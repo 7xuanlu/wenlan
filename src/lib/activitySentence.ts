@@ -200,9 +200,17 @@ export function blockedCauses(activity: ActivityResponse): Phrase[] {
       jobs.add(governingJob(asset.kind));
     }
   }
+  // A pinned source that is not serving (a model still loading, a local
+  // server that is down) is a different fix from no choice at all: saying
+  // "none is chosen" there would contradict the Intelligence page.
   return (["everyday", "synthesis"] as const)
     .filter((job) => jobs.has(job))
-    .map((job) => ({ key: `activityStatus.blockedCause.${job}` }));
+    .map((job) => ({
+      key:
+        activity[job].mode === "pinned_unavailable"
+          ? `activityStatus.blockedCauseUnavailable.${job}`
+          : `activityStatus.blockedCause.${job}`,
+    }));
 }
 
 /** The "Everyday work: qwen3-8b on this machine." sentence for one route. */

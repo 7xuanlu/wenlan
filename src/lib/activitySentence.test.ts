@@ -103,6 +103,21 @@ describe("blockedCauses", () => {
     ]);
   });
 
+  it("says a chosen model is unavailable rather than unchosen", () => {
+    const a = activity({
+      everyday: { ...route("everyday", "basic", false), mode: "pinned_unavailable" },
+      synthesis: route("synthesis", "none", false),
+      assets: [
+        asset("memories", { blocked: 3, total: 3 }),
+        asset("pages", { blocked: 1, total: 1 }),
+      ],
+    });
+    expect(blockedCauses(a)).toEqual([
+      { key: "activityStatus.blockedCauseUnavailable.everyday" },
+      { key: "activityStatus.blockedCause.synthesis" },
+    ]);
+  });
+
   it("ignores failed work and unavailable models with nothing blocked", () => {
     const a = activity({
       synthesis: route("synthesis", "none", false),

@@ -192,7 +192,7 @@ test("the popover opens by click and by keyboard, and gives focus back", async (
   await expect(popover).toBeVisible();
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(popover.getByTestId("activity-summary-headline")).toHaveText(
-    "Wenlan is steeping what you have given it.",
+    "Wenlan is steeping what you have given it. It works while your computer is quiet, so it can pause while you use it.",
   );
   await expect(popover.getByTestId("activity-asset-memories")).toContainText(
     "7 of 12 summarized and linked",
@@ -324,7 +324,7 @@ test("a missing model leads the popover, in units that match each row", async ({
 
   // The cause is the first thing in the popover, and it carries the fix.
   const causes = popover.getByTestId("activity-summary-causes");
-  await expect(causes).toContainText("Steeping is paused: no everyday model is loaded.");
+  await expect(causes).toContainText("Steeping is paused: no everyday model is chosen.");
   expect(await popover.evaluate((node) => node.firstElementChild?.getAttribute("data-testid"))).toBe(
     "activity-summary-causes",
   );

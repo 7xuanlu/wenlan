@@ -222,10 +222,10 @@ describe("ActivityNow", () => {
     expect(models).toHaveTextContent("claude-opus-5 on Anthropic");
   });
 
-  it("says no model is loaded rather than printing null", async () => {
+  it("says no model is in use rather than printing null", async () => {
     renderNow(activity({ synthesis: route("synthesis", "none", null) }));
     expect(await screen.findByTestId("activity-now-models")).toHaveTextContent(
-      "no model loaded",
+      "no model in use",
     );
   });
 

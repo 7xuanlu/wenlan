@@ -96,7 +96,7 @@ beforeEach(async () => {
 describe("ActivitySummaryPopover", () => {
   it("names a missing model once, not on every row it blocks", async () => {
     // Memories and Entities both run on the everyday model. The live app
-    // printed "no everyday model is loaded" under each row.
+    // printed "no everyday model is chosen" under each row.
     await openPopover(
       activity({
         state: "blocked",
@@ -112,7 +112,7 @@ describe("ActivitySummaryPopover", () => {
 
     const dialog = screen.getByRole("dialog");
     expect(
-      dialog.textContent?.match(/no everyday model is loaded/g) ?? [],
+      dialog.textContent?.match(/no everyday model is chosen/g) ?? [],
     ).toHaveLength(1);
     // Pages has nothing blocked, so its model is not named as a cause.
     expect(dialog).not.toHaveTextContent("no page-writing model");
@@ -212,7 +212,7 @@ describe("ActivitySummaryPopover", () => {
     );
     const causes = screen.getByTestId("activity-summary-causes");
     expect(causes).toHaveTextContent(
-      "Page writing is paused: no page-writing model is loaded.",
+      "Page writing is paused: no page-writing model is chosen.",
     );
   });
 

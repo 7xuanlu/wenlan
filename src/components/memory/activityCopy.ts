@@ -39,7 +39,7 @@ export const enActivityStatus = {
   // ── Tier 1, the summary popover ───────────────────────────────────────
   headline: {
     up_to_date: "Everything you have given Wenlan has steeped.",
-    organizing: "Wenlan is steeping what you have given it.",
+    organizing: "Wenlan is steeping what you have given it. It works while your computer is quiet, so it can pause while you use it.",
     blocked: "Some steeping is waiting on you.",
   },
   asset: {
@@ -83,8 +83,14 @@ export const enActivityStatus = {
   // stopped and why; the button carries the fix. turnOnModel repeats Home's
   // empty-state button word for word: one action, one name.
   blockedCause: {
-    everyday: "Steeping is paused: no everyday model is loaded.",
-    synthesis: "Page writing is paused: no page-writing model is loaded.",
+    everyday: "Steeping is paused: no everyday model is chosen.",
+    synthesis: "Page writing is paused: no page-writing model is chosen.",
+  },
+  // A model was chosen but is not serving: still loading, or its server is
+  // down. The fix is the same page, so turnOnModel still applies.
+  blockedCauseUnavailable: {
+    everyday: "Steeping is paused: the everyday model is not available.",
+    synthesis: "Page writing is paused: the page-writing model is not available.",
   },
   turnOnModel: "Turn on a model",
   assetBlockedFailed: {
@@ -144,10 +150,10 @@ export const enActivityStatus = {
     external: "on your local server",
     anthropic: "on Anthropic",
     basic: "built in, no model",
-    none: "no model loaded",
+    none: "no model in use",
   },
   // One sentence per route. A route with no model prints its lane alone:
-  // interpolating a "no model" placeholder AND the lane read "no model loaded
+  // interpolating a "no model" placeholder AND the lane read "no model in use
   // built in, no model".
   route: "{{job}}: {{model}} {{lane}}.",
   routeNoModel: "{{job}}: {{lane}}.",
@@ -191,7 +197,7 @@ export const hansActivityStatus = {
   buttonLabel: "活动，{{state}}",
   headline: {
     up_to_date: "你交给文澜的内容都已沉淀完毕。",
-    organizing: "文澜正在沉淀你交给它的内容。",
+    organizing: "文澜正在沉淀你交给它的内容。它在电脑空闲时工作，你使用电脑时可能会暂停。",
     blocked: "部分沉淀工作在等你处理。",
   },
   asset: {
@@ -225,8 +231,12 @@ export const hansActivityStatus = {
     pages_other: "{{count}} 个页面等待更新",
   },
   blockedCause: {
-    everyday: "沉淀已暂停：未加载日常模型。",
-    synthesis: "页面撰写已暂停：未加载写页面的模型。",
+    everyday: "沉淀已暂停：尚未选择日常模型。",
+    synthesis: "页面撰写已暂停：尚未选择写页面的模型。",
+  },
+  blockedCauseUnavailable: {
+    everyday: "沉淀已暂停：日常模型目前无法使用。",
+    synthesis: "页面撰写已暂停：写页面的模型目前无法使用。",
   },
   turnOnModel: "启用模型",
   assetBlockedFailed: {
@@ -276,7 +286,7 @@ export const hansActivityStatus = {
     external: "在你的本地服务器",
     anthropic: "在 Anthropic",
     basic: "内置，无需模型",
-    none: "未加载模型",
+    none: "未使用模型",
   },
   route: "{{job}}：{{model}}，{{lane}}。",
   routeNoModel: "{{job}}：{{lane}}。",
@@ -314,7 +324,7 @@ export const hantActivityStatus = {
   buttonLabel: "活動，{{state}}",
   headline: {
     up_to_date: "你交給文瀾的內容都已沉澱完畢。",
-    organizing: "文瀾正在沉澱你交給它的內容。",
+    organizing: "文瀾正在沉澱你交給它的內容。它在電腦閒置時工作，你使用電腦時可能會暫停。",
     blocked: "部分沉澱工作在等你處理。",
   },
   asset: {
@@ -348,8 +358,12 @@ export const hantActivityStatus = {
     pages_other: "{{count}} 個頁面等待更新",
   },
   blockedCause: {
-    everyday: "沉澱已暫停：未載入日常模型。",
-    synthesis: "頁面撰寫已暫停：未載入寫頁面的模型。",
+    everyday: "沉澱已暫停：尚未選擇日常模型。",
+    synthesis: "頁面撰寫已暫停：尚未選擇寫頁面的模型。",
+  },
+  blockedCauseUnavailable: {
+    everyday: "沉澱已暫停：日常模型目前無法使用。",
+    synthesis: "頁面撰寫已暫停：寫頁面的模型目前無法使用。",
   },
   turnOnModel: "啟用模型",
   assetBlockedFailed: {
@@ -399,7 +413,7 @@ export const hantActivityStatus = {
     external: "在你的本機伺服器",
     anthropic: "在 Anthropic",
     basic: "內建，不需模型",
-    none: "未載入模型",
+    none: "未使用模型",
   },
   route: "{{job}}：{{model}}，{{lane}}。",
   routeNoModel: "{{job}}：{{lane}}。",
