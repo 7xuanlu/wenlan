@@ -199,6 +199,13 @@ describe("review command contract", () => {
     expect(stale, "Remove these from OUTSIDE_THE_REVIEW_SURFACE; nothing invokes them.").toEqual([]);
   });
 
+  it("still sees commands invoked with a typed generic", () => {
+    // INVOKE_LITERAL stops at the first `>`, so a nested generic such as
+    // invoke<Omit<A, "b">>("x") hides "x" from every check above. get_activity
+    // is read on every screen; losing sight of it must fail here.
+    expect(invokedCommands().has("get_activity")).toBe(true);
+  });
+
   it("covers the page-review commands, which the Review surface does answer", () => {
     // The reason this guard exists at all. Both are new, both are reachable
     // from the page detail screen the Review surface renders.

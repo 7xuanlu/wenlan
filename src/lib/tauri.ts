@@ -622,10 +622,15 @@ export interface ActivityResponse {
   refinement: ActivityRefinement;
 }
 
+/** `/api/activity` as sent: a daemon from before `refinement` omits it. */
+type ActivityWire = Omit<ActivityResponse, "refinement"> & {
+  refinement?: ActivityRefinement;
+};
+
 export async function getActivity(): Promise<ActivityResponse> {
-  const response = await invoke<
-    Omit<ActivityResponse, "refinement"> & { refinement?: ActivityRefinement }
-  >("get_activity");
+  // A flat generic keeps `get_activity` visible to the command scanners in
+  // reviewCommandContract.test.ts and preview/mocks/live-invoke.test.ts.
+  const response = await invoke<ActivityWire>("get_activity");
   // The browser preview proxies the daemon's raw JSON, so a daemon from
   // before `refinement` existed sends none. The app's Rust client already
   // fills zeros through its serde default.
