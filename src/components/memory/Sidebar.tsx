@@ -210,21 +210,22 @@ export default function Sidebar({
         </div>
 
         <div className="flex-shrink-0">
-          <div className="px-4 pt-2 pb-3">
+          <div className="px-4 pt-2 pb-3 flex flex-col gap-1.5">
             <ReviewEnvironmentBadge />
+            {/* Directly above the account card and inside the same gutter, so
+                the status reads as part of the sidebar footer rather than a
+                ruled strip under it. The popover opens upward from here. */}
+            <ActivityStatus
+              expanded={activityOpen}
+              onToggle={() => setActivityOpen((open) => !open)}
+              onOpenActivity={closeAfterNavigation(onNavigateActivity, onRequestClose)}
+            />
             <IdentityCard
               onOpenDetail={closeAfterNavigation(onEntityClick, closeOverlay)}
               onOpenSettings={closeAfterNavigation(onNavigateSettings, closeOverlay)}
               onOpenAbout={closeAfterNavigation(onOpenAbout, closeOverlay)}
             />
           </div>
-          {/* Below the identity card and OUTSIDE its horizontal padding, so the
-              hairline spans the sidebar rather than floating inside a gutter. */}
-          <ActivityStatus
-            expanded={activityOpen}
-            onToggle={() => setActivityOpen((open) => !open)}
-            onOpenActivity={closeAfterNavigation(onNavigateActivity, onRequestClose)}
-          />
         </div>
       </div>
       </aside>

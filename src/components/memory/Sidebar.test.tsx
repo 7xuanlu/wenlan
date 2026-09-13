@@ -384,13 +384,14 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("button", { name: "Wenlan" })).not.toBeInTheDocument();
   });
 
-  it("puts the background status line under the account card", async () => {
+  it("puts the background status line directly above the account card", async () => {
     renderSidebar();
 
     const account = screen.getByTestId("identity-card");
     const status = await screen.findByTestId("activity-status");
 
-    expect(account.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Above the account card, not a ruled strip below it.
+    expect(status.compareDocumentPosition(account) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps the account card as the footer after locale changes", async () => {

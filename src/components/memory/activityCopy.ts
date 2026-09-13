@@ -61,13 +61,18 @@ export const enActivityStatus = {
     entities: "{{done}} of {{total}} checked",
     pages: "{{done}} of {{total}} pages written",
   },
+  // Rows say only how many are waiting. The cause and the fix are said ONCE,
+  // per missing model, by blockedCause: Memories and Entities share the
+  // everyday model, so a per-row cause printed the same sentence twice.
   assetBlockedNoModel: {
-    memories:
-      "{{count}} waiting: no everyday model is loaded. Choose one in Settings, Intelligence.",
-    entities:
-      "{{count}} waiting: no everyday model is loaded. Choose one in Settings, Intelligence.",
-    pages:
-      "{{count}} waiting: no page-writing model is loaded. Choose one in Settings, Intelligence.",
+    memories: "{{count}} waiting for a model",
+    entities: "{{count}} waiting for a model",
+    pages: "{{count}} waiting for a model",
+  },
+  blockedCause: {
+    everyday: "No everyday model is loaded. Choose one in Settings, Intelligence.",
+    synthesis:
+      "No page-writing model is loaded. Choose one in Settings, Intelligence.",
   },
   assetBlockedFailed: {
     memories_one:
@@ -82,7 +87,10 @@ export const enActivityStatus = {
   openActivity: "Open Activity",
   jobSeparator: " and ",
   lastActivity: "Last activity {{time}}",
-  neverActive: "No background work yet",
+  // Pairs with lastActivity, so it reports when work last RAN. It must not say
+  // there is no background work: this string shows exactly when nothing has
+  // finished, which is also when a blocked library has the most work waiting.
+  neverActive: "Nothing has run yet",
 
   // ── Tier 2, the Now section on the Activity page ───────────────────────
   nowTitle: "Now",
@@ -117,9 +125,15 @@ export const enActivityStatus = {
     basic: "built in, no model",
     none: "no model loaded",
   },
-  models:
-    "Everyday work: {{everyday}} {{everydayLane}}. Page writing: {{synthesis}} {{synthesisLane}}.",
-  modelsNone: "No model is loaded for {{job}}.",
+  // One sentence per route. A route with no model prints its lane alone:
+  // interpolating a "no model" placeholder AND the lane read "no model loaded
+  // built in, no model".
+  route: "{{job}}: {{model}} {{lane}}.",
+  routeNoModel: "{{job}}: {{lane}}.",
+  jobTitle: {
+    everyday: "Everyday work",
+    synthesis: "Page writing",
+  },
   job: {
     everyday: "everyday work",
     synthesis: "page writing",
@@ -181,9 +195,13 @@ export const hansActivityStatus = {
     pages: "{{total}} 个页面中已写好 {{done}} 个",
   },
   assetBlockedNoModel: {
-    memories: "{{count}} 条在等待：未加载日常模型。请在「设置 - 智能」中选择一个。",
-    entities: "{{count}} 个在等待：未加载日常模型。请在「设置 - 智能」中选择一个。",
-    pages: "{{count}} 个在等待：未加载写页面的模型。请在「设置 - 智能」中选择一个。",
+    memories: "{{count}} 条在等待模型",
+    entities: "{{count}} 个在等待模型",
+    pages: "{{count}} 个在等待模型",
+  },
+  blockedCause: {
+    everyday: "未加载日常模型。请在「设置 - 智能」中选择一个。",
+    synthesis: "未加载写页面的模型。请在「设置 - 智能」中选择一个。",
   },
   assetBlockedFailed: {
     memories_one: "{{total}} 条中有 {{count}} 条暂停：生成摘要失败。全部 {{total}} 条仍可搜索。",
@@ -194,7 +212,7 @@ export const hansActivityStatus = {
   openActivity: "打开动态",
   jobSeparator: "和",
   lastActivity: "最近活动于{{time}}",
-  neverActive: "还没有后台工作",
+  neverActive: "尚未运行过",
   nowTitle: "当前",
   showSteps: "展开步骤",
   hideSteps: "收起步骤",
@@ -227,8 +245,12 @@ export const hansActivityStatus = {
     basic: "内置，无需模型",
     none: "未加载模型",
   },
-  models: "日常工作：{{everyday}}，{{everydayLane}}。写页面：{{synthesis}}，{{synthesisLane}}。",
-  modelsNone: "{{job}}尚未加载模型。",
+  route: "{{job}}：{{model}}，{{lane}}。",
+  routeNoModel: "{{job}}：{{lane}}。",
+  jobTitle: {
+    everyday: "日常工作",
+    synthesis: "写页面",
+  },
   job: {
     everyday: "日常工作",
     synthesis: "写页面",
@@ -284,9 +306,13 @@ export const hantActivityStatus = {
     pages: "{{total}} 個頁面中已寫好 {{done}} 個",
   },
   assetBlockedNoModel: {
-    memories: "{{count}} 則在等待：未載入日常模型。請在「設定 - 智慧」中選擇一個。",
-    entities: "{{count}} 個在等待：未載入日常模型。請在「設定 - 智慧」中選擇一個。",
-    pages: "{{count}} 個在等待：未載入寫頁面的模型。請在「設定 - 智慧」中選擇一個。",
+    memories: "{{count}} 則在等待模型",
+    entities: "{{count}} 個在等待模型",
+    pages: "{{count}} 個在等待模型",
+  },
+  blockedCause: {
+    everyday: "未載入日常模型。請在「設定 - 智慧」中選擇一個。",
+    synthesis: "未載入寫頁面的模型。請在「設定 - 智慧」中選擇一個。",
   },
   assetBlockedFailed: {
     memories_one: "{{total}} 則中有 {{count}} 則暫停：產生摘要失敗。全部 {{total}} 則仍可搜尋。",
@@ -297,7 +323,7 @@ export const hantActivityStatus = {
   openActivity: "開啟動態",
   jobSeparator: "和",
   lastActivity: "最近活動於{{time}}",
-  neverActive: "還沒有背景工作",
+  neverActive: "尚未執行過",
   nowTitle: "目前",
   showSteps: "展開步驟",
   hideSteps: "收合步驟",
@@ -330,8 +356,12 @@ export const hantActivityStatus = {
     basic: "內建，不需模型",
     none: "未載入模型",
   },
-  models: "日常工作：{{everyday}}，{{everydayLane}}。寫頁面：{{synthesis}}，{{synthesisLane}}。",
-  modelsNone: "{{job}}尚未載入模型。",
+  route: "{{job}}：{{model}}，{{lane}}。",
+  routeNoModel: "{{job}}：{{lane}}。",
+  jobTitle: {
+    everyday: "日常工作",
+    synthesis: "寫頁面",
+  },
   job: {
     everyday: "日常工作",
     synthesis: "寫頁面",

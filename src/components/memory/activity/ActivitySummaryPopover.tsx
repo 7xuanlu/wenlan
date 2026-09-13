@@ -6,7 +6,11 @@ import type {
   ActivityResponse,
 } from "../../../lib/tauri";
 import { relativeTime } from "../../../lib/relativeTime";
-import { assetSentence, trustSentence } from "../../../lib/activitySentence";
+import {
+  assetSentence,
+  blockedCauses,
+  trustSentence,
+} from "../../../lib/activitySentence";
 
 /**
  * Tier 1: the summary the status line opens.
@@ -131,6 +135,29 @@ function AssetRow({
   );
 }
 
+/**
+ * Why a Blocked library is waiting, one sentence per missing model, said once
+ * under the headline instead of on every row. Shared with the Now section.
+ */
+export function BlockedCauses({
+  activity,
+  testId,
+}: {
+  readonly activity: ActivityResponse;
+  readonly testId: string;
+}) {
+  const { t } = useTranslation();
+  const causes = blockedCauses(activity);
+  if (causes.length === 0) return null;
+  return (
+    <div data-testid={testId} className="mem-activity-causes">
+      {causes.map((cause) => (
+        <p key={cause.key}>{t(cause.key)}</p>
+      ))}
+    </div>
+  );
+}
+
 export default function ActivitySummaryPopover({
   activity,
   onClose,
@@ -172,6 +199,7 @@ export default function ActivitySummaryPopover({
       >
         {t(`activityStatus.headline.${activity.state}`)}
       </p>
+      <BlockedCauses activity={activity} testId="activity-summary-causes" />
 
       <div style={{ display: "grid", gap: "10px" }}>
         {ASSET_ORDER.map((kind) => {
@@ -197,13 +225,16 @@ export default function ActivitySummaryPopover({
         {trustText}
       </p>
 
-      <div style={{ alignItems: "center", display: "flex", gap: "8px" }}>
+      {/* Wraps as whole items: the sidebar is ~300px wide, and in some locales
+          the time and the button do not fit on one line. */}
+      <div style={{ alignItems: "center", display: "flex", flexWrap: "wrap", gap: "6px 8px" }}>
         <span
           data-testid="activity-summary-last"
           style={{
             color: "var(--mem-text-tertiary)",
             fontFamily: "var(--mem-font-mono)",
             fontSize: "10px",
+            whiteSpace: "nowrap",
           }}
         >
           {activity.last_activity_at === null

@@ -88,6 +88,36 @@ beforeEach(async () => {
 });
 
 describe("ActivitySummaryPopover", () => {
+  it("names a missing model once, not on every row it blocks", async () => {
+    // Memories and Entities both run on the everyday model. The live app
+    // printed "no everyday model is loaded" under each row.
+    await openPopover(
+      activity({
+        state: "blocked",
+        everyday: route("everyday", "basic", false),
+        synthesis: route("synthesis", "none", false),
+        assets: [
+          asset("memories", { total: 8, blocked: 8 }),
+          asset("entities", { total: 8, blocked: 8 }),
+          asset("pages"),
+        ],
+      }),
+    );
+
+    const dialog = screen.getByRole("dialog");
+    expect(
+      dialog.textContent?.match(/No everyday model is loaded/g) ?? [],
+    ).toHaveLength(1);
+    // Pages has nothing blocked, so its model is not named as a cause.
+    expect(dialog).not.toHaveTextContent("No page-writing model");
+    expect(screen.getByTestId("activity-asset-memories")).toHaveTextContent(
+      "8 waiting for a model",
+    );
+    expect(screen.getByTestId("activity-asset-entities")).toHaveTextContent(
+      "8 waiting for a model",
+    );
+  });
+
   it("opens a dialog with the three asset rows in a fixed order", async () => {
     await openPopover(
       activity({
@@ -148,9 +178,12 @@ describe("ActivitySummaryPopover", () => {
       }),
     );
 
-    const pages = screen.getByTestId("activity-asset-pages");
-    expect(pages).toHaveTextContent("no page-writing model is loaded");
-    expect(pages).toHaveTextContent("Settings, Intelligence");
+    expect(screen.getByTestId("activity-asset-pages")).toHaveTextContent(
+      "12 waiting for a model",
+    );
+    const causes = screen.getByTestId("activity-summary-causes");
+    expect(causes).toHaveTextContent("No page-writing model is loaded");
+    expect(causes).toHaveTextContent("Settings, Intelligence");
   });
 
   it("draws no progress for an asset with nothing in it", async () => {
@@ -179,10 +212,10 @@ describe("ActivitySummaryPopover", () => {
     expect(trust).not.toHaveTextContent("Nothing leaves your device");
   });
 
-  it("says there has been no background work yet rather than a bare time", async () => {
+  it("says nothing has run yet rather than a bare time", async () => {
     await openPopover(activity());
     expect(screen.getByTestId("activity-summary-last")).toHaveTextContent(
-      "No background work yet",
+      "Nothing has run yet",
     );
   });
 

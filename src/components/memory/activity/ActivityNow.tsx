@@ -17,9 +17,10 @@ import {
   assetSentence,
   laneKey,
   routeFor,
+  routeSentence,
   trustSentence,
 } from "../../../lib/activitySentence";
-import { ASSET_ORDER } from "./ActivitySummaryPopover";
+import { ASSET_ORDER, BlockedCauses } from "./ActivitySummaryPopover";
 
 /**
  * Tier 2: the Now section on the Activity page.
@@ -260,6 +261,7 @@ function NowBody({
       >
         {t(`activityStatus.headline.${activity.state}`)}
       </p>
+      <BlockedCauses activity={activity} testId="activity-now-causes" />
 
       <div style={{ display: "grid", gap: "11px" }}>
         {ASSET_ORDER.map((kind) => {
@@ -288,16 +290,16 @@ function NowBody({
             margin: 0,
           }}
         >
-          {t("activityStatus.models", {
-            everyday:
-              activity.everyday.model ??
-              t("activityStatus.lane.none"),
-            everydayLane: t(laneKey(activity.everyday.lane)),
-            synthesis:
-              activity.synthesis.model ??
-              t("activityStatus.lane.none"),
-            synthesisLane: t(laneKey(activity.synthesis.lane)),
-          })}
+          {[activity.everyday, activity.synthesis]
+            .map((route) => {
+              const phrase = routeSentence(route);
+              return t(phrase.key, {
+                ...phrase.params,
+                job: t(`activityStatus.jobTitle.${route.job}`),
+                lane: t(laneKey(route.lane)),
+              });
+            })
+            .join(" ")}
           {onOpenIntelligence !== undefined && (
             <>
               {" "}

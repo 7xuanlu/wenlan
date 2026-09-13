@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import { i18n } from "../i18n";
 import {
   assetSentence,
+  blockedCauses,
   governingJob,
   isCloud,
   laneKey,
   routeFor,
+  routeSentence,
   trustSentence,
 } from "./activitySentence";
 import type {
@@ -74,6 +76,57 @@ describe("governingJob / routeFor", () => {
     });
     expect(routeFor(a, "pages").lane).toBe("anthropic");
     expect(routeFor(a, "memories").lane).toBe("on_device");
+  });
+});
+
+describe("blockedCauses", () => {
+  it("lists each missing model once, in job order", () => {
+    const a = activity({
+      everyday: route("everyday", "none", false),
+      synthesis: route("synthesis", "none", false),
+      assets: [
+        asset("pages", { blocked: 1, total: 1 }),
+        asset("memories", { blocked: 8, total: 8 }),
+        asset("entities", { blocked: 8, total: 8 }),
+      ],
+    });
+    expect(blockedCauses(a)).toEqual([
+      { key: "activityStatus.blockedCause.everyday" },
+      { key: "activityStatus.blockedCause.synthesis" },
+    ]);
+  });
+
+  it("ignores failed work and unavailable models with nothing blocked", () => {
+    const a = activity({
+      synthesis: route("synthesis", "none", false),
+      assets: [asset("memories", { blocked: 2, total: 5 }), asset("pages")],
+    });
+    // Memories failed on an available model; Pages is blocked on nothing.
+    expect(blockedCauses(a)).toEqual([]);
+  });
+});
+
+describe("routeSentence", () => {
+  it("prints the lane alone when no model is loaded", () => {
+    const phrase = routeSentence(route("everyday", "basic", false));
+    expect(
+      i18n.t(phrase.key, {
+        ...phrase.params,
+        job: i18n.t("activityStatus.jobTitle.everyday"),
+        lane: i18n.t(laneKey("basic")),
+      }),
+    ).toBe("Everyday work: built in, no model.");
+  });
+
+  it("names the model and its lane when one is loaded", () => {
+    const phrase = routeSentence(route("synthesis", "on_device", true));
+    expect(
+      i18n.t(phrase.key, {
+        ...phrase.params,
+        job: i18n.t("activityStatus.jobTitle.synthesis"),
+        lane: i18n.t(laneKey("on_device")),
+      }),
+    ).toBe("Page writing: a-model on this machine.");
   });
 });
 

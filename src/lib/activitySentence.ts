@@ -103,6 +103,33 @@ export function assetSentence(
   };
 }
 
+/**
+ * The missing models behind a Blocked library, each named once.
+ *
+ * A row only says how many items are waiting; the cause and the fix belong to
+ * the model, not the asset. Memories and Entities both run on the everyday
+ * model, so a per-row cause repeated the same sentence. Failed work (the lane
+ * is available) is not listed: its rows carry their own cause.
+ */
+export function blockedCauses(activity: ActivityResponse): Phrase[] {
+  const jobs = new Set<ActivityJob>();
+  for (const asset of activity.assets) {
+    if (asset.blocked > 0 && !routeFor(activity, asset.kind).available) {
+      jobs.add(governingJob(asset.kind));
+    }
+  }
+  return (["everyday", "synthesis"] as const)
+    .filter((job) => jobs.has(job))
+    .map((job) => ({ key: `activityStatus.blockedCause.${job}` }));
+}
+
+/** The "Everyday work: qwen3-8b on this machine." sentence for one route. */
+export function routeSentence(route: ActivityRoute): Phrase {
+  return route.model === null
+    ? { key: "activityStatus.routeNoModel" }
+    : { key: "activityStatus.route", params: { model: route.model } };
+}
+
 /** Lane chip copy for a resolved route. */
 export function laneKey(lane: ActivityLane): ParseKeys {
   return `activityStatus.lane.${lane}`;

@@ -105,20 +105,6 @@ export default function ActivityStatus({
       aria-label={t("activityStatus.statusLabel")}
       onClick={onToggle}
       className="mem-activity-status"
-      style={{
-        alignItems: "center",
-        background: "transparent",
-        border: "none",
-        borderTop: "1px solid var(--mem-border)",
-        color: "var(--mem-text-tertiary)",
-        cursor: "pointer",
-        display: "flex",
-        fontSize: "11px",
-        gap: "7px",
-        padding: "8px 16px",
-        textAlign: "left",
-        width: "100%",
-      }}
     >
       <span
         aria-hidden="true"

@@ -120,17 +120,22 @@ for (const width of WIDTHS) {
       // Memories is the busiest asset: 5 left against 0 everywhere else.
       await expect(page.getByTestId("activity-status-detail")).toHaveText("7/12");
 
-      // The line sits at the bottom: nothing inside the sidebar is below it.
-      const isLast = await line.evaluate((node) => {
+      // The line sits in the footer directly above the account card, fully
+      // on screen, and nothing else is wedged between the two.
+      const placement = await line.evaluate((node) => {
         const sidebar = node.closest("aside");
-        if (!sidebar) return false;
+        const account = sidebar?.querySelector('button[aria-haspopup="menu"]');
+        if (!sidebar || !account) return { onScreen: false, gap: -1 };
         const box = node.getBoundingClientRect();
-        return [...sidebar.querySelectorAll("*")].every((other) => {
-          const rect = other.getBoundingClientRect();
-          return rect.height === 0 || node.contains(other) || rect.bottom <= box.bottom + 1;
-        });
+        const card = account.getBoundingClientRect();
+        return {
+          onScreen: box.top >= 0 && box.bottom <= window.innerHeight,
+          gap: card.top - box.bottom,
+        };
       });
-      expect(isLast, `status line is the bottom-most element on ${view}`).toBe(true);
+      expect(placement.onScreen, `status line on screen on ${view}`).toBe(true);
+      expect(placement.gap, `status line directly above the account on ${view}`).toBeGreaterThanOrEqual(0);
+      expect(placement.gap, `status line directly above the account on ${view}`).toBeLessThanOrEqual(12);
 
       // A status line that widens the sidebar would push the whole shell
       // sideways, which is the failure mode worth guarding at 375px.

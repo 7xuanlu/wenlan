@@ -3794,7 +3794,28 @@ p.entity-error {
    one moving thing on the page always means "work is in flight". Blocked is
    amber and STILL: nothing is lost when work is waiting, so it must not read
    as an alarm, and a second moving dot would compete with the first. */
-.mem-activity-status:hover { background: var(--mem-surface); }
+/* Sits in the sidebar footer gutter directly above the account card, in the
+   nav rows' own grammar (inset, rounded, hover fill) rather than as a
+   full-bleed hairline strip under it: a ruled strip below the account read as
+   a browser status bar bolted onto the window, not as part of the sidebar. */
+.mem-activity-status {
+  align-items: center;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  gap: 8px;
+  padding: 6px 13px;
+  text-align: left;
+  transition: background-color 120ms ease, color 120ms ease;
+  width: 100%;
+}
+.mem-activity-status:hover,
+.mem-activity-status[aria-expanded="true"] { background: var(--mem-hover); color: var(--mem-text-secondary); }
 .mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: -2px; }
 @keyframes mem-activity-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .mem-activity-dot-pulse { animation: mem-activity-dot-pulse 1.8s ease-in-out infinite; }
@@ -3805,21 +3826,38 @@ p.entity-error {
 /* The popover opens UPWARD from the status line: the line sits at the very
    bottom of the sidebar, so a downward popover would open off-screen. */
 .mem-activity-status-anchor { position: relative; }
+/* Pinned to both edges of the anchor rather than given a fixed width: the
+   sidebar sets `overflow: hidden` (Sidebar.tsx) and is ~300px at EVERY window
+   width, so any popover wider than it is silently clipped: the trailing words
+   of each sentence and half the action button simply never paint. A width in
+   px only ever matched the sidebar by luck. */
 .mem-activity-popover {
   bottom: calc(100% + 6px);
   display: grid;
   gap: 12px;
-  left: 8px;
+  left: 0;
+  right: 0;
   padding: 12px;
   position: absolute;
-  width: 300px;
   z-index: 40;
 }
-/* At phone width the sidebar is a full-width drawer, so 300px plus the 8px
-   offset can overhang. Cap it to the anchor instead. */
-@media (max-width: 380px) {
-  .mem-activity-popover { left: 8px; right: 8px; width: auto; }
+/* Grid items default to min-width:auto, so one unbreakable line would widen
+   the whole popover past its border instead of wrapping. */
+.mem-activity-popover > * { min-width: 0; }
+/* The cause of a Blocked library, said once per missing model. Warning tint,
+   not danger: nothing is lost while work waits for a model. */
+.mem-activity-causes {
+  background: var(--mem-status-warning-bg);
+  border-radius: 6px;
+  color: var(--mem-text);
+  display: grid;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  gap: 4px;
+  line-height: 1.45;
+  padding: 7px 9px;
 }
+.mem-activity-causes p { margin: 0; }
 .mem-activity-popover-action {
   background: transparent;
   border: 1px solid var(--mem-border);
@@ -3828,8 +3866,10 @@ p.entity-error {
   cursor: pointer;
   font-family: var(--mem-font-body);
   font-size: 11px;
+  flex-shrink: 0;
   margin-left: auto;
   padding: 3px 9px;
+  white-space: nowrap;
 }
 .mem-activity-popover-action:hover { background: var(--mem-hover); color: var(--mem-text); }
 .mem-activity-popover-action:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
