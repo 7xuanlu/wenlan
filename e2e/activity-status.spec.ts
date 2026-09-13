@@ -360,23 +360,37 @@ test("steeping held for a quiet moment stills the clock and says so", async ({ p
   const errors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
-  await installActivityFixture(page, { ...ACTIVITY_FIXTURE, waiting_for_idle: true });
+  await installActivityFixture(page, { ...ACTIVITY_FIXTURE, state: "waiting_for_idle" });
   await page.goto("/");
 
   const trigger = page.getByTestId("activity-status");
-  await expect(trigger).toHaveAttribute("data-state", "organizing");
+  await expect(trigger).toHaveAttribute("data-state", "waiting_for_idle");
   await expect(trigger).toHaveAccessibleName("Activity, Waiting for a quiet moment");
-  // Motion means work is running. The clock stays indigo, but its hands do not
-  // move beside a "Last activity" from long ago.
+  // Motion means work is running. The clock keeps Steeping's indigo, but its
+  // hands do not move beside a "Last activity" from long ago.
   const icon = page.getByTestId("activity-status-icon");
-  await expect(icon).toHaveAttribute("data-icon-state", "organizing");
+  await expect(icon).toHaveAttribute("data-icon-state", "waiting_for_idle");
   await expect(icon.locator(".mem-activity-hands")).toHaveCount(1);
   await expect(icon.locator(".mem-activity-hands-sweep")).toHaveCount(0);
+  // Same indigo as Steeping, resolved in the icon's own scope: an untinted icon
+  // would read as Up to date. Polled, because the icon eases into its color.
+  await expect
+    .poll(() =>
+      icon.evaluate((node) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--mem-accent-indigo)";
+        node.parentElement?.append(probe);
+        const indigo = getComputedStyle(probe).color;
+        probe.remove();
+        return getComputedStyle(node).color === indigo;
+      }),
+    )
+    .toBe(true);
 
   await trigger.click();
   const popover = page.getByRole("dialog", { name: "Background activity" });
   await expect(popover.getByTestId("activity-summary-headline")).toHaveText(
-    "Wenlan will keep steeping when your computer is quiet. It holds off while you use it or while it is busy.",
+    "Wenlan will keep steeping when your computer is quiet. It holds off while you use it, or while it is busy, low on memory or running hot.",
   );
 
   expect(errors.pageErrors).toEqual([]);

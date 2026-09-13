@@ -569,7 +569,14 @@ export async function getPipelineStatus(): Promise<PipelineStatusResponse> {
 // ── Activity status (daemon ≥ activity route; GET /api/activity) ───────────
 // Field names and enum string values mirror wenlan_types::activity exactly.
 
-export type ActivityState = "up_to_date" | "organizing" | "blocked";
+// "unknown" is a state from a daemon newer than this app: the app's Rust
+// client reads any unrecognized state word as it rather than failing the read.
+export type ActivityState =
+  | "up_to_date"
+  | "organizing"
+  | "waiting_for_idle"
+  | "blocked"
+  | "unknown";
 export type ActivityAssetKind = "memories" | "entities" | "pages";
 export type ActivityStepName =
   | "store"
@@ -619,8 +626,6 @@ export interface ActivityResponse {
   assets: ActivityAssetStatus[];
   everyday: ActivityRoute;
   synthesis: ActivityRoute;
-  /** Steeping, but held until the computer is quiet. Absent on older daemons. */
-  waiting_for_idle?: boolean;
 }
 
 export async function getActivity(): Promise<ActivityResponse> {

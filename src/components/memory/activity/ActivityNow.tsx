@@ -15,7 +15,7 @@ import {
 } from "../../../lib/activityNowLayout";
 import {
   assetSentence,
-  displayState,
+  knownState,
   laneKey,
   routeFor,
   routeSentence,
@@ -240,6 +240,7 @@ function NowBody({
   const { t } = useTranslation();
   const byKind = new Map(activity.assets.map((asset) => [asset.kind, asset]));
   const trust = trustSentence(activity);
+  const state = knownState(activity);
   const trustText =
     trust.kind === "local"
       ? t(trust.key)
@@ -252,18 +253,20 @@ function NowBody({
 
   return (
     <div style={{ display: "grid", gap: "12px" }}>
-      <p
-        data-testid="activity-now-headline"
-        style={{
-          color: "var(--mem-text)",
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "12px",
-          lineHeight: 1.45,
-          margin: 0,
-        }}
-      >
-        {t(`activityStatus.headline.${displayState(activity)}`)}
-      </p>
+      {state !== undefined && (
+        <p
+          data-testid="activity-now-headline"
+          style={{
+            color: "var(--mem-text)",
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "12px",
+            lineHeight: 1.45,
+            margin: 0,
+          }}
+        >
+          {t(`activityStatus.headline.${state}`)}
+        </p>
+      )}
       <BlockedCauses activity={activity} testId="activity-now-causes" />
 
       <div style={{ display: "grid", gap: "11px" }}>

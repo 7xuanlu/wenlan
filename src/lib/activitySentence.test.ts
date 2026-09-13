@@ -6,9 +6,9 @@ import {
   assetProgress,
   assetSentence,
   blockedCauses,
-  displayState,
   governingJob,
   isCloud,
+  knownState,
   laneKey,
   routeFor,
   routeSentence,
@@ -72,24 +72,15 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
   };
 }
 
-describe("displayState", () => {
-  it("splits Steeping into running and waiting for a quiet moment", () => {
-    expect(displayState(activity({ state: "organizing" }))).toBe("organizing");
-    expect(
-      displayState(activity({ state: "organizing", waiting_for_idle: false })),
-    ).toBe("organizing");
-    expect(
-      displayState(activity({ state: "organizing", waiting_for_idle: true })),
-    ).toBe("waiting_for_idle");
+describe("knownState", () => {
+  it("passes every state this build has words for through unchanged", () => {
+    for (const state of ["up_to_date", "organizing", "waiting_for_idle", "blocked"] as const) {
+      expect(knownState(activity({ state }))).toBe(state);
+    }
   });
 
-  it("never turns Blocked or Up to date into waiting", () => {
-    expect(
-      displayState(activity({ state: "blocked", waiting_for_idle: true })),
-    ).toBe("blocked");
-    expect(
-      displayState(activity({ state: "up_to_date", waiting_for_idle: true })),
-    ).toBe("up_to_date");
+  it("claims nothing for a state from a newer daemon", () => {
+    expect(knownState(activity({ state: "unknown" }))).toBeUndefined();
   });
 });
 

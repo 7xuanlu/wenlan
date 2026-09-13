@@ -11,7 +11,7 @@ import {
   assetProgress,
   assetSentence,
   blockedCauses,
-  displayState,
+  knownState,
   trustSentence,
 } from "../../../lib/activitySentence";
 
@@ -187,6 +187,7 @@ export default function ActivitySummaryPopover({
 }: ActivitySummaryPopoverProps) {
   const { t, i18n } = useTranslation();
 
+  const state = knownState(activity);
   const trust = trustSentence(activity);
   const trustText =
     trust.kind === "local"
@@ -235,7 +236,7 @@ export default function ActivitySummaryPopover({
             margin: 0,
           }}
         >
-          {t(`activityStatus.headline.${displayState(activity)}`)}
+          {state !== undefined && t(`activityStatus.headline.${state}`)}
         </p>
       )}
 

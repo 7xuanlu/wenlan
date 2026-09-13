@@ -29,7 +29,7 @@ export const enActivityStatus = {
   state: {
     up_to_date: "Up to date",
     organizing: "Steeping",
-    // Steeping that cannot run yet (ActivityResponse.waiting_for_idle).
+    // Steeping that cannot run yet (ActivityState waiting_for_idle).
     waiting_for_idle: "Waiting for a quiet moment",
     blocked: "Blocked",
   },
@@ -43,8 +43,10 @@ export const enActivityStatus = {
     up_to_date: "Everything you have given Wenlan has steeped.",
     organizing: "Wenlan is steeping what you have given it.",
     // Pairs with lastActivity: an old time under this line is expected, so it
-    // must not claim anything is running.
-    waiting_for_idle: "Wenlan will keep steeping when your computer is quiet. It holds off while you use it or while it is busy.",
+    // must not claim anything is running. It names every reason the scheduler
+    // holds work, so a long wait while the user is away (low memory, a warm
+    // computer) is still explained.
+    waiting_for_idle: "Wenlan will keep steeping when your computer is quiet. It holds off while you use it, or while it is busy, low on memory or running hot.",
     blocked: "Some steeping is waiting on you.",
   },
   asset: {
@@ -205,7 +207,7 @@ export const hansActivityStatus = {
   headline: {
     up_to_date: "你交给文澜的内容都已沉淀完毕。",
     organizing: "文澜正在沉淀你交给它的内容。",
-    waiting_for_idle: "文澜会在电脑空闲时继续沉淀。你使用电脑或电脑忙碌时，它会先等一等。",
+    waiting_for_idle: "文澜会在电脑空闲时继续沉淀。你使用电脑，或电脑忙碌、内存不足、温度过高时，它会先等一等。",
     blocked: "部分沉淀工作在等你处理。",
   },
   asset: {
@@ -335,7 +337,7 @@ export const hantActivityStatus = {
   headline: {
     up_to_date: "你交給文瀾的內容都已沉澱完畢。",
     organizing: "文瀾正在沉澱你交給它的內容。",
-    waiting_for_idle: "文瀾會在電腦閒置時繼續沉澱。你使用電腦或電腦忙碌時，它會先等一等。",
+    waiting_for_idle: "文瀾會在電腦閒置時繼續沉澱。你使用電腦，或電腦忙碌、記憶體不足、溫度過高時，它會先等一等。",
     blocked: "部分沉澱工作在等你處理。",
   },
   asset: {

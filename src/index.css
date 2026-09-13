@@ -3818,11 +3818,12 @@ p.entity-error {
 /* The icon carries state, never a number: the assets count different things
    (memories, entities, pages), so no single figure is true for all three.
    State is told by FORM as well as color, so it survives color blindness:
-   Steeping sweeps the clock hands (work moving, nothing to do) or, while held
-   for a quiet moment, keeps them still in indigo. Blocked turns
+   Steeping sweeps the clock hands (work moving, nothing to do). Waiting for a
+   quiet moment keeps the same indigo with the hands still. Blocked turns
    them into "!" (it needs you). Up to date is the plain clock. */
 .mem-activity-status-icon { flex-shrink: 0; transition: color 150ms ease; }
-.mem-activity-status-icon[data-icon-state="organizing"] { color: var(--mem-accent-indigo); }
+.mem-activity-status-icon[data-icon-state="organizing"],
+.mem-activity-status-icon[data-icon-state="waiting_for_idle"] { color: var(--mem-accent-indigo); }
 .mem-activity-status-icon[data-icon-state="blocked"] { color: var(--mem-accent-amber); }
 .mem-activity-hands { transform-box: view-box; transform-origin: 50% 50%; }
 @keyframes mem-activity-hands-sweep { to { transform: rotate(360deg); } }

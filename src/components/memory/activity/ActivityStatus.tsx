@@ -2,8 +2,7 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { displayState, isWaitingForIdle } from "../../../lib/activitySentence";
-import type { ActivityState } from "../../../lib/tauri";
+import { knownState, type KnownActivityState } from "../../../lib/activitySentence";
 import { useActivity } from "../../../lib/useActivity";
 import ActivitySummaryPopover from "./ActivitySummaryPopover";
 
@@ -77,14 +76,19 @@ export default function ActivityStatus({
 
   // Until the first read lands the button is the plain Activity button: an
   // icon claiming a state before the app has asked would be a claim it cannot back.
-  // It is the same element either way, so focus survives the first read.
+  // It is the same element either way, so focus survives the first read. A
+  // state from a daemon newer than this app claims nothing either: the icon
+  // stays plain, but the summary still opens, since its counts still hold.
+  // Gating the summary on a known state would unmount it under an open flag
+  // the parent never clears, and a later poll would reopen it unasked.
   const loaded = activity !== undefined;
-  const stateWord = loaded ? t(`activityStatus.state.${displayState(activity)}`) : undefined;
-  const quiet = !loaded || activity.state === "up_to_date";
-  // Motion means work is running now. Steeping held until the computer is
-  // quiet keeps the indigo clock but stills its hands, so it never sweeps
-  // beside a "Last activity" from hours ago.
-  const sweep = loaded && activity.state === "organizing" && !isWaitingForIdle(activity);
+  const state = activity === undefined ? undefined : knownState(activity);
+  const stateWord = state === undefined ? undefined : t(`activityStatus.state.${state}`);
+  const quiet = state === undefined || state === "up_to_date";
+  // Motion means work is running now. Waiting for a quiet moment keeps the
+  // indigo clock but stills its hands, so it never sweeps beside a "Last
+  // activity" from hours ago.
+  const sweep = state === "organizing";
 
   return (
     <div
@@ -96,16 +100,18 @@ export default function ActivityStatus({
         ref={triggerRef}
         type="button"
         data-testid="activity-status"
-        data-state={activity?.state}
+        data-state={state}
         aria-current={current ? "page" : undefined}
         aria-haspopup={loaded ? "dialog" : undefined}
         aria-expanded={loaded ? expanded : undefined}
-        aria-label={loaded ? t("activityStatus.buttonLabel", { state: stateWord }) : undefined}
+        aria-label={
+          stateWord === undefined ? undefined : t("activityStatus.buttonLabel", { state: stateWord })
+        }
         title={stateWord}
         onClick={loaded ? onToggle : onOpenActivity}
         className="mem-activity-status"
       >
-        <ActivityIcon state={quiet ? undefined : activity.state} sweep={sweep} />
+        <ActivityIcon state={quiet ? undefined : state} sweep={sweep} />
         <span>{label}</span>
       </button>
       {loaded && expanded && (
@@ -124,6 +130,7 @@ export default function ActivityStatus({
  * The icon is the state, so the button has one mark rather than an icon and a
  * dot beside it. Up to date is the plain clock. Steeping tints it indigo, and
  * its hands sweep only while work can run: time passing while work steeps.
+ * Waiting for a quiet moment keeps the indigo with the hands still.
  * Blocked tints it amber and turns the hands into "!", so it is told by shape
  * as well as color, and it stays still: waiting work is not an alarm.
  */
@@ -131,7 +138,7 @@ function ActivityIcon({
   state,
   sweep,
 }: {
-  readonly state?: ActivityState;
+  readonly state?: KnownActivityState;
   readonly sweep: boolean;
 }) {
   return (

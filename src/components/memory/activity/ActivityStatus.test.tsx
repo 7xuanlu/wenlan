@@ -185,21 +185,48 @@ describe("ActivityStatus", () => {
   });
 
   it("stills the hands while steeping waits for a quiet moment", async () => {
-    getActivityMock.mockResolvedValue(
-      activity({ state: "organizing", waiting_for_idle: true }),
-    );
+    getActivityMock.mockResolvedValue(activity({ state: "waiting_for_idle" }));
     renderStatus();
 
     const button = await loadedTrigger();
     await waitFor(() =>
       expect(button).toHaveAccessibleName("Activity, Waiting for a quiet moment"),
     );
+    expect(button).toHaveAttribute("data-state", "waiting_for_idle");
     expect(button).toHaveAttribute("title", "Waiting for a quiet moment");
     const icon = screen.getByTestId("activity-status-icon");
-    // Still indigo: the work is steeping, just not running.
-    expect(icon).toHaveAttribute("data-icon-state", "organizing");
+    // The hands are drawn but still; index.css tints this state indigo.
+    expect(icon).toHaveAttribute("data-icon-state", "waiting_for_idle");
     expect(icon.querySelector(".mem-activity-hands")).not.toBeNull();
     expect(icon.querySelector(".mem-activity-hands-sweep")).toBeNull();
+  });
+
+  it("keeps a plain icon but still opens the summary for a state from a newer daemon", async () => {
+    getActivityMock.mockResolvedValue(activity({ state: "unknown" }));
+    const onOpenActivity = vi.fn();
+    const { onToggle } = renderStatus(vi.fn(), false, { onOpenActivity });
+
+    const button = screen.getByRole("button", { name: "Activity" });
+    // aria-haspopup appears only once the read has landed, so the checks
+    // below run against the unknown response, not the pre-load button.
+    await waitFor(() => expect(button).toHaveAttribute("aria-haspopup", "dialog"));
+    expect(button).toHaveAccessibleName("Activity");
+    expect(button).not.toHaveAttribute("data-state");
+    expect(button).not.toHaveAttribute("title");
+    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
+
+    await userEvent.click(button);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onOpenActivity).not.toHaveBeenCalled();
+  });
+
+  // An open flag the summary ignored would stay set in the parent and reopen
+  // it unasked once a known state came back.
+  it("shows the open summary for a state from a newer daemon", async () => {
+    getActivityMock.mockResolvedValue(activity({ state: "unknown" }));
+    renderStatus(vi.fn(), true);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
   it("opens the popover on click and reports its expanded state", async () => {

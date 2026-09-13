@@ -8,13 +8,24 @@
 use serde::{Deserialize, Serialize};
 
 /// Overall background-work state. Precedence: Blocked over Organizing over
-/// UpToDate.
+/// WaitingForIdle over UpToDate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
     UpToDate,
+    /// Work is waiting and can run now.
     Organizing,
+    /// Work is waiting but cannot run yet: the scheduler's latest resource
+    /// check held background work (the computer is in use, busy, low on
+    /// memory or hot) and no import is bypassing that check. Only ever
+    /// replaces Organizing.
+    WaitingForIdle,
     Blocked,
+    /// A state this build does not know, sent by a newer daemon. The daemon
+    /// never sends it; it lets an older reader keep the rest of the response
+    /// instead of failing to parse it.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The three asset groups the Activity surface reports on.
@@ -132,13 +143,6 @@ pub struct ActivityResponse {
     pub assets: Vec<ActivityAssetStatus>,
     pub everyday: ActivityRoute,
     pub synthesis: ActivityRoute,
-    /// True while the state is Organizing but nothing can run yet: the
-    /// scheduler's latest resource check held background work (the computer
-    /// is in use, busy, low on memory or hot) and no import is bypassing that
-    /// check. Organizing alone only means work is waiting with a model to
-    /// serve it. Defaults to false for daemons that predate the field.
-    #[serde(default)]
-    pub waiting_for_idle: bool,
 }
 
 #[cfg(test)]
@@ -158,6 +162,7 @@ mod tests {
         for (state, label) in [
             (ActivityState::UpToDate, "up_to_date"),
             (ActivityState::Organizing, "organizing"),
+            (ActivityState::WaitingForIdle, "waiting_for_idle"),
             (ActivityState::Blocked, "blocked"),
         ] {
             let json = serde_json::to_string(&state).unwrap();
@@ -213,7 +218,6 @@ mod tests {
                 mode: "pinned_unavailable".to_string(),
                 available: false,
             },
-            waiting_for_idle: true,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"pinned_unavailable\""));
@@ -222,12 +226,16 @@ mod tests {
         assert_eq!(back, response);
     }
 
+    /// An app older than its daemon must not lose the whole response to one
+    /// state word it has never seen.
     #[test]
-    fn activity_response_without_waiting_for_idle_reads_as_not_waiting() {
-        let json = r#"{"state":"organizing","last_activity_at":null,"assets":[],
+    fn activity_response_with_a_newer_state_still_parses() {
+        let json = r#"{"state":"a_state_from_a_newer_daemon","last_activity_at":null,
+            "assets":[{"kind":"pages","state":"idle","done":2,"total":2,"blocked":0,"steps":[]}],
             "everyday":{"job":"everyday","lane":"on_device","model":"m","mode":"pinned","available":true},
             "synthesis":{"job":"synthesis","lane":"on_device","model":"m","mode":"pinned","available":true}}"#;
         let response: ActivityResponse = serde_json::from_str(json).unwrap();
-        assert!(!response.waiting_for_idle);
+        assert_eq!(response.state, ActivityState::Unknown);
+        assert_eq!(response.assets[0].total, 2);
     }
 }

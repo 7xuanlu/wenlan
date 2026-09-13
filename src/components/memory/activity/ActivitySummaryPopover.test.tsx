@@ -288,15 +288,14 @@ describe("ActivitySummaryPopover", () => {
   it("says it is waiting, not steeping, while work is held for a quiet moment", async () => {
     await openPopover(
       activity({
-        state: "organizing",
-        waiting_for_idle: true,
+        state: "waiting_for_idle",
         last_activity_at: Math.floor(Date.now() / 1000) - 7200,
         assets: [asset("memories", { state: "running", total: 9 })],
       }),
     );
     const headline = screen.getByTestId("activity-summary-headline");
     expect(headline).toHaveTextContent(
-      "Wenlan will keep steeping when your computer is quiet. It holds off while you use it or while it is busy.",
+      "Wenlan will keep steeping when your computer is quiet. It holds off while you use it, or while it is busy, low on memory or running hot.",
     );
     expect(headline).not.toHaveTextContent("Wenlan is steeping what you have given it.");
     expect(screen.getByTestId("activity-summary-last")).toHaveTextContent("2h ago");

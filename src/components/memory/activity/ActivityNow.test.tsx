@@ -213,6 +213,14 @@ describe("ActivityNow", () => {
     expect(screen.queryByTestId("activity-steps-toggle-entities")).toBeNull();
   });
 
+  it("drops only the headline for a state from a newer daemon", async () => {
+    renderNow(activity({ state: "unknown" }));
+    expect(await screen.findByTestId("activity-now-models")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-now-trust")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-steps-toggle-memories")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-now-headline")).toBeNull();
+  });
+
   it("names both models and their lanes", async () => {
     renderNow(
       activity({ synthesis: route("synthesis", "anthropic", "claude-opus-5") }),
