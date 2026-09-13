@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import type { ActivityState } from "../../../lib/tauri";
 import { useActivity } from "../../../lib/useActivity";
 import ActivitySummaryPopover from "./ActivitySummaryPopover";
 
@@ -11,8 +12,8 @@ import ActivitySummaryPopover from "./ActivitySummaryPopover";
  * It is the ONE way into activity. The toolbar sits on every view (Settings
  * and a collapsed sidebar included), so the state rides on the button that
  * already names the destination rather than on a second entry in the sidebar.
- * Up to date looks like the plain button; Steeping adds a pulsing ring;
- * Blocked adds a solid amber dot. No number: memories, entities and pages are
+ * The icon carries the state (see ActivityIcon), so there is no separate dot.
+ * No number: memories, entities and pages are
  * counted in different units, so any one figure here would be wrong for two of
  * them. The counts live in the summary, each beside its own unit. Amber is not
  * red on purpose: blocked work is waiting, nothing is lost.
@@ -73,8 +74,8 @@ export default function ActivityStatus({
 
   const label = t("main.activity");
 
-  // Until the first read lands the button is the plain Activity button: a dot
-  // claiming a state before the app has asked would be a claim it cannot back.
+  // Until the first read lands the button is the plain Activity button: an
+  // icon claiming a state before the app has asked would be a claim it cannot back.
   // It is the same element either way, so focus survives the first read.
   const loaded = activity !== undefined;
   const stateWord = loaded ? t(`activityStatus.state.${activity.state}`) : undefined;
@@ -99,22 +100,8 @@ export default function ActivityStatus({
         onClick={loaded ? onToggle : onOpenActivity}
         className="mem-activity-status"
       >
-        <ActivityIcon />
+        <ActivityIcon state={quiet ? undefined : activity.state} />
         <span>{label}</span>
-        {!quiet && (
-          <span className="mem-activity-status-badge">
-            <span
-              aria-hidden="true"
-              data-testid="activity-status-dot"
-              data-dot-state={activity.state}
-              className={
-                activity.state === "organizing"
-                  ? "mem-activity-dot mem-activity-dot-pulse"
-                  : "mem-activity-dot"
-              }
-            />
-          </span>
-        )}
       </button>
       {loaded && expanded && (
         <ActivitySummaryPopover
@@ -128,16 +115,42 @@ export default function ActivityStatus({
   );
 }
 
-function ActivityIcon() {
+/**
+ * The icon is the state, so the button has one mark rather than an icon and a
+ * dot beside it. Up to date is the plain clock. Steeping tints it indigo and
+ * sweeps the hands: time passing while work steeps. Blocked tints it amber and
+ * turns the hands into "!", so it is told by shape as well as color, and it
+ * stays still: waiting work is not an alarm.
+ */
+function ActivityIcon({ state }: { readonly state?: ActivityState }) {
   return (
-    <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-      <path
-        d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8M3 3v5h5M12 7v5l3 2"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.8"
-      />
+    <svg
+      aria-hidden="true"
+      className="mem-activity-status-icon"
+      data-testid="activity-status-icon"
+      data-icon-state={state}
+      fill="none"
+      height="16"
+      stroke="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      strokeWidth="1.8"
+      viewBox="0 0 24 24"
+      width="16"
+    >
+      <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8M3 3v5h5" />
+      {state === "blocked" ? (
+        <path d="M12 7.5v5M12 16.5h.01" />
+      ) : (
+        <path
+          className={
+            state === "organizing"
+              ? "mem-activity-hands mem-activity-hands-sweep"
+              : "mem-activity-hands"
+          }
+          d="M12 7v5l3 2"
+        />
+      )}
     </svg>
   );
 }

@@ -115,11 +115,11 @@ for (const width of WIDTHS) {
       await expect(button).toBeVisible();
       await expect(button).toHaveAttribute("data-state", "organizing");
       // State, never a number: the assets count different things, so the
-      // badge is a ring while steeping and the word lives in the name.
+      // icon sweeps while steeping and the word lives in the name.
       await expect(button).toHaveText("Activity");
       await expect(button).toHaveAccessibleName("Activity, Steeping");
-      await expect(page.getByTestId("activity-status-dot")).toHaveAttribute(
-        "data-dot-state",
+      await expect(page.getByTestId("activity-status-icon")).toHaveAttribute(
+        "data-icon-state",
         "organizing",
       );
 
@@ -316,7 +316,7 @@ test("a missing model leads the popover, in units that match each row", async ({
   const trigger = page.getByTestId("activity-status");
   await expect(trigger).toHaveAttribute("data-state", "blocked");
   await expect(trigger).toHaveText("Activity");
-  await expect(page.getByTestId("activity-status-dot")).toHaveAttribute("data-dot-state", "blocked");
+  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-state", "blocked");
 
   await trigger.click();
   const popover = page.getByRole("dialog", { name: "Background activity" });

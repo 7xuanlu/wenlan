@@ -175,8 +175,8 @@ test("an import shows Ingest and Store, then hands the rest to the toolbar Activ
   // ── And the button it points at is doing the reporting ──
   await expect(statusLine).toHaveAttribute("data-state", "organizing", { timeout: 15_000 });
   await expect(statusLine).toHaveAccessibleName("Activity, Steeping");
-  await expect(page.getByTestId("activity-status-dot")).toHaveAttribute(
-    "data-dot-state",
+  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute(
+    "data-icon-state",
     "organizing",
   );
 

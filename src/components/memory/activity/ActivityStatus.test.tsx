@@ -83,7 +83,7 @@ beforeEach(() => {
 
 describe("ActivityStatus", () => {
   it("is the plain Activity button until the first read lands", async () => {
-    // A dot claiming a state before asking would be a claim the app cannot
+    // An icon claiming a state before asking would be a claim the app cannot
     // back, and this sits on every page. Clicking still reaches Activity.
     getActivityMock.mockReturnValue(new Promise(() => {}));
     const onOpenActivity = vi.fn();
@@ -92,14 +92,14 @@ describe("ActivityStatus", () => {
     const button = screen.getByRole("button", { name: "Activity" });
     expect(button).not.toHaveAttribute("data-state");
     expect(button).not.toHaveAttribute("aria-haspopup");
-    expect(screen.queryByTestId("activity-status-dot")).toBeNull();
+    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
 
     await userEvent.click(button);
     expect(onOpenActivity).toHaveBeenCalledTimes(1);
     expect(onToggle).not.toHaveBeenCalled();
   });
 
-  it("stays quiet when up to date: the state is in the name, not a dot", async () => {
+  it("stays quiet when up to date: the plain clock, the state in the name", async () => {
     getActivityMock.mockResolvedValue(activity());
     renderStatus();
 
@@ -107,7 +107,8 @@ describe("ActivityStatus", () => {
     expect(button).toHaveAttribute("data-state", "up_to_date");
     expect(button).toHaveAccessibleName("Activity, Up to date");
     expect(button).toHaveAttribute("title", "Up to date");
-    expect(screen.queryByTestId("activity-status-dot")).toBeNull();
+    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
+    expect(button.querySelector(".mem-activity-status-badge, .mem-activity-dot")).toBeNull();
   });
 
   it("marks itself as the current page on the Activity view", async () => {
@@ -118,7 +119,7 @@ describe("ActivityStatus", () => {
 
   it("shows no number in any state", async () => {
     // Memories, entities and pages count different things, so no one figure
-    // on the button is true for all three. The state is the dot's form.
+    // on the button is true for all three. The state is the icon's form.
     for (const state of ["organizing", "blocked"] as const) {
       getActivityMock.mockResolvedValue(
         activity({
@@ -155,18 +156,18 @@ describe("ActivityStatus", () => {
     const line = await loadedTrigger();
     expect(line).toHaveAttribute("data-state", "blocked");
     expect(line).toHaveAccessibleName("Activity, Blocked");
-    expect(screen.getByTestId("activity-status-dot")).toHaveAttribute(
-      "data-dot-state",
+    expect(screen.getByTestId("activity-status-icon")).toHaveAttribute(
+      "data-icon-state",
       "blocked",
     );
   });
 
-  it("pulses the dot only while steeping", async () => {
+  it("sweeps the clock hands only while steeping, and shows ! when blocked", async () => {
     getActivityMock.mockResolvedValue(activity({ state: "organizing" }));
     const { unmount } = renderStatus();
-    expect(await screen.findByTestId("activity-status-dot")).toHaveClass(
-      "mem-activity-dot-pulse",
-    );
+    const steeping = await screen.findByTestId("activity-status-icon");
+    await waitFor(() => expect(steeping).toHaveAttribute("data-icon-state", "organizing"));
+    expect(steeping.querySelector(".mem-activity-hands-sweep")).not.toBeNull();
     unmount();
 
     getActivityMock.mockResolvedValue(
@@ -174,10 +175,13 @@ describe("ActivityStatus", () => {
     );
     renderStatus();
     await waitFor(() => {
-      expect(screen.getByTestId("activity-status-dot")).not.toHaveClass(
-        "mem-activity-dot-pulse",
-      );
+      expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-state", "blocked");
     });
+    const blocked = screen.getByTestId("activity-status-icon");
+    // Blocked is told by shape, not color alone: the hands become "!", and it
+    // does not move, because waiting work is not an alarm.
+    expect(blocked.querySelector(".mem-activity-hands")).toBeNull();
+    expect(blocked.querySelector(".mem-activity-hands-sweep")).toBeNull();
   });
 
   it("opens the popover on click and reports its expanded state", async () => {

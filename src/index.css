@@ -3791,10 +3791,10 @@ p.entity-error {
 .content-renderer a.content-page-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
 
 /* Toolbar Activity button. It carries the background state, so it is the one
-   entry into activity on every view. The dot pulses only while steeping, so
-   the one moving thing on the page always means "work is in flight". Blocked
-   is amber and STILL: nothing is lost when work is waiting, so it must not
-   read as an alarm. Up to date shows no dot at all: the plain button. */
+   entry into activity on every view. The clock hands sweep only while
+   steeping, so the one moving thing on the page always means "work is in
+   flight". Blocked is amber and STILL: nothing is lost when work is waiting,
+   so it must not read as an alarm. Up to date is the plain button. */
 .mem-activity-status {
   align-items: center;
   background: transparent;
@@ -3814,19 +3814,19 @@ p.entity-error {
 .mem-activity-status[aria-expanded="true"] { background: var(--mem-hover-strong); }
 .mem-activity-status[aria-current="page"] { color: var(--mem-text); }
 .mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
-/* The badge carries state, never a number: the assets count different things
+/* The icon carries state, never a number: the assets count different things
    (memories, entities, pages), so no single figure is true for all three.
    State is told by FORM as well as color, so it survives color blindness:
-   Steeping is a pulsing ring (work moving, nothing to do), Blocked a solid
-   amber dot (it needs you). Up to date draws nothing. */
-.mem-activity-status-badge { align-items: center; display: inline-flex; }
-.mem-activity-dot { border-radius: 50%; box-sizing: border-box; flex-shrink: 0; height: 7px; width: 7px; }
-.mem-activity-dot[data-dot-state="organizing"] { border: 1.5px solid var(--mem-accent-indigo); }
-.mem-activity-dot[data-dot-state="blocked"] { background: var(--mem-accent-amber); }
-@keyframes mem-activity-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.mem-activity-dot-pulse { animation: mem-activity-dot-pulse 1.8s ease-in-out infinite; }
+   Steeping sweeps the clock hands (work moving, nothing to do), Blocked turns
+   them into "!" (it needs you). Up to date is the plain clock. */
+.mem-activity-status-icon { flex-shrink: 0; transition: color 150ms ease; }
+.mem-activity-status-icon[data-icon-state="organizing"] { color: var(--mem-accent-indigo); }
+.mem-activity-status-icon[data-icon-state="blocked"] { color: var(--mem-accent-amber); }
+.mem-activity-hands { transform-box: view-box; transform-origin: 50% 50%; }
+@keyframes mem-activity-hands-sweep { to { transform: rotate(360deg); } }
+.mem-activity-hands-sweep { animation: mem-activity-hands-sweep 6s linear infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .mem-activity-dot-pulse { animation: none; }
+  .mem-activity-hands-sweep { animation: none; }
 }
 
 /* The summary drops down from the button, right-aligned to it, since the
