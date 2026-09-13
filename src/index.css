@@ -3792,8 +3792,9 @@ p.entity-error {
 
 /* Toolbar Activity button. It carries the background state, so it is the one
    entry into activity on every view. The clock hands sweep only while
-   steeping, so the one moving thing on the page always means "work is in
-   flight". Blocked is amber and STILL: nothing is lost when work is waiting,
+   steeping work can run, so the one moving thing on the page always means
+   "work is in flight"; steeping held until the computer is quiet stays still.
+   Blocked is amber and STILL: nothing is lost when work is waiting,
    so it must not read as an alarm. Up to date is the plain button. */
 .mem-activity-status {
   align-items: center;
@@ -3817,7 +3818,8 @@ p.entity-error {
 /* The icon carries state, never a number: the assets count different things
    (memories, entities, pages), so no single figure is true for all three.
    State is told by FORM as well as color, so it survives color blindness:
-   Steeping sweeps the clock hands (work moving, nothing to do), Blocked turns
+   Steeping sweeps the clock hands (work moving, nothing to do) or, while held
+   for a quiet moment, keeps them still in indigo. Blocked turns
    them into "!" (it needs you). Up to date is the plain clock. */
 .mem-activity-status-icon { flex-shrink: 0; transition: color 150ms ease; }
 .mem-activity-status-icon[data-icon-state="organizing"] { color: var(--mem-accent-indigo); }

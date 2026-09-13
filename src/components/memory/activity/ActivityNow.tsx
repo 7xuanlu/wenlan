@@ -15,6 +15,7 @@ import {
 } from "../../../lib/activityNowLayout";
 import {
   assetSentence,
+  displayState,
   laneKey,
   routeFor,
   routeSentence,
@@ -261,7 +262,7 @@ function NowBody({
           margin: 0,
         }}
       >
-        {t(`activityStatus.headline.${activity.state}`)}
+        {t(`activityStatus.headline.${displayState(activity)}`)}
       </p>
       <BlockedCauses activity={activity} testId="activity-now-causes" />
 

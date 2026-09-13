@@ -132,6 +132,13 @@ pub struct ActivityResponse {
     pub assets: Vec<ActivityAssetStatus>,
     pub everyday: ActivityRoute,
     pub synthesis: ActivityRoute,
+    /// True while the state is Organizing but nothing can run yet: the
+    /// scheduler's latest resource check held background work (the computer
+    /// is in use, busy, low on memory or hot) and no import is bypassing that
+    /// check. Organizing alone only means work is waiting with a model to
+    /// serve it. Defaults to false for daemons that predate the field.
+    #[serde(default)]
+    pub waiting_for_idle: bool,
 }
 
 #[cfg(test)]
@@ -206,11 +213,21 @@ mod tests {
                 mode: "pinned_unavailable".to_string(),
                 available: false,
             },
+            waiting_for_idle: true,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"pinned_unavailable\""));
         assert!(json.contains("\"on_device\""));
         let back: ActivityResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back, response);
+    }
+
+    #[test]
+    fn activity_response_without_waiting_for_idle_reads_as_not_waiting() {
+        let json = r#"{"state":"organizing","last_activity_at":null,"assets":[],
+            "everyday":{"job":"everyday","lane":"on_device","model":"m","mode":"pinned","available":true},
+            "synthesis":{"job":"synthesis","lane":"on_device","model":"m","mode":"pinned","available":true}}"#;
+        let response: ActivityResponse = serde_json::from_str(json).unwrap();
+        assert!(!response.waiting_for_idle);
     }
 }

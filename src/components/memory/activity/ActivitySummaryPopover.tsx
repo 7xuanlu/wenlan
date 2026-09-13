@@ -11,6 +11,7 @@ import {
   assetProgress,
   assetSentence,
   blockedCauses,
+  displayState,
   trustSentence,
 } from "../../../lib/activitySentence";
 
@@ -234,7 +235,7 @@ export default function ActivitySummaryPopover({
             margin: 0,
           }}
         >
-          {t(`activityStatus.headline.${activity.state}`)}
+          {t(`activityStatus.headline.${displayState(activity)}`)}
         </p>
       )}
 

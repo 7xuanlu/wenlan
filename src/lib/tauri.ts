@@ -619,6 +619,8 @@ export interface ActivityResponse {
   assets: ActivityAssetStatus[];
   everyday: ActivityRoute;
   synthesis: ActivityRoute;
+  /** Steeping, but held until the computer is quiet. Absent on older daemons. */
+  waiting_for_idle?: boolean;
 }
 
 export async function getActivity(): Promise<ActivityResponse> {

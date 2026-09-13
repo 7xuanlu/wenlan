@@ -30,19 +30,41 @@ pub async fn handle_activity(
     // Snapshot everything the handler needs out of the state lock in one
     // short block, then drop the guard before any await.
     let cfg = config::load_config();
-    let (db, everyday, synthesis) = {
+    let (db, everyday, synthesis, gate_admitted) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         let (everyday, synthesis) = resolve_job_routes(&cfg, &s);
-        (db, everyday, synthesis)
+        // A `std::sync::Mutex`, locked and released within this statement.
+        let gate_admitted = s
+            .ambient_gate
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|snapshot| snapshot.admitted);
+        (db, everyday, synthesis, gate_admitted)
     };
     let counts = db.activity_counts().await?;
     let batches = db
         .active_import_batches(DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT)
         .await?;
-    Ok(Json(compose_activity(
-        counts, &batches, &everyday, &synthesis,
-    )))
+    let mut response = compose_activity(counts, &batches, &everyday, &synthesis);
+    response.waiting_for_idle = waiting_for_idle(response.state, &batches, gate_admitted);
+    Ok(Json(response))
+}
+
+/// Organizing work that cannot run yet. The scheduler holds background work
+/// until the computer is quiet (idle input, spare CPU and memory, nominal
+/// thermals) and publishes what its latest check saw. An import in progress
+/// bypasses that check, so it still counts as running. Before the first check
+/// (`None`) nothing is claimed.
+fn waiting_for_idle(
+    state: ActivityState,
+    batches: &[ImportBatchStatus],
+    gate_admitted: Option<bool>,
+) -> bool {
+    state == ActivityState::Organizing
+        && gate_admitted == Some(false)
+        && batches.iter().all(|batch| batch.complete)
 }
 
 /// Done/failed/pending split for one group of `enrichment_steps` rows.
@@ -325,6 +347,9 @@ pub(crate) fn compose_activity(
         assets,
         everyday: everyday_route,
         synthesis: synthesis_route,
+        // Needs the scheduler's gate, which the counts do not carry; the
+        // handler fills it in (see `waiting_for_idle`).
+        waiting_for_idle: false,
     }
 }
 
@@ -725,6 +750,45 @@ mod tests {
         // Eight memories pending in both Summarize and Link is eight blocked
         // items, not sixteen.
         assert_eq!(memories_asset(&response).blocked, 8);
+    }
+
+    /// Steeping with the gate closed is waiting, not running: this is the
+    /// sweeping clock beside "Last activity 2h ago".
+    #[test]
+    fn organizing_work_held_by_the_gate_is_waiting_for_idle() {
+        let mut done_batch = incomplete_batch();
+        done_batch.complete = true;
+        let cases = [
+            (ActivityState::Organizing, vec![], Some(false), true),
+            (
+                ActivityState::Organizing,
+                vec![done_batch],
+                Some(false),
+                true,
+            ),
+            // The gate admits work: it runs.
+            (ActivityState::Organizing, vec![], Some(true), false),
+            // No check yet: claim nothing.
+            (ActivityState::Organizing, vec![], None, false),
+            // An import bypasses the gate, so it is running.
+            (
+                ActivityState::Organizing,
+                vec![incomplete_batch()],
+                Some(false),
+                false,
+            ),
+            // Only Steeping can wait; the other states say their own thing.
+            (ActivityState::Blocked, vec![], Some(false), false),
+            (ActivityState::UpToDate, vec![], Some(false), false),
+        ];
+        for (state, batches, gate, expected) in cases {
+            assert_eq!(
+                waiting_for_idle(state, &batches, gate),
+                expected,
+                "{state:?} batches={} gate={gate:?}",
+                batches.len()
+            );
+        }
     }
 
     #[test]

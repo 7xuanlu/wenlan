@@ -51,6 +51,23 @@ export function routeFor(
 }
 
 /**
+ * Steeping that cannot run yet: the daemon holds background work until the
+ * computer is quiet. Organizing alone only means work is waiting with a model
+ * to serve it, so a sweeping clock or "is steeping" copy there would sit beside
+ * a "Last activity 2h ago" that says nothing has run.
+ */
+export function isWaitingForIdle(activity: ActivityResponse): boolean {
+  return activity.state === "organizing" && activity.waiting_for_idle === true;
+}
+
+/** The state as the user sees it: Steeping splits into running and waiting. */
+export type ActivityDisplayState = ActivityResponse["state"] | "waiting_for_idle";
+
+export function displayState(activity: ActivityResponse): ActivityDisplayState {
+  return isWaitingForIdle(activity) ? "waiting_for_idle" : activity.state;
+}
+
+/**
  * The step that counts an asset's OWN items: memories for Memories, entities
  * for Entities, pages for Pages.
  *

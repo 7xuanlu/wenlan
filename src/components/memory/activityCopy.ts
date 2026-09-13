@@ -29,6 +29,8 @@ export const enActivityStatus = {
   state: {
     up_to_date: "Up to date",
     organizing: "Steeping",
+    // Steeping that cannot run yet (ActivityResponse.waiting_for_idle).
+    waiting_for_idle: "Waiting for a quiet moment",
     blocked: "Blocked",
   },
   statusLabel: "Background activity",
@@ -39,7 +41,10 @@ export const enActivityStatus = {
   // ── Tier 1, the summary popover ───────────────────────────────────────
   headline: {
     up_to_date: "Everything you have given Wenlan has steeped.",
-    organizing: "Wenlan is steeping what you have given it. It works while your computer is quiet, so it can pause while you use it.",
+    organizing: "Wenlan is steeping what you have given it.",
+    // Pairs with lastActivity: an old time under this line is expected, so it
+    // must not claim anything is running.
+    waiting_for_idle: "Wenlan will keep steeping when your computer is quiet. It holds off while you use it or while it is busy.",
     blocked: "Some steeping is waiting on you.",
   },
   asset: {
@@ -191,13 +196,16 @@ export const hansActivityStatus = {
   state: {
     up_to_date: "已就绪",
     organizing: "沉淀中",
+    // Not 暂停: that word is Blocked in this locale.
+    waiting_for_idle: "等电脑空闲",
     blocked: "已暂停",
   },
   statusLabel: "后台工作",
   buttonLabel: "活动，{{state}}",
   headline: {
     up_to_date: "你交给文澜的内容都已沉淀完毕。",
-    organizing: "文澜正在沉淀你交给它的内容。它在电脑空闲时工作，你使用电脑时可能会暂停。",
+    organizing: "文澜正在沉淀你交给它的内容。",
+    waiting_for_idle: "文澜会在电脑空闲时继续沉淀。你使用电脑或电脑忙碌时，它会先等一等。",
     blocked: "部分沉淀工作在等你处理。",
   },
   asset: {
@@ -318,13 +326,16 @@ export const hantActivityStatus = {
   state: {
     up_to_date: "已就緒",
     organizing: "沉澱中",
+    // Not 暫停: that word is Blocked in this locale.
+    waiting_for_idle: "等電腦閒置",
     blocked: "已暫停",
   },
   statusLabel: "背景工作",
   buttonLabel: "活動，{{state}}",
   headline: {
     up_to_date: "你交給文瀾的內容都已沉澱完畢。",
-    organizing: "文瀾正在沉澱你交給它的內容。它在電腦閒置時工作，你使用電腦時可能會暫停。",
+    organizing: "文瀾正在沉澱你交給它的內容。",
+    waiting_for_idle: "文瀾會在電腦閒置時繼續沉澱。你使用電腦或電腦忙碌時，它會先等一等。",
     blocked: "部分沉澱工作在等你處理。",
   },
   asset: {

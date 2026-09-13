@@ -184,6 +184,24 @@ describe("ActivityStatus", () => {
     expect(blocked.querySelector(".mem-activity-hands-sweep")).toBeNull();
   });
 
+  it("stills the hands while steeping waits for a quiet moment", async () => {
+    getActivityMock.mockResolvedValue(
+      activity({ state: "organizing", waiting_for_idle: true }),
+    );
+    renderStatus();
+
+    const button = await loadedTrigger();
+    await waitFor(() =>
+      expect(button).toHaveAccessibleName("Activity, Waiting for a quiet moment"),
+    );
+    expect(button).toHaveAttribute("title", "Waiting for a quiet moment");
+    const icon = screen.getByTestId("activity-status-icon");
+    // Still indigo: the work is steeping, just not running.
+    expect(icon).toHaveAttribute("data-icon-state", "organizing");
+    expect(icon.querySelector(".mem-activity-hands")).not.toBeNull();
+    expect(icon.querySelector(".mem-activity-hands-sweep")).toBeNull();
+  });
+
   it("opens the popover on click and reports its expanded state", async () => {
     getActivityMock.mockResolvedValue(activity());
     const { onToggle } = renderStatus();

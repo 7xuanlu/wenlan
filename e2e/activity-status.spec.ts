@@ -122,6 +122,9 @@ for (const width of WIDTHS) {
         "data-icon-state",
         "organizing",
       );
+      await expect(
+        page.getByTestId("activity-status-icon").locator(".mem-activity-hands-sweep"),
+      ).toHaveCount(1);
 
       // The status lives in the top toolbar, fully on screen, and there is
       // exactly one of it: no second copy left behind in a sidebar.
@@ -192,7 +195,7 @@ test("the popover opens by click and by keyboard, and gives focus back", async (
   await expect(popover).toBeVisible();
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(popover.getByTestId("activity-summary-headline")).toHaveText(
-    "Wenlan is steeping what you have given it. It works while your computer is quiet, so it can pause while you use it.",
+    "Wenlan is steeping what you have given it.",
   );
   await expect(popover.getByTestId("activity-asset-memories")).toContainText(
     "7 of 12 summarized and linked",
@@ -348,6 +351,33 @@ test("a missing model leads the popover, in units that match each row", async ({
   await turnOn.click();
   await expect(popover).toBeHidden();
   await expect(page.getByText("On-device and routed models")).toBeVisible();
+
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
+});
+
+test("steeping held for a quiet moment stills the clock and says so", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
+  await installActivityFixture(page, { ...ACTIVITY_FIXTURE, waiting_for_idle: true });
+  await page.goto("/");
+
+  const trigger = page.getByTestId("activity-status");
+  await expect(trigger).toHaveAttribute("data-state", "organizing");
+  await expect(trigger).toHaveAccessibleName("Activity, Waiting for a quiet moment");
+  // Motion means work is running. The clock stays indigo, but its hands do not
+  // move beside a "Last activity" from long ago.
+  const icon = page.getByTestId("activity-status-icon");
+  await expect(icon).toHaveAttribute("data-icon-state", "organizing");
+  await expect(icon.locator(".mem-activity-hands")).toHaveCount(1);
+  await expect(icon.locator(".mem-activity-hands-sweep")).toHaveCount(0);
+
+  await trigger.click();
+  const popover = page.getByRole("dialog", { name: "Background activity" });
+  await expect(popover.getByTestId("activity-summary-headline")).toHaveText(
+    "Wenlan will keep steeping when your computer is quiet. It holds off while you use it or while it is busy.",
+  );
 
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);

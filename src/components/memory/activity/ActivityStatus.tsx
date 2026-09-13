@@ -2,6 +2,7 @@
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
+import { displayState, isWaitingForIdle } from "../../../lib/activitySentence";
 import type { ActivityState } from "../../../lib/tauri";
 import { useActivity } from "../../../lib/useActivity";
 import ActivitySummaryPopover from "./ActivitySummaryPopover";
@@ -78,8 +79,12 @@ export default function ActivityStatus({
   // icon claiming a state before the app has asked would be a claim it cannot back.
   // It is the same element either way, so focus survives the first read.
   const loaded = activity !== undefined;
-  const stateWord = loaded ? t(`activityStatus.state.${activity.state}`) : undefined;
+  const stateWord = loaded ? t(`activityStatus.state.${displayState(activity)}`) : undefined;
   const quiet = !loaded || activity.state === "up_to_date";
+  // Motion means work is running now. Steeping held until the computer is
+  // quiet keeps the indigo clock but stills its hands, so it never sweeps
+  // beside a "Last activity" from hours ago.
+  const sweep = loaded && activity.state === "organizing" && !isWaitingForIdle(activity);
 
   return (
     <div
@@ -100,7 +105,7 @@ export default function ActivityStatus({
         onClick={loaded ? onToggle : onOpenActivity}
         className="mem-activity-status"
       >
-        <ActivityIcon state={quiet ? undefined : activity.state} />
+        <ActivityIcon state={quiet ? undefined : activity.state} sweep={sweep} />
         <span>{label}</span>
       </button>
       {loaded && expanded && (
@@ -117,12 +122,18 @@ export default function ActivityStatus({
 
 /**
  * The icon is the state, so the button has one mark rather than an icon and a
- * dot beside it. Up to date is the plain clock. Steeping tints it indigo and
- * sweeps the hands: time passing while work steeps. Blocked tints it amber and
- * turns the hands into "!", so it is told by shape as well as color, and it
- * stays still: waiting work is not an alarm.
+ * dot beside it. Up to date is the plain clock. Steeping tints it indigo, and
+ * its hands sweep only while work can run: time passing while work steeps.
+ * Blocked tints it amber and turns the hands into "!", so it is told by shape
+ * as well as color, and it stays still: waiting work is not an alarm.
  */
-function ActivityIcon({ state }: { readonly state?: ActivityState }) {
+function ActivityIcon({
+  state,
+  sweep,
+}: {
+  readonly state?: ActivityState;
+  readonly sweep: boolean;
+}) {
   return (
     <svg
       aria-hidden="true"
@@ -144,7 +155,7 @@ function ActivityIcon({ state }: { readonly state?: ActivityState }) {
       ) : (
         <path
           className={
-            state === "organizing"
+            sweep
               ? "mem-activity-hands mem-activity-hands-sweep"
               : "mem-activity-hands"
           }
