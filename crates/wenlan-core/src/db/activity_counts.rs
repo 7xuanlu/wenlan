@@ -103,8 +103,7 @@ pub struct ActivityCounts {
 
 impl MemoryDB {
     /// Read every count `GET /api/activity` needs in one pass. Holds the
-    /// connection guard for the whole function like `pipeline_status` does;
-    /// every query is read-only.
+    /// connection guard for the whole function; every query is read-only.
     pub async fn activity_counts(&self) -> Result<ActivityCounts, WenlanError> {
         let conn = self.conn.lock().await;
 
@@ -146,10 +145,10 @@ impl MemoryDB {
         }
         drop(step_rows);
 
-        // Per-step backlog: memories with no row for that step at all. The
-        // `pipeline_status` "raw" count cannot answer this per step — a
-        // memory with only a `title_enrich` row is still waiting on
-        // `page_growth` — so each step gets its own correlated subquery.
+        // Per-step backlog: memories with no row for that step at all. A
+        // single "raw" count cannot answer this per step — a memory with
+        // only a `title_enrich` row is still waiting on `page_growth` — so
+        // each step gets its own correlated subquery.
         let mut backlog_rows = conn
             .query(
                 // DISTINCT: `memories` holds one row per chunk, so a bare

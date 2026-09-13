@@ -926,8 +926,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         let response = app.oneshot(req).await.unwrap();
-        // 503 = DbNotInitialized, the same mapping the debug pipeline route
-        // reports when no database is attached.
+        // 503 = DbNotInitialized, reported when no database is attached.
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }

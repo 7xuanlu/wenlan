@@ -26,7 +26,6 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
         .route("/api/context", post(handle_context))
         .route("/api/llm/test", post(handle_test_llm))
         .route("/api/shutdown", post(handle_shutdown))
-        .route("/api/debug/pipeline", get(handle_pipeline_status))
         .route("/api/retrievals/recent", get(handle_recent_retrievals))
         .route("/api/pages/recent", get(handle_recent_pages))
         .route("/api/steep", post(handle_steep))
@@ -437,23 +436,6 @@ pub async fn handle_context(
             total: tier2 + tier3,
         },
     }))
-}
-
-/// GET /api/debug/pipeline
-pub async fn handle_pipeline_status(
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> Result<Json<serde_json::Value>, ServerError> {
-    // Snapshot the DB Arc so the read guard is not held across the await
-    // (AGENTS.md: never hold a tokio RwLock guard across .await).
-    let db = {
-        let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
-    };
-    let status = db
-        .pipeline_status()
-        .await
-        .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(status))
 }
 
 /// POST /api/steep
