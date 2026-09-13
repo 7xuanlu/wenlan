@@ -2,6 +2,11 @@ export const supportedAppLocales = ["en", "zh-Hans", "zh-Hant"] as const;
 
 import { enFirstUse, hansFirstUse, hantFirstUse } from "../components/onboarding/firstUseCopy";
 import { enImportView, hansImportView, hantImportView } from "../components/memory/importCopy";
+import {
+  enActivityStatus,
+  hansActivityStatus,
+  hantActivityStatus,
+} from "../components/memory/activityCopy";
 
 const en = {
   common: {
@@ -1875,6 +1880,7 @@ const en = {
   },
   firstUse: enFirstUse,
   importView: enImportView,
+  activityStatus: enActivityStatus,
 };
 
 const zhHans = {
@@ -3699,6 +3705,7 @@ const zhHans = {
   },
   firstUse: hansFirstUse,
   importView: hansImportView,
+  activityStatus: hansActivityStatus,
 };
 
 const zhHant = {
@@ -5523,6 +5530,7 @@ const zhHant = {
   },
   firstUse: hantFirstUse,
   importView: hantImportView,
+  activityStatus: hantActivityStatus,
 };
 
 export const resources = {
