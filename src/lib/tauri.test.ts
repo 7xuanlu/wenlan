@@ -57,6 +57,36 @@ describe('getPipelineStatus', () => {
   });
 });
 
+describe('getActivity', () => {
+  const withoutRefinement = {
+    state: 'up_to_date',
+    last_activity_at: null,
+    assets: [],
+    everyday: { job: 'everyday', lane: 'none', model: null, mode: 'unconfigured', available: false },
+    synthesis: { job: 'synthesis', lane: 'none', model: null, mode: 'unconfigured', available: false },
+  };
+
+  it('fills zero suggestions when an older daemon sends no refinement', async () => {
+    mockInvoke.mockResolvedValue(withoutRefinement);
+
+    const activity = await tauri.getActivity();
+
+    expect(mockInvoke).toHaveBeenCalledWith('get_activity');
+    expect(activity.refinement).toEqual({ ready_for_review: 0, not_ready: 0, groups: [] });
+  });
+
+  it('keeps the refinement the daemon sent', async () => {
+    const refinement = {
+      ready_for_review: 2,
+      not_ready: 1,
+      groups: [{ action: 'entity_merge', status: 'pending', count: 1 }],
+    };
+    mockInvoke.mockResolvedValue({ ...withoutRefinement, refinement });
+
+    await expect(tauri.getActivity()).resolves.toMatchObject({ refinement });
+  });
+});
+
 describe('guarded quit bridge', () => {
   it('acknowledges the exact native quit delivery', async () => {
     mockInvoke.mockResolvedValue(true);

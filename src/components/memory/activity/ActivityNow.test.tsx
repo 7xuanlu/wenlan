@@ -81,6 +81,7 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
     ],
     everyday: route("everyday", "on_device", "qwen3-8b"),
     synthesis: route("synthesis", "on_device", "qwen3-8b"),
+    refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     ...fields,
   };
 }
@@ -285,6 +286,60 @@ describe("ActivityNow", () => {
     await userEvent.click(await screen.findByTestId("activity-steps-toggle-memories"));
     expect(screen.getByTestId("activity-step-summarize")).toBeInTheDocument();
     expect(screen.queryByTestId("activity-step-unknown")).toBeNull();
+  });
+
+  it("hides Suggestions when no suggestion is open", async () => {
+    renderNow();
+    await screen.findByTestId("activity-now");
+    expect(screen.queryByTestId("activity-now-suggestions")).toBeNull();
+  });
+
+  it("shows only the Suggestions lines whose count is not zero", async () => {
+    renderNow(
+      activity({ refinement: { ready_for_review: 0, not_ready: 3, groups: [] } }),
+    );
+    const block = await screen.findByTestId("activity-now-suggestions");
+    expect(block).toHaveTextContent("Suggestions");
+    expect(screen.queryByTestId("activity-now-suggestions-ready")).toBeNull();
+    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
+      "3 not yet ready for review",
+    );
+  });
+
+  it("counts Suggestions in the singular and plural", async () => {
+    renderNow(
+      activity({ refinement: { ready_for_review: 1, not_ready: 1, groups: [] } }),
+    );
+    expect(
+      await screen.findByTestId("activity-now-suggestions-ready"),
+    ).toHaveTextContent("1 waiting for your review");
+    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
+      "1 not yet ready for review",
+    );
+  });
+
+  it("words Suggestions per locale for one and for three", async () => {
+    await i18n.changeLanguage("zh-Hant");
+    const { unmount } = renderNow(
+      activity({ refinement: { ready_for_review: 1, not_ready: 3, groups: [] } }),
+    );
+    expect(await screen.findByTestId("activity-now-suggestions")).toHaveTextContent("建議");
+    expect(screen.getByTestId("activity-now-suggestions-ready")).toHaveTextContent(
+      "1 則等待你審閱",
+    );
+    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
+      "3 則尚未進入審閱",
+    );
+    unmount();
+
+    await i18n.changeLanguage("en");
+    renderNow(
+      activity({ refinement: { ready_for_review: 3, not_ready: 0, groups: [] } }),
+    );
+    expect(
+      await screen.findByTestId("activity-now-suggestions-ready"),
+    ).toHaveTextContent("3 waiting for your review");
+    expect(screen.queryByTestId("activity-now-suggestions-not-ready")).toBeNull();
   });
 
   it("renders nothing until the first read lands", () => {

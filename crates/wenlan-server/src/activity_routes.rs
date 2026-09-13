@@ -8,6 +8,7 @@
 use crate::config_routes::{resolve_job_routes, JobRoute};
 use crate::error::ServerError;
 use crate::import_routes::DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT;
+use crate::refinery_routes::parse_action;
 use crate::route_registry::{get, TrackedRouter};
 use crate::scheduler::AmbientGateSnapshot;
 use crate::state::SharedState;
@@ -15,8 +16,9 @@ use axum::{extract::State, response::Json};
 use wenlan_core::config;
 use wenlan_core::db::ActivityCounts;
 use wenlan_types::activity::{
-    ActivityAssetKind, ActivityAssetStatus, ActivityJob, ActivityLane, ActivityResponse,
-    ActivityRoute, ActivityState, ActivityStep, ActivityStepName, ActivityStepState,
+    ActivityAssetKind, ActivityAssetStatus, ActivityJob, ActivityLane, ActivityRefinement,
+    ActivityRefinementGroup, ActivityResponse, ActivityRoute, ActivityState, ActivityStep,
+    ActivityStepName, ActivityStepState,
 };
 use wenlan_types::import::ImportBatchStatus;
 
@@ -182,6 +184,36 @@ fn route_of(job: ActivityJob, route: &JobRoute) -> ActivityRoute {
     }
 }
 
+/// Split the open refinement rows by whether the review queue lists them.
+///
+/// Ready for review is an `awaiting_review` row whose action
+/// `refinery_routes::parse_action` knows, the same filter
+/// `GET /api/refinery/queue` applies. Every other open row is not ready: a
+/// `pending` row the refinery has not processed yet, or an `awaiting_review`
+/// row in an action the queue cannot show (`community_split`, say), which no
+/// list reaches. Known gap: the queue also skips a `lint_repair_review` row
+/// whose payload does not parse, and this count cannot see payloads, so such
+/// a row counts as ready although the list leaves it out.
+///
+/// Reported only. It never feeds `ActivityResponse.state`: some open rows
+/// never move on their own and would pin the state to Blocked.
+fn refinement_of(counts: &ActivityCounts) -> ActivityRefinement {
+    let mut refinement = ActivityRefinement::default();
+    for row in &counts.refinement_open {
+        if row.status == "awaiting_review" && parse_action(&row.action).is_some() {
+            refinement.ready_for_review += row.count;
+        } else {
+            refinement.not_ready += row.count;
+        }
+        refinement.groups.push(ActivityRefinementGroup {
+            action: row.action.clone(),
+            status: row.status.clone(),
+            count: row.count,
+        });
+    }
+    refinement
+}
+
 /// Assemble an `ActivityResponse` from raw counts. Pure: unit-testable without
 /// a DB.
 pub(crate) fn compose_activity(
@@ -323,6 +355,8 @@ pub(crate) fn compose_activity(
         steps: page_steps,
     };
 
+    let refinement = refinement_of(&counts);
+
     // ── Overall ─────────────────────────────────────────────────────
     let assets = vec![memories, entities, pages];
     // Never WaitingForIdle: that needs the scheduler's gate, which the counts
@@ -350,6 +384,7 @@ pub(crate) fn compose_activity(
         assets,
         everyday: everyday_route,
         synthesis: synthesis_route,
+        refinement,
     }
 }
 
@@ -361,7 +396,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::RwLock;
     use tower::ServiceExt;
-    use wenlan_core::db::{AssetBacklog, StepBacklog, StepCount};
+    use wenlan_core::db::{AssetBacklog, RefinementOpenCount, StepBacklog, StepCount};
 
     fn job_route(source: &str, model: Option<&str>, mode: &str) -> JobRoute {
         JobRoute {
@@ -399,6 +434,7 @@ mod tests {
             pages_stale: 0,
             pages_refresh_blocked: 0,
             last_work_at: None,
+            refinement_open: vec![],
         }
     }
 
@@ -815,6 +851,69 @@ mod tests {
         let entities = entities_asset(&response);
         assert_eq!(entities.state, ActivityStepState::Idle);
         assert_eq!((entities.done, entities.total), (5, 5));
+    }
+
+    fn open_row(action: &str, status: &str, count: u64) -> RefinementOpenCount {
+        RefinementOpenCount {
+            action: action.to_string(),
+            status: status.to_string(),
+            count,
+        }
+    }
+
+    /// Ready for review is exactly what the review queue lists: awaiting
+    /// review in an action it can show. A pending row and an awaiting row in
+    /// an action the queue has no arm for are open but not ready.
+    #[test]
+    fn refinement_splits_ready_and_not_ready_by_review_queue_rule() {
+        let (everyday, synthesis) = pinned_local();
+        let counts = ActivityCounts {
+            refinement_open: vec![
+                open_row("community_split", "awaiting_review", 2),
+                open_row("entity_merge", "awaiting_review", 3),
+                open_row("entity_merge", "pending", 4),
+                open_row("page_merge", "awaiting_review", 5),
+            ],
+            ..empty_counts()
+        };
+        let response = compose_activity(counts, &[], &everyday, &synthesis);
+        assert_eq!(response.refinement.ready_for_review, 3 + 5);
+        assert_eq!(response.refinement.not_ready, 2 + 4);
+        assert_eq!(
+            response
+                .refinement
+                .groups
+                .iter()
+                .map(|group| (group.action.as_str(), group.status.as_str(), group.count))
+                .collect::<Vec<_>>(),
+            vec![
+                ("community_split", "awaiting_review", 2),
+                ("entity_merge", "awaiting_review", 3),
+                ("entity_merge", "pending", 4),
+                ("page_merge", "awaiting_review", 5),
+            ]
+        );
+    }
+
+    /// Open suggestions that never move on their own must not pin the state:
+    /// with every asset idle the library is still up to date.
+    #[test]
+    fn open_refinements_never_change_the_state() {
+        let (everyday, synthesis) = pinned_local();
+        let counts = ActivityCounts {
+            refinement_open: vec![
+                open_row("community_split", "awaiting_review", 1),
+                open_row("entity_merge", "pending", 7),
+            ],
+            ..empty_counts()
+        };
+        let response = compose_activity(counts, &[], &everyday, &synthesis);
+        for asset in &response.assets {
+            assert_eq!(asset.state, ActivityStepState::Idle, "{:?}", asset.kind);
+        }
+        assert_eq!(response.refinement.not_ready, 8);
+        assert_eq!(response.refinement.ready_for_review, 0);
+        assert_eq!(response.state, ActivityState::UpToDate);
     }
 
     #[tokio::test]

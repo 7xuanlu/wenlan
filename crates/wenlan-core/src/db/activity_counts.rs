@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Counts backing `GET /api/activity`: one read-only pass over the memories,
-//! enrichment-step, entity-shadow and page tables.
+//! enrichment-step, entity-shadow, page and refinement-queue tables.
 //!
 //! Same shape as the other `impl MemoryDB` reader files (e.g.
 //! `scoped_entities.rs`): pure counts, no prose, one held connection guard.
@@ -49,6 +49,14 @@ pub struct AssetBacklog {
     pub unfinished: u64,
 }
 
+/// Open `refinement_queue` rows for one `(action, status)` pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefinementOpenCount {
+    pub action: String,
+    pub status: String,
+    pub count: u64,
+}
+
 /// Every count `GET /api/activity` composes into an `ActivityResponse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActivityCounts {
@@ -87,6 +95,10 @@ pub struct ActivityCounts {
     /// step rows, and "Nothing has run yet" beside a written page is false.
     /// `None` when neither has happened.
     pub last_work_at: Option<i64>,
+    /// Open `refinement_queue` rows only (`pending` or `awaiting_review`), by
+    /// action and status, ordered by action then status. Served by the partial
+    /// index `idx_refinement_status`, which covers exactly those two statuses.
+    pub refinement_open: Vec<RefinementOpenCount>,
 }
 
 impl MemoryDB {
@@ -315,6 +327,36 @@ impl MemoryDB {
             };
         drop(updated_rows);
 
+        let mut refinement_rows = conn
+            .query(
+                "SELECT action, status, COUNT(*) FROM refinement_queue \
+                 WHERE status IN ('pending', 'awaiting_review') \
+                 GROUP BY action, status ORDER BY action, status",
+                (),
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("activity_counts refinement_open: {e}")))?;
+        let mut refinement_open = Vec::new();
+        while let Some(row) = refinement_rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("activity_counts refinement_open row: {e}"))
+        })? {
+            refinement_open.push(RefinementOpenCount {
+                action: row.get::<String>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("activity_counts refinement_open action: {e}"))
+                })?,
+                status: row.get::<String>(1).map_err(|e| {
+                    WenlanError::VectorDb(format!("activity_counts refinement_open status: {e}"))
+                })?,
+                count: row
+                    .get::<i64>(2)
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("activity_counts refinement_open count: {e}"))
+                    })?
+                    .max(0) as u64,
+            });
+        }
+        drop(refinement_rows);
+
         Ok(ActivityCounts {
             memories_total,
             step_counts,
@@ -328,6 +370,7 @@ impl MemoryDB {
             pages_stale,
             pages_refresh_blocked,
             last_work_at,
+            refinement_open,
         })
     }
 }
@@ -415,6 +458,7 @@ mod tests {
                 pages_stale: 0,
                 pages_refresh_blocked: 0,
                 last_work_at: None,
+                refinement_open: vec![],
             }
         );
     }
@@ -678,5 +722,51 @@ mod tests {
         .await;
         let counts = db.activity_counts().await.unwrap();
         assert_eq!(counts.last_work_at, Some(1_700_000_200));
+    }
+
+    #[tokio::test]
+    async fn refinement_open_groups_only_open_rows() {
+        let (db, _tmp) = super::super::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            // Every written status across two actions: only `pending` and
+            // `awaiting_review` are open.
+            let rows: &[(&str, &str, &str)] = &[
+                ("r-1", "entity_merge", "pending"),
+                ("r-2", "entity_merge", "pending"),
+                ("r-3", "entity_merge", "awaiting_review"),
+                ("r-4", "entity_merge", "dismissed"),
+                ("r-5", "entity_merge", "resolved"),
+                ("r-6", "community_split", "awaiting_review"),
+                ("r-7", "community_split", "awaiting_review"),
+                ("r-8", "community_split", "awaiting_review"),
+                ("r-9", "community_split", "auto_applied"),
+                ("r-10", "community_split", "superseded"),
+            ];
+            for (id, action, status) in rows {
+                conn.execute(
+                    "INSERT INTO refinement_queue (id, action, source_ids, status) \
+                     VALUES (?1, ?2, '[]', ?3)",
+                    libsql::params![*id, *action, *status],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        let counts = db.activity_counts().await.unwrap();
+        let open = |action: &str, status: &str, count: u64| RefinementOpenCount {
+            action: action.to_string(),
+            status: status.to_string(),
+            count,
+        };
+        assert_eq!(
+            counts.refinement_open,
+            vec![
+                open("community_split", "awaiting_review", 3),
+                open("entity_merge", "awaiting_review", 1),
+                open("entity_merge", "pending", 2),
+            ]
+        );
     }
 }

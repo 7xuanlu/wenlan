@@ -623,16 +623,40 @@ export interface ActivityAssetStatus {
   steps: ActivityStep[];
 }
 
+/** Open refinement rows for one action and status, verbatim labels. */
+export interface ActivityRefinementGroup {
+  action: string;
+  status: string;
+  count: number;
+}
+
+/** Open refinement suggestions. Reported only: never part of `state`. */
+export interface ActivityRefinement {
+  ready_for_review: number;
+  not_ready: number;
+  groups: ActivityRefinementGroup[];
+}
+
 export interface ActivityResponse {
   state: ActivityState;
   last_activity_at: number | null;
   assets: ActivityAssetStatus[];
   everyday: ActivityRoute;
   synthesis: ActivityRoute;
+  refinement: ActivityRefinement;
 }
 
 export async function getActivity(): Promise<ActivityResponse> {
-  return invoke("get_activity");
+  const response = await invoke<
+    Omit<ActivityResponse, "refinement"> & { refinement?: ActivityRefinement }
+  >("get_activity");
+  // The browser preview proxies the daemon's raw JSON, so a daemon from
+  // before `refinement` existed sends none. The app's Rust client already
+  // fills zeros through its serde default.
+  return {
+    ...response,
+    refinement: response.refinement ?? { ready_for_review: 0, not_ready: 0, groups: [] },
+  };
 }
 
 // ── Tags ────────────────────────────────────────────────────────────────

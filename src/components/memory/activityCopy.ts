@@ -176,6 +176,16 @@ export const enActivityStatus = {
   trustLocal: "Runs on this machine. Nothing leaves your device.",
   trustCloud:
     "{{jobs}} runs on {{vendor}}; the text for that step leaves your device. Everything else stays on this machine.",
+  // Open refinement suggestions. Ready ones are what the review queue lists;
+  // the rest are open but not listed yet, and some never move on their own,
+  // so neither line claims the library is waiting on anything.
+  suggestions: {
+    title: "Suggestions",
+    ready_one: "{{count}} waiting for your review",
+    ready_other: "{{count}} waiting for your review",
+    notReady_one: "{{count}} not yet ready for review",
+    notReady_other: "{{count}} not yet ready for review",
+  },
 
   // ── Import handoff ────────────────────────────────────────────────────
   importHandoff_one:
@@ -311,6 +321,13 @@ export const hansActivityStatus = {
   openIntelligence: "设置 - 智能",
   trustLocal: "在本机运行，数据不会离开你的设备。",
   trustCloud: "{{jobs}}在 {{vendor}} 上运行，该步骤的文本会离开你的设备。其余全部留在本机。",
+  suggestions: {
+    title: "建议",
+    ready_one: "{{count}} 条等待你审阅",
+    ready_other: "{{count}} 条等待你审阅",
+    notReady_one: "{{count}} 条尚未进入审阅",
+    notReady_other: "{{count}} 条尚未进入审阅",
+  },
   importHandoff_one:
     "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可从工具栏的「活动」查看进度。",
   importHandoff_other:
@@ -441,6 +458,13 @@ export const hantActivityStatus = {
   openIntelligence: "設定 - 智慧",
   trustLocal: "在本機執行，資料不會離開你的裝置。",
   trustCloud: "{{jobs}}在 {{vendor}} 上執行，該步驟的文字會離開你的裝置。其餘全部留在本機。",
+  suggestions: {
+    title: "建議",
+    ready_one: "{{count}} 則等待你審閱",
+    ready_other: "{{count}} 則等待你審閱",
+    notReady_one: "{{count}} 則尚未進入審閱",
+    notReady_other: "{{count}} 則尚未進入審閱",
+  },
   importHandoff_one:
     "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可從工具列的「活動」查看進度。",
   importHandoff_other:

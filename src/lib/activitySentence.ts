@@ -280,6 +280,36 @@ export function blockedCauses(activity: ActivityResponse): Phrase[] {
     }));
 }
 
+/** One Suggestions line: which count it is, and its sentence. */
+export interface SuggestionLine extends Phrase {
+  readonly kind: "ready" | "not-ready";
+}
+
+/**
+ * The Suggestions lines, one per non-zero count, ready first. Empty when no
+ * suggestion is open, and the section hides. These counts never feed the
+ * state: some open suggestions never move on their own.
+ */
+export function suggestionLines(activity: ActivityResponse): SuggestionLine[] {
+  const { ready_for_review: ready, not_ready: notReady } = activity.refinement;
+  const lines: SuggestionLine[] = [];
+  if (ready > 0) {
+    lines.push({
+      kind: "ready",
+      key: "activityStatus.suggestions.ready",
+      params: { count: ready },
+    });
+  }
+  if (notReady > 0) {
+    lines.push({
+      kind: "not-ready",
+      key: "activityStatus.suggestions.notReady",
+      params: { count: notReady },
+    });
+  }
+  return lines;
+}
+
 /** The "Everyday work: qwen3-8b on this machine." sentence for one route. */
 export function routeSentence(route: ActivityRoute): Phrase {
   return route.model === null
