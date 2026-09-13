@@ -1,24 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import DiagnosticsSection from "./DiagnosticsSection";
 import {
-  getPipelineStatus,
+  getActivity,
   getWireState,
   clipboardWrite,
   removeLegacyMcpEntry,
   removeRawMcpEntry,
   setSetupCompleted,
   startDaemonSidecar,
+  type ActivityAssetKind,
+  type ActivityAssetStatus,
+  type ActivityResponse,
+  type ActivityStep,
+  type ActivityStepName,
   type WireState,
 } from "../../../../lib/tauri";
 import { i18n } from "../../../../i18n";
 import { NO, YES, unreadable } from "../../../../test/readings";
 
 vi.mock("../../../../lib/tauri", () => ({
-  getPipelineStatus: vi.fn(),
+  getActivity: vi.fn(),
   getWireState: vi.fn(),
   clipboardWrite: vi.fn().mockResolvedValue(undefined),
   removeLegacyMcpEntry: vi.fn().mockResolvedValue(undefined),
@@ -86,69 +91,225 @@ const wireFixture: WireState = {
   ],
 };
 
+function step(name: ActivityStepName, fields: Partial<ActivityStep> = {}): ActivityStep {
+  return { name, state: "idle", done: 0, total: 0, failed: 0, job: null, ...fields };
+}
+
+function asset(kind: ActivityAssetKind, fields: Partial<ActivityAssetStatus> = {}): ActivityAssetStatus {
+  return { kind, state: "idle", done: 0, total: 0, blocked: 0, steps: [], ...fields };
+}
+
+/**
+ * Memories and Entities count different things on purpose: 143 memories were
+ * scanned for entities, 21 entities were found, and 93 memories wait on the
+ * everyday model. The Entities headline `done`/`total` follow Detect (memories),
+ * which is exactly the number the card must not print beside "Entities".
+ */
+function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
+  return {
+    state: "organizing",
+    last_activity_at: null,
+    assets: [
+      asset("memories", {
+        state: "running",
+        done: 140,
+        total: 143,
+        steps: [
+          step("store", { done: 143, total: 143 }),
+          step("summarize", { state: "running", done: 140, total: 143, failed: 3, job: "everyday" }),
+          step("link", { done: 143, total: 143, job: "everyday" }),
+        ],
+      }),
+      asset("entities", {
+        state: "blocked",
+        done: 50,
+        total: 143,
+        blocked: 93,
+        steps: [
+          step("detect", { state: "blocked", done: 50, total: 143, job: "everyday" }),
+          step("confirm", { done: 9, total: 21 }),
+        ],
+      }),
+      asset("pages", { done: 12, total: 12, steps: [step("write", { done: 12, total: 12, job: "synthesis" })] }),
+    ],
+    everyday: { job: "everyday", lane: "on_device", model: "qwen3-8b", mode: "pinned", available: true },
+    synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+    refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
+    ...fields,
+  };
+}
+
 describe("DiagnosticsSection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getWireState).mockResolvedValue(wireFixture);
-    vi.mocked(getPipelineStatus).mockResolvedValue({
-      enrichment: { classified: 9, raw: 2 },
-      entity_linking: { linked: 7, unlinked: 3 },
-      refinement_queue: [{ action: "merge", status: "pending", count: 4 }],
-      recaps: 5,
-      types: { fact: 6, preference: 1 },
-      quality: { trusted: 8, low: 1 },
-    });
+    vi.mocked(getActivity).mockResolvedValue(activity());
   });
 
-  describe("pipeline card (unchanged)", () => {
-    it("renders the pipeline snapshot fields", async () => {
+  describe("background work card", () => {
+    it("renders the state, every asset's steps and both model routes", async () => {
       renderDiagnostics();
 
-      expect(await screen.findByText("Pipeline Snapshot")).toBeInTheDocument();
-      expect(await screen.findByText("classified")).toBeInTheDocument();
-      expect(screen.getByText("9")).toBeInTheDocument();
-      expect(screen.getByText("Entity linking")).toBeInTheDocument();
-      expect(screen.getByText("70% linked")).toBeInTheDocument();
-      expect(screen.getByText("Refinery queue")).toBeInTheDocument();
-      expect(screen.getByText("merge")).toBeInTheDocument();
-      expect(screen.getByText("pending")).toBeInTheDocument();
-      expect(screen.getByText("Recaps")).toBeInTheDocument();
-      expect(screen.getByText("5")).toBeInTheDocument();
-      expect(screen.getByText("fact")).toBeInTheDocument();
-      expect(screen.getByText("trusted")).toBeInTheDocument();
+      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
+      expect(screen.getByText("Background work")).toBeInTheDocument();
+      expect(screen.getByTestId("diagnostics-state")).toHaveTextContent("Steeping");
+      expect(screen.getByTestId("diagnostics-last-activity")).toHaveTextContent("Nothing has run yet");
+
+      const memories = screen.getByTestId("diagnostics-asset-memories");
+      expect(within(memories).getByText("Memories")).toBeInTheDocument();
+      const memorySteps = within(memories).getAllByTestId("diagnostics-step");
+      expect(memorySteps.map((row) => row.textContent)).toEqual([
+        "StoreIdle143 of 143 memories0 memories failed",
+        "SummarizeRunning140 of 143 memories3 memories failed",
+        "LinkIdle143 of 143 memories0 memories failed",
+      ]);
+
+      const pages = screen.getByTestId("diagnostics-asset-pages");
+      expect(within(pages).getByTestId("diagnostics-asset-count")).toHaveTextContent("12 pages");
+      expect(within(pages).getByText("12 of 12 pages")).toBeInTheDocument();
+
+      const everyday = screen.getByTestId("diagnostics-route-everyday");
+      expect(everyday).toHaveTextContent("Everyday work");
+      expect(everyday).toHaveTextContent("on this machine");
+      expect(everyday).toHaveTextContent("qwen3-8b");
+      expect(within(everyday).getByText("Available")).toBeInTheDocument();
+      const synthesis = screen.getByTestId("diagnostics-route-synthesis");
+      expect(synthesis).toHaveTextContent("Page writing");
+      expect(synthesis).toHaveTextContent("no model in use");
+      expect(synthesis).toHaveTextContent("No model");
+      expect(within(synthesis).getByText("Not available")).toBeInTheDocument();
     });
 
-    it("renders the refinery queue empty state", async () => {
-      vi.mocked(getPipelineStatus).mockResolvedValue({
-        enrichment: {},
-        entity_linking: { linked: 0, unlinked: 0 },
-        refinement_queue: [],
-        recaps: 0,
-        types: {},
-        quality: {},
+    it("counts each asset in its own unit when memory and entity totals differ", async () => {
+      renderDiagnostics();
+
+      const memories = await screen.findByTestId("diagnostics-asset-memories");
+      expect(within(memories).getByTestId("diagnostics-asset-count")).toHaveTextContent("143 memories");
+      expect(within(memories).getByTestId("diagnostics-asset-blocked")).toHaveTextContent("0 memories blocked");
+
+      const entities = screen.getByTestId("diagnostics-asset-entities");
+      // The headline total (143) follows Detect; the asset's own count is the
+      // 21 entities Confirm counts.
+      expect(within(entities).getByTestId("diagnostics-asset-count")).toHaveTextContent("21 entities");
+      expect(entities).not.toHaveTextContent("143 entities");
+      // Blocked is memories not yet scanned, never entities.
+      expect(within(entities).getByTestId("diagnostics-asset-blocked")).toHaveTextContent("93 memories blocked");
+      expect(entities).not.toHaveTextContent("93 entities");
+
+      const [detect, confirm] = within(entities).getAllByTestId("diagnostics-step");
+      expect(detect).toHaveTextContent("Detect");
+      expect(detect).toHaveTextContent("50 of 143 memories");
+      expect(confirm).toHaveTextContent("Confirm");
+      expect(confirm).toHaveTextContent("9 of 21 entities");
+    });
+
+    it("lists a step or asset this build cannot name as unknown, with its counts and no unit", async () => {
+      const base = activity();
+      vi.mocked(getActivity).mockResolvedValue({
+        ...base,
+        assets: [
+          {
+            ...base.assets[0],
+            steps: [...base.assets[0].steps, step("unknown", { state: "unknown", done: 4, total: 7, failed: 1 })],
+          },
+          ...base.assets.slice(1),
+          asset("unknown", { done: 2, total: 5, blocked: 1, steps: [step("unknown", { done: 2, total: 5 })] }),
+        ],
       });
 
       renderDiagnostics();
 
-      expect(await screen.findByText("Refinery queue")).toBeInTheDocument();
-      expect(screen.getByText("No pending refinery work.")).toBeInTheDocument();
+      const memories = await screen.findByTestId("diagnostics-asset-memories");
+      const rows = within(memories).getAllByTestId("diagnostics-step");
+      expect(rows).toHaveLength(4);
+      expect(rows[3].textContent).toBe("UnknownUnknown4 of 71 failed");
+
+      const unknownAsset = screen.getByTestId("diagnostics-asset-unknown");
+      expect(within(unknownAsset).getByTestId("diagnostics-asset-count")).toHaveTextContent(/^2 of 5$/);
+      expect(within(unknownAsset).getByTestId("diagnostics-asset-blocked")).toHaveTextContent(/^1 blocked$/);
+      expect(unknownAsset.textContent).not.toMatch(/memor|entit|page/i);
     });
 
-    it("shows a scoped old-daemon message when the route is missing", async () => {
-      vi.mocked(getPipelineStatus).mockRejectedValue(
-        new Error("HTTP GET /api/debug/pipeline returned 404: not found"),
+    it("lists open suggestions by verbatim action and status", async () => {
+      vi.mocked(getActivity).mockResolvedValue(
+        activity({
+          refinement: {
+            ready_for_review: 2,
+            not_ready: 5,
+            groups: [
+              { action: "detect_contradiction", status: "awaiting_review", count: 2 },
+              { action: "entity_merge", status: "pending", count: 5 },
+            ],
+          },
+        }),
       );
 
       renderDiagnostics();
 
+      const suggestions = await screen.findByTestId("diagnostics-suggestions");
+      expect(within(suggestions).getByText("Suggestions")).toBeInTheDocument();
+      expect(within(suggestions).getByTestId("diagnostics-suggestions-ready")).toHaveTextContent("Ready for review2");
+      expect(within(suggestions).getByTestId("diagnostics-suggestions-not-ready")).toHaveTextContent(
+        "Not yet ready for review5",
+      );
+      expect(within(suggestions).getByRole("columnheader", { name: "Action" })).toBeInTheDocument();
+      expect(within(suggestions).getByRole("columnheader", { name: "Status" })).toBeInTheDocument();
+      expect(within(suggestions).getByRole("columnheader", { name: "Count" })).toBeInTheDocument();
+      const groups = within(suggestions).getAllByTestId("diagnostics-suggestion-group");
+      expect(groups.map((row) => row.textContent)).toEqual([
+        "detect_contradictionawaiting_review2",
+        "entity_mergepending5",
+      ]);
+      expect(within(suggestions).queryByText("No open suggestions.")).not.toBeInTheDocument();
+    });
+
+    it("says there are no open suggestions when none are open", async () => {
+      renderDiagnostics();
+
+      const suggestions = await screen.findByTestId("diagnostics-suggestions");
+      expect(within(suggestions).getByText("No open suggestions.")).toBeInTheDocument();
+      expect(within(suggestions).queryByRole("table")).not.toBeInTheDocument();
+      expect(within(suggestions).getByTestId("diagnostics-suggestions-ready")).toHaveTextContent("Ready for review0");
+    });
+
+    it("says it needs a newer daemon, with no Retry, when the activity route is missing", async () => {
+      // A Tauri command rejects with the bare string the Rust client formats.
+      vi.mocked(getActivity).mockRejectedValue("HTTP GET /api/activity returned 404 Not Found");
+
+      renderDiagnostics();
+
       expect(await screen.findByText("Diagnostics require a newer daemon")).toBeInTheDocument();
-      expect(screen.queryByText("Run maintenance")).not.toBeInTheDocument();
+      expect(screen.queryByText("Diagnostics unavailable")).not.toBeInTheDocument();
+      expect(screen.queryByText("Retry")).not.toBeInTheDocument();
+    });
+
+    it("offers a Retry that reads activity again on any other error", async () => {
+      vi.mocked(getActivity).mockRejectedValue("HTTP GET /api/activity returned 500 Internal Server Error");
+
+      renderDiagnostics();
+
+      expect(await screen.findByText("Diagnostics unavailable")).toBeInTheDocument();
+      expect(screen.queryByText("Diagnostics require a newer daemon")).not.toBeInTheDocument();
+      const callsBefore = vi.mocked(getActivity).mock.calls.length;
+      fireEvent.click(screen.getByText("Retry"));
+
+      await waitFor(() => expect(vi.mocked(getActivity).mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    it("Refresh reads activity again", async () => {
+      renderDiagnostics();
+
+      await screen.findByTestId("diagnostics-asset-memories");
+      const callsBefore = vi.mocked(getActivity).mock.calls.length;
+      fireEvent.click(screen.getByText("Refresh"));
+
+      await waitFor(() => expect(vi.mocked(getActivity).mock.calls.length).toBeGreaterThan(callsBefore));
     });
 
     it("does not expose the manual steep maintenance action", async () => {
       renderDiagnostics();
 
-      await waitFor(() => expect(getPipelineStatus).toHaveBeenCalled());
+      await waitFor(() => expect(getActivity).toHaveBeenCalled());
       expect(screen.queryByText("Run maintenance")).not.toBeInTheDocument();
       expect(screen.queryByText("Steep")).not.toBeInTheDocument();
     });
@@ -158,11 +319,11 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      // "Pipeline Snapshot" is the static SectionHeader label — present
+      // "Background work" is the static SectionHeader label, present
       // regardless of query state, so it proves nothing about data having
-      // loaded. Await "classified" instead: it only renders inside the
-      // resolved pipeline data branch.
-      expect(await screen.findByText("classified")).toBeInTheDocument();
+      // loaded. Await an asset block instead: it only renders inside the
+      // resolved activity data branch.
+      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
       expect(await screen.findByText("Wiring information unavailable")).toBeInTheDocument();
     });
 
@@ -226,8 +387,8 @@ describe("DiagnosticsSection", () => {
       expect(screen.getByText("Claude Desktop")).toBeInTheDocument();
     });
 
-    it("still renders when the pipeline query rejects", async () => {
-      vi.mocked(getPipelineStatus).mockRejectedValue(new Error("boom"));
+    it("still renders when the activity query rejects", async () => {
+      vi.mocked(getActivity).mockRejectedValue(new Error("boom"));
 
       renderDiagnostics();
 
@@ -236,7 +397,7 @@ describe("DiagnosticsSection", () => {
       expect(await screen.findByText("Diagnostics unavailable")).toBeInTheDocument();
     });
 
-    it("shows its own loading state independent of the pipeline card", async () => {
+    it("shows its own loading state independent of the background work card", async () => {
       let resolveWire!: (value: WireState) => void;
       vi.mocked(getWireState).mockReturnValue(
         new Promise((resolve) => {
@@ -247,9 +408,9 @@ describe("DiagnosticsSection", () => {
       renderDiagnostics();
 
       expect(await screen.findByText("Loading wiring…")).toBeInTheDocument();
-      // Pipeline card resolved already; wiring card is still loading independently.
-      expect(await screen.findByText("Pipeline Snapshot")).toBeInTheDocument();
-      expect(await screen.findByText("classified")).toBeInTheDocument();
+      // Background work card resolved already; wiring card is still loading independently.
+      expect(await screen.findByText("Background work")).toBeInTheDocument();
+      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
 
       resolveWire(wireFixture);
       expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
@@ -561,8 +722,9 @@ describe("DiagnosticsSection", () => {
       renderDiagnostics();
 
       fireEvent.click(await screen.findByText("Run setup again"));
-      // ConfirmActionButton arms an inline two-step confirm.
-      fireEvent.click(await screen.findByText("Confirm"));
+      // ConfirmActionButton arms an inline two-step confirm. By role: the
+      // background work card also names its Confirm step.
+      fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
 
       await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledWith(false));
     });
@@ -910,8 +1072,8 @@ describe("DiagnosticsSection", () => {
       await i18n.changeLanguage("zh-Hans");
       renderDiagnostics();
 
-      expect(await screen.findByText("流水线快照")).toBeInTheDocument();
-      expect(screen.queryByText("Pipeline Snapshot")).not.toBeInTheDocument();
+      expect(await screen.findByText("后台工作")).toBeInTheDocument();
+      expect(screen.queryByText("Background work")).not.toBeInTheDocument();
     });
 
     it("renders the wiring heading through the translation layer, not hardcoded English", async () => {

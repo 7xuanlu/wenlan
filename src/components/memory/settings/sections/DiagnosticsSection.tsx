@@ -5,44 +5,52 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
   clipboardWrite,
-  getPipelineStatus,
   getWireState,
   removeLegacyMcpEntry,
   removeRawMcpEntry,
   setSetupCompleted,
   startDaemonSidecar,
+  type ActivityAssetStatus,
+  type ActivityResponse,
+  type ActivityStep,
   type BinaryCandidate,
   type BinaryWire,
   type ClientWire,
   type DaemonWire,
   type JobBinding,
   type SidecarStopOutcome,
-  type PipelineStatusResponse,
   type WireState,
 } from "../../../../lib/tauri";
 import { readingIsNo, readingIsYes, type Reading } from "../../../../lib/reading";
+import { relativeTime } from "../../../../lib/relativeTime";
+import { useActivity } from "../../../../lib/useActivity";
+import {
+  assetCount,
+  knownAssets,
+  knownLane,
+  knownState,
+  laneKey,
+  ROUTE_JOBS,
+  STEP_UNIT,
+  stepCount,
+  type KnownActivityAsset,
+  type KnownActivityAssetKind,
+  type KnownActivityStep,
+} from "../../../../lib/activitySentence";
+import { ASSET_ORDER } from "../../activity/ActivitySummaryPopover";
 import { Button, Card, ConfirmActionButton, SectionHeader, Skeleton, StatusChip } from "../primitives";
 
-function sortedEntries(values: Record<string, number>): [string, number][] {
-  return Object.entries(values).sort(([leftKey, leftValue], [rightKey, rightValue]) => {
-    if (rightValue !== leftValue) return rightValue - leftValue;
-    return leftKey.localeCompare(rightKey);
-  });
-}
-
+/** A daemon from before `/api/activity` answers it with a plain 404. */
 function isOldDaemonError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  const lowerMessage = message.toLowerCase();
-  return (
-    lowerMessage.includes("/api/debug/pipeline") &&
-    (lowerMessage.includes("404") || lowerMessage.includes("not found"))
-  );
+  return message.includes("/api/activity") && message.includes("404");
 }
 
 // ── Wiring card ───────────────────────────────────────────────────────────
-// What the pipeline card below can't tell you: whether the plumbing works at
-// all. `getWireState()` never rejects on a down daemon (`daemon.reachable:
-// false` instead), so isError here only means the IPC call itself failed.
+// What the background work card below can't tell you: whether the plumbing
+// works at all. `getWireState()` never rejects on a down daemon
+// (`daemon.reachable: false` instead), so isError here only means the IPC
+// call itself failed.
 
 /** `route` arrives from Rust as a bare tag (`plugin` | `config` | `skip`).
  *  It is never rendered raw: `plugin` is a word we don't say about Wenlan, and
@@ -736,90 +744,250 @@ function WiringError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-// ── Pipeline card (unchanged) ───────────────────────────────────────────
+// ── Background work card ─────────────────────────────────────────────────
+// Reads `/api/activity` through `useActivity`, the same query the toolbar
+// Activity button keeps, so Settings adds no request of its own. It shows
+// the same counts the Activity page does, one level more literal: every
+// step, both model routes, and the open refinement suggestions by their
+// verbatim action and status, since this is what a bug report quotes.
 
-function StatList({
-  title,
-  values,
-  empty,
-}: {
-  title: string;
-  values: Record<string, number>;
-  empty: string;
-}) {
-  const entries = sortedEntries(values);
+const STEP_STATE_WORDS = { idle: true, running: true, blocked: true } as const;
+
+/**
+ * What an asset's `blocked` counts. The daemon counts Entities' blocked work
+ * as memories not yet scanned (see `assetSentence`), so that count names
+ * memories, never entities.
+ */
+const BLOCKED_UNIT: Readonly<Record<KnownActivityAssetKind, "memories" | "pages">> = {
+  memories: "memories",
+  entities: "memories",
+  pages: "pages",
+};
+
+function isKnownKind(kind: string): kind is KnownActivityAssetKind {
+  return (ASSET_ORDER as readonly string[]).includes(kind);
+}
+
+/** Known by `STEP_UNIT`, the one table that says what each step counts. */
+function isKnownStep(step: ActivityStep): step is KnownActivityStep {
+  return Object.prototype.hasOwnProperty.call(STEP_UNIT, step.name);
+}
+
+const monoText = (color: string) => ({
+  fontFamily: "var(--mem-font-mono)",
+  fontSize: "var(--mem-text-sm)",
+  color,
+});
+
+const blockTitleStyle = {
+  fontFamily: "var(--mem-font-body)",
+  fontSize: "var(--mem-text-base)",
+  fontWeight: 600,
+  color: "var(--mem-text)",
+} as const;
+
+function StepRow({ step }: { step: ActivityStep }) {
+  const { t } = useTranslation();
+  const stateWord = Object.prototype.hasOwnProperty.call(STEP_STATE_WORDS, step.state)
+    ? t(`activityStatus.stepState.${step.state as keyof typeof STEP_STATE_WORDS}`)
+    : t("settings.diagnostics.unknown");
+  // A step this build has no word for gets its counts with no unit: the unit
+  // is exactly what it cannot know.
+  let name: string;
+  let progress: string;
+  let failed: string;
+  if (isKnownStep(step)) {
+    const count = stepCount(step);
+    name = t(`activityStatus.step.${step.name}`);
+    progress = t(count.key, count.params);
+    failed = t(`settings.diagnostics.failedCount.${STEP_UNIT[step.name]}`, { count: step.failed });
+  } else {
+    name = t("settings.diagnostics.unknown");
+    progress = t("settings.diagnostics.unknownProgress", { done: step.done, total: step.total });
+    failed = t("settings.diagnostics.unknownFailed", { count: step.failed });
+  }
   return (
-    <div className="px-5 py-4">
-      <div className="mb-2" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-base)", fontWeight: 600, color: "var(--mem-text)" }}>
-        {title}
-      </div>
-      {entries.length === 0 ? (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>{empty}</p>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {entries.map(([key, count]) => (
-            <div key={key} className="flex items-center justify-between gap-3">
-              <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{key}</span>
-              <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text)" }}>{count}</span>
-            </div>
-          ))}
-        </div>
-      )}
+    <div data-testid="diagnostics-step" className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3">
+      <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{name}</span>
+      <span style={monoText("var(--mem-text-tertiary)")}>{stateWord}</span>
+      <span style={monoText("var(--mem-text)")}>{progress}</span>
+      <span style={monoText(step.failed > 0 ? "var(--mem-status-danger-text)" : "var(--mem-text-tertiary)")}>{failed}</span>
     </div>
   );
 }
 
-function EntityLinking({ data }: { data: PipelineStatusResponse }) {
+function AssetBlock({
+  asset,
+  known,
+}: {
+  asset: ActivityAssetStatus;
+  /** The same asset narrowed by `knownAssets`, absent for a kind this build cannot name. */
+  known: KnownActivityAsset | undefined;
+}) {
   const { t } = useTranslation();
-  const total = data.entity_linking.linked + data.entity_linking.unlinked;
-  const percent = total === 0 ? null : Math.round((data.entity_linking.linked / total) * 100);
+  // The headline `done`/`total` follow whichever step is busy, so they are
+  // never printed raw for a known asset: `assetCount` is its own unit.
+  const title = known ? t(`activityStatus.asset.${known.kind}`) : t("settings.diagnostics.unknown");
+  const count = known
+    ? t(`settings.diagnostics.assetCount.${known.kind}`, { count: assetCount(known) })
+    : t("settings.diagnostics.unknownProgress", { done: asset.done, total: asset.total });
+  const blocked = known
+    ? t(`settings.diagnostics.blockedCount.${BLOCKED_UNIT[known.kind]}`, { count: asset.blocked })
+    : t("settings.diagnostics.unknownBlocked", { count: asset.blocked });
   return (
-    <div className="px-5 py-4">
-      <div className="mb-2" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-base)", fontWeight: 600, color: "var(--mem-text)" }}>
-        {t("settings.diagnostics.entityLinking")}
-      </div>
-      <div className="flex items-baseline gap-3">
-        <span style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-xl)", color: "var(--mem-text)", fontVariantNumeric: "tabular-nums" }}>{data.entity_linking.linked}</span>
-        <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
-          {t("settings.diagnostics.linkedUnlinked", { unlinked: data.entity_linking.unlinked })}
+    <div data-testid={`diagnostics-asset-${known ? known.kind : "unknown"}`} className="px-5 py-4">
+      <div className="mb-2 flex items-baseline justify-between gap-3 flex-wrap">
+        <span style={blockTitleStyle}>{title}</span>
+        <span className="flex items-baseline gap-3">
+          <span data-testid="diagnostics-asset-count" style={monoText("var(--mem-text)")}>{count}</span>
+          <span
+            data-testid="diagnostics-asset-blocked"
+            style={monoText(asset.blocked > 0 ? "var(--mem-status-danger-text)" : "var(--mem-text-tertiary)")}
+          >
+            {blocked}
+          </span>
         </span>
       </div>
-      {percent !== null && (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)", marginTop: 4 }}>
-          {t("settings.diagnostics.percentLinked", { percent })}
+      <div className="flex flex-col gap-1.5">
+        {asset.steps.map((step, index) => (
+          <StepRow key={`${step.name}:${index}`} step={step} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RoutesBlock({ activity }: { activity: ActivityResponse }) {
+  const { t } = useTranslation();
+  return (
+    <div className="px-5 py-4">
+      <div className="mb-2" style={blockTitleStyle}>
+        {t("settings.diagnostics.routesTitle")}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {ROUTE_JOBS.map((job) => {
+          const route = activity[job];
+          const lane = knownLane(route.lane);
+          return (
+            <div key={job} data-testid={`diagnostics-route-${job}`} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3">
+              <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
+                {t(`activityStatus.jobTitle.${job}`)}
+              </span>
+              <span style={monoText("var(--mem-text-tertiary)")}>
+                {lane === undefined ? t("settings.diagnostics.unknown") : t(laneKey(lane))}
+              </span>
+              <span style={monoText("var(--mem-text)")}>{route.model ?? t("settings.diagnostics.noModel")}</span>
+              <StatusChip
+                state={route.available ? { kind: "up" } : { kind: "down" }}
+                label={route.available ? t("settings.diagnostics.available") : t("settings.diagnostics.notAvailable")}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function SuggestionsBlock({ activity }: { activity: ActivityResponse }) {
+  const { t } = useTranslation();
+  const { ready_for_review: ready, not_ready: notReady, groups } = activity.refinement;
+  const headerStyle = {
+    ...monoText("var(--mem-text-tertiary)"),
+    fontWeight: 400,
+    textAlign: "left",
+    paddingBottom: 4,
+  } as const;
+  return (
+    <div data-testid="diagnostics-suggestions" className="px-5 py-4">
+      <div className="mb-2" style={blockTitleStyle}>
+        {t("activityStatus.suggestions.title")}
+      </div>
+      <div className="flex flex-col gap-1.5">
+        {(
+          [
+            ["ready", t("settings.diagnostics.readyForReview"), ready],
+            ["not-ready", t("settings.diagnostics.notReady"), notReady],
+          ] as const
+        ).map(([id, label, count]) => (
+          <div key={id} data-testid={`diagnostics-suggestions-${id}`} className="flex items-center justify-between gap-3">
+            <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{label}</span>
+            <span style={monoText("var(--mem-text)")}>{count}</span>
+          </div>
+        ))}
+      </div>
+      {groups.length === 0 ? (
+        <p className="mt-3" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+          {t("settings.diagnostics.noOpenSuggestions")}
         </p>
+      ) : (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full" style={{ borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th scope="col" style={headerStyle}>{t("settings.diagnostics.columnAction")}</th>
+                <th scope="col" style={headerStyle}>{t("settings.diagnostics.columnStatus")}</th>
+                <th scope="col" style={{ ...headerStyle, textAlign: "right" }}>{t("settings.diagnostics.columnCount")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* Verbatim labels: these are the daemon's own words, and a bug
+                  report is only useful if it quotes them exactly. */}
+              {groups.map((group) => (
+                <tr key={`${group.action}:${group.status}`} data-testid="diagnostics-suggestion-group">
+                  <td style={{ ...monoText("var(--mem-text-secondary)"), paddingBlock: 2 }}>{group.action}</td>
+                  <td style={{ ...monoText("var(--mem-text-tertiary)"), paddingBlock: 2 }}>{group.status}</td>
+                  <td style={{ ...monoText("var(--mem-text)"), paddingBlock: 2, textAlign: "right" }}>{group.count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
 }
 
-function RefineryQueue({ data }: { data: PipelineStatusResponse }) {
-  const { t } = useTranslation();
+function BackgroundWorkRows({ activity }: { activity: ActivityResponse }) {
+  const { t, i18n } = useTranslation();
+  const state = knownState(activity);
+  const known = new Map(knownAssets(activity).map((asset) => [asset.kind, asset]));
+  // Known assets in the order every Activity surface uses, then anything this
+  // build cannot name, so an unknown asset is listed rather than dropped.
+  const ordered = [
+    ...ASSET_ORDER.flatMap((kind) => activity.assets.filter((asset) => asset.kind === kind)),
+    ...activity.assets.filter((asset) => !isKnownKind(asset.kind)),
+  ];
   return (
-    <div className="px-5 py-4">
-      <div className="mb-2" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-base)", fontWeight: 600, color: "var(--mem-text)" }}>
-        {t("settings.diagnostics.refineryQueue")}
+    <>
+      <div className="px-5 py-4 flex items-baseline justify-between gap-3 flex-wrap">
+        <span data-testid="diagnostics-state" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
+          {state === undefined ? t("settings.diagnostics.unknown") : t(`activityStatus.state.${state}`)}
+        </span>
+        <span data-testid="diagnostics-last-activity" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+          {activity.last_activity_at === null
+            ? t("activityStatus.neverActive")
+            : t("activityStatus.lastActivity", {
+                time: relativeTime(activity.last_activity_at, t, i18n.language),
+              })}
+        </span>
       </div>
-      {data.refinement_queue.length === 0 ? (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>{t("settings.diagnostics.refineryEmpty")}</p>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {data.refinement_queue.map((entry) => (
-            <div key={`${entry.action}:${entry.status}`} className="grid grid-cols-[1fr_auto_auto] items-center gap-3">
-              <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{entry.action}</span>
-              <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>{entry.status}</span>
-              <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text)" }}>{entry.count}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+      {ordered.map((asset, index) => (
+        <AssetBlock
+          key={`${asset.kind}:${index}`}
+          asset={asset}
+          known={isKnownKind(asset.kind) ? known.get(asset.kind) : undefined}
+        />
+      ))}
+      <RoutesBlock activity={activity} />
+      <SuggestionsBlock activity={activity} />
+    </>
   );
 }
 
 function DiagnosticsError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
   const { t } = useTranslation();
-  // Version skew (an old daemon lacking the pipeline route) is not a failure —
+  // Version skew (an old daemon lacking the activity route) is not a failure —
   // it reads as a warning (amber), and retrying can't fix it, so no Retry.
   // A genuine unavailability keeps the danger tone and offers a Retry.
   const versionSkew = isOldDaemonError(error);
@@ -853,11 +1021,7 @@ export default function DiagnosticsSection() {
     queryFn: getWireState,
     retry: false,
   });
-  const pipelineQuery = useQuery({
-    queryKey: ["pipelineStatus"],
-    queryFn: getPipelineStatus,
-    retry: false,
-  });
+  const activityQuery = useActivity();
 
   return (
     <>
@@ -888,33 +1052,21 @@ export default function DiagnosticsSection() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 15l3-3 3 2 4-6" />
             </svg>
           }
-          label={t("settings.diagnostics.pipelineTitle")}
+          label={t("settings.diagnostics.backgroundTitle")}
           action={
-            <Button variant="secondary" size="sm" onClick={() => pipelineQuery.refetch()}>
+            <Button variant="secondary" size="sm" onClick={() => activityQuery.refetch()}>
               {t("settings.diagnostics.refresh")}
             </Button>
           }
         />
         <Card padding="rows">
-          {pipelineQuery.isLoading && (
+          {activityQuery.isLoading && (
             <p className="px-5 py-4" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
               {t("settings.diagnostics.loading")}
             </p>
           )}
-          {pipelineQuery.isError && <DiagnosticsError error={pipelineQuery.error} onRetry={() => pipelineQuery.refetch()} />}
-          {pipelineQuery.data && (
-            <>
-              <StatList title={t("settings.diagnostics.enrichment")} values={pipelineQuery.data.enrichment} empty={t("settings.diagnostics.enrichmentEmpty")} />
-              <EntityLinking data={pipelineQuery.data} />
-              <RefineryQueue data={pipelineQuery.data} />
-              <div className="px-5 py-4">
-                <div className="mb-1" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-base)", fontWeight: 600, color: "var(--mem-text)" }}>{t("settings.diagnostics.recaps")}</div>
-                <span style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-xl)", color: "var(--mem-text)", fontVariantNumeric: "tabular-nums" }}>{pipelineQuery.data.recaps}</span>
-              </div>
-              <StatList title={t("settings.diagnostics.memoryTypes")} values={pipelineQuery.data.types} empty={t("settings.diagnostics.memoryTypesEmpty")} />
-              <StatList title={t("settings.diagnostics.quality")} values={pipelineQuery.data.quality} empty={t("settings.diagnostics.qualityEmpty")} />
-            </>
-          )}
+          {activityQuery.isError && <DiagnosticsError error={activityQuery.error} onRetry={() => activityQuery.refetch()} />}
+          {activityQuery.data && <BackgroundWorkRows activity={activityQuery.data} />}
         </Card>
       </section>
     </>

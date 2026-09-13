@@ -138,7 +138,7 @@ function findStep(
 }
 
 /** What one step counts. Detect scans memories; Confirm settles entities. */
-const STEP_UNIT: Readonly<Record<KnownActivityStepName, KnownActivityAssetKind>> = {
+export const STEP_UNIT: Readonly<Record<KnownActivityStepName, KnownActivityAssetKind>> = {
   store: "memories",
   summarize: "memories",
   link: "memories",
