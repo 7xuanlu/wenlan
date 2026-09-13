@@ -38,7 +38,7 @@ import {
   type KnownActivityStep,
 } from "../../../../lib/activitySentence";
 import { ASSET_ORDER } from "../../activity/ActivitySummaryPopover";
-import { Button, Card, ConfirmActionButton, SectionHeader, Skeleton, StatusChip } from "../primitives";
+import { Button, Card, ConfirmActionButton, SectionHeader, Skeleton, StatusChip, type ProbeState } from "../primitives";
 
 /** A daemon from before `/api/activity` answers it with a plain 404. */
 function isOldDaemonError(error: unknown): boolean {
@@ -857,6 +857,13 @@ function AssetBlock({
   );
 }
 
+/** Red only for a model someone chose that cannot run. With no model chosen,
+ *  Everyday work still runs on the built-in path, so that row stays muted. */
+function routeChipState(route: ActivityResponse["everyday"]): ProbeState {
+  if (route.available) return { kind: "up" };
+  return route.mode === "pinned_unavailable" ? { kind: "down" } : { kind: "idle" };
+}
+
 function RoutesBlock({ activity }: { activity: ActivityResponse }) {
   const { t } = useTranslation();
   return (
@@ -878,7 +885,7 @@ function RoutesBlock({ activity }: { activity: ActivityResponse }) {
               </span>
               <span style={monoText("var(--mem-text)")}>{route.model ?? t("settings.diagnostics.noModel")}</span>
               <StatusChip
-                state={route.available ? { kind: "up" } : { kind: "down" }}
+                state={routeChipState(route)}
                 label={route.available ? t("settings.diagnostics.available") : t("settings.diagnostics.notAvailable")}
               />
             </div>

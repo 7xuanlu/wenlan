@@ -230,6 +230,25 @@ describe("DiagnosticsSection", () => {
       expect(unknownAsset.textContent).not.toMatch(/memor|entit|page/i);
     });
 
+    it("keeps an unset model muted and a chosen model that cannot run red", async () => {
+      vi.mocked(getActivity).mockResolvedValue(
+        activity({
+          everyday: { job: "everyday", lane: "basic", model: null, mode: "unconfigured", available: false },
+          synthesis: { job: "synthesis", lane: "external", model: "gpt-x", mode: "pinned_unavailable", available: false },
+        }),
+      );
+
+      renderDiagnostics();
+
+      const everyday = await screen.findByTestId("diagnostics-route-everyday");
+      const unset = within(everyday).getByText("Not available").closest("[aria-live]");
+      expect(unset?.className).toContain("text-[var(--mem-text-tertiary)]");
+      expect(unset?.className).not.toContain("danger");
+      const synthesis = screen.getByTestId("diagnostics-route-synthesis");
+      const broken = within(synthesis).getByText("Not available").closest("[aria-live]");
+      expect(broken?.className).toContain("text-[var(--mem-status-danger-text)]");
+    });
+
     it("lists open suggestions by verbatim action and status", async () => {
       vi.mocked(getActivity).mockResolvedValue(
         activity({
