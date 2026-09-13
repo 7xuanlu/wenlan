@@ -20,6 +20,7 @@ interface SidebarProps {
   readonly currentPageId?: string | null;
   readonly currentSpaceId?: string | null;
   readonly onEntityClick: (entityId: string) => void;
+  readonly onNavigateActivity?: () => void;
   readonly onNavigateEntities?: () => void;
   readonly onNavigateGraph?: () => void;
   onNavigateHome?: () => void;
@@ -63,6 +64,7 @@ export default function Sidebar({
   currentPageId = null,
   currentSpaceId = null,
   onEntityClick,
+  onNavigateActivity,
   onNavigateEntities,
   onNavigateGraph,
   onNavigateHome,
@@ -221,6 +223,7 @@ export default function Sidebar({
           <ActivityStatus
             expanded={activityOpen}
             onToggle={() => setActivityOpen((open) => !open)}
+            onOpenActivity={closeAfterNavigation(onNavigateActivity, onRequestClose)}
           />
         </div>
       </div>

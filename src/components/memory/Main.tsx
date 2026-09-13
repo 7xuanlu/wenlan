@@ -673,6 +673,13 @@ export default function Main({
             currentPageId={view.kind === "page" ? view.pageId : null}
             currentSpaceId={view.kind === "space" ? view.spaceId : null}
             onEntityClick={handleEntityClick}
+            onNavigateActivity={() => {
+              afterNavigationGuards(() => {
+                setActiveTab("activity");
+                setView({ kind: "activity" });
+                setViewHistory([]);
+              });
+            }}
             onNavigateLog={() => {
               afterNavigationGuards(() => {
                 setView({ kind: "stream" });

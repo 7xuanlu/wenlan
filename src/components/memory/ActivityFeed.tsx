@@ -9,20 +9,11 @@ import {
   type AgentActivityItem,
 } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
+import { relativeTime } from "../../lib/relativeTime";
 import { Select } from "./settings/primitives";
 
 interface ActivityFeedProps {
   onNavigateMemory: (sourceId: string) => void;
-}
-
-function relativeTime(ts: number, t: TFunction, language: string): string {
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  if (diff < 60) return t("activity.relative.justNow");
-  if (diff < 3600) return t("activity.relative.minutesAgo", { count: Math.floor(diff / 60) });
-  if (diff < 86400) return t("activity.relative.hoursAgo", { count: Math.floor(diff / 3600) });
-  if (diff < 604800) return t("activity.relative.daysAgo", { count: Math.floor(diff / 86400) });
-  return new Date(ts * 1000).toLocaleDateString(language);
 }
 
 type TimeGroup = "today" | "yesterday" | "thisWeek" | "older";

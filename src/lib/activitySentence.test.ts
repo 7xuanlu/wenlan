@@ -160,7 +160,10 @@ describe("trustSentence", () => {
         everyday: route("everyday", lane, lane !== "none"),
         synthesis: route("synthesis", lane, lane !== "none"),
       });
-      expect(trustSentence(a)).toEqual({ key: "activityStatus.trustLocal" });
+      expect(trustSentence(a)).toEqual({
+        kind: "local",
+        key: "activityStatus.trustLocal",
+      });
     }
   });
 
@@ -170,11 +173,10 @@ describe("trustSentence", () => {
       synthesis: route("synthesis", "anthropic", true),
     });
     expect(trustSentence(a)).toEqual({
+      kind: "cloud",
       key: "activityStatus.trustCloud",
-      params: {
-        jobsKey: "activityStatus.job.synthesis",
-        vendorKey: "activityStatus.lane.anthropic",
-      },
+      jobKeys: ["activityStatus.job.synthesis"],
+      vendorKey: "activityStatus.lane.anthropic",
     });
   });
 
@@ -183,9 +185,11 @@ describe("trustSentence", () => {
       everyday: route("everyday", "anthropic", true),
       synthesis: route("synthesis", "anthropic", true),
     });
-    expect(trustSentence(a).params?.jobsKey).toBe(
-      "activityStatus.job.everyday|activityStatus.job.synthesis",
-    );
+    const trust = trustSentence(a);
+    expect(trust.kind === "cloud" && trust.jobKeys).toEqual([
+      "activityStatus.job.everyday",
+      "activityStatus.job.synthesis",
+    ]);
   });
 
   it("treats a local server as local, not as a vendor", () => {

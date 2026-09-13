@@ -9,6 +9,7 @@
 // of them return prose: the copy lives in activityCopy.ts, and
 // hardcodedCopyGuard.test.ts would fail on a literal sentence here.
 
+import type { ParseKeys } from "i18next";
 import type {
   ActivityAssetKind,
   ActivityAssetStatus,
@@ -18,8 +19,13 @@ import type {
   ActivityRoute,
 } from "./tauri";
 
+/**
+ * An i18n key with its interpolation params. `key` is `ParseKeys`, not
+ * `string`, so a typo or a renamed copy key fails `tsc` here rather than
+ * rendering the key itself into the sidebar.
+ */
 export interface Phrase {
-  readonly key: string;
+  readonly key: ParseKeys;
   readonly params?: Record<string, string | number>;
 }
 
@@ -98,7 +104,7 @@ export function assetSentence(
 }
 
 /** Lane chip copy for a resolved route. */
-export function laneKey(lane: ActivityLane): string {
+export function laneKey(lane: ActivityLane): ParseKeys {
   return `activityStatus.lane.${lane}`;
 }
 
@@ -109,23 +115,38 @@ export function isCloud(route: ActivityRoute): boolean {
 }
 
 /**
- * The trust sentence.
+ * The trust sentence, as keys rather than a Phrase.
  *
+ * The cloud case interpolates a LIST of job names, and a list of keys cannot
+ * ride inside `params` without being flattened to a string and losing its
+ * types. So it travels as an array and the component joins it with the
+ * locale's own separator.
+ */
+export type TrustPhrase =
+  | { readonly kind: "local"; readonly key: "activityStatus.trustLocal" }
+  | {
+      readonly kind: "cloud";
+      readonly key: "activityStatus.trustCloud";
+      readonly jobKeys: readonly ParseKeys[];
+      readonly vendorKey: ParseKeys;
+    };
+
+/**
  * "Nothing leaves your device" is claimed only when NO resolved lane is a
  * cloud vendor. `external` is a local server the user runs, so it stays local;
  * `basic` and `none` run no model at all. Any cloud lane names its vendor and
  * says which work leaves the device, because claiming local while sending text
  * to a vendor is the one thing this sentence must never do.
  */
-export function trustSentence(activity: ActivityResponse): Phrase {
+export function trustSentence(activity: ActivityResponse): TrustPhrase {
   const cloud = [activity.everyday, activity.synthesis].filter(isCloud);
-  if (cloud.length === 0) return { key: "activityStatus.trustLocal" };
+  if (cloud.length === 0)
+    return { kind: "local", key: "activityStatus.trustLocal" };
 
   return {
+    kind: "cloud",
     key: "activityStatus.trustCloud",
-    params: {
-      jobsKey: cloud.map((route) => `activityStatus.job.${route.job}`).join("|"),
-      vendorKey: laneKey(cloud[0].lane),
-    },
+    jobKeys: cloud.map((route) => `activityStatus.job.${route.job}` as const),
+    vendorKey: laneKey(cloud[0].lane),
   };
 }

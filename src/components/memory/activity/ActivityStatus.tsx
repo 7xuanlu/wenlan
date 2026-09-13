@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { useRef } from "react";
+import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { ActivityResponse, ActivityState } from "../../../lib/tauri";
 import { useActivity } from "../../../lib/useActivity";
+import ActivitySummaryPopover from "./ActivitySummaryPopover";
 
 /**
  * Tier 0 of the activity surfaces: one quiet line at the bottom of the
@@ -44,14 +47,37 @@ export function statusDetail(activity: ActivityResponse): string | null {
 interface ActivityStatusProps {
   readonly expanded: boolean;
   readonly onToggle: () => void;
+  /** Navigates to the Activity view. Absent when the shell has no such route. */
+  readonly onOpenActivity?: () => void;
 }
 
 export default function ActivityStatus({
   expanded,
   onToggle,
+  onOpenActivity,
 }: ActivityStatusProps) {
   const { t } = useTranslation();
   const { data: activity } = useActivity();
+  // The trigger ref lives here rather than in the sidebar because Escape has to
+  // put focus back on the exact element that opened the popover.
+  const triggerRef = useRef<HTMLButtonElement>(null);
+
+  const close = () => {
+    onToggle();
+    triggerRef.current?.focus();
+  };
+
+  // Escape lives on the anchor, not on the popover: after a click focus is
+  // still on the trigger, which is the popover's SIBLING, so a handler on the
+  // popover alone would never see the key.
+  const closeOnEscape = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape" || !expanded) return;
+    event.preventDefault();
+    // The sidebar drawer also closes on Escape, and the user meant this
+    // popover, not the whole sidebar.
+    event.stopPropagation();
+    close();
+  };
 
   // Render nothing until the first read lands. A line that says "Up to date"
   // before it has asked would be a claim the app cannot back, and this sits
@@ -61,7 +87,16 @@ export default function ActivityStatus({
   const detail = statusDetail(activity);
 
   return (
+    <div className="mem-activity-status-anchor" onKeyDown={closeOnEscape}>
+      {expanded && (
+        <ActivitySummaryPopover
+          activity={activity}
+          onClose={close}
+          onOpenActivity={onOpenActivity}
+        />
+      )}
     <button
+      ref={triggerRef}
       type="button"
       data-testid="activity-status"
       data-state={activity.state}
@@ -122,5 +157,6 @@ export default function ActivityStatus({
         </span>
       )}
     </button>
+    </div>
   );
 }

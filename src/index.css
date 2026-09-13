@@ -3801,3 +3801,35 @@ p.entity-error {
 @media (prefers-reduced-motion: reduce) {
   .mem-activity-dot-pulse { animation: none; }
 }
+
+/* The popover opens UPWARD from the status line: the line sits at the very
+   bottom of the sidebar, so a downward popover would open off-screen. */
+.mem-activity-status-anchor { position: relative; }
+.mem-activity-popover {
+  bottom: calc(100% + 6px);
+  display: grid;
+  gap: 12px;
+  left: 8px;
+  padding: 12px;
+  position: absolute;
+  width: 300px;
+  z-index: 40;
+}
+/* At phone width the sidebar is a full-width drawer, so 300px plus the 8px
+   offset can overhang. Cap it to the anchor instead. */
+@media (max-width: 380px) {
+  .mem-activity-popover { left: 8px; right: 8px; width: auto; }
+}
+.mem-activity-popover-action {
+  background: transparent;
+  border: 1px solid var(--mem-border);
+  border-radius: 5px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 11px;
+  margin-left: auto;
+  padding: 3px 9px;
+}
+.mem-activity-popover-action:hover { background: var(--mem-hover); color: var(--mem-text); }
+.mem-activity-popover-action:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }

@@ -15,6 +15,14 @@
 // and Linux too, so the lane copy says "this machine", matching the wording
 // already used by setup.privacyTitle and setup.intelligence.deviceNote.
 // Vendor names (Anthropic, OpenAI) stay literal in every locale.
+//
+// No Retry copy. The spec asks for a Retry that reruns only the failed steps,
+// and no such capability exists: failed enrichment rows are re-selected by the
+// scheduler automatically until ENRICHMENT_MAX_ATTEMPTS and then become
+// `abandoned`, which is terminal with no reset path (crates/wenlan-core/src/
+// post_ingest.rs:107-119). There is no daemon route and no Tauri command for
+// it. Shipping a button that cannot do what it says would be worse than
+// leaving it out, so Retry waits for the daemon work.
 
 export const enActivityStatus = {
   // ── Tier 0, the sidebar status line ──────────────────────────────────
@@ -72,9 +80,7 @@ export const enActivityStatus = {
       "{{count}} of {{total}} blocked: page writing failed. Your sources are unaffected.",
   },
   openActivity: "Open Activity",
-  retry: "Retry",
-  retryRunning: "Retrying…",
-  retryFailed: "Could not restart those steps. Try again.",
+  jobSeparator: " and ",
   lastActivity: "Last activity {{time}}",
   neverActive: "No background work yet",
 
@@ -186,9 +192,7 @@ export const hansActivityStatus = {
     pages: "{{total}} 个中有 {{count}} 个暂停：写页面失败。你的来源不受影响。",
   },
   openActivity: "打开动态",
-  retry: "重试",
-  retryRunning: "正在重试…",
-  retryFailed: "无法重新开始这些步骤，请再试一次。",
+  jobSeparator: "和",
   lastActivity: "最近活动于{{time}}",
   neverActive: "还没有后台工作",
   nowTitle: "当前",
@@ -291,9 +295,7 @@ export const hantActivityStatus = {
     pages: "{{total}} 個中有 {{count}} 個暫停：寫頁面失敗。你的來源不受影響。",
   },
   openActivity: "開啟動態",
-  retry: "重試",
-  retryRunning: "正在重試…",
-  retryFailed: "無法重新開始這些步驟，請再試一次。",
+  jobSeparator: "和",
   lastActivity: "最近活動於{{time}}",
   neverActive: "還沒有背景工作",
   nowTitle: "目前",
