@@ -69,6 +69,25 @@ describe("pinsToFill", () => {
   it("writes nothing when no source is configured", () => {
     expect(pinsToFill(routing())).toEqual({ everyday: null, synthesis: null });
   });
+
+  it("passes over an on-device model that is selected but not loaded", () => {
+    expect(
+      pinsToFill(
+        routing({
+          pool: {
+            on_device: { selected: "qwen3-4b", loaded: false },
+            anthropic: { configured: true, everyday_model: "h", synthesis_model: "s" },
+          },
+        }),
+      ),
+    ).toEqual({ everyday: "anthropic", synthesis: "anthropic" });
+  });
+
+  it("writes nothing when the only source is an unloaded on-device model", () => {
+    expect(
+      pinsToFill(routing({ pool: { on_device: { selected: "qwen3-4b", loaded: false } } })),
+    ).toEqual({ everyday: null, synthesis: null });
+  });
 });
 
 describe("fillUnsetPins", () => {

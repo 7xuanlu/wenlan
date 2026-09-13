@@ -41,12 +41,22 @@ export function deriveOnboardingPins(pool: ResolvedRouting["pool"]): {
 /** The pins to write so a job with no model chosen gets one, using the same
  *  preference as onboarding. A job the user already pinned is never touched,
  *  even when its pinned source is unavailable: that choice is theirs. Null for
- *  a job means "leave it", matching `setSourcePin`'s patch semantics. */
+ *  a job means "leave it", matching `setSourcePin`'s patch semantics.
+ *
+ *  Unlike onboarding, an on-device model counts only once it is loaded. The
+ *  pool lists a model as soon as one is selected, so a load that failed or was
+ *  never finished would otherwise win over the provider the user just saved
+ *  and leave that job pinned to nothing that runs. Settings' Load returns only
+ *  after the model is loaded, so that path still chooses it. */
 export function pinsToFill(routing: ResolvedRouting): {
   everyday: SourcePin | null;
   synthesis: SourcePin | null;
 } {
-  const derived = deriveOnboardingPins(routing.pool);
+  const { pool } = routing;
+  const derived = deriveOnboardingPins({
+    ...pool,
+    on_device: pool.on_device?.loaded ? pool.on_device : null,
+  });
   return {
     everyday: routing.everyday.pin === null ? derived.everyday : null,
     synthesis: routing.synthesis.pin === null ? derived.synthesis : null,
