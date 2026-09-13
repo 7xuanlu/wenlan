@@ -442,9 +442,46 @@ pub(super) fn import_priority_block_reason_with_headroom(
     }
 }
 
+/// True when this tick's import-priority lane would run work: a request is
+/// active, it is not past its deadline or finished, and nothing it still honours
+/// holds it. The scheduler publishes this beside the ordinary gate so a reader
+/// can tell an import still running from one waiting like everything else.
+pub(super) fn import_lane_open(
+    import: Option<ImportPrioritySnapshot>,
+    should_finish: bool,
+    now: Instant,
+    block_reason: Option<ResourceBlockReason>,
+) -> bool {
+    import.is_some_and(|import| now < import.deadline && !should_finish && block_reason.is_none())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_lane_is_open_only_while_its_window_can_run() {
+        let now = Instant::now();
+        let mut priority = ImportPriority::default();
+        assert!(!import_lane_open(priority.snapshot(), false, now, None));
+
+        priority.prepare_request(now);
+        let active = priority.snapshot();
+        assert!(import_lane_open(active, false, now, None));
+        assert!(!import_lane_open(active, true, now, None));
+        assert!(!import_lane_open(
+            active,
+            false,
+            now,
+            Some(ResourceBlockReason::MemoryPressure)
+        ));
+        assert!(!import_lane_open(
+            active,
+            false,
+            now + IMPORT_PRIORITY_WINDOW,
+            None
+        ));
+    }
 
     fn admitted(cpu_usage_percent: f32, available_memory_bytes: u64) -> ResourceStatus {
         ResourceStatus {

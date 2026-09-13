@@ -16,6 +16,10 @@ import {
 } from "../../../../lib/tauri";
 import { type Theme, useTheme } from "../../../../lib/theme";
 import {
+  ACTIVITY_NOW_LAYOUTS,
+  useActivityNowLayout,
+} from "../../../../lib/activityNowLayout";
+import {
   readStoredLocalePreference,
   setLocalePreference,
   type StoredLocale,
@@ -227,6 +231,7 @@ export default function GeneralSection() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [theme, setThemeValue] = useTheme();
+  const [nowLayout, setNowLayout] = useActivityNowLayout();
   const [languagePreference, setLanguagePreference] = useState<StoredLocale>(
     () => readStoredLocalePreference(),
   );
@@ -337,6 +342,24 @@ export default function GeneralSection() {
                 }))}
                 value={theme}
                 onChange={setThemeValue}
+              />
+            }
+          />
+          {/* Beside Theme and Language: all three are per-device display
+              preferences. The spec asked for a Settings, Appearance section;
+              Appearance was folded into General, see the Theme row above. */}
+          <SettingRow
+            title={t("activityStatus.layoutSetting")}
+            description={t("activityStatus.layoutSettingHelp")}
+            control={
+              <SegmentedControl
+                aria-label={t("activityStatus.layoutSetting")}
+                options={ACTIVITY_NOW_LAYOUTS.map((value) => ({
+                  value,
+                  label: t(`activityStatus.layout.${value}`),
+                }))}
+                value={nowLayout}
+                onChange={setNowLayout}
               />
             }
           />

@@ -143,7 +143,8 @@ import {
   deleteMemory,
 } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
-import { deriveOnboardingPins, DoneStep } from "./SetupWizard";
+import { DoneStep } from "./SetupWizard";
+import { deriveOnboardingPins } from "../lib/routingPins";
 import { NO, YES, unreadable } from "../test/readings";
 
 /** An agent write that lands AFTER the wizard was entered — the only kind that

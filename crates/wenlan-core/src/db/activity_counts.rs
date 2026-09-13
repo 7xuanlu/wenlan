@@ -25,8 +25,14 @@ pub struct StepBacklog {
 }
 
 /// Memories (distinct `source_id`, `source = 'memory'`) by how their entity
-/// detection stands: `done` has BOTH `entity_extract` and `entity_link` in a
-/// done status, `failed` has EITHER in a failed status and is not done.
+/// detection stands: `done` has `entity_extract` in a done status OR is
+/// linked to an entity in `memory_entities`; `failed` has `entity_extract` or
+/// `entity_link` in a failed status and is not done.
+///
+/// Done is not "both steps ok": the three writers do not agree on receipts.
+/// Post-ingest writes both; the ambient slice writes only `entity_extract`
+/// when it creates a new entity; the refinery entity phase writes neither and
+/// only links. Requiring both rows showed "0 of 9 scanned" beside 5 entities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetectTally {
     pub done: u64,
@@ -75,8 +81,12 @@ pub struct ActivityCounts {
     pub pages_stale: u64,
     /// Live non-entity pages whose refresh is blocked.
     pub pages_refresh_blocked: u64,
-    /// `MAX(updated_at)` over `enrichment_steps`; `None` on an empty table.
-    pub last_step_updated_at: Option<i64>,
+    /// Latest background write, epoch seconds: the newer of
+    /// `MAX(enrichment_steps.updated_at)` and the latest page compile. Pages
+    /// count because the refinery writes entity and concept pages without
+    /// step rows, and "Nothing has run yet" beside a written page is false.
+    /// `None` when neither has happened.
+    pub last_work_at: Option<i64>,
 }
 
 impl MemoryDB {
@@ -170,24 +180,29 @@ impl MemoryDB {
         // distinct memories. The inner DISTINCT collapses chunks so each
         // memory counts once; the outer CASE sums use only portable SQL (no
         // FILTER clause). `ok`/`bad` count ROWS in a done/failed status for
-        // the lane's two steps; a memory is finished only when both are ok.
+        // the lane's steps. A memory's page work is finished only when both
+        // steps are ok; its entity scan is finished per `DetectTally`.
         let mut tally_rows = conn
             .query(
                 "SELECT \
-                 COALESCE(SUM(CASE WHEN ent_ok = 2 THEN 1 ELSE 0 END), 0), \
-                 COALESCE(SUM(CASE WHEN ent_ok < 2 AND ent_bad > 0 THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN ent_ok > 0 OR ent_linked > 0 THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN ent_ok = 0 AND ent_linked = 0 AND ent_bad > 0 \
+                                   THEN 1 ELSE 0 END), 0), \
                  COALESCE(SUM(CASE WHEN mem_bad > 0 THEN 1 ELSE 0 END), 0), \
                  COALESCE(SUM(CASE WHEN mem_ok < 2 THEN 1 ELSE 0 END), 0), \
-                 COALESCE(SUM(CASE WHEN ent_bad > 0 THEN 1 ELSE 0 END), 0), \
-                 COALESCE(SUM(CASE WHEN ent_ok < 2 THEN 1 ELSE 0 END), 0) \
+                 COALESCE(SUM(CASE WHEN ent_ok = 0 AND ent_linked = 0 AND ent_bad > 0 \
+                                   THEN 1 ELSE 0 END), 0), \
+                 COALESCE(SUM(CASE WHEN ent_ok = 0 AND ent_linked = 0 THEN 1 ELSE 0 END), 0) \
                  FROM ( \
                    SELECT m.source_id, \
                      SUM(CASE WHEN e.step_name IN ('title_enrich', 'page_growth') \
                               AND e.status IN ('ok', 'skipped') THEN 1 ELSE 0 END) AS mem_ok, \
                      SUM(CASE WHEN e.step_name IN ('title_enrich', 'page_growth') \
                               AND e.status IN ('failed', 'abandoned') THEN 1 ELSE 0 END) AS mem_bad, \
-                     SUM(CASE WHEN e.step_name IN ('entity_extract', 'entity_link') \
+                     SUM(CASE WHEN e.step_name = 'entity_extract' \
                               AND e.status IN ('ok', 'skipped') THEN 1 ELSE 0 END) AS ent_ok, \
+                     (SELECT COUNT(*) FROM memory_entities me \
+                      WHERE me.memory_id = m.source_id) AS ent_linked, \
                      SUM(CASE WHEN e.step_name IN ('entity_extract', 'entity_link') \
                               AND e.status IN ('failed', 'abandoned') THEN 1 ELSE 0 END) AS ent_bad \
                    FROM (SELECT DISTINCT source_id FROM memories WHERE source = 'memory') m \
@@ -276,19 +291,28 @@ impl MemoryDB {
         .await?;
 
         let mut updated_rows = conn
-            .query("SELECT MAX(updated_at) FROM enrichment_steps", ())
+            // `last_compiled` is RFC 3339 text in production; a non-text value
+            // is skipped rather than read as a Julian day number.
+            .query(
+                "SELECT MAX(t) FROM ( \
+                   SELECT MAX(updated_at) AS t FROM enrichment_steps \
+                   UNION ALL \
+                   SELECT CAST(strftime('%s', MAX(last_compiled)) AS INTEGER) FROM pages \
+                   WHERE typeof(last_compiled) = 'text' \
+                 )",
+                (),
+            )
             .await
-            .map_err(|e| {
-                WenlanError::VectorDb(format!("activity_counts last_step_updated_at: {e}"))
-            })?;
-        let last_step_updated_at = match updated_rows.next().await.map_err(|e| {
-            WenlanError::VectorDb(format!("activity_counts last_step_updated_at row: {e}"))
-        })? {
-            Some(row) => row.get::<Option<i64>>(0).map_err(|e| {
-                WenlanError::VectorDb(format!("activity_counts last_step_updated_at get: {e}"))
-            })?,
-            None => None,
-        };
+            .map_err(|e| WenlanError::VectorDb(format!("activity_counts last_work_at: {e}")))?;
+        let last_work_at =
+            match updated_rows.next().await.map_err(|e| {
+                WenlanError::VectorDb(format!("activity_counts last_work_at row: {e}"))
+            })? {
+                Some(row) => row.get::<Option<i64>>(0).map_err(|e| {
+                    WenlanError::VectorDb(format!("activity_counts last_work_at get: {e}"))
+                })?,
+                None => None,
+            };
         drop(updated_rows);
 
         Ok(ActivityCounts {
@@ -303,7 +327,7 @@ impl MemoryDB {
             pages_total,
             pages_stale,
             pages_refresh_blocked,
-            last_step_updated_at,
+            last_work_at,
         })
     }
 }
@@ -390,7 +414,7 @@ mod tests {
                 pages_total: 0,
                 pages_stale: 0,
                 pages_refresh_blocked: 0,
-                last_step_updated_at: None,
+                last_work_at: None,
             }
         );
     }
@@ -504,7 +528,9 @@ mod tests {
         assert_eq!(counts.pages_total, 3);
         assert_eq!(counts.pages_stale, 1);
         assert_eq!(counts.pages_refresh_blocked, 1);
-        assert_eq!(counts.last_step_updated_at, Some(100));
+        // The seeded entity pages are compiled "now", which is newer than the
+        // step row at 100.
+        assert!(matches!(counts.last_work_at, Some(t) if t > 1_700_000_000));
     }
 
     #[tokio::test]
@@ -557,7 +583,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn detect_counts_memories_with_both_steps_done() {
+    async fn detect_counts_memories_scanned_by_any_entity_writer() {
         let (db, _tmp) = super::super::tests::test_db().await;
         {
             let conn = db.conn.lock().await;
@@ -568,8 +594,7 @@ mod tests {
             .await
             .unwrap();
         }
-        // Two memories with both entity steps done, one with only extract
-        // done, one with link failed.
+        // Post-ingest writes both receipts.
         seed_memory(
             &db,
             "row-a",
@@ -584,11 +609,38 @@ mod tests {
             &[("entity_extract", "ok", 12), ("entity_link", "skipped", 13)],
         )
         .await;
+        // The ambient slice writes only `entity_extract` when it creates a
+        // new entity.
         seed_memory(&db, "row-c", "mem-c", &[("entity_extract", "ok", 14)]).await;
+        // Link failed and nothing else: not scanned, failed.
         seed_memory(&db, "row-d", "mem-d", &[("entity_link", "failed", 15)]).await;
+        // The refinery entity phase writes no receipt, only the link.
+        seed_memory(&db, "row-e", "mem-e", &[]).await;
+        // Extract finished even though linking failed: scanned, not failed.
+        seed_memory(
+            &db,
+            "row-f",
+            "mem-f",
+            &[("entity_extract", "ok", 16), ("entity_link", "failed", 17)],
+        )
+        .await;
+        // No work at all: waiting.
+        seed_memory(&db, "row-g", "mem-g", &[]).await;
+        db.test_seed_entity_shadow_page(crate::db::TestEntity::new("ent-e", "E", "concept"))
+            .await
+            .unwrap();
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "INSERT INTO memory_entities (memory_id, entity_id) VALUES ('mem-e', 'ent-e')",
+                (),
+            )
+            .await
+            .unwrap();
+        }
 
         let counts = db.activity_counts().await.unwrap();
-        assert_eq!(counts.detect, DetectTally { done: 2, failed: 1 });
+        assert_eq!(counts.detect, DetectTally { done: 5, failed: 1 });
         assert_eq!(
             counts.entities_backlog,
             AssetBacklog {
@@ -596,5 +648,35 @@ mod tests {
                 unfinished: 2,
             }
         );
+    }
+
+    #[tokio::test]
+    async fn last_work_counts_page_compiles_without_step_rows() {
+        let (db, _tmp) = super::super::tests::test_db().await;
+        {
+            let conn = db.conn.lock().await;
+            // The refinery compiles pages and writes no step rows.
+            conn.execute(
+                "INSERT INTO pages (id, title, content, created_at, last_compiled, last_modified) \
+                 VALUES ('page-refinery', 'Refinery', 'body', 0, \
+                 '2023-11-14T22:15:00.123456+00:00', 0)",
+                (),
+            )
+            .await
+            .unwrap();
+        }
+        let counts = db.activity_counts().await.unwrap();
+        assert_eq!(counts.last_work_at, Some(1_700_000_100));
+
+        // A newer step row wins over an older compile.
+        seed_memory(
+            &db,
+            "row-new",
+            "mem-new",
+            &[("title_enrich", "ok", 1_700_000_200)],
+        )
+        .await;
+        let counts = db.activity_counts().await.unwrap();
+        assert_eq!(counts.last_work_at, Some(1_700_000_200));
     }
 }

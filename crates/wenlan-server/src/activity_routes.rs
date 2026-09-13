@@ -9,6 +9,7 @@ use crate::config_routes::{resolve_job_routes, JobRoute};
 use crate::error::ServerError;
 use crate::import_routes::DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT;
 use crate::route_registry::{get, TrackedRouter};
+use crate::scheduler::AmbientGateSnapshot;
 use crate::state::SharedState;
 use axum::{extract::State, response::Json};
 use wenlan_core::config;
@@ -30,19 +31,41 @@ pub async fn handle_activity(
     // Snapshot everything the handler needs out of the state lock in one
     // short block, then drop the guard before any await.
     let cfg = config::load_config();
-    let (db, everyday, synthesis) = {
+    let (db, everyday, synthesis, work_can_run) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
         let (everyday, synthesis) = resolve_job_routes(&cfg, &s);
-        (db, everyday, synthesis)
+        // A `std::sync::Mutex`, locked and released within this statement.
+        let work_can_run = s
+            .ambient_gate
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(AmbientGateSnapshot::work_can_run);
+        (db, everyday, synthesis, work_can_run)
     };
     let counts = db.activity_counts().await?;
     let batches = db
         .active_import_batches(DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT)
         .await?;
-    Ok(Json(compose_activity(
-        counts, &batches, &everyday, &synthesis,
-    )))
+    let mut response = compose_activity(counts, &batches, &everyday, &synthesis);
+    response.state = held_until_idle(response.state, work_can_run);
+    Ok(Json(response))
+}
+
+/// Organizing work that cannot run yet becomes WaitingForIdle. The scheduler
+/// holds background work until the computer is quiet (idle input, spare CPU
+/// and memory, nominal thermals) and publishes what its latest check saw,
+/// including whether a recent import's short priority window could still run.
+/// An unfinished import is not enough on its own: once that window ends or is
+/// held, its work waits like everything else. Before the first check (`None`)
+/// nothing is claimed. Every other state passes through: Blocked needs the
+/// user, and UpToDate has nothing to hold.
+fn held_until_idle(state: ActivityState, work_can_run: Option<bool>) -> ActivityState {
+    match state {
+        ActivityState::Organizing if work_can_run == Some(false) => ActivityState::WaitingForIdle,
+        other => other,
+    }
 }
 
 /// Done/failed/pending split for one group of `enrichment_steps` rows.
@@ -302,6 +325,8 @@ pub(crate) fn compose_activity(
 
     // ── Overall ─────────────────────────────────────────────────────
     let assets = vec![memories, entities, pages];
+    // Never WaitingForIdle: that needs the scheduler's gate, which the counts
+    // do not carry, so the handler refines Organizing (see `held_until_idle`).
     let state = if assets
         .iter()
         .any(|asset| asset.state == ActivityStepState::Blocked)
@@ -320,7 +345,7 @@ pub(crate) fn compose_activity(
     ActivityResponse {
         state,
         last_activity_at: counts
-            .last_step_updated_at
+            .last_work_at
             .max(batches.iter().map(|batch| batch.updated_at).max()),
         assets,
         everyday: everyday_route,
@@ -373,7 +398,7 @@ mod tests {
             pages_total: 0,
             pages_stale: 0,
             pages_refresh_blocked: 0,
-            last_step_updated_at: None,
+            last_work_at: None,
         }
     }
 
@@ -725,6 +750,39 @@ mod tests {
         // Eight memories pending in both Summarize and Link is eight blocked
         // items, not sixteen.
         assert_eq!(memories_asset(&response).blocked, 8);
+    }
+
+    /// Steeping with the gate closed is waiting, not running: this is the
+    /// sweeping clock beside "Last activity 2h ago".
+    #[test]
+    fn organizing_work_held_by_the_gate_is_waiting_for_idle() {
+        use ActivityState::{Blocked, Organizing, UpToDate, WaitingForIdle};
+        let gate = |admitted, import_priority_admitted| AmbientGateSnapshot {
+            admitted,
+            import_priority_admitted,
+            blocked_reason: None,
+            sampled_at_epoch: 0,
+        };
+        let cases = [
+            (Organizing, Some(gate(false, false)), WaitingForIdle),
+            // The gate admits work: it runs.
+            (Organizing, Some(gate(true, false)), Organizing),
+            // A recent import's priority window runs work past a closed gate.
+            (Organizing, Some(gate(false, true)), Organizing),
+            // No check yet: claim nothing.
+            (Organizing, None, Organizing),
+            // Only Steeping can wait; the other states say their own thing.
+            (Blocked, Some(gate(false, false)), Blocked),
+            (UpToDate, Some(gate(false, false)), UpToDate),
+        ];
+        for (state, gate, expected) in cases {
+            let work_can_run = gate.as_ref().map(AmbientGateSnapshot::work_can_run);
+            assert_eq!(
+                held_until_idle(state, work_can_run),
+                expected,
+                "{state:?} gate={gate:?}"
+            );
+        }
     }
 
     #[test]

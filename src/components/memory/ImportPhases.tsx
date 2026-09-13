@@ -19,6 +19,19 @@ export const IMPORT_PHASE_ORDER: ImportPhase[] = [
   "distill",
 ];
 
+/**
+ * The phases the import surface shows.
+ *
+ * The other four moved to the toolbar Activity button and the Activity page. Shown
+ * in the foreground they read as cost before proof: a user watched six phases
+ * grind for minutes with nothing usable in sight. Ingest and Store are the two
+ * that end in something they can use, so those are the two that stay.
+ *
+ * IMPORT_PHASE_ORDER is unchanged: it mirrors ImportPhase::ALL and other
+ * callers read it for the full pipeline.
+ */
+export const IMPORT_VISIBLE_PHASES: ImportPhase[] = ["ingest", "store"];
+
 /** How often to re-read the daemon's live row counts. Matches the chat-import
  *  poll in ChatImport/ImportFlow (immediate read, then an interval). */
 export const IMPORT_BATCH_POLL_MS = 1_500;
@@ -214,21 +227,19 @@ function PhaseDot({ state }: { state: ImportPhaseState }) {
  * A phase with no known total reads as waiting, never as 0%. `distill` never
  * reports a usable total, so it always renders as a live count with no bar.
  */
-export function ImportPhaseList({ phases, pageCount }: { phases: ImportPhaseStatus[]; pageCount?: number | null }) {
+export function ImportPhaseList({ phases }: { phases: ImportPhaseStatus[] }) {
   const { t } = useTranslation();
   const byPhase = new Map<ImportPhase, ImportPhaseStatus>();
   for (const p of phases) byPhase.set(p.phase, p);
 
-  const organizationSettled = IMPORT_PHASE_ORDER.filter((phase) => phase !== "distill")
-    .every((phase) => byPhase.get(phase)?.state === "complete");
-  const awaitingContext = organizationSettled && byPhase.get("distill")?.state === "pending";
+  const stored = byPhase.get("store");
+  const handedOff = stored?.state === "complete";
 
   return (
     <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: "4px" }}>
-      {IMPORT_PHASE_ORDER.map((phase) => {
+      {IMPORT_VISIBLE_PHASES.map((phase) => {
         const entry = byPhase.get(phase) ?? emptyPhase(phase);
-        const isDistill = phase === "distill";
-        const hasTotal = !isDistill && entry.total > 0;
+        const hasTotal = entry.total > 0;
         const fraction = hasTotal ? Math.min(entry.done / entry.total, 1) : 0;
         return (
           <div
@@ -282,11 +293,7 @@ export function ImportPhaseList({ phases, pageCount }: { phases: ImportPhaseStat
               {entry.state === "failed" && (
                 <span style={{ color: "#ef4444" }}>{t("importBatch.states.failed")}</span>
               )}
-              {isDistill ? (
-                <span>{pageCount === null
-                  ? t(entry.done > 0 ? "importBatch.relatedPagesAvailable" : "importBatch.noRelatedPages")
-                  : t("importBatch.pagesSoFar", { count: pageCount ?? entry.done })}</span>
-              ) : hasTotal ? (
+              {hasTotal ? (
                 <span>{t("importBatch.countOf", { done: entry.done, total: entry.total })}</span>
               ) : (
                 <span>{t("importBatch.states.waiting")}</span>
@@ -326,9 +333,14 @@ export function ImportPhaseList({ phases, pageCount }: { phases: ImportPhaseStat
           </div>
         );
       })}
-      {awaitingContext && (
-        <p style={{ margin: "8px 14px", fontSize: "12px", lineHeight: 1.6, color: "var(--mem-text-secondary)" }}>
-          {t("importBatch.readyWithoutPages")}
+      {handedOff && (
+        // The handoff: everything stored is searchable now, and the organizing
+        // that follows is reported by the toolbar Activity button, not here.
+        <p
+          data-testid="import-handoff"
+          style={{ margin: "8px 14px", fontSize: "12px", lineHeight: 1.6, color: "var(--mem-text-secondary)" }}
+        >
+          {t("activityStatus.importHandoff", { count: stored?.done ?? 0 })}
         </p>
       )}
     </div>
@@ -444,7 +456,7 @@ export function ImportDetailPanel({
         </h2>
       </div>
 
-      <ImportPhaseList phases={summary.phases} pageCount={summary.pagesDistilled} />
+      <ImportPhaseList phases={summary.phases} />
 
       <p style={{
         fontFamily: "var(--mem-font-mono)",

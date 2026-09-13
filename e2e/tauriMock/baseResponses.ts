@@ -25,6 +25,21 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
     case "search_pages": case "search_entities_cmd": case "list_recent_retrievals": case "list_recent_changes": case "list_recent_memories": case "list_unconfirmed_memories": case "list_recent_pages": case "list_onboarding_milestones": case "list_pending_revisions": case "get_pending_contradictions": return [];
     case "get_memory_stats_cmd": return { total: context.memoryCount, new_today: 0, confirmed: context.memoryCount, domains: [], by_type: [] };
     case "get_home_stats": return { total: context.memoryCount, new_today: 0, confirmed: context.memoryCount, total_ingested: 0, active_insights: 0, distilled_today: 0, distilled_all: 0, sources_archived: 0, times_served_today: 0, words_saved_today: 0, times_served_week: 0, words_saved_week: 0, times_served_all: 0, words_saved_all: 0, corrections_active: 0, top_memories: [] };
+    // The sidebar status line mounts on EVERY page, so an unregistered
+    // get_activity would make the default arm throw for every spec in the
+    // suite, not just the activity ones. Up to date with empty assets is
+    // the quietest shape: one still line, no counts, no popover content.
+    case "get_activity": return {
+      state: "up_to_date",
+      last_activity_at: null,
+      assets: [
+        { kind: "memories", state: "idle", done: 0, total: 0, blocked: 0, steps: [] },
+        { kind: "entities", state: "idle", done: 0, total: 0, blocked: 0, steps: [] },
+        { kind: "pages", state: "idle", done: 0, total: 0, blocked: 0, steps: [] },
+      ],
+      everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+      synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+    };
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };

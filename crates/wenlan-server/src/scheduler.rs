@@ -1367,17 +1367,37 @@ pub fn spawn_scheduler(
             let host_activity = sample_host_activity();
             let resource_status =
                 apply_host_activity(resource_probe.sample(now, resource_policy), host_activity);
+            let import_route_uses_on_device = matches!(
+                everyday_pin,
+                Some(wenlan_core::refinery::EverydaySource::OnDevice)
+            ) || matches!(
+                synthesis_pin,
+                Some(wenlan_core::refinery::SynthesisSource::OnDevice)
+            );
+            let import_block_reason = import_priority_block_reason(
+                resource_status,
+                host_activity,
+                startup_model_load_reserved,
+                import_route_uses_on_device,
+            );
 
             // Publish the gate state this tick actually observed so
             // `/api/ambient/status` can report it without re-sampling
             // CPU/host-activity independently (see `AmbientGateSnapshot`).
             {
+                let import_priority_admitted = import_lane_open(
+                    write_signal.import_priority_snapshot(),
+                    write_signal.import_priority_should_finish(now),
+                    now,
+                    import_block_reason,
+                );
                 let ambient_gate = {
                     let state = shared.read().await;
                     state.ambient_gate.clone()
                 };
                 *ambient_gate.lock().unwrap() = Some(AmbientGateSnapshot {
                     admitted: resource_status.admitted,
+                    import_priority_admitted,
                     blocked_reason: resource_status
                         .block_reason
                         .map(|reason| format!("{reason:?}")),
@@ -1436,18 +1456,7 @@ pub fn spawn_scheduler(
                     if finish_import_priority(&write_signal, &db, import_generation).await {
                         tracing::info!("[scheduler] import priority finished reason=deadline");
                     }
-                } else if let Some(reason) = import_priority_block_reason(
-                    resource_status,
-                    host_activity,
-                    startup_model_load_reserved,
-                    matches!(
-                        everyday_pin,
-                        Some(wenlan_core::refinery::EverydaySource::OnDevice)
-                    ) || matches!(
-                        synthesis_pin,
-                        Some(wenlan_core::refinery::SynthesisSource::OnDevice)
-                    ),
-                ) {
+                } else if let Some(reason) = import_block_reason {
                     tracing::debug!("[scheduler] import priority deferred reason={reason:?}");
                 } else {
                     let everyday_provider = resolve_ambient_provider(

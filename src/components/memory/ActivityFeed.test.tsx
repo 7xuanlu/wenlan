@@ -8,8 +8,12 @@ import type { AgentActivityItem, AgentConnection } from "../../lib/tauri";
 
 const activityMock = vi.hoisted(() => vi.fn());
 const agentsMock = vi.hoisted(() => vi.fn());
+// The Now section mounts inside the feed and reads get_activity. Mock plumbing
+// only: no assertion in this file changes.
+const getActivityMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/tauri", () => ({
+  getActivity: getActivityMock,
   listAgentActivity: activityMock,
   listAgents: agentsMock,
 }));
@@ -51,6 +55,13 @@ function renderActivityFeed() {
 describe("ActivityFeed i18n", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    getActivityMock.mockResolvedValue({
+      state: "up_to_date",
+      last_activity_at: null,
+      assets: [],
+      everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+      synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+    });
     await i18n.changeLanguage("zh-Hant");
     agentsMock.mockResolvedValue([
       agent("codex", "Codex"),

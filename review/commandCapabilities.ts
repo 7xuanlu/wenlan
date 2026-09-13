@@ -34,6 +34,8 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "get_pending_contradictions",
     "get_truth_status",
     "active_import_batches_cmd",
+    // The toolbar Activity button reads it on every screen.
+    "get_activity",
   ],
   wikiAndPages: [
     "list_pages",

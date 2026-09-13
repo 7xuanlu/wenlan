@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   setModelChoice: vi.fn(),
   getOnDeviceModel: vi.fn(),
   getSystemInfo: vi.fn(),
+  downloadOnDeviceModel: vi.fn(),
+  getResolvedRouting: vi.fn(),
+  setSourcePin: vi.fn(),
 }));
 vi.mock("../../lib/tauri", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/tauri")>();
@@ -164,5 +167,48 @@ describe("OnDeviceModelCard", () => {
     );
     expect(await screen.findByText("Model catalog unavailable — check your connection.")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  // A model loaded from Settings used to sit in the pool while both jobs
+  // stayed unpinned, so Activity said steeping was paused on a machine with a
+  // running model.
+  it("chooses a model loaded here for the jobs that have none", async () => {
+    mocks.getOnDeviceModel.mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [{
+        id: "qwen3-4b-instruct-2507",
+        display_name: "Qwen3 4B",
+        param_count: "4B",
+        ram_required_gb: 8,
+        file_size_gb: 2.7,
+        cached: true,
+      }],
+    });
+    mocks.downloadOnDeviceModel.mockResolvedValue(undefined);
+    mocks.getResolvedRouting.mockResolvedValue({
+      everyday: { source: "basic", model: null, mode: "unconfigured", pin: null },
+      synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
+      pool: {
+        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
+      },
+    });
+    mocks.setSourcePin.mockResolvedValue(undefined);
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    render(
+      <QueryClientProvider client={qc}>
+        <OnDeviceModelCard />
+      </QueryClientProvider>,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Load" }));
+
+    await waitFor(() => expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+    expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-4b-instruct-2507");
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["activity"] });
   });
 });

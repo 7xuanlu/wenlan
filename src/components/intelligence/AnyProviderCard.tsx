@@ -11,6 +11,8 @@ import {
   getExternalLlmKeyConfigured,
 } from "../../lib/tauri";
 import { useDaemonVersion } from "../../hooks/useDaemonVersion";
+import { fillUnsetPinsAfterSave } from "../../lib/routingPins";
+import { ACTIVITY_QUERY_KEY } from "../../lib/useActivity";
 import { AnthropicFields, useApiKeyStatus } from "./IntelligenceSetup";
 import {
   PROVIDER_PRESETS,
@@ -311,6 +313,8 @@ export default function AnyProviderCard({
     setSaveState("saving");
     try {
       await setExternalLlm(trimmedEndpoint, model, keyToSend());
+      // Choose the saved provider for any job that has no model yet.
+      await fillUnsetPinsAfterSave();
       setSaveState(supportsHotSwap ? "applied" : "restart");
       // The daemon may hot-load this config immediately, so the routing
       // queries the job summary rows read from must refresh alongside our
@@ -318,6 +322,7 @@ export default function AnyProviderCard({
       queryClient.invalidateQueries({ queryKey: ["external-llm"] });
       queryClient.invalidateQueries({ queryKey: ["external-llm-key-configured"] });
       queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
+      queryClient.invalidateQueries({ queryKey: ACTIVITY_QUERY_KEY });
     } catch (err) {
       setSaveState(`error:${err instanceof Error ? err.message : String(err)}`);
     }

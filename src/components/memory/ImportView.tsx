@@ -433,11 +433,11 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
     // note below says which phases are still moving them.
     const imported = batchStatus?.memories_imported ?? result.imported;
     const skipped = batchStatus?.memories_skipped ?? result.skipped;
-    const runningNames = (batchStatus?.phases ?? [])
-      .filter((p) => p.state === "running" || p.state === "pending")
-      .map((p) => t(`importBatch.phases.${p.phase}`));
-    // The daemon's `complete` flag is the source of truth for whether the
-    // numbers are still moving — never a phase row read in isolation.
+    // Storing is the phase the handoff sentence speaks for: null until it
+    // completes, because "stored and searchable now" is a claim this surface
+    // must not make while rows are still being written.
+    const stored = (batchStatus?.phases ?? []).find((p) => p.phase === "store");
+    const storedCount = stored?.state === "complete" ? stored.done : null;
 
     return (
       <div className="flex flex-col gap-6 max-w-2xl mx-auto py-4">
@@ -521,23 +521,11 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
             </div>
           )}
 
-          {/* Live enrichment figures from the daemon */}
-          {batchStatus && (
-            <div
-              className="flex flex-wrap gap-x-4 gap-y-1 mb-4"
-              style={{
-                fontFamily: "var(--mem-font-mono)",
-                fontSize: "11px",
-                color: "var(--mem-text-tertiary)",
-              }}
-            >
-              <span>{t("importBatch.entitiesDetected", { count: batchStatus.entities_detected })}</span>
-              <span>{t("importBatch.entitiesEstablished", { count: batchStatus.entities_established })}</span>
-              <span>{t("importBatch.pagesDistilled", { count: batchStatus.pages_distilled })}</span>
-            </div>
-          )}
-
-          {/* Honesty note: background phases keep moving these numbers */}
+          {/* The handoff. Entity, link and page figures used to sit here, and
+              they are the output of work this surface no longer reports: the
+              user reads them as an unfinished bill for an import they were
+              told was done. Stored and searchable is the promise the import
+              actually keeps, and the toolbar Activity button carries the rest. */}
           {batchStatus && (
             <p
               style={{
@@ -548,13 +536,11 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
                 margin: 0,
               }}
             >
-              {!batchStatus.complete && runningNames.length > 0
-                ? t("importBatch.backgroundRunning", { phases: runningNames.join(", ") })
-                : t(batchStatus.phases.some((p) => p.state === "failed")
-                  ? "importBatch.pillFailed"
-                  : batchStatus.pages_distilled === 0
-                    ? "importBatch.readyWithoutPages"
-                    : "importBatch.backgroundSettled")}
+              {batchStatus.phases.some((p) => p.state === "failed")
+                ? t("importBatch.pillFailed")
+                : storedCount === null
+                  ? t("importBatch.backgroundRunning")
+                  : t("activityStatus.importHandoff", { count: storedCount })}
             </p>
           )}
         </div>

@@ -8,13 +8,24 @@
 use serde::{Deserialize, Serialize};
 
 /// Overall background-work state. Precedence: Blocked over Organizing over
-/// UpToDate.
+/// WaitingForIdle over UpToDate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
     UpToDate,
+    /// Work is waiting and can run now.
     Organizing,
+    /// Work is waiting but cannot run yet: the scheduler's latest resource
+    /// check held background work (the computer is in use, busy, low on
+    /// memory or hot) and no import is bypassing that check. Only ever
+    /// replaces Organizing.
+    WaitingForIdle,
     Blocked,
+    /// A state this build does not know, sent by a newer daemon. The daemon
+    /// never sends it; it lets an older reader keep the rest of the response
+    /// instead of failing to parse it. Every enum in this response has one.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The three asset groups the Activity surface reports on.
@@ -24,6 +35,9 @@ pub enum ActivityAssetKind {
     Memories,
     Entities,
     Pages,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One background step inside an asset. `Store` and `Confirm` finish without
@@ -37,6 +51,9 @@ pub enum ActivityStepName {
     Detect,
     Confirm,
     Write,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 impl ActivityStepName {
@@ -49,7 +66,7 @@ impl ActivityStepName {
                 Some(ActivityJob::Everyday)
             }
             ActivityStepName::Write => Some(ActivityJob::Synthesis),
-            ActivityStepName::Store | ActivityStepName::Confirm => None,
+            ActivityStepName::Store | ActivityStepName::Confirm | ActivityStepName::Unknown => None,
         }
     }
 }
@@ -62,6 +79,9 @@ pub enum ActivityStepState {
     Idle,
     Running,
     Blocked,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// The two background job classes, served by the resolved routing lanes.
@@ -70,6 +90,9 @@ pub enum ActivityStepState {
 pub enum ActivityJob {
     Everyday,
     Synthesis,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// Resolved lane serving a job. Mirrors `JobRoute.source` strings verbatim.
@@ -81,6 +104,9 @@ pub enum ActivityLane {
     Anthropic,
     Basic,
     None,
+    /// A value from a newer daemon; see `ActivityState::Unknown`.
+    #[serde(other)]
+    Unknown,
 }
 
 /// One resolved job route: which lane serves the job and whether it can run.
@@ -151,6 +177,7 @@ mod tests {
         for (state, label) in [
             (ActivityState::UpToDate, "up_to_date"),
             (ActivityState::Organizing, "organizing"),
+            (ActivityState::WaitingForIdle, "waiting_for_idle"),
             (ActivityState::Blocked, "blocked"),
         ] {
             let json = serde_json::to_string(&state).unwrap();
@@ -169,6 +196,7 @@ mod tests {
         assert_eq!(ActivityStepName::Write.job(), Some(ActivityJob::Synthesis));
         assert_eq!(ActivityStepName::Store.job(), None);
         assert_eq!(ActivityStepName::Confirm.job(), None);
+        assert_eq!(ActivityStepName::Unknown.job(), None);
     }
 
     #[test]
@@ -212,5 +240,35 @@ mod tests {
         assert!(json.contains("\"on_device\""));
         let back: ActivityResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back, response);
+    }
+
+    /// An app older than its daemon must not lose the whole response to one
+    /// word it has never seen, in any of the response's enums.
+    #[test]
+    fn activity_response_with_newer_words_still_parses() {
+        let json = r#"{"state":"new_state","last_activity_at":null,
+            "assets":[{"kind":"new_kind","state":"new_step_state","done":2,"total":2,"blocked":0,
+                "steps":[{"name":"new_step","state":"idle","done":2,"total":2,"failed":0,"job":"new_job"}]}],
+            "everyday":{"job":"everyday","lane":"new_lane","model":"m","mode":"pinned","available":true},
+            "synthesis":{"job":"synthesis","lane":"on_device","model":"m","mode":"pinned","available":true}}"#;
+        let response: ActivityResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(response.state, ActivityState::Unknown);
+        let asset = &response.assets[0];
+        assert_eq!(asset.kind, ActivityAssetKind::Unknown);
+        assert_eq!(asset.state, ActivityStepState::Unknown);
+        assert_eq!(asset.total, 2);
+        assert_eq!(asset.steps[0].name, ActivityStepName::Unknown);
+        assert_eq!(asset.steps[0].job, Some(ActivityJob::Unknown));
+        assert_eq!(response.everyday.lane, ActivityLane::Unknown);
+        assert_eq!(response.synthesis.lane, ActivityLane::OnDevice);
+
+        // The app hands this struct on to the webview, which reads "unknown".
+        let passed_on = serde_json::to_value(&response).unwrap();
+        assert_eq!(passed_on["state"], "unknown");
+        assert_eq!(passed_on["assets"][0]["kind"], "unknown");
+        assert_eq!(passed_on["assets"][0]["state"], "unknown");
+        assert_eq!(passed_on["assets"][0]["steps"][0]["name"], "unknown");
+        assert_eq!(passed_on["assets"][0]["steps"][0]["job"], "unknown");
+        assert_eq!(passed_on["everyday"]["lane"], "unknown");
     }
 }
