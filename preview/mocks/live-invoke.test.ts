@@ -821,13 +821,16 @@ describe("liveInvoke wire_state (setup wizard daemon row)", () => {
   it("returns a reachable daemon, a resolved mcp_binary with its candidate trail, and 5 routed clients", async () => {
     const wire = (await liveInvoke("wire_state")) as {
       daemon: { reachable: boolean; base_url: string };
-      mcp_binary: { command: string; candidates: { path: string; exists: boolean; source: string }[] };
+      mcp_binary: { command: string; candidates: { path: string; state: { kind: string }; source: string }[] };
       clients: { client_type: string; route: string; has_plugin: { kind: string } }[];
     };
 
     expect(wire.daemon.reachable).toBe(true);
     expect(wire.mcp_binary.command.length).toBeGreaterThan(0);
     expect(wire.mcp_binary.candidates.length).toBeGreaterThan(0);
+    // Settings > Diagnostics matches on `state.kind` (BinaryCandidate in
+    // src/lib/tauri.ts); the old `exists` boolean left the page blank.
+    expect(wire.mcp_binary.candidates.map((c) => c.state?.kind)).toEqual(["file", "absent", "absent"]);
 
     expect(wire.clients).toHaveLength(5);
     const codex = wire.clients.find((c) => c.client_type === "codex_cli");

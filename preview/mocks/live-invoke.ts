@@ -1035,9 +1035,9 @@ export const DEFAULTS: Record<string, unknown> = {
       command: "/Users/preview/.wenlan/bin/wenlan-mcp",
       args: [],
       candidates: [
-        { path: "/Users/preview/.wenlan/bin/wenlan-mcp", exists: true, source: "installed" },
-        { path: "/Applications/Wenlan.app/Contents/MacOS/wenlan-mcp", exists: false, source: "bundled" },
-        { path: "/Users/preview/.cargo/bin/wenlan-mcp", exists: false, source: "cargo" },
+        { path: "/Users/preview/.wenlan/bin/wenlan-mcp", state: { kind: "file" }, source: "installed" },
+        { path: "/Applications/Wenlan.app/Contents/MacOS/wenlan-mcp", state: { kind: "absent" }, source: "bundled" },
+        { path: "/Users/preview/.cargo/bin/wenlan-mcp", state: { kind: "absent" }, source: "cargo" },
       ],
     },
     clients: [
