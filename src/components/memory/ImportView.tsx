@@ -525,7 +525,7 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
               they are the output of work this surface no longer reports: the
               user reads them as an unfinished bill for an import they were
               told was done. Stored and searchable is the promise the import
-              actually keeps, and the sidebar status line carries the rest. */}
+              actually keeps, and the toolbar Activity button carries the rest. */}
           {batchStatus && (
             <p
               style={{

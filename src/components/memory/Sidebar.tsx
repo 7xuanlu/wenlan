@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { forwardRef, useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listSpaces, type Page, type Space } from "../../lib/tauri";
 import { rankRecentPages, readRecentPageHistory } from "../../lib/recentPages";
 import { rankRecentSpaces, readRecentSpaceHistory } from "../../lib/recentSpaces";
 import IdentityCard from "./IdentityCard";
-import ActivityStatus from "./activity/ActivityStatus";
 import { RecentPages } from "./RecentPages";
 import { RecentSpaces } from "./RecentSpaces";
 import { PrimaryNavigation } from "./navigation/PrimaryNavigation";
@@ -20,7 +19,6 @@ interface SidebarProps {
   readonly currentPageId?: string | null;
   readonly currentSpaceId?: string | null;
   readonly onEntityClick: (entityId: string) => void;
-  readonly onNavigateActivity?: () => void;
   readonly onNavigateEntities?: () => void;
   readonly onNavigateGraph?: () => void;
   onNavigateHome?: () => void;
@@ -64,7 +62,6 @@ export default function Sidebar({
   currentPageId = null,
   currentSpaceId = null,
   onEntityClick,
-  onNavigateActivity,
   onNavigateEntities,
   onNavigateGraph,
   onNavigateHome,
@@ -83,9 +80,6 @@ export default function Sidebar({
   recentSpacesRevision: _recentSpacesRevision = 0,
 }: SidebarProps) {
   const { t } = useTranslation();
-  // Tier 1 popover open state. Owned here rather than inside ActivityStatus
-  // so closing the sidebar overlay can also close the popover.
-  const [activityOpen, setActivityOpen] = useState(false);
   const asideRef = useRef<HTMLElement>(null);
   const { data: pages = [] } = useQuery({
     queryKey: ["pages", "active"],
@@ -209,23 +203,13 @@ export default function Sidebar({
           />
         </div>
 
-        <div className="flex-shrink-0">
-          <div className="px-4 pt-2 pb-3 flex flex-col gap-1.5">
-            <ReviewEnvironmentBadge />
-            {/* Directly above the account card and inside the same gutter, so
-                the status reads as part of the sidebar footer rather than a
-                ruled strip under it. The popover opens upward from here. */}
-            <ActivityStatus
-              expanded={activityOpen}
-              onToggle={() => setActivityOpen((open) => !open)}
-              onOpenActivity={closeAfterNavigation(onNavigateActivity, onRequestClose)}
-            />
-            <IdentityCard
-              onOpenDetail={closeAfterNavigation(onEntityClick, closeOverlay)}
-              onOpenSettings={closeAfterNavigation(onNavigateSettings, closeOverlay)}
-              onOpenAbout={closeAfterNavigation(onOpenAbout, closeOverlay)}
-            />
-          </div>
+        <div className="px-4 pt-2 pb-3 flex-shrink-0">
+          <ReviewEnvironmentBadge />
+          <IdentityCard
+            onOpenDetail={closeAfterNavigation(onEntityClick, closeOverlay)}
+            onOpenSettings={closeAfterNavigation(onNavigateSettings, closeOverlay)}
+            onOpenAbout={closeAfterNavigation(onOpenAbout, closeOverlay)}
+          />
         </div>
       </div>
       </aside>

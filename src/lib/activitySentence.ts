@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The pure state-to-copy mapping behind the status line, the popover and the
+// The pure state-to-copy mapping behind the toolbar Activity button, the popover and the
 // Now section. Kept out of the components so acceptance 5 (Blocked is honest)
 // and 6 (trust matches routing) are tested as functions with literal inputs
 // rather than through three render trees that would each have to be mocked.

@@ -10,12 +10,12 @@ export const ACTIVITY_IDLE_POLL_MS = 60_000;
 export const ACTIVITY_QUERY_KEY = ["activity"] as const;
 
 /**
- * The one read behind the status line, the summary popover and the Now
+ * The one read behind the toolbar Activity button, the summary popover and the Now
  * section. All three mount at once on the Activity page, so they share a
  * single query key and the daemon sees one request, not three.
  *
  * The spec asks for 5 s while the window is focused and the state is
- * Organizing or Blocked, 60 s when Up to date. Only the cadence is spelled
+ * Steeping or Blocked, 60 s when Up to date. Only the cadence is spelled
  * here: React Query already suspends `refetchInterval` while the window is
  * unfocused, so adding a focus listener would duplicate that and race it.
  *

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// Locale literals for the background-activity surfaces: the sidebar status
-// line, its summary popover, and the Now section on the Activity page.
+// Locale literals for the background-activity surfaces: the toolbar Activity
+// button, its summary popover, and the Now section on the Activity page.
 // Imported by src/i18n/resources.ts into the `activityStatus` namespace of
 // every locale. NOT `activity`: that namespace already exists and belongs to
 // the Activity feed (actions, groups, filters, relative times). A second
@@ -25,19 +25,22 @@
 // leaving it out, so Retry waits for the daemon work.
 
 export const enActivityStatus = {
-  // ── Tier 0, the sidebar status line ──────────────────────────────────
+  // ── Tier 0, the toolbar Activity button ────────────────────────────────
   state: {
     up_to_date: "Up to date",
-    organizing: "Organizing",
+    organizing: "Steeping",
     blocked: "Blocked",
   },
   statusLabel: "Background activity",
+  // The toolbar button's accessible name: its visible word plus the state,
+  // which sighted users read from the dot and the tooltip.
+  buttonLabel: "Activity, {{state}}",
 
   // ── Tier 1, the summary popover ───────────────────────────────────────
   headline: {
-    up_to_date: "Everything you have given Wenlan is organized.",
-    organizing: "Wenlan is organizing what you have given it.",
-    blocked: "Some organizing is waiting on you.",
+    up_to_date: "Everything you have given Wenlan has steeped.",
+    organizing: "Wenlan is steeping what you have given it.",
+    blocked: "Some steeping is waiting on you.",
   },
   asset: {
     memories: "Memories",
@@ -84,7 +87,7 @@ export const enActivityStatus = {
     pages:
       "{{count}} of {{total}} blocked: page writing failed. Your sources are unaffected.",
   },
-  openActivity: "Open Activity",
+  openActivity: "See all activity",
   jobSeparator: " and ",
   lastActivity: "Last activity {{time}}",
   // Pairs with lastActivity, so it reports when work last RAN. It must not say
@@ -145,9 +148,9 @@ export const enActivityStatus = {
 
   // ── Import handoff ────────────────────────────────────────────────────
   importHandoff_one:
-    "{{count}} memory stored and searchable now. Wenlan keeps organizing it in the background. Follow along from the status line at the bottom of the sidebar.",
+    "{{count}} memory stored and searchable now. Wenlan keeps steeping it in the background. Follow along from Activity in the toolbar.",
   importHandoff_other:
-    "{{count}} memories stored and searchable now. Wenlan keeps organizing them in the background. Follow along from the status line at the bottom of the sidebar.",
+    "{{count}} memories stored and searchable now. Wenlan keeps steeping them in the background. Follow along from Activity in the toolbar.",
 
   // ── Settings, Appearance ──────────────────────────────────────────────
   layoutSetting: "Activity summary placement",
@@ -163,14 +166,15 @@ export const enActivityStatus = {
 export const hansActivityStatus = {
   state: {
     up_to_date: "已就绪",
-    organizing: "整理中",
+    organizing: "沉淀中",
     blocked: "已暂停",
   },
   statusLabel: "后台工作",
+  buttonLabel: "活动，{{state}}",
   headline: {
-    up_to_date: "你交给文澜的内容都已整理完毕。",
-    organizing: "文澜正在整理你交给它的内容。",
-    blocked: "部分整理工作在等你处理。",
+    up_to_date: "你交给文澜的内容都已沉淀完毕。",
+    organizing: "文澜正在沉淀你交给它的内容。",
+    blocked: "部分沉淀工作在等你处理。",
   },
   asset: {
     memories: "记忆",
@@ -209,7 +213,7 @@ export const hansActivityStatus = {
     entities: "{{total}} 个中有 {{count}} 个暂停：识别失败。你的记忆不受影响。",
     pages: "{{total}} 个中有 {{count}} 个暂停：写页面失败。你的来源不受影响。",
   },
-  openActivity: "打开动态",
+  openActivity: "查看全部活动",
   jobSeparator: "和",
   lastActivity: "最近活动于{{time}}",
   neverActive: "尚未运行过",
@@ -259,9 +263,9 @@ export const hansActivityStatus = {
   trustLocal: "在本机运行，数据不会离开你的设备。",
   trustCloud: "{{jobs}}在 {{vendor}} 上运行，该步骤的文本会离开你的设备。其余全部留在本机。",
   importHandoff_one:
-    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续整理。可从侧栏底部的状态行查看进度。",
+    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可从工具栏的「活动」查看进度。",
   importHandoff_other:
-    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续整理。可从侧栏底部的状态行查看进度。",
+    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可从工具栏的「活动」查看进度。",
   layoutSetting: "动态摘要的位置",
   layoutSettingHelp: "「当前」摘要在动态页面中的位置。仅保存在本设备。",
   layout: {
@@ -274,14 +278,15 @@ export const hansActivityStatus = {
 export const hantActivityStatus = {
   state: {
     up_to_date: "已就緒",
-    organizing: "整理中",
+    organizing: "沉澱中",
     blocked: "已暫停",
   },
   statusLabel: "背景工作",
+  buttonLabel: "活動，{{state}}",
   headline: {
-    up_to_date: "你交給文瀾的內容都已整理完畢。",
-    organizing: "文瀾正在整理你交給它的內容。",
-    blocked: "部分整理工作在等你處理。",
+    up_to_date: "你交給文瀾的內容都已沉澱完畢。",
+    organizing: "文瀾正在沉澱你交給它的內容。",
+    blocked: "部分沉澱工作在等你處理。",
   },
   asset: {
     memories: "記憶",
@@ -320,7 +325,7 @@ export const hantActivityStatus = {
     entities: "{{total}} 個中有 {{count}} 個暫停：辨識失敗。你的記憶不受影響。",
     pages: "{{total}} 個中有 {{count}} 個暫停：寫頁面失敗。你的來源不受影響。",
   },
-  openActivity: "開啟動態",
+  openActivity: "查看全部活動",
   jobSeparator: "和",
   lastActivity: "最近活動於{{time}}",
   neverActive: "尚未執行過",
@@ -370,9 +375,9 @@ export const hantActivityStatus = {
   trustLocal: "在本機執行，資料不會離開你的裝置。",
   trustCloud: "{{jobs}}在 {{vendor}} 上執行，該步驟的文字會離開你的裝置。其餘全部留在本機。",
   importHandoff_one:
-    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續整理。可從側欄底部的狀態行查看進度。",
+    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可從工具列的「活動」查看進度。",
   importHandoff_other:
-    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續整理。可從側欄底部的狀態行查看進度。",
+    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可從工具列的「活動」查看進度。",
   layoutSetting: "動態摘要的位置",
   layoutSettingHelp: "「目前」摘要在動態頁面中的位置。僅儲存在本裝置。",
   layout: {

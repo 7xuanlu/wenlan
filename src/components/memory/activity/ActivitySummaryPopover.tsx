@@ -13,7 +13,7 @@ import {
 } from "../../../lib/activitySentence";
 
 /**
- * Tier 1: the summary the status line opens.
+ * Tier 1: the summary the toolbar Activity button opens.
  *
  * One headline, the three assets the user already knows from the nav, and a
  * trust line. The steps behind each asset stay one level down on the Activity
@@ -45,7 +45,7 @@ const ASSET_COLOR: Record<ActivityAssetKind, string> = {
 
 interface ActivitySummaryPopoverProps {
   readonly activity: ActivityResponse;
-  /** Closes the popover and returns focus to the status line. */
+  /** Closes the popover and returns focus to the Activity button. */
   readonly onClose: () => void;
   /** Navigates to the Activity view. Absent when the shell has no such route. */
   readonly onOpenActivity?: () => void;

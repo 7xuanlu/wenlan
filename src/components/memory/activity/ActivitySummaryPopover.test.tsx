@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../../i18n";
@@ -47,7 +47,7 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
   };
 }
 
-/** Renders the status line and opens the popover, the way a user reaches it. */
+/** Renders the Activity button and opens the popover, the way a user reaches it. */
 async function openPopover(
   data: ActivityResponse,
   options: { readonly onOpenActivity?: (() => void) | null } = {},
@@ -77,7 +77,9 @@ async function openPopover(
     </QueryClientProvider>,
   );
 
-  const trigger = await screen.findByTestId("activity-status");
+  const trigger = screen.getByTestId("activity-status");
+  // Before the first read the button navigates; wait until it opens a popover.
+  await waitFor(() => expect(trigger).toHaveAttribute("aria-haspopup", "dialog"));
   await userEvent.click(trigger);
   return { trigger, onOpenActivity };
 }
@@ -228,7 +230,7 @@ describe("ActivitySummaryPopover", () => {
     );
   });
 
-  it("closes on Escape and returns focus to the status line", async () => {
+  it("closes on Escape and returns focus to the Activity button", async () => {
     const { trigger } = await openPopover(activity());
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
@@ -251,13 +253,15 @@ describe("ActivitySummaryPopover", () => {
     const onOpenActivity = vi.fn();
     await openPopover(activity(), { onOpenActivity });
 
-    await userEvent.click(screen.getByTestId("activity-summary-open"));
+    const open = screen.getByTestId("activity-summary-open");
+    expect(open).toHaveTextContent("See all activity");
+    await userEvent.click(open);
 
     expect(onOpenActivity).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("omits Open Activity when the shell has no such route", async () => {
+  it("omits See all activity when the shell has no such route", async () => {
     await openPopover(activity(), { onOpenActivity: null });
     expect(screen.queryByTestId("activity-summary-open")).toBeNull();
     expect(screen.getByRole("dialog")).toBeInTheDocument();

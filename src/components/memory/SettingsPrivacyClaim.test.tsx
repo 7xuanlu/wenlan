@@ -25,9 +25,6 @@ vi.mock("../../lib/theme", () => ({
 }));
 
 vi.mock("../../lib/tauri", () => ({
-  // The sidebar now carries the activity status line. An unresolved read
-  // renders nothing, which keeps this suite about the privacy claim.
-  getActivity: vi.fn(() => new Promise(() => {})),
   deleteAgent: vi.fn(() => Promise.resolve()),
   detectMcpClients: vi.fn(() => Promise.resolve([])),
   getCaptureStats: vi.fn(() => Promise.resolve({ clipboard: 0, screen: 0 })),

@@ -22,7 +22,7 @@ export const IMPORT_PHASE_ORDER: ImportPhase[] = [
 /**
  * The phases the import surface shows.
  *
- * The other four moved to the sidebar status line and the Activity page. Shown
+ * The other four moved to the toolbar Activity button and the Activity page. Shown
  * in the foreground they read as cost before proof: a user watched six phases
  * grind for minutes with nothing usable in sight. Ingest and Store are the two
  * that end in something they can use, so those are the two that stay.
@@ -335,7 +335,7 @@ export function ImportPhaseList({ phases }: { phases: ImportPhaseStatus[] }) {
       })}
       {handedOff && (
         // The handoff: everything stored is searchable now, and the organizing
-        // that follows is reported by the sidebar status line, not here.
+        // that follows is reported by the toolbar Activity button, not here.
         <p
           data-testid="import-handoff"
           style={{ margin: "8px 14px", fontSize: "12px", lineHeight: 1.6, color: "var(--mem-text-secondary)" }}

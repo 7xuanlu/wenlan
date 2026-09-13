@@ -298,7 +298,7 @@ describe("ImportView", () => {
       screen.getByText(/3 memories stored and searchable now/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/status line at the bottom of the sidebar/),
+      screen.getByText(/Follow along from Activity in the toolbar/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/idle and has enough resources/)).not.toBeInTheDocument();
     expect(screen.queryByText(/keep climbing/)).not.toBeInTheDocument();

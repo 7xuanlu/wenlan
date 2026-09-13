@@ -3790,55 +3790,58 @@ p.entity-error {
 .content-renderer a.content-page-link:hover { background: var(--mem-indigo-bg); }
 .content-renderer a.content-page-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
 
-/* Sidebar activity status line. The dot pulses only while organizing, so the
-   one moving thing on the page always means "work is in flight". Blocked is
-   amber and STILL: nothing is lost when work is waiting, so it must not read
-   as an alarm, and a second moving dot would compete with the first. */
-/* Sits in the sidebar footer gutter directly above the account card, in the
-   nav rows' own grammar (inset, rounded, hover fill) rather than as a
-   full-bleed hairline strip under it: a ruled strip below the account read as
-   a browser status bar bolted onto the window, not as part of the sidebar. */
+/* Toolbar Activity button. It carries the background state, so it is the one
+   entry into activity on every view. The dot pulses only while steeping, so
+   the one moving thing on the page always means "work is in flight". Blocked
+   is amber and STILL: nothing is lost when work is waiting, so it must not
+   read as an alarm. Up to date shows no dot at all: the plain button. */
 .mem-activity-status {
   align-items: center;
   background: transparent;
   border: none;
-  border-radius: 8px;
-  color: var(--mem-text-tertiary);
+  border-radius: 6px;
+  color: var(--mem-text-secondary);
   cursor: pointer;
   display: flex;
   font-family: var(--mem-font-body);
   font-size: 12px;
   gap: 8px;
-  padding: 6px 13px;
-  text-align: left;
-  transition: background-color 120ms ease, color 120ms ease;
-  width: 100%;
+  padding: 6px 8px;
+  transition: background-color 150ms ease, color 150ms ease;
+  white-space: nowrap;
 }
 .mem-activity-status:hover,
-.mem-activity-status[aria-expanded="true"] { background: var(--mem-hover); color: var(--mem-text-secondary); }
-.mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: -2px; }
+.mem-activity-status[aria-expanded="true"] { background: var(--mem-hover-strong); }
+.mem-activity-status[aria-current="page"] { color: var(--mem-text); }
+.mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
+.mem-activity-status-badge {
+  align-items: center;
+  color: var(--mem-text-tertiary);
+  display: inline-flex;
+  font-family: var(--mem-font-mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  gap: 5px;
+}
+.mem-activity-dot { border-radius: 50%; flex-shrink: 0; height: 6px; width: 6px; }
 @keyframes mem-activity-dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .mem-activity-dot-pulse { animation: mem-activity-dot-pulse 1.8s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .mem-activity-dot-pulse { animation: none; }
 }
 
-/* The popover opens UPWARD from the status line: the line sits at the very
-   bottom of the sidebar, so a downward popover would open off-screen. */
+/* The summary drops down from the button, right-aligned to it, since the
+   button sits at the window's right edge. Capped to the viewport so it never
+   pushes past the window at phone widths. */
 .mem-activity-status-anchor { position: relative; }
-/* Pinned to both edges of the anchor rather than given a fixed width: the
-   sidebar sets `overflow: hidden` (Sidebar.tsx) and is ~300px at EVERY window
-   width, so any popover wider than it is silently clipped: the trailing words
-   of each sentence and half the action button simply never paint. A width in
-   px only ever matched the sidebar by luck. */
 .mem-activity-popover {
-  bottom: calc(100% + 6px);
   display: grid;
   gap: 12px;
-  left: 0;
-  right: 0;
   padding: 12px;
   position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(320px, calc(100vw - 32px));
   z-index: 40;
 }
 /* Grid items default to min-width:auto, so one unbreakable line would widen

@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The sidebar status line and its summary popover.
+// The toolbar Activity button, its status badge, and its summary popover.
 //
-// Two things are being proved here. First, that the line is actually on every
-// page and survives every width the app supports, because a status line that
+// Two things are being proved here. First, that the status is actually on
+// every page and survives every width the app supports, because a status that
 // disappears on one view is worse than none: the user learns not to trust it.
-// Second, that the popover is operable from the keyboard alone and gives focus
-// back when it closes, because it opens from a control at the very bottom of
-// the sidebar and a lost focus there strands a keyboard user at the end of the
-// document.
+// Toolbar placement is what makes that hold with the sidebar collapsed or
+// swapped for Settings. Second, that the popover is operable from the keyboard
+// alone and gives focus back when it closes.
 //
 import { expect, test, type Page } from "@playwright/test";
 import type { ActivityResponse } from "../src/lib/tauri";
@@ -102,7 +101,7 @@ async function goToView(page: Page, view: string): Promise<void> {
 }
 
 for (const width of WIDTHS) {
-  test(`status line rides every view at ${width}px`, async ({ page }) => {
+  test(`Activity status rides every view at ${width}px`, async ({ page }) => {
     const errors = collectBrowserErrors(page);
     await page.setViewportSize({ width, height: 900 });
     await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
@@ -111,49 +110,57 @@ for (const width of WIDTHS) {
 
     for (const view of VIEWS) {
       await goToView(page, view);
-      // Navigating from the drawer closes it, so ask for it again.
-      await openSidebar(page);
 
-      const line = page.getByTestId("activity-status");
-      await expect(line).toBeVisible();
-      await expect(line).toHaveAttribute("data-state", "organizing");
+      const button = page.getByTestId("activity-status");
+      await expect(button).toBeVisible();
+      await expect(button).toHaveAttribute("data-state", "organizing");
       // Memories is the busiest asset: 5 left against 0 everywhere else.
       await expect(page.getByTestId("activity-status-detail")).toHaveText("7/12");
 
-      // The line sits in the footer directly above the account card, fully
-      // on screen, and nothing else is wedged between the two.
-      const placement = await line.evaluate((node) => {
-        const sidebar = node.closest("aside");
-        const account = sidebar?.querySelector('button[aria-haspopup="menu"]');
-        if (!sidebar || !account) return { onScreen: false, gap: -1 };
+      // The status lives in the top toolbar, fully on screen, and there is
+      // exactly one of it: no second copy left behind in a sidebar.
+      const placement = await button.evaluate((node) => {
         const box = node.getBoundingClientRect();
-        const card = account.getBoundingClientRect();
         return {
-          onScreen: box.top >= 0 && box.bottom <= window.innerHeight,
-          gap: card.top - box.bottom,
+          inHeader: node.closest("header") !== null,
+          inSidebar: node.closest("aside") !== null,
+          onScreen: box.left >= 0 && box.right <= window.innerWidth && box.top >= 0,
         };
       });
-      expect(placement.onScreen, `status line on screen on ${view}`).toBe(true);
-      expect(placement.gap, `status line directly above the account on ${view}`).toBeGreaterThanOrEqual(0);
-      expect(placement.gap, `status line directly above the account on ${view}`).toBeLessThanOrEqual(12);
+      expect(placement, `status placement on ${view}`).toEqual({
+        inHeader: true,
+        inSidebar: false,
+        onScreen: true,
+      });
+      await expect(page.getByTestId("activity-status")).toHaveCount(1);
 
-      // A status line that widens the sidebar would push the whole shell
-      // sideways, which is the failure mode worth guarding at 375px.
-      const overflow = await page
-        .locator("aside.memory-sidebar")
-        .evaluate((node) => node.scrollWidth - node.clientWidth);
-      expect(overflow, `sidebar overflow on ${view}`).toBeLessThanOrEqual(1);
+      // A badge that widens the toolbar would push the whole shell sideways,
+      // which is the failure mode worth guarding at 375px.
       const documentOverflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(documentOverflow, `document overflow on ${view}`).toBeLessThanOrEqual(1);
     }
 
-    // Settings is reached from the account menu, not the primary navigation.
+    // The popover drops from the button and stays inside the window.
+    await page.getByTestId("activity-status").click();
+    const popover = page.getByRole("dialog", { name: "Background activity" });
+    await expect(popover).toBeVisible();
+    const popoverBox = await popover.evaluate((node) => {
+      const box = node.getBoundingClientRect();
+      const trigger = document.querySelector('[data-testid="activity-status"]')!.getBoundingClientRect();
+      return { left: box.left, right: box.right, top: box.top, triggerBottom: trigger.bottom };
+    });
+    expect(popoverBox.left, "popover left edge").toBeGreaterThanOrEqual(0);
+    expect(popoverBox.right, "popover right edge").toBeLessThanOrEqual(width);
+    expect(popoverBox.top, "popover below the button").toBeGreaterThanOrEqual(popoverBox.triggerBottom);
+    await page.keyboard.press("Escape");
+    await expect(popover).toBeHidden();
+
+    // Settings swaps the sidebar for its own; the toolbar status stays.
     await openSidebar(page);
     await page.getByRole("button", { name: /account menu/i }).click();
     await page.getByRole("menuitem", { name: "Settings" }).click();
-    await openSidebar(page);
     await expect(page.getByTestId("activity-status")).toBeVisible();
 
     expect(errors.pageErrors).toEqual([]);
@@ -179,7 +186,7 @@ test("the popover opens by click and by keyboard, and gives focus back", async (
   await expect(popover).toBeVisible();
   await expect(trigger).toHaveAttribute("aria-expanded", "true");
   await expect(popover.getByTestId("activity-summary-headline")).toHaveText(
-    "Wenlan is organizing what you have given it.",
+    "Wenlan is steeping what you have given it.",
   );
   await expect(popover.getByTestId("activity-asset-memories")).toContainText(
     "7 of 12 summarized and linked",
@@ -207,10 +214,17 @@ test("the popover opens by click and by keyboard, and gives focus back", async (
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog", { name: "Background activity" })).toBeVisible();
 
-  // ── Open Activity navigates and closes the popover behind it ──
+  // ── See all activity navigates and closes the popover behind it ──
   await page.getByTestId("activity-summary-open").click();
   await expect(page.getByRole("dialog", { name: "Background activity" })).toBeHidden();
   await expect(page.getByTestId("activity-now")).toBeVisible();
+  await expect(trigger).toHaveAttribute("aria-current", "page");
+
+  // ── A click anywhere else closes it ──
+  await trigger.click();
+  await expect(page.getByRole("dialog", { name: "Background activity" })).toBeVisible();
+  await page.mouse.click(640, 700);
+  await expect(page.getByRole("dialog", { name: "Background activity" })).toBeHidden();
 
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);
@@ -233,7 +247,7 @@ test("the popover is reachable and readable from the keyboard alone", async ({ p
   // Structure, not styling: a dialog with an accessible name, an action that
   // is a real button, and decorative swatches hidden from the tree.
   await expect(popover).toHaveAttribute("aria-label", "Background activity");
-  await expect(popover.getByRole("button", { name: "Open Activity" })).toBeVisible();
+  await expect(popover.getByRole("button", { name: "See all activity" })).toBeVisible();
   const unlabelledImages = await popover.evaluate((node) =>
     [...node.querySelectorAll("svg, img")].filter(
       (element) =>
@@ -244,10 +258,10 @@ test("the popover is reachable and readable from the keyboard alone", async ({ p
   );
   expect(unlabelledImages).toBe(0);
 
-  // The popover renders ABOVE the line and before it in the DOM, so its
-  // action is the previous stop in the tab order, not the next one. Tabbing
-  // backwards from the trigger has to land inside the popover rather than
-  // skipping over it into the rest of the sidebar.
-  await page.keyboard.press("Shift+Tab");
+  // The popover follows the button in the DOM, so Tab from the trigger has to
+  // land inside it rather than skipping over it into the rest of the toolbar.
+  // The Intelligence link is the first stop when a cause is named; this
+  // fixture has none, so the first stop is See all activity.
+  await page.keyboard.press("Tab");
   await expect(popover.getByTestId("activity-summary-open")).toBeFocused();
 });

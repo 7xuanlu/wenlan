@@ -173,7 +173,7 @@ test("import flow shows real phases and an honest summary", async ({ page }) => 
     page.getByText(/3 memories stored and searchable now/),
   ).toBeVisible();
   await expect(
-    page.getByText(/status line at the bottom of the sidebar/),
+    page.getByText(/Follow along from Activity in the toolbar/),
   ).toBeVisible();
 
   expect(errors.pageErrors).toEqual([]);

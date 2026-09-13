@@ -28,7 +28,7 @@ declare global {
 /**
  * One stateful mock for both surfaces, because the point of this spec is that
  * they agree: the moment the import stops reporting background work, the
- * status line starts. `get_activity` therefore answers from the same counter
+ * toolbar Activity button starts. `get_activity` therefore answers from the same counter
  * the batch status does, rather than from a fixed fixture.
  */
 async function installHandoffMock(page: Page): Promise<void> {
@@ -131,7 +131,7 @@ async function installHandoffMock(page: Page): Promise<void> {
   });
 }
 
-test("an import shows Ingest and Store, then hands the rest to the status line", async ({ page }) => {
+test("an import shows Ingest and Store, then hands the rest to the toolbar Activity button", async ({ page }) => {
   const errors = collectBrowserErrors(page);
 
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -139,10 +139,10 @@ test("an import shows Ingest and Store, then hands the rest to the status line",
   await installHandoffMock(page);
   await page.goto("/");
 
-  // Nothing has been given to Wenlan yet, so the line says so.
+  // Nothing has been given to Wenlan yet, so the button says so.
   const statusLine = page.getByTestId("activity-status");
   await expect(statusLine).toHaveAttribute("data-state", "up_to_date");
-  await expect(statusLine).toContainText("Up to date");
+  await expect(statusLine).toHaveAccessibleName("Activity, Up to date");
 
   // Account menu → Settings → Sources → Import memories.
   await page.getByRole("button", { name: /account menu/i }).click();
@@ -169,12 +169,12 @@ test("an import shows Ingest and Store, then hands the rest to the status line",
   // ── The handoff sentence, naming the number stored ──
   await expect(page.getByText(/3 memories stored and searchable now/)).toBeVisible();
   await expect(
-    page.getByText(/status line at the bottom of the sidebar/),
+    page.getByText(/Follow along from Activity in the toolbar/),
   ).toBeVisible();
 
-  // ── And the status line it points at is doing the reporting ──
+  // ── And the button it points at is doing the reporting ──
   await expect(statusLine).toHaveAttribute("data-state", "organizing", { timeout: 15_000 });
-  await expect(statusLine).toContainText("Organizing");
+  await expect(statusLine).toHaveAccessibleName("Activity, Steeping");
   await expect(page.getByTestId("activity-status-detail")).toHaveText("1/3");
 
   // The background phases stay gone on the summary too, along with the
