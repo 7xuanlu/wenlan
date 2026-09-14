@@ -440,6 +440,18 @@ export interface RepairVerificationReceipt {
   [key: string]: unknown;
 }
 
+/**
+ * UI-authored approval to resume normal runtime after a terminal
+ * verification receipt. Mirrors `RepairRuntimeResumeApproval` in
+ * `crates/wenlan-types/src/repair_runtime.rs`. Native code measures process
+ * identity itself and only restarts positively owned services; the UI never
+ * chooses an instance or PID.
+ */
+export interface RepairRuntimeResumeApproval {
+  apply: ApplyRepairRequest;
+  verification_receipt_digest: RepairDigest;
+}
+
 export interface RepairPlanRequest {
   scope: RepairLintScope;
   general_report: RepairLintReport;

@@ -25,6 +25,7 @@ pub mod repair;
 pub mod repair_current;
 pub mod repair_plan;
 pub mod repair_recovery;
+pub mod repair_runtime;
 pub mod requests;
 pub mod responses;
 pub mod sources;

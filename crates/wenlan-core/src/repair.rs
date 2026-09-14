@@ -1243,6 +1243,18 @@ impl RepairArtifactStore {
     /// receipt. This keeps a lost HTTP verify response safely retryable after
     /// the in-memory writer fence has been released.
     pub fn has_completed_verification(&self, manifest_id: &str) -> Result<bool, WenlanError> {
+        Ok(self.completed_verification_receipt(manifest_id)?.is_some())
+    }
+
+    /// Return the durable verification receipt for a manifest, but only once
+    /// it is terminal: `Some` exactly when `has_completed_verification` would
+    /// return `true`. A missing post-COMMIT review marker is reported as
+    /// `None` (not yet terminal, safely retryable); corrupt or mismatched
+    /// durable evidence fails closed with `Err`. No artifact is written.
+    pub fn completed_verification_receipt(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<RepairVerificationReceipt>, WenlanError> {
         let manifest = self.load_manifest(manifest_id)?;
         let apply_path = self.manifest_dir(manifest_id)?.join(APPLY_RECEIPT_FILE);
         if !apply_path.is_file() {
@@ -1253,7 +1265,7 @@ impl RepairArtifactStore {
             {
                 return Err(review_completion_marker_mismatch());
             }
-            return Ok(false);
+            return Ok(None);
         }
         let apply_receipt = self.load_apply_receipt(&manifest)?;
         let Some(receipt) = self.load_verification_receipt(&manifest, &apply_receipt)? else {
@@ -1265,12 +1277,16 @@ impl RepairArtifactStore {
             {
                 return Err(review_completion_marker_mismatch());
             }
-            return Ok(false);
+            return Ok(None);
         };
         if manifest.source().review_binding().is_none() {
-            return Ok(true);
+            return Ok(Some(receipt));
         }
-        self.load_review_completion_marker(&manifest, &receipt)
+        if self.load_review_completion_marker(&manifest, &receipt)? {
+            Ok(Some(receipt))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -8494,6 +8510,132 @@ mod tests {
         assert!(store
             .has_completed_verification(manifest.manifest_id())
             .unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn completed_verification_receipt_returns_receipt_after_authenticated_marker() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        let expected = record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        let receipt = store
+            .completed_verification_receipt(manifest.manifest_id())
+            .unwrap();
+        assert_eq!(receipt, Some(expected));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn completed_verification_receipt_returns_none_when_review_marker_missing() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(
+            store
+                .manifest_dir(manifest.manifest_id())
+                .unwrap()
+                .join(REVIEW_COMPLETION_MARKER_FILE),
+        )
+        .unwrap();
+
+        assert_eq!(
+            store
+                .completed_verification_receipt(manifest.manifest_id())
+                .unwrap(),
+            None
+        );
+        assert!(!store
+            .has_completed_verification(manifest.manifest_id())
+            .unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn completed_verification_receipt_fails_closed_on_corrupt_marker() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+        std::fs::write(
+            store
+                .manifest_dir(manifest.manifest_id())
+                .unwrap()
+                .join(REVIEW_COMPLETION_MARKER_FILE),
+            b"corrupt marker",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            store.completed_verification_receipt(manifest.manifest_id()),
+            Err(WenlanError::Validation(message))
+                if message == "repair_review_completion_marker_invalid"
+        ));
+    }
+
+    #[test]
+    fn completed_verification_receipt_honors_legacy_nonreview_receipt_validity() {
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = repair_root.path().join(manifest_id);
+        std::fs::create_dir(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            manifest_dir.join(APPLY_RECEIPT_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/apply-receipt.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            manifest_dir.join(VERIFICATION_RECEIPT_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/verification-receipt.json"),
+        )
+        .unwrap();
+
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let receipt = store
+            .completed_verification_receipt(manifest_id)
+            .unwrap()
+            .expect("legacy non-review receipt is terminal without a marker");
+        assert_eq!(receipt.manifest_id(), manifest_id);
     }
 
     #[tokio::test]

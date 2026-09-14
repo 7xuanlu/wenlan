@@ -55,6 +55,17 @@ struct RepairAttemptToken(u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct PendingRepairToken(u64);
 
+/// `Active` while a `RuntimeResumptionGuard` is held and not yet committed
+/// (cleared on `Drop`, admitting a retry). `Committed` is a one-way
+/// transition: the daemon-owned cold-start repair took durable evidence and
+/// is proceeding to its own graceful shutdown, so every new admission stays
+/// sealed for the rest of the process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeResumptionSeal {
+    Active,
+    Committed,
+}
+
 #[derive(Debug, Default)]
 struct CoordinatorState {
     recovery_complete: bool,
@@ -74,6 +85,7 @@ struct CoordinatorState {
     next_pending_repair: u64,
     next_repair_attempt: u64,
     next_reservation: u64,
+    runtime_resumption: Option<RuntimeResumptionSeal>,
 }
 
 impl CoordinatorState {
@@ -233,6 +245,7 @@ impl MaintenanceCoordinator {
             || state.pending_repair.is_some()
             || state.repair_lease.is_some()
             || state.reserved_repair.is_some()
+            || state.runtime_resumption.is_some()
         {
             drop(state);
             if expired {
@@ -264,6 +277,7 @@ impl MaintenanceCoordinator {
                     && state.pending_repair.is_none()
                     && state.repair_lease.is_none()
                     && state.reserved_repair.is_none()
+                    && state.runtime_resumption.is_none()
                 {
                     state.active_background = state.active_background.saturating_add(1);
                     drop(state);
@@ -296,6 +310,7 @@ impl MaintenanceCoordinator {
                     && state.pending_repair.is_none()
                     && state.repair_allows_analysis()
                     && state.reserved_repair.is_none()
+                    && state.runtime_resumption.is_none()
                 {
                     state.active_analysis = state.active_analysis.saturating_add(1);
                     drop(state);
@@ -356,6 +371,9 @@ impl MaintenanceCoordinator {
                     self.notify.notify_waiters();
                 }
                 if !state.recovery_complete {
+                    return Err(MaintenanceFenceError::Busy);
+                }
+                if state.runtime_resumption.is_some() {
                     return Err(MaintenanceFenceError::Busy);
                 }
                 if state.startup_claim_complete {
@@ -509,6 +527,9 @@ impl MaintenanceCoordinator {
         manifest_id: &str,
     ) -> Result<RepairFenceGuard, MaintenanceFenceError> {
         let mut state = self.state.lock().unwrap();
+        if state.runtime_resumption.is_some() {
+            return Err(MaintenanceFenceError::Busy);
+        }
         match state.repair_lease.as_ref() {
             Some(lease) if lease.manifest_id != manifest_id => {
                 return Err(MaintenanceFenceError::Conflict)
@@ -648,6 +669,76 @@ impl MaintenanceCoordinator {
         state.startup_claim = Some(request);
         state.startup_claim_complete = false;
         Ok(())
+    }
+
+    /// Seal the coordinator for the daemon-owned cold-start repair owner to
+    /// resume normal runtime after its exact approved request has reached an
+    /// authenticated terminal verification. This is never available for a
+    /// normal-runtime repair: it requires the process-lifetime startup claim
+    /// to exist, exactly match `request`, and already be complete (i.e. the
+    /// writer fence that `release_after_verification` drops). A stale
+    /// `reserved_repair` handoff is treated as blocking as-is; this call
+    /// never expires one itself, so a chained-but-unconsumed reservation
+    /// cannot be raced out of the way to force eligibility.
+    pub fn begin_runtime_resumption(
+        &self,
+        request: &ApplyRepairRequest,
+    ) -> Result<RuntimeResumptionGuard, MaintenanceFenceError> {
+        let mut state = self.state.lock().unwrap();
+        if state.runtime_resumption.is_some() {
+            return Err(MaintenanceFenceError::Busy);
+        }
+        if !state.recovery_complete || !state.startup_claim_complete {
+            return Err(MaintenanceFenceError::Busy);
+        }
+        if state.startup_claim.as_ref() != Some(request) {
+            return Err(MaintenanceFenceError::Conflict);
+        }
+        if state.active_background != 0
+            || state.active_analysis != 0
+            || state.pending_repair.is_some()
+            || state.repair_lease.is_some()
+            || state.reserved_repair.is_some()
+        {
+            return Err(MaintenanceFenceError::Busy);
+        }
+        state.runtime_resumption = Some(RuntimeResumptionSeal::Active);
+        Ok(RuntimeResumptionGuard {
+            coordinator: self.clone(),
+            committed: false,
+        })
+    }
+}
+
+/// Exclusive proof that the daemon-owned cold-start repair owner is
+/// transitioning to normal runtime. While held, the coordinator refuses
+/// every new background, analysis, apply, and verify acquisition. Dropping
+/// the guard without committing unseals the coordinator so a failed receipt
+/// validation can retry; `commit` makes the seal permanent for the rest of
+/// the process, ahead of the daemon requesting its own graceful shutdown.
+pub struct RuntimeResumptionGuard {
+    coordinator: MaintenanceCoordinator,
+    committed: bool,
+}
+
+impl RuntimeResumptionGuard {
+    pub fn commit(mut self) {
+        let mut state = self.coordinator.state.lock().unwrap();
+        state.runtime_resumption = Some(RuntimeResumptionSeal::Committed);
+        drop(state);
+        self.committed = true;
+    }
+}
+
+impl Drop for RuntimeResumptionGuard {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        let mut state = self.coordinator.state.lock().unwrap();
+        state.runtime_resumption = None;
+        drop(state);
+        self.coordinator.notify.notify_waiters();
     }
 }
 
@@ -1758,5 +1849,214 @@ mod tests {
             .acquire_approved_repair(&next, Duration::from_secs(1))
             .await
             .expect("the exact successor remains retryable");
+    }
+
+    /// Bring a coordinator to the exact post-startup state
+    /// `begin_runtime_resumption` is meant for: cold-start repair owner,
+    /// authenticated terminal verification recorded, writer fence released.
+    async fn coordinator_with_completed_startup_claim(
+        exact: ApplyRepairRequest,
+    ) -> MaintenanceCoordinator {
+        let coordinator = MaintenanceCoordinator::default();
+        coordinator.rearm_approved_repair(exact.clone()).unwrap();
+        coordinator.finish_recovery();
+        coordinator
+            .acquire_approved_repair(&exact, Duration::from_secs(1))
+            .await
+            .unwrap()
+            .retain_until_verification()
+            .unwrap();
+        coordinator
+            .acquire_repair_verification(exact.manifest_id())
+            .unwrap()
+            .release_after_verification()
+            .unwrap();
+        coordinator
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_resumption_requires_a_completed_exact_cold_start_claim() {
+        let exact = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let wrong_digest = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'b');
+        let other_manifest = approved("repair_550e8400-e29b-41d4-a716-446655440001", 'c');
+
+        // Non-startup coordinator: no cold-start claim was ever armed.
+        let no_claim = MaintenanceCoordinator::default();
+        no_claim.finish_recovery();
+        assert!(matches!(
+            no_claim.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+
+        // Unfinished: the claim is armed but its verification has not yet
+        // released the writer fence.
+        let unfinished = MaintenanceCoordinator::default();
+        unfinished.rearm_approved_repair(exact.clone()).unwrap();
+        unfinished.finish_recovery();
+        assert!(matches!(
+            unfinished.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+
+        // Wrong manifest / wrong digest: the claim completed, but the
+        // request presented to begin_runtime_resumption is not the exact
+        // approved request.
+        let completed = coordinator_with_completed_startup_claim(exact.clone()).await;
+        assert!(matches!(
+            completed.begin_runtime_resumption(&wrong_digest),
+            Err(MaintenanceFenceError::Conflict)
+        ));
+        assert!(matches!(
+            completed.begin_runtime_resumption(&other_manifest),
+            Err(MaintenanceFenceError::Conflict)
+        ));
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_resumption_blocked_by_active_background_and_analysis() {
+        let exact = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let coordinator = coordinator_with_completed_startup_claim(exact.clone()).await;
+
+        let background = coordinator
+            .try_begin_background()
+            .expect("writer fence was released by the completed startup claim");
+        assert!(matches!(
+            coordinator.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+        drop(background);
+
+        let analysis = coordinator.begin_analysis().await;
+        assert!(matches!(
+            coordinator.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+        drop(analysis);
+
+        coordinator
+            .begin_runtime_resumption(&exact)
+            .expect("idle coordinator admits the exact completed cold-start claim");
+    }
+
+    /// `acquire_repair_inner` fails fast with `Conflict` for every attempt
+    /// once `startup_claim_complete` is set (its very first gate, ahead of
+    /// registering any pending owner), so `pending_repair` / `repair_lease` /
+    /// `reserved_repair` can never become non-`None` again for the rest of
+    /// the process. `begin_runtime_resumption` still checks them
+    /// defensively, but this proves the check guards dead state rather than
+    /// a live blocker -- `active_background`/`active_analysis` (covered
+    /// above) are the only reachable blockers once a cold-start claim has
+    /// completed.
+    #[tokio::test]
+    async fn begin_runtime_resumption_pending_repair_chain_is_unreachable_after_completion() {
+        let exact = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let coordinator = coordinator_with_completed_startup_claim(exact.clone()).await;
+
+        assert!(matches!(
+            coordinator
+                .acquire_repair("unrelated_manifest", Duration::ZERO)
+                .await,
+            Err(MaintenanceFenceError::Conflict)
+        ));
+        assert!(matches!(
+            coordinator
+                .acquire_approved_repair(&exact, Duration::ZERO)
+                .await,
+            Err(MaintenanceFenceError::Conflict)
+        ));
+
+        coordinator
+            .begin_runtime_resumption(&exact)
+            .expect("idle coordinator admits the exact completed cold-start claim");
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_resumption_seal_refuses_concurrent_admission_and_every_acquisition() {
+        let exact = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let coordinator = coordinator_with_completed_startup_claim(exact.clone()).await;
+
+        let guard = coordinator
+            .begin_runtime_resumption(&exact)
+            .expect("exact completed cold-start claim seals for resumption");
+
+        assert!(matches!(
+            coordinator.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+        assert!(coordinator.try_begin_background().is_none());
+        assert!(matches!(
+            coordinator
+                .acquire_approved_repair(&exact, Duration::ZERO)
+                .await,
+            Err(MaintenanceFenceError::Busy)
+        ));
+        assert!(matches!(
+            coordinator.acquire_repair_verification(exact.manifest_id()),
+            Err(MaintenanceFenceError::Busy)
+        ));
+
+        drop(guard);
+        coordinator
+            .try_begin_background()
+            .expect("dropping the guard without commit unseals for retry");
+    }
+
+    #[tokio::test]
+    async fn begin_runtime_resumption_commit_seals_permanently() {
+        let exact = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let coordinator = coordinator_with_completed_startup_claim(exact.clone()).await;
+
+        let guard = coordinator
+            .begin_runtime_resumption(&exact)
+            .expect("exact completed cold-start claim seals for resumption");
+        guard.commit();
+
+        assert!(matches!(
+            coordinator.begin_runtime_resumption(&exact),
+            Err(MaintenanceFenceError::Busy)
+        ));
+        assert!(coordinator.try_begin_background().is_none());
+        assert!(matches!(
+            coordinator
+                .acquire_approved_repair(&exact, Duration::ZERO)
+                .await,
+            Err(MaintenanceFenceError::Busy)
+        ));
+        assert!(matches!(
+            coordinator.acquire_repair_verification(exact.manifest_id()),
+            Err(MaintenanceFenceError::Busy)
+        ));
+    }
+
+    #[tokio::test]
+    async fn runtime_resumption_waits_for_final_successor_in_a_repair_chain() {
+        let first = approved("repair_550e8400-e29b-41d4-a716-446655440000", 'a');
+        let next = approved("repair_550e8400-e29b-41d4-a716-446655440001", 'b');
+        let coordinator = MaintenanceCoordinator::default();
+        coordinator.rearm_approved_repair(first.clone()).unwrap();
+        coordinator.finish_recovery();
+        coordinator
+            .acquire_repair_verification(first.manifest_id())
+            .unwrap()
+            .handoff_after_verification(next.clone(), Duration::from_secs(120))
+            .unwrap();
+        assert!(coordinator.begin_runtime_resumption(&first).is_err());
+        assert!(coordinator.begin_runtime_resumption(&next).is_err());
+        coordinator
+            .acquire_approved_repair(&next, Duration::ZERO)
+            .await
+            .unwrap()
+            .retain_until_verification()
+            .unwrap();
+        coordinator
+            .acquire_repair_verification(next.manifest_id())
+            .unwrap()
+            .release_after_verification()
+            .unwrap();
+        assert!(matches!(
+            coordinator.begin_runtime_resumption(&first),
+            Err(MaintenanceFenceError::Conflict)
+        ));
+        assert!(coordinator.begin_runtime_resumption(&next).is_ok());
     }
 }

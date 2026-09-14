@@ -52,6 +52,7 @@ main|get|/api/profile|wenlan_server::profile_agents_routes::handle_get_profile
 main|get|/api/profile/narrative|wenlan_server::profile_narrative_routes::handle_get_profile_narrative
 main|get|/api/refinery/queue|wenlan_server::refinery_routes::handle_list_refinements
 main|get|/api/repairs/recovery/{review_id}|wenlan_server::repair_read_routes::handle_get_repair_recovery
+main|get|/api/repairs/runtime|wenlan_server::repair_runtime_routes::handle_runtime
 main|get|/api/retrievals/recent|wenlan_server::routes::handle_recent_retrievals
 main|get|/api/setup/status|wenlan_server::config_routes::handle_get_setup_status
 repair|get|/api/setup/status|wenlan_server::config_routes::handle_get_setup_status
@@ -130,6 +131,7 @@ main|post|/api/repairs/plan/entries|wenlan_server::repair_routes::handle_plan_en
 main|post|/api/repairs/prepare|wenlan_server::repair_routes::handle_prepare
 main|post|/api/repairs/prepare-current|wenlan_server::repair_routes::handle_prepare_current
 main|post|/api/repairs/verify|wenlan_server::repair_routes::handle_verify
+main|post|/api/repairs/runtime/resume|wenlan_server::repair_runtime_routes::handle_resume
 main|post|/api/search|wenlan_server::routes::handle_search
 main|post|/api/shutdown|wenlan_server::routes::handle_shutdown
 main|post|/api/snapshots/{id}/delete|wenlan_server::snapshot_routes::handle_delete_snapshot
@@ -184,7 +186,9 @@ repair|get|/api/memory/{id}/detail|wenlan_server::repair_read_routes::handle_get
 repair|get|/api/pages/{id}|wenlan_server::repair_read_routes::handle_get_repair_page
 repair|get|/api/refinery/queue|wenlan_server::repair_read_routes::handle_list_repair_queue
 repair|get|/api/repairs/recovery/{review_id}|wenlan_server::repair_read_routes::handle_get_repair_recovery
+repair|get|/api/repairs/runtime|wenlan_server::repair_runtime_routes::handle_runtime
 repair|get|/api/status|wenlan_server::routes::handle_status
 repair|post|/api/lint|wenlan_server::lint_routes::handle_lint_submission
 repair|post|/api/repairs/apply|wenlan_server::repair_routes::handle_apply
 repair|post|/api/repairs/verify|wenlan_server::repair_routes::handle_verify
+repair|post|/api/repairs/runtime/resume|wenlan_server::repair_runtime_routes::handle_resume

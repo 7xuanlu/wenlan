@@ -1167,3 +1167,11 @@ describe('restartDaemon', () => {
     expect(mockInvoke).toHaveBeenCalledWith('restart_daemon');
   });
 });
+
+ describe("repairResumeRuntime", () => {
+  it("forwards only the exact repair authority to the native owner", async () => {
+    const request = { apply: { manifest_id: "repair-1", approved_manifest_digest: "a".repeat(64), approval: "approved" }, verification_receipt_digest: "b".repeat(64) };
+    await tauri.repairResumeRuntime(request);
+    expect(mockInvoke).toHaveBeenCalledWith("repair_resume_runtime", { request });
+  });
+});

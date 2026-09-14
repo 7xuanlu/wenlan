@@ -15,6 +15,8 @@ use tauri::AppHandle;
 /// teardown releases it so the recovered app can guard a later retry.
 static QUITTING: AtomicBool = AtomicBool::new(false);
 
+pub(crate) mod repair_service;
+
 /// Armed by the tray's "Quit and stop background service" item before it runs
 /// the same guarded quit as "Quit Wenlan". The quit still stops the daemon
 /// (graceful shutdown, then the sidecar stop), but it leaves the LaunchAgent
@@ -1528,6 +1530,8 @@ pub fn handover_may_proceed(outcome: &SidecarStopOutcome) -> Result<(), Handover
 /// line 198).
 pub async fn set_run_at_login(enabled: bool, launchctl: &dyn LaunchctlExec) -> Result<()> {
     let _guard = RUN_AT_LOGIN_LOCK.lock().await;
+    let _pending = crate::daemon_start::LaunchdInstallPending::try_begin_user_change()
+        .map_err(anyhow::Error::msg)?;
     if data_dir_env_overridden() {
         log::info!(
             "[lifecycle] skipping Run at Login change: isolated run (data-dir env override)"
@@ -1547,7 +1551,6 @@ pub async fn set_run_at_login(enabled: bool, launchctl: &dyn LaunchctlExec) -> R
         }
         // The "Start Wenlan" button must not spawn a sidecar between the stop
         // below and the launchd registration; the count releases on drop.
-        let _pending = crate::daemon_start::LaunchdInstallPending::begin();
         // A sidecar this app spawned holds the port that `wenlan background
         // on` is about to hand to launchd, and the CLI's pre-install shutdown
         // request failed against it (first-run gauntlet finding F16). Stop it
@@ -1630,7 +1633,9 @@ pub(crate) fn shutdown_url_for(client: &crate::api::WenlanClient) -> String {
 pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
     // Debounce: tray menu Quit Wenlan item stays clickable during the 500ms
     // shutdown sleep; double-click would otherwise spawn 2× POSTs (H1).
-    let Some(attempt) = QuitAttemptGuard::try_begin(&QUITTING) else {
+    let Some(attempt) =
+        crate::daemon_start::with_owner_decision(|| QuitAttemptGuard::try_begin(&QUITTING))
+    else {
         return Ok(());
     };
     log::info!("{FULL_QUIT_BREADCRUMB}");

@@ -39,6 +39,7 @@ pub mod read_scope;
 pub mod refinery_routes;
 pub mod repair_read_routes;
 pub mod repair_routes;
+pub mod repair_runtime_routes;
 mod route_registry;
 pub mod router;
 pub mod routes;

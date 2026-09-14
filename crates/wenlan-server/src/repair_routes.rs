@@ -35,7 +35,7 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
 }
 
 pub(crate) fn register_execution(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
-    router
+    crate::repair_runtime_routes::register(router)
         .route("/api/repairs/apply", post(handle_apply))
         .route("/api/repairs/verify", post(handle_verify))
 }
@@ -164,7 +164,7 @@ async fn handle_prepare_current(
         .map(Json)
 }
 
-fn validate_manifest_scope_binding(
+pub(crate) fn validate_manifest_scope_binding(
     store: &RepairArtifactStore,
     header_space: Option<&str>,
     manifest_id: &str,
@@ -384,7 +384,14 @@ async fn handle_verify(
                     | crate::maintenance_coordinator::MaintenanceFenceError::Conflict
             ) && matching_retry
             {
-                None
+                // A terminal marker already proves the database transaction
+                // completed. Returning its authenticated receipt is a read;
+                // do not re-enter reconciliation without an attempt fence,
+                // especially while a cold runtime is being retired.
+                return store
+                    .completed_verification_receipt(&manifest_id)?
+                    .map(Json)
+                    .ok_or_else(|| ServerError::Conflict(error.to_string()));
             } else {
                 return Err(ServerError::from(
                     wenlan_core::error::WenlanError::Conflict(error.to_string()),

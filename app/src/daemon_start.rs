@@ -28,6 +28,9 @@ use tokio::sync::RwLock;
 
 use crate::state::AppState;
 
+mod repair_runtime;
+pub use repair_runtime::resume_repair_runtime;
+
 /// Whether `setup()`'s server-plist preflight repair succeeded. Set once at
 /// startup and read by the on-demand command, which must not re-run the
 /// *mutating* preflight (that would be plist management from a user click).
@@ -106,6 +109,13 @@ impl LaunchdInstallPending {
         LAUNCHD_INSTALLS_PENDING.fetch_add(1, Ordering::Relaxed);
         Self(())
     }
+
+    pub fn try_begin_user_change() -> Result<Self, String> {
+        with_owner_decision(|| {
+            repair_runtime::ordinary_spawn_allowed()?;
+            Ok(Self::begin())
+        })
+    }
 }
 
 impl Drop for LaunchdInstallPending {
@@ -124,6 +134,13 @@ fn launchd_install_pending() -> bool {
 /// second child that had already seen the first one healthy exits 75, which
 /// leaves zero owners.
 static OWNER_DECISION: Mutex<()> = Mutex::new(());
+
+pub(crate) fn with_owner_decision<T>(operation: impl FnOnce() -> T) -> T {
+    let _decision = OWNER_DECISION
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    operation()
+}
 
 /// Whether this app's own sidecar is in the slot: booting or serving.
 ///
@@ -938,6 +955,13 @@ pub enum DaemonStartResult {
 /// to the app's job object on Windows). Returns `Err(msg)` when the sidecar
 /// command can't be created or spawned; the caller decides how to surface it.
 pub fn spawn_daemon_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
+    with_owner_decision(|| {
+        repair_runtime::ordinary_spawn_allowed()?;
+        spawn_daemon_sidecar_unlocked(app)
+    })
+}
+
+fn spawn_daemon_sidecar_unlocked(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
     let (data_dir_env, data_dir) = crate::identity_paths::sidecar_data_dir_env();
     let command = app
@@ -1006,7 +1030,8 @@ fn spawn_for_owner_decision(
     owner_unknown: bool,
     context: &str,
 ) -> Result<(), String> {
-    let result = spawn_daemon_sidecar(app);
+    repair_runtime::ordinary_spawn_allowed()?;
+    let result = spawn_daemon_sidecar_unlocked(app);
     if records_unknown_owner_spawn(owner_unknown, result.is_ok()) {
         record_spawn_on_unknown_owner(context);
     }

@@ -217,7 +217,7 @@ fn manifest_counts_match_the_spec() {
     // (Diagnostics migrated to `/api/activity`).
     assert_eq!(
         HTTP_READERS.len(),
-        183,
+        185,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -228,7 +228,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        189,
+        193,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -236,7 +236,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        178,
+        180,
         "main builder entries"
     );
     assert_eq!(
@@ -244,7 +244,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Repair)
             .count(),
-        11,
+        13,
         "repair builder entries"
     );
 
@@ -412,7 +412,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        176 // all remaining handlers carry no page markers
+        178 // all remaining handlers carry no page markers
     );
 }
 
@@ -548,9 +548,11 @@ fn builder_membership_is_exact() {
         BTreeSet::from([
             ("GET", "/api/lint"),
             ("GET", "/api/repairs/recovery/{review_id}"),
+            ("GET", "/api/repairs/runtime"),
             ("GET", "/api/setup/status"),
             ("POST", "/api/lint"),
             ("POST", "/api/repairs/apply"),
+            ("POST", "/api/repairs/runtime/resume"),
             ("POST", "/api/repairs/verify"),
         ]),
         "the set of call sites installed into both builders changed"

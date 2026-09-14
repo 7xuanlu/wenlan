@@ -1657,6 +1657,7 @@ pub fn run() {
             repair::repair_prepare,
             repair::repair_prepare_current,
             repair::repair_recovery,
+            repair::repair_resume_runtime,
             repair::repair_apply,
             repair::repair_verify,
             repair::repair_plan,
