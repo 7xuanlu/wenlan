@@ -101,13 +101,27 @@ static RE_TIMESTAMP: LazyLock<Regex> =
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 /// True for a character in one of the CJK scripts that write without spaces
-/// between words: CJK Unified Ideographs, Hiragana, Katakana, Hangul syllables.
-fn is_cjk_char(c: char) -> bool {
+/// between words: CJK Unified Ideographs (plus Extension A and Extension B
+/// onward), CJK Compatibility Ideographs, the CJK iteration mark, Hiragana,
+/// Katakana (plus halfwidth), and Hangul (syllables plus the Jamo blocks).
+///
+/// `pub(crate)` so `sources::directory`'s own min-text heuristic can weight
+/// CJK characters the same way the quality gate does.
+pub(crate) fn is_cjk_char(c: char) -> bool {
     matches!(c,
-        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
-        | '\u{3040}'..='\u{309F}' // Hiragana
-        | '\u{30A0}'..='\u{30FF}' // Katakana
-        | '\u{AC00}'..='\u{D7A3}' // Hangul syllables
+        '\u{1100}'..='\u{11FF}'     // Hangul Jamo
+        | '\u{3005}'                // CJK iteration mark (々)
+        | '\u{3040}'..='\u{309F}'   // Hiragana
+        | '\u{30A0}'..='\u{30FF}'   // Katakana
+        | '\u{3130}'..='\u{318F}'   // Hangul Compatibility Jamo
+        | '\u{3400}'..='\u{4DBF}'   // CJK Unified Ideographs Extension A
+        | '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+        | '\u{A960}'..='\u{A97F}'   // Hangul Jamo Extended-A
+        | '\u{AC00}'..='\u{D7A3}'   // Hangul syllables
+        | '\u{D7B0}'..='\u{D7FF}'   // Hangul Jamo Extended-B
+        | '\u{F900}'..='\u{FAFF}'   // CJK Compatibility Ideographs
+        | '\u{FF61}'..='\u{FF9F}'   // Halfwidth Katakana
+        | '\u{20000}'..='\u{2EBEF}' // CJK Unified Ideographs Extension B onward
     )
 }
 
@@ -130,30 +144,70 @@ fn cjk_run_word_count(text: &str) -> usize {
     total
 }
 
-/// Count "meaningful" words: length > 1, or single-char alphanumeric.
-/// A whitespace token made entirely of CJK characters is excluded here and
-/// counted instead by `cjk_run_word_count`, so CJK runs are not double-counted.
+/// Count a non-CJK fragment (no internal whitespace) as 0 or 1 "meaningful"
+/// word: length > 1 after stripping ASCII punctuation, or a single
+/// alphanumeric character. `len` here is a char count, not a byte count, so a
+/// single multi-byte punctuation character (e.g. the ideographic "。") is
+/// correctly treated as one char and filtered out, not mistaken for a
+/// multi-char fragment.
+fn meaningful_fragment_count(fragment: &str) -> usize {
+    let trimmed: String = fragment
+        .chars()
+        .filter(|c| !c.is_ascii_punctuation())
+        .collect();
+    if trimmed.is_empty() {
+        return 0;
+    }
+    if trimmed.chars().count() == 1 {
+        return usize::from(trimmed.chars().next().is_some_and(|c| c.is_alphanumeric()));
+    }
+    1
+}
+
+/// Count the meaningful words in one whitespace-delimited token, splitting it
+/// on CJK/non-CJK boundaries first. A mixed token like "2024年報告" is split
+/// into the non-CJK fragment "2024" (counted by `meaningful_fragment_count`)
+/// and the CJK run "年報告" (counted as `ceil(len / 2)`), so neither fragment
+/// swallows the other.
+fn token_word_count(token: &str) -> usize {
+    let mut total = 0;
+    let mut fragment = String::new();
+    let mut fragment_is_cjk = false;
+
+    for c in token.chars() {
+        let c_is_cjk = is_cjk_char(c);
+        if !fragment.is_empty() && c_is_cjk != fragment_is_cjk {
+            total += if fragment_is_cjk {
+                fragment.chars().count().div_ceil(2)
+            } else {
+                meaningful_fragment_count(&fragment)
+            };
+            fragment.clear();
+        }
+        fragment.push(c);
+        fragment_is_cjk = c_is_cjk;
+    }
+    if !fragment.is_empty() {
+        total += if fragment_is_cjk {
+            fragment.chars().count().div_ceil(2)
+        } else {
+            meaningful_fragment_count(&fragment)
+        };
+    }
+
+    total
+}
+
+/// Count "meaningful" words across whitespace-delimited tokens, treating each
+/// CJK run inside a token as `ceil(run_len / 2)` words (CJK scripts carry no
+/// whitespace between words the way Latin text does) and each non-CJK
+/// fragment as 0 or 1 word via `meaningful_fragment_count`.
 ///
 /// `pub(crate)` so `sources::directory`'s own min-text heuristic can share
 /// this CJK-aware count instead of keeping a second, CJK-blind word counter
 /// that disagrees with the quality gate on the same content.
 pub(crate) fn meaningful_word_count(text: &str) -> usize {
-    let whitespace_words = text
-        .split_whitespace()
-        .filter(|w| !w.chars().any(is_cjk_char))
-        .filter(|w| {
-            let trimmed: String = w.chars().filter(|c| !c.is_ascii_punctuation()).collect();
-            if trimmed.is_empty() {
-                return false;
-            }
-            if trimmed.len() == 1 {
-                return trimmed.chars().next().is_some_and(|c| c.is_alphanumeric());
-            }
-            true
-        })
-        .count();
-
-    whitespace_words + cjk_run_word_count(text)
+    text.split_whitespace().map(token_word_count).sum()
 }
 
 /// Instruction-density keywords.
@@ -849,8 +903,8 @@ mod tests {
     }
 
     #[test]
-    fn test_admits_japanese_twelve_kana_sentence() {
-        // 12 kana characters -> ceil(12/2) = 6 words, at/above the floor of 5.
+    fn test_admits_japanese_eleven_kana_sentence() {
+        // 11 kana characters -> ceil(11/2) = 6 words, at/above the floor of 5.
         let g = gate();
         let r = g.check_content("わたしはねこがすきです");
         assert_eq!(r.scores.word_count, 6);
@@ -876,6 +930,51 @@ mod tests {
         // "meeting" and "notes" are 2 whitespace words; the trailing 9-char CJK
         // run counts as ceil(9/2) = 5 words, for 7 total.
         assert_eq!(meaningful_word_count("meeting notes 今天決定採用新方案"), 7);
+    }
+
+    #[test]
+    fn test_admits_cjk_extension_a_note() {
+        // 10 CJK Unified Ideographs Extension A characters -> ceil(10/2) = 5
+        // words, at the floor of 5.
+        let g = gate();
+        let r = g.check_content("㐀㐁㐂㐃㐄㐅㐆㐇㐈㐉");
+        assert!(r.admitted, "reason: {:?}", r.reason);
+    }
+
+    #[test]
+    fn test_counts_hangul_compatibility_jamo_run() {
+        // 10 repeated "ㅋ" (Hangul Compatibility Jamo) -> ceil(10/2) = 5 words.
+        assert_eq!(meaningful_word_count("ㅋㅋㅋㅋㅋㅋㅋㅋㅋㅋ"), 5);
+    }
+
+    #[test]
+    fn test_iteration_mark_does_not_split_a_cjk_run() {
+        // "時々" ("often") is a 2-char CJK run (the base ideograph plus the
+        // 々 iteration mark) -> ceil(2/2) = 1 word, not two separate runs.
+        assert_eq!(meaningful_word_count("時々"), 1);
+    }
+
+    #[test]
+    fn test_single_char_check_counts_chars_not_bytes() {
+        // Each "。" (ideographic full stop, U+3002) is one char but three
+        // UTF-8 bytes; a byte-length check would wrongly treat it as a
+        // multi-char "word" and count all five as meaningful.
+        assert_eq!(meaningful_word_count("。 。 。 。 。"), 0);
+    }
+
+    #[test]
+    fn test_mixed_digit_and_cjk_token_counts_both_fragments() {
+        // "2024年報告" splits into the non-CJK fragment "2024" (1 word) and
+        // the 3-char CJK run "年報告" (ceil(3/2) = 2 words), for 3 total.
+        assert_eq!(meaningful_word_count("2024年報告"), 3);
+    }
+
+    #[test]
+    fn test_mixed_ascii_and_cjk_token_counts_all_fragments() {
+        // "ab中cd" splits into "ab" (1 word), the 1-char CJK run "中"
+        // (ceil(1/2) = 1 word), and "cd" (1 word); plus "ef" and "gh" as
+        // their own whitespace words, for 5 total.
+        assert_eq!(meaningful_word_count("ab中cd ef gh"), 5);
     }
 
     #[test]

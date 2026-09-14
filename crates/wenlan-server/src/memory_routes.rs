@@ -2752,6 +2752,22 @@ mod content_length_gate_tests {
         .await;
         assert!(matches!(result, Err(ServerError::ValidationError(_))));
     }
+
+    /// 9 Chinese characters is 27 UTF-8 bytes: the old byte-length gate
+    /// (`content.len() < 10`) would have wrongly accepted this at 27 >= 10.
+    /// The char-counting gate must still reject it at 9 < 10.
+    #[tokio::test]
+    async fn nine_chinese_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(store_request("今天天氣非常晴朗好")),
+        )
+        .await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+    }
 }
 
 #[cfg(test)]
