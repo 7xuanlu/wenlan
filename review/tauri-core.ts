@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { createSpacesNavigationFixture } from "../e2e/fixtures/spacesNavigation";
+import { createReviewDecisionFixture } from "../e2e/fixtures/reviewDecisions";
 import { UnknownTauriCommandError } from "../e2e/tauriMock/errors";
 import { TauriMockRuntime } from "../e2e/tauriMock/runtime";
 import { isReviewCommand } from "./commandCapabilities";
 
 export function createReviewRuntime(): TauriMockRuntime {
-  return new TauriMockRuntime(createSpacesNavigationFixture());
+  const scenario = typeof location === "undefined" ? "" : new URLSearchParams(location.search).get("reviewScenario") ?? "";
+  return new TauriMockRuntime(createReviewDecisionFixture(scenario),
+    scenario === "sources-error" ? [{ command: "get_page_sources", message: "Review fixture: source lookup unavailable", times: 100 }] : []);
+
 }
 
 let runtime = createReviewRuntime();

@@ -9,9 +9,10 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use wenlan_types::lint::{
-    LintAgentSubmission, LintAgentVerdict, LintDigest, LintEvidenceRef, LintMetricCode,
-    LintMetricValue, LintProfile, LintQuery, LintReasonCode, LintSemanticAction,
-    LintSemanticCandidateKind, LintSemanticCheckId, LintSemanticDecision, LintSemanticReasonCode,
+    LintAgentRecord, LintAgentRecordKind, LintAgentSubmission, LintAgentVerdict, LintDigest,
+    LintEvidenceRef, LintMetricCode, LintMetricValue, LintProfile, LintQuery, LintReasonCode,
+    LintSemanticAction, LintSemanticCandidateKind, LintSemanticCheckId, LintSemanticDecision,
+    LintSemanticPopulation, LintSemanticProviderRoute, LintSemanticReasonCode,
 };
 
 #[derive(Clone, Copy)]
@@ -22,6 +23,10 @@ enum FakeMode {
     Timeout,
     WrongReason,
     SelfSuppliedSecond,
+    Classification,
+    InvalidTupleLength,
+    UnknownCandidate,
+    MalformedTupleType,
 }
 
 struct FakeProvider {
@@ -29,6 +34,29 @@ struct FakeProvider {
     mode: FakeMode,
     calls: AtomicUsize,
     prompts: Mutex<Vec<String>>,
+    grammar_calls: AtomicUsize,
+    grammars: Mutex<Vec<String>>,
+}
+
+struct DefaultGrammarProvider;
+
+#[async_trait]
+impl LlmProvider for DefaultGrammarProvider {
+    async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+        Ok("unconstrained output".to_string())
+    }
+
+    fn is_available(&self) -> bool {
+        true
+    }
+
+    fn name(&self) -> &str {
+        "default-grammar-test"
+    }
+
+    fn backend(&self) -> LlmBackend {
+        LlmBackend::OnDevice
+    }
 }
 
 impl FakeProvider {
@@ -38,6 +66,8 @@ impl FakeProvider {
             mode,
             calls: AtomicUsize::new(0),
             prompts: Mutex::new(Vec::new()),
+            grammar_calls: AtomicUsize::new(0),
+            grammars: Mutex::new(Vec::new()),
         }
     }
 }
@@ -63,26 +93,48 @@ impl LlmProvider for FakeProvider {
             .iter()
             .map(|candidate| {
                 let contradiction = candidate["proposed_action"] == "review_contradiction";
-                let finding = contradiction && matches!(self.mode, FakeMode::Contradiction);
+                let classification = candidate["proposed_action"] == "reclassify_memory";
+                let finding = (contradiction && matches!(self.mode, FakeMode::Contradiction))
+                    || (classification && matches!(self.mode, FakeMode::Classification));
                 let decision = if finding { "finding" } else { "pass" };
-                let mut verdict = serde_json::json!({
-                    "candidate_ref": candidate["reference"],
-                    "decision": decision,
-                    "reason_code": if matches!(self.mode, FakeMode::WrongReason) {
-                        Value::String("dangling_owner".to_string())
-                    } else {
-                        candidate["reason_code"].clone()
-                    },
-                    "confidence_basis_points": 9000,
-                    "counterevidence_refs": [],
-                });
-                if matches!(self.mode, FakeMode::SelfSuppliedSecond) {
-                    verdict["second_decision"] = Value::String(decision.to_string());
+                let candidate_ref = if matches!(self.mode, FakeMode::UnknownCandidate) {
+                    Value::from(9999_u16)
+                } else {
+                    candidate["reference"].clone()
+                };
+                let mut verdict = serde_json::json!([candidate_ref, decision, 9000, []]);
+                if matches!(
+                    self.mode,
+                    FakeMode::WrongReason | FakeMode::SelfSuppliedSecond
+                ) {
+                    verdict.as_array_mut().unwrap().push(Value::String(
+                        if matches!(self.mode, FakeMode::WrongReason) {
+                            "dangling_owner".to_string()
+                        } else {
+                            decision.to_string()
+                        },
+                    ));
+                }
+                if matches!(self.mode, FakeMode::InvalidTupleLength) {
+                    verdict.as_array_mut().unwrap().pop();
+                }
+                if matches!(self.mode, FakeMode::MalformedTupleType) {
+                    verdict[2] = Value::String("high".to_string());
                 }
                 verdict
             })
             .collect::<Vec<_>>();
         Ok(serde_json::json!({ "verdicts": verdicts }).to_string())
+    }
+
+    async fn generate_with_grammar(
+        &self,
+        request: LlmRequest,
+        grammar: String,
+    ) -> Result<String, LlmError> {
+        self.grammar_calls.fetch_add(1, Ordering::SeqCst);
+        self.grammars.lock().unwrap().push(grammar);
+        self.generate(request).await
     }
 
     fn is_available(&self) -> bool {
@@ -94,6 +146,190 @@ impl LlmProvider for FakeProvider {
     fn backend(&self) -> LlmBackend {
         self.backend
     }
+}
+
+#[test]
+fn semantic_system_prompt_matches_the_single_judge_contract() {
+    let prompt = system_prompt();
+    assert!(prompt.contains("exactly one four-item JSON array for every supplied candidate_ref"));
+    assert!(
+        prompt.contains("[candidate_ref, decision, confidence_basis_points, counterevidence_refs]")
+    );
+    assert!(prompt.contains("There is no preset decision"));
+    assert!(prompt.contains("The server binds each candidate's authoritative reason_code"));
+    assert!(prompt.contains("stored_memory_type=missing or stored_memory_type=empty"));
+    assert!(prompt.contains("sorted unique array of integer record references"));
+    assert!(prompt.contains("Do not output verdict objects"));
+}
+
+fn grammar_work() -> LintAgentWork {
+    let records = (1..=4)
+        .map(|reference| {
+            LintAgentRecord::try_new(
+                reference,
+                LintAgentRecordKind::Memory,
+                format!("record {reference}"),
+                Some("fact".to_string()),
+                None,
+                None,
+            )
+            .unwrap()
+        })
+        .collect();
+    let candidates = vec![
+        LintAgentCandidate::try_new(
+            1,
+            LintSemanticCheckId::MemoryContradiction,
+            LintSemanticCandidateKind::PairReview,
+            vec![1, 3],
+            vec![4],
+            LintSemanticAction::ReviewContradiction,
+            LintSemanticReasonCode::PotentialContradiction,
+        )
+        .unwrap(),
+        LintAgentCandidate::try_new(
+            2,
+            LintSemanticCheckId::MemoryStaleness,
+            LintSemanticCandidateKind::RecordReview,
+            vec![2],
+            vec![],
+            LintSemanticAction::ReviewStaleness,
+            LintSemanticReasonCode::PotentialStaleness,
+        )
+        .unwrap(),
+    ];
+    let populations = LintSemanticCheckId::ALL
+        .into_iter()
+        .map(|check_id| {
+            let count = match check_id {
+                LintSemanticCheckId::MemoryContradiction | LintSemanticCheckId::MemoryStaleness => {
+                    1
+                }
+                _ => 0,
+            };
+            LintSemanticPopulation::try_new(check_id, count, count, count, false).unwrap()
+        })
+        .collect();
+    LintAgentWork::try_new(LintDigest::from_u64(1), populations, records, candidates).unwrap()
+}
+
+#[test]
+fn provider_verdict_grammar_is_exact_four_tuple_contract() {
+    let work = grammar_work();
+    let grammar = provider_verdict_grammar(&work, &BTreeSet::from([1_u16, 2_u16]));
+    assert!(grammar.contains(r#"root ::= "{" ws "\"verdicts\"" ws ":" ws "[""#));
+    assert!(grammar.contains(
+        r#"verdict-0 ::= "[" ws "1" ws "," ws decision ws "," ws confidence ws "," ws "[" ws (refs-0-0)?"#
+    ));
+    assert!(grammar.contains(
+        r#"verdict-1 ::= "[" ws "2" ws "," ws decision ws "," ws confidence ws "," ws "[" ws (refs-1-0)?"#
+    ));
+    assert!(grammar.contains(r#"decision ::= "\"pass\"" | "\"finding\"""#));
+    assert!(grammar.contains(
+        r#"confidence ::= "0" | [1-9] | [1-9][0-9] | [1-9][0-9][0-9] | [1-9][0-9][0-9][0-9] | "10000""#
+    ));
+    assert!(grammar.contains(r#"refs-0-0 ::= "1" (ws "," ws refs-0-1)? | refs-0-1"#));
+    assert!(grammar.contains(r#"refs-0-1 ::= "3" (ws "," ws refs-0-2)? | refs-0-2"#));
+    assert!(grammar.contains(r#"refs-0-2 ::= "4""#));
+    assert!(grammar.contains(r#"refs-1-0 ::= "2""#));
+    assert!(!grammar.contains("refs-1-1"));
+    assert!(!grammar.contains("verdict-2"));
+    assert!(!grammar.contains("integer"));
+    assert!(!grammar.contains("reason_code"));
+    assert!(!grammar.contains("second_decision"));
+}
+
+#[tokio::test]
+async fn unsupported_grammar_provider_fails_closed_without_unconstrained_fallback() {
+    let provider = DefaultGrammarProvider;
+    let error = provider
+        .generate_with_grammar(
+            LlmRequest {
+                system_prompt: None,
+                user_prompt: "judge".to_string(),
+                max_tokens: 32,
+                temperature: 0.0,
+                label: None,
+                timeout_secs: Some(1),
+            },
+            provider_verdict_grammar(&grammar_work(), &BTreeSet::from([1_u16])),
+        )
+        .await
+        .expect_err("default grammar path must fail closed");
+    assert!(matches!(
+        error,
+        LlmError::InferenceFailed(message)
+            if message == "grammar-constrained generation unsupported"
+    ));
+}
+
+#[test]
+fn reason_code_mismatch_diagnostic_contains_only_safe_contract_metadata() {
+    let candidate = LintAgentCandidate::try_new(
+        1,
+        LintSemanticCheckId::MemoryContradiction,
+        LintSemanticCandidateKind::RecordReview,
+        vec![1],
+        vec![],
+        LintSemanticAction::ReviewContradiction,
+        LintSemanticReasonCode::PotentialContradiction,
+    )
+    .unwrap();
+    let verdict = LintAgentVerdict::try_new(
+        1,
+        LintSemanticDecision::Finding,
+        None,
+        LintSemanticReasonCode::DanglingOwner,
+        9_000,
+        vec![],
+    )
+    .unwrap();
+    let diagnostic = ReasonCodeMismatchDiagnostic::from_verdict(&candidate, &verdict);
+
+    assert_eq!(diagnostic.candidate_ref, 1);
+    assert_eq!(
+        diagnostic.expected_reason,
+        LintSemanticReasonCode::PotentialContradiction
+    );
+    assert_eq!(
+        diagnostic.received_reason,
+        LintSemanticReasonCode::DanglingOwner
+    );
+    assert_eq!(diagnostic.decision, LintSemanticDecision::Finding);
+    assert_eq!(diagnostic.action, LintSemanticAction::ReviewContradiction);
+    let fields = diagnostic.log_fields();
+    assert_eq!(
+        fields,
+        "candidate_ref=1 expected_reason=PotentialContradiction received_reason=DanglingOwner decision=Finding action=ReviewContradiction"
+    );
+    assert!(!fields.contains("record"));
+    assert!(!fields.contains("excerpt"));
+    assert!(!fields.contains("title"));
+    assert!(!fields.contains("path"));
+    assert!(!fields.contains("url"));
+}
+
+#[test]
+fn provider_tuple_diagnostic_identifies_fixed_position_without_provider_values() {
+    let raw = r#"{
+        "verdicts": [[1, "not_a_decision", 9000, []]],
+        "untrusted_payload": "secret provider output"
+    }"#;
+    assert!(serde_json::from_str::<ProviderResponse>(raw).is_err());
+    let diagnostics = provider_tuple_diagnostics(raw);
+
+    assert!(diagnostics.contains(&ProviderTupleDiagnostic::new("decision", "invalidenum")));
+    assert!(diagnostics.contains(&ProviderTupleDiagnostic::new("response", "unknownfield")));
+    let fields = diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.log_fields())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(fields.contains("field=decision failure_category=invalidenum"));
+    assert!(fields.contains("field=response failure_category=unknownfield"));
+    assert!(!fields.contains("not_a_decision"));
+    assert!(!fields.contains("untrusted_payload"));
+    assert!(!fields.contains("secret provider output"));
 }
 
 async fn fixture() -> (crate::db::MemoryDB, tempfile::TempDir) {
@@ -134,12 +370,25 @@ async fn fixture() -> (crate::db::MemoryDB, tempfile::TempDir) {
 #[tokio::test]
 async fn provider_and_calling_agent_share_candidate_contract() {
     let (db, _dir) = fixture().await;
+    db.test_primary_session()
+        .await
+        .execute(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,memory_type)
+             VALUES ('classification-row','Unclassified note','memory','classification-source',
+                     'unclassified',0,2,'text',0,0,'hide',NULL)",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
     let provider = Arc::new(FakeProvider::new(
         LlmBackend::OnDevice,
         FakeMode::Contradiction,
     ));
     let report = run_provider(&db, Arc::clone(&provider)).await;
     assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(provider.grammar_calls.load(Ordering::SeqCst), 2);
     assert_eq!(
         check(&report, LintSemanticCheckId::MemoryContradiction).outcome(),
         LintOutcome::Finding
@@ -148,6 +397,76 @@ async fn provider_and_calling_agent_share_candidate_contract() {
         check(&report, LintSemanticCheckId::MemoryContradiction).evidence(),
         [LintEvidenceRef::SemanticFinding { .. }]
     ));
+    let work = report
+        .agent_work()
+        .expect("a fully validated provider run retains its work packet");
+    let primary: Value = {
+        let prompts = provider.prompts.lock().unwrap();
+        serde_json::from_str(&prompts[0]).unwrap()
+    };
+    let work_json = serde_json::to_value(work).unwrap();
+    let primary_refs = work
+        .candidates()
+        .iter()
+        .map(|candidate| candidate.reference())
+        .collect::<BTreeSet<_>>();
+    let second: Value = {
+        let prompts = provider.prompts.lock().unwrap();
+        serde_json::from_str(&prompts[1]).unwrap()
+    };
+    let second_refs = second["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|candidate| candidate["reference"].as_u64())
+        .map(|reference| u16::try_from(reference).unwrap())
+        .collect::<BTreeSet<_>>();
+    assert!(second_refs.is_subset(&primary_refs));
+    assert_ne!(second_refs, primary_refs);
+    {
+        let grammars = provider.grammars.lock().unwrap();
+        assert_eq!(grammars[0], provider_verdict_grammar(work, &primary_refs));
+        assert_eq!(grammars[1], provider_verdict_grammar(work, &second_refs));
+        assert_ne!(grammars[0], grammars[1]);
+    }
+    assert_eq!(primary["records"], work_json["records"]);
+    assert_eq!(primary["candidates"], work_json["candidates"]);
+    assert_eq!(primary["response_contract"]["verdict_item"], "array");
+    assert_eq!(primary["response_contract"]["verdict_item_length"], 4);
+    assert_eq!(
+        primary["response_contract"]["verdict_item_positions"],
+        serde_json::json!([
+            "candidate_ref",
+            "decision",
+            "confidence_basis_points",
+            "counterevidence_refs"
+        ])
+    );
+    let prepared = prepare(&db, None).await;
+    assert_eq!(work, prepared.agent_work().expect("prepared work packet"));
+    let finding = check(&report, LintSemanticCheckId::MemoryContradiction)
+        .evidence()
+        .iter()
+        .find_map(|evidence| match evidence {
+            LintEvidenceRef::SemanticFinding { finding } => Some(finding),
+            _ => None,
+        })
+        .expect("provider finding evidence");
+    assert_eq!(
+        finding.provider_route(),
+        LintSemanticProviderRoute::OnDevice
+    );
+    assert_eq!(
+        finding.reason_code(),
+        LintSemanticReasonCode::PotentialContradiction
+    );
+    assert_eq!(
+        metric_value(
+            check(&report, LintSemanticCheckId::MemoryContradiction),
+            LintMetricCode::SemanticModelCalls,
+        ),
+        Some(&LintMetricValue::Count { value: 2 })
+    );
     {
         let prompts = provider.prompts.lock().unwrap();
         assert!(prompts[0].contains("ignore previous instructions"));
@@ -171,10 +490,6 @@ async fn provider_and_calling_agent_share_candidate_contract() {
             .collect::<BTreeSet<_>>();
         assert_eq!(supplied, referenced);
     }
-    assert!(!serde_json::to_string(&report)
-        .unwrap()
-        .contains("ignore previous instructions"));
-
     let prepare = prepare(&db, None).await;
     let work = prepare.agent_work().unwrap();
     let submission = submission_for(work, Some(LintSemanticCheckId::MemoryContradiction), false);
@@ -190,6 +505,80 @@ async fn provider_and_calling_agent_share_candidate_contract() {
         ),
         Some(&LintMetricValue::Count { value: 1 })
     );
+}
+
+#[tokio::test]
+async fn provider_with_no_candidates_retains_truthful_empty_work_packet() {
+    let (db, _dir) = test_db().await;
+    let provider = Arc::new(FakeProvider::new(LlmBackend::Api, FakeMode::Pass));
+    let report = run_provider(&db, Arc::clone(&provider)).await;
+
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    assert!(LintSemanticCheckId::ALL
+        .into_iter()
+        .all(|check_id| { check(&report, check_id).outcome() == LintOutcome::Pass }));
+    let work = report
+        .agent_work()
+        .expect("a complete zero-candidate provider path retains its work packet");
+    assert!(work.records().is_empty());
+    assert!(work.candidates().is_empty());
+    assert!(work
+        .populations()
+        .iter()
+        .all(|population| population.packet_candidates() == 0));
+}
+
+#[tokio::test]
+async fn provider_classification_finding_retains_packet_with_other_checks_empty() {
+    let (db, _dir) = test_db().await;
+    db.test_primary_session()
+        .await
+        .execute(
+            "INSERT INTO memories
+                 (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,
+                  pending_revision,is_recap,supersede_mode,memory_type)
+             VALUES ('classification-row','A decision about Project Atlas','memory',
+                     'classification-source','classification',0,0,'text',0,0,'hide',NULL)",
+            libsql::params::Params::None,
+        )
+        .await
+        .unwrap();
+    let provider = Arc::new(FakeProvider::new(LlmBackend::Api, FakeMode::Classification));
+    let report = run_provider(&db, Arc::clone(&provider)).await;
+
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(provider.grammar_calls.load(Ordering::SeqCst), 0);
+    let classification = check(&report, LintSemanticCheckId::MemoryClassification);
+    assert_eq!(classification.outcome(), LintOutcome::Finding);
+    assert_eq!(
+        metric_value(classification, LintMetricCode::SemanticModelCalls),
+        Some(&LintMetricValue::Count { value: 1 })
+    );
+    assert!(LintSemanticCheckId::ALL
+        .into_iter()
+        .filter(|check_id| *check_id != LintSemanticCheckId::MemoryClassification)
+        .all(|check_id| check(&report, check_id).coverage().evaluated() == 0));
+
+    let work = report
+        .agent_work()
+        .expect("validated classification work packet");
+    assert_eq!(
+        candidates_for(work, LintSemanticCheckId::MemoryClassification).len(),
+        1
+    );
+    let primary: Value = {
+        let prompts = provider.prompts.lock().unwrap();
+        serde_json::from_str(&prompts[0]).unwrap()
+    };
+    let work_json = serde_json::to_value(work).unwrap();
+    assert_eq!(primary["records"], work_json["records"]);
+    assert_eq!(primary["candidates"], work_json["candidates"]);
+    assert!(primary["records"][0]["excerpt"]
+        .as_str()
+        .unwrap()
+        .contains("stored_memory_type=missing"));
+    let prepared = prepare(&db, None).await;
+    assert_eq!(work, prepared.agent_work().expect("prepared work packet"));
 }
 
 #[tokio::test]
@@ -210,6 +599,7 @@ async fn missing_provider_and_malformed_output_are_incomplete() {
         LintOutcome::NotRunPrerequisite,
         LintReasonCode::SemanticProviderUnavailable,
     );
+    assert!(missing.agent_work().is_none());
 
     let malformed = Arc::new(FakeProvider::new(LlmBackend::Api, FakeMode::Malformed));
     let report = run_provider(&db, malformed).await;
@@ -219,6 +609,7 @@ async fn missing_provider_and_malformed_output_are_incomplete() {
         LintOutcome::FailedToRun,
         LintReasonCode::SemanticExecutionFailure,
     );
+    assert!(report.agent_work().is_none());
 
     let timeout = Arc::new(FakeProvider::new(LlmBackend::Api, FakeMode::Timeout));
     let report = run_provider(&db, timeout).await;
@@ -228,12 +619,19 @@ async fn missing_provider_and_malformed_output_are_incomplete() {
         LintOutcome::FailedToRun,
         LintReasonCode::SemanticExecutionFailure,
     );
+    assert!(report.agent_work().is_none());
 }
 
 #[tokio::test]
 async fn provider_cannot_change_reason_or_self_supply_second_judge() {
     let (db, _dir) = fixture().await;
-    for mode in [FakeMode::WrongReason, FakeMode::SelfSuppliedSecond] {
+    for mode in [
+        FakeMode::WrongReason,
+        FakeMode::SelfSuppliedSecond,
+        FakeMode::InvalidTupleLength,
+        FakeMode::UnknownCandidate,
+        FakeMode::MalformedTupleType,
+    ] {
         let provider = Arc::new(FakeProvider::new(LlmBackend::Api, mode));
         let report = run_provider(&db, provider).await;
         assert_reason(
@@ -242,6 +640,7 @@ async fn provider_cannot_change_reason_or_self_supply_second_judge() {
             LintOutcome::FailedToRun,
             LintReasonCode::SemanticExecutionFailure,
         );
+        assert!(report.agent_work().is_none());
     }
 }
 

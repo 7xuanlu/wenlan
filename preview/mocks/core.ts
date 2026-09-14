@@ -144,6 +144,10 @@ export async function invoke(
     case "list_refinements":
       if (REVIEW_FAIL.queue) throw new Error("[preview] simulated queue failure");
       return { proposals: REVIEW_STATE.proposals };
+    case "repair_recovery":
+      // Fixture mode has no pending daemon repair artifact. The product must
+      // continue through its normal ready path rather than inventing one.
+      return null;
     case "list_unconfirmed_memories":
       if (REVIEW_FAIL.queue) throw new Error("[preview] simulated queue failure");
       return REVIEW_STATE.captures;

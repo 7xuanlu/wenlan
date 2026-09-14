@@ -405,6 +405,18 @@ describe('refinery queue', () => {
   });
 });
 
+describe('repair recovery bridge', () => {
+  it('passes the exact review id and preserves a nullable response', async () => {
+    mockInvoke.mockResolvedValue(null);
+
+    await expect(tauri.repairRecovery('review/1')).resolves.toBeNull();
+
+    expect(mockInvoke).toHaveBeenCalledWith('repair_recovery', {
+      reviewId: 'review/1',
+    });
+  });
+});
+
 // --- Additional wrappers for coverage ---
 
 describe('reindex', () => {

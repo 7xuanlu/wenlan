@@ -116,7 +116,7 @@ export function SettingRow(props: SettingRowProps) {
       {error && (
         <p
           id={errorId}
-          style={{ fontFamily: "var(--mem-font-body)", fontSize: "11px", color: "var(--mem-status-danger-text)", marginTop: "8px", lineHeight: "1.5", wordBreak: "break-all" }}
+          style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-description)", color: "var(--mem-status-danger-text)", marginTop: "8px", lineHeight: "1.5", wordBreak: "break-all" }}
         >
           {error}
         </p>
@@ -126,7 +126,7 @@ export function SettingRow(props: SettingRowProps) {
           <WarningTriangleIcon className="w-3.5 h-3.5 text-[var(--mem-status-warning-text)] shrink-0 mt-px" />
           <p
             id={warningId}
-            style={{ fontFamily: "var(--mem-font-body)", fontSize: "11px", color: "var(--mem-status-warning-text)", lineHeight: "1.5" }}
+            style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-description)", color: "var(--mem-status-warning-text)", lineHeight: "1.5" }}
           >
             {warning}
           </p>
@@ -476,7 +476,7 @@ export function Field({ label, htmlFor, description, error, children }: FieldPro
           role="alert"
           style={{
             fontFamily: "var(--mem-font-body)",
-            fontSize: "var(--mem-text-xs)",
+            fontSize: "var(--mem-text-description)",
             lineHeight: 1.4,
             color: "var(--mem-status-danger-text)",
             marginTop: "4px",

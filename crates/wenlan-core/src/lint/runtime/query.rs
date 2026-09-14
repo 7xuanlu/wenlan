@@ -1,5 +1,8 @@
 use super::result::{Assessment, PendingAssessment};
-use super::{RuntimeReadiness, RuntimeRunConfig, StatusFilesObservation, WorkingMemoryObservation};
+use super::{
+    ProviderClass, RuntimeReadiness, RuntimeRunConfig, StatusFilesObservation,
+    WorkingMemoryObservation,
+};
 use super::{INDEXES, PROVIDERS, SCHEMA, STATUS, WORKER};
 use crate::lint::context::LintContext;
 
@@ -79,9 +82,35 @@ impl RuntimeSnapshot {
                 .iter()
                 .filter(|reranker| reranker.readiness != RuntimeReadiness::Unavailable)
                 .count();
+        let suspended_unexpected_observed = config
+            .observation
+            .providers
+            .iter()
+            .filter(|provider| provider.readiness != RuntimeReadiness::Unavailable)
+            .filter(|provider| {
+                !(provider.class == ProviderClass::OnDevice
+                    && provider.readiness == RuntimeReadiness::Ready
+                    && config
+                        .observation
+                        .repair_verification_model()
+                        .is_some_and(|model_id| model_id == provider.model_id)
+                    && config.snapshot.providers.iter().any(|request| {
+                        request.class == ProviderClass::OnDevice
+                            && request.model_id == provider.model_id
+                    }))
+            })
+            .count()
+            + config
+                .observation
+                .rerankers
+                .iter()
+                .filter(|reranker| reranker.readiness != RuntimeReadiness::Unavailable)
+                .count();
         let provider_population = u64::try_from(requested).unwrap_or(u64::MAX);
         let provider_observed = u64::try_from(observed).unwrap_or(u64::MAX);
         let suspended_worker_observed = u64::try_from(observed_while_suspended).unwrap_or(u64::MAX);
+        let suspended_unexpected_observed =
+            u64::try_from(suspended_unexpected_observed).unwrap_or(u64::MAX);
         let providers =
             if config.observation.optional_workers_suspended() && suspended_worker_observed == 0 {
                 PendingAssessment::ExpectedEmpty(
@@ -93,7 +122,7 @@ impl RuntimeSnapshot {
                     Assessment::new(
                         PROVIDERS,
                         provider_population.max(suspended_worker_observed),
-                        suspended_worker_observed,
+                        suspended_unexpected_observed,
                     )
                     .with_observed(suspended_worker_observed),
                 )

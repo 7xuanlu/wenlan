@@ -1,6 +1,47 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { invoke } from "@tauri-apps/api/core";
+import type {
+  ApplyRepairRequest, PrepareRepairRequest, PrepareCurrentRepairRequest, RepairApplyReceipt, RepairLintQuery,
+  RepairLintReport, RepairManifest, RepairPlanEntriesPage, RepairPlanEntriesRequest, RepairRecovery,
+  RepairPlanRequest, RepairPlanSummary, RepairVerificationReceipt, VerifyRepairRequest,
+} from "./repairTypes";
 export { daemonMeetsFloor } from "./daemonVersion";
+
+export async function repairLint(query: RepairLintQuery): Promise<RepairLintReport> {
+  return invoke("repair_lint", { query });
+}
+
+export async function repairPrepare(request: PrepareRepairRequest): Promise<RepairManifest> {
+  return invoke("repair_prepare", { request });
+}
+
+export async function repairPrepareCurrent(request: PrepareCurrentRepairRequest): Promise<RepairManifest> {
+  return invoke("repair_prepare_current", { request });
+}
+
+export async function repairRecovery(reviewId: string): Promise<RepairRecovery | null> {
+  return invoke("repair_recovery", { reviewId });
+}
+
+export async function repairValidateManifest(manifest: RepairManifest): Promise<boolean> {
+  return invoke("repair_validate_manifest", { manifest });
+}
+
+export async function repairApply(request: ApplyRepairRequest): Promise<RepairApplyReceipt> {
+  return invoke("repair_apply", { request });
+}
+
+export async function repairVerify(request: VerifyRepairRequest): Promise<RepairVerificationReceipt> {
+  return invoke("repair_verify", { request });
+}
+
+export async function repairPlan(request: RepairPlanRequest): Promise<RepairPlanSummary> {
+  return invoke("repair_plan", { request });
+}
+
+export async function repairPlanEntries(request: RepairPlanEntriesRequest): Promise<RepairPlanEntriesPage> {
+  return invoke("repair_plan_entries", { request });
+}
 
 export async function setTrafficLightsVisible(visible: boolean): Promise<void> {
   return invoke("set_traffic_lights_visible", { visible });
@@ -1459,6 +1500,8 @@ export interface OrphanLinksResponse {
 
 export interface DistillReviewResponse {
   pages_created: number;
+  clusters_found?: number | null;
+  hint?: string | null;
   scoped: boolean;
   created_ids: string[];
   pending: DistillPendingCluster[];
@@ -1875,7 +1918,10 @@ export type ProposalAction =
   | "dedup_merge"
   | "page_merge"
   | "cross_space_discovery"
-  | "page_keep_or_archive";
+  | "page_keep_or_archive"
+  | "lint_repair_review"
+  | "vocab_promote"
+  | "unknown";
 
 export type RefinementPayload =
   | {
@@ -1912,7 +1958,18 @@ export type RefinementPayload =
       action: "page_keep_or_archive";
       page_id: string;
       source_count: number;
-    };
+      allowed_actions?: Array<"accept" | "dismiss" | "pick_space">;
+    }
+  | {
+      action: "lint_repair_review";
+      check_id: string;
+      occurrence_digest: string;
+      owner_binding_digest: string;
+      issue: string;
+      choices: string[];
+      suggested_research_queries: string[];
+    }
+  | { action: "vocab_promote"; kind: string; old_value: string; category?: string | null };
 
 export interface RefinementProposalSummary {
   id: string;

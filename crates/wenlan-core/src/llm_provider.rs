@@ -13,7 +13,7 @@
 
 use async_trait::async_trait;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -96,6 +96,20 @@ pub enum LlmBackend {
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn generate(&self, request: LlmRequest) -> Result<String, LlmError>;
+
+    /// Generate with provider-side constrained decoding. Providers that do
+    /// not implement grammar support fail closed rather than silently falling
+    /// back to unconstrained text generation.
+    async fn generate_with_grammar(
+        &self,
+        _request: LlmRequest,
+        _grammar: String,
+    ) -> Result<String, LlmError> {
+        Err(LlmError::InferenceFailed(
+            "grammar-constrained generation unsupported".into(),
+        ))
+    }
+
     fn is_available(&self) -> bool;
     fn name(&self) -> &str;
     fn backend(&self) -> LlmBackend;
@@ -212,6 +226,7 @@ struct InferenceRequest {
     ctx_size: u32,
     label: Option<String>,
     timeout_secs: Option<u64>,
+    grammar: Option<String>,
     response_tx: tokio::sync::oneshot::Sender<Result<String, LlmError>>,
 }
 
@@ -290,7 +305,7 @@ fn request_continuous_batch_eligible(
     req: &InferenceRequest,
     seq_capacity: usize,
 ) -> bool {
-    if seq_capacity <= 1 || req.max_tokens <= 0 {
+    if seq_capacity <= 1 || req.max_tokens <= 0 || req.grammar.is_some() {
         return false;
     }
     let prompt_tokens = engine.count_prompt_tokens(req.system_prompt.as_deref(), &req.prompt);
@@ -371,6 +386,37 @@ impl OnDeviceProvider {
         );
         let model_path =
             LlmEngine::download_model_by_spec(model_spec.repo_id, model_spec.filename)?;
+        Self::new_with_model_path(model_spec, model_path)
+    }
+
+    /// Create a provider for an explicitly selected registry model using only
+    /// an existing hf-hub cache snapshot. This path never contacts the Hub or
+    /// falls back to the downloading constructor.
+    pub fn new_cached_with_model(model_id: &str) -> Result<Self, crate::error::WenlanError> {
+        let model_spec = crate::on_device_models::get_model(model_id).ok_or_else(|| {
+            crate::error::WenlanError::Llm(format!(
+                "unknown on-device model id for cached load: {model_id}"
+            ))
+        })?;
+        let cache = hf_hub::Cache::from_env();
+        let model_path = crate::on_device_models::cached_model_path(model_spec, &cache)
+            .ok_or_else(|| {
+                crate::error::WenlanError::Llm(format!(
+                    "on-device model {model_id} is not cached; refusing network download"
+                ))
+            })?;
+        log::info!(
+            "[on_device_provider] using cached model: {} ({})",
+            model_spec.display_name,
+            model_spec.id
+        );
+        Self::new_with_model_path(model_spec, model_path)
+    }
+
+    fn new_with_model_path(
+        model_spec: &'static crate::on_device_models::OnDeviceModel,
+        model_path: PathBuf,
+    ) -> Result<Self, crate::error::WenlanError> {
         let resolved_model_version = hf_snapshot_model_version(model_spec.repo_id, &model_path)
             .ok_or_else(|| {
                 crate::error::WenlanError::Llm(format!(
@@ -679,29 +725,58 @@ impl OnDeviceProvider {
                             let t = batch_log_enabled.then(std::time::Instant::now);
 
                             let result = match persistent_ctx.as_mut() {
-                                Some(ctx) => engine.run_inference_persistent(
-                                    ctx,
-                                    &full_prompt,
-                                    req.max_tokens,
-                                    req.temperature,
-                                    timeout_secs,
-                                    strip_think,
-                                    req.label.as_deref(),
-                                ),
+                                Some(ctx) => match req.grammar.as_deref() {
+                                    Some(grammar) => engine.run_inference_persistent_with_grammar(
+                                        ctx,
+                                        &full_prompt,
+                                        req.max_tokens,
+                                        req.temperature,
+                                        timeout_secs,
+                                        strip_think,
+                                        req.label.as_deref(),
+                                        Some(grammar),
+                                    ),
+                                    None => engine.run_inference_persistent(
+                                        ctx,
+                                        &full_prompt,
+                                        req.max_tokens,
+                                        req.temperature,
+                                        timeout_secs,
+                                        strip_think,
+                                        req.label.as_deref(),
+                                    ),
+                                },
                                 None => {
                                     log::warn!(
                                         "[on_device_provider] worker {i} persistent context \
                                          unavailable, falling back to per-call context"
                                     );
-                                    match req.timeout_secs {
-                                        Some(secs) => engine.run_inference_raw(
+                                    match (req.timeout_secs, req.grammar.as_deref()) {
+                                        (Some(secs), Some(grammar)) => engine
+                                            .run_inference_raw_with_grammar(
+                                                &full_prompt,
+                                                req.max_tokens,
+                                                req.temperature,
+                                                secs,
+                                                req.ctx_size,
+                                                Some(grammar),
+                                            ),
+                                        (Some(secs), None) => engine.run_inference_raw(
                                             &full_prompt,
                                             req.max_tokens,
                                             req.temperature,
                                             secs,
                                             req.ctx_size,
                                         ),
-                                        None => engine.run_inference(
+                                        (None, Some(grammar)) => engine.run_inference_with_grammar(
+                                            &full_prompt,
+                                            req.max_tokens,
+                                            req.temperature,
+                                            req.ctx_size,
+                                            req.label.as_deref(),
+                                            Some(grammar),
+                                        ),
+                                        (None, None) => engine.run_inference(
                                             &full_prompt,
                                             req.max_tokens,
                                             req.temperature,
@@ -872,9 +947,12 @@ impl OnDeviceProvider {
     }
 }
 
-#[async_trait]
-impl LlmProvider for OnDeviceProvider {
-    async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+impl OnDeviceProvider {
+    async fn generate_inner(
+        &self,
+        request: LlmRequest,
+        grammar: Option<String>,
+    ) -> Result<String, LlmError> {
         if !self.is_available() {
             return Err(LlmError::NotAvailable);
         }
@@ -889,6 +967,7 @@ impl LlmProvider for OnDeviceProvider {
             ctx_size: self.model_context_size,
             label: request.label,
             timeout_secs: request.timeout_secs,
+            grammar,
             response_tx,
         };
 
@@ -906,6 +985,21 @@ impl LlmProvider for OnDeviceProvider {
             )),
             Err(_) => Err(LlmError::Timeout),
         }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OnDeviceProvider {
+    async fn generate(&self, request: LlmRequest) -> Result<String, LlmError> {
+        self.generate_inner(request, None).await
+    }
+
+    async fn generate_with_grammar(
+        &self,
+        request: LlmRequest,
+        grammar: String,
+    ) -> Result<String, LlmError> {
+        self.generate_inner(request, Some(grammar)).await
     }
 
     fn is_available(&self) -> bool {
@@ -2147,5 +2241,18 @@ mod tests {
             crate::on_device_models::resolve_or_default(Some("qwen3.5-9b")).id,
             "qwen3.5-9b"
         );
+    }
+
+    #[test]
+    fn new_cached_with_model_rejects_unknown_registry_id_before_loading() {
+        let error = match OnDeviceProvider::new_cached_with_model("unknown") {
+            Ok(_) => panic!("unknown cached model id must be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            crate::error::WenlanError::Llm(message)
+                if message.contains("unknown on-device model id")
+        ));
     }
 }

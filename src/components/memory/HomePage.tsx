@@ -56,7 +56,11 @@ export default function HomePage({
   onCreatePage,
   onOpenIntelligenceSettings,
 }: HomePageProps) {
-  const { data: recentConcepts = [], isLoading: recentConceptsLoading } = useQuery({
+  const {
+    data: recentConcepts = [],
+    isLoading: recentConceptsLoading,
+    isFetched: recentConceptsFetched,
+  } = useQuery({
     queryKey: ["recent-concepts"],
     queryFn: listAllActivePages,
     refetchInterval: 10_000,
@@ -128,8 +132,10 @@ export default function HomePage({
   // The "recent-concepts" query has never resolved right after onboarding
   // (HomePage isn't mounted during the wizard), so its default `[]` would
   // otherwise be read as "no pages" and flash the empty state before the real
-  // page list arrives.
-  if (recentConceptsLoading) {
+  // page list arrives. Once the first attempt has answered, keep the rest of
+  // Home mounted during background refetches so an open review dialog survives
+  // an ambient page-list failure.
+  if (recentConceptsLoading && !recentConceptsFetched) {
     return null;
   }
 
@@ -313,7 +319,7 @@ function WikiHome({
               <ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />
               {knowledgePages.length > 0 && onStartFirstUse && (
                 <button type="button" className="home-empty-action" onClick={onStartFirstUse}
-                  style={{ ...EMPTY_ACTION_STYLE, background: "none", border: "none", color: "var(--mem-text-secondary)", fontSize: 12, padding: "4px 0" }}>
+                  style={{ ...EMPTY_ACTION_STYLE, background: "none", border: "none", color: "var(--mem-text-secondary)", fontSize: "var(--mem-text-meta)", padding: "4px 0" }}>
                   {t("firstUse.entry")}
                 </button>
               )}
@@ -443,7 +449,7 @@ function TodayHeader({ pages, statusPill }: { pages: Page[]; statusPill?: React.
               data-testid="wiki-context-latest"
               style={{
                 fontFamily: "var(--mem-font-mono)",
-                fontSize: 11,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-text-tertiary)",
                 whiteSpace: "nowrap",
               }}
@@ -459,7 +465,7 @@ function TodayHeader({ pages, statusPill }: { pages: Page[]; statusPill?: React.
 
 const EMPTY_ACTION_STYLE: React.CSSProperties = {
   fontFamily: "var(--mem-font-body)",
-  fontSize: 13,
+  fontSize: "var(--mem-text-control)",
   borderRadius: 8,
   padding: "7px 12px",
   cursor: "pointer",
@@ -659,7 +665,7 @@ function PageList({
                   className="truncate"
                   style={{
                     fontFamily: "var(--mem-font-mono)",
-                    fontSize: 11,
+                    fontSize: "var(--mem-text-meta)",
                     color: "var(--mem-text-tertiary)",
                     margin: "6px 0 0",
                   }}
@@ -674,7 +680,7 @@ function PageList({
                       WebkitBoxOrient: "vertical",
                       overflow: "hidden",
                       fontFamily: "var(--mem-font-body)",
-                      fontSize: 12,
+                      fontSize: "var(--mem-text-meta)",
                       color: "var(--mem-text-secondary)",
                       lineHeight: 1.45,
                       margin: "8px 0 0",
@@ -695,7 +701,7 @@ function PageList({
                 justifyContent: isWideLayout ? "center" : "flex-start",
                 gap: isWideLayout ? 4 : 12,
                 fontFamily: "var(--mem-font-body)",
-                fontSize: 12,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-text-tertiary)",
                 textAlign: isWideLayout ? "right" : "left",
               }}
@@ -817,7 +823,7 @@ function ContextMetric({
       <p
         style={{
           fontFamily: "var(--mem-font-mono)",
-          fontSize: 11,
+          fontSize: "var(--mem-text-meta)",
           fontWeight: 600,
           color: "var(--mem-text-tertiary)",
           letterSpacing: "0.04em",
@@ -850,7 +856,7 @@ function ContextMetric({
               delta.tone === "warm-pill"
                 ? {
                     fontFamily: "var(--mem-font-mono)",
-                    fontSize: 11,
+                    fontSize: "var(--mem-text-meta)",
                     fontVariantNumeric: "tabular-nums",
                     borderRadius: 5,
                     padding: "2px 8px",
@@ -860,7 +866,7 @@ function ContextMetric({
                   }
                 : {
                     fontFamily: "var(--mem-font-mono)",
-                    fontSize: 11.5,
+                    fontSize: "var(--mem-text-meta)",
                     fontVariantNumeric: "tabular-nums",
                     color: delta.tone === "sage" ? "var(--mem-accent-sage)" : "var(--mem-accent-indigo)",
                     whiteSpace: "nowrap",
@@ -909,7 +915,7 @@ function NeedsReviewRail({
           alignItems: "center",
           gap: 8,
           fontFamily: "var(--mem-font-body)",
-          fontSize: 11,
+          fontSize: "var(--mem-text-meta)",
           fontWeight: 500,
           letterSpacing: "0.08em",
           textTransform: "uppercase",
@@ -923,7 +929,7 @@ function NeedsReviewRail({
             style={{
               fontFamily: "var(--mem-font-mono)",
               fontVariantNumeric: "tabular-nums",
-              fontSize: 11,
+              fontSize: "var(--mem-text-meta)",
               fontWeight: 400,
               letterSpacing: 0,
               color: "var(--mem-accent-indigo)",
@@ -959,7 +965,7 @@ function NeedsReviewRail({
                   alignItems: "center",
                   gap: 7,
                   fontFamily: "var(--mem-font-body)",
-                  fontSize: 13,
+                  fontSize: "var(--mem-text-control)",
                   color: "var(--mem-text-secondary)",
                   lineHeight: 1.5,
                   margin: "4px 0 6px",
@@ -992,7 +998,7 @@ function NeedsReviewRail({
                     alignItems: "center",
                     gap: 7,
                     fontFamily: "var(--mem-font-body)",
-                    fontSize: 12.5,
+                    fontSize: "var(--mem-text-description)",
                     color: "var(--mem-accent-sage)",
                     lineHeight: 1.5,
                     margin: "4px 0 6px",
@@ -1016,7 +1022,7 @@ function NeedsReviewRail({
                 <p
                   style={{
                     fontFamily: "var(--mem-font-body)",
-                    fontSize: 12,
+                    fontSize: "var(--mem-text-meta)",
                     color: "var(--mem-text-tertiary)",
                     lineHeight: 1.4,
                     margin: "6px 0 0",
@@ -1044,7 +1050,7 @@ function NeedsReviewRail({
               color: "var(--mem-accent-indigo)",
               cursor: "pointer",
               fontFamily: "var(--mem-font-body)",
-              fontSize: 12,
+              fontSize: "var(--mem-text-meta)",
             }}
           >
             {items.length > 0
@@ -1057,13 +1063,14 @@ function NeedsReviewRail({
   );
 }
 
-function reviewItemAge(ms: number): string {
+function reviewItemAge(ms: number, locale: string): string {
   const diff = (Date.now() - ms) / 1000;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return new Date(ms).toLocaleDateString();
+  const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+  if (diff < 60) return relative.format(0, "second");
+  if (diff < 3600) return relative.format(-Math.floor(diff / 60), "minute");
+  if (diff < 86400) return relative.format(-Math.floor(diff / 3600), "hour");
+  if (diff < 604800) return relative.format(-Math.floor(diff / 86400), "day");
+  return new Date(ms).toLocaleDateString(locale);
 }
 
 /** Mockup kind-dot palette: revision indigo, page-level the page accent,
@@ -1098,16 +1105,21 @@ function ReviewRailItem({
   onOpenItem: (id: string) => void;
   isLast?: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const kind = reviewKindLabel(t, item);
   // Same rich titles as the review-page cards — a rail row never reads as
   // just its kind label when the names its ids point at can be fetched.
-  const { title } = useReviewItemSummary(item);
+  const { title, reason } = useReviewItemSummary(item);
+  const isSourceRepair = item.kind === "refinement" && item.action === "lint_repair_review";
   // Bare confidence "%" read as an unlabeled number on this terse rail — the
   // dialog carries the precise, labeled metric (overlap / confidence) instead.
+  const intent = isSourceRepair && reason ? reason
+    : item.kind === "revision" ? t("review.intentRevision")
+    : item.kind === "refinement" && item.action === "page_keep_or_archive" ? t("review.intentArchive")
+    : item.kind === "refinement" && (item.action === "page_merge" || item.action === "entity_merge") ? t("review.intentMerge") : kind;
   const meta = [
-    kind,
-    item.timestampMs != null ? reviewItemAge(item.timestampMs) : null,
+    intent,
+    item.timestampMs != null ? reviewItemAge(item.timestampMs, i18n.language) : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -1153,13 +1165,15 @@ function ReviewRailItem({
         <span
           style={{
             overflow: "hidden",
-            whiteSpace: "nowrap",
-            textOverflow: "ellipsis",
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflowWrap: "anywhere",
             fontFamily: "var(--mem-font-heading)",
-            fontSize: 13,
+            fontSize: "var(--mem-text-card-title)",
             fontWeight: 500,
             color: "var(--mem-text)",
-            lineHeight: 1.25,
+            lineHeight: 1.4,
           }}
         >
           {title}
@@ -1168,8 +1182,8 @@ function ReviewRailItem({
       <span
         style={{
           fontFamily: "var(--mem-font-body)",
-          fontSize: 11.5,
-          color: "var(--mem-text-tertiary)",
+          fontSize: isSourceRepair ? "var(--mem-text-description)" : "var(--mem-text-meta)",
+          color: "var(--mem-text-secondary)",
           lineHeight: 1.35,
           paddingLeft: 14,
         }}

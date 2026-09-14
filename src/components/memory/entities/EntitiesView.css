@@ -318,7 +318,7 @@
   align-items: center;
   color: var(--mem-text-secondary);
   display: flex;
-  font-size: 12px;
+  font-size: var(--mem-text-label);
   gap: 8px;
   margin-bottom: 8px;
 }

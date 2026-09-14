@@ -129,6 +129,7 @@ async fn repair_routes_are_distinct_typed_posts() {
     let state = Arc::new(RwLock::new(crate::state::ServerState::default()));
     for path in [
         "/api/repairs/plan",
+        "/api/repairs/plan-current",
         "/api/repairs/plan/entries",
         "/api/repairs/prepare",
         "/api/repairs/apply",
@@ -195,6 +196,48 @@ async fn repair_plan_accepts_exact_registered_body_scope_when_space_header_is_pr
         status,
         StatusCode::SERVICE_UNAVAILABLE,
         "matching scope must reach the existing database precondition"
+    );
+}
+
+async fn post_plan_current(scope: RepairLintScope, header_space: Option<&str>) -> StatusCode {
+    let state = Arc::new(RwLock::new(crate::state::ServerState::default()));
+    let mut request_builder = Request::builder()
+        .method("POST")
+        .uri("/api/repairs/plan-current")
+        .header("Content-Type", "application/json");
+    if let Some(space) = header_space {
+        request_builder = request_builder.header("X-Wenlan-Space", space);
+    }
+    crate::router::build_router(state)
+        .oneshot(
+            request_builder
+                .body(Body::from(serde_json::to_vec(&scope).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn repair_plan_current_rejects_scope_header_mismatch_before_fresh_reports() {
+    assert_eq!(
+        post_plan_current(RepairLintScope::global(), Some("career")).await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
+async fn repair_plan_current_matching_scope_reaches_fresh_report_precondition() {
+    let status = post_plan_current(
+        RepairLintScope::registered("career".to_string()).unwrap(),
+        Some("career"),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "matching scope must reach the fresh-report database precondition"
     );
 }
 

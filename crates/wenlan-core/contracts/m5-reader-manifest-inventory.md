@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 168 registered `(method, path, handler)` triples
+## HTTP — all 183 registered `(method, path, handler)` triples
 
-59 page-bearing, 109 not.
+65 page-bearing, 118 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -626,6 +626,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/memory/unconfirmed` | main | yes | automatic | `none` | `handle_list_unconfirmed_memories` | RecentActivityItem.title/snippet via revision card |
 | `POST` | `/api/memory/{id}/correct` | main | yes | automatic | `none` | `handle_correct_memory` | opaque response type — fail-closed |
 | `GET` | `/api/memory/{id}/detail` | main | yes | automatic | `none` | `handle_get_memory_detail` | MemoryItem.title/content via dismissed card |
+| `GET` | `/api/memory/{id}/detail` | repair | yes | automatic | `none` | `handle_get_repair_memory_detail` | exact durable pending repair target memory |
 | `POST` | `/api/memory/{id}/pin` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/memory/{id}/revisions` | main | yes | automatic | `none` | `handle_get_memory_revisions` | MemoryRevisionEntry.title/content_preview via card |
 | `PUT` | `/api/memory/{id}/stability` | main | no | not_applicable | `none` | — | no prose fields |
@@ -654,6 +655,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/pages/search` | main | yes | automatic | **`collection`** | `handle_search_pages` | opaque response type — fail-closed |
 | `DELETE` | `/api/pages/{id}` | main | yes | automatic | `none` | `handle_delete_page` | opaque response type — fail-closed |
 | `GET` | `/api/pages/{id}` | main | yes | automatic | **`named_page`** | `handle_get_page` | opaque response type — fail-closed |
+| `GET` | `/api/pages/{id}` | repair | yes | automatic | **`named_page`** | `handle_get_repair_page` | exact durable pending repair target page |
 | `PUT` | `/api/pages/{id}` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/pages/{id}/archive` | main | yes | automatic | `none` | `handle_archive_page` | opaque response type — fail-closed |
 | `POST` | `/api/pages/{id}/export` | main | yes | automatic | `none` | `handle_export_page` | EFFECT: writes page prose to the requested vault |
@@ -676,18 +678,22 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/profile/narrative` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `POST` | `/api/profile/narrative/regenerate` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/refinery/queue` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/refinery/queue` | repair | no | not_applicable | `none` | `handle_list_repair_queue` | validated durable repair review row only |
 | `POST` | `/api/refinery/queue/{id}/accept` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/refinery/queue/{id}/reject` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/repairs/apply` | main + repair | yes | automatic | `none` | `handle_apply` | RepairTarget.label_key |
 | `POST` | `/api/repairs/plan` | main | no | not_applicable | `none` | — | no prose fields |
+| `POST` | `/api/repairs/plan-current` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/repairs/plan/entries` | main | yes | automatic | `none` | `handle_plan_entries` | RepairMutation.after_title, RepairMutation.before_title, RepairSys |
 | `POST` | `/api/repairs/prepare` | main | yes | automatic | `none` | `handle_prepare` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
+| `POST` | `/api/repairs/prepare-current` | main | yes | automatic | `none` | `handle_prepare_current` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
+| `GET` | `/api/repairs/recovery/{review_id}` | main + repair | yes | automatic | `none` | `handle_get_repair_recovery` | RepairManifest and optional RepairApplyReceipt |
 | `POST` | `/api/repairs/verify` | main + repair | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/retrievals/recent` | main | yes | automatic | `none` | `handle_recent_retrievals` | RetrievalEvent.memory_snippets, RetrievalEvent.page_titles |
 | `POST` | `/api/search` | main | yes | automatic | `none` | `handle_search` | SearchResult.content, SearchResult.content_hash, SearchResult.last |
 | `DELETE` | `/api/setup/anthropic-key` | main | no | not_applicable | `none` | — | no prose fields |
 | `PUT` | `/api/setup/anthropic-key` | main | no | not_applicable | `none` | — | no prose fields |
-| `GET` | `/api/setup/status` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/setup/status` | main + repair | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/shutdown` | main | yes | automatic | `none` | `handle_shutdown` | opaque response type — fail-closed |
 | `GET` | `/api/snapshots` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/snapshots/{id}/captures` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
@@ -1237,6 +1243,7 @@ carrying the authority of agreement.
 | `core/repair.rs::apply_repair_with_pages` | `pub` | no | **yes** | `server/repair_routes.rs::handle_apply` | `core/repair.rs::apply_repair_with_pages_inner` |
 | `core/repair.rs::capture_page_projection_rollback` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_from_snapshot` |
 | `core/repair.rs::projection_page_row_on_connection` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_from_connection` |
+| `core/repair/current.rs::prepare_current_repair_with_pages` | `pub` | no | **yes** | `server/lint_routes.rs::prepare_current_repair` | `core/repair.rs::prepare_memory_reclassification_with_pages` |
 | `core/repair_plan.rs::deterministic_target_still_actionable` | `pub(crate)` | no | no | — | `core/repair_plan/deterministic.rs::target_still_actionable` |
 | `core/sources/page_watcher.rs::sync_one_file` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/synthesis/detect.rs::detect_page_candidates` | `pub` | no | no | — | `core/db.rs::find_distillation_clusters_scoped`, `core/db.rs::find_matching_page_scoped` |
@@ -1343,6 +1350,7 @@ carrying the authority of agreement.
 | `server/cmd_cutover.rs::run` | `pub` | yes | no | — | `core/export/knowledge.rs::plan_truth_cutover` |
 | `server/cmd_prune_junk_entities.rs::restore` | `pub` | yes | no | — | `core/db.rs::restore_entity` |
 | `server/cmd_prune_junk_entities.rs::run` | `pub` | yes | no | — | `core/db.rs::archive_entity` |
+| `server/lint_routes.rs::prepare_current_repair` | `pub(crate)` | no | no | `server/repair_routes.rs::handle_prepare_current` | `core/repair/current.rs::prepare_current_repair_with_pages` |
 | `server/main.rs::main` | `private` | yes | no | — | `server/main.rs::run_daemon` |
 | `server/memory_routes.rs::handle_search_memory` | `pub` | no | no | — | `server/memory_routes.rs::handle_search_memory_inner` |
 | `server/page_map_routes.rs::build_map_response` | `private` | no | no | `server/page_map_routes.rs::handle_get_page_map`, `server/page_map_routes.rs::handle_improve_page_map`, `server/page_map_routes.rs::handle_put_page_map_layout` | `server/page_map_routes.rs::wire_node` |

@@ -160,6 +160,52 @@ async fn repair_recovery_reports_an_optional_worker_that_is_still_running() {
 }
 
 #[tokio::test]
+async fn repair_recovery_exempts_only_marked_configured_ready_ondevice_model() {
+    let (db, _temp) = test_db().await;
+    let requested =
+        RuntimeConfigSnapshot::disabled().with_provider_request(ProviderClass::OnDevice, "model-a");
+    let suspended = RuntimeObservation::open(1)
+        .with_optional_workers_suspended()
+        .with_provider(ProviderClass::OnDevice, "model-a", RuntimeReadiness::Ready)
+        .with_repair_verification_model("model-a");
+
+    let report = run(&db, RuntimeRunConfig::for_test(requested, suspended, None)).await;
+    let provider_inventory = check(&report, PROVIDERS);
+
+    assert_eq!(provider_inventory.outcome(), LintOutcome::Pass);
+    assert_eq!(
+        provider_inventory.applicability(),
+        LintApplicability::Inventory
+    );
+    assert_eq!(provider_inventory.precondition(), LintPrecondition::Ready);
+    assert_eq!(
+        provider_inventory.summary_code(),
+        LintSummaryCode::CheckPassed
+    );
+    assert_eq!(metric(provider_inventory), 0);
+    assert_eq!(
+        metric_value(provider_inventory, LintMetricCode::ObservedRecords),
+        1
+    );
+}
+
+#[tokio::test]
+async fn repair_recovery_counts_ready_wrong_model_as_unexpected() {
+    let (db, _temp) = test_db().await;
+    let requested =
+        RuntimeConfigSnapshot::disabled().with_provider_request(ProviderClass::OnDevice, "model-a");
+    let suspended = RuntimeObservation::open(1)
+        .with_optional_workers_suspended()
+        .with_provider(ProviderClass::OnDevice, "model-b", RuntimeReadiness::Ready)
+        .with_repair_verification_model("model-b");
+
+    let report = run(&db, RuntimeRunConfig::for_test(requested, suspended, None)).await;
+
+    assert_eq!(check(&report, PROVIDERS).outcome(), LintOutcome::Finding);
+    assert_eq!(metric(check(&report, PROVIDERS)), 1);
+}
+
+#[tokio::test]
 async fn repair_recovery_reports_an_optional_worker_that_failed_to_start() {
     let (db, _temp) = test_db().await;
     let requested =

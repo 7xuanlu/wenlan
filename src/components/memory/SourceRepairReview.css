@@ -1,0 +1,105 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.source-repair {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+
+.source-repair-source {
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background: var(--mem-detail-surface-raised);
+  padding: 13px 15px;
+  min-width: 0;
+}
+
+.source-repair-content {
+  margin: 0;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.source-repair-entities {
+  display: grid;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.source-repair-entities legend {
+  padding: 0 0 8px;
+  font-weight: 600;
+}
+
+.source-repair-entity {
+  display: flex;
+  align-items: start;
+  gap: 10px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.source-repair-entity input {
+  width: 16px;
+  height: 16px;
+  margin-top: 4px;
+  flex-shrink: 0;
+  accent-color: var(--mem-accent-indigo);
+}
+
+.source-repair select,
+.source-repair input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-control);
+  line-height: 1.5;
+  padding: 9px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-surface);
+  color: var(--mem-text);
+}
+
+.source-repair :is(button, input, select, summary):focus-visible,
+.source-repair-actions button:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 3px;
+}
+
+.source-repair button:disabled, .source-repair-actions button:disabled { opacity: 0.5; cursor: default; }
+
+.source-repair-preview {
+  border-top: 1px solid var(--mem-border);
+  padding-top: 16px;
+}
+
+.source-repair-notice {
+  border-left: 2px solid var(--mem-accent-indigo);
+  padding-left: 12px;
+}
+
+.source-repair-notice p { margin: 0; }
+.source-repair-notice p + p { margin-top: 6px; }
+
+.source-repair-details {
+  border-top: 1px solid var(--mem-border);
+  padding-top: 12px;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-meta);
+  line-height: 1.65;
+  min-width: 0;
+}
+
+.source-repair-details summary { cursor: pointer; width: fit-content; }
+.source-repair-details pre {
+  font-family: var(--mem-font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}

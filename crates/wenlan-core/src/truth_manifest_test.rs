@@ -217,7 +217,7 @@ fn manifest_counts_match_the_spec() {
     // (Diagnostics migrated to `/api/activity`).
     assert_eq!(
         HTTP_READERS.len(),
-        177,
+        183,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -228,7 +228,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        181,
+        189,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -236,7 +236,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        175,
+        178,
         "main builder entries"
     );
     assert_eq!(
@@ -244,7 +244,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Repair)
             .count(),
-        6,
+        11,
         "repair builder entries"
     );
 
@@ -252,7 +252,7 @@ fn manifest_counts_match_the_spec() {
         .iter()
         .filter(|r| r.page_bearing == PageBearing::Yes)
         .count();
-    assert_eq!(bearing, 61, "page-bearing HTTP routes");
+    assert_eq!(bearing, 65, "page-bearing HTTP routes");
 }
 
 #[test]
@@ -405,14 +405,14 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::NamedPage)
             .count(),
-        4
+        5 // main and repair each have a distinct page-detail adapter
     );
     assert_eq!(
         HTTP_READERS
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        171 // includes the GET/PUT telemetry consent routes and GET /api/activity, which carry no page markers
+        176 // all remaining handlers carry no page markers
     );
 }
 
@@ -537,10 +537,7 @@ fn builder_membership_is_exact() {
     assert!(Builder::MainAndRepair.installs_into(Builder::Main));
     assert!(Builder::MainAndRepair.installs_into(Builder::Repair));
 
-    // The four triples that land in both builders, keyed on (method, path)
-    // because `/api/lint` contributes two of them. They come from exactly two
-    // call sites -- `lint_routes::register` and `repair_routes::register_execution`
-    // -- and this is the +4 that makes 162 call sites into 166 runtime entries.
+    // These six handlers are installed in both main and repair routers.
     let both: BTreeSet<(&str, &str)> = HTTP_READERS
         .iter()
         .filter(|r| r.builder == Builder::MainAndRepair)
@@ -550,6 +547,8 @@ fn builder_membership_is_exact() {
         both,
         BTreeSet::from([
             ("GET", "/api/lint"),
+            ("GET", "/api/repairs/recovery/{review_id}"),
+            ("GET", "/api/setup/status"),
             ("POST", "/api/lint"),
             ("POST", "/api/repairs/apply"),
             ("POST", "/api/repairs/verify"),

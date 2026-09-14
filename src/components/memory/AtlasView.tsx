@@ -1338,7 +1338,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
             className="flex items-center gap-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
             style={{
               color: "var(--mem-text-secondary)",
-              fontSize: 12,
+              fontSize: "var(--mem-text-control)",
               fontFamily: "var(--mem-font-body)",
               background: "none",
               border: "none",
@@ -1442,7 +1442,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
                     gap: 8,
                     padding: "6px 10px",
                     borderRadius: "var(--mem-radius-sm)",
-                    fontSize: 13,
+                    fontSize: "var(--mem-text-control)",
                     color: "var(--mem-text)",
                     cursor: "pointer",
                     background: index === activeIndex ? "var(--mem-hover)" : "transparent",
@@ -1469,7 +1469,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
                 </li>
               ))}
               {matches.length === 0 && (
-                <li style={{ padding: "6px 10px", fontSize: 12, color: "var(--mem-text-secondary)" }}>
+                <li style={{ padding: "6px 10px", fontSize: "var(--mem-text-description)", color: "var(--mem-text-secondary)" }}>
                   {t("atlas.noMatches")}
                 </li>
               )}

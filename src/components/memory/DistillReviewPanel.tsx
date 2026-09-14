@@ -89,7 +89,7 @@ const secondaryTextStyle = {
 const sectionTitleStyle = {
   margin: "0 0 10px",
   fontFamily: "var(--mem-font-body)",
-  fontSize: "12px",
+  fontSize: "var(--mem-text-meta)",
   fontWeight: 600,
   letterSpacing: "0.08em",
   textTransform: "uppercase" as const,
@@ -123,7 +123,7 @@ const itemSurfaceStyle = {
  * mirrors the recipe in ReviewDialog's header chip row. */
 const examplePillStyle = {
   fontFamily: "var(--mem-font-mono)",
-  fontSize: 10.5,
+  fontSize: "var(--mem-text-meta)",
   letterSpacing: "0.06em",
   textTransform: "uppercase" as const,
   borderRadius: 5,
@@ -142,12 +142,12 @@ function QueueCard({
   onOpen: (id: string) => void;
   example?: boolean;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // Mockup card anatomy: chip + age on top, a real title (page/entity names,
   // never the bare kind label), then the evidence line (word delta, overlap,
   // similarity) — the reason a decision is being asked for.
   const { title, reason, delta } = useReviewItemSummary(item);
-  const age = item.timestampMs != null ? relativeMs(item.timestampMs) : null;
+  const age = item.timestampMs != null ? relativeMs(item.timestampMs, i18n.language) : null;
   const tone = reviewKindTone(item);
   const preview =
     item.kind === "page_candidate"
@@ -177,7 +177,7 @@ function QueueCard({
       <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span
           style={{
-            fontSize: 11,
+            fontSize: "var(--mem-text-meta)",
             letterSpacing: "0.04em",
             borderRadius: 5,
             padding: "2px 8px",
@@ -194,7 +194,7 @@ function QueueCard({
           <span
             style={{
               marginLeft: "auto",
-              fontSize: 12,
+              fontSize: "var(--mem-text-meta)",
               color: "var(--mem-text-tertiary)",
               whiteSpace: "nowrap",
             }}
@@ -206,7 +206,7 @@ function QueueCard({
       <span
         style={{
           fontFamily: "var(--mem-font-heading)",
-          fontSize: 15,
+          fontSize: "var(--mem-text-card-title)",
           fontWeight: 500,
           lineHeight: 1.35,
         }}
@@ -221,7 +221,7 @@ function QueueCard({
             gap: 10,
             alignItems: "baseline",
             flexWrap: "wrap",
-            fontSize: 13,
+            fontSize: "var(--mem-text-control)",
             lineHeight: 1.45,
           }}
         >
@@ -229,7 +229,7 @@ function QueueCard({
             <span
               style={{
                 fontFamily: "var(--mem-font-mono)",
-                fontSize: 11.5,
+                fontSize: "var(--mem-text-meta)",
                 fontVariantNumeric: "tabular-nums",
               }}
             >
@@ -249,7 +249,7 @@ function QueueCard({
           key={index}
           style={{
             ...secondaryTextStyle,
-            fontSize: 13,
+            fontSize: "var(--mem-text-control)",
             lineHeight: 1.45,
           }}
         >
@@ -317,7 +317,7 @@ function HiddenFooter({
         className="rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
         style={{
           fontFamily: "var(--mem-font-body)",
-          fontSize: 12.5,
+          fontSize: "var(--mem-text-meta)",
           color: "var(--mem-text-tertiary)",
           border: "none",
           background: "none",
@@ -349,7 +349,7 @@ function HiddenFooter({
               style={{
                 marginLeft: "auto",
                 fontFamily: "var(--mem-font-body)",
-                fontSize: 12.5,
+                fontSize: "var(--mem-text-meta)",
                 fontWeight: 400,
                 textTransform: "none",
                 letterSpacing: "normal",
@@ -378,7 +378,7 @@ function HiddenFooter({
                 >
                   <span
                     style={{
-                      fontSize: 11,
+                      fontSize: "var(--mem-text-meta)",
                       letterSpacing: "0.04em",
                       borderRadius: 5,
                       padding: "2px 8px",
@@ -397,7 +397,7 @@ function HiddenFooter({
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      fontSize: 13,
+                      fontSize: "var(--mem-text-control)",
                     }}
                   >
                     {truncateText(entry.label, 60)}
@@ -407,7 +407,7 @@ function HiddenFooter({
                     onClick={() => onRestore(entry.key)}
                     style={{
                       fontFamily: "var(--mem-font-body)",
-                      fontSize: 12.5,
+                      fontSize: "var(--mem-text-meta)",
                       color: "var(--mem-accent-indigo)",
                       border: "none",
                       background: "none",
@@ -465,7 +465,7 @@ function FilterChipRow({
             className="transition-colors duration-150 hover:bg-[var(--mem-hover)] focus-visible:outline-2 focus-visible:outline-[var(--mem-accent-indigo)] focus-visible:outline-offset-2"
             style={{
               fontFamily: "var(--mem-font-body)",
-              fontSize: 12,
+              fontSize: "var(--mem-text-meta)",
               lineHeight: 1,
               padding: "6px 12px",
               borderRadius: 999,
@@ -482,7 +482,7 @@ function FilterChipRow({
               style={{
                 fontFamily: "var(--mem-font-mono)",
                 fontVariantNumeric: "tabular-nums",
-                fontSize: 11,
+                fontSize: "var(--mem-text-meta)",
                 marginLeft: 6,
               }}
             >
@@ -748,7 +748,7 @@ export default function DistillReviewPanel({
           >
             {t("review.title")}
           </h1>
-          <p style={{ ...secondaryTextStyle, margin: "5px 0 0", fontSize: "13px" }}>
+          <p style={{ ...secondaryTextStyle, margin: "5px 0 0", fontSize: "var(--mem-text-control)" }}>
             {t("review.subtitle")}
           </p>
         </div>
@@ -758,7 +758,7 @@ export default function DistillReviewPanel({
               style={{
                 fontFamily: "var(--mem-font-mono)",
                 fontVariantNumeric: "tabular-nums",
-                fontSize: 12,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-accent-indigo)",
                 backgroundColor: "var(--mem-indigo-bg)",
                 borderRadius: 999,
@@ -778,7 +778,7 @@ export default function DistillReviewPanel({
               style={{
                 fontFamily: "var(--mem-font-mono)",
                 fontVariantNumeric: "tabular-nums",
-                fontSize: 12,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-text-secondary)",
                 border: "1px solid var(--mem-border)",
                 backgroundColor: "transparent",
@@ -824,7 +824,7 @@ export default function DistillReviewPanel({
             padding: "10px 12px",
             color: "var(--mem-text)",
             fontFamily: "var(--mem-font-body)",
-            fontSize: "13px",
+            fontSize: "var(--mem-text-control)",
           }}
         >
           {error}
@@ -835,7 +835,7 @@ export default function DistillReviewPanel({
         {filter === "all" && allCaughtUp && (
           <section>
             <h2 style={emptyTitleStyle}>{t("review.allCaughtUp")}</h2>
-            <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "13px" }}>
+            <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-control)" }}>
               {t("review.allCaughtUpHint")}
             </p>
           </section>
@@ -862,7 +862,7 @@ export default function DistillReviewPanel({
         )}
 
         {queue.error && decisionItems.length > 0 && (
-          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "12px" }}>
+          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-meta)" }}>
             {t("review.loadPartial")}
           </p>
         )}
@@ -885,7 +885,7 @@ export default function DistillReviewPanel({
               style={{
                 margin: 0,
                 fontFamily: "var(--mem-font-body)",
-                fontSize: 12.5,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-text-secondary)",
               }}
             >
@@ -896,7 +896,7 @@ export default function DistillReviewPanel({
               onClick={() => setFilter("all")}
               style={{
                 fontFamily: "var(--mem-font-body)",
-                fontSize: 12,
+                fontSize: "var(--mem-text-meta)",
                 color: "var(--mem-accent-indigo)",
                 background: "none",
                 border: "none",
@@ -944,7 +944,7 @@ export default function DistillReviewPanel({
                       style={{
                         margin: "0 0 10px",
                         fontFamily: "var(--mem-font-mono)",
-                        fontSize: 11,
+                        fontSize: "var(--mem-text-meta)",
                         color: "var(--mem-text-tertiary)",
                       }}
                     >
@@ -963,14 +963,14 @@ export default function DistillReviewPanel({
                   </>
                 ) : (
                   <div style={{ ...itemSurfaceStyle, padding: "13px 14px" }}>
-                    <p style={{ ...secondaryTextStyle, margin: 0, fontSize: 13.5 }}>
+                    <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-control)" }}>
                       {t("review.revisionsEmptyTitle")}
                     </p>
                     <p
                       style={{
                         ...secondaryTextStyle,
                         margin: "6px 0 0",
-                        fontSize: 13,
+                        fontSize: "var(--mem-text-control)",
                         lineHeight: 1.5,
                         color: "var(--mem-text-tertiary)",
                       }}
@@ -1023,12 +1023,12 @@ export default function DistillReviewPanel({
               )}
             </h2>
             {lastResult.stale_truncated && (
-              <p style={{ ...secondaryTextStyle, margin: "0 0 10px", fontSize: "12px" }}>
+              <p style={{ ...secondaryTextStyle, margin: "0 0 10px", fontSize: "var(--mem-text-meta)" }}>
                 {t("review.staleTruncated")}
               </p>
             )}
             {stalePageItems.length === 0 ? (
-              <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "13px" }}>
+              <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-control)" }}>
                 {t("review.pagesCurrent")}
               </p>
             ) : (

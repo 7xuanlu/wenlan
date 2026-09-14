@@ -32,8 +32,15 @@ export function sourceKindLabel(mem: MemoryItem): string {
   return SOURCE_KIND_LABEL[mt] ?? (mt || "memory");
 }
 
-export function relativeMs(ms: number): string {
+export function relativeMs(ms: number, locale?: string): string {
   const delta = Date.now() - ms;
+  if (locale) {
+    const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+    if (delta < 60_000) return relative.format(0, "second");
+    if (delta < 3_600_000) return relative.format(-Math.floor(delta / 60_000), "minute");
+    if (delta < 86_400_000) return relative.format(-Math.floor(delta / 3_600_000), "hour");
+    return relative.format(-Math.floor(delta / 86_400_000), "day");
+  }
   if (delta < 60_000) return "just now";
   if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`;
   if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`;

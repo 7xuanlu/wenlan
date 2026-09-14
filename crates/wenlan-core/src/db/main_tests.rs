@@ -30795,6 +30795,55 @@ async fn flag_memory_for_revision_missing_not_found() {
 
 // ==================== resolve_refinement_if_open ====================
 
+const NO_CHANGE_LINT_OCCURRENCE: &str =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+fn no_change_lint_review_payload(occurrence: &str, source_ids: &[String]) -> String {
+    let occurrence = wenlan_types::repair::RepairDigest::parse(occurrence).unwrap();
+    serde_json::json!({
+        "action": "lint_repair_review",
+        "check_id": "identity.memory_state_integrity",
+        "occurrence_digest": occurrence.clone(),
+        "owner_binding_digest": crate::repair::lint_review_owner_binding_digest(
+            &occurrence,
+            source_ids,
+        )
+        .unwrap(),
+        "issue": "Review this memory state.",
+        "choices": ["confirm", "unpin"],
+        "suggested_research_queries": [],
+    })
+    .to_string()
+}
+
+async fn no_change_lint_row(db: &MemoryDB, id: &str) -> (String, String, Option<String>, String) {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT action,source_ids,payload,status FROM refinement_queue WHERE id=?1",
+            libsql::params![id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().unwrap();
+    (
+        row.get(0).unwrap(),
+        row.get(1).unwrap(),
+        row.get(2).unwrap(),
+        row.get(3).unwrap(),
+    )
+}
+
+async fn seed_no_change_lint_review(db: &MemoryDB, id: &str) -> (Vec<String>, String) {
+    let source_ids = vec!["owner-a".to_string(), "owner-b".to_string()];
+    let payload = no_change_lint_review_payload(NO_CHANGE_LINT_OCCURRENCE, &source_ids);
+    assert!(db
+        .insert_lint_review_if_absent(id, &source_ids, &payload)
+        .await
+        .unwrap());
+    (source_ids, payload)
+}
+
 async fn seed_proposal(db: &MemoryDB, id: &str, status: &str) {
     db.insert_refinement_proposal(id, "entity_merge", &["a".into(), "b".into()], None, 0.85)
         .await
@@ -30873,6 +30922,106 @@ async fn resolve_refinement_if_open_concurrent_only_one_wins() {
         1,
         "exactly one caller should see rows=1, got {r1} + {r2}"
     );
+}
+
+#[tokio::test]
+async fn resolve_refinement_if_open_valid_lint_changes_only_status() {
+    let (db, _tmp) = test_db().await;
+    let id = format!("lint_review_{NO_CHANGE_LINT_OCCURRENCE}");
+    seed_no_change_lint_review(&db, &id).await;
+    let before = no_change_lint_row(&db, &id).await;
+
+    assert_eq!(
+        db.resolve_refinement_if_open(&id, "dismissed")
+            .await
+            .unwrap(),
+        1
+    );
+
+    let after = no_change_lint_row(&db, &id).await;
+    assert_eq!(after.0, before.0, "action must remain bound");
+    assert_eq!(after.1, before.1, "source owners must not change");
+    assert_eq!(after.2, before.2, "review payload must not change");
+    assert_eq!(after.3, "dismissed");
+}
+
+#[tokio::test]
+async fn resolve_refinement_if_open_rejects_malformed_lint_without_mutation() {
+    let (db, _tmp) = test_db().await;
+    let id = format!("lint_review_{NO_CHANGE_LINT_OCCURRENCE}");
+    let (source_ids, _payload) = seed_no_change_lint_review(&db, &id).await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE refinement_queue SET payload='not-json' WHERE id=?1",
+            libsql::params![id.clone()],
+        )
+        .await
+        .unwrap();
+
+    let before = no_change_lint_row(&db, &id).await;
+    let error = db
+        .resolve_refinement_if_open(&id, "dismissed")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WenlanError::Validation(_)));
+    let after = no_change_lint_row(&db, &id).await;
+    assert_eq!(after.1, serde_json::to_string(&source_ids).unwrap());
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn resolve_refinement_if_open_rejects_lint_owner_mismatch_without_mutation() {
+    let (db, _tmp) = test_db().await;
+    let id = format!("lint_review_{NO_CHANGE_LINT_OCCURRENCE}");
+    let (source_ids, _payload) = seed_no_change_lint_review(&db, &id).await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE refinement_queue SET source_ids='[\"owner-c\"]' WHERE id=?1",
+            libsql::params![id.clone()],
+        )
+        .await
+        .unwrap();
+
+    let before = no_change_lint_row(&db, &id).await;
+    let error = db
+        .resolve_refinement_if_open(&id, "dismissed")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WenlanError::Validation(_)));
+    let after = no_change_lint_row(&db, &id).await;
+    assert_eq!(after.1, "[\"owner-c\"]");
+    assert_eq!(after.1, serde_json::to_string(&vec!["owner-c"]).unwrap());
+    assert_ne!(after.1, serde_json::to_string(&source_ids).unwrap());
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn resolve_refinement_if_open_rejects_terminal_lint_without_mutation() {
+    let (db, _tmp) = test_db().await;
+    let id = format!("lint_review_{NO_CHANGE_LINT_OCCURRENCE}");
+    seed_no_change_lint_review(&db, &id).await;
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE refinement_queue SET status='resolved' WHERE id=?1",
+            libsql::params![id.clone()],
+        )
+        .await
+        .unwrap();
+
+    let before = no_change_lint_row(&db, &id).await;
+    let error = db
+        .resolve_refinement_if_open(&id, "dismissed")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WenlanError::Validation(_)));
+    let after = no_change_lint_row(&db, &id).await;
+    assert_eq!(after, before);
 }
 
 #[tokio::test]

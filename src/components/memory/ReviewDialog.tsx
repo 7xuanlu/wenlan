@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
+  clipboardWrite,
   daemonErrorMessage,
   getEntityDetail,
   getMemoryDetail,
   getPage,
+  getPageSources,
   search,
 } from "../../lib/tauri";
 import { diffWords, diffWordCounts, type DiffSegment } from "../../lib/wordDiff";
 import { isExampleReviewItem } from "./reviewExamples";
 import { reviewItemId, type ReviewItem } from "./useReviewQueue";
-import { PageMergeStripOff } from "./ReviewPageMerge";
+import { PageMergeStripOff, usePageMergeEvidence } from "./ReviewPageMerge";
 import { MemoryRevisionChain, PageRevisionChain } from "./ReviewHistory";
+import SourceRepairReview from "./SourceRepairReview";
 
 export function reviewKindLabel(t: TFunction, item: ReviewItem): string {
   if (item.kind === "revision")
@@ -44,6 +48,12 @@ export function reviewKindLabel(t: TFunction, item: ReviewItem): string {
       return t("review.kindCrossSpace");
     case "page_keep_or_archive":
       return t("review.kindPageArchive");
+    case "lint_repair_review":
+      return t("review.kindLintRepair");
+    case "vocab_promote":
+      return t("review.kindVocabPromote");
+    default:
+      return t("review.kindUnsupported");
   }
 }
 
@@ -61,36 +71,54 @@ function pageKeepOrArchiveId(item: ReviewItem | null): string | null {
   ) {
     return null;
   }
-  const pageId = item.payload.page_id.trim();
+  const pageId = typeof item.payload.page_id === "string" ? item.payload.page_id.trim() : "";
   return pageId.length > 0 ? pageId : null;
 }
 
-/** Actions the daemon rejects with 422 on accept — the dialog offers only
- * dismiss for these (suggest_entity/dedup_merge have no accept path;
- * cross_space_discovery needs a pick-space verb the app doesn't plumb yet). */
+/** Only actions whose decision contract this UI understands can be approved.
+ * Compare displayed payload targets with the ids the daemon actually mutates. */
 export function reviewApproveBlocked(item: ReviewItem): boolean {
-  if (isExampleReviewItem(item)) return true;
-  if (
-    item.kind === "refinement" &&
-    item.action === "page_keep_or_archive" &&
-    pageKeepOrArchiveId(item) === null
-  ) {
-    return true;
+  if (isExampleReviewItem(item) || reviewReadOnly(item)) return true;
+  const nonempty = (value: unknown): value is string =>
+    typeof value === "string" && value.trim().length > 0;
+  if (item.kind === "revision") return !nonempty(item.targetSourceId);
+  if (item.kind === "capture" || item.kind === "stale_page") return !nonempty(item.id);
+  if (item.kind !== "refinement") return true;
+  const [first, second] = item.sourceIds;
+  const pair = nonempty(first) && nonempty(second) && first !== second;
+  const payload = item.payload;
+  switch (item.action) {
+    case "page_keep_or_archive":
+      return pageKeepOrArchiveId(item) === null ||
+        pageKeepOrArchiveId(item) !== first ||
+        (payload?.action === "page_keep_or_archive" &&
+          payload.allowed_actions != null && !payload.allowed_actions.includes("accept"));
+    case "entity_merge":
+    case "relation_conflict":
+      return !pair || payload?.action !== item.action ||
+        !("new_id" in payload) || payload.new_id !== first || payload.existing_id !== second;
+    case "page_merge":
+      return !pair || (payload != null && (payload.action !== "page_merge" ||
+        payload.left_page_id !== first || payload.right_page_id !== second));
+    case "detect_contradiction":
+      return !pair;
+    case "vocab_promote":
+      return payload?.action !== "vocab_promote" ||
+        !["entity", "relation"].includes(payload.kind) ||
+        !nonempty(payload.old_value) || payload.old_value !== payload.old_value.trim() ||
+        (payload.kind === "entity" && !item.sourceIds.every(nonempty));
+    default:
+      // Includes known actions requiring dedicated choice flows and future tags.
+      return true;
   }
-  return (
-    reviewReadOnly(item) ||
-    (item.kind === "refinement" &&
-      (item.action === "suggest_entity" ||
-        item.action === "dedup_merge" ||
-        item.action === "cross_space_discovery"))
-  );
 }
 
 /** Every kind now has a dismiss-side action: read-only discovery and
  * stale-page refreshes hide locally (see DistillReviewPanel's resolveItem
  * wrapper) rather than calling a daemon dismiss verb. */
-export function reviewDismissBlocked(_item: ReviewItem): boolean {
-  return false;
+export function reviewDismissBlocked(item: ReviewItem): boolean {
+  return item.kind === "refinement" && item.payload?.action === "page_keep_or_archive" &&
+    item.payload.allowed_actions != null && !item.payload.allowed_actions.includes("dismiss");
 }
 
 /** Per-kind chip tone: revisions indigo, page work warm, entity merges amber,
@@ -153,6 +181,18 @@ export function truncateReviewText(value: string, max: number): string {
   return `${trimmed.slice(0, max - 3).trimEnd()}...`;
 }
 
+function sourceRepairHint(t: TFunction, item: Extract<ReviewItem, { kind: "refinement" }>): string {
+  if (item.payload?.action !== "lint_repair_review") return t("sourceRepair.reviewHint");
+  switch (item.payload.check_id) {
+    case "memories.enrichment_failures": return t("sourceRepair.extractionHint");
+    case "pages.duplicate_active_titles": return t("sourceRepair.duplicateHint");
+    case "memories.semantic.classification": return t("sourceRepair.classificationHint");
+    case "pages.semantic.provenance_adequacy": return t("sourceRepair.provenanceHint");
+    case "pages.semantic.faithfulness": return t("sourceRepair.faithfulnessHint");
+    default: return item.payload.issue;
+  }
+}
+
 type ReviewLookup = "page" | "entity" | "memory" | null;
 
 /** Resolve which two ids a review item's evidence points at, if any. */
@@ -172,6 +212,17 @@ function reviewLookupRefs(item: ReviewItem | null): {
   }
   if (item?.kind !== "refinement") return { lookup: null, aId: null, bId: null };
   switch (item.action) {
+    case "lint_repair_review": {
+      if (item.payload?.action !== "lint_repair_review" || item.sourceIds.length !== 1) {
+        return { lookup: null, aId: null, bId: null };
+      }
+      const check = item.payload.check_id;
+      const lookup = check === "pages.duplicate_active_titles" ||
+        check === "pages.semantic.provenance_adequacy" ||
+        check === "pages.semantic.faithfulness" ? "page"
+        : check === "memories.enrichment_failures" || check === "memories.semantic.classification" ? "memory" : null;
+      return { lookup, aId: lookup ? item.sourceIds[0] : null, bId: null };
+    }
     case "page_merge":
       return {
         lookup: "page",
@@ -297,6 +348,10 @@ export function useReviewItemSummary(item: ReviewItem | null): {
     });
     reason = confidence;
     switch (item.action) {
+      case "lint_repair_review":
+        title = short(a.data?.name, 96);
+        reason = sourceRepairHint(t, item);
+        break;
       case "page_merge":
         if (aName && bName)
           title = t("review.pageMergeTitle", { keep: aName, absorb: bName });
@@ -339,6 +394,10 @@ export function useReviewItemSummary(item: ReviewItem | null): {
         if (item.payload?.action === "cross_space_discovery")
           title = item.payload.spaces.join(" · ");
         break;
+      case "vocab_promote":
+        if (item.payload?.action === "vocab_promote")
+          title = item.payload.old_value;
+        break;
     }
   }
   return { title: title ?? reviewKindLabel(t, item), reason, delta };
@@ -372,16 +431,16 @@ const paneStyle: React.CSSProperties = {
 
 const paneLabelStyle: React.CSSProperties = {
   fontFamily: "var(--mem-font-body)",
-  fontSize: 11,
+  fontSize: "var(--mem-text-meta)",
   letterSpacing: "0.08em",
   textTransform: "uppercase",
-  color: "var(--mem-text-tertiary)",
+  color: "var(--mem-text-secondary)",
   margin: "0 0 7px",
 };
 
 const actionButtonStyle: React.CSSProperties = {
   fontFamily: "var(--mem-font-body)",
-  fontSize: 13.5,
+  fontSize: "var(--mem-text-control)",
   borderRadius: 8,
   padding: "8px 15px",
   cursor: "pointer",
@@ -394,12 +453,12 @@ const actionButtonStyle: React.CSSProperties = {
  * and dialog share this recipe. */
 const examplePillStyle: React.CSSProperties = {
   fontFamily: "var(--mem-font-mono)",
-  fontSize: 10.5,
+  fontSize: "var(--mem-text-meta)",
   letterSpacing: "0.06em",
   textTransform: "uppercase",
   borderRadius: 5,
   padding: "1px 7px",
-  color: "var(--mem-text-tertiary)",
+  color: "var(--mem-text-secondary)",
   border: "1px dashed var(--mem-border)",
   whiteSpace: "nowrap",
 };
@@ -444,6 +503,13 @@ function ReviewEvidencePane({
       <p style={paneLabelStyle}>{t("review.mentionedIn")}</p>
       {evidence.isLoading ? (
         <div style={paneStyle}>{t("review.loadingCurrent")}</div>
+      ) : evidence.isError ? (
+        <div role="alert" style={paneStyle}>
+          {t("review.evidenceError")}
+          <button type="button" style={actionButtonStyle} onClick={() => void evidence.refetch()}>
+            {t("review.retryEvidence")}
+          </button>
+        </div>
       ) : results.length === 0 ? (
         <div style={paneStyle}>{t("review.evidenceNone")}</div>
       ) : (
@@ -459,7 +525,7 @@ function ReviewEvidencePane({
                 style={{
                   fontFamily: "var(--mem-font-heading)",
                   fontWeight: 500,
-                  fontSize: 13.5,
+                  fontSize: "var(--mem-text-control)",
                   color: "var(--mem-text)",
                 }}
               >
@@ -468,8 +534,8 @@ function ReviewEvidencePane({
               <div
                 style={{
                   fontFamily: "var(--mem-font-body)",
-                  fontSize: 12,
-                  color: "var(--mem-text-tertiary)",
+                  fontSize: "var(--mem-text-meta)",
+                  color: "var(--mem-text-secondary)",
                   marginTop: 2,
                 }}
               >
@@ -480,8 +546,8 @@ function ReviewEvidencePane({
           <p
             style={{
               fontFamily: "var(--mem-font-body)",
-              color: "var(--mem-text-tertiary)",
-              fontSize: 12,
+              color: "var(--mem-text-secondary)",
+              fontSize: "var(--mem-text-meta)",
               margin: 0,
             }}
           >
@@ -533,6 +599,7 @@ export default function ReviewDialog({
   onOpenPage,
 }: ReviewDialogProps) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [showDone, setShowDone] = useState(false);
   const [sideBySide, setSideBySide] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
@@ -543,6 +610,21 @@ export default function ReviewDialog({
   // generic wording when the daemon sent no explanation.
   const [resolveError, setResolveError] = useState<string | null>(null);
   const [resolvingLocally, setResolvingLocally] = useState(false);
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairActionHost, setRepairActionHost] = useState<HTMLDivElement | null>(null);
+  const repairBusyRef = useRef(false);
+  const displayedItemRef = useRef<ReviewItem | null>(null);
+  const retainedRepairItemRef = useRef<ReviewItem | null>(null);
+  const handleRepairBusy = useCallback((busy: boolean) => {
+    if (busy && !repairBusyRef.current) {
+      retainedRepairItemRef.current = displayedItemRef.current;
+    } else if (!busy) {
+      retainedRepairItemRef.current = null;
+    }
+    repairBusyRef.current = busy;
+    setRepairBusy(busy);
+  }, []);
+  const [repairCopyState, setRepairCopyState] = useState<"idle" | "copying" | "copied" | "error">("idle");
   const dialogRef = useRef<HTMLDivElement>(null);
   const navigationVersionRef = useRef(0);
   const resolveRequestRef = useRef(0);
@@ -550,9 +632,14 @@ export default function ReviewDialog({
   const open = openId != null;
   const foundIndex = items.findIndex((entry) => reviewItemId(entry) === openId);
   const index = foundIndex >= 0 ? foundIndex : items.length > 0 ? 0 : -1;
-  const item = showDone ? null : index >= 0 ? items[index] : null;
-  const done = open && (showDone || items.length === 0);
-  const resolving = isResolving || resolvingLocally;
+  // A queue refresh may remove/reorder a proposal while its exact repair is
+  // applying or awaiting verification. Keep that recovery surface mounted.
+  const item = repairBusy && retainedRepairItemRef.current
+    ? retainedRepairItemRef.current
+    : showDone ? null : index >= 0 ? items[index] : null;
+  displayedItemRef.current = item;
+  const done = open && !repairBusy && (showDone || items.length === 0);
+  const resolving = isResolving || resolvingLocally || repairBusy;
   const summary = useReviewItemSummary(item);
 
   // The diff's "before" side. Both revision kinds resolve through the same two
@@ -664,14 +751,69 @@ export default function ReviewDialog({
   useEffect(() => {
     navigationVersionRef.current += 1;
     setResolveError(null);
+    setRepairCopyState("idle");
   }, [openId]);
 
+  const pageMerge = usePageMergeEvidence(
+    item?.kind === "refinement" && item.action === "page_merge" ? item.sourceIds[0] ?? "" : "",
+    item?.kind === "refinement" && item.action === "page_merge" ? item.sourceIds[1] ?? "" : "",
+  );
+  const archiveSources = useQuery({
+    queryKey: ["page-sources", archivePageId],
+    queryFn: () => getPageSources(archivePageId as string),
+    enabled: archivePageId != null,
+  });
+  const vocabulary = item?.kind === "refinement" && item.action === "vocab_promote" &&
+    item.payload?.action === "vocab_promote" ? item.payload : null;
+  const vocabularyEntityIds = vocabulary?.kind === "entity" && item?.kind === "refinement"
+    ? [...new Set(item.sourceIds.filter((id) => typeof id === "string" && id.trim().length > 0))] : [];
+  const vocabularyEntities = useQueries({
+    queries: vocabularyEntityIds.map((id) => ({
+      queryKey: ["entity-detail", id],
+      queryFn: () => getEntityDetail(id),
+    })),
+  });
+  const decisionQueries = item?.kind === "revision"
+    ? [item.targetKind === "page" ? targetPage : target]
+    : item?.kind === "capture" ? [target]
+    : item?.kind === "refinement" && item.action === "page_keep_or_archive" ? [archivePage, archiveSources]
+    : item?.kind === "refinement" && item.action === "page_merge"
+      ? [pageMerge.keepPageQ, pageMerge.retirePageQ, pageMerge.keepSourcesQ, pageMerge.retireSourcesQ]
+    : item?.kind === "refinement" && item.action === "entity_merge" ? [mergeExisting, mergeIncoming]
+    : vocabulary ? vocabularyEntities
+    : isContradiction ? [memoryPaneA, memoryPaneB] : [];
+  const evidenceLoading = decisionQueries.some((query) => query.isLoading);
+  const sourceLists = item?.kind === "refinement" && item.action === "page_keep_or_archive" ? [archiveSources.data]
+    : item?.kind === "refinement" && item.action === "page_merge" ? [pageMerge.keepSourcesQ.data, pageMerge.retireSourcesQ.data] : [];
+  const missingSources = sourceLists.some((sources) => sources?.some((entry) => entry.memory == null));
+  const missingMergeSources = missingSources && item?.kind === "refinement" && item.action === "page_merge";
+  const evidenceFailed = decisionQueries.some((query) => query.isError);
+  const vocabularyTargetMismatch = vocabularyEntities.some((query, index) => query.isSuccess && query.data?.entity?.id !== vocabularyEntityIds[index]);
+  const missingTarget = decisionQueries.some((query) => query.isSuccess && query.data == null) || vocabularyTargetMismatch;
+  const evidenceUnavailable = decisionQueries.some((query) => query.isError || query.data == null) || missingMergeSources || vocabularyTargetMismatch;
+  const contractBlocked = item != null && reviewApproveBlocked(item);
+  const canApprove = !contractBlocked && !evidenceLoading && !evidenceUnavailable;
+  const retryEvidence = () => { decisionQueries.forEach((query) => void query.refetch()); };
+
+  const copyRepairDetails = async () => {
+    if (item?.kind !== "refinement" || item.payload?.action !== "lint_repair_review" || repairCopyState === "copying") return;
+    const version = navigationVersionRef.current;
+    setRepairCopyState("copying");
+    try {
+      // This is a reference packet, never an approval or a prepared manifest.
+      await clipboardWrite(JSON.stringify({ review_id: item.id, source_ids: item.sourceIds, ...item.payload }, null, 2));
+      if (version === navigationVersionRef.current) setRepairCopyState("copied");
+    } catch {
+      if (version === navigationVersionRef.current) setRepairCopyState("error");
+    }
+  };
+
   const resolveCurrent = async (approve: boolean) => {
-    if (!item || resolving) return;
+    if (!item || resolving || repairBusyRef.current) return;
     // reviewApproveBlocked already folds in reviewReadOnly — read-only kinds
     // (topic/page_candidate) can still dismiss (hide) even though they can't
     // approve.
-    if (approve && reviewApproveBlocked(item)) return;
+    if (approve && !canApprove) return;
     if (!approve && reviewDismissBlocked(item)) return;
     const isCapture = item.kind === "capture";
     const isConflict =
@@ -692,7 +834,10 @@ export default function ReviewDialog({
         resolveRequestRef.current === requestId &&
         navigationVersionRef.current === navigationVersion
       ) {
-        setResolveError(daemonErrorMessage(error) ?? t("review.actionError"));
+        const code = daemonErrorMessage(error);
+        setResolveError(code === "repair_write_fence_conflict"
+          ? t("sourceRepair.sourceBusy")
+          : code ?? t("review.actionError"));
       }
       return;
     } finally {
@@ -731,13 +876,14 @@ export default function ReviewDialog({
   };
 
   const goTo = (offset: number) => {
-    if (items.length < 2) return;
+    if (items.length < 2 || repairBusyRef.current) return;
     const nextIndex = (index + offset + items.length) % items.length;
     navigationVersionRef.current += 1;
     onOpenChange(reviewItemId(items[nextIndex]));
   };
 
   const close = () => {
+    if (repairBusyRef.current) return;
     navigationVersionRef.current += 1;
     setShowDone(false);
     onOpenChange(null);
@@ -786,10 +932,6 @@ export default function ReviewDialog({
         return;
       }
       switch (event.key) {
-        case "Enter":
-          event.preventDefault();
-          void resolveCurrent(true);
-          break;
         case "d":
         case "D":
           void resolveCurrent(false);
@@ -802,14 +944,15 @@ export default function ReviewDialog({
           break;
       }
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    // The modal owns Escape before the shell's bubbling navigation shortcut.
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   });
 
   if (!open) return null;
 
   const heading = done
-    ? t("review.allCaughtUp")
+    ? t("review.reviewComplete")
     : item?.kind === "revision"
       ? (beforeTitle?.trim() || truncateReviewText(item.content, 72))
       : item?.kind === "capture"
@@ -824,7 +967,8 @@ export default function ReviewDialog({
                 summary.title
               : "";
 
-  return (
+  // Keep viewport positioning independent of the review page's entry transform.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -894,7 +1038,7 @@ export default function ReviewDialog({
             <span
               style={{
                 fontFamily: "var(--mem-font-body)",
-                fontSize: 11,
+                fontSize: "var(--mem-text-meta)",
                 letterSpacing: "0.04em",
                 borderRadius: 5,
                 padding: "2px 8px",
@@ -913,8 +1057,8 @@ export default function ReviewDialog({
               marginLeft: "auto",
               fontFamily: "var(--mem-font-mono)",
               fontVariantNumeric: "tabular-nums",
-              fontSize: 12,
-              color: "var(--mem-text-tertiary)",
+              fontSize: "var(--mem-text-meta)",
+              color: "var(--mem-text-secondary)",
             }}
           >
             {item
@@ -927,11 +1071,12 @@ export default function ReviewDialog({
           <button
             type="button"
             aria-label={t("review.close")}
+            disabled={repairBusy}
             onClick={close}
             style={{
               background: "none",
               border: "none",
-              color: "var(--mem-text-tertiary)",
+              color: "var(--mem-text-secondary)",
               cursor: "pointer",
               fontSize: 16,
               lineHeight: 1,
@@ -970,17 +1115,17 @@ export default function ReviewDialog({
                 color: "var(--mem-text)",
               }}
             >
-              {t("review.allCaughtUp")}
+              {t("review.reviewComplete")}
             </h3>
             <p
               style={{
                 fontFamily: "var(--mem-font-body)",
                 color: "var(--mem-text-secondary)",
-                fontSize: 13.5,
+                fontSize: "var(--mem-text-control)",
                 margin: "0 0 20px",
               }}
             >
-              {t("review.emptyQueueHint")}
+              {t("review.reviewCompleteHint")}
             </p>
             <button
               type="button"
@@ -1013,8 +1158,8 @@ export default function ReviewDialog({
               <p
                 style={{
                   fontFamily: "var(--mem-font-body)",
-                  color: "var(--mem-text-tertiary)",
-                  fontSize: 12.5,
+                  color: "var(--mem-text-secondary)",
+                  fontSize: "var(--mem-text-description)",
                   margin: "0 0 18px",
                 }}
               >
@@ -1045,6 +1190,8 @@ export default function ReviewDialog({
                               : "")
                         : isContradiction
                           ? t("review.contradictionHint")
+                      : item.action === "lint_repair_review"
+                        ? sourceRepairHint(t, item)
                       : item.action === "relation_conflict"
                         ? t("review.relationConflictHint")
                         : item.action === "page_keep_or_archive"
@@ -1068,6 +1215,75 @@ export default function ReviewDialog({
                                       percent: Math.round(item.confidence * 100),
                                     })}
               </p>
+
+              {contractBlocked && !reviewReadOnly(item) && !isExampleReviewItem(item) &&
+                !(item.kind === "refinement" && item.action === "lint_repair_review" && item.payload?.action === "lint_repair_review") && (
+                <p role="status" style={paneStyle}>{t("review.approvalUnavailable")}</p>
+              )}
+              {!contractBlocked && (evidenceLoading || evidenceUnavailable) && (
+                <div role={evidenceLoading ? "status" : "alert"} style={paneStyle}>
+                  {t(evidenceLoading ? "review.loadingEvidence" : missingTarget ? "review.targetMissing" : missingMergeSources ? "review.mergeSourcesMissing" : "review.evidenceUnavailable")}
+                  {!evidenceLoading && evidenceFailed && !missingTarget && !missingMergeSources && <button type="button" style={actionButtonStyle} onClick={retryEvidence}>
+                    {t("review.retryEvidence")}
+                  </button>}
+                </div>
+              )}
+              {missingSources && !missingMergeSources && (
+                <p role="status" style={paneStyle}>{t("review.archiveSourcesMissing")}</p>
+              )}
+              {item.kind === "refinement" && item.action === "lint_repair_review" && item.payload?.action === "lint_repair_review" && (
+                <div>
+                  <SourceRepairReview key={item.id} item={item} actionHost={repairActionHost} onBusyChange={handleRepairBusy} onVerified={() => {
+                    // A repair closes through its verified daemon receipt, never
+                    // through the generic refinement approval endpoint.
+                    handleRepairBusy(false);
+                    const remaining = items.filter((entry) => reviewItemId(entry) !== reviewItemId(item));
+                    const next = remaining[Math.min(index, remaining.length - 1)] ?? null;
+                    setFlash(t("review.resolved"));
+                    window.setTimeout(() => setFlash(null), 650);
+                    if (next) onOpenChange(reviewItemId(next));
+                    else setShowDone(true);
+                    for (const key of ["refinement-proposals", "pending-revisions", "pages", "space-pages", "recent-concepts", "memories", "memoryStats", "memory-detail", "page", "page-links", "page-revisions", "page-sources", "entities", "entity-detail", "entityDetail", "space-entities", "constellation-entities", "knowledge-graph", "distill-review"]) {
+                      void queryClient.invalidateQueries({ queryKey: [key] });
+                    }
+                  }} technicalDetails={<>
+                  <p>{item.payload.issue}</p>
+                  <ul>{item.payload.choices.map((choice, index) => <li key={index}>{choice}</li>)}</ul>
+                  {item.payload.suggested_research_queries.length > 0 && <>
+                    <p style={paneLabelStyle}>{t("review.repairResearchQueries")}</p>
+                    <ul>{item.payload.suggested_research_queries.map((query, index) => <li key={index}>{query}</li>)}</ul>
+                  </>}
+                  <button type="button" style={actionButtonStyle} disabled={repairCopyState === "copying"} onClick={() => void copyRepairDetails()}>
+                    {t("review.copyRepairDetails")}
+                  </button>
+                  {repairCopyState === "copied" && <p role="status">{t("review.repairDetailsCopied")}</p>}
+                  {repairCopyState === "error" && <p role="alert">{t("review.repairCopyFailed")}</p>}
+                  </>} />
+                </div>
+              )}
+              {vocabulary && (
+                <div style={paneStyle}>
+                  <p>{t("review.vocabProposal", { value: vocabulary.old_value.toLowerCase(), kind: t(vocabulary.kind === "entity" ? "review.vocabEntityType" : "review.vocabRelationType") })}</p>
+                  {vocabulary.category && <p>{t("review.vocabCategory", { category: vocabulary.category })}</p>}
+                  <p>{t(vocabulary.kind === "entity" ? "review.vocabEntityImpact" : "review.vocabRelationImpact")}</p>
+                  {vocabulary.kind === "entity" && (
+                    <>
+                      <p style={paneLabelStyle}>{t("review.vocabAffected", { count: vocabularyEntityIds.length })}</p>
+                      {vocabularyEntityIds.length === 0 ? <p>{t("review.vocabNoEntities")}</p> : (
+                        <ul aria-label={t("review.vocabAffected", { count: vocabularyEntityIds.length })}>
+                          {vocabularyEntities.map((query, index) => (
+                            <li key={vocabularyEntityIds[index]}>
+                              {query.data?.entity
+                                ? t("review.vocabCurrentEntity", { name: query.data.entity.name, type: query.data.entity.entity_type })
+                                : t(query.isLoading ? "review.loadingCurrent" : "review.targetMissing")}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
 
               {item.kind === "revision" && (
                 <>
@@ -1093,7 +1309,7 @@ export default function ReviewDialog({
                         onClick={() => setSideBySide(side)}
                         style={{
                           fontFamily: "var(--mem-font-body)",
-                          fontSize: 12.5,
+                          fontSize: "var(--mem-text-meta)",
                           padding: "5px 12px",
                           border: "none",
                           cursor: "pointer",
@@ -1154,8 +1370,8 @@ export default function ReviewDialog({
                     <p
                       style={{
                         fontFamily: "var(--mem-font-body)",
-                        color: "var(--mem-text-tertiary)",
-                        fontSize: 12,
+                        color: "var(--mem-text-secondary)",
+                        fontSize: "var(--mem-text-meta)",
                         margin: "10px 2px 0",
                       }}
                     >
@@ -1195,7 +1411,7 @@ export default function ReviewDialog({
                     style={{
                       fontFamily: "var(--mem-font-body)",
                       color: "var(--mem-text-secondary)",
-                      fontSize: 13,
+                      fontSize: "var(--mem-text-control)",
                       margin: 0,
                     }}
                   >
@@ -1219,7 +1435,7 @@ export default function ReviewDialog({
                     style={{
                       fontFamily: "var(--mem-font-body)",
                       color: "var(--mem-text-secondary)",
-                      fontSize: 13,
+                      fontSize: "var(--mem-text-control)",
                       margin: 0,
                     }}
                   >
@@ -1238,7 +1454,7 @@ export default function ReviewDialog({
                     style={{
                       fontFamily: "var(--mem-font-body)",
                       color: "var(--mem-text-secondary)",
-                      fontSize: 13,
+                      fontSize: "var(--mem-text-control)",
                       margin: 0,
                     }}
                   >
@@ -1372,19 +1588,17 @@ export default function ReviewDialog({
                             "")}
                       </div>
                     </div>
-                    {item.payload?.action === "page_keep_or_archive" && (
-                      <p
-                        style={{
-                          fontFamily: "var(--mem-font-body)",
-                          color: "var(--mem-text-tertiary)",
-                          fontSize: 12,
-                          margin: 0,
-                        }}
-                      >
-                        {t("review.sources", {
-                          count: item.payload.source_count,
-                        })}
-                      </p>
+                    {archiveSources.data && (
+                      <div>
+                        <p style={paneLabelStyle}>{t("review.sources", { count: archiveSources.data.length })}</p>
+                        {archiveSources.data.map((source) => (
+                          <button key={source.source.memory_source_id} type="button" style={evidenceRowStyle}
+                            disabled={!onOpenMemory || !source.memory}
+                            onClick={() => onOpenMemory?.(source.source.memory_source_id)}>
+                            {source.memory?.title || truncateReviewText(source.memory?.content ?? source.source.memory_source_id, 100)}
+                          </button>
+                        ))}
+                      </div>
                     )}
                   </div>
                 )}
@@ -1413,7 +1627,7 @@ export default function ReviewDialog({
                         style={{
                           fontFamily: "var(--mem-font-body)",
                           color: "var(--mem-text-secondary)",
-                          fontSize: 13,
+                          fontSize: "var(--mem-text-control)",
                           margin: 0,
                         }}
                       >
@@ -1446,8 +1660,8 @@ export default function ReviewDialog({
               <p
                 style={{
                   fontFamily: "var(--mem-font-body)",
-                  fontSize: 12,
-                  color: "var(--mem-text-tertiary)",
+                  fontSize: "var(--mem-text-meta)",
+                  color: "var(--mem-text-secondary)",
                   margin: "0 20px 10px",
                 }}
               >
@@ -1463,7 +1677,7 @@ export default function ReviewDialog({
                   border: "1px solid var(--mem-status-danger-border)",
                   borderRadius: 8,
                   color: "var(--mem-status-danger-text)",
-                  font: "12px/1.5 var(--mem-font-body)",
+                  font: "var(--mem-text-description)/1.5 var(--mem-font-body)",
                   margin: "4px 20px 0",
                   padding: "9px 11px",
                 }}
@@ -1506,6 +1720,8 @@ export default function ReviewDialog({
                       : item.kind === "refinement" &&
                           item.action === "page_keep_or_archive"
                         ? t("review.keepPage")
+                        : item.kind === "refinement" && item.action === "lint_repair_review"
+                          ? t("sourceRepair.keepCurrent")
                         : item.kind === "topic" ||
                             item.kind === "page_candidate" ||
                             item.kind === "stale_page"
@@ -1526,6 +1742,11 @@ export default function ReviewDialog({
                     {t("review.openPage")}
                   </button>
                 )}
+              {archivePageId && archivePage.data && onOpenPage && (
+                <button type="button" onClick={() => onOpenPage(archivePageId)} style={actionButtonStyle}>
+                  {t("review.openPage")}
+                </button>
+              )}
               {item.kind === "stale_page" && onOpenPage && (
                 <button
                   type="button"
@@ -1564,22 +1785,25 @@ export default function ReviewDialog({
               <span style={{ flex: 1 }} />
               <button
                 type="button"
-                disabled={items.length < 2}
+                disabled={repairBusy || items.length < 2}
                 onClick={() => goTo(1)}
                 style={actionButtonStyle}
               >
                 {t("review.skip")}
               </button>
+              {item.kind === "refinement" && item.action === "lint_repair_review" && <div className="source-repair-actions" ref={setRepairActionHost} />}
               {!reviewApproveBlocked(item) && (
                 <button
                   type="button"
-                  disabled={resolving}
+                  disabled={resolving || !canApprove}
                   onClick={() => void resolveCurrent(true)}
                   style={{
                     ...actionButtonStyle,
-                    backgroundColor: "var(--mem-accent-indigo)",
-                    borderColor: "var(--mem-accent-indigo)",
-                    color: "var(--mem-bg)",
+                    backgroundColor: archivePageId ? "var(--mem-surface)" : "var(--mem-accent-indigo)",
+                    borderColor: archivePageId ? "var(--mem-border)" : "var(--mem-accent-indigo)",
+                    color: archivePageId ? "var(--mem-text)" : "var(--mem-bg)",
+                    opacity: resolving || !canApprove ? 0.55 : 1,
+                    cursor: resolving || !canApprove ? "not-allowed" : "pointer",
                     fontWeight: 600,
                   }}
                 >
@@ -1595,7 +1819,9 @@ export default function ReviewDialog({
                           : item.kind === "refinement" &&
                               item.action === "page_merge"
                             ? t("review.mergePages")
-                            : t("review.approve")}
+                            : vocabulary
+                              ? t("review.promoteVocabulary")
+                              : t("review.approve")}
                 </button>
               )}
             </div>
@@ -1606,8 +1832,8 @@ export default function ReviewDialog({
               <p
                 style={{
                   fontFamily: "var(--mem-font-body)",
-                  color: "var(--mem-text-tertiary)",
-                  fontSize: 12,
+                  color: "var(--mem-text-secondary)",
+                  fontSize: "var(--mem-text-meta)",
                   margin: "0 20px 14px",
                 }}
               >
@@ -1617,6 +1843,7 @@ export default function ReviewDialog({
           </>
         ) : null}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

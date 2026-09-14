@@ -6,9 +6,19 @@ import {
   resetReviewRuntime,
 } from "../review/tauri-core";
 import { isKnowledgePage } from "./components/memory/pages/listAllPages";
-import type { Page } from "./lib/tauri";
+import { createReviewDecisionFixture } from "../e2e/fixtures/reviewDecisions";
+import { TauriMockRuntime } from "../e2e/tauriMock/runtime";
+import type { Page, RefinementProposalSummary, PageSourceWithMemory } from "./lib/tauri";
 
 describe("Review fixture IPC", () => {
+  it("promotes only the proposal's concept entities, preserving manually typed entities", async () => {
+    const runtime = new TauriMockRuntime(createReviewDecisionFixture("vocab_promote"));
+    await runtime.invoke("accept_refinement", { id: "review-vocabulary" });
+    expect(await runtime.invoke("get_entity_detail_cmd", { entityId: "entity-review-method" })).toMatchObject({ entity: { entity_type: "research-method" } });
+    expect(await runtime.invoke("get_entity_detail_cmd", { entityId: "entity-ada" })).toMatchObject({ entity: { entity_type: "person" } });
+    expect(await runtime.invoke("get_entity_detail_cmd", { entityId: "entity-babbage" })).toMatchObject({ entity: { entity_type: "person" } });
+    expect(await runtime.invoke("list_refinements")).toEqual({ proposals: [] });
+  });
   beforeEach(() => {
     resetReviewRuntime();
   });
@@ -25,6 +35,10 @@ describe("Review fixture IPC", () => {
 
     expect(spaces.map((space) => space.name)).toContain("Wenlan");
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports no durable repair artifact in the isolated Review fixture", async () => {
+    await expect(invoke("repair_recovery", { reviewId: "review-source" })).resolves.toBeNull();
   });
 
   it("exposes deterministic Page editor prerequisites", async () => {
@@ -61,6 +75,33 @@ describe("Review fixture IPC", () => {
       }),
     ]));
     expect(pages.some((page) => page.review_status === "unconfirmed")).toBe(true);
+  });
+
+  it("uses the same archive target as the daemon and resolves actual sources", async () => {
+    const runtime = createReviewRuntime();
+    const { proposals } = await runtime.invoke("list_refinements") as { proposals: RefinementProposalSummary[] };
+    const archive = proposals[0];
+    expect(archive.payload).toMatchObject({ page_id: archive.source_ids[0] });
+    const sources = await runtime.invoke("get_page_sources", { pageId: archive.source_ids[0] }) as PageSourceWithMemory[];
+    expect(sources).toHaveLength(1);
+    expect(sources[0].memory?.source_id).toBe(sources[0].source.memory_source_id);
+    await runtime.invoke("accept_refinement", { id: archive.id });
+    expect(await runtime.invoke("get_page", { id: archive.source_ids[0] })).toMatchObject({ status: "archived" });
+    expect(await runtime.invoke("get_page", { id: "page-architecture" })).toMatchObject({ status: "active" });
+  });
+
+  it("resolves both sides of the normal merge scenario and separates the missing-target scenario", async () => {
+    const fixture = createReviewDecisionFixture("page_merge");
+    const runtime = new TauriMockRuntime(fixture);
+    for (const id of fixture.refinements[0].source_ids) {
+      expect(await runtime.invoke("get_page", { id })).not.toBeNull();
+      const sources = await runtime.invoke("get_page_sources", { pageId: id }) as PageSourceWithMemory[];
+      expect(sources.length).toBeGreaterThan(0);
+      expect(sources.every((source) => source.memory != null)).toBe(true);
+    }
+    const missing = new TauriMockRuntime(createReviewDecisionFixture("missing-target"));
+    expect(await missing.invoke("get_page", { id: "page-history" })).toBeNull();
+    expect(await missing.invoke("list_refinements")).toMatchObject({ proposals: [{ action: "page_keep_or_archive", source_ids: ["page-history"] }] });
   });
 
   it("keeps every declared Graph entity resolvable through its detail command", async () => {

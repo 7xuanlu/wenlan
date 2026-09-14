@@ -14,6 +14,7 @@ use tower::ServiceExt;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::events::NoopEmitter;
 use wenlan_core::sources::RawDocument;
+use wenlan_server::maintenance_coordinator::MaintenanceCoordinator;
 use wenlan_server::router::{build_router, AppRouter};
 use wenlan_server::state::ServerState;
 
@@ -31,6 +32,16 @@ fn owner_binding_digest(digest: &str, source_ids: &[String]) -> String {
 }
 
 async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
+    let (router, dir, db, _maintenance) = test_app_with_coordinator().await;
+    (router, dir, db)
+}
+
+async fn test_app_with_coordinator() -> (
+    AppRouter,
+    tempfile::TempDir,
+    Arc<MemoryDB>,
+    MaintenanceCoordinator,
+) {
     let dir = tempfile::tempdir().unwrap();
     let db = MemoryDB::new(dir.path(), Arc::new(NoopEmitter))
         .await
@@ -40,8 +51,10 @@ async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
         db: Some(db_arc.clone()),
         ..ServerState::default()
     };
+    let maintenance = state.maintenance_coordinator.clone();
+    maintenance.finish_recovery();
     let router = build_router(Arc::new(RwLock::new(state)));
-    (router, dir, db_arc)
+    (router, dir, db_arc, maintenance)
 }
 
 /// Insert a proposal and immediately transition it to `awaiting_review` so the
@@ -419,6 +432,73 @@ async fn reject_already_terminal_returns_422() {
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn reject_refuses_during_analysis_apply_and_pending_verification() {
+    use std::time::Duration;
+    use wenlan_types::repair::{ApplyRepairRequest, RepairDigest};
+    let (app, _tmp, db, maintenance) = test_app_with_coordinator().await;
+    db.insert_refinement_proposal(
+        "ref_reject_fenced",
+        "detect_contradiction",
+        &["src_a".to_string()],
+        None,
+        0.8,
+    )
+    .await
+    .unwrap();
+    let reject = || {
+        app.clone().oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/refinery/queue/ref_reject_fenced/reject")
+                .body(Body::empty())
+                .unwrap(),
+        )
+    };
+
+    let analysis = maintenance.begin_analysis().await;
+    assert_eq!(reject().await.unwrap().status(), StatusCode::CONFLICT);
+    drop(analysis);
+
+    let digest = "a".repeat(64);
+    let request = ApplyRepairRequest::try_new(
+        "repair_550e8400-e29b-41d4-a716-446655440009".to_string(),
+        RepairDigest::parse(&digest).unwrap(),
+        format!("apply repair repair_550e8400-e29b-41d4-a716-446655440009 {digest}"),
+    )
+    .unwrap();
+    let repair = maintenance
+        .acquire_approved_repair(&request, Duration::from_secs(1))
+        .await
+        .unwrap();
+    assert_eq!(reject().await.unwrap().status(), StatusCode::CONFLICT);
+    repair.retain_until_verification().unwrap();
+    assert_eq!(reject().await.unwrap().status(), StatusCode::CONFLICT);
+    assert_eq!(
+        db.get_refinement_proposal("ref_reject_fenced")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "pending"
+    );
+
+    maintenance
+        .acquire_repair_verification("repair_550e8400-e29b-41d4-a716-446655440009")
+        .unwrap()
+        .release_after_verification()
+        .unwrap();
+    assert_eq!(reject().await.unwrap().status(), StatusCode::OK);
+    assert_eq!(
+        db.get_refinement_proposal("ref_reject_fenced")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "dismissed"
+    );
 }
 
 // ── accept endpoint tests ─────────────────────────────────────────────────────

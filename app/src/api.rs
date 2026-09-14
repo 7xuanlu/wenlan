@@ -159,6 +159,10 @@ pub struct DistillReviewResponse {
     pub stale_pages: Vec<DistillStalePage>,
     pub stale_truncated: bool,
     pub orphan_topics: Vec<DistillOrphanTopic>,
+    #[serde(default)]
+    pub clusters_found: Option<usize>,
+    #[serde(default)]
+    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -768,6 +772,84 @@ impl WenlanClient {
     pub async fn redistill_page(&self, page_id: &str) -> Result<PageRedistillResponse, String> {
         let path = format!("/api/distill/{}", percent_encode_path_segment(page_id));
         self.post_json(&path, &PageRedistillRequest {}).await
+    }
+
+    // ── Lint and approval-gated repair ────────────────────────────────
+
+    /// Run a typed lint request through the daemon's query-string contract.
+    pub async fn lint(
+        &self,
+        query: wenlan_types::lint::LintRequestQuery,
+    ) -> Result<wenlan_types::lint::LintReport, String> {
+        let path = lint_query_path(&query);
+        self.get_json(&path).await
+    }
+
+    /// Submit an agent-assisted lint verdict packet for the exact query.
+    pub async fn lint_submit(
+        &self,
+        query: wenlan_types::lint::LintRequestQuery,
+        submission: wenlan_types::lint::LintAgentSubmission,
+    ) -> Result<wenlan_types::lint::LintReport, String> {
+        let path = lint_query_path(&query);
+        self.post_json(&path, &submission).await
+    }
+
+    pub async fn prepare_repair(
+        &self,
+        request: wenlan_types::repair::PrepareRepairRequest,
+    ) -> Result<wenlan_types::repair::RepairManifest, String> {
+        self.post_json("/api/repairs/prepare", &request).await
+    }
+
+    pub async fn prepare_current_repair(
+        &self,
+        request: wenlan_types::repair_current::PrepareCurrentRepairRequest,
+    ) -> Result<wenlan_types::repair::RepairManifest, String> {
+        self.post_json("/api/repairs/prepare-current", &request)
+            .await
+    }
+
+    /// Read the daemon-owned recovery artifact for one exact review binding.
+    /// A successful `null` means there is no durable pending repair; HTTP and
+    /// decode failures remain errors so a recovery conflict cannot look empty.
+    pub async fn repair_recovery(
+        &self,
+        review_id: &str,
+    ) -> Result<Option<wenlan_types::repair_recovery::RepairRecovery>, String> {
+        let path = format!(
+            "/api/repairs/recovery/{}",
+            percent_encode_path_segment(review_id)
+        );
+        self.get_json(&path).await
+    }
+
+    pub async fn apply_repair(
+        &self,
+        request: wenlan_types::repair::ApplyRepairRequest,
+    ) -> Result<wenlan_types::repair::RepairApplyReceipt, String> {
+        self.post_json("/api/repairs/apply", &request).await
+    }
+
+    pub async fn verify_repair(
+        &self,
+        request: wenlan_types::repair::VerifyRepairRequest,
+    ) -> Result<wenlan_types::repair::RepairVerificationReceipt, String> {
+        self.post_json("/api/repairs/verify", &request).await
+    }
+
+    pub async fn repair_plan(
+        &self,
+        request: wenlan_types::repair_plan::RepairPlanRequest,
+    ) -> Result<wenlan_types::repair_plan::RepairPlanSummary, String> {
+        self.post_json("/api/repairs/plan", &request).await
+    }
+
+    pub async fn repair_plan_entries(
+        &self,
+        request: wenlan_types::repair_plan::RepairPlanEntriesRequest,
+    ) -> Result<wenlan_types::repair_plan::RepairPlanEntriesPage, String> {
+        self.post_json("/api/repairs/plan/entries", &request).await
     }
 
     pub async fn move_space(&self, from: &str, to: &str) -> Result<MoveSpaceResponse, String> {
@@ -1425,6 +1507,27 @@ pub(crate) fn percent_encode_path_segment(value: &str) -> String {
             _ => format!("%{byte:02X}").chars().collect(),
         })
         .collect()
+}
+
+fn lint_query_path(query: &wenlan_types::lint::LintRequestQuery) -> String {
+    let mut params = Vec::new();
+    if let Some(profile) = query.lint().profile {
+        params.push(format!("profile={profile}"));
+    }
+    if let Some(space) = query.lint().space.as_deref() {
+        params.push(format!("space={}", percent_encode_path_segment(space)));
+    }
+    if query.external_egress() {
+        params.push("external_egress=true".to_string());
+    }
+    if query.agent_assist() {
+        params.push("agent_assist=true".to_string());
+    }
+    if params.is_empty() {
+        "/api/lint".to_string()
+    } else {
+        format!("/api/lint?{}", params.join("&"))
+    }
 }
 
 // `UpdateConfigRequest` does not derive `Default` in wenlan-types, so
@@ -2415,7 +2518,7 @@ mod tests {
 
     #[tokio::test]
     async fn distill_review_posts_empty_global_request_to_daemon() {
-        let body = r#"{"pages_created":0,"scoped":false,"created_ids":[],"pending":[],"stale_pages":[],"stale_truncated":false,"orphan_topics":[]}"#;
+        let body = r#"{"pages_created":0,"scoped":false,"created_ids":[],"pending":[],"stale_pages":[],"stale_truncated":false,"orphan_topics":[],"clusters_found":0,"hint":"No synthesis model is configured or reachable: install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup` before distilling."}"#;
         let (base_url, request) = serve_json_once(body).await;
         let client = WenlanClient {
             client: reqwest::Client::new(),
@@ -2426,6 +2529,11 @@ mod tests {
 
         assert_eq!(resp.pages_created, 0);
         assert!(!resp.scoped);
+        assert_eq!(resp.clusters_found, Some(0));
+        assert_eq!(
+            resp.hint.as_deref(),
+            Some("No synthesis model is configured or reachable: install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup` before distilling.")
+        );
         let request = request.await.unwrap();
         assert_eq!(
             request.lines().next().unwrap_or_default(),
@@ -2467,6 +2575,152 @@ mod tests {
         assert_eq!(
             blocked.reason.as_deref(),
             Some("citation verification failed (8 verified, 13 unverified, 0 stripped)")
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_bridge_lint_uses_the_typed_query_and_percent_encodes_values() {
+        let (base_url, request) = serve_json_once("{}").await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let query = wenlan_types::lint::LintRequestQuery::new(
+            wenlan_types::lint::LintQuery::new(
+                Some(wenlan_types::lint::LintProfile::Deep),
+                Some("Team / R&D".to_string()),
+            ),
+            true,
+            true,
+        );
+
+        let error = client
+            .lint(query)
+            .await
+            .expect_err("the deliberately empty fixture is not a LintReport");
+
+        assert!(error.contains("Parse /api/lint?"), "{error}");
+        assert_eq!(
+            request.await.unwrap().lines().next().unwrap_or_default(),
+            "GET /api/lint?profile=deep&space=Team%20%2F%20R%26D&external_egress=true&agent_assist=true HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_bridge_lint_submit_posts_the_typed_submission_and_propagates_decode_errors() {
+        let (base_url, request) = serve_json_once("{}").await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let query = wenlan_types::lint::LintRequestQuery::new(
+            wenlan_types::lint::LintQuery::new(
+                Some(wenlan_types::lint::LintProfile::Deep),
+                Some("agent work".to_string()),
+            ),
+            false,
+            true,
+        );
+        let submission = wenlan_types::lint::LintAgentSubmission::try_new(
+            wenlan_types::lint::LintDigest::from_u64(7),
+            Vec::new(),
+        )
+        .unwrap();
+        let expected_body = serde_json::to_value(&submission).unwrap();
+
+        let error = client
+            .lint_submit(query, submission)
+            .await
+            .expect_err("the deliberately empty fixture is not a LintReport");
+
+        assert!(error.contains("Parse /api/lint?"), "{error}");
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/lint?profile=deep&space=agent%20work&agent_assist=true HTTP/1.1"
+        );
+        assert_eq!(request_body(&request), expected_body);
+    }
+
+    #[tokio::test]
+    async fn repair_bridge_apply_repair_posts_typed_request_and_propagates_http_errors() {
+        let (base_url, request) =
+            serve_response_once("409 Conflict", r#"{"error":"repair is stale"}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let digest = wenlan_types::repair::RepairDigest::parse(
+            "0000000000000000000000000000000000000000000000000000000000000009",
+        )
+        .unwrap();
+        let manifest_id = "repair_00000000-0000-0000-0000-000000000009".to_string();
+        let approval = format!("apply repair {manifest_id} {}", digest.as_str());
+        let request_body_value =
+            wenlan_types::repair::ApplyRepairRequest::try_new(manifest_id, digest, approval)
+                .unwrap();
+        let expected_body = serde_json::to_value(&request_body_value).unwrap();
+
+        let error = client
+            .apply_repair(request_body_value)
+            .await
+            .expect_err("the fixture deliberately returns a conflict");
+
+        assert!(
+            error.contains("HTTP POST /api/repairs/apply returned 409"),
+            "{error}"
+        );
+        assert!(error.contains("repair is stale"), "{error}");
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/repairs/apply HTTP/1.1"
+        );
+        assert_eq!(request_body(&request), expected_body);
+    }
+
+    #[tokio::test]
+    async fn repair_bridge_recovery_gets_encoded_review_id_and_accepts_empty_recovery() {
+        let (base_url, request) = serve_json_once("null").await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let recovery = client.repair_recovery("review/id #1").await.unwrap();
+
+        assert_eq!(recovery, None);
+        assert_eq!(
+            request.await.unwrap().lines().next().unwrap_or_default(),
+            "GET /api/repairs/recovery/review%2Fid%20%231 HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn repair_bridge_recovery_propagates_http_errors_instead_of_returning_none() {
+        let (base_url, request) = serve_response_once(
+            "409 Conflict",
+            r#"{"error":"repair_recovery_review_conflict"}"#,
+        )
+        .await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let error = client
+            .repair_recovery("review/id")
+            .await
+            .expect_err("the fixture deliberately returns a conflict");
+
+        assert!(
+            error.contains("HTTP GET /api/repairs/recovery/review%2Fid returned 409"),
+            "{error}"
+        );
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "GET /api/repairs/recovery/review%2Fid HTTP/1.1"
         );
     }
 

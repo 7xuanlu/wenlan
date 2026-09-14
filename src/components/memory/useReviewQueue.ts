@@ -234,7 +234,15 @@ export function useReviewQueue(enabled: boolean = true) {
       }
       return approve ? acceptRefinement(item.id) : rejectRefinement(item.id);
     },
-    onSuccess: (_result, { item }) => {
+    onSuccess: (_result, { item, approve }) => {
+      if (approve && item.kind === "refinement" && item.action === "vocab_promote") {
+        // Promoting an entity type also retypes its active concept pages.
+        for (const key of ["entity-detail", "entityDetail", "entities", "space-entities",
+          "constellation-entities", "connections-entities", "searchEntities", "knowledge-graph",
+          "pages", "page", "space-pages"]) {
+          void queryClient.invalidateQueries({ queryKey: [key] });
+        }
+      }
       // Panel-owned distill items never live in these caches — stale pages are
       // removed from the panel's last distill result by its resolve wrapper.
       if (
@@ -287,8 +295,10 @@ export function useReviewQueue(enabled: boolean = true) {
 
   return {
     items,
-    isLoading: revisions.isLoading || refinements.isLoading || captures.isLoading,
-    error: revisions.error ?? refinements.error ?? captures.error ?? null,
+    isLoading: revisions.isLoading || refinements.isLoading,
+    error: revisions.error ?? refinements.error ?? null,
+    capturesLoading: captures.isLoading,
+    capturesError: captures.error,
     /** True when any source filled its page — the queue may hold more. */
     isTruncated: decisionsTruncated || capturesTruncated,
     /** Decision sources (revisions + refinements) at their fetch cap. */

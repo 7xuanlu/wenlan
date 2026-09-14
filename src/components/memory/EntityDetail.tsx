@@ -351,7 +351,7 @@ function EntityGraphOverlay({
             <path d="M18 6 6 18M6 6l12 12" />
           </svg>
         </button>
-        <span style={{ fontSize: 12, color: "var(--mem-text-tertiary)" }}>
+        <span style={{ fontSize: "var(--mem-text-meta)", color: "var(--mem-text-tertiary)" }}>
           {t("focus.crumbAtlas")}
           {mode === "focus" ? (
             <>
@@ -368,7 +368,7 @@ function EntityGraphOverlay({
             aria-pressed={showVerbs}
             onClick={() => setShowVerbs((value) => !value)}
             style={{
-              fontSize: 12,
+              fontSize: "var(--mem-text-control)",
               color: showVerbs ? "var(--mem-text)" : "var(--mem-text-secondary)",
               border: `1px solid ${
                 showVerbs ? "var(--mem-distilled-border)" : "var(--mem-border)"
@@ -417,7 +417,7 @@ function EntityGraphOverlay({
                 aria-pressed={selected}
                 onClick={() => setMode(nextMode)}
                 style={{
-                  fontSize: 12,
+                  fontSize: "var(--mem-text-control)",
                   padding: "4px 14px",
                   border: "none",
                   cursor: "pointer",
@@ -497,7 +497,7 @@ function EntityGraphOverlay({
               >
                 {entity.name}
               </h4>
-              <div style={{ fontSize: 12, color: "var(--mem-text-tertiary)" }}>
+              <div style={{ fontSize: "var(--mem-text-meta)", color: "var(--mem-text-tertiary)" }}>
                 {t("focus.observations", { count: detail.observations.length })}
                 {` · ${t("focus.relations", { count: relations.length })}`}
                 {` · ${t("focus.updatedAgo", {

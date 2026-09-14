@@ -22,7 +22,9 @@ pub mod outbox;
 pub mod page_map;
 pub mod pages;
 pub mod repair;
+pub mod repair_current;
 pub mod repair_plan;
+pub mod repair_recovery;
 pub mod requests;
 pub mod responses;
 pub mod sources;
@@ -59,7 +61,9 @@ pub use outbox::{
 };
 pub use pages::{Page, PageEvidence};
 pub use repair::*;
+pub use repair_current::*;
 pub use repair_plan::*;
+pub use repair_recovery::*;
 pub use requests::{
     AcceptRefinementRequest, ArchiveEntitiesRequest, CreatePageDraftRequest, EntitySelection,
     ListEntitiesRequest, PageDraftVersionRequest, RestoreEntitiesRequest, UpdatePageDraftRequest,

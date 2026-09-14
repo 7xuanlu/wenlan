@@ -30,13 +30,15 @@ async function settle(page: Page): Promise<void> {
   }
 }
 
-// These redesigned surfaces use explicit browser contracts and review artifacts
-// instead of requiring new screenshots in Git. Unchanged surfaces retain their
-// existing pixel baselines.
+// These surfaces share the updated typography. Use explicit browser contracts
+// and review artifacts instead of requiring new screenshots in Git.
 async function assertRedesignedSurface(page: Page, name: string): Promise<boolean> {
   const spaces = name.startsWith("spaces-");
+  const spaceDetail = name.startsWith("space-");
   const wikiReferences = name.startsWith("home-");
-  if (!spaces && !wikiReferences) return false;
+  const entityPage = name.startsWith("entity-");
+  const wikiLibrary = name.startsWith("pages-");
+  if (!spaces && !spaceDetail && !wikiReferences && !entityPage && !wikiLibrary) return false;
   const viewport = page.viewportSize()!;
   const overflow = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth - window.innerWidth,
@@ -44,7 +46,121 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
   }));
   expect(overflow.page).toBeLessThanOrEqual(1);
   expect(overflow.main).toBeLessThanOrEqual(1);
-  if (spaces) {
+  if (wikiLibrary) {
+    await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
+    const cards = page.getByTestId("wiki-cards").locator('[data-testid^="wiki-card-"]');
+    await expect(cards).toHaveCount(6);
+    await expect(cards.first()).toContainText("Fixture architecture summary");
+    const controls = page.locator(".wiki-filters select, .wiki-new-page-action");
+    await expect(controls).toHaveCount(4);
+    const controlBounds = await controls.evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, height: box.height, fontSize: Number.parseFloat(getComputedStyle(node).fontSize) };
+    }));
+    for (const box of controlBounds) {
+      expect(box.fontSize, "Wiki controls must use the readable control role").toBeGreaterThanOrEqual(14);
+      expect(box.height).toBeGreaterThanOrEqual(32);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+    }
+    const cardBounds = await cards.evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width, scrollWidth: node.scrollWidth };
+    }));
+    for (const box of cardBounds) {
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+      expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: ".wiki-overview h1", label: "Wiki title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".wiki-filters select", label: "Wiki filter controls", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+  } else if (entityPage) {
+    // The readability update intentionally changes these pixels. Preserve
+    // content, legibility, contrast and responsive containment as live contracts
+    // while keeping the complete light/dark captures as review artifacts.
+    const detail = page.locator(".page-detail");
+    await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+    await expect(detail.locator(".page-detail-dateline")).toContainText("from 1 memory");
+    await expect(detail.getByRole("group", { name: "Page info" })).toContainText("1 source");
+    await expect(detail.locator(".page-detail-prose")).toContainText("Deterministic content for the integrated Wenlan journey.");
+    await expect(detail.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();
+    const typography = await detail.locator(".page-detail-dateline").evaluate((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      width: node.getBoundingClientRect().width,
+      scrollWidth: node.scrollWidth,
+    }));
+    expect(typography.fontSize, "source metadata must remain readable").toBeGreaterThanOrEqual(13);
+    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
+    const bounds = await detail.locator("h1, .page-detail-prose, .page-detail-dateline").evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width };
+    }));
+    for (const box of bounds) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: ".page-detail-title", label: "Entity page title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".page-detail-dateline", label: "Source metadata", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+  } else if (spaceDetail) {
+    const dossier = page.locator(".space-dossier");
+    await expect(dossier.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
+    await expect(dossier.locator(".space-dossier-description")).toHaveText("Editorial memory system");
+    await expect(dossier.locator(".space-dossier-metrics dd")).toHaveText(["6", "205", "7", "Jul 10, 2026"]);
+    const recent = dossier.getByRole("region", { name: "Recently refined" });
+    await expect(recent.getByRole("button")).toHaveCount(5);
+    await expect(recent.getByRole("button").first()).toContainText("Fixture architecture");
+    await expect(recent.locator(".space-dossier-page-meta > span")).toHaveText(Array(5).fill("1 source"));
+    await expect(dossier.locator(".space-dossier-review-list > button")).toHaveCount(2);
+    await expect(dossier.locator(".space-dossier-entity-list > button")).toHaveCount(6);
+    await expect(dossier.getByRole("button", { name: "Review all", exact: true })).toBeVisible();
+    const create = dossier.getByRole("button", { name: "New page", exact: true });
+    await expect(create).toBeVisible();
+    const control = await create.evaluate((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      height: node.getBoundingClientRect().height,
+    }));
+    expect(control.fontSize, "Space creation uses the shared readable control role").toBeGreaterThanOrEqual(14);
+    expect(control.height).toBeGreaterThanOrEqual(32);
+    const bounds = await dossier.locator("h1, .space-dossier-actions, .space-dossier-metrics, .space-dossier-page-list > button, .space-dossier-rail").evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width, scrollWidth: node.scrollWidth };
+    }));
+    for (const box of bounds) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+      expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
+    }
+    const recentBox = (await recent.boundingBox())!;
+    const railBox = (await dossier.locator(".space-dossier-rail").boundingBox())!;
+    if (viewport.width >= 900) {
+      expect(railBox.x, "desktop keeps the review rail beside the page list").toBeGreaterThan(recentBox.x + recentBox.width);
+      expect(Math.abs(railBox.y - recentBox.y)).toBeLessThanOrEqual(1);
+    } else {
+      expect(railBox.y, "narrow layouts move the review rail below the page list").toBeGreaterThan(recentBox.y + recentBox.height);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: ".space-dossier h1", label: "Space title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".space-dossier-new-page", label: "Space creation control", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".space-dossier-page-title", label: "Space page title", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+    const sidebar = page.locator('aside[aria-label="Primary navigation"]');
+    if (await sidebar.getAttribute("aria-hidden") === "false") {
+      const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+      await expect(navigation.locator('[aria-current="page"]')).toHaveCount(1);
+      await expect(navigation.getByRole("button", { name: "Spaces", exact: true })).toHaveAttribute("aria-current", "page");
+      const navFonts = await navigation.getByRole("button").evaluateAll((nodes) => nodes.map((node) => Number.parseFloat(getComputedStyle(node).fontSize)));
+      for (const font of navFonts) expect(font, "shared navigation must remain readable").toBeGreaterThanOrEqual(13);
+    }
+  } else if (spaces) {
     await expect(page.locator(".spaces-suggestions")).not.toHaveAttribute("open");
     await expect(page.locator("summary").filter({ hasText: "Suggested (2)" })).toBeVisible();
     await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
@@ -102,9 +218,13 @@ async function capture(page: Page, name: string): Promise<void> {
   });
   await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
   await settle(page);
+  if (name.startsWith("entity-")) {
+    await expect(page.locator(".page-detail-dateline")).toContainText("from 1 memory");
+  }
+  const redesigned = await assertRedesignedSurface(page, name);
   await page.screenshot({ path: path.join(evidenceDir, `${name}.png`), fullPage: false });
   await test.info().attach(name, { path: path.join(evidenceDir, `${name}.png`), contentType: "image/png" });
-  if (!(await assertRedesignedSurface(page, name))) {
+  if (!redesigned) {
     await expect(page).toHaveScreenshot(`${name}.png`, {
       animations: "disabled",
       fullPage: false,

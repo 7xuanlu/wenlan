@@ -376,7 +376,7 @@ export function ImportStatusPill({
         gap: "6px",
         fontFamily: "var(--mem-font-mono)",
         fontVariantNumeric: "tabular-nums",
-        fontSize: 11,
+        fontSize: "var(--mem-text-control)",
         fontWeight: 400,
         borderRadius: 999,
         padding: "1px 8px",

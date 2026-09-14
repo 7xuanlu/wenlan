@@ -37,15 +37,7 @@ impl LlmProvider for FakeApiProvider {
             .as_array()
             .unwrap()
             .iter()
-            .map(|candidate| {
-                serde_json::json!({
-                    "candidate_ref": candidate["reference"],
-                    "decision": "pass",
-                    "reason_code": candidate["reason_code"],
-                    "confidence_basis_points": 9000,
-                    "counterevidence_refs": [],
-                })
-            })
+            .map(|candidate| serde_json::json!([candidate["reference"], "pass", 9000, []]))
             .collect::<Vec<_>>();
         Ok(serde_json::json!({ "verdicts": verdicts }).to_string())
     }
@@ -71,15 +63,7 @@ impl LlmProvider for BlockingApiProvider {
             .as_array()
             .unwrap()
             .iter()
-            .map(|candidate| {
-                serde_json::json!({
-                    "candidate_ref": candidate["reference"],
-                    "decision": "pass",
-                    "reason_code": candidate["reason_code"],
-                    "confidence_basis_points": 9000,
-                    "counterevidence_refs": [],
-                })
-            })
+            .map(|candidate| serde_json::json!([candidate["reference"], "pass", 9000, []]))
             .collect::<Vec<_>>();
         Ok(serde_json::json!({ "verdicts": verdicts }).to_string())
     }

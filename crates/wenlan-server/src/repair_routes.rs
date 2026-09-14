@@ -3,6 +3,7 @@
 
 use crate::{
     error::ServerError,
+    lint_routes,
     route_registry::{post, TrackedRouter},
     space_header::SpaceHeader,
     state::SharedState,
@@ -14,6 +15,7 @@ use wenlan_types::repair::{
     ApplyRepairRequest, PrepareRepairRequest, RepairApplyReceipt, RepairDigest, RepairLintScope,
     RepairManifest, RepairVerificationReceipt, VerifyRepairRequest,
 };
+use wenlan_types::repair_current::PrepareCurrentRepairRequest;
 use wenlan_types::repair_plan::{
     PrepareRepairPlanResponse, RepairPlanEntriesPage, RepairPlanEntriesRequest, RepairPlanRequest,
     RepairPlanSummary,
@@ -25,8 +27,10 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
     register_execution(
         router
             .route("/api/repairs/plan", post(handle_plan))
+            .route("/api/repairs/plan-current", post(handle_plan_current))
             .route("/api/repairs/plan/entries", post(handle_plan_entries))
-            .route("/api/repairs/prepare", post(handle_prepare)),
+            .route("/api/repairs/prepare", post(handle_prepare))
+            .route("/api/repairs/prepare-current", post(handle_prepare_current)),
     )
 }
 
@@ -57,6 +61,43 @@ async fn handle_plan(
     )
     .await?;
     let artifact_path = store
+        .plan_path(plan.plan_id())?
+        .to_string_lossy()
+        .into_owned();
+    PrepareRepairPlanResponse::try_new(plan, artifact_path)
+        .and_then(|response| response.compact_summary())
+        .map(Json)
+        .map_err(|error| {
+            ServerError::from(wenlan_core::error::WenlanError::Validation(
+                error.to_string(),
+            ))
+        })
+}
+
+async fn handle_plan_current(
+    State(state): State<SharedState>,
+    SpaceHeader(header_space): SpaceHeader,
+    Json(scope): Json<RepairLintScope>,
+) -> Result<Json<RepairPlanSummary>, ServerError> {
+    validate_repair_scope_header(header_space.as_deref(), &scope)?;
+
+    // The reports and the plan are one fenced operation. This keeps a
+    // background writer from changing the rows/pages after either report was
+    // captured but before the plan materializes its current findings.
+    let mut fresh = lint_routes::fresh_repair_reports(state, &scope, true).await?;
+    let request = RepairPlanRequest::try_new(scope, fresh.general, fresh.deep.take())
+        .map_err(|error| ServerError::ValidationError(error.to_string()))?;
+    let plan = wenlan_core::repair_plan::prepare_repair_plan(
+        &fresh.db,
+        &fresh.store,
+        request,
+        fresh.page_root.as_deref(),
+        now_epoch_seconds()?,
+    )
+    .await
+    .map_err(ServerError::from)?;
+    let artifact_path = fresh
+        .store
         .plan_path(plan.plan_id())?
         .to_string_lossy()
         .into_owned();
@@ -110,6 +151,17 @@ fn validate_repair_scope_header(
             "repair scope must exactly match X-Wenlan-Space".to_string(),
         ))
     }
+}
+
+async fn handle_prepare_current(
+    State(state): State<SharedState>,
+    SpaceHeader(header_space): SpaceHeader,
+    Json(request): Json<PrepareCurrentRepairRequest>,
+) -> Result<Json<RepairManifest>, ServerError> {
+    validate_repair_scope_header(header_space.as_deref(), request.lint_scope())?;
+    lint_routes::prepare_current_repair(state, request, now_epoch_seconds()?)
+        .await
+        .map(Json)
 }
 
 fn validate_manifest_scope_binding(

@@ -161,6 +161,26 @@ describe("translation resources", () => {
     ]);
   });
 
+  it("keeps repair controls in the selected Chinese writing system", () => {
+    expect(resources["zh-Hans"].translation.sourceRepair.prepareChange).toBe("准备变更");
+    expect(resources["zh-Hant"].translation.sourceRepair.prepareChange).toBe("準備變更");
+    expect(resources["zh-Hans"].translation.sourceRepair.extractionHint).toContain("实体提取");
+    expect(resources["zh-Hant"].translation.sourceRepair.extractionHint).toContain("實體擷取");
+  });
+
+  it("localizes the recovery retry copy in every supported locale", () => {
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.sourceRepair.recoveryFailed)).toEqual([
+      "The pending repair could not be recovered. No new change will be prepared.",
+      "无法恢复待处理的修复，不会准备新的变更。",
+      "無法復原待處理的修復，不會準備新的變更。",
+    ]);
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.sourceRepair.retryRecovery)).toEqual([
+      "Retry recovery",
+      "重试恢复",
+      "重試復原",
+    ]);
+  });
+
   it("keeps Simplified and Traditional Chinese key sets in parity with English", () => {
     const englishKeys = flattenKeys(resources.en.translation).sort();
 

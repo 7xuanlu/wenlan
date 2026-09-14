@@ -142,8 +142,15 @@ const RUNTIME_WORKER_ORDER: &[&str] = &[
 
 const RUNTIME_OPTIONAL_WORKER_SCOPES: &[&str] = &[
     "if optional_runtime_workers_allowed(repair_recovery_pending) && deep_bgebase_pending {\n        let shared_for_deep = shared.clone();",
-    "if optional_runtime_workers_allowed(repair_recovery_pending) {\n        let selected_model = config",
     "if optional_runtime_workers_allowed(repair_recovery_pending) {\n        let db_for_ready = db_arc.clone();",
+];
+
+// Recovery may load a selected cached inference provider for verification,
+// while ordinary writer workers remain gated above. Pin both branches so a
+// recovery preload cannot fall back to a downloading/config-mutating constructor.
+const RUNTIME_RECOVERY_PROVIDER_SCOPES: &[&str] = &[
+    "let selected_model = config.on_device_model.as_deref().and_then(|id| {\n            if repair_recovery_pending {\n                wenlan_core::on_device_models::get_model(id)",
+    "let provider = if repair_recovery_pending {\n                            wenlan_core::llm_provider::OnDeviceProvider::new_cached_with_model(model_id)?\n                        } else {\n                            wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some(model_id))?",
 ];
 
 const RUNTIME_SERVE_ORDER: &[&str] = &[
@@ -740,7 +747,10 @@ fn runtime_carried_value_violations(source: &str, owner: &str) -> Vec<String> {
     let normalized_source = source.replace("\r\n", "\n");
     let code = mask_rust_non_code(&normalized_source);
     let mut violations = unique_order_violations(&code, RUNTIME_WORKER_ORDER, owner);
-    for scope in RUNTIME_OPTIONAL_WORKER_SCOPES {
+    for scope in RUNTIME_OPTIONAL_WORKER_SCOPES
+        .iter()
+        .chain(RUNTIME_RECOVERY_PROVIDER_SCOPES)
+    {
         violations.extend(exact_token_count_violations(&code, scope, 1, owner));
     }
     violations.extend(runtime_recompute_violations(&code, owner));
@@ -1854,33 +1864,26 @@ fn reviewer_mutations_reject_startup_runtime_and_drain_false_greens() {
         "optional-worker guard removal must be rejected by the live runtime tooth: {violations:?}"
     );
 
-    let scope_anchor =
-        "if optional_runtime_workers_allowed(repair_recovery_pending) {\n        let selected_model = config";
-    let drifted_scope = runtime.replacen(
-        scope_anchor,
-        "let selected_model = config;\n    if optional_runtime_workers_allowed(repair_recovery_pending) {",
-        1,
-    );
-    assert_ne!(
-        drifted_scope, runtime,
-        "on-device optional-worker scope must exist"
-    );
-    let violations = structure_violations_with_children(
-        &root,
-        Phase::Runtime,
-        &main,
-        &scheduler,
-        Some(&startup),
-        Some(&drifted_scope),
-        None,
-    );
-    assert!(
-        violations.iter().any(|violation| {
-            violation.contains("let selected_model = config")
-                && violation.contains("exactly 1 times, found 0")
-        }),
-        "optional-worker scope drift must be rejected by the live runtime tooth: {violations:?}"
-    );
+    for &scope_anchor in RUNTIME_RECOVERY_PROVIDER_SCOPES {
+        let drifted_scope = runtime.replacen(scope_anchor, "removed_recovery_provider_scope", 1);
+        assert_ne!(drifted_scope, runtime, "recovery provider scope must exist");
+        let violations = structure_violations_with_children(
+            &root,
+            Phase::Runtime,
+            &main,
+            &scheduler,
+            Some(&startup),
+            Some(&drifted_scope),
+            None,
+        );
+        assert!(
+            violations.iter().any(|violation| {
+                violation.contains("repair_recovery_pending")
+                    && violation.contains("exactly 1 times, found 0")
+            }),
+            "recovery provider scope drift must be rejected by the live runtime tooth: {violations:?}"
+        );
+    }
 
     for (needle, replacement, expected) in [
         (

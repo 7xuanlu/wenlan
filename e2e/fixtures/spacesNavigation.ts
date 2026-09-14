@@ -6,10 +6,12 @@ import type {
   MemoryItem,
   Page as KnowledgePage,
   RefinementProposalSummary,
+  PendingRevisionItem,
   Space,
 } from "../../src/lib/tauri";
 
 export type SpacesNavigationFixture = {
+  readonly pendingRevisions?: readonly PendingRevisionItem[];
   readonly spaces: readonly Space[];
   readonly pages: readonly KnowledgePage[];
   readonly entities: readonly Entity[];
@@ -104,7 +106,7 @@ export function createSpacesNavigationFixture(): SpacesNavigationFixture {
     },
     makePage("page-history", "History semantics", "2026-07-07T12:00:00Z"),
     { ...makePage("page-independent", "Independent research", "2026-07-06T12:00:00Z"), domain: null, space: null },
-  ];
+  ].map((page, index) => ({ ...page, source_memory_ids: [`memory-${index}`] }));
   const memories = Array.from({ length: 205 }, (_, index) => makeMemory(index));
   return {
     spaces: [
@@ -165,7 +167,7 @@ export function createSpacesNavigationFixture(): SpacesNavigationFixture {
       {
         id: "refinement-page-history-cleanup",
         action: "page_keep_or_archive",
-        source_ids: ["memory-page-history"],
+        source_ids: ["page-history"],
         payload: {
           action: "page_keep_or_archive",
           page_id: "page-history",

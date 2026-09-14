@@ -9,7 +9,10 @@ use crate::{
         repair_page_rename::recover_rename_page_title_apply_receipt,
         repair_stale_projection::recover_stale_page_projection_apply_receipt,
         repair_target_receipt::read_current_repair_target_receipt,
-        repair_verification::{record_repair_verification_atomic, RepairVerificationAtomicInput},
+        repair_verification::{
+            reconcile_repair_review_completion, record_repair_verification_atomic,
+            RepairVerificationAtomicInput,
+        },
         MemoryDB,
     },
     error::WenlanError,
@@ -52,7 +55,7 @@ use wenlan_types::{
         RepairAffectedRecord, RepairAffectedRecordKind, RepairPlan, RepairPlanEntriesPage,
         RepairPlanEntriesRequest, RepairPlanEntry, StoredRepairPlan,
     },
-    MemoryType,
+    MemoryType, RepairRecovery,
 };
 
 #[cfg(test)]
@@ -71,6 +74,9 @@ const STALE_PAGE_PROJECTION_APPLY_JOURNAL_PENDING_FILE: &str =
     ".stale-page-projection-apply-journal-v1.json.pending";
 const STALE_PAGE_PROJECTION_APPLY_JOURNAL_FORMAT_VERSION: u16 = 1;
 const VERIFICATION_RECEIPT_FILE: &str = "verification-receipt.json";
+const REVIEW_COMPLETION_MARKER_FILE: &str = "review-completion-marker.json";
+const REVIEW_COMPLETION_MARKER_SCHEMA_VERSION: u16 = 1;
+const REVIEW_COMPLETION_MARKER_MAX_BYTES: u64 = 64 * 1024;
 const OPERATION_LOCK_FILE: &str = ".operation.lock";
 const PLAN_DIR: &str = "plans";
 const TAG_RECORD_SET_LOCK_PREFIX: &str = ".tag-record-set-";
@@ -83,6 +89,9 @@ const REPAIR_ROLLBACK_ARTIFACT_MAX_BYTES: u64 = 40 * 1024 * 1024;
 
 #[cfg(test)]
 mod title_rename_tests;
+
+pub mod current;
+pub(crate) mod review_completion;
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
@@ -107,6 +116,84 @@ pub(crate) enum StalePageProjectionRecoveryArtifactUpdate {
     ClearPendingOnly,
     PublishPendingAndClearJournal,
     ClearPendingAndJournal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ReviewCompletionMarkerDraft<'a> {
+    marker_schema_version: u16,
+    manifest_id: &'a str,
+    manifest_digest: &'a RepairDigest,
+    verification_receipt_digest: &'a RepairDigest,
+    review_id: &'a str,
+    occurrence_digest: &'a RepairDigest,
+    owner_ids: &'a [String],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReviewCompletionMarker {
+    marker_schema_version: u16,
+    manifest_id: String,
+    manifest_digest: RepairDigest,
+    verification_receipt_digest: RepairDigest,
+    review_id: String,
+    occurrence_digest: RepairDigest,
+    owner_ids: Vec<String>,
+    marker_digest: RepairDigest,
+}
+
+impl ReviewCompletionMarker {
+    fn new(
+        manifest: &RepairManifest,
+        receipt: &RepairVerificationReceipt,
+    ) -> Result<Self, WenlanError> {
+        let binding = manifest
+            .source()
+            .review_binding()
+            .ok_or_else(review_completion_marker_mismatch)?;
+        if receipt.manifest_id() != manifest.manifest_id()
+            || receipt.manifest_digest() != manifest.manifest_digest()
+        {
+            return Err(review_completion_marker_mismatch());
+        }
+        let draft = ReviewCompletionMarkerDraft {
+            marker_schema_version: REVIEW_COMPLETION_MARKER_SCHEMA_VERSION,
+            manifest_id: manifest.manifest_id(),
+            manifest_digest: manifest.manifest_digest(),
+            verification_receipt_digest: receipt.receipt_digest(),
+            review_id: binding.review_id(),
+            occurrence_digest: binding.occurrence_digest(),
+            owner_ids: binding.owner_ids(),
+        };
+        let marker_digest = repair_digest(&serde_json::to_vec(&draft)?);
+        Ok(Self {
+            marker_schema_version: draft.marker_schema_version,
+            manifest_id: draft.manifest_id.to_string(),
+            manifest_digest: draft.manifest_digest.clone(),
+            verification_receipt_digest: draft.verification_receipt_digest.clone(),
+            review_id: draft.review_id.to_string(),
+            occurrence_digest: draft.occurrence_digest.clone(),
+            owner_ids: draft.owner_ids.to_vec(),
+            marker_digest,
+        })
+    }
+
+    fn verify(
+        self,
+        manifest: &RepairManifest,
+        receipt: &RepairVerificationReceipt,
+    ) -> Result<(), WenlanError> {
+        let expected = Self::new(manifest, receipt)?;
+        if self == expected {
+            Ok(())
+        } else {
+            Err(review_completion_marker_mismatch())
+        }
+    }
+}
+
+fn review_completion_marker_mismatch() -> WenlanError {
+    WenlanError::Validation("repair_review_completion_marker_invalid".to_string())
 }
 
 impl RepairArtifactStore {
@@ -925,6 +1012,56 @@ impl RepairArtifactStore {
         result
     }
 
+    /// Publish the authenticated marker that proves a review-bound
+    /// verification receipt's queue CAS committed. The receipt itself is
+    /// intentionally written inside the transaction before COMMIT; this
+    /// marker is the durable post-COMMIT edge that keeps a crash between those
+    /// two events recoverable.
+    pub(crate) fn publish_review_completion_marker(
+        &self,
+        manifest: &RepairManifest,
+        receipt: &RepairVerificationReceipt,
+    ) -> Result<(), WenlanError> {
+        if manifest.source().review_binding().is_none() {
+            return Ok(());
+        }
+        let marker = ReviewCompletionMarker::new(manifest, receipt)?;
+        let manifest_dir = self.manifest_dir(manifest.manifest_id())?;
+        let final_path = manifest_dir.join(REVIEW_COMPLETION_MARKER_FILE);
+        if final_path.exists() {
+            let existing = self.load_review_completion_marker(manifest, receipt)?;
+            debug_assert!(existing);
+            return Ok(());
+        }
+        let temp_path = manifest_dir.join(format!(
+            ".{REVIEW_COMPLETION_MARKER_FILE}.tmp-{}",
+            Uuid::new_v4()
+        ));
+        let result = (|| {
+            write_private_file(&temp_path, &serde_json::to_vec_pretty(&marker)?)?;
+            match publish_no_replace(
+                &temp_path,
+                &final_path,
+                "repair_review_completion_marker_exists",
+            ) {
+                Ok(()) => Ok(()),
+                Err(WenlanError::Conflict(message))
+                    if message == "repair_review_completion_marker_exists" =>
+                {
+                    // A concurrent retry may have won publication. Validate
+                    // that winner before accepting idempotent completion.
+                    self.load_review_completion_marker(manifest, receipt)
+                        .map(|_| ())
+                }
+                Err(error) => Err(error),
+            }
+        })();
+        if result.is_err() && temp_path.exists() {
+            let _ = fs::remove_file(temp_path);
+        }
+        result
+    }
+
     fn load_verification_receipt(
         &self,
         manifest: &RepairManifest,
@@ -938,6 +1075,55 @@ impl RepairArtifactStore {
         }
         let receipt = StoredRepairVerificationReceipt::from_slice(&fs::read(path)?)?;
         verify_stored_verification_receipt(receipt, manifest, apply_receipt).map(Some)
+    }
+
+    fn load_review_completion_marker(
+        &self,
+        manifest: &RepairManifest,
+        receipt: &RepairVerificationReceipt,
+    ) -> Result<bool, WenlanError> {
+        let path = self
+            .manifest_dir(manifest.manifest_id())?
+            .join(REVIEW_COMPLETION_MARKER_FILE);
+        if !path.exists() {
+            return Ok(false);
+        }
+        let marker = serde_json::from_slice::<ReviewCompletionMarker>(&read_bounded_file(
+            &path,
+            REVIEW_COMPLETION_MARKER_MAX_BYTES,
+        )?)
+        .map_err(|_| review_completion_marker_mismatch())?;
+        marker.verify(manifest, receipt)?;
+        Ok(true)
+    }
+
+    /// Return whether this review-bound manifest has an authenticated
+    /// verification receipt. Recovery routes use this extra proof before
+    /// surfacing a queue row that has already reached `resolved` while the
+    /// post-COMMIT marker was still unpublished.
+    pub fn has_authenticated_review_verification_receipt(
+        &self,
+        manifest_id: &str,
+    ) -> Result<bool, WenlanError> {
+        let manifest = self.load_manifest(manifest_id)?;
+        if manifest.source().review_binding().is_none() {
+            return Ok(false);
+        }
+        let apply_path = self.manifest_dir(manifest_id)?.join(APPLY_RECEIPT_FILE);
+        if !apply_path.is_file() {
+            return Ok(false);
+        }
+        let apply_receipt = self.load_apply_receipt(&manifest)?;
+        let Some(receipt) = self.load_verification_receipt(&manifest, &apply_receipt)? else {
+            return Ok(false);
+        };
+        let marker_path = self
+            .manifest_dir(manifest_id)?
+            .join(REVIEW_COMPLETION_MARKER_FILE);
+        if marker_path.exists() {
+            self.load_review_completion_marker(&manifest, &receipt)?;
+        }
+        Ok(true)
     }
 
     /// Return every durably applied repair that still needs verification.
@@ -966,22 +1152,81 @@ impl RepairArtifactStore {
                 WenlanError::Validation("invalid_repair_manifest_directory".to_string())
             })?;
             let manifest = self.load_manifest(&manifest_id)?;
+            let marker_path = entry.path().join(REVIEW_COMPLETION_MARKER_FILE);
             if apply_path.is_file() {
                 let apply_receipt = self.load_apply_receipt(&manifest)?;
-                if self
-                    .load_verification_receipt(&manifest, &apply_receipt)?
-                    .is_none()
-                {
+                let verification = self.load_verification_receipt(&manifest, &apply_receipt)?;
+                let completed = match verification {
+                    Some(receipt) if manifest.source().review_binding().is_some() => {
+                        self.load_review_completion_marker(&manifest, &receipt)?
+                    }
+                    Some(_) => true,
+                    None if manifest.source().review_binding().is_some()
+                        && marker_path.exists() =>
+                    {
+                        return Err(review_completion_marker_mismatch());
+                    }
+                    None => false,
+                };
+                if !completed {
                     pending.push(manifest_id);
                 }
                 continue;
             }
             if pending_path.is_file() {
+                if marker_path.exists() {
+                    return Err(review_completion_marker_mismatch());
+                }
                 pending.push(manifest_id);
             }
         }
         pending.sort();
         Ok(pending)
+    }
+
+    /// Load the durable recovery state for one manifest without changing any
+    /// artifact or database state. A final apply receipt is returned only
+    /// after the existing authenticated receipt loader validates it. A
+    /// provisional pending receipt is intentionally opaque: its existence is
+    /// the recovery signal, while publication and salvage remain owned by the
+    /// apply recovery path.
+    pub fn load_pending_recovery(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<RepairRecovery>, WenlanError> {
+        let manifest_dir = self.manifest_dir(manifest_id)?;
+        if !manifest_dir.join(MANIFEST_FILE).is_file() {
+            return Ok(None);
+        }
+        let manifest = self.load_manifest(manifest_id)?;
+        let apply_path = manifest_dir.join(APPLY_RECEIPT_FILE);
+        let marker_path = manifest_dir.join(REVIEW_COMPLETION_MARKER_FILE);
+        if !apply_path.is_file() && marker_path.exists() {
+            return Err(review_completion_marker_mismatch());
+        }
+        if apply_path.is_file() {
+            let apply_receipt = self.load_apply_receipt(&manifest)?;
+            if let Some(receipt) = self.load_verification_receipt(&manifest, &apply_receipt)? {
+                if manifest.source().review_binding().is_none()
+                    || self.load_review_completion_marker(&manifest, &receipt)?
+                {
+                    return Ok(None);
+                }
+            } else if manifest.source().review_binding().is_some() && marker_path.exists() {
+                return Err(review_completion_marker_mismatch());
+            }
+            return Ok(Some(RepairRecovery {
+                manifest,
+                apply_receipt: Some(apply_receipt),
+            }));
+        }
+        if manifest_dir.join(APPLY_RECEIPT_PENDING_FILE).is_file() {
+            return Ok(Some(RepairRecovery {
+                manifest,
+                apply_receipt: None,
+            }));
+        }
+        Ok(None)
     }
 
     fn clear_pending_apply_receipt(&self, manifest_id: &str) -> Result<(), WenlanError> {
@@ -1001,12 +1246,31 @@ impl RepairArtifactStore {
         let manifest = self.load_manifest(manifest_id)?;
         let apply_path = self.manifest_dir(manifest_id)?.join(APPLY_RECEIPT_FILE);
         if !apply_path.is_file() {
+            if self
+                .manifest_dir(manifest_id)?
+                .join(REVIEW_COMPLETION_MARKER_FILE)
+                .exists()
+            {
+                return Err(review_completion_marker_mismatch());
+            }
             return Ok(false);
         }
         let apply_receipt = self.load_apply_receipt(&manifest)?;
-        Ok(self
-            .load_verification_receipt(&manifest, &apply_receipt)?
-            .is_some())
+        let Some(receipt) = self.load_verification_receipt(&manifest, &apply_receipt)? else {
+            if manifest.source().review_binding().is_some()
+                && self
+                    .manifest_dir(manifest_id)?
+                    .join(REVIEW_COMPLETION_MARKER_FILE)
+                    .exists()
+            {
+                return Err(review_completion_marker_mismatch());
+            }
+            return Ok(false);
+        };
+        if manifest.source().review_binding().is_none() {
+            return Ok(true);
+        }
+        self.load_review_completion_marker(&manifest, &receipt)
     }
 }
 
@@ -2793,6 +3057,11 @@ async fn record_repair_verification_inner(
     }
     if apply_receipt.post_apply_db_digest().is_none() {
         if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+            if manifest.source().review_binding().is_some() {
+                store.load_review_completion_marker(&manifest, &receipt)?;
+            }
+            reconcile_repair_review_completion(db, &manifest, &receipt).await?;
+            store.publish_review_completion_marker(&manifest, &receipt)?;
             store.clear_pending_apply_receipt(manifest.manifest_id())?;
             return Ok(receipt);
         }
@@ -2809,6 +3078,11 @@ async fn record_repair_verification_inner(
         ));
     }
     if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+        if manifest.source().review_binding().is_some() {
+            store.load_review_completion_marker(&manifest, &receipt)?;
+        }
+        reconcile_repair_review_completion(db, &manifest, &receipt).await?;
+        store.publish_review_completion_marker(&manifest, &receipt)?;
         store.clear_pending_apply_receipt(manifest.manifest_id())?;
         return Ok(receipt);
     }
@@ -2870,6 +3144,7 @@ async fn record_repair_verification_inner(
     run_repair_verification_test_checkpoint(
         RepairVerificationTestCheckpointKind::AfterCommitBeforePendingClear,
     );
+    store.publish_review_completion_marker(&manifest, &receipt)?;
     store.clear_pending_apply_receipt(manifest.manifest_id())?;
     Ok(receipt)
 }
@@ -3231,6 +3506,7 @@ pub(crate) async fn validate_current_page_report_receipt(
     if report.snapshots().pages().before_scan_digest() != &current_page
         || report.snapshots().pages().after_scan_digest() != Some(&current_page)
     {
+        log::warn!("[repair] source report rejected: page projection snapshot changed");
         return Err(WenlanError::Conflict(
             "repair_verification_reports_stale".to_string(),
         ));
@@ -6329,6 +6605,7 @@ pub(crate) fn validate_report_source_receipts(
     for report in reports {
         let db = report.snapshots().db();
         if db.analysis_digest() != &current || db.post_run_digest() != Some(&current) {
+            log::warn!("[repair] preparation rejected: database source snapshot changed");
             return Err(WenlanError::Conflict(
                 "repair_source_reports_stale".to_string(),
             ));
@@ -6673,6 +6950,11 @@ mod entity_extraction_tests;
 
 #[cfg(test)]
 mod tests {
+    #[path = "current_tests.rs"]
+    mod current_tests;
+    #[path = "review_completion_tests.rs"]
+    mod review_completion_tests;
+
     use super::*;
     use crate::{
         db::{
@@ -8069,8 +8351,8 @@ mod tests {
 
     #[tokio::test]
     #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
-    async fn verification_commit_failure_keeps_terminal_receipt_for_retry_cleanup() {
-        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+    async fn verification_commit_failure_keeps_receipt_pending_until_review_replay() {
+        let (db, db_dir, repair_root, manifest) = prepared_fixture().await;
         let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
         let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
             .await
@@ -8101,13 +8383,34 @@ mod tests {
             "Vector DB error: repair verify commit: injected test failure"
         );
         assert!(final_receipt.is_file());
+        assert!(!manifest_dir.join(REVIEW_COMPLETION_MARKER_FILE).exists());
         assert!(pending.is_file());
-        let retried = record_repair_verification(&db, &store, request, None, 1_721_000_003)
+        assert_eq!(
+            store.pending_verification_manifest_ids().unwrap(),
+            vec![manifest.manifest_id().to_string()]
+        );
+        assert!(store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .is_some());
+        rollback_repair_verification_test_transaction(&db).await;
+        drop(db);
+        let reopened = MemoryDB::open_for_repair(db_dir.path()).await.unwrap();
+        let retried = record_repair_verification(&reopened, &store, request, None, 1_721_000_003)
             .await
             .unwrap();
         assert_eq!(retried.manifest_id(), manifest.manifest_id());
+        assert!(manifest_dir.join(REVIEW_COMPLETION_MARKER_FILE).is_file());
         assert!(!pending.exists());
-        rollback_repair_verification_test_transaction(&db).await;
+        assert_eq!(
+            review_completion_tests::queue_status(
+                &reopened,
+                manifest.source().review_binding().unwrap().review_id()
+            )
+            .await
+            .as_deref(),
+            Some("resolved")
+        );
     }
 
     #[tokio::test]
@@ -8191,6 +8494,139 @@ mod tests {
         assert!(store
             .has_completed_verification(manifest.manifest_id())
             .unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_returns_manifest_and_validated_apply_receipt() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        assert!(store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .is_none());
+
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let recovery = store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .expect("applied-unverified repair should be recoverable");
+        assert_eq!(recovery.manifest, manifest);
+        assert_eq!(recovery.apply_receipt, Some(apply_receipt));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_keeps_uncertain_pending_receipt_opaque() {
+        let (_db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let manifest_dir = store.manifest_dir(manifest.manifest_id()).unwrap();
+        std::fs::write(
+            manifest_dir.join(APPLY_RECEIPT_PENDING_FILE),
+            b"not a receipt and must not be parsed here",
+        )
+        .unwrap();
+
+        let recovery = store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .expect("provisional pending artifact should remain recoverable");
+        assert_eq!(recovery.manifest, manifest);
+        assert!(recovery.apply_receipt.is_none());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_rejects_an_invalid_final_apply_receipt() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        std::fs::write(
+            store
+                .manifest_dir(manifest.manifest_id())
+                .unwrap()
+                .join(APPLY_RECEIPT_FILE),
+            b"tampered final receipt",
+        )
+        .unwrap();
+
+        assert!(store.load_pending_recovery(manifest.manifest_id()).is_err());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn review_completion_marker_corruption_fails_closed() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let (general, deep) = verification_reports(&db).await;
+        record_repair_verification(
+            &db,
+            &store,
+            exact_verify(&manifest, &apply_receipt, general, deep),
+            None,
+            1_721_000_002,
+        )
+        .await
+        .unwrap();
+
+        let marker = store
+            .manifest_dir(manifest.manifest_id())
+            .unwrap()
+            .join(REVIEW_COMPLETION_MARKER_FILE);
+        std::fs::write(&marker, b"corrupt marker").unwrap();
+        for result in [
+            store.pending_verification_manifest_ids().map(|_| ()),
+            store
+                .load_pending_recovery(manifest.manifest_id())
+                .map(|_| ()),
+            store
+                .has_completed_verification(manifest.manifest_id())
+                .map(|_| ()),
+        ] {
+            assert!(matches!(
+                result,
+                Err(WenlanError::Validation(message))
+                    if message == "repair_review_completion_marker_invalid"
+            ));
+        }
+    }
+
+    #[test]
+    fn legacy_nonreview_verification_remains_terminal_without_marker() {
+        let repair_root = tempfile::tempdir().unwrap();
+        let manifest_id = "repair_550e8400-e29b-41d4-a716-446655440000";
+        let manifest_dir = repair_root.path().join(manifest_id);
+        std::fs::create_dir(&manifest_dir).unwrap();
+        std::fs::write(
+            manifest_dir.join(MANIFEST_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/manifest.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            manifest_dir.join(APPLY_RECEIPT_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/apply-receipt.json"),
+        )
+        .unwrap();
+        std::fs::write(
+            manifest_dir.join(VERIFICATION_RECEIPT_FILE),
+            include_bytes!("../../wenlan-types/testdata/repair/v1/verification-receipt.json"),
+        )
+        .unwrap();
+
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        assert!(store
+            .pending_verification_manifest_ids()
+            .unwrap()
+            .is_empty());
+        assert!(store.load_pending_recovery(manifest_id).unwrap().is_none());
+        assert!(store.has_completed_verification(manifest_id).unwrap());
     }
 
     #[test]

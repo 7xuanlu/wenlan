@@ -339,7 +339,7 @@ pub(crate) async fn record_repair_verification_atomic(
         .map_err(|error| WenlanError::Validation(error.to_string()))?;
         let receipt_digest = repair_digest(&draft.canonical_bytes()?);
         let receipt = RepairVerificationReceipt::from_draft(draft, receipt_digest);
-        if let Some(session) = rename_projection_session {
+        let receipt = if let Some(session) = rename_projection_session {
             validate_current_page_receipts_on_repair_projection(
                 request.general_report(),
                 request.deep_report(),
@@ -384,7 +384,19 @@ pub(crate) async fn record_repair_verification_atomic(
                 RepairVerificationTestCheckpointKind::AfterReceiptPersist,
             );
             Ok(receipt)
+        }?;
+        if manifest.source().review_binding().is_some() {
+            // The receipt has been durably published before this queue
+            // mutation. Keep the exact receipt object as the authority for
+            // completion, including on a later retry after commit failure.
+            crate::repair::review_completion::finalize_lint_repair_review_on_connection(
+                &connection,
+                manifest,
+                &receipt,
+            )
+            .await?;
         }
+        Ok(receipt)
     }
     .await;
     let receipt = match result {
@@ -404,6 +416,53 @@ pub(crate) async fn record_repair_verification_atomic(
         .await
         .map_err(|error| WenlanError::VectorDb(format!("repair verify commit: {error}")))?;
     Ok(receipt)
+}
+
+/// Reconcile a durable verification receipt with its exact source Review Item.
+///
+/// This is used only on the receipt-replay path. The caller has already
+/// authenticated the immutable receipt against the manifest and apply receipt;
+/// this transaction performs only the missing queue CAS and never re-runs or
+/// reapplies the repair.
+pub(crate) async fn reconcile_repair_review_completion(
+    db: &MemoryDB,
+    manifest: &RepairManifest,
+    receipt: &RepairVerificationReceipt,
+) -> Result<(), WenlanError> {
+    if manifest.source().review_binding().is_none() {
+        return Ok(());
+    }
+    let connection = db.conn.lock().await;
+    let owns_transaction = connection.is_autocommit();
+    if owns_transaction {
+        connection
+            .execute("BEGIN IMMEDIATE", ())
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair review completion begin: {error}"))
+            })?;
+    }
+    let result = crate::repair::review_completion::finalize_lint_repair_review_on_connection(
+        &connection,
+        manifest,
+        receipt,
+    )
+    .await;
+    match result {
+        Ok(()) if owns_transaction => commit_or_rollback(&connection)
+            .await
+            .map_err(|error| {
+                WenlanError::VectorDb(format!("repair review completion commit: {error}"))
+            })
+            .map(|_| ()),
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if owns_transaction {
+                let _ = connection.execute("ROLLBACK", ()).await;
+            }
+            Err(error)
+        }
+    }
 }
 
 #[cfg(test)]

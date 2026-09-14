@@ -1782,7 +1782,7 @@ impl RepairTarget {
         entity_ids: Vec<String>,
         scope: RepairScope,
     ) -> Result<Self, RepairContractError> {
-        if !valid_nonempty(&memory_id) || !strictly_sorted_unique(&entity_ids) {
+        if !valid_nonempty(&memory_id) || !valid_sorted_ids(&entity_ids) {
             return Err(RepairContractError::InvalidTarget);
         }
         Ok(Self::MemoryEntityExtraction {
@@ -2475,7 +2475,7 @@ impl RepairMutation {
     pub fn complete_entity_extraction(
         entity_ids: Vec<String>,
     ) -> Result<Self, RepairContractError> {
-        if !strictly_sorted_unique(&entity_ids) {
+        if !valid_sorted_ids(&entity_ids) {
             return Err(RepairContractError::InvalidMutation);
         }
         Ok(Self::CompleteEntityExtraction { entity_ids })
