@@ -682,11 +682,16 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/refinery/queue/{id}/accept` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/refinery/queue/{id}/reject` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/repairs/apply` | main + repair | yes | automatic | `none` | `handle_apply` | RepairTarget.label_key |
+| `POST` | `/api/repairs/status` | main + repair | yes | automatic | `none` | `handle_status` | RepairTarget.label_key |
+| `POST` | `/api/repairs/cancel` | main + repair | yes | automatic | `none` | `handle_cancel` | RepairTarget.label_key |
 | `POST` | `/api/repairs/plan` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/repairs/plan-current` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/repairs/plan/entries` | main | yes | automatic | `none` | `handle_plan_entries` | RepairMutation.after_title, RepairMutation.before_title, RepairSys |
 | `POST` | `/api/repairs/prepare` | main | yes | automatic | `none` | `handle_prepare` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
 | `POST` | `/api/repairs/prepare-current` | main | yes | automatic | `none` | `handle_prepare_current` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
+| `POST` | `/api/repairs/prepare-operation` | main | yes | automatic | `none` | `handle_prepare_operation` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
+| `POST` | `/api/repairs/prepare-operation/status` | main + repair | yes | automatic | `none` | `handle_prepare_status` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
+| `POST` | `/api/repairs/prepare-operation/cancel` | main + repair | yes | automatic | `none` | `handle_prepare_cancel` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
 | `GET` | `/api/repairs/recovery/{review_id}` | main + repair | yes | automatic | `none` | `handle_get_repair_recovery` | RepairManifest and optional RepairApplyReceipt |
 | `POST` | `/api/repairs/verify` | main + repair | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/repairs/runtime` | main + repair | no | not_applicable | `none` | — | process identity and lifecycle flags only |
@@ -1246,7 +1251,7 @@ carrying the authority of agreement.
 | `core/repair.rs::apply_repair_with_pages` | `pub` | no | **yes** | `server/repair_routes.rs::handle_apply` | `core/repair.rs::apply_repair_with_pages_inner` |
 | `core/repair.rs::capture_page_projection_rollback` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_from_snapshot` |
 | `core/repair.rs::projection_page_row_on_connection` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_from_connection` |
-| `core/repair/current.rs::prepare_current_repair_with_pages` | `pub` | no | **yes** | `server/lint_routes.rs::prepare_current_repair` | `core/repair.rs::prepare_memory_reclassification_with_pages` |
+| `core/repair/current.rs::prepare_current_repair_with_pages` | `pub` | no | **yes** | `server/lint_routes.rs::prepare_current_repair`, `server/repair_prepare_operation_routes.rs::handle_prepare_operation` | `core/repair.rs::prepare_memory_reclassification_with_pages` |
 | `core/repair_plan.rs::deterministic_target_still_actionable` | `pub(crate)` | no | no | — | `core/repair_plan/deterministic.rs::target_still_actionable` |
 | `core/sources/page_watcher.rs::sync_one_file` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/synthesis/detect.rs::detect_page_candidates` | `pub` | no | no | — | `core/db.rs::find_distillation_clusters_scoped`, `core/db.rs::find_matching_page_scoped` |
@@ -1373,6 +1378,7 @@ carrying the authority of agreement.
 | `server/page_routes.rs::handle_refresh_page` | `pub` | no | no | — | `server/page_routes.rs::handle_refresh_page_inner` |
 | `server/page_routes.rs::handle_review_page` | `pub` | no | no | — | `core/db/presence_review.rs::review_page_with_presence` |
 | `server/refinery_routes.rs::handle_accept_refinement` | `pub` | no | no | — | `core/synthesis/refinement_queue.rs::apply_refinement_with_decision` |
+| `server/repair_prepare_operation_routes.rs::handle_prepare_operation` | `private` | no | no | — | `core/repair/current.rs::prepare_current_repair_with_pages` |
 | `server/repair_routes.rs::handle_apply` | `private` | no | no | — | `core/repair.rs::apply_repair_with_pages` |
 | `server/routes.rs::handle_context` | `pub` | no | no | — | `server/brief_routes.rs::handle_read_brief` |
 | `server/routes.rs::handle_search` | `pub` | no | no | — | `server/routes.rs::handle_search_inner` |

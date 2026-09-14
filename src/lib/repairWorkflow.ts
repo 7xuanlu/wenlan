@@ -4,6 +4,7 @@ import type {
   RepairApplyReceipt,
   RepairLintReport,
   RepairManifest,
+  RepairOperationStatus,
   RepairSemanticFinding,
   RepairVerificationReceipt,
 } from "./repairTypes";
@@ -218,4 +219,30 @@ export function validateRepairVerificationReceipt(
     receipt.manifest_digest === manifest.manifest_digest &&
     receipt.apply_receipt_digest === applyReceipt.receipt_digest &&
     isDigest(receipt.receipt_digest);
+}
+
+
+/** Bind every status, including cancellation, to the exact approved manifest. */
+export function validateRepairOperationStatus(
+  value: unknown,
+  manifest: RepairManifest,
+): value is RepairOperationStatus {
+  if (!isRecord(value) || value.manifest_id !== manifest.manifest_id ||
+    value.manifest_digest !== manifest.manifest_digest || !isRecord(value.state)) return false;
+  const state = value.state;
+  switch (state.phase) {
+    case "prepared":
+    case "in_progress":
+    case "indeterminate": return true;
+    case "cancelled": return typeof state.cancelled_at === "number" && Number.isSafeInteger(state.cancelled_at) && state.cancelled_at > 0;
+    case "applied_unverified":
+    case "verified": {
+      if (!isRecord(state.apply_receipt) ||
+        !validateRepairApplyReceipt(state.apply_receipt as unknown as RepairApplyReceipt, manifest)) return false;
+      return state.phase === "applied_unverified" || (isRecord(state.verification_receipt) &&
+        validateRepairVerificationReceipt(state.verification_receipt as unknown as RepairVerificationReceipt,
+          manifest, state.apply_receipt as unknown as RepairApplyReceipt));
+    }
+    default: return false;
+  }
 }

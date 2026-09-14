@@ -912,6 +912,44 @@ impl WenlanClient {
         self.post_json("/api/repairs/apply", &request).await
     }
 
+    pub async fn prepare_repair_operation(
+        &self,
+        request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+    ) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+        self.post_json("/api/repairs/prepare-operation", &request)
+            .await
+    }
+
+    pub async fn repair_prepare_operation_status(
+        &self,
+        request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+    ) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+        self.post_json("/api/repairs/prepare-operation/status", &request)
+            .await
+    }
+
+    pub async fn cancel_repair_prepare_operation(
+        &self,
+        request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+    ) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+        self.post_json("/api/repairs/prepare-operation/cancel", &request)
+            .await
+    }
+
+    pub async fn repair_operation_status(
+        &self,
+        request: wenlan_types::repair::ApplyRepairRequest,
+    ) -> Result<wenlan_types::repair_operation::RepairOperationStatus, String> {
+        self.post_json("/api/repairs/status", &request).await
+    }
+
+    pub async fn cancel_prepared_repair(
+        &self,
+        request: wenlan_types::repair::ApplyRepairRequest,
+    ) -> Result<wenlan_types::repair_operation::RepairOperationStatus, String> {
+        self.post_json("/api/repairs/cancel", &request).await
+    }
+
     pub async fn verify_repair(
         &self,
         request: wenlan_types::repair::VerifyRepairRequest,

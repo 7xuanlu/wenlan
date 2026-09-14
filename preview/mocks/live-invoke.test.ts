@@ -926,6 +926,7 @@ describe("native source repair boundary", () => {
   it.each([
     "repair_lint", "repair_prepare", "repair_prepare_current", "repair_validate_manifest",
     "repair_apply", "repair_verify", "repair_plan", "repair_plan_entries", "repair_recovery", "repair_resume_runtime",
+    "repair_operation_status", "repair_cancel", "repair_prepare_operation", "repair_prepare_operation_status", "repair_prepare_operation_cancel",
   ])("rejects %s explicitly without reaching a daemon", async (command) => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);

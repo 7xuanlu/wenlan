@@ -310,3 +310,38 @@ async fn archive_page_without_invalidation_trigger_fails_exact_and_rolls_back_ac
     assert_eq!(page_route_state(&db).await, route_before);
     assert_db_mutex_released(&db);
 }
+
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn cancelled_manifest_rejects_apply_before_canonical_mutation() {
+    let (db, _db_dir, repair_root, manifest) = simple_fixture().await;
+    let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+    let request = wenlan_types::repair::ApplyRepairRequest::try_new(
+        manifest.manifest_id().into(),
+        manifest.manifest_digest().clone(),
+        format!(
+            "apply repair {} {}",
+            manifest.manifest_id(),
+            manifest.manifest_digest().as_str()
+        ),
+    )
+    .unwrap();
+    let before = source_agent_state(&db).await;
+    store
+        .cancel_prepared_repair(&request, 1_721_000_001)
+        .unwrap();
+    let restarted_store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+    let error =
+        crate::repair::apply_repair_with_pages(&db, &restarted_store, request, None, 1_721_000_002)
+            .await
+            .unwrap_err();
+    assert!(
+        matches!(error, WenlanError::Conflict(ref code) if code == "repair_operation_cancelled")
+    );
+    assert_eq!(source_agent_state(&db).await, before);
+    assert!(!store
+        .manifest_dir(manifest.manifest_id())
+        .unwrap()
+        .join("apply-receipt.json")
+        .exists());
+}

@@ -398,6 +398,18 @@ export interface ApplyRepairRequest {
   approval: string;
 }
 
+export interface RepairOperationStatus {
+  manifest_id: string;
+  manifest_digest: RepairDigest;
+  state:
+    | { phase: "prepared" }
+    | { phase: "in_progress" }
+    | { phase: "indeterminate" }
+    | { phase: "applied_unverified"; apply_receipt: RepairApplyReceipt }
+    | { phase: "verified"; apply_receipt: RepairApplyReceipt; verification_receipt: RepairVerificationReceipt }
+    | { phase: "cancelled"; cancelled_at: number };
+}
+
 export interface RepairApplyReceipt {
   receipt_schema_version: number;
   manifest_id: string;
@@ -505,4 +517,20 @@ export interface RepairPlanEntriesPage {
   next_offset?: number | null;
   total_entries: number;
   entries: RepairPlanEntry[];
+}
+
+
+export interface RepairPrepareOperationRequest {
+  operation_id: string;
+  request: PrepareCurrentRepairRequest;
+}
+
+export interface RepairPrepareOperationStatus {
+  operation_id: string;
+  state:
+    | { phase: "not_started" }
+    | { phase: "in_progress" }
+    | { phase: "interrupted" }
+    | { phase: "ready"; manifest: RepairManifest; operation: RepairOperationStatus }
+    | { phase: "cancelled"; cancelled_at: number };
 }

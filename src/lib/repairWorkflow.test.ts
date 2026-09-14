@@ -7,6 +7,7 @@ import {
   semanticRecordDigest,
   sha256Hex,
   validateRepairApplyReceipt,
+  validateRepairOperationStatus,
   validateRepairManifestBinding,
   validateRepairManifestDigest,
   validateRepairVerificationReceipt,
@@ -174,5 +175,24 @@ describe("source repair workflow guards", () => {
       approved_manifest_digest: manifest.manifest_digest,
       approval: `apply repair ${manifest.manifest_id} ${manifest.manifest_digest}`,
     });
+  });
+});
+
+
+describe("durable operation status binding", () => {
+  it("never accepts cancellation for another manifest or a malformed terminal state", async () => {
+    const manifest = await manifestFor();
+    const status = { manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "cancelled", cancelled_at: 123 } };
+    expect(validateRepairOperationStatus(status, manifest)).toBe(true);
+    for (const invalid of [null, { ...status, manifest_id: "other" }, { ...status, manifest_digest: "f".repeat(64) }, { ...status, state: { phase: "cancelled", cancelled_at: 0 } }, { ...status, state: { phase: "verified" } }, { ...status, state: { phase: "success" } }]) {
+      expect(validateRepairOperationStatus(invalid, manifest)).toBe(false);
+    }
+  });
+  it("requires matching receipts before an applied status may proceed to verification", async () => {
+    const manifest = await manifestFor();
+    const receipt = applyReceipt(manifest);
+    const status = { manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "applied_unverified", apply_receipt: receipt } };
+    expect(validateRepairOperationStatus(status, manifest)).toBe(true);
+    expect(validateRepairOperationStatus({ ...status, state: { ...status.state, apply_receipt: { ...receipt, manifest_id: "other" } } }, manifest)).toBe(false);
   });
 });

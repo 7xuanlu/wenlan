@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   ApplyRepairRequest, PrepareRepairRequest, PrepareCurrentRepairRequest, RepairApplyReceipt, RepairLintQuery,
-  RepairLintReport, RepairManifest, RepairPlanEntriesPage, RepairPlanEntriesRequest, RepairRecovery,
+  RepairLintReport, RepairManifest, RepairOperationStatus, RepairPrepareOperationRequest, RepairPrepareOperationStatus, RepairPlanEntriesPage, RepairPlanEntriesRequest, RepairRecovery,
   RepairPlanRequest, RepairPlanSummary, RepairRuntimeResumeApproval, RepairVerificationReceipt, VerifyRepairRequest,
 } from "./repairTypes";
 export { daemonMeetsFloor } from "./daemonVersion";
@@ -19,6 +19,18 @@ export async function repairPrepareCurrent(request: PrepareCurrentRepairRequest)
   return invoke("repair_prepare_current", { request });
 }
 
+export async function repairPrepareOperation(request: RepairPrepareOperationRequest): Promise<RepairPrepareOperationStatus> {
+  return invoke("repair_prepare_operation", { request });
+}
+
+export async function repairPrepareOperationStatus(request: RepairPrepareOperationRequest): Promise<RepairPrepareOperationStatus> {
+  return invoke("repair_prepare_operation_status", { request });
+}
+
+export async function repairPrepareOperationCancel(request: RepairPrepareOperationRequest): Promise<RepairPrepareOperationStatus> {
+  return invoke("repair_prepare_operation_cancel", { request });
+}
+
 export async function repairRecovery(reviewId: string): Promise<RepairRecovery | null> {
   return invoke("repair_recovery", { reviewId });
 }
@@ -29,6 +41,16 @@ export async function repairValidateManifest(manifest: RepairManifest): Promise<
 
 export async function repairApply(request: ApplyRepairRequest): Promise<RepairApplyReceipt> {
   return invoke("repair_apply", { request });
+}
+
+/** Observe an exact manifest without retrying its write. */
+export async function repairOperationStatus(request: ApplyRepairRequest): Promise<RepairOperationStatus> {
+  return invoke("repair_operation_status", { request });
+}
+
+/** A cancellation is confirmed only by the returned cancelled state. */
+export async function repairCancel(request: ApplyRepairRequest): Promise<RepairOperationStatus> {
+  return invoke("repair_cancel", { request });
 }
 
 export async function repairVerify(request: VerifyRepairRequest): Promise<RepairVerificationReceipt> {

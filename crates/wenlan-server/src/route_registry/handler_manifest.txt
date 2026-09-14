@@ -125,6 +125,8 @@ main|post|/api/profile/narrative/regenerate|wenlan_server::profile_narrative_rou
 main|post|/api/refinery/queue/{id}/accept|wenlan_server::refinery_routes::handle_accept_refinement
 main|post|/api/refinery/queue/{id}/reject|wenlan_server::refinery_routes::handle_reject_refinement
 main|post|/api/repairs/apply|wenlan_server::repair_routes::handle_apply
+main|post|/api/repairs/status|wenlan_server::repair_operation_routes::handle_status
+main|post|/api/repairs/cancel|wenlan_server::repair_operation_routes::handle_cancel
 main|post|/api/repairs/plan|wenlan_server::repair_routes::handle_plan
 main|post|/api/repairs/plan-current|wenlan_server::repair_routes::handle_plan_current
 main|post|/api/repairs/plan/entries|wenlan_server::repair_routes::handle_plan_entries
@@ -190,5 +192,12 @@ repair|get|/api/repairs/runtime|wenlan_server::repair_runtime_routes::handle_run
 repair|get|/api/status|wenlan_server::routes::handle_status
 repair|post|/api/lint|wenlan_server::lint_routes::handle_lint_submission
 repair|post|/api/repairs/apply|wenlan_server::repair_routes::handle_apply
+repair|post|/api/repairs/status|wenlan_server::repair_operation_routes::handle_status
+repair|post|/api/repairs/cancel|wenlan_server::repair_operation_routes::handle_cancel
 repair|post|/api/repairs/verify|wenlan_server::repair_routes::handle_verify
 repair|post|/api/repairs/runtime/resume|wenlan_server::repair_runtime_routes::handle_resume
+main|post|/api/repairs/prepare-operation/status|wenlan_server::repair_prepare_operation_routes::handle_prepare_status
+main|post|/api/repairs/prepare-operation/cancel|wenlan_server::repair_prepare_operation_routes::handle_prepare_cancel
+main|post|/api/repairs/prepare-operation|wenlan_server::repair_prepare_operation_routes::handle_prepare_operation
+repair|post|/api/repairs/prepare-operation/status|wenlan_server::repair_prepare_operation_routes::handle_prepare_status
+repair|post|/api/repairs/prepare-operation/cancel|wenlan_server::repair_prepare_operation_routes::handle_prepare_cancel

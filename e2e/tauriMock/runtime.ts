@@ -172,6 +172,12 @@ export class TauriMockRuntime {
 
     switch (command) {
       case "repair_resume_runtime": return undefined;
+      case "repair_operation_status":
+      case "repair_cancel":
+      case "repair_prepare_operation":
+      case "repair_prepare_operation_status":
+      case "repair_prepare_operation_cancel":
+        throw new Error("Source repair operation status requires native durable artifacts.");
       case "repair_recovery": {
         requiredString(command, args, "reviewId");
         // This fixture has no durable native repair artifacts.

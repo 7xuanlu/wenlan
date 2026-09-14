@@ -25,6 +25,51 @@ use crate::state::AppState;
 type State = Arc<RwLock<AppState>>;
 
 #[tauri::command]
+pub async fn repair_prepare_operation(
+    state: tauri::State<'_, State>,
+    request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+    let client = { state.read().await.client.clone() };
+    client.prepare_repair_operation(request).await
+}
+
+#[tauri::command]
+pub async fn repair_prepare_operation_status(
+    state: tauri::State<'_, State>,
+    request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+    let client = { state.read().await.client.clone() };
+    client.repair_prepare_operation_status(request).await
+}
+
+#[tauri::command]
+pub async fn repair_prepare_operation_cancel(
+    state: tauri::State<'_, State>,
+    request: wenlan_types::repair_prepare_operation::RepairPrepareOperationRequest,
+) -> Result<wenlan_types::repair_prepare_operation::RepairPrepareOperationStatus, String> {
+    let client = { state.read().await.client.clone() };
+    client.cancel_repair_prepare_operation(request).await
+}
+
+#[tauri::command]
+pub async fn repair_operation_status(
+    state: tauri::State<'_, State>,
+    request: ApplyRepairRequest,
+) -> Result<wenlan_types::repair_operation::RepairOperationStatus, String> {
+    let client = { state.read().await.client.clone() };
+    client.repair_operation_status(request).await
+}
+
+#[tauri::command]
+pub async fn repair_cancel(
+    state: tauri::State<'_, State>,
+    request: ApplyRepairRequest,
+) -> Result<wenlan_types::repair_operation::RepairOperationStatus, String> {
+    let client = { state.read().await.client.clone() };
+    client.cancel_prepared_repair(request).await
+}
+
+#[tauri::command]
 pub async fn repair_resume_runtime(
     app: tauri::AppHandle,
     state: tauri::State<'_, State>,
