@@ -432,7 +432,10 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
     // responses before that. Either way these are measured rows, and the
     // note below says which phases are still moving them.
     const imported = batchStatus?.memories_imported ?? result.imported;
-    const skipped = batchStatus?.memories_skipped ?? result.skipped;
+    // memories_skipped is not recoverable from the database after the fact
+    // and the daemon always reports it as 0 (db.rs), so the chunk responses
+    // are the only real count -- read straight from them, not the batch poll.
+    const skipped = result.skipped;
     // Storing is the phase the handoff sentence speaks for: null until it
     // completes, because "stored and searchable now" is a claim this surface
     // must not make while rows are still being written.

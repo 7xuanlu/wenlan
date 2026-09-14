@@ -41,6 +41,11 @@ export default function App() {
     networkMode: "always",
   });
 
+  // A rejection propagates to the wizard's Done step, which stays put with an
+  // inline alert. Invalidate the gate only after the save lands: refetching a
+  // gate that has no data (the fail-closed error branch below) puts the query
+  // back to pending, which swaps the wizard for the starting-runtime screen and
+  // drops every pick the user made.
   async function handleWizardComplete() {
     await setSetupCompleted(true);
     queryClient.invalidateQueries({ queryKey: ["shouldShowWizard"] });

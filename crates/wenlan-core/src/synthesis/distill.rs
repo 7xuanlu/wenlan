@@ -1255,6 +1255,13 @@ pub enum RefreshReason {
     /// Explicit human/agent request (`POST /api/distill/{id}`, force rebuild).
     /// Written as `distill`.
     Explicit,
+    /// User-forced Re-distill ([`force_redistill_single`]). Written as
+    /// `distill`, but the page's own `user_edited` flag does not gate the
+    /// write: the new body lands in place and releases that flag and the
+    /// page's staleness in the same UPDATE. Nothing is released when no body
+    /// lands (provider failure, cancellation, discarded or unavailable
+    /// output). Authored pages still get a revision card.
+    UserForced,
 }
 
 impl RefreshReason {
@@ -1262,7 +1269,7 @@ impl RefreshReason {
     fn edited_by(self) -> &'static str {
         match self {
             RefreshReason::SourceChanged => "re_distill",
-            RefreshReason::Explicit => "distill",
+            RefreshReason::Explicit | RefreshReason::UserForced => "distill",
         }
     }
 }
@@ -1528,12 +1535,30 @@ pub(crate) async fn refresh_page_with_candidate_sources(
     // detach landing between the two reads shows up in `source_revision` but
     // not in the page/sources snapshot -- the CAS would then pass on a write
     // that still carries the stale (pre-detach) source list.
-    let source_revision = db.get_page_source_revision(page_id).await?;
+    //
+    // The revision is read together with the row's incarnation (one
+    // statement). Deleting the page and recreating it under the same id
+    // restarts `source_revision` (and `version`), so a revision-only CAS
+    // could match the replacement; the incarnation cannot. The user-forced
+    // write and every discard marker carry both.
+    let page_fence = db
+        .try_get_page_fence(page_id)
+        .await?
+        .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+    let source_revision = page_fence.source_revision;
 
     let page = db
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::VectorDb(format!("page {page_id} not found")))?;
+
+    // A forced rebuild of a draft is refused before any generation runs, with
+    // the same error the draft guard gives every other page mutator.
+    if reason == RefreshReason::UserForced && page.status == "draft" {
+        return Err(WenlanError::Validation(format!(
+            "Page {page_id} is not active"
+        )));
+    }
 
     // Rebuild from the page's CURRENT sources: join table first, JSON column
     // fallback for legacy pages.
@@ -1570,8 +1595,22 @@ pub(crate) async fn refresh_page_with_candidate_sources(
             // can put it in their responses. The marker is cleared by every
             // successful canonical page write and by every mark-stale site (a
             // real source change re-arms the automatic retry).
-            db.set_page_refresh_blocked_reason(page_id, &discard_reason)
-                .await?;
+            //
+            // The marker rides the page fence read before generation. An
+            // edit or source change that landed meanwhile already cleared it,
+            // and a page recreated under the same id is a different row;
+            // pinning the discard on either would pause the retry of a state
+            // this generation never saw, so it is dropped and not attributed
+            // to the current page.
+            if !db
+                .set_page_refresh_blocked_reason_at_fence(page_id, &discard_reason, &page_fence)
+                .await?
+            {
+                log::info!(
+                    "[refresh] page {page_id} changed during generation; dropping its obsolete discard"
+                );
+                return Ok(RefreshOutcome::default());
+            }
             return Ok(RefreshOutcome {
                 discard_reason: Some(discard_reason),
                 ..RefreshOutcome::default()
@@ -1586,29 +1625,59 @@ pub(crate) async fn refresh_page_with_candidate_sources(
     // `require_stale = true` means the write only lands while `stale_reason IS
     // NOT NULL`, so a concurrent agent PUT that cleared staleness wins the race
     // without TOCTOU.
+    //
+    // A user-forced rebuild does not require staleness. It rides the page
+    // fence (source revision AND incarnation), so a human edit that landed
+    // during generation (which bumps `source_revision`) or a page recreated
+    // under the same id still wins, and the edit protection it overrides is
+    // released by the write that lands the body, never before.
     let summary = candidate.summary.clone();
-    let result = crate::post_write::update_page_at_source_revision(
-        db,
-        page_id,
-        UpdatePageRequest {
-            content: candidate.content,
-            source_memory_ids: source_ids,
-            expected_version: candidate_sources.map(|_| page.version),
-            caller_id: None,
-            operation_id: None,
-        },
-        reason.edited_by(),
-        candidate_sources.is_none(),
-        source_revision,
-        knowledge_path,
-        Some((candidate.citations_json, candidate.stats_summary)),
-    )
-    .await?;
+    let req = UpdatePageRequest {
+        content: candidate.content,
+        source_memory_ids: source_ids,
+        expected_version: candidate_sources.map(|_| page.version),
+        caller_id: None,
+        operation_id: None,
+    };
+    let citations = Some((candidate.citations_json, candidate.stats_summary));
+    let user_forced_write = reason == RefreshReason::UserForced && candidate_sources.is_none();
+    let result = if user_forced_write {
+        crate::post_write::page_write(
+            db,
+            crate::post_write::PageWrite::UserForcedUpdate {
+                page_id,
+                req,
+                edited_by: reason.edited_by(),
+                expected_fence: &page_fence,
+                knowledge_path,
+                citations,
+            },
+        )
+        .await?
+    } else {
+        crate::post_write::update_page_at_source_revision(
+            db,
+            page_id,
+            req,
+            reason.edited_by(),
+            candidate_sources.is_none(),
+            source_revision,
+            knowledge_path,
+            citations,
+        )
+        .await?
+    };
 
     // The one-line summary is derived from the body, so a rebuilt body gets
     // a rebuilt summary; otherwise the pull quote outlives the prose it
     // summarised. A gated or unchanged outcome leaves the stored page alone.
-    if result.wrote {
+    // A user-forced write is fenced on the incarnation it just wrote, so a
+    // page recreated under the same id right after that write keeps its own
+    // summary.
+    if result.wrote && user_forced_write {
+        db.update_page_summary_at_incarnation(page_id, summary.as_deref(), &page_fence.incarnation)
+            .await?;
+    } else if result.wrote {
         db.update_page_summary(page_id, summary.as_deref()).await?;
     }
 
@@ -1655,6 +1724,45 @@ pub async fn deep_distill_single(
         prompts,
         page_id,
         RefreshReason::Explicit,
+        knowledge_path,
+    )
+    .await
+}
+
+/// User-forced Re-distill of a single page (the Re-distill routes). Same
+/// contract as [`deep_distill_single`], except a `user_edited` page is rebuilt
+/// in place instead of being staged as a revision card. Edit protection is
+/// never cleared ahead of generation: `user_edited`, `stale_reason`, and any
+/// pending revision card survive a provider failure, a dropped future, and
+/// discarded or unavailable output. Only the UPDATE that lands the new body
+/// releases them, under the source-revision fence read before generation.
+pub async fn force_redistill_single(
+    db: &MemoryDB,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    page_id: &str,
+    knowledge_path: Option<&std::path::Path>,
+) -> Result<RefreshOutcome, WenlanError> {
+    let llm = match llm {
+        Some(l) if l.is_available() => l,
+        Some(_) => {
+            return Err(WenlanError::Llm(
+                "LLM not available for re-distillation".into(),
+            ))
+        }
+        None => {
+            return Err(WenlanError::Llm(
+                "No LLM available for re-distillation".into(),
+            ))
+        }
+    };
+
+    refresh_page(
+        db,
+        llm,
+        prompts,
+        page_id,
+        RefreshReason::UserForced,
         knowledge_path,
     )
     .await
@@ -3338,6 +3446,654 @@ The app process is the only writer [3].\n\n## Backup\n\nNightly copy to iCloud D
         assert!(
             r.is_some(),
             "threshold above cosine max should prevent attach and allow synthesis"
+        );
+    }
+
+    const FORCED_SOURCE_TEXT: &str = "Tokio is an async runtime for Rust programs";
+    const FORCED_REBUILT_BODY: &str = "Tokio is an async runtime for Rust programs [1]";
+    const FORCED_USER_PROSE: &str = "My own notes about the Tokio runtime.";
+
+    /// A distilled page with a real source memory, hand edited (`user_edited`)
+    /// and stale, the state a user's Re-distill starts from.
+    async fn seed_protected_page(db: &crate::db::MemoryDB, page_id: &str) {
+        let now = chrono::Utc::now().to_rfc3339();
+        let now_ts = chrono::Utc::now().timestamp();
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute(
+                "INSERT INTO memories (id, source_id, title, content, chunk_index, chunk_type, memory_type, space, source_agent, created_at, last_modified, confirmed, stability, source) \
+                 VALUES (?1, ?1, ?1, ?2, 0, 'text', 'fact', 'test', 'claude-code', ?3, ?3, 1, 'confirmed', 'memory')",
+                libsql::params!["mem_forced_seed".to_string(), FORCED_SOURCE_TEXT, now_ts],
+            )
+            .await
+            .unwrap();
+        }
+        db.insert_page(
+            page_id,
+            "Tokio",
+            None,
+            FORCED_SOURCE_TEXT,
+            None,
+            None,
+            &["mem_forced_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        db.update_page_content(page_id, FORCED_USER_PROSE, &["mem_forced_seed"], "fs_edit")
+            .await
+            .unwrap();
+        db.set_page_stale(page_id, "source_updated").await.unwrap();
+        let page = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(page.user_edited, "precondition: the page is hand edited");
+        assert_eq!(page.stale_reason.as_deref(), Some("source_updated"));
+    }
+
+    enum MidGeneration {
+        Observe,
+        HumanEdit,
+        /// Return a body the citation gate discards.
+        Discard,
+        /// Land a human edit, then return a body the citation gate discards.
+        HumanEditThenDiscard,
+        /// Delete the page and recreate it under the same id at the same
+        /// version and source revision (a new incarnation), then return the
+        /// faithful rebuilt body.
+        RecreateThenRebuild {
+            replacement_body: &'static str,
+            creation_kind: &'static str,
+        },
+        /// Recreate the page as above, then return a body the citation gate
+        /// discards.
+        RecreateThenDiscard,
+    }
+
+    const REPLACEMENT_MARKER: &str = "the replacement page's own refresh marker";
+
+    /// Delete `page_id` and recreate it under the same id with the same
+    /// `version` and `source_revision` the refresh captured, so only the row
+    /// incarnation tells the two apart. The replacement is hand edited, stale,
+    /// and carries its own refresh marker, which a stale terminal write would
+    /// overwrite or clear.
+    async fn recreate_page_under_same_id(
+        db: &crate::db::MemoryDB,
+        page_id: &str,
+        replacement_body: &str,
+        creation_kind: &str,
+    ) {
+        let before = db.get_page(page_id).await.unwrap().unwrap();
+        let fence_before = db.try_get_page_fence(page_id).await.unwrap().unwrap();
+        db.delete_page(page_id).await.unwrap();
+        let now = chrono::Utc::now().to_rfc3339();
+        db.insert_page(
+            page_id,
+            "Tokio",
+            None,
+            replacement_body,
+            None,
+            None,
+            &["mem_forced_seed"],
+            &now,
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute(
+                "UPDATE pages SET version = ?1, source_revision = ?2, creation_kind = ?3, \
+                   user_edited = 1, stale_reason = 'source_updated', refresh_blocked_reason = ?4 \
+                 WHERE id = ?5",
+                libsql::params![
+                    before.version,
+                    fence_before.source_revision,
+                    creation_kind.to_string(),
+                    REPLACEMENT_MARKER,
+                    page_id.to_string()
+                ],
+            )
+            .await
+            .unwrap();
+        }
+        let replacement = db.get_page(page_id).await.unwrap().unwrap();
+        let fence_after = db.try_get_page_fence(page_id).await.unwrap().unwrap();
+        assert_eq!(
+            replacement.version, before.version,
+            "precondition: same version"
+        );
+        assert_eq!(
+            fence_after.source_revision, fence_before.source_revision,
+            "precondition: the recreated page restarts at the captured source revision"
+        );
+        assert_ne!(
+            fence_after.incarnation, fence_before.incarnation,
+            "precondition: only the incarnation tells the replacement apart"
+        );
+    }
+
+    async fn pending_revision_card_ids(db: &crate::db::MemoryDB, page_id: &str) -> Vec<String> {
+        let conn = db.test_primary_session().await;
+        let mut rows = conn
+            .query(
+                "SELECT source_id FROM memories WHERE pending_revision = 1 AND supersedes = ?1",
+                libsql::params![page_id.to_string()],
+            )
+            .await
+            .unwrap();
+        let mut ids = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            ids.push(row.get::<String>(0).unwrap());
+        }
+        ids
+    }
+
+    const FORCED_UNFAITHFUL_BODY: &str =
+        "Penguins migrate across Antarctic ice shelves during polar winter months [1]";
+
+    /// Records the page's `(user_edited, stale_reason)` while generation is in
+    /// flight, optionally lands a human edit at that moment, then returns a
+    /// body whose single claim verifies against the seeded source.
+    struct ForcedRebuildProvider {
+        db: Arc<crate::db::MemoryDB>,
+        page_id: &'static str,
+        mid_generation: MidGeneration,
+        observed: tokio::sync::Mutex<Vec<(bool, Option<String>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for ForcedRebuildProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            let page = self.db.get_page(self.page_id).await.unwrap().unwrap();
+            self.observed
+                .lock()
+                .await
+                .push((page.user_edited, page.stale_reason.clone()));
+            // A retried generation must not recreate the page a second time.
+            let first_call = self.observed.lock().await.len() == 1;
+            if let MidGeneration::RecreateThenRebuild {
+                replacement_body,
+                creation_kind,
+            } = self.mid_generation
+            {
+                if first_call {
+                    recreate_page_under_same_id(
+                        &self.db,
+                        self.page_id,
+                        replacement_body,
+                        creation_kind,
+                    )
+                    .await;
+                }
+            }
+            if let (MidGeneration::RecreateThenDiscard, true) = (&self.mid_generation, first_call) {
+                recreate_page_under_same_id(
+                    &self.db,
+                    self.page_id,
+                    "A replacement page recreated during generation.",
+                    "distilled",
+                )
+                .await;
+            }
+            if let MidGeneration::HumanEdit | MidGeneration::HumanEditThenDiscard =
+                self.mid_generation
+            {
+                self.db
+                    .update_page_content(
+                        self.page_id,
+                        "A human edit that landed during generation.",
+                        &["mem_forced_seed"],
+                        "manual_edit",
+                    )
+                    .await
+                    .unwrap();
+            }
+            Ok(match self.mid_generation {
+                MidGeneration::Discard
+                | MidGeneration::HumanEditThenDiscard
+                | MidGeneration::RecreateThenDiscard => FORCED_UNFAITHFUL_BODY,
+                MidGeneration::Observe
+                | MidGeneration::HumanEdit
+                | MidGeneration::RecreateThenRebuild { .. } => FORCED_REBUILT_BODY,
+            }
+            .to_string())
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "forced-rebuild"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::OnDevice
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    fn forced_rebuild_provider(
+        db: &Arc<crate::db::MemoryDB>,
+        page_id: &'static str,
+        mid_generation: MidGeneration,
+    ) -> Arc<ForcedRebuildProvider> {
+        Arc::new(ForcedRebuildProvider {
+            db: Arc::clone(db),
+            page_id,
+            mid_generation,
+            observed: tokio::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn force_redistill_lands_body_and_releases_edit_protection_in_one_write() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced").await;
+        let before = db.get_page("page_forced").await.unwrap().unwrap();
+        let provider = forced_rebuild_provider(&db, "page_forced", MidGeneration::Observe);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.wrote, "a verified forced rebuild lands in place");
+        assert!(!outcome.gated, "user_edited alone must not stage a card");
+        assert_eq!(
+            *provider.observed.lock().await,
+            vec![(true, Some("source_updated".to_string()))],
+            "edit protection must hold while generation is in flight"
+        );
+        let after = db.get_page("page_forced").await.unwrap().unwrap();
+        assert_eq!(after.content, FORCED_REBUILT_BODY);
+        assert_eq!(after.version, before.version + 1, "exactly one write");
+        assert!(!after.user_edited, "the landing write releases user_edited");
+        assert_eq!(
+            after.stale_reason, None,
+            "the landing write consumes staleness"
+        );
+        assert_eq!(after.refresh_blocked_reason, None);
+        let changelog: Vec<serde_json::Value> =
+            serde_json::from_str(&db.get_page_changelog("page_forced").await.unwrap()).unwrap();
+        let last_entry = changelog
+            .last()
+            .expect("the write appends a changelog entry");
+        assert_eq!(last_entry["version"], after.version);
+        assert_eq!(last_entry["edited_by"], "distill");
+    }
+
+    #[tokio::test]
+    async fn force_redistill_identical_body_acknowledges_without_releasing_edit_protection() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_same").await;
+        // The hand edit already says exactly what the rebuild will produce,
+        // and an earlier automatic refresh of it was discarded.
+        db.update_page_content(
+            "page_forced_same",
+            FORCED_REBUILT_BODY,
+            &["mem_forced_seed"],
+            "fs_edit",
+        )
+        .await
+        .unwrap();
+        db.set_page_stale("page_forced_same", "source_updated")
+            .await
+            .unwrap();
+        db.set_page_refresh_blocked_reason("page_forced_same", "an earlier refresh was discarded")
+            .await
+            .unwrap();
+        let before = db.get_page("page_forced_same").await.unwrap().unwrap();
+        assert!(before.user_edited, "precondition: the page is hand edited");
+        assert_eq!(before.content, FORCED_REBUILT_BODY);
+        assert_eq!(before.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            before.refresh_blocked_reason.as_deref(),
+            Some("an earlier refresh was discarded")
+        );
+        let provider = forced_rebuild_provider(&db, "page_forced_same", MidGeneration::Observe);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_same",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.wrote, "an identical body is not a write");
+        assert!(!outcome.gated, "an identical body stages nothing");
+        assert!(
+            outcome.acknowledged,
+            "the completed compile is acknowledged"
+        );
+        let after = db.get_page("page_forced_same").await.unwrap().unwrap();
+        assert_eq!(after.content, FORCED_REBUILT_BODY);
+        assert_eq!(after.version, before.version, "no version bump");
+        assert!(
+            after.user_edited,
+            "nothing landed, so user_edited is not released"
+        );
+        assert_eq!(after.stale_reason, None, "the compile consumed staleness");
+        assert_eq!(
+            after.refresh_blocked_reason, None,
+            "the acknowledged compile clears the blocked marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_redistill_discard_after_a_mid_generation_edit_leaves_the_new_state_unblocked() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_discard_race").await;
+        db.set_page_refresh_blocked_reason("page_forced_discard_race", "an earlier discard")
+            .await
+            .unwrap();
+        let provider = forced_rebuild_provider(
+            &db,
+            "page_forced_discard_race",
+            MidGeneration::HumanEditThenDiscard,
+        );
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_discard_race",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.wrote);
+        assert!(!outcome.gated);
+        assert_eq!(
+            outcome.discard_reason, None,
+            "an obsolete discard is not attributed to the edited page"
+        );
+        let after = db
+            .get_page("page_forced_discard_race")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.content, "A human edit that landed during generation.");
+        assert!(after.user_edited, "the human edit keeps its protection");
+        assert_eq!(
+            after.refresh_blocked_reason, None,
+            "the edit cleared the marker and the obsolete discard must not re-add it"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_redistill_discard_on_an_unchanged_page_still_records_the_marker() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_discard").await;
+        let before = db.get_page("page_forced_discard").await.unwrap().unwrap();
+        let provider = forced_rebuild_provider(&db, "page_forced_discard", MidGeneration::Discard);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_discard",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(!outcome.wrote);
+        let discard_reason = outcome
+            .discard_reason
+            .expect("a discard of the unchanged page carries its reason");
+        let after = db.get_page("page_forced_discard").await.unwrap().unwrap();
+        assert_eq!(
+            after.refresh_blocked_reason.as_deref(),
+            Some(discard_reason.as_str())
+        );
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert!(after.user_edited, "a discard releases no edit protection");
+        assert_eq!(after.stale_reason.as_deref(), Some("source_updated"));
+    }
+
+    /// Runs a forced rebuild whose provider deletes and recreates the page
+    /// under the same id mid-generation, and asserts the replacement row is
+    /// exactly as the recreation left it. Returns the outcome for
+    /// path-specific assertions.
+    async fn force_redistill_across_a_same_id_recreation(
+        page_id: &'static str,
+        mid_generation: MidGeneration,
+        replacement_body: &str,
+    ) -> RefreshOutcome {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, page_id).await;
+        let provider = forced_rebuild_provider(&db, page_id, mid_generation);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome =
+            force_redistill_single(&db, Some(&llm), &PromptRegistry::default(), page_id, None)
+                .await
+                .unwrap();
+        let generations = provider.observed.lock().await.len();
+        assert!(generations >= 1, "the provider ran and recreated the page");
+
+        let after = db.get_page(page_id).await.unwrap().unwrap();
+        assert!(!outcome.wrote, "nothing lands on the replacement page");
+        assert!(!outcome.gated, "nothing is staged for the replacement page");
+        assert!(!outcome.acknowledged, "no compile is acknowledged on it");
+        assert_eq!(outcome.revision_card_id, None);
+        assert_eq!(
+            after.content, replacement_body,
+            "the replacement body stays"
+        );
+        assert!(
+            after.user_edited,
+            "the replacement keeps its edit protection"
+        );
+        assert_eq!(
+            after.stale_reason.as_deref(),
+            Some("source_updated"),
+            "the replacement's staleness is not consumed"
+        );
+        assert_eq!(
+            after.refresh_blocked_reason.as_deref(),
+            Some(REPLACEMENT_MARKER),
+            "the replacement's own marker is neither cleared nor overwritten"
+        );
+        assert!(
+            pending_revision_card_ids(&db, page_id).await.is_empty(),
+            "no revision card targets the replacement page"
+        );
+        outcome
+    }
+
+    #[tokio::test]
+    async fn force_redistill_verified_body_does_not_overwrite_a_page_recreated_under_the_same_id() {
+        force_redistill_across_a_same_id_recreation(
+            "page_forced_recreated_write",
+            MidGeneration::RecreateThenRebuild {
+                replacement_body: "A replacement page recreated during generation.",
+                creation_kind: "distilled",
+            },
+            "A replacement page recreated during generation.",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn force_redistill_identical_body_does_not_acknowledge_a_page_recreated_under_the_same_id(
+    ) {
+        // The replacement already holds the exact rebuilt body and source set,
+        // so the rebuild reaches the no-op acknowledgement, not the write.
+        force_redistill_across_a_same_id_recreation(
+            "page_forced_recreated_ack",
+            MidGeneration::RecreateThenRebuild {
+                replacement_body: FORCED_REBUILT_BODY,
+                creation_kind: "distilled",
+            },
+            FORCED_REBUILT_BODY,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn force_redistill_discard_does_not_mark_a_page_recreated_under_the_same_id() {
+        let outcome = force_redistill_across_a_same_id_recreation(
+            "page_forced_recreated_discard",
+            MidGeneration::RecreateThenDiscard,
+            "A replacement page recreated during generation.",
+        )
+        .await;
+        assert_eq!(
+            outcome.discard_reason, None,
+            "an obsolete discard is not attributed to the replacement page"
+        );
+    }
+
+    #[tokio::test]
+    async fn force_redistill_does_not_stage_a_card_on_an_authored_page_recreated_under_the_same_id()
+    {
+        // An authored replacement routes the rebuild to revision-card staging
+        // and the staleness clear, both of which must miss the new row.
+        force_redistill_across_a_same_id_recreation(
+            "page_forced_recreated_authored",
+            MidGeneration::RecreateThenRebuild {
+                replacement_body: "An authored replacement recreated during generation.",
+                creation_kind: "authored",
+            },
+            "An authored replacement recreated during generation.",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn force_redistill_yields_to_a_human_edit_that_lands_mid_generation() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_race").await;
+        let provider = forced_rebuild_provider(&db, "page_forced_race", MidGeneration::HumanEdit);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_race",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !outcome.wrote,
+            "the source-revision fence must refuse the stale rebuild"
+        );
+        assert!(!outcome.gated, "a fenced-out rebuild stages nothing");
+        let after = db.get_page("page_forced_race").await.unwrap().unwrap();
+        assert_eq!(after.content, "A human edit that landed during generation.");
+        assert!(after.user_edited, "the human edit keeps its protection");
+        assert_eq!(after.stale_reason.as_deref(), Some("source_updated"));
+    }
+
+    #[tokio::test]
+    async fn force_redistill_refuses_a_draft_before_generation() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_draft").await;
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute(
+                "UPDATE pages SET status = 'draft' WHERE id = ?1",
+                libsql::params!["page_forced_draft"],
+            )
+            .await
+            .unwrap();
+        }
+        let before = db.get_page("page_forced_draft").await.unwrap().unwrap();
+        let provider = forced_rebuild_provider(&db, "page_forced_draft", MidGeneration::Observe);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let err = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_draft",
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(
+            matches!(&err, WenlanError::Validation(msg) if msg == "Page page_forced_draft is not active"),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            provider.observed.lock().await.is_empty(),
+            "no generation for a draft"
+        );
+        let after = db.get_page("page_forced_draft").await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::to_value(&after).unwrap(),
+            serde_json::to_value(&before).unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn force_redistill_on_authored_page_stages_card_and_keeps_protection() {
+        let (db, _db_dir) = crate::db::tests::test_db().await;
+        let db = Arc::new(db);
+        seed_protected_page(&db, "page_forced_authored").await;
+        {
+            let conn = db.test_primary_session().await;
+            conn.execute(
+                "UPDATE pages SET creation_kind = 'authored' WHERE id = ?1",
+                libsql::params!["page_forced_authored"],
+            )
+            .await
+            .unwrap();
+        }
+        let before = db.get_page("page_forced_authored").await.unwrap().unwrap();
+        let provider = forced_rebuild_provider(&db, "page_forced_authored", MidGeneration::Observe);
+        let llm: Arc<dyn LlmProvider> = provider.clone();
+
+        let outcome = force_redistill_single(
+            &db,
+            Some(&llm),
+            &PromptRegistry::default(),
+            "page_forced_authored",
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            !outcome.wrote,
+            "an authored page is never rewritten in place"
+        );
+        assert!(outcome.gated, "the forced rebuild lands as a revision card");
+        assert!(outcome.revision_card_id.is_some());
+        let after = db.get_page("page_forced_authored").await.unwrap().unwrap();
+        assert_eq!(after.content, before.content);
+        assert_eq!(after.version, before.version);
+        assert!(
+            after.user_edited,
+            "a staged card must not release user_edited"
         );
     }
 }

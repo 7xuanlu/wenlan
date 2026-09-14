@@ -10,7 +10,12 @@ vi.mock("./tauri", async (importOriginal) => {
   return { ...actual, ...mocks };
 });
 
-import { fillUnsetPins, fillUnsetPinsAfterSave, pinsToFill } from "./routingPins";
+import {
+  fillUnsetPins,
+  fillUnsetPinsAfterSave,
+  fillUnsetPinsWithRetry,
+  pinsToFill,
+} from "./routingPins";
 import type { JobRoute, ResolvedRouting } from "./tauri";
 
 function job(pin: string | null): JobRoute {
@@ -100,15 +105,30 @@ describe("fillUnsetPins", () => {
       routing({ synthesisPin: "anthropic", pool: onDevice }),
     );
     mocks.setSourcePin.mockResolvedValue(undefined);
-    await expect(fillUnsetPins()).resolves.toEqual({ everyday: "on_device", synthesis: null });
+    await expect(fillUnsetPins()).resolves.toEqual({
+      written: { everyday: "on_device", synthesis: null },
+      inEffect: { everyday: "on_device", synthesis: "anthropic" },
+    });
     expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", null);
   });
 
-  it("skips the write when every job is pinned", async () => {
+  it("skips the write when every job is pinned, and reports the pins already in effect", async () => {
     mocks.getResolvedRouting.mockResolvedValue(
-      routing({ everydayPin: "on_device", synthesisPin: "on_device", pool: onDevice }),
+      routing({ everydayPin: "on_device", synthesisPin: "external", pool: onDevice }),
     );
-    await expect(fillUnsetPins()).resolves.toBeNull();
+    await expect(fillUnsetPins()).resolves.toEqual({
+      written: { everyday: null, synthesis: null },
+      inEffect: { everyday: "on_device", synthesis: "external" },
+    });
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
+  });
+
+  it("reports a job left unpinned when there is nothing to fill it with", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(routing());
+    await expect(fillUnsetPins()).resolves.toEqual({
+      written: { everyday: null, synthesis: null },
+      inEffect: { everyday: null, synthesis: null },
+    });
     expect(mocks.setSourcePin).not.toHaveBeenCalled();
   });
 
@@ -125,5 +145,74 @@ describe("fillUnsetPins", () => {
     await expect(fillUnsetPinsAfterSave()).resolves.toBeUndefined();
     expect(error).toHaveBeenCalled();
     error.mockRestore();
+  });
+});
+
+describe("fillUnsetPinsWithRetry", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.values(mocks).forEach((m) => m.mockReset());
+  });
+
+  it("re-reads routing on retry, so a job pinned after a failed attempt is left alone", async () => {
+    vi.useFakeTimers();
+    mocks.getResolvedRouting
+      .mockResolvedValueOnce(routing({ pool: onDevice }))
+      .mockResolvedValueOnce(routing({ synthesisPin: "external", pool: onDevice }));
+    mocks.setSourcePin.mockRejectedValueOnce(new Error("daemon busy")).mockResolvedValue(undefined);
+
+    const filled = fillUnsetPinsWithRetry();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(filled).resolves.toEqual({
+      written: { everyday: "on_device", synthesis: null },
+      inEffect: { everyday: "on_device", synthesis: "external" },
+    });
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(2);
+    expect(mocks.setSourcePin).toHaveBeenLastCalledWith("on_device", null);
+  });
+
+  it("retries a failed routing read", async () => {
+    vi.useFakeTimers();
+    mocks.getResolvedRouting
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockResolvedValue(routing({ pool: onDevice }));
+    mocks.setSourcePin.mockResolvedValue(undefined);
+
+    const filled = fillUnsetPinsWithRetry();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    await expect(filled).resolves.toEqual({
+      written: { everyday: "on_device", synthesis: "on_device" },
+      inEffect: { everyday: "on_device", synthesis: "on_device" },
+    });
+  });
+
+  it("stops after a bounded number of attempts with backoff, logs, and never throws", async () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.getResolvedRouting.mockResolvedValue(routing({ pool: onDevice }));
+    mocks.setSourcePin.mockRejectedValue(new Error("daemon down"));
+
+    const filled = fillUnsetPinsWithRetry();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(filled).resolves.toBeNull();
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(3);
+    expect(error).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it("does not retry on a daemon without the routing endpoint", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(null);
+    await expect(fillUnsetPinsWithRetry()).resolves.toBeNull();
+    expect(mocks.getResolvedRouting).toHaveBeenCalledTimes(1);
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
   });
 });

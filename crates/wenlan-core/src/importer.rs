@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
@@ -181,8 +182,14 @@ fn is_paragraph_mode(text: &str) -> bool {
 }
 
 /// Strip common list/date prefixes from a line, returning the cleaned
-/// content, an optional extracted date, and an optional memory type.
-fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>) {
+/// content, an optional extracted date, an optional memory type, and
+/// whether the line carried an explicit export marker (a date prefix with a
+/// real calendar date, an `[unknown]` prefix, or a standalone `[type]` tag
+/// naming a valid type).
+/// A marked line is exempt from the `MIN_CONTENT_CHARS` floor in
+/// `parse_memories_counted` -- it's an explicit assertion, not free-form
+/// noise, even when short.
+fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>, bool) {
     let trimmed = line.trim();
 
     // Date prefix with optional type tag: [2025-06-15] [type] - ... or [2025-06-15] - ...
@@ -197,7 +204,10 @@ fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>) {
             .get(2)
             .map(|m| m.as_str().to_lowercase())
             .filter(|t| VALID_TYPES.contains(&t.as_str()));
-        return (rest.trim().to_string(), timestamp, mem_type);
+        // A malformed date is not a marker, but an independently valid
+        // type tag still identifies an explicit assertion.
+        let marked = timestamp.is_some() || mem_type.is_some();
+        return (rest.trim().to_string(), timestamp, mem_type, marked);
     }
 
     // [unknown] with optional type tag: [unknown] [type] - ...
@@ -207,7 +217,7 @@ fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>) {
             .get(1)
             .map(|m| m.as_str().to_lowercase())
             .filter(|t| VALID_TYPES.contains(&t.as_str()));
-        return (rest.trim().to_string(), None, mem_type);
+        return (rest.trim().to_string(), None, mem_type, true);
     }
 
     // Standalone type tag: [type] - ...
@@ -215,27 +225,144 @@ fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>) {
         let tag = caps[1].to_lowercase();
         if VALID_TYPES.contains(&tag.as_str()) {
             let rest = &trimmed[caps.get(0).unwrap().end()..];
-            return (rest.trim().to_string(), None, Some(tag));
+            return (rest.trim().to_string(), None, Some(tag), true);
         }
     }
 
     // Numbered list: 1. , 2. , etc.
     if let Some(m) = NUMBERED_PREFIX_RE.find(trimmed) {
-        return (trimmed[m.end()..].trim().to_string(), None, None);
+        return (trimmed[m.end()..].trim().to_string(), None, None, false);
     }
 
     // Bullet prefixes: - , * , bullet char
     if let Some(rest) = trimmed.strip_prefix("- ") {
-        return (rest.trim().to_string(), None, None);
+        return (rest.trim().to_string(), None, None, false);
     }
     if let Some(rest) = trimmed.strip_prefix("* ") {
-        return (rest.trim().to_string(), None, None);
+        return (rest.trim().to_string(), None, None, false);
     }
     if let Some(rest) = trimmed.strip_prefix('\u{2022}') {
-        return (rest.trim().to_string(), None, None);
+        return (rest.trim().to_string(), None, None, false);
     }
 
-    (trimmed.to_string(), None, None)
+    (trimmed.to_string(), None, None, false)
+}
+
+/// Returns true if a trimmed line opens or closes a fenced code block
+/// (e.g. `` ``` `` or `` ```text ``). Export pastes sometimes wrap sample
+/// output in fences; the marker itself is never a memory.
+fn is_code_fence(line: &str) -> bool {
+    line.starts_with("```")
+}
+
+/// Parse raw text into a list of individual memories, keeping every entry
+/// [`parse_memories`] does. See it for the supported formats.
+///
+/// Returns the kept memories alongside a count of entries dropped during
+/// parsing: too-short unmarked lines, empty-after-strip lines, known
+/// section headers, and in-batch exact duplicates. Blank lines, separators
+/// (`---`, `===`, `***`), and code-fence lines are not counted -- they are
+/// formatting, not dropped content.
+///
+/// A line carrying an explicit export marker (a real calendar date prefix,
+/// `[unknown]`, or a valid `[type]` tag) is exempt from the
+/// `MIN_CONTENT_CHARS` floor: it's an explicit assertion, not free-form
+/// noise, even when short. The floor still applies to everything else, so
+/// bare short lines, bracketed words that aren't a recognized type (e.g.
+/// `[notatype] - x`), and date-shaped prefixes that don't parse (e.g.
+/// `[2025-13-99] - x`) keep being filtered and counted.
+///
+/// CRLF line endings are normalized to LF before mode detection, so a
+/// `\r\n\r\n`-separated paste parses exactly like its `\n\n` equivalent.
+pub fn parse_memories_counted(raw_text: &str) -> (Vec<ParsedMemory>, usize) {
+    // Normalize CRLF to LF first: paragraph detection and the paragraph
+    // split look for "\n\n", which a "\r\n\r\n" paste never contains. Line
+    // mode is unaffected, since `str::lines()` already strips a trailing \r.
+    let normalized: Cow<'_, str> = if raw_text.contains("\r\n") {
+        Cow::Owned(raw_text.replace("\r\n", "\n"))
+    } else {
+        Cow::Borrowed(raw_text)
+    };
+    let raw_text: &str = &normalized;
+    let paragraph_mode = is_paragraph_mode(raw_text);
+
+    let raw_blocks: Vec<String> = if paragraph_mode {
+        // Split on double newlines; collapse internal newlines to spaces.
+        // Fence lines are dropped here, per physical line, before the join --
+        // a whole-block fence check after collapsing would treat a real
+        // paragraph that merely contains a fence line as one and discard its
+        // other content along with it.
+        raw_text
+            .split("\n\n")
+            .map(|block| {
+                block
+                    .lines()
+                    .map(|l| l.trim())
+                    .filter(|l| !l.is_empty() && !is_code_fence(l))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect()
+    } else {
+        // One entry per line.
+        raw_text.lines().map(|l| l.to_string()).collect()
+    };
+
+    let mut seen = HashSet::new();
+    let mut result = Vec::new();
+    let mut dropped = 0usize;
+
+    for block in &raw_blocks {
+        let trimmed = block.trim();
+
+        // Skip empty and separator lines without counting them as drops.
+        if is_separator(trimmed) {
+            continue;
+        }
+
+        // Skip code-fence lines without counting them as drops. Paragraph
+        // mode already filtered these out per-line above; this also covers
+        // line mode, where each block is one physical line.
+        if is_code_fence(trimmed) {
+            continue;
+        }
+
+        let (content, extracted_date, memory_type, marked) = strip_prefix(trimmed);
+
+        // Empty content after stripping (e.g. "[fact] - " with nothing
+        // after the dash): drop and count, marked or not.
+        if content.is_empty() {
+            dropped += 1;
+            continue;
+        }
+
+        // Skip entries shorter than MIN_CONTENT_CHARS, unless the line
+        // carried an explicit export marker.
+        if !marked && content.chars().count() < MIN_CONTENT_CHARS {
+            dropped += 1;
+            continue;
+        }
+
+        // Skip known section headers (e.g. "Earlier context", "Top of mind")
+        if SECTION_HEADERS.contains(&content.to_lowercase().as_str()) {
+            dropped += 1;
+            continue;
+        }
+
+        // Deduplicate exact matches
+        if !seen.insert(content.clone()) {
+            dropped += 1;
+            continue;
+        }
+
+        result.push(ParsedMemory {
+            content,
+            extracted_date,
+            memory_type,
+        });
+    }
+
+    (result, dropped)
 }
 
 /// Parse raw text into a list of individual memories.
@@ -248,65 +375,12 @@ fn strip_prefix(line: &str) -> (String, Option<i64>, Option<String>) {
 /// - Bullet lists (`- `, `* `, `\u{2022} `)
 /// - Numbered lists (`1. `, `2. `, etc.)
 ///
-/// Skips empty lines, separators (`---`, `===`, `***`), and entries shorter
-/// than 20 characters (filters section headers). Deduplicates exact matches within the batch.
+/// Skips empty lines, separators (`---`, `===`, `***`), code fences, and
+/// unmarked entries shorter than 20 characters (filters section headers and
+/// free-form noise; a line with an explicit export marker is exempt -- see
+/// [`parse_memories_counted`]). Deduplicates exact matches within the batch.
 pub fn parse_memories(raw_text: &str) -> Vec<ParsedMemory> {
-    let paragraph_mode = is_paragraph_mode(raw_text);
-
-    let raw_blocks: Vec<String> = if paragraph_mode {
-        // Split on double newlines; collapse internal newlines to spaces.
-        raw_text
-            .split("\n\n")
-            .map(|block| {
-                block
-                    .lines()
-                    .map(|l| l.trim())
-                    .filter(|l| !l.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            })
-            .collect()
-    } else {
-        // One entry per line.
-        raw_text.lines().map(|l| l.to_string()).collect()
-    };
-
-    let mut seen = HashSet::new();
-    let mut result = Vec::new();
-
-    for block in &raw_blocks {
-        let trimmed = block.trim();
-
-        // Skip empty and separator lines
-        if is_separator(trimmed) {
-            continue;
-        }
-
-        let (content, extracted_date, memory_type) = strip_prefix(trimmed);
-
-        // Skip entries shorter than MIN_CONTENT_CHARS
-        if content.chars().count() < MIN_CONTENT_CHARS {
-            continue;
-        }
-
-        // Skip known section headers (e.g. "Earlier context", "Top of mind")
-        if SECTION_HEADERS.contains(&content.to_lowercase().as_str()) {
-            continue;
-        }
-
-        // Deduplicate exact matches
-        if !seen.insert(content.clone()) {
-            continue;
-        }
-
-        result.push(ParsedMemory {
-            content,
-            extracted_date,
-            memory_type,
-        });
-    }
-
-    result
+    parse_memories_counted(raw_text).0
 }
 
 /// Result of an import operation.
@@ -430,7 +504,7 @@ async fn import_memories_no_llm_inner(
     if let Some(id) = batch_id {
         validate_batch_id(id)?;
     }
-    let memories = parse_memories(raw_text);
+    let (memories, parse_dropped) = parse_memories_counted(raw_text);
     validate_parsed_count(memories.len())?;
 
     let duplicates = find_duplicates(db, &memories).await;
@@ -445,7 +519,9 @@ async fn import_memories_no_llm_inner(
     };
     let now = chrono::Utc::now().timestamp();
     let mut imported = 0usize;
-    let mut skipped = 0usize;
+    // Starts at the parse-time drop count (too-short, empty, headers,
+    // in-batch duplicates); DB duplicates are added to it below.
+    let mut skipped = parse_dropped;
     let mut breakdown: HashMap<String, usize> = HashMap::new();
 
     // Collect all non-duplicate docs for a single batch upsert
@@ -642,6 +718,173 @@ mod tests {
             "User is a software engineer who works at a fintech startup"
         );
         assert_eq!(result[1].content, "Prefers dark mode in all applications");
+    }
+
+    // ── short tagged line exemption (paste-short-lines) ─────────────────
+
+    #[test]
+    fn parse_keeps_short_marked_lines() {
+        let input = "[fact] - Uses Rust daily\n[identity] - 住在台北\n[2025-01-20] - Likes tea\n[unknown] [preference] - Dark mode";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 4);
+        assert_eq!(result[0].content, "Uses Rust daily");
+        assert_eq!(result[0].memory_type.as_deref(), Some("fact"));
+        assert_eq!(result[1].content, "住在台北");
+        assert_eq!(result[1].memory_type.as_deref(), Some("identity"));
+        assert_eq!(result[2].content, "Likes tea");
+        assert!(result[2].extracted_date.is_some());
+        assert_eq!(result[3].content, "Dark mode");
+        assert_eq!(result[3].memory_type.as_deref(), Some("preference"));
+    }
+
+    #[test]
+    fn parse_drops_short_lines_with_invalid_markers() {
+        // A bracketed word that isn't in VALID_TYPES doesn't exempt the line
+        // from the length floor: it's ordinary short noise, not an explicit
+        // export marker.
+        let input = "[notatype] - x\n[fact] - Uses Rust daily";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "Uses Rust daily");
+    }
+
+    #[test]
+    fn parse_drops_empty_tagged_content() {
+        // A tag with nothing after the dash must not become an empty-content
+        // memory, marked or not.
+        let input = "[fact] - \n[fact] - Uses Rust daily";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "Uses Rust daily");
+    }
+
+    #[test]
+    fn parse_respects_exact_length_boundary() {
+        // Unmarked lines: 19 chars is still filtered, 20 is the kept floor.
+        // Unchanged by the marked-line exemption; guards against an
+        // off-by-one regression in the surrounding refactor.
+        let short = "a".repeat(19);
+        let exact = "a".repeat(20);
+        let input = format!("{short}\n{exact}");
+        let result = parse_memories(&input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, exact);
+    }
+
+    #[test]
+    fn parse_skips_code_fence_lines() {
+        // A fence line long enough to clear the length floor on its own must
+        // still be dropped as a fence, not kept as a memory.
+        let input = "```a-long-enough-fence-marker-line\nUser is a software engineer";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "User is a software engineer");
+    }
+
+    #[test]
+    fn paragraph_mode_fence_line_does_not_discard_paragraph_payload() {
+        // Paragraph mode collapses a block's internal lines into one memory
+        // before the main loop's per-block filters run (importer.rs:256-267).
+        // A fence line embedded in a real paragraph must be dropped at the
+        // per-line stage, before the join -- not by a whole-block
+        // "starts with a fence" check in the main loop, which would throw
+        // away the real payload collapsed alongside it.
+        let input = "```\nUser is a software engineer who ships Rust\nand reviews pull requests daily\n\nPrefers dark mode\nin every editor";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[0].content,
+            "User is a software engineer who ships Rust and reviews pull requests daily"
+        );
+        assert_eq!(result[1].content, "Prefers dark mode in every editor");
+    }
+
+    #[test]
+    fn parse_keeps_short_marked_lines_with_crlf() {
+        // CRLF export text: str::lines() already strips the trailing \r, so
+        // a short marked line surrounded by CRLF terminators is still kept,
+        // with no stray \r left in the content.
+        let input = "[fact] - Uses Rust daily\r\n[identity] - 住在台北\r\nhi\r\n";
+        let result = parse_memories(input);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].content, "Uses Rust daily");
+        assert_eq!(result[1].content, "住在台北");
+    }
+
+    #[test]
+    fn parse_counts_dropped_lines() {
+        // Not "\n\n" anywhere in this input, so it stays in line mode: each
+        // physical line is judged on its own (paragraph mode would collapse
+        // several of these into one block instead).
+        let input = "User is a software engineer\nhi\nTop of mind\nUser is a software engineer\n---\n```\n```text";
+        let (result, dropped) = parse_memories_counted(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "User is a software engineer");
+        // hi (too short), "Top of mind" (header), and the repeat (duplicate)
+        // are dropped and counted; the separator and both fence lines are
+        // formatting and are not.
+        assert_eq!(dropped, 3);
+    }
+
+    #[test]
+    fn parse_crlf_paragraph_mode_matches_lf() {
+        // Every block spans two lines, so the LF form parses in paragraph
+        // mode. The CRLF form has no "\n\n" in it until CRLF is normalized;
+        // without that it falls back to line mode and splits each paragraph
+        // into short fragments, keeping and dropping different content.
+        let lf = "[fact] - Uses Rust\nand Go\n\n[identity] - 住在\n台北\n\nhi\nthere\n\n[notatype] - x\ny\n\nUser is a software engineer\nwho ships Rust";
+        let crlf = lf.replace('\n', "\r\n");
+        assert!(crlf.contains("\r\n\r\n"));
+
+        let summarize = |memories: &[ParsedMemory]| {
+            memories
+                .iter()
+                .map(|m| (m.content.clone(), m.extracted_date, m.memory_type.clone()))
+                .collect::<Vec<_>>()
+        };
+
+        let (lf_memories, lf_dropped) = parse_memories_counted(lf);
+        let (crlf_memories, crlf_dropped) = parse_memories_counted(&crlf);
+
+        // The LF baseline itself: short marked paragraphs kept, the short
+        // unmarked and invalid-marker paragraphs dropped and counted.
+        let contents: Vec<&str> = lf_memories.iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(
+            contents,
+            vec![
+                "Uses Rust and Go",
+                "住在 台北",
+                "User is a software engineer who ships Rust"
+            ]
+        );
+        assert_eq!(lf_dropped, 2);
+
+        assert_eq!(summarize(&crlf_memories), summarize(&lf_memories));
+        assert_eq!(crlf_dropped, lf_dropped);
+    }
+
+    #[test]
+    fn parse_invalid_calendar_date_prefix_is_not_a_marker() {
+        // `[2025-13-99]` matches the date-prefix shape but is not a real
+        // date, so it doesn't exempt the line from the length floor: the
+        // short line is dropped and counted. A real date still exempts one.
+        let input = "[2025-13-99] - x\n[2025-01-20] - Likes tea";
+        let (result, dropped) = parse_memories_counted(input);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "Likes tea");
+        assert!(result[0].extracted_date.is_some());
+        assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn parse_valid_type_survives_an_invalid_date_prefix() {
+        let (result, dropped) =
+            parse_memories_counted("[2025-13-99] [fact] - Likes tea\n[2025-13-99] [notatype] - x");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].content, "Likes tea");
+        assert_eq!(result[0].memory_type.as_deref(), Some("fact"));
+        assert_eq!(result[0].extracted_date, None);
+        assert_eq!(dropped, 1);
     }
 
     // ── validation tests ───────────────────────────────────────────────
@@ -1270,5 +1513,67 @@ mod tests {
         assert_eq!(status.memories_imported, 2);
         assert_eq!(status.chunks_received, 1);
         assert_eq!(status.source, "chatgpt");
+    }
+
+    #[tokio::test]
+    async fn import_all_noise_input_reports_full_skipped_count() {
+        // Every line here is parse-time noise (too short, a section header):
+        // nothing lands in the DB, so this must not read as "nothing skipped".
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let cfg = crate::tuning::ConfidenceConfig::default();
+        let space = crate::space_context::ResolvedWriteSpace::uncategorized();
+        let result = import_memories_no_llm_in_space(
+            &db,
+            "hi\nok\nTop of mind",
+            "chatgpt",
+            None,
+            &cfg,
+            &space,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.imported, 0);
+        assert_eq!(result.skipped, 3);
+    }
+
+    #[tokio::test]
+    async fn import_skipped_counts_parse_drops_and_db_duplicates() {
+        // Cross-chunk duplicates: the second chunk's content already sits in
+        // the DB from the first, so it must be counted alongside this
+        // chunk's own parse-time drop.
+        let (db, _dir) = crate::db::tests::test_db().await;
+        let cfg = crate::tuning::ConfidenceConfig::default();
+        let space = crate::space_context::ResolvedWriteSpace::uncategorized();
+        let content = "- first durable import memory line\nhi\n[fact] - Uses Rust";
+
+        let first = import_memories_no_llm_in_batch(
+            &db,
+            content,
+            "other",
+            None,
+            &cfg,
+            &space,
+            Some("skip-count-batch"),
+            Some(0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.imported, 2);
+        assert_eq!(first.skipped, 1);
+
+        let second = import_memories_no_llm_in_batch(
+            &db,
+            content,
+            "other",
+            None,
+            &cfg,
+            &space,
+            Some("skip-count-batch"),
+            Some(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.skipped, 3);
     }
 }

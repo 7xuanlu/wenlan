@@ -1536,6 +1536,66 @@ fn take_fail_before_commit(_page_id: &str) -> bool {
     false
 }
 
+/// Test-only fault injection for `store_raw_import_memories_batch`: the
+/// embedding pass of a batch whose content contains the armed marker fails,
+/// or comes back one vector short. Keyed by content so a test can fail one
+/// chosen slice of a multi-slice import, and task-local so a fault cannot
+/// fire in another test's import running in parallel.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RawImportEmbeddingFault {
+    Fail,
+    MissingVector,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static RAW_IMPORT_EMBEDDING_FAULT: (&'static str, RawImportEmbeddingFault);
+}
+
+/// Run `future` with raw-import embedding passes over `marker` armed to fault.
+#[cfg(test)]
+pub(crate) async fn with_raw_import_embedding_fault<T>(
+    marker: &'static str,
+    fault: RawImportEmbeddingFault,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    RAW_IMPORT_EMBEDDING_FAULT
+        .scope((marker, fault), future)
+        .await
+}
+
+#[cfg(test)]
+fn raw_import_embedding_fault<'a>(
+    mut contents: impl Iterator<Item = &'a str>,
+    embeddings: Result<Vec<Vec<f32>>, WenlanError>,
+) -> Result<Vec<Vec<f32>>, WenlanError> {
+    let Ok((marker, fault)) = RAW_IMPORT_EMBEDDING_FAULT.try_with(|armed| *armed) else {
+        return embeddings;
+    };
+    if !contents.any(|content| content.contains(marker)) {
+        return embeddings;
+    }
+    match fault {
+        RawImportEmbeddingFault::Fail => Err(WenlanError::Embedding(
+            "injected raw import embedding failure".to_string(),
+        )),
+        RawImportEmbeddingFault::MissingVector => embeddings.map(|mut vectors| {
+            vectors.pop();
+            vectors
+        }),
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn raw_import_embedding_fault<'a>(
+    _contents: impl Iterator<Item = &'a str>,
+    embeddings: Result<Vec<Vec<f32>>, WenlanError>,
+) -> Result<Vec<Vec<f32>>, WenlanError> {
+    embeddings
+}
+
 /// `COMMIT`, rolling the transaction back when the commit itself fails.
 ///
 /// SQLite leaves the transaction open when `COMMIT` returns an error —
@@ -1600,6 +1660,40 @@ pub(crate) async fn with_failing_commit_at<T>(
         .await
 }
 
+/// Test-only faults for one memory embedding recovery batch: SQL that runs
+/// after the batch embedded its rows and before it writes them (a concurrent
+/// edit or write-time embed), and a cap on how many vectors the model returns.
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct NullEmbedRecoveryFault {
+    pub(crate) race_sql: &'static [&'static str],
+    pub(crate) keep_vectors: Option<usize>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static NULL_EMBED_RECOVERY_FAULT: std::cell::Cell<Option<NullEmbedRecoveryFault>>;
+}
+
+/// Run `future` with the next recovery batch staged to meet `fault`.
+#[cfg(test)]
+pub(crate) async fn with_null_embed_recovery_fault<T>(
+    fault: NullEmbedRecoveryFault,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    NULL_EMBED_RECOVERY_FAULT
+        .scope(std::cell::Cell::new(Some(fault)), future)
+        .await
+}
+
+#[cfg(test)]
+fn take_null_embed_recovery_fault() -> Option<NullEmbedRecoveryFault> {
+    NULL_EMBED_RECOVERY_FAULT
+        .try_with(|fault| fault.take())
+        .ok()
+        .flatten()
+}
+
 /// Stage a deferred foreign-key violation inside the caller's open
 /// transaction when `site` is the armed one, so the `COMMIT` that follows
 /// fails while the transaction stays open on the connection.
@@ -1637,6 +1731,43 @@ async fn arm_commit_failure(conn: &libsql::Connection, site: &'static str) {
             .await
             .expect("stage the deferred foreign-key violation");
     }
+}
+
+/// When a constructor re-embeds memory rows that have no embedding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryEmbeddingRecovery {
+    /// Before the constructor returns: CLI commands, evals and tests.
+    #[default]
+    AtOpen,
+    /// Left to the caller, which runs
+    /// [`MemoryDB::recover_null_memory_embeddings_batch`] itself. The daemon
+    /// uses this so a backlog is recovered after it serves, not before.
+    Deferred,
+}
+
+/// Largest batch one recovery step embeds and writes in one transaction.
+pub const NULL_EMBEDDING_RECOVERY_BATCH: usize = 64;
+
+/// What one bounded recovery batch did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NullEmbeddingBatch {
+    /// Rows this batch filled.
+    pub recovered: usize,
+    /// Rows this batch selected but left alone: the model returned no vector
+    /// for them, the write failed, or the row changed (embedded, edited or
+    /// moved to another space) between the read and the write.
+    pub skipped: usize,
+    /// The last id this batch selected. The next batch starts after it, so a
+    /// skipped row is never selected again in the same run. `None` when
+    /// nothing was left to select: the run is finished.
+    pub next_cursor: Option<String>,
+}
+
+/// Totals for a whole recovery run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NullEmbeddingRecoveryReport {
+    pub recovered: usize,
+    pub skipped: usize,
 }
 
 /// One recorded version of a page, as stored in `page_history`.
@@ -4797,7 +4928,23 @@ impl MemoryDB {
         })
     }
 
+    /// Open, migrate and fully initialize the database. Memory rows left with
+    /// no embedding are re-embedded before this returns, so a CLI command or
+    /// eval run sees a complete vector index.
     pub async fn new(db_path: &Path, emitter: Arc<dyn EventEmitter>) -> Result<Self, WenlanError> {
+        Self::new_with_embedding_recovery(db_path, emitter, MemoryEmbeddingRecovery::AtOpen).await
+    }
+
+    /// [`Self::new`] with a choice of when memory rows left with no embedding
+    /// are re-embedded. The daemon passes [`MemoryEmbeddingRecovery::Deferred`]
+    /// so a large backlog cannot hold its health check shut; it then drives
+    /// [`Self::recover_null_memory_embeddings_batch`] itself after it serves.
+    /// Every other open effect is identical.
+    pub async fn new_with_embedding_recovery(
+        db_path: &Path,
+        emitter: Arc<dyn EventEmitter>,
+        recovery: MemoryEmbeddingRecovery,
+    ) -> Result<Self, WenlanError> {
         std::fs::create_dir_all(db_path)?;
         let db_file = db_path.join("origin_memory.db");
         // Decided before the open: `Builder::new_local` creates the file.
@@ -5026,6 +5173,11 @@ impl MemoryDB {
 
         // Run schema migrations for existing databases
         instance.run_migrations(emitter.as_ref()).await?;
+        if recovery == MemoryEmbeddingRecovery::AtOpen {
+            instance
+                .recover_null_memory_embeddings(emitter.as_ref())
+                .await?;
+        }
         instance.retire_empty_overview().await?;
 
         // Ensure a default profile always exists
@@ -5041,6 +5193,24 @@ impl MemoryDB {
         db_path: &Path,
         emitter: Arc<dyn EventEmitter>,
         embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+    ) -> Result<Self, WenlanError> {
+        Self::new_with_shared_embedder_and_recovery(
+            db_path,
+            emitter,
+            embedder,
+            MemoryEmbeddingRecovery::AtOpen,
+        )
+        .await
+    }
+
+    /// [`Self::new_with_shared_embedder`] with the recovery choice of
+    /// [`Self::new_with_embedding_recovery`]; tests use it to open the same
+    /// store both ways without loading a second model.
+    pub(crate) async fn new_with_shared_embedder_and_recovery(
+        db_path: &Path,
+        emitter: Arc<dyn EventEmitter>,
+        embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+        recovery: MemoryEmbeddingRecovery,
     ) -> Result<Self, WenlanError> {
         std::fs::create_dir_all(db_path)?;
         let db_file = db_path.join("origin_memory.db");
@@ -5119,6 +5289,11 @@ impl MemoryDB {
         };
 
         instance.run_migrations(emitter.as_ref()).await?;
+        if recovery == MemoryEmbeddingRecovery::AtOpen {
+            instance
+                .recover_null_memory_embeddings(emitter.as_ref())
+                .await?;
+        }
         instance.retire_empty_overview().await?;
         instance.bootstrap_profile().await?;
 
@@ -6582,114 +6757,13 @@ impl MemoryDB {
             }
         }
 
-        // Crash recovery: if app crashed during Phase 2 re-embedding, some memories
-        // may have NULL embeddings permanently (user_version is already 24 so migration
-        // won't re-run). This unconditional pass is a no-op if all embeddings exist.
-        {
-            let null_count = {
-                let conn = self.conn.lock().await;
-                let mut rows = conn
-                    .query("SELECT COUNT(*) FROM memories WHERE embedding IS NULL", ())
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(format!("null embed check: {}", e)))?;
-                let count: i64 = if let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                {
-                    row.get(0).unwrap_or(0)
-                } else {
-                    0
-                };
-                count as usize
-            };
-
-            if null_count > 0 {
-                log::warn!(
-                    "[memory_db] found {} memories with NULL embeddings, re-embedding...",
-                    null_count
-                );
-                let batch_size = 64;
-                let mut recovered = 0usize;
-
-                loop {
-                    let batch: Vec<(String, String, Option<String>)> = {
-                        let conn = self.conn.lock().await;
-                        let mut rows = conn.query(
-                            "SELECT id, COALESCE(source_text, content), space FROM memories WHERE embedding IS NULL LIMIT ?1",
-                            libsql::params![batch_size as i64],
-                        ).await.map_err(|e| WenlanError::VectorDb(format!("null embed batch: {}", e)))?;
-                        let mut batch = Vec::new();
-                        while let Some(row) = rows
-                            .next()
-                            .await
-                            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                        {
-                            let id: String = row.get(0).unwrap_or_default();
-                            let text: String = row.get(1).unwrap_or_default();
-                            let space: Option<String> = row.get(2).unwrap_or(None);
-                            batch.push((id, text, space));
-                        }
-                        batch
-                    };
-
-                    if batch.is_empty() {
-                        break;
-                    }
-
-                    let texts: Vec<String> = batch
-                        .iter()
-                        .map(|(_, t, d)| {
-                            if let Some(ref space) = d {
-                                format!("[{}] {}", space, t)
-                            } else {
-                                t.clone()
-                            }
-                        })
-                        .collect();
-                    let embeddings = self.generate_embeddings(&texts)?;
-
-                    let conn = self.conn.lock().await;
-                    if let Err(e) = conn.execute("BEGIN", ()).await {
-                        log::warn!("[memory_db] null embed recovery begin: {}", e);
-                    }
-                    for (idx, (id, _, _)) in batch.iter().enumerate() {
-                        if idx < embeddings.len() {
-                            if let Err(e) = conn
-                                .execute(
-                                    "UPDATE memories SET embedding = vector32(?1) WHERE id = ?2",
-                                    libsql::params![Self::vec_to_sql(&embeddings[idx]), id.clone()],
-                                )
-                                .await
-                            {
-                                log::warn!(
-                                    "[memory_db] null embed recovery update id={}: {}",
-                                    id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    #[cfg(test)]
-                    arm_commit_failure(&conn, "null_embed_recovery").await;
-                    // Same unbounded-loop reason as migration 24's batches.
-                    commit_or_rollback(&conn).await.map_err(|e| {
-                        WenlanError::VectorDb(format!("null embed recovery commit: {e}"))
-                    })?;
-                    drop(conn);
-
-                    recovered += batch.len();
-                    if let Ok(payload) = serde_json::to_string(&MigrationProgress {
-                        current: recovered,
-                        total: null_count,
-                        phase: "Recovering embeddings...".into(),
-                    }) {
-                        let _ = emitter.emit("migration-progress", &payload);
-                    }
-                }
-                log::info!("[memory_db] null embedding recovery complete");
-            }
-        }
+        // Memory rows with no embedding (a crash during migration 24/25's
+        // re-embed, or a chat import from a build that stored them bare) are
+        // recovered after the chain by `recover_null_memory_embeddings`, which
+        // the ordinary constructors call before returning and the daemon runs
+        // in the background after it serves. No later migration reads
+        // `memories.embedding`, so moving the pass out of the chain changes no
+        // migration's input.
 
         let _ = emitter.emit("migration-complete", "{}");
 
@@ -25209,6 +25283,229 @@ impl MemoryDB {
             .map_err(|e| WenlanError::Embedding(e.to_string()))
     }
 
+    /// [`Self::generate_embeddings`] on the blocking pool, for async callers.
+    /// The embedder sits behind a synchronous `std::sync::Mutex`, so an inline
+    /// model pass holds a runtime worker for its whole length; this takes
+    /// owned texts and holds no database lock while it runs.
+    async fn generate_embeddings_blocking(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>, WenlanError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let embedder = self.embedder.clone().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        tokio::task::spawn_blocking(move || {
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let mut embedder = embedder
+                .lock()
+                .map_err(|_| WenlanError::Embedding("embedder mutex poisoned".to_string()))?;
+            embedder
+                .embed(text_refs, None)
+                .map_err(|e| WenlanError::Embedding(e.to_string()))
+        })
+        .await
+        .map_err(|e| WenlanError::Embedding(format!("embedding task failed: {e}")))?
+    }
+
+    /// How many memory rows have no embedding.
+    pub async fn count_null_memory_embeddings(&self) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE embedding IS NULL", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed check: {e}")))?;
+        let count: i64 = match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => row.get(0).unwrap_or(0),
+            None => 0,
+        };
+        Ok(count.max(0) as usize)
+    }
+
+    /// Re-embed every memory row that has no embedding, one bounded batch at a
+    /// time, before returning. The ordinary constructors call this after the
+    /// migration chain; the daemon drives the batches itself instead.
+    ///
+    /// A batch whose commit fails, or whose embedding call errors, ends the
+    /// run with that error. Rows the batch leaves alone are counted as
+    /// skipped and are not selected again in this run, so it always ends.
+    pub async fn recover_null_memory_embeddings(
+        &self,
+        emitter: &dyn EventEmitter,
+    ) -> Result<NullEmbeddingRecoveryReport, WenlanError> {
+        let pending = self.count_null_memory_embeddings().await?;
+        if pending == 0 {
+            return Ok(NullEmbeddingRecoveryReport::default());
+        }
+        log::warn!("[memory_db] found {pending} memories with NULL embeddings, re-embedding...");
+        let mut report = NullEmbeddingRecoveryReport::default();
+        let mut cursor: Option<String> = None;
+        loop {
+            let batch = self
+                .recover_null_memory_embeddings_batch(
+                    cursor.as_deref(),
+                    NULL_EMBEDDING_RECOVERY_BATCH,
+                )
+                .await?;
+            let Some(next_cursor) = batch.next_cursor else {
+                break;
+            };
+            report.recovered += batch.recovered;
+            report.skipped += batch.skipped;
+            cursor = Some(next_cursor);
+            if let Ok(payload) = serde_json::to_string(&MigrationProgress {
+                current: (report.recovered + report.skipped).min(pending),
+                total: pending,
+                phase: "Recovering embeddings...".into(),
+            }) {
+                let _ = emitter.emit("migration-progress", &payload);
+            }
+        }
+        log::info!(
+            "[memory_db] null embedding recovery complete: {} recovered, {} skipped",
+            report.recovered,
+            report.skipped
+        );
+        // The chain already emitted completion before this pass; say it again
+        // so a listener's progress state clears after the last progress event.
+        let _ = emitter.emit("migration-complete", "{}");
+        Ok(report)
+    }
+
+    /// Re-embed at most `batch_size` (capped at
+    /// [`NULL_EMBEDDING_RECOVERY_BATCH`]) memory rows that have no embedding,
+    /// taking ids in order after `after_id`.
+    ///
+    /// The rows are read under the connection lock, embedded on the blocking
+    /// pool with no lock held, then written in one transaction. Each write
+    /// lands only if the row still has no embedding and still has the text
+    /// and space that were embedded, so a row embedded, edited or moved in
+    /// the meantime keeps its own state and counts as skipped. A failed
+    /// `BEGIN` or commit returns an error and writes nothing.
+    pub async fn recover_null_memory_embeddings_batch(
+        &self,
+        after_id: Option<&str>,
+        batch_size: usize,
+    ) -> Result<NullEmbeddingBatch, WenlanError> {
+        let limit = batch_size.clamp(1, NULL_EMBEDDING_RECOVERY_BATCH) as i64;
+        let batch: Vec<(String, Option<String>, Option<String>)> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, COALESCE(source_text, content), space FROM memories \
+                     WHERE embedding IS NULL AND (?1 IS NULL OR id > ?1) \
+                     ORDER BY id LIMIT ?2",
+                    libsql::params![after_id.map(str::to_string), limit],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("null embed batch: {e}")))?;
+            let mut batch = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let id: String = row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("null embed batch id: {e}")))?;
+                let text: Option<String> = row.get(1).unwrap_or(None);
+                let space: Option<String> = row.get(2).unwrap_or(None);
+                batch.push((id, text, space));
+            }
+            batch
+        };
+        let Some(next_cursor) = batch.last().map(|(id, _, _)| id.clone()) else {
+            return Ok(NullEmbeddingBatch::default());
+        };
+
+        let texts: Vec<String> = batch
+            .iter()
+            .map(|(_, text, space)| {
+                let text = text.as_deref().unwrap_or_default();
+                match space {
+                    Some(space) => format!("[{space}] {text}"),
+                    None => text.to_string(),
+                }
+            })
+            .collect();
+        #[allow(unused_mut)]
+        let mut embeddings = self.generate_embeddings_blocking(texts).await?;
+        #[cfg(test)]
+        let fault = take_null_embed_recovery_fault();
+        #[cfg(test)]
+        if let Some(keep) = fault.and_then(|fault| fault.keep_vectors) {
+            embeddings.truncate(keep);
+        }
+        if embeddings.len() < batch.len() {
+            log::warn!(
+                "[memory_db] null embed recovery: model returned {} vectors for {} rows; \
+                 the rest stay unembedded this run",
+                embeddings.len(),
+                batch.len()
+            );
+        }
+
+        let conn = self.conn.lock().await;
+        #[cfg(test)]
+        for sql in fault.map(|fault| fault.race_sql).unwrap_or_default() {
+            conn.execute(sql, ())
+                .await
+                .expect("stage a concurrent memory change");
+        }
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed recovery begin: {e}")))?;
+        let mut recovered = 0usize;
+        let mut skipped = 0usize;
+        for (idx, (id, text, space)) in batch.iter().enumerate() {
+            let Some(embedding) = embeddings.get(idx) else {
+                skipped += 1;
+                continue;
+            };
+            match conn
+                .execute(
+                    "UPDATE memories SET embedding = vector32(?1) \
+                     WHERE id = ?2 AND embedding IS NULL \
+                       AND COALESCE(source_text, content) IS ?3 AND space IS ?4",
+                    libsql::params![
+                        Self::vec_to_sql(embedding),
+                        id.clone(),
+                        text.clone(),
+                        space.clone()
+                    ],
+                )
+                .await
+            {
+                Ok(0) => skipped += 1,
+                Ok(_) => recovered += 1,
+                Err(e) => {
+                    log::warn!("[memory_db] null embed recovery update id={id}: {e}");
+                    skipped += 1;
+                }
+            }
+        }
+        #[cfg(test)]
+        arm_commit_failure(&conn, "null_embed_recovery").await;
+        // A failed commit is rolled back and returned: swallowing it would
+        // report rows as recovered that went back to NULL.
+        commit_or_rollback(&conn)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed recovery commit: {e}")))?;
+        drop(conn);
+
+        Ok(NullEmbeddingBatch {
+            recovered,
+            skipped,
+            next_cursor: Some(next_cursor),
+        })
+    }
+
     // ==================== document_tags ====================
 
     /// Replace all tags for (source, source_id). Returns the normalized final set.
@@ -25982,15 +26279,69 @@ impl MemoryDB {
     /// derived from `docs` here (previously each wrapper re-derived them).
     async fn upsert_documents_with_derived_channels(
         &self,
-        mut docs: Vec<RawDocument>,
+        docs: Vec<RawDocument>,
         episode_enabled_override: Option<bool>,
         fact_enabled_override: Option<bool>,
         enrichment_origin: Option<EnrichmentOrigin>,
         operation_receipt: Option<OperationReceipt<'_>>,
         write_spaces: Option<HashMap<String, crate::space_context::ResolvedWriteSpace>>,
     ) -> Result<usize, WenlanError> {
+        self.upsert_documents_at_optional_page_fence(
+            docs,
+            episode_enabled_override,
+            fact_enabled_override,
+            enrichment_origin,
+            operation_receipt,
+            write_spaces,
+            None,
+        )
+        .await
+        .map(|written| written.unwrap_or(0))
+    }
+
+    /// Stage page-bound rows (a revision card) only while the page they were
+    /// computed from is still that exact row: active, at `expected_version`,
+    /// at the fence's source revision, and of the fence's incarnation. The
+    /// predicate is read inside the same transaction as the insert and the
+    /// optional receipt, so a page edited, re-armed, or deleted and recreated
+    /// under the same id after the caller's snapshot gets no card. Returns
+    /// `Ok(false)` without writing anything when the fence no longer holds.
+    pub(crate) async fn upsert_documents_at_page_fence(
+        &self,
+        docs: Vec<RawDocument>,
+        operation_receipt: Option<OperationReceipt<'_>>,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        self.upsert_documents_at_optional_page_fence(
+            docs,
+            None,
+            None,
+            None,
+            operation_receipt,
+            None,
+            Some((page_id, expected_version, fence)),
+        )
+        .await
+        .map(|written| written.is_some())
+    }
+
+    /// Shared body of the `upsert_documents*` family. `Ok(None)` only when a
+    /// `page_fence` was supplied and did not hold; nothing was written then.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_documents_at_optional_page_fence(
+        &self,
+        mut docs: Vec<RawDocument>,
+        episode_enabled_override: Option<bool>,
+        fact_enabled_override: Option<bool>,
+        enrichment_origin: Option<EnrichmentOrigin>,
+        operation_receipt: Option<OperationReceipt<'_>>,
+        write_spaces: Option<HashMap<String, crate::space_context::ResolvedWriteSpace>>,
+        page_fence: Option<(&str, i64, &PageFence)>,
+    ) -> Result<Option<usize>, WenlanError> {
         if docs.is_empty() {
-            return Ok(0);
+            return Ok(Some(0));
         }
         let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
         let episode_enabled =
@@ -26320,7 +26671,7 @@ impl MemoryDB {
         }
 
         if memory_rows.is_empty() {
-            return Ok(0);
+            return Ok(Some(0));
         }
 
         // Generate embeddings for all memory rows
@@ -26354,7 +26705,33 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("begin transaction: {}", e)))?;
 
         let total = memory_rows.len();
-        let transaction_result: Result<(), WenlanError> = async {
+        let transaction_result: Result<bool, WenlanError> = async {
+            if let Some((page_id, expected_version, fence)) = page_fence {
+                let mut rows = conn
+                    .query(
+                        "SELECT 1 FROM pages
+                         WHERE id = ?1 AND status = 'active' AND version = ?2
+                           AND COALESCE(source_revision, 0) = ?3
+                           AND incarnation = ?4",
+                        libsql::params![
+                            page_id,
+                            expected_version,
+                            fence.source_revision,
+                            fence.incarnation.as_str()
+                        ],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("upsert page fence: {e}")))?;
+                let held = rows
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("upsert page fence row: {e}")))?
+                    .is_some();
+                drop(rows);
+                if !held {
+                    return Ok(false);
+                }
+            }
             if let Some(write_spaces) = write_spaces.as_ref() {
                 let mut finalized_names: HashMap<String, Option<String>> = HashMap::new();
                 for (source_id, resolved) in write_spaces {
@@ -26813,17 +27190,28 @@ impl MemoryDB {
                 })?;
             }
 
-            Ok(())
+            Ok(true)
         }
         .await;
 
-        if let Err(error) = transaction_result {
-            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
-                return Err(WenlanError::VectorDb(format!(
-                    "{error}; rollback failed: {rollback_error}"
-                )));
+        match transaction_result {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                    return Err(WenlanError::VectorDb(format!(
+                        "upsert page fence rollback: {rollback_error}"
+                    )));
+                }
+                return Ok(None);
             }
-            return Err(error);
+            Err(error) => {
+                if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                    return Err(WenlanError::VectorDb(format!(
+                        "{error}; rollback failed: {rollback_error}"
+                    )));
+                }
+                return Err(error);
+            }
         }
 
         if let Err(error) = conn.execute("COMMIT", ()).await {
@@ -26838,7 +27226,7 @@ impl MemoryDB {
         }
 
         log::info!("[memory_db] upserted {} memories", total);
-        Ok(total)
+        Ok(Some(total))
     }
 
     /// Hybrid search: vector similarity + FTS, combined with Reciprocal Rank Fusion.
@@ -43082,13 +43470,14 @@ impl MemoryDB {
 
     /// Count agent connections that have recorded at least one memory write.
     /// Used to detect when a second agent starts contributing (the
-    /// `second-agent` milestone fires at ≥2).
+    /// `second-agent` milestone fires at ≥2). The setup wizard's probe agent
+    /// is not a contributing agent and is excluded.
     pub async fn count_agents_with_writes(&self) -> Result<i64, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM agent_connections WHERE memory_count >= 1",
-                (),
+                "SELECT COUNT(*) FROM agent_connections WHERE memory_count >= 1 AND name != ?1",
+                libsql::params![crate::onboarding::SETUP_PROBE_AGENT],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("count_agents_with_writes query: {}", e)))?;
@@ -50949,22 +51338,6 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Clear the user_edited flag and mark the page stale with reason "manual_force".
-    /// Used by the `/distill rebuild` force path so the next refinery pass regenerates
-    /// the page from sources. The stale_reason ensures the CAS branch of update_page
-    /// can write through afterwards.
-    pub async fn clear_user_edited(&self, page_id: &str) -> Result<(), WenlanError> {
-        let conn = self.conn.lock().await;
-        Self::reject_page_draft_on_conn(&conn, page_id).await?;
-        conn.execute(
-            "UPDATE pages SET user_edited = 0, stale_reason = 'manual_force', refresh_blocked_reason = NULL WHERE id = ?1",
-            libsql::params![page_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("clear_user_edited: {e}")))?;
-        Ok(())
-    }
-
     /// List pages, optionally filtered by space.
     pub async fn list_pages_by_space(
         &self,
@@ -51144,6 +51517,7 @@ impl MemoryDB {
             None,
             None,
             false,
+            false,
         )
         .await
         .map(|_| ())
@@ -51177,6 +51551,7 @@ impl MemoryDB {
             None,
             None,
             None,
+            false,
             false,
         )
         .await
@@ -51213,6 +51588,46 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
+        )
+        .await
+    }
+
+    /// User-forced Re-distill write (`POST /api/distill/{id}` and the force
+    /// target of `POST /api/distill`). Lands the new body under the
+    /// source-revision and incarnation fence without requiring the page to be
+    /// stale, and releases `user_edited` and the page's staleness in that same
+    /// UPDATE. Nothing is cleared unless the body lands; authored pages never
+    /// match, and neither does a page deleted and recreated under the same id.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn try_user_forced_page_content_at_source_revision(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        changelog: &str,
+        citations_json: Option<&str>,
+        expected_source_revision: i64,
+        expected_incarnation: &str,
+        receipt: Option<OperationReceipt<'_>>,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            false,
+            Some(changelog),
+            citations_json,
+            None,
+            Some(expected_source_revision),
+            Some(expected_incarnation),
+            None,
+            receipt,
+            None,
+            false,
+            true,
         )
         .await
     }
@@ -51259,6 +51674,7 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51292,6 +51708,7 @@ impl MemoryDB {
             None,
             receipt,
             None,
+            false,
             false,
         )
         .await
@@ -51340,6 +51757,7 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51382,6 +51800,7 @@ impl MemoryDB {
             None,
             Some((source_id, expected_memory_version)),
             true,
+            false,
         )
         .await
     }
@@ -51415,6 +51834,7 @@ impl MemoryDB {
             None,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51444,7 +51864,29 @@ impl MemoryDB {
         receipt: Option<OperationReceipt<'_>>,
         page_growth_guard: Option<(&str, i64)>,
         machine_owned_only: bool,
+        user_forced: bool,
     ) -> Result<bool, WenlanError> {
+        // A user-forced rebuild releases edit protection in this UPDATE, so it
+        // only rides the one shape that fences it: a machine changelog write
+        // under a source-revision AND incarnation CAS, with no stale
+        // requirement. The revision alone cannot see a delete-and-recreate
+        // under the same id, which restarts the revision counter.
+        if user_forced
+            && (require_stale
+                || changelog.is_none()
+                || expected_version.is_some()
+                || expected_source_revision.is_none()
+                || expected_incarnation.is_none()
+                || consume_revision_id.is_some()
+                || page_growth_guard.is_some()
+                || machine_owned_only
+                || matches!(link_reason, "manual_edit" | "fs_edit"))
+        {
+            return Err(WenlanError::Validation(
+                "a user-forced page rebuild requires a machine changelog write under a source-revision fence"
+                    .to_string(),
+            ));
+        }
         // Page growth and the citation backfill are the two machine writers
         // that snapshot both counters BEFORE reading evidence, so combining
         // both fences for them is stricter, not looser, than either alone.
@@ -51466,14 +51908,15 @@ impl MemoryDB {
                 "only page growth, citation backfill, and revision accept may combine version and source-revision CAS".to_string(),
             ));
         }
-        // The incarnation fence only rides with a fully fenced changelog
-        // write (the citation backfill's shape): that is the one SQL builder
-        // below that binds it, so accepting it anywhere else would silently
-        // drop the fence.
+        // The incarnation fence only rides with a changelog write under a
+        // source-revision CAS: the citation backfill's fully fenced shape, or
+        // the user-forced rebuild's revision-only shape. Those are the only
+        // SQL bindings below that carry it, so accepting it anywhere else
+        // would silently drop the fence.
         if expected_incarnation.is_some()
-            && (expected_version.is_none()
-                || expected_source_revision.is_none()
-                || changelog.is_none())
+            && (expected_source_revision.is_none()
+                || changelog.is_none()
+                || (expected_version.is_none() && !user_forced))
         {
             return Err(WenlanError::Validation(
                 "the page incarnation fence requires version, source-revision, and changelog"
@@ -51582,7 +52025,30 @@ impl MemoryDB {
         }
         let affected = if let Some(cl) = changelog {
             // Changelog-aware variant: write changelog atomically with content.
-            let mut sql = if require_stale {
+            let mut sql = if user_forced {
+                // User-forced rebuild: the new body, `user_edited = 0`, and the
+                // consumed staleness land together or not at all. There is no
+                // `user_edited = 0` guard; the source-revision fence appended
+                // below is what stops a human edit that landed mid-generation
+                // from being overwritten. Authored pages never take this path.
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = 0, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
+                   changelog = ?6, \
+                   citations = ?7, \
+                   stale_reason = NULL, \
+                   refresh_blocked_reason = NULL, \
+                   sources_updated_count = 0, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
+                 WHERE id = ?5 \
+                   AND status = 'active' \
+                   AND COALESCE(creation_kind, 'distilled') <> 'authored'"
+            } else if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -51643,7 +52109,11 @@ impl MemoryDB {
                 }
             }
             if expected_incarnation.is_some() {
-                sql.push_str(" AND incarnation = ?10");
+                if expected_version.is_some() {
+                    sql.push_str(" AND incarnation = ?10");
+                } else {
+                    sql.push_str(" AND incarnation = ?9");
+                }
             }
             let update_result = match (expected_version, expected_source_revision) {
                 (Some(version), None) => {
@@ -51662,22 +52132,41 @@ impl MemoryDB {
                     )
                     .await
                 }
-                (None, Some(revision)) => {
-                    conn.execute(
-                        &sql,
-                        libsql::params![
-                            content,
-                            source_ids_json,
-                            now,
-                            link_reason,
-                            id,
-                            cl,
-                            citations_bind,
-                            revision
-                        ],
-                    )
-                    .await
-                }
+                (None, Some(revision)) => match expected_incarnation {
+                    Some(incarnation) => {
+                        conn.execute(
+                            &sql,
+                            libsql::params![
+                                content,
+                                source_ids_json,
+                                now,
+                                link_reason,
+                                id,
+                                cl,
+                                citations_bind,
+                                revision,
+                                incarnation
+                            ],
+                        )
+                        .await
+                    }
+                    None => {
+                        conn.execute(
+                            &sql,
+                            libsql::params![
+                                content,
+                                source_ids_json,
+                                now,
+                                link_reason,
+                                id,
+                                cl,
+                                citations_bind,
+                                revision
+                            ],
+                        )
+                        .await
+                    }
+                },
                 (None, None) => {
                     conn.execute(
                         &sql,
@@ -51861,6 +52350,7 @@ impl MemoryDB {
             }
         };
         if (require_stale
+            || user_forced
             || expected_version.is_some()
             || expected_source_revision.is_some()
             || consume_revision_id.is_some()
@@ -56137,6 +56627,43 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// [`Self::set_page_refresh_blocked_reason`] fenced to the compile input
+    /// the discarded refresh started from: the marker lands only while the
+    /// page is still active at the captured `fence`. Every canonical page
+    /// write and every mark-stale site advances `source_revision` and clears
+    /// the marker, so a generation that raced one of them cannot pin its
+    /// obsolete discard on the newer state and pause that state's retry. The
+    /// incarnation catches the one change the revision cannot: the page
+    /// deleted and recreated under the same id, which restarts the revision.
+    /// Staleness is not required: a user-forced refresh may start on a fresh
+    /// page. Returns whether the marker was written.
+    pub async fn set_page_refresh_blocked_reason_at_fence(
+        &self,
+        page_id: &str,
+        reason: &str,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE pages SET refresh_blocked_reason = ?1
+                 WHERE id = ?2 AND status = 'active'
+                   AND COALESCE(source_revision, 0) = ?3
+                   AND incarnation = ?4",
+                libsql::params![
+                    reason,
+                    page_id,
+                    fence.source_revision,
+                    fence.incarnation.as_str()
+                ],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("set_page_refresh_blocked_reason_at_fence: {e}"))
+            })?;
+        Ok(affected == 1)
+    }
+
     /// Monotonic compile-input token for page synthesis. It advances whenever
     /// the source set or source content is invalidated and never resets when
     /// pending staleness is acknowledged.
@@ -56328,6 +56855,131 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile commit: {e}")))?;
         Ok(acknowledged)
+    }
+
+    /// [`Self::acknowledge_page_compile`] and
+    /// [`Self::acknowledge_page_compile_with_receipt`] under the full page
+    /// fence: the exact version, the captured source revision, and the row
+    /// incarnation, so an identical-body result computed for a page that was
+    /// deleted and recreated under the same id cannot clear the replacement's
+    /// staleness or refresh marker. The receipt, when present, commits in the
+    /// same transaction and only if the acknowledgement matched.
+    pub(crate) async fn acknowledge_page_compile_at_fence(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+        receipt: Option<OperationReceipt<'_>>,
+    ) -> Result<bool, WenlanError> {
+        const SQL: &str = "UPDATE pages
+             SET last_compiled = ?1, stale_reason = NULL, refresh_blocked_reason = NULL, sources_updated_count = 0
+             WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL
+               AND COALESCE(source_revision, 0) = ?4
+               AND incarnation = ?5";
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let Some(receipt) = receipt else {
+            let affected = conn
+                .execute(
+                    SQL,
+                    libsql::params![
+                        now,
+                        page_id,
+                        expected_version,
+                        fence.source_revision,
+                        fence.incarnation.as_str()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence: {e}"))
+                })?;
+            return Ok(affected == 1);
+        };
+        conn.execute("BEGIN", ()).await.map_err(|e| {
+            WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence begin: {e}"))
+        })?;
+        let result = async {
+            let affected = conn
+                .execute(
+                    SQL,
+                    libsql::params![
+                        now,
+                        page_id,
+                        expected_version,
+                        fence.source_revision,
+                        fence.incarnation.as_str()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence: {e}"))
+                })?;
+            if affected == 0 {
+                return Ok(false);
+            }
+            conn.execute(
+                "INSERT INTO operation_receipts \
+                   (caller_id, operation_id, request_digest, response, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                libsql::params![
+                    receipt.caller_id,
+                    receipt.operation_id,
+                    receipt.request_digest,
+                    receipt.response,
+                    chrono::Utc::now().timestamp()
+                ],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::Conflict(format!(
+                    "operation id '{}' for '{}' was already used: {e}",
+                    receipt.operation_id, receipt.caller_id
+                ))
+            })?;
+            Ok(true)
+        }
+        .await;
+        let acknowledged = match result {
+            Ok(acknowledged) => acknowledged,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        commit_or_rollback(&conn).await.map_err(|e| {
+            WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence commit: {e}"))
+        })?;
+        Ok(acknowledged)
+    }
+
+    /// [`Self::clear_page_staleness_at_source_revision`] under the full page
+    /// fence (version, source revision, and incarnation), for the user-forced
+    /// rebuild that staged a card from a snapshot of one exact row.
+    pub(crate) async fn clear_page_staleness_at_fence(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE pages
+                 SET stale_reason = NULL, refresh_blocked_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?1 AND version = ?2 AND stale_reason IS NOT NULL
+                   AND COALESCE(source_revision, 0) = ?3
+                   AND incarnation = ?4",
+                libsql::params![
+                    page_id,
+                    expected_version,
+                    fence.source_revision,
+                    fence.incarnation.as_str()
+                ],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("clear_page_staleness_at_fence: {e}")))?;
+        Ok(affected == 1)
     }
 
     /// Clear a human-owned page's queued stale item after its review card was
@@ -56579,6 +57231,31 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_page_summary: {e}")))?;
         Ok(())
+    }
+
+    /// [`Self::update_page_summary`] for the row generation a fenced refresh
+    /// just wrote: a page deleted and recreated under the same id after that
+    /// write keeps its own summary. Returns whether the summary was written.
+    pub(crate) async fn update_page_summary_at_incarnation(
+        &self,
+        page_id: &str,
+        summary: Option<&str>,
+        expected_incarnation: &str,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = conn
+            .execute(
+                "UPDATE pages SET summary = ?1, last_modified = ?2
+                 WHERE id = ?3 AND incarnation = ?4",
+                libsql::params![summary, now, page_id, expected_incarnation],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("update_page_summary_at_incarnation: {e}"))
+            })?;
+        Ok(affected == 1)
     }
 
     /// Read the current `stale_reason` for a page without loading the rest
@@ -57603,6 +58280,8 @@ impl MemoryDB {
     /// extraction, and event emission — those happen later via the refinery
     /// steep cycle. Uses `source = 'memory'` and `memory_type = NULL` so the row
     /// matches the `memory_type IS NULL` filter in `get_unclassified_imports`.
+    /// No production caller (tests only); chat imports store through the
+    /// embedding batch writer `store_raw_import_memories_batch`.
     pub async fn store_raw_import_memory(
         &self,
         source_id: &str,
@@ -57669,7 +58348,13 @@ impl MemoryDB {
     /// Store multiple raw import memories inside a single transaction.
     ///
     /// Each entry is `(source_id, content, title, created_at, chunk_index)`.
-    /// On error the entire batch is rolled back.
+    /// Every row is embedded at write time, so it is vector-searchable (and
+    /// passes the embedding lint) without waiting for the startup NULL-embedding
+    /// recovery. The embed text is the raw content, the same text that recovery
+    /// embeds for these rows (they carry no space and no source text). The model
+    /// pass runs before the connection lock is taken; an embedding failure or a
+    /// count mismatch fails the batch before BEGIN. On error the entire batch is
+    /// rolled back.
     #[allow(clippy::type_complexity)]
     pub async fn store_raw_import_memories_batch(
         &self,
@@ -57681,13 +58366,28 @@ impl MemoryDB {
             i64,
         )],
     ) -> Result<usize, WenlanError> {
+        let texts: Vec<String> = entries.iter().map(|entry| entry.1.clone()).collect();
+        let embeddings = raw_import_embedding_fault(
+            entries.iter().map(|entry| entry.1.as_str()),
+            self.generate_embeddings_blocking(texts).await,
+        )?;
+        if embeddings.len() != entries.len() {
+            return Err(WenlanError::Embedding(format!(
+                "batch import: expected {} embeddings, got {}",
+                entries.len(),
+                embeddings.len()
+            )));
+        }
+
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("batch import begin: {e}")))?;
 
         let mut count = 0usize;
-        for (source_id, content, title, created_at, chunk_index) in entries {
+        for ((source_id, content, title, created_at, chunk_index), embedding) in
+            entries.iter().zip(&embeddings)
+        {
             let memory_id = format!("mem_{}", uuid::Uuid::new_v4());
             let now_ts = chrono::Utc::now().timestamp();
             let created_ts = created_at.map(|ts| ts.timestamp()).unwrap_or(now_ts);
@@ -57697,8 +58397,8 @@ impl MemoryDB {
             if let Err(e) = conn.execute(
                 // `origin_class` pinned for the same reason as the single-row
                 // `store_raw_import_memory` above: a chat export is `generated`.
-                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, word_count, created_at, origin_class)
-                 VALUES (?1, ?2, 'memory', ?3, ?4, ?5, ?6, 'text', ?7, ?8, ?9)",
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, word_count, created_at, origin_class, embedding)
+                 VALUES (?1, ?2, 'memory', ?3, ?4, ?5, ?6, 'text', ?7, ?8, ?9, vector32(?10))",
                 libsql::params![
                     memory_id,
                     content.clone(),
@@ -57709,6 +58409,7 @@ impl MemoryDB {
                     word_count,
                     created_ts,
                     crate::origin::OriginClass::Generated.as_str(),
+                    Self::vec_to_sql(embedding),
                 ],
             ).await {
                 let _ = conn.execute("ROLLBACK", ()).await;
@@ -57964,6 +58665,24 @@ impl MemoryDB {
         }
 
         Ok(result)
+    }
+
+    /// Mark every import whose stage is not terminal (done/error) as `error`
+    /// with `message`, and return how many rows changed. For daemon startup:
+    /// imports run inside the daemon process and nothing resumes them, so a
+    /// row still short of done/error in a fresh process belongs to an import
+    /// the previous process never finished, and would otherwise show as
+    /// pending forever.
+    pub async fn fail_unfinished_imports(&self, message: &str) -> Result<u64, WenlanError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE import_state SET stage = 'error', updated_at = ?1, error_message = ?2
+             WHERE stage NOT IN ('done', 'error')",
+            libsql::params![now, message],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("fail_unfinished_imports: {e}")))
     }
 
     // ==================== App Metadata ====================

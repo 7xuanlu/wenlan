@@ -92,9 +92,13 @@ const STARTUP_CHILD_ORDER: &[&str] = &[
     "select_startup_repair_fence(",
     "let mut server_state = ServerState::new()",
     "let db = if repair_recovery_pending",
+    // The daemon open defers memory embedding recovery to the runtime worker;
+    // recovering a backlog during startup holds the health check shut.
+    "MemoryEmbeddingRecovery::Deferred",
     "import_legacy_status_files(",
     "run_migration_55(",
     "reset_in_progress_documents(",
+    "fail_unfinished_imports(",
     "enforce_projection_directory_invariant(",
     "PromptRegistry::load(",
     "let config = wenlan_core::config::load_config(",
@@ -130,6 +134,8 @@ const RUNTIME_WORKER_ORDER: &[&str] = &[
     "let selected_model = config",
     "wait_for_startup_model_admission(",
     "OnDeviceProvider::new_with_model(",
+    // Inside the optional-worker scope, so repair-only startup never starts it.
+    "tokio::spawn(recover_null_memory_embeddings_in_background(",
     "LLM_READINESS_HOOK.set(",
     "let db_for_reconcile = db_arc.clone()",
     "let shared_for_reconcile = shared.clone()",
@@ -195,7 +201,7 @@ const SCHEDULER_POLL_ORDER: &[&str] = &[
     "try_begin_background()",
     "let snapshot = {",
     "sync_filesystem_edits(",
-    "sync_directory_sources(",
+    "sync_directory_sources_in_scope(",
     "fire_steep_phase_safe(",
     "run_derived_receipt_sweep_if_due(",
     "run_ambient_job_safe(",
@@ -2048,8 +2054,9 @@ fn truth_reconciliation_work_runs_only_in_the_runtime_worker() {
         );
     }
     assert!(
-        startup.contains("wenlan_core::db::MemoryDB::new("),
-        "normal startup must keep the constructor alias visible to the placement tooth"
+        startup.contains("wenlan_core::db::MemoryDB::new_with_embedding_recovery(")
+            && startup.contains("wenlan_core::db::MemoryEmbeddingRecovery::Deferred"),
+        "normal startup must use the initialized constructor with deferred memory embedding recovery"
     );
     assert!(
         claim_derivation.contains("pub(super) const MIGRATION_105_BACKLOG_SEED_LIMIT: i64 = 500;"),

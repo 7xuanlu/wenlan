@@ -21,6 +21,20 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// never respond (wedged, or bound-but-still-initializing); the probe must
 /// not inherit the ingest-sized backstop above.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// Chat-export import only: a measured 10000-message synthetic import took
+/// 625.2s server-side (5000 embedded rows), so the 600s shared default fires
+/// while the detached daemon still completes. Eight hours bounds the wait
+/// without touching the shared client, health, or setup timeouts.
+const CHAT_EXPORT_IMPORT_TIMEOUT: Duration = Duration::from_secs(8 * 60 * 60);
+
+/// The on-device model download request stays open until the whole model is
+/// fetched and loaded. The largest catalog model is 5.5 GB (the default is
+/// 2.7 GB), which at a slow 2 Mbps takes about 6.1 hours of transfer alone
+/// (5.5 GB x 8 bits / 2 Mbps = 22,000 s), far past [`REQUEST_TIMEOUT`]. Eight
+/// hours leaves room for that plus engine init and a link that dips below
+/// 2 Mbps. Timing out early rejects the wizard's download even though the
+/// daemon may still be fetching.
+const MODEL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(8 * 60 * 60);
 
 fn build_http_client(connect_timeout: Duration, request_timeout: Duration) -> Client {
     Client::builder()
@@ -867,10 +881,32 @@ impl WenlanClient {
         &self,
         path: &str,
     ) -> Result<wenlan_types::import::ImportChatExportResponse, String> {
+        // Per-request override, NOT `post_json`: the shared client carries the
+        // 600s default, which fires on a large import the daemon still
+        // completes. Error/status/decode mapping mirrors `post_json` exactly.
+        let api_path = "/api/import/chat-export";
         let req = wenlan_types::import::ImportChatExportRequest {
             path: path.to_string(),
         };
-        self.post_json("/api/import/chat-export", &req).await
+        let resp = self
+            .client
+            .post(self.url(api_path))
+            .timeout(CHAT_EXPORT_IMPORT_TIMEOUT)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP POST {}: {}", api_path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!(
+                "HTTP POST {} returned {}: {}",
+                api_path, status, text
+            ));
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("Parse {}: {}", api_path, e))
     }
 
     pub async fn list_pending_imports(
@@ -1260,11 +1296,29 @@ impl WenlanClient {
         self.get_json("/api/on-device-model").await
     }
 
+    /// Bounded by [`MODEL_DOWNLOAD_TIMEOUT`], not the client's
+    /// [`REQUEST_TIMEOUT`]: the daemon answers only after the download and
+    /// engine init finish.
     pub async fn download_on_device_model(&self, model_id: String) -> Result<(), String> {
+        let path = "/api/on-device-model/download";
         let req = OnDeviceModelRequest { model_id };
-        let _resp: wenlan_types::responses::SuccessResponse = self
-            .post_json("/api/on-device-model/download", &req)
-            .await?;
+        let resp = self
+            .client
+            .post(self.url(path))
+            .timeout(MODEL_DOWNLOAD_TIMEOUT)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP POST {}: {}", path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP POST {} returned {}: {}", path, status, text));
+        }
+        let _resp: wenlan_types::responses::SuccessResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Parse {}: {}", path, e))?;
         Ok(())
     }
 
@@ -2008,6 +2062,186 @@ mod tests {
         assert!(
             err.contains("HTTP GET /api/setup/status"),
             "unexpected error shape: {err}"
+        );
+    }
+
+    /// Accepts one connection, waits `delay`, then answers 200 with `body`.
+    /// The write result is ignored: the timeout control below drops its end
+    /// first, and a reset on a deliberately abandoned socket is not a failure.
+    async fn serve_json_after_once(
+        body: &'static str,
+        delay: std::time::Duration,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 4096];
+            let n = stream.read(&mut buf).await.unwrap();
+            let request = String::from_utf8_lossy(&buf[..n]).to_string();
+            tokio::time::sleep(delay).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+            request
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    /// A large chat-export import legitimately outlives the shared 600s
+    /// default (measured: 625.2s server-side for 10000 messages). The import
+    /// carries its own 8h per-request bound instead; the generic helper keeps
+    /// the short default. Scaled down: 300ms default vs a 1500ms response.
+    #[tokio::test]
+    async fn chat_export_import_outlives_the_default_request_timeout() {
+        assert_eq!(
+            CHAT_EXPORT_IMPORT_TIMEOUT,
+            std::time::Duration::from_secs(8 * 60 * 60),
+            "the import bound is eight hours, not the shared default"
+        );
+        let body = r#"{"import_id":"import-1","vendor":"chatgpt","conversations_total":10,"conversations_new":8,"conversations_skipped_existing":2,"memories_stored":42}"#;
+        let delay = std::time::Duration::from_millis(1500);
+        let default_timeout = std::time::Duration::from_millis(300);
+
+        // Control: the generic helper inherits the short default and times out.
+        let (control_url, control_server) = serve_json_after_once(body, delay).await;
+        let control = WenlanClient {
+            client: build_http_client(CONNECT_TIMEOUT, default_timeout),
+            base_url: control_url,
+        };
+        let req = wenlan_types::import::ImportChatExportRequest {
+            path: "/tmp/export.zip".to_string(),
+        };
+        let err = control
+            .post_json::<wenlan_types::import::ImportChatExportRequest, serde_json::Value>(
+                "/api/import/chat-export",
+                &req,
+            )
+            .await
+            .expect_err("the 300ms default must fire before the 1500ms response");
+        assert!(
+            err.contains("HTTP POST /api/import/chat-export"),
+            "unexpected error shape: {err}"
+        );
+        control_server.abort();
+
+        // Actual: the import's own bound survives the same slow response, and
+        // the typed fields plus the request path are unchanged.
+        let (base_url, request) = serve_json_after_once(body, delay).await;
+        let client = WenlanClient {
+            client: build_http_client(CONNECT_TIMEOUT, default_timeout),
+            base_url,
+        };
+        let resp = client
+            .import_chat_export("/tmp/export.zip")
+            .await
+            .expect("import outlives the short default");
+        assert_eq!(resp.import_id, "import-1");
+        assert_eq!(resp.vendor, "chatgpt");
+        assert_eq!(resp.conversations_total, 10);
+        assert_eq!(resp.conversations_new, 8);
+        assert_eq!(resp.conversations_skipped_existing, 2);
+        assert_eq!(resp.memories_stored, 42);
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/import/chat-export HTTP/1.1"
+        );
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"path": "/tmp/export.zip"})
+        );
+    }
+
+    /// Leaving `post_json` means this method owns its error mapping now: raw
+    /// daemon failures and typed decode failures must read exactly as before.
+    #[tokio::test]
+    async fn import_chat_export_propagates_http_errors_and_decode_failures() {
+        let (base_url, _request) = serve_response_once("409 Conflict", r#"{"error":"busy"}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let err = client
+            .import_chat_export("/tmp/export.zip")
+            .await
+            .expect_err("the fixture deliberately returns a conflict");
+        assert!(
+            err.contains("HTTP POST /api/import/chat-export returned 409"),
+            "{err}"
+        );
+        assert!(err.contains("busy"), "{err}");
+
+        let (base_url, _request) = serve_response_once("200 OK", "{}").await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let err = client
+            .import_chat_export("/tmp/export.zip")
+            .await
+            .expect_err("an empty object is not an ImportChatExportResponse");
+        assert!(err.contains("Parse /api/import/chat-export"), "{err}");
+    }
+
+    /// Accepts one connection, reads the request, waits `delay`, then answers
+    /// 200 with `body`.
+    async fn serve_json_after(delay: std::time::Duration, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(delay).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        format!("http://{}", addr)
+    }
+
+    /// The download request stays open until the whole model is fetched and
+    /// loaded, which outlasts the client's total backstop on a slow link. A
+    /// client whose backstop is shorter than the daemon's reply must still see
+    /// the download succeed; the control request on the same client shape
+    /// proves the delay really exceeds that backstop.
+    #[tokio::test]
+    async fn model_download_is_not_cut_off_by_the_client_request_timeout() {
+        let base_timeout = std::time::Duration::from_millis(300);
+        let reply_delay = std::time::Duration::from_millis(1500);
+
+        let control = WenlanClient {
+            client: build_http_client(base_timeout, base_timeout),
+            base_url: serve_json_after(reply_delay, r#"{"ok":true}"#).await,
+        };
+        let control_result: Result<wenlan_types::responses::SuccessResponse, String> = control
+            .post_json(
+                "/api/on-device-model/download",
+                &OnDeviceModelRequest {
+                    model_id: "qwen3-4b".into(),
+                },
+            )
+            .await;
+        assert!(
+            control_result.is_err(),
+            "control request should hit the short client timeout"
+        );
+
+        let client = WenlanClient {
+            client: build_http_client(base_timeout, base_timeout),
+            base_url: serve_json_after(reply_delay, r#"{"ok":true}"#).await,
+        };
+        let result = client.download_on_device_model("qwen3-4b".into()).await;
+        assert!(
+            result.is_ok(),
+            "model download inherited the client request timeout: {result:?}"
         );
     }
 

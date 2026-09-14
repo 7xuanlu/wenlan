@@ -40,6 +40,24 @@ pub(super) enum ImportSynthesisPhase {
     Emergence,
 }
 
+/// Result of one model-free document preparation attempt in the import lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DocumentPrepOutcome {
+    /// No fresh document was claimable.
+    Idle,
+    /// The queue claim itself failed. Nothing ran, so no slice is spent and
+    /// prep stays pending for the next tick.
+    ClaimFailed,
+    /// A document was parsed, embedded and parked (or requeued because the
+    /// file changed after the claim).
+    Prepared,
+    /// The document failed and paused until `retry_at`.
+    RetryableFailure { retry_at: Option<i64> },
+    /// The document failed and reached the queue's attempt cap; it is never
+    /// claimed again.
+    Exhausted,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct ImportPrioritySnapshot {
     pub(super) deadline: Instant,
@@ -48,6 +66,34 @@ pub(super) struct ImportPrioritySnapshot {
     pub(super) ambient_slices: u8,
     pub(super) next_job: AmbientJob,
     pub(super) synthesis_phase: Option<ImportSynthesisPhase>,
+    document_prep_drained: bool,
+    /// Earliest pending in-window retry. Set exactly when at least one
+    /// retryable document still holds the lane.
+    document_prep_retry_at: Option<i64>,
+    prefer_document_prep: bool,
+    inference_round_idle: bool,
+}
+
+impl ImportPrioritySnapshot {
+    /// Prep may still have work: the shared slice budget is not spent and
+    /// either no claim has come back empty yet or a paused document is due to
+    /// retry before the deadline.
+    ///
+    /// Intentional bound: prep shares the 64-slice budget with inference, so a
+    /// folder with more fresh files than the budget leaves the rest queued for
+    /// the ordinary idle-gated ambient lap after the lane finishes.
+    pub(super) fn document_prep_open(&self) -> bool {
+        self.ambient_slices < IMPORT_PRIORITY_MAX_AMBIENT_SLICES
+            && (!self.document_prep_drained || self.document_prep_retry_at.is_some())
+    }
+
+    fn document_prep_due(&self, now_epoch: i64) -> bool {
+        self.document_prep_open()
+            && (!self.document_prep_drained
+                || self
+                    .document_prep_retry_at
+                    .is_some_and(|retry_at| retry_at <= now_epoch))
+    }
 }
 
 /// State is bounded by both a wall-clock deadline and an ambient-slice count.
@@ -65,6 +111,14 @@ pub(super) struct ImportPriority {
     synthesis_phase: Option<ImportSynthesisPhase>,
     started_logged: bool,
     synthesis_finished: bool,
+    document_prep_drained: bool,
+    /// Retry times of documents that failed inside the window and have not
+    /// been confirmed resolved. The lane wakes for the earliest and stays open
+    /// until every one is resolved. Bounded: each entry spends a slice, so it
+    /// never exceeds `IMPORT_PRIORITY_MAX_AMBIENT_SLICES`.
+    document_prep_retries: Vec<i64>,
+    prefer_document_prep: bool,
+    inference_round_idle: bool,
 }
 
 impl ImportPriority {
@@ -95,6 +149,10 @@ impl ImportPriority {
         self.synthesis_phase = None;
         self.started_logged = false;
         self.synthesis_finished = false;
+        self.document_prep_drained = false;
+        self.document_prep_retries.clear();
+        self.prefer_document_prep = true;
+        self.inference_round_idle = false;
     }
 
     pub(super) fn prepare_request(&mut self, now: Instant) -> ImportPriorityRequest {
@@ -129,7 +187,16 @@ impl ImportPriority {
             ambient_slices: self.ambient_slices,
             next_job: IMPORT_PRIORITY_JOBS[self.next_job],
             synthesis_phase: self.synthesis_phase,
+            document_prep_drained: self.document_prep_drained,
+            document_prep_retry_at: self.document_prep_retries.iter().copied().min(),
+            prefer_document_prep: self.prefer_document_prep,
+            inference_round_idle: self.inference_round_idle,
         })
+    }
+
+    fn document_prep_open(&self) -> bool {
+        self.snapshot()
+            .is_some_and(|snapshot| snapshot.document_prep_open())
     }
 
     pub(super) fn mark_started(&mut self) -> bool {
@@ -154,13 +221,75 @@ impl ImportPriority {
         self.next_job = (self.next_job + 1) % IMPORT_PRIORITY_JOBS.len();
         if self.round_attempts == IMPORT_PRIORITY_JOBS.len() as u8 {
             if !self.round_had_work {
-                self.synthesis_phase = Some(ImportSynthesisPhase::Detect);
+                if self.document_prep_open() {
+                    // Fresh documents remain: an empty inference round must
+                    // not start synthesis (and so finish the lane). Inference
+                    // sits out until prep closes.
+                    self.inference_round_idle = true;
+                } else {
+                    self.synthesis_phase = Some(ImportSynthesisPhase::Detect);
+                }
             }
             self.round_attempts = 0;
             self.round_had_work = false;
         }
         if self.ambient_slices >= IMPORT_PRIORITY_MAX_AMBIENT_SLICES {
             self.synthesis_phase = Some(ImportSynthesisPhase::Detect);
+        }
+        self.prefer_document_prep = true;
+        true
+    }
+
+    /// Record one document prep attempt. Prep spends the shared slice budget
+    /// but never rotates the inference jobs or counts toward an inference
+    /// round.
+    pub(super) fn note_document_slice(
+        &mut self,
+        generation: u64,
+        outcome: DocumentPrepOutcome,
+        now_epoch: i64,
+    ) -> bool {
+        if self.generation != generation {
+            return false;
+        }
+        match outcome {
+            DocumentPrepOutcome::ClaimFailed => return true,
+            DocumentPrepOutcome::Idle => {
+                self.document_prep_drained = true;
+                // Nothing was claimable, so every retry already due has been
+                // resolved (claimed or rescheduled); later ones still hold
+                // the lane.
+                self.document_prep_retries
+                    .retain(|retry_at| *retry_at > now_epoch);
+            }
+            DocumentPrepOutcome::Prepared
+            | DocumentPrepOutcome::RetryableFailure { .. }
+            | DocumentPrepOutcome::Exhausted => {
+                self.ambient_slices = self
+                    .ambient_slices
+                    .saturating_add(1)
+                    .min(IMPORT_PRIORITY_MAX_AMBIENT_SLICES);
+                if let DocumentPrepOutcome::RetryableFailure {
+                    retry_at: Some(retry_at),
+                } = outcome
+                {
+                    // Only a retry the lane can still reach holds it open.
+                    if retry_at < self.deadline_epoch {
+                        self.document_prep_retries.push(retry_at);
+                    }
+                }
+                if self.ambient_slices >= IMPORT_PRIORITY_MAX_AMBIENT_SLICES {
+                    self.synthesis_phase = Some(ImportSynthesisPhase::Detect);
+                }
+            }
+        }
+        self.prefer_document_prep = false;
+        if self.inference_round_idle && !self.document_prep_open() {
+            // Prep just closed. The prepared documents may carry inference
+            // work, so run one fresh full round before synthesis.
+            self.inference_round_idle = false;
+            self.round_attempts = 0;
+            self.round_had_work = false;
         }
         true
     }
@@ -178,6 +307,7 @@ impl ImportPriority {
             ImportSynthesisPhase::Emergence => None,
         };
         self.synthesis_finished = phase == ImportSynthesisPhase::Emergence;
+        self.prefer_document_prep = true;
         true
     }
 
@@ -300,6 +430,18 @@ impl WriteSignal {
             .lock()
             .expect("import priority mutex poisoned")
             .note_ambient(generation, selected)
+    }
+
+    pub(super) fn import_priority_note_document(
+        &self,
+        generation: u64,
+        outcome: DocumentPrepOutcome,
+        now_epoch: i64,
+    ) -> bool {
+        self.import_priority
+            .lock()
+            .expect("import priority mutex poisoned")
+            .note_document_slice(generation, outcome, now_epoch)
     }
 
     pub(super) fn import_priority_note_phase(
@@ -442,6 +584,84 @@ pub(super) fn import_priority_block_reason_with_headroom(
     }
 }
 
+/// Model-free document prep loads no inference model, so it gets no on-device
+/// inference headroom. It still honours the memory reserve, thermal pressure,
+/// unavailable host signals and an in-flight startup model reservation, since
+/// parsing and embedding compete for the memory that reservation protects.
+pub(super) fn import_document_prep_block_reason(
+    status: ResourceStatus,
+    host_activity: HostActivitySnapshot,
+    startup_model_load_reserved: bool,
+) -> Option<ResourceBlockReason> {
+    import_priority_block_reason_with_headroom(status, host_activity, false, 0)
+        .or(startup_model_load_reserved.then_some(ResourceBlockReason::Warming))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImportLaneWait {
+    Resource(ResourceBlockReason),
+    DocumentPrepRetry,
+    PinnedProviderLoading,
+}
+
+impl ImportLaneWait {
+    pub(super) fn log_reason(self) -> String {
+        match self {
+            Self::Resource(reason) => format!("{reason:?}"),
+            Self::DocumentPrepRetry => "document_prep_retry".to_string(),
+            Self::PinnedProviderLoading => "pinned_provider_loading".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ImportLaneTurn {
+    DocumentPrep,
+    /// A synthesis phase when one is due, otherwise the next inference job.
+    Inference,
+    Wait(ImportLaneWait),
+    FinishNoAuthorizedProvider,
+}
+
+/// Choose this tick's import-lane turn. Prep and inference have separate
+/// admission; while both can run they alternate. The lane only finishes for
+/// want of a provider once prep has closed, so a lock-contended tick, a
+/// retryable failure waiting inside the window, or an exhausted document never
+/// ends it while fresh documents remain. The caller takes the ambient run lock
+/// only for a turn that runs, and records nothing when that lock is busy.
+pub(super) fn plan_import_lane_turn(
+    import: &ImportPrioritySnapshot,
+    now_epoch: i64,
+    inference_block: Option<ResourceBlockReason>,
+    document_prep_block: Option<ResourceBlockReason>,
+    provider_available: bool,
+    everyday_pinned: bool,
+) -> ImportLaneTurn {
+    let prep_open = import.document_prep_open();
+    let prep_ready = import.document_prep_due(now_epoch) && document_prep_block.is_none();
+    let inference_ready = provider_available
+        && inference_block.is_none()
+        && !(prep_open && import.inference_round_idle);
+    if prep_ready && (import.prefer_document_prep || !inference_ready) {
+        return ImportLaneTurn::DocumentPrep;
+    }
+    if inference_ready {
+        return ImportLaneTurn::Inference;
+    }
+    if prep_open {
+        return ImportLaneTurn::Wait(
+            document_prep_block.map_or(ImportLaneWait::DocumentPrepRetry, ImportLaneWait::Resource),
+        );
+    }
+    if let Some(reason) = inference_block {
+        return ImportLaneTurn::Wait(ImportLaneWait::Resource(reason));
+    }
+    if everyday_pinned {
+        return ImportLaneTurn::Wait(ImportLaneWait::PinnedProviderLoading);
+    }
+    ImportLaneTurn::FinishNoAuthorizedProvider
+}
+
 /// True when this tick's import-priority lane would run work: a request is
 /// active, it is not past its deadline or finished, and nothing it still honours
 /// holds it. The scheduler publishes this beside the ordinary gate so a reader
@@ -500,6 +720,13 @@ mod tests {
         let now = Instant::now();
         let mut priority = ImportPriority::default();
         let generation = priority.prepare_request(now).generation;
+        // No fresh documents: an empty round starts synthesis only once prep
+        // has drained (see empty_inference_round_with_pending_documents_does_not_finish_lane).
+        priority.note_document_slice(
+            generation,
+            DocumentPrepOutcome::Idle,
+            chrono::Utc::now().timestamp(),
+        );
         let mut jobs = Vec::new();
         for _ in 0..IMPORT_PRIORITY_JOBS.len() {
             jobs.push(priority.snapshot().expect("active priority").next_job);
@@ -587,6 +814,355 @@ mod tests {
                 Duration::from_secs(60)
             )
             .await
+        );
+    }
+
+    #[test]
+    fn document_prep_slice_counts_toward_cap_without_rotating_import_jobs() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+
+        assert!(priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, now_epoch));
+        let snapshot = priority.snapshot().unwrap();
+        assert_eq!(snapshot.ambient_slices, 1);
+        assert_eq!(snapshot.next_job, AmbientJob::Classification);
+        assert_eq!(snapshot.synthesis_phase, None);
+
+        for _ in 1..IMPORT_PRIORITY_MAX_AMBIENT_SLICES {
+            priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, now_epoch);
+        }
+        let snapshot = priority.snapshot().unwrap();
+        assert_eq!(snapshot.ambient_slices, IMPORT_PRIORITY_MAX_AMBIENT_SLICES);
+        assert_eq!(snapshot.next_job, AmbientJob::Classification);
+        assert_eq!(snapshot.synthesis_phase, Some(ImportSynthesisPhase::Detect));
+        assert!(!snapshot.document_prep_open());
+
+        let fresh = priority.prepare_request(now).generation;
+        assert_ne!(generation, fresh);
+        assert!(!priority.note_document_slice(
+            generation,
+            DocumentPrepOutcome::Prepared,
+            now_epoch
+        ));
+        assert_eq!(priority.snapshot().unwrap().ambient_slices, 0);
+    }
+
+    #[test]
+    fn empty_inference_round_with_pending_documents_does_not_finish_lane() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+        for _ in 0..IMPORT_PRIORITY_JOBS.len() {
+            priority.note_ambient(generation, false);
+        }
+        let snapshot = priority.snapshot().unwrap();
+        assert_eq!(
+            snapshot.synthesis_phase, None,
+            "an empty inference round must not start synthesis while documents remain"
+        );
+        assert!(!priority.should_finish(now));
+        assert_eq!(
+            plan_import_lane_turn(&snapshot, now_epoch, None, None, true, true),
+            ImportLaneTurn::DocumentPrep,
+            "an idle inference round hands the remaining turns to document prep"
+        );
+
+        priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, now_epoch);
+        let snapshot = priority.snapshot().unwrap();
+        assert_eq!(
+            plan_import_lane_turn(&snapshot, now_epoch, None, None, true, true),
+            ImportLaneTurn::DocumentPrep
+        );
+
+        // Once prep drains, inference gets one fresh full round before
+        // synthesis, because the prepared documents may carry new work.
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, now_epoch);
+        let snapshot = priority.snapshot().unwrap();
+        assert!(!snapshot.document_prep_open());
+        assert_eq!(
+            plan_import_lane_turn(&snapshot, now_epoch, None, None, true, true),
+            ImportLaneTurn::Inference
+        );
+        for _ in 0..IMPORT_PRIORITY_JOBS.len() - 1 {
+            priority.note_ambient(generation, false);
+            assert_eq!(priority.snapshot().unwrap().synthesis_phase, None);
+        }
+        priority.note_ambient(generation, false);
+        assert_eq!(
+            priority.snapshot().unwrap().synthesis_phase,
+            Some(ImportSynthesisPhase::Detect)
+        );
+    }
+
+    #[test]
+    fn document_prep_and_inference_alternate_while_both_have_work() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+        let plan = |priority: &ImportPriority| {
+            plan_import_lane_turn(
+                &priority.snapshot().unwrap(),
+                now_epoch,
+                None,
+                None,
+                true,
+                true,
+            )
+        };
+        assert_eq!(plan(&priority), ImportLaneTurn::DocumentPrep);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, now_epoch);
+        assert_eq!(plan(&priority), ImportLaneTurn::Inference);
+        priority.note_ambient(generation, true);
+        assert_eq!(plan(&priority), ImportLaneTurn::DocumentPrep);
+    }
+
+    #[test]
+    fn document_prep_lock_contention_retry_and_failures_keep_lane_open() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+        let deadline_epoch = priority.snapshot().unwrap().deadline_epoch;
+        // No provider and no pin: before this fix the lane finished at once.
+        let plan = |priority: &ImportPriority, epoch: i64, prep_block| {
+            plan_import_lane_turn(
+                &priority.snapshot().unwrap(),
+                epoch,
+                None,
+                prep_block,
+                false,
+                false,
+            )
+        };
+        assert_eq!(
+            plan(&priority, now_epoch, None),
+            ImportLaneTurn::DocumentPrep
+        );
+
+        // Lock contention runs nothing and records nothing, so the next
+        // tick plans the same prep turn and the lane stays open.
+        assert_eq!(
+            plan(&priority, now_epoch, None),
+            ImportLaneTurn::DocumentPrep
+        );
+        assert!(!priority.should_finish(now));
+
+        // A failed claim spends no slice and leaves prep pending.
+        priority.note_document_slice(generation, DocumentPrepOutcome::ClaimFailed, now_epoch);
+        assert_eq!(priority.snapshot().unwrap().ambient_slices, 0);
+        assert_eq!(
+            plan(&priority, now_epoch, None),
+            ImportLaneTurn::DocumentPrep
+        );
+
+        // A retryable failure inside the window keeps the lane waiting for
+        // its retry instead of finishing as "no provider".
+        let retry_at = now_epoch + 60;
+        priority.note_document_slice(
+            generation,
+            DocumentPrepOutcome::RetryableFailure {
+                retry_at: Some(retry_at),
+            },
+            now_epoch,
+        );
+        assert_eq!(priority.snapshot().unwrap().ambient_slices, 1);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, now_epoch);
+        assert_eq!(
+            plan(&priority, now_epoch, None),
+            ImportLaneTurn::Wait(ImportLaneWait::DocumentPrepRetry)
+        );
+        assert!(!priority.should_finish(now));
+        assert_eq!(
+            plan(&priority, retry_at, Some(ResourceBlockReason::Warming)),
+            ImportLaneTurn::Wait(ImportLaneWait::Resource(ResourceBlockReason::Warming))
+        );
+        assert_eq!(
+            plan(&priority, retry_at, None),
+            ImportLaneTurn::DocumentPrep
+        );
+
+        // The retry exhausts the document: it spends a slice, and the lane
+        // only finishes after a later claim confirms nothing is left.
+        priority.note_document_slice(generation, DocumentPrepOutcome::Exhausted, retry_at);
+        assert_eq!(priority.snapshot().unwrap().ambient_slices, 2);
+        assert_eq!(
+            plan(&priority, retry_at, None),
+            ImportLaneTurn::DocumentPrep
+        );
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, retry_at);
+        assert_eq!(
+            plan(&priority, retry_at, None),
+            ImportLaneTurn::FinishNoAuthorizedProvider
+        );
+
+        // A retry that falls after the lane's deadline does not hold it open.
+        let generation = priority.prepare_request(now).generation;
+        priority.note_document_slice(
+            generation,
+            DocumentPrepOutcome::RetryableFailure {
+                retry_at: Some(deadline_epoch + 3600),
+            },
+            now_epoch,
+        );
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, now_epoch);
+        assert_eq!(
+            plan(&priority, now_epoch, None),
+            ImportLaneTurn::FinishNoAuthorizedProvider
+        );
+        // A pinned provider that is still loading keeps waiting, as before.
+        assert_eq!(
+            plan_import_lane_turn(
+                &priority.snapshot().unwrap(),
+                now_epoch,
+                None,
+                None,
+                false,
+                true
+            ),
+            ImportLaneTurn::Wait(ImportLaneWait::PinnedProviderLoading)
+        );
+    }
+
+    #[test]
+    fn document_prep_wakes_for_earliest_retry_and_holds_lane_for_later_ones() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+        let deadline_epoch = priority.snapshot().unwrap().deadline_epoch;
+        let plan = |priority: &ImportPriority, epoch: i64| {
+            plan_import_lane_turn(
+                &priority.snapshot().unwrap(),
+                epoch,
+                None,
+                None,
+                false,
+                false,
+            )
+        };
+        let early = now_epoch + 60;
+        let late = deadline_epoch - 1;
+        assert!(early < late);
+
+        // Two documents fail inside the window, the early one first.
+        for retry_at in [early, late] {
+            priority.note_document_slice(
+                generation,
+                DocumentPrepOutcome::RetryableFailure {
+                    retry_at: Some(retry_at),
+                },
+                now_epoch,
+            );
+        }
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, now_epoch);
+        assert_eq!(
+            plan(&priority, now_epoch),
+            ImportLaneTurn::Wait(ImportLaneWait::DocumentPrepRetry)
+        );
+
+        // The lane wakes for the earliest retry, not the latest.
+        assert_eq!(plan(&priority, early), ImportLaneTurn::DocumentPrep);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, early);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, early);
+
+        // Once the early retry resolves, the later one still holds the lane.
+        assert_eq!(
+            plan(&priority, early),
+            ImportLaneTurn::Wait(ImportLaneWait::DocumentPrepRetry)
+        );
+        assert!(priority.snapshot().unwrap().document_prep_open());
+        assert_eq!(plan(&priority, late), ImportLaneTurn::DocumentPrep);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, late);
+        priority.note_document_slice(generation, DocumentPrepOutcome::Idle, late);
+        assert!(!priority.snapshot().unwrap().document_prep_open());
+        assert_eq!(
+            plan(&priority, late),
+            ImportLaneTurn::FinishNoAuthorizedProvider
+        );
+    }
+
+    #[test]
+    fn document_prep_cap_leaves_files_pending_and_lane_finishes() {
+        let now = Instant::now();
+        let now_epoch = chrono::Utc::now().timestamp();
+        let mut priority = ImportPriority::default();
+        let generation = priority.prepare_request(now).generation;
+        for _ in 0..IMPORT_PRIORITY_MAX_AMBIENT_SLICES {
+            priority.note_document_slice(generation, DocumentPrepOutcome::Prepared, now_epoch);
+        }
+        let snapshot = priority.snapshot().unwrap();
+        // Prep never drained, yet the shared budget is spent: remaining
+        // files stay queued for the ordinary idle-gated ambient lap.
+        assert!(!snapshot.document_prep_open());
+        assert_eq!(
+            plan_import_lane_turn(&snapshot, now_epoch, None, None, false, false),
+            ImportLaneTurn::FinishNoAuthorizedProvider
+        );
+        assert_eq!(
+            plan_import_lane_turn(&snapshot, now_epoch, None, None, true, true),
+            ImportLaneTurn::Inference
+        );
+        assert_eq!(snapshot.synthesis_phase, Some(ImportSynthesisPhase::Detect));
+    }
+
+    #[test]
+    fn document_prep_admission_skips_on_device_headroom_but_keeps_guards() {
+        let host = HostActivitySnapshot::Observed {
+            idle_for: Duration::ZERO,
+            thermal_state: 0,
+        };
+        let three_gib = admitted(95.0, 3 * super::super::GIB);
+        assert_eq!(
+            import_priority_block_reason(three_gib, host, false, true),
+            Some(ResourceBlockReason::MemoryPressure),
+            "on-device inference keeps its two-gibibyte headroom"
+        );
+        assert_eq!(
+            import_document_prep_block_reason(three_gib, host, false),
+            None
+        );
+        assert_eq!(
+            import_document_prep_block_reason(three_gib, host, true),
+            Some(ResourceBlockReason::Warming),
+            "the startup model reservation still blocks prep"
+        );
+        assert_eq!(
+            import_document_prep_block_reason(admitted(1.0, super::super::GIB), host, false),
+            Some(ResourceBlockReason::MemoryPressure)
+        );
+        assert_eq!(
+            import_document_prep_block_reason(
+                three_gib,
+                HostActivitySnapshot::Observed {
+                    idle_for: Duration::ZERO,
+                    thermal_state: 2,
+                },
+                false
+            ),
+            Some(ResourceBlockReason::ThermalPressure)
+        );
+        assert_eq!(
+            import_document_prep_block_reason(three_gib, HostActivitySnapshot::Unavailable, false),
+            Some(ResourceBlockReason::HostActivityUnavailable)
+        );
+
+        let now = Instant::now();
+        let mut priority = ImportPriority::default();
+        priority.prepare_request(now);
+        assert_eq!(
+            plan_import_lane_turn(
+                &priority.snapshot().unwrap(),
+                chrono::Utc::now().timestamp(),
+                import_priority_block_reason(three_gib, host, false, true),
+                import_document_prep_block_reason(three_gib, host, false),
+                true,
+                true,
+            ),
+            ImportLaneTurn::DocumentPrep
         );
     }
 

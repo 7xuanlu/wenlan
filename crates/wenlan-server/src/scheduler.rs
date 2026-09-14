@@ -460,6 +460,40 @@ fn periodic_directory_sync_allowed(resource_admitted: bool) -> bool {
     resource_admitted
 }
 
+/// Which registered Directory sources a poll may scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectorySyncScope {
+    /// The ordinary resource-admitted pass over every pollable source.
+    All,
+    /// Only sources that have never synced. A folder the app just registered
+    /// must reach the import lane even while ordinary periodic scans defer to
+    /// CPU load; later changes to a synced folder still wait for admission.
+    FirstSyncOnly,
+}
+
+/// Choose this poll's Directory scan. The ordinary scan keeps its resource
+/// gate. When that gate is closed, a first-sync-only scan is allowed under
+/// the import lane's model-free document-prep admission, which ignores CPU
+/// load and input idleness but still defers to memory pressure, thermal
+/// pressure, unavailable host telemetry, and the startup model reservation.
+/// `host_activity` is sampled only when the ordinary gate is closed.
+fn directory_sync_scope(
+    filesystem_resource_status: ResourceStatus,
+    host_activity: impl FnOnce() -> HostActivitySnapshot,
+    startup_model_load_reserved: bool,
+) -> Option<DirectorySyncScope> {
+    if periodic_directory_sync_allowed(filesystem_resource_status.admitted) {
+        return Some(DirectorySyncScope::All);
+    }
+    import_document_prep_block_reason(
+        filesystem_resource_status,
+        host_activity(),
+        startup_model_load_reserved,
+    )
+    .is_none()
+    .then_some(DirectorySyncScope::FirstSyncOnly)
+}
+
 fn automatic_heavy_turn_allowed(
     system_resources_idle: bool,
     ambient_turn_owed: bool,
@@ -1200,6 +1234,7 @@ pub fn spawn_scheduler(
         let mut maintenance_round: Option<AutomaticMaintenanceRound> = None;
         let mut ambient_turn_owed = false;
         let mut last_deferred_resource_reason = None;
+        let mut document_prep_claim_log = DocumentPrepClaimLog::default();
 
         // Load persisted daily timestamp from DB (survives restarts)
         let last_daily_epoch = load_last_daily(&shared).await;
@@ -1349,8 +1384,28 @@ pub fn spawn_scheduler(
             // Directory source (mtime+hash diff, deletion propagation — no LLM),
             // Changed files are queued here; the ambient controller claims at
             // most one bounded document slice after resource/cooldown admission.
-            if periodic_directory_sync_allowed(filesystem_resource_status.admitted) {
-                sync_directory_sources(&db).await;
+            let directory_scope = directory_sync_scope(
+                filesystem_resource_status,
+                sample_host_activity,
+                startup_model_load_reserved,
+            );
+            if let Some(scope) = directory_scope {
+                if scope == DirectorySyncScope::FirstSyncOnly {
+                    tracing::debug!(
+                        "[scheduler] periodic directory sync deferred reason={:?}; scanning never-synced sources only",
+                        filesystem_resource_status.block_reason
+                    );
+                }
+                if sync_directory_sources_in_scope(&db, scope).await {
+                    // A never-synced source just queued files (the app adds
+                    // folders without calling sync). Give them the import
+                    // lane once; later polls of that source never re-arm it.
+                    if let Err(error) = write_signal.persist_and_request_import(&db, None).await {
+                        tracing::warn!(
+                            "[scheduler] failed to request import priority for first directory sync: {error}"
+                        );
+                    }
+                }
             } else {
                 tracing::debug!(
                     "[scheduler] directory sync deferred reason={:?}",
@@ -1380,16 +1435,28 @@ pub fn spawn_scheduler(
                 startup_model_load_reserved,
                 import_route_uses_on_device,
             );
+            let document_prep_block_reason = import_document_prep_block_reason(
+                resource_status,
+                host_activity,
+                startup_model_load_reserved,
+            );
 
             // Publish the gate state this tick actually observed so
             // `/api/ambient/status` can report it without re-sampling
             // CPU/host-activity independently (see `AmbientGateSnapshot`).
             {
+                let import_snapshot = write_signal.import_priority_snapshot();
                 let import_priority_admitted = import_lane_open(
-                    write_signal.import_priority_snapshot(),
+                    import_snapshot,
                     write_signal.import_priority_should_finish(now),
                     now,
-                    import_block_reason,
+                    if import_snapshot.is_some_and(|import| import.document_prep_open())
+                        && document_prep_block_reason.is_none()
+                    {
+                        None
+                    } else {
+                        import_block_reason
+                    },
                 );
                 let ambient_gate = {
                     let state = shared.read().await;
@@ -1456,8 +1523,6 @@ pub fn spawn_scheduler(
                     if finish_import_priority(&write_signal, &db, import_generation).await {
                         tracing::info!("[scheduler] import priority finished reason=deadline");
                     }
-                } else if let Some(reason) = import_block_reason {
-                    tracing::debug!("[scheduler] import priority deferred reason={reason:?}");
                 } else {
                     let everyday_provider = resolve_ambient_provider(
                         everyday_pin,
@@ -1465,117 +1530,157 @@ pub fn spawn_scheduler(
                         external_llm.as_ref(),
                         llm.as_ref(),
                     );
-                    if everyday_provider.is_none() {
-                        if everyday_pin.is_none()
-                            && finish_import_priority(&write_signal, &db, import_generation).await
-                        {
-                            tracing::info!(
-                                "[scheduler] import priority finished reason=no_authorized_provider"
-                            );
-                        } else {
+                    let turn = plan_import_lane_turn(
+                        &import_snapshot,
+                        chrono::Utc::now().timestamp(),
+                        import_block_reason,
+                        document_prep_block_reason,
+                        everyday_provider.is_some(),
+                        everyday_pin.is_some(),
+                    );
+                    match turn {
+                        ImportLaneTurn::Wait(reason) => {
                             tracing::debug!(
-                                "[scheduler] import priority deferred reason=pinned_provider_loading"
+                                "[scheduler] import priority deferred reason={}",
+                                reason.log_reason()
                             );
                         }
-                    } else {
-                        let ambient_run_lock = {
-                            let state = shared.read().await;
-                            state.ambient_run_lock.clone()
-                        };
-                        match ambient_run_lock.try_lock() {
-                            Err(_) => {
-                                tracing::debug!(
-                                    "[scheduler] import priority deferred reason=ambient_run_lock"
+                        ImportLaneTurn::FinishNoAuthorizedProvider => {
+                            if finish_import_priority(&write_signal, &db, import_generation).await {
+                                tracing::info!(
+                                    "[scheduler] import priority finished reason=no_authorized_provider"
                                 );
                             }
-                            Ok(_ambient_run_guard) => {
-                                let Some(current) = write_signal.import_priority_snapshot() else {
-                                    continue;
-                                };
-                                let processing_generation = current.generation;
-                                if let Some(phase) = current.synthesis_phase {
-                                    let shared_calls =
-                                        Arc::new(std::sync::atomic::AtomicUsize::new(0));
-                                    let budgeted_llm = with_shared_automatic_budget(
-                                        llm.as_ref(),
-                                        shared_calls.clone(),
-                                    );
-                                    let budgeted_api_llm = with_shared_automatic_budget(
-                                        api_llm.as_ref(),
-                                        shared_calls.clone(),
-                                    );
-                                    let budgeted_synthesis_llm = with_shared_automatic_budget(
-                                        synthesis_llm.as_ref(),
-                                        shared_calls.clone(),
-                                    );
-                                    let budgeted_external_llm = with_shared_automatic_budget(
-                                        external_llm.as_ref(),
-                                        shared_calls,
-                                    );
-                                    let synthesis_available =
-                                        wenlan_core::refinery::resolve_synthesis(
-                                            synthesis_pin,
-                                            budgeted_synthesis_llm.as_ref(),
-                                            budgeted_api_llm.as_ref(),
-                                            budgeted_external_llm.as_ref(),
-                                            budgeted_llm.as_ref(),
-                                        )
-                                        .llm
-                                        .is_some();
-                                    if !synthesis_available {
-                                        if synthesis_pin.is_none()
-                                            && finish_import_priority(
-                                                &write_signal,
-                                                &db,
-                                                import_generation,
-                                            )
-                                            .await
-                                        {
-                                            tracing::info!(
-                                                "[scheduler] import priority finished reason=no_authorized_synthesis_provider"
-                                            );
-                                        } else {
-                                            tracing::debug!(
-                                                "[scheduler] import priority deferred reason=pinned_synthesis_provider_loading"
-                                            );
-                                        }
-                                    } else {
-                                        tracing::info!(
-                                            "[scheduler] import priority phase={} started",
-                                            match phase {
-                                                ImportSynthesisPhase::Detect => "detect",
-                                                ImportSynthesisPhase::Emergence => "emergence",
-                                            }
-                                        );
-                                        let phase_kind = match phase {
-                                            ImportSynthesisPhase::Detect => {
-                                                wenlan_core::refinery::Phase::Detect
-                                            }
-                                            ImportSynthesisPhase::Emergence => {
-                                                wenlan_core::refinery::Phase::Emergence
-                                            }
-                                        };
-                                        let outcome = fire_steep_phase_safe(
+                        }
+                        ImportLaneTurn::DocumentPrep | ImportLaneTurn::Inference => {
+                            let ambient_run_lock = {
+                                let state = shared.read().await;
+                                state.ambient_run_lock.clone()
+                            };
+                            match ambient_run_lock.try_lock() {
+                                Err(_) => {
+                                    // Contention runs and records nothing, so the
+                                    // lane stays open and replans next tick.
+                                    tracing::debug!(
+                                    "[scheduler] import priority deferred reason=ambient_run_lock"
+                                );
+                                }
+                                Ok(_ambient_run_guard) => {
+                                    let Some(current) = write_signal.import_priority_snapshot()
+                                    else {
+                                        continue;
+                                    };
+                                    let processing_generation = current.generation;
+                                    if turn == ImportLaneTurn::DocumentPrep {
+                                        let report = run_import_document_prep_slice(
                                             &db,
-                                            budgeted_llm.as_ref(),
-                                            budgeted_api_llm.as_ref(),
-                                            budgeted_synthesis_llm.as_ref(),
-                                            budgeted_external_llm.as_ref(),
                                             &prompts,
-                                            &refinery_cfg,
-                                            &confidence_cfg,
-                                            &distillation_cfg,
-                                            wenlan_core::refinery::TriggerKind::Idle,
-                                            phase_kind,
-                                            "ImportPriority",
+                                            &knowledge_path,
+                                            &mut document_prep_claim_log,
                                         )
                                         .await;
-                                        write_signal.import_priority_note_phase(
+                                        write_signal.import_priority_note_document(
                                             processing_generation,
-                                            phase,
+                                            report.outcome,
+                                            chrono::Utc::now().timestamp(),
                                         );
-                                        import_work_ran = true;
-                                        tracing::info!(
+                                        import_work_ran = !matches!(
+                                            report.outcome,
+                                            DocumentPrepOutcome::Idle
+                                                | DocumentPrepOutcome::ClaimFailed
+                                        );
+                                        if import_work_ran {
+                                            tracing::info!(
+                                            "[scheduler] import priority document_prep done outcome={:?} slice={} panicked={} elapsed_ms={}",
+                                            report.outcome,
+                                            current.ambient_slices.saturating_add(1),
+                                            report.panicked,
+                                            report.elapsed.as_millis(),
+                                        );
+                                        }
+                                    } else if let Some(phase) = current.synthesis_phase {
+                                        let shared_calls =
+                                            Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                                        let budgeted_llm = with_shared_automatic_budget(
+                                            llm.as_ref(),
+                                            shared_calls.clone(),
+                                        );
+                                        let budgeted_api_llm = with_shared_automatic_budget(
+                                            api_llm.as_ref(),
+                                            shared_calls.clone(),
+                                        );
+                                        let budgeted_synthesis_llm = with_shared_automatic_budget(
+                                            synthesis_llm.as_ref(),
+                                            shared_calls.clone(),
+                                        );
+                                        let budgeted_external_llm = with_shared_automatic_budget(
+                                            external_llm.as_ref(),
+                                            shared_calls,
+                                        );
+                                        let synthesis_available =
+                                            wenlan_core::refinery::resolve_synthesis(
+                                                synthesis_pin,
+                                                budgeted_synthesis_llm.as_ref(),
+                                                budgeted_api_llm.as_ref(),
+                                                budgeted_external_llm.as_ref(),
+                                                budgeted_llm.as_ref(),
+                                            )
+                                            .llm
+                                            .is_some();
+                                        if !synthesis_available {
+                                            if synthesis_pin.is_none()
+                                                && finish_import_priority(
+                                                    &write_signal,
+                                                    &db,
+                                                    import_generation,
+                                                )
+                                                .await
+                                            {
+                                                tracing::info!(
+                                                "[scheduler] import priority finished reason=no_authorized_synthesis_provider"
+                                            );
+                                            } else {
+                                                tracing::debug!(
+                                                "[scheduler] import priority deferred reason=pinned_synthesis_provider_loading"
+                                            );
+                                            }
+                                        } else {
+                                            tracing::info!(
+                                                "[scheduler] import priority phase={} started",
+                                                match phase {
+                                                    ImportSynthesisPhase::Detect => "detect",
+                                                    ImportSynthesisPhase::Emergence => "emergence",
+                                                }
+                                            );
+                                            let phase_kind = match phase {
+                                                ImportSynthesisPhase::Detect => {
+                                                    wenlan_core::refinery::Phase::Detect
+                                                }
+                                                ImportSynthesisPhase::Emergence => {
+                                                    wenlan_core::refinery::Phase::Emergence
+                                                }
+                                            };
+                                            let outcome = fire_steep_phase_safe(
+                                                &db,
+                                                budgeted_llm.as_ref(),
+                                                budgeted_api_llm.as_ref(),
+                                                budgeted_synthesis_llm.as_ref(),
+                                                budgeted_external_llm.as_ref(),
+                                                &prompts,
+                                                &refinery_cfg,
+                                                &confidence_cfg,
+                                                &distillation_cfg,
+                                                wenlan_core::refinery::TriggerKind::Idle,
+                                                phase_kind,
+                                                "ImportPriority",
+                                            )
+                                            .await;
+                                            write_signal.import_priority_note_phase(
+                                                processing_generation,
+                                                phase,
+                                            );
+                                            import_work_ran = true;
+                                            tracing::info!(
                                             "[scheduler] import priority phase={} done selected={} progressed={} more={} retryable={} panicked={}",
                                             phase_kind,
                                             outcome.selected,
@@ -1584,34 +1689,34 @@ pub fn spawn_scheduler(
                                             outcome.retryable,
                                             outcome.panicked,
                                         );
-                                    }
-                                } else if current.ambient_slices
-                                    < IMPORT_PRIORITY_MAX_AMBIENT_SLICES
-                                {
-                                    let job = current.next_job;
-                                    tracing::info!(
+                                        }
+                                    } else if current.ambient_slices
+                                        < IMPORT_PRIORITY_MAX_AMBIENT_SLICES
+                                    {
+                                        let job = current.next_job;
+                                        tracing::info!(
                                         "[scheduler] import priority job={job:?} started slice={}",
                                         current.ambient_slices.saturating_add(1),
                                     );
-                                    let report = run_ambient_job_safe(
-                                        job,
-                                        &db,
-                                        llm.as_ref(),
-                                        api_llm.as_ref(),
-                                        external_llm.as_ref(),
-                                        everyday_pin,
-                                        &prompts,
-                                        &refinery_cfg,
-                                        &distillation_cfg,
-                                        Some(knowledge_path.as_path()),
-                                    )
-                                    .await;
-                                    write_signal.import_priority_note_ambient(
-                                        processing_generation,
-                                        report.selected,
-                                    );
-                                    import_work_ran = true;
-                                    tracing::info!(
+                                        let report = run_ambient_job_safe(
+                                            job,
+                                            &db,
+                                            llm.as_ref(),
+                                            api_llm.as_ref(),
+                                            external_llm.as_ref(),
+                                            everyday_pin,
+                                            &prompts,
+                                            &refinery_cfg,
+                                            &distillation_cfg,
+                                            Some(knowledge_path.as_path()),
+                                        )
+                                        .await;
+                                        write_signal.import_priority_note_ambient(
+                                            processing_generation,
+                                            report.selected,
+                                        );
+                                        import_work_ran = true;
+                                        tracing::info!(
                                         "[scheduler] import priority job={:?} done selected={} llm_calls={} panicked={} elapsed_ms={}",
                                         report.job,
                                         report.selected,
@@ -1619,23 +1724,24 @@ pub fn spawn_scheduler(
                                         report.panicked,
                                         report.elapsed.as_millis(),
                                     );
-                                }
-                                let finished =
-                                    write_signal.import_priority_should_finish(Instant::now());
-                                if finished
-                                    && finish_import_priority(
-                                        &write_signal,
-                                        &db,
-                                        processing_generation,
-                                    )
-                                    .await
-                                {
-                                    tracing::info!(
+                                    }
+                                    let finished =
+                                        write_signal.import_priority_should_finish(Instant::now());
+                                    if finished
+                                        && finish_import_priority(
+                                            &write_signal,
+                                            &db,
+                                            processing_generation,
+                                        )
+                                        .await
+                                    {
+                                        tracing::info!(
                                         "[scheduler] import priority finished reason=bounded_work"
                                     );
+                                    }
                                 }
-                            }
-                        };
+                            };
+                        }
                     }
                 }
             }
@@ -2067,19 +2173,39 @@ fn should_poll_directory_source(source: &wenlan_types::sources::Source) -> bool 
 /// Sync every recoverable Directory source via the shared source route. This
 /// only discovers changes and updates the durable queue; LLM work is owned by
 /// the ambient scheduler below.
-async fn sync_directory_sources(db: &Arc<wenlan_core::db::MemoryDB>) {
+///
+/// Returns true when a source that had never synced newly queued files, so the
+/// caller can give that first import the bounded import lane. Intentional
+/// bound: a source that has synced before (including one first synced while
+/// empty) gets no trigger, and its later files wait for the idle-gated lap.
+#[cfg(test)]
+async fn sync_directory_sources(db: &Arc<wenlan_core::db::MemoryDB>) -> bool {
+    sync_directory_sources_in_scope(db, DirectorySyncScope::All).await
+}
+
+/// [`sync_directory_sources`] restricted to `scope`. `FirstSyncOnly` skips
+/// every source that has synced before, so a repeated first-only pass finds
+/// nothing once the first scan recorded its `last_sync`.
+async fn sync_directory_sources_in_scope(
+    db: &Arc<wenlan_core::db::MemoryDB>,
+    scope: DirectorySyncScope,
+) -> bool {
     let config = wenlan_core::config::load_config();
-    for source in config
-        .sources
-        .iter()
-        .filter(|source| should_poll_directory_source(source))
-    {
-        if let Err(e) =
-            crate::source_routes::sync_directory_source(db.clone(), source, &config).await
-        {
-            tracing::warn!("[scheduler] directory sync '{}' failed: {e}", source.id);
+    let mut first_sync_queued = false;
+    for source in config.sources.iter().filter(|source| {
+        should_poll_directory_source(source)
+            && (scope == DirectorySyncScope::All || source.last_sync.is_none())
+    }) {
+        match crate::source_routes::sync_directory_source(db.clone(), source, &config).await {
+            Ok(outcome) => {
+                first_sync_queued |= source.last_sync.is_none() && outcome.newly_queued > 0;
+            }
+            Err(e) => {
+                tracing::warn!("[scheduler] directory sync '{}' failed: {e}", source.id);
+            }
         }
     }
+    first_sync_queued
 }
 
 fn resolve_maintenance_provider(
