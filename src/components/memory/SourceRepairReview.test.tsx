@@ -11,8 +11,9 @@ import {
   writeRepairProgress,
   type RepairProgressRecord,
 } from "../../lib/repairWorkflow";
-import type { RepairApplyReceipt, RepairLintReport, RepairManifest, RepairVerificationReceipt } from "../../lib/repairTypes";
+import type { RepairApplyReceipt, RepairLintReport, RepairManifest, RepairVerificationReceipt, RepairPrepareOperationRequest } from "../../lib/repairTypes";
 import SourceRepairReview from "./SourceRepairReview";
+import { writeRepairPreparation, type RepairPreparationRecord } from "../../lib/repairPreparation";
 import type { ReviewItem } from "./useReviewQueue";
 
 type RepairItem = Extract<ReviewItem, { kind: "refinement" }>;
@@ -24,7 +25,11 @@ vi.mock("../../lib/tauri", async (original) => ({
   getPage: vi.fn(),
   listEntities: vi.fn(),
   repairLint: vi.fn(),
-  repairPrepareCurrent: vi.fn(),
+  repairPrepareOperation: vi.fn(),
+  repairPrepareOperationStatus: vi.fn(),
+  repairPrepareOperationCancel: vi.fn(),
+  repairOperationStatus: vi.fn(),
+  repairCancel: vi.fn(),
   repairRecovery: vi.fn(),
   repairApply: vi.fn(),
   repairVerify: vi.fn(),
@@ -235,9 +240,22 @@ function mount(item: RepairItem, onVerified = vi.fn(), onBusyChange = vi.fn()) {
   return { user: userEvent.setup(), onVerified, onBusyChange };
 }
 
+function mockPrepared(manifest: RepairManifest) {
+  vi.mocked(api.repairPrepareOperation).mockImplementation(async (request: RepairPrepareOperationRequest) => ({
+    operation_id: request.operation_id,
+    state: { phase: "ready", manifest, operation: { manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "prepared" } } },
+  }));
+}
+
 beforeEach(async () => {
+  vi.restoreAllMocks();
   localStorage.clear();
   vi.clearAllMocks();
+  vi.mocked(api.repairPrepareOperation).mockReset();
+  vi.mocked(api.repairPrepareOperationStatus).mockReset();
+  vi.mocked(api.repairPrepareOperationCancel).mockReset();
+  vi.mocked(api.repairOperationStatus).mockReset().mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "prepared" } }));
+  vi.mocked(api.repairCancel).mockReset().mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "cancelled", cancelled_at: 123 } }));
   await i18n.changeLanguage("en");
   vi.mocked(api.getMemoryDetail).mockResolvedValue(memory);
   vi.mocked(api.getPage).mockResolvedValue(page);
@@ -302,7 +320,7 @@ describe("SourceRepairReview", () => {
     await user.click(await screen.findByRole("button", { name: "Continue" }));
     expect(api.repairResumeRuntime).toHaveBeenCalledTimes(2);
     expect(api.repairResumeRuntime).toHaveBeenNthCalledWith(2, vi.mocked(api.repairResumeRuntime).mock.calls[0][0]);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(api.repairVerify).not.toHaveBeenCalled();
     expect(onVerified).toHaveBeenCalledTimes(1);
@@ -321,27 +339,27 @@ describe("SourceRepairReview", () => {
     expect(onVerified).not.toHaveBeenCalled();
   });
 
-  it("keeps the classification choice retryable when its source check could not run", async () => {
-    vi.mocked(api.repairPrepareCurrent).mockRejectedValue(new Error('HTTP POST /api/repairs/prepare-current returned 409: {"error":"repair_current_check_unavailable"}'));
+  it("preserves the prepare identity when its source check could not run", async () => {
+    vi.mocked(api.repairPrepareOperation).mockRejectedValue(new Error('HTTP POST /api/repairs/prepare-current returned 409: {"error":"repair_current_check_unavailable"}'));
     const { user } = mount(itemFor("memories.semantic.classification"));
     const choice = await screen.findByLabelText("New memory type");
     await user.selectOptions(choice, "decision");
     await user.click(screen.getByRole("button", { name: "Prepare change" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.checkUnavailable"));
-    expect(screen.queryByText(i18n.t("sourceRepair.staleProposal"))).toBeNull();
-    expect(screen.getByLabelText("New memory type")).toHaveValue("decision");
-    expect(screen.getByRole("button", { name: "Prepare change" })).toBeEnabled();
+    expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("sourceRepair.preparationUnknown"));
+    expect(screen.getByRole("button", { name: "Check status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel this repair" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
     expect(api.repairApply).not.toHaveBeenCalled();
   });
 
-  it("stops offering edits when fresh evidence no longer contains the proposed issue", async () => {
+  it("keeps preparation recoverable when fresh evidence rejects the issue", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
-    vi.mocked(api.repairPrepareCurrent).mockRejectedValue(new Error('HTTP POST /api/repairs/prepare-current returned 422: {"error":"unsupported_repair_finding"}'));
+    vi.mocked(api.repairPrepareOperation).mockRejectedValue(new Error('HTTP POST /api/repairs/prepare-current returned 422: {"error":"unsupported_repair_finding"}'));
     const { user } = mount(item);
     await screen.findByLabelText("New page title");
     await user.type(screen.getByLabelText("New page title"), "Unnecessary title");
     await user.click(screen.getByRole("button", { name: "Prepare change" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.staleProposal"));
+    expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("sourceRepair.preparationUnknown"));
     expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Apply this change" })).toBeNull();
     expect(api.repairApply).not.toHaveBeenCalled();
@@ -386,7 +404,7 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByText("Complete entity extraction and link: Same scope")).toBeVisible();
     expect(apply).toBeEnabled();
     expect(api.repairRecovery).not.toHaveBeenCalled();
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
 
     await user.click(apply);
     await waitFor(() => expect(api.repairApply).toHaveBeenCalledWith({
@@ -400,7 +418,7 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     vi.mocked(api.repairLint).mockResolvedValue(lintReport("general", (item.payload as RepairPayload).check_id));
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     const { user } = mount(item);
     expect(await screen.findByText(page.title)).toBeVisible();
     await user.type(screen.getByLabelText("New page title"), "New title");
@@ -408,7 +426,7 @@ describe("SourceRepairReview", () => {
     await screen.findByRole("button", { name: "Apply this change" });
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(api.repairLint).not.toHaveBeenCalled();
-    expect(api.repairPrepareCurrent).toHaveBeenCalledWith(expect.objectContaining({ lint_scope: { kind: "uncategorized" }, choice: expect.objectContaining({ before_title: page.title, after_title: "New title" }) }));
+    expect(api.repairPrepareOperation).toHaveBeenCalledWith(expect.objectContaining({ operation_id: expect.any(String), request: expect.objectContaining({ lint_scope: { kind: "uncategorized" }, choice: expect.objectContaining({ before_title: page.title, after_title: "New title" }) }) }));
   });
 
   it.each([
@@ -440,12 +458,12 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     manifest.source.review_binding!.review_id = "newer-review";
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     const { user } = mount(item);
     await screen.findByText(page.title);
     await user.type(screen.getByLabelText("New page title"), "New title");
     await user.click(screen.getByRole("button", { name: "Prepare change" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("stale");
+    expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("sourceRepair.preparationUnknown"));
     expect(screen.queryByRole("button", { name: "Apply this change" })).toBeNull();
     expect(api.repairApply).not.toHaveBeenCalled();
   });
@@ -453,7 +471,7 @@ describe("SourceRepairReview", () => {
   it("guards duplicate apply clicks and keeps a stale-like server error recoverable", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     let rejectApply!: (reason: Error) => void;
     vi.mocked(api.repairApply).mockReturnValue(new Promise((_, reject) => { rejectApply = reject; }));
     const { user } = mount(item);
@@ -467,7 +485,7 @@ describe("SourceRepairReview", () => {
     rejectApply(new Error("409 stale conflict after commit"));
     expect(await screen.findByText(/apply result is unknown/i)).toBeVisible();
     expect(screen.queryByText(i18n.t("sourceRepair.verificationPending"))).toBeNull();
-    const recover = screen.getByRole("button", { name: "Recover and apply this change" });
+    const recover = screen.getByRole("button", { name: "Check status" });
     expect(recover).toBeEnabled();
   });
 
@@ -475,7 +493,7 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     const receipt = applyReceiptFor(manifest);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.mocked(api.repairApply).mockResolvedValue(receipt);
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     const onVerified = vi.fn();
@@ -495,7 +513,7 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     const receipt = applyReceiptFor(manifest);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.mocked(api.repairApply).mockResolvedValue(receipt);
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     vi.mocked(api.getActivity).mockRejectedValue(new Error("404 activity"));
@@ -517,7 +535,7 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     const receipt = applyReceiptFor(manifest);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.mocked(api.repairApply).mockResolvedValue(receipt);
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     vi.mocked(api.getActivity).mockRejectedValueOnce(new Error("404 activity")).mockResolvedValue(activityResponse());
@@ -540,7 +558,7 @@ describe("SourceRepairReview", () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
     const receipt = applyReceiptFor(manifest);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.mocked(api.repairApply).mockResolvedValue(receipt);
     vi.mocked(api.repairVerify).mockRejectedValueOnce(new Error("verification unavailable")).mockResolvedValue(verificationFor(manifest, receipt));
     const onVerified = vi.fn();
@@ -568,10 +586,13 @@ describe("SourceRepairReview", () => {
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     const onVerified = vi.fn();
     const { user, onBusyChange } = mount(item, onVerified);
-    const recover = await screen.findByRole("button", { name: "Recover and apply this change" });
+    const recover = await screen.findByRole("button", { name: "Check status" });
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(onBusyChange).toHaveBeenCalledWith(true);
+    vi.mocked(api.repairOperationStatus).mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "indeterminate" } }));
     await user.click(recover);
+    expect(api.repairApply).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Recover and apply this change" }));
     await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
     expect(api.repairApply).toHaveBeenCalledWith({ manifest_id: manifest.manifest_id, approved_manifest_digest: manifest.manifest_digest, approval: `apply repair ${manifest.manifest_id} ${manifest.manifest_digest}` });
   });
@@ -587,7 +608,7 @@ describe("SourceRepairReview", () => {
 
     expect(await screen.findByRole("button", { name: "Retry verification" })).toBeEnabled();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(localStorage.getItem(`wenlan.repair.progress.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
 
@@ -607,14 +628,17 @@ describe("SourceRepairReview", () => {
     const onVerified = vi.fn();
     const { user } = mount(item, onVerified);
 
-    const recover = await screen.findByRole("button", { name: "Recover and apply this change" });
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    const recover = await screen.findByRole("button", { name: "Check status" });
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
+    vi.mocked(api.repairOperationStatus).mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "indeterminate" } }));
     await user.click(recover);
+    expect(api.repairApply).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Recover and apply this change" }));
     await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
     expect(api.repairApply).toHaveBeenCalledTimes(1);
     expect(api.repairApply).toHaveBeenCalledWith({ manifest_id: manifest.manifest_id, approved_manifest_digest: manifest.manifest_digest, approval: `apply repair ${manifest.manifest_id} ${manifest.manifest_digest}` });
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
   });
 
   it("probes the normal activity route before continuing a saved verified record", async () => {
@@ -655,11 +679,14 @@ describe("SourceRepairReview", () => {
     vi.mocked(api.repairApply).mockResolvedValue(receipt);
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     const { user } = mount(item);
-    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Check status" })).toBeEnabled();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(localStorage.getItem(repairProgressKey(item.id))).not.toBe("{malformed");
-    await user.click(screen.getByRole("button", { name: "Recover and apply this change" }));
+    vi.mocked(api.repairOperationStatus).mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "indeterminate" } }));
+    await user.click(screen.getByRole("button", { name: "Check status" }));
+    expect(api.repairApply).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Recover and apply this change" }));
     await waitFor(() => expect(api.repairApply).toHaveBeenCalledTimes(1));
   });
 
@@ -676,7 +703,7 @@ describe("SourceRepairReview", () => {
     mount(item);
     expect(await screen.findByRole("button", { name: "Retry verification" })).toBeEnabled();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
   });
 
@@ -696,9 +723,9 @@ describe("SourceRepairReview", () => {
     const durableManifest = await manifestFor(item);
     vi.mocked(api.repairRecovery).mockResolvedValue({ manifest: durableManifest, apply_receipt: null });
     mount(item);
-    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Check status" })).toBeEnabled();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
   });
 
   it("uses a normal ready flow when recovery reports no pending artifact", async () => {
@@ -707,7 +734,7 @@ describe("SourceRepairReview", () => {
 
     expect(await screen.findByLabelText("New page title")).toBeVisible();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("New page title"), "New title");
     expect(screen.getByRole("button", { name: "Prepare change" })).toBeEnabled();
   });
@@ -720,7 +747,7 @@ describe("SourceRepairReview", () => {
     const { user } = mount(item);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.recoveryFailed"));
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Retry recovery" }));
     expect(await screen.findByLabelText("New page title")).toBeVisible();
     expect(api.repairRecovery).toHaveBeenCalledTimes(2);
@@ -733,7 +760,7 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.storageFailed"));
     expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Retry recovery" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Retry recovery" }));
@@ -749,8 +776,8 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.recoveryFailed"));
     expect(screen.getByRole("button", { name: "Retry recovery" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Retry recovery" }));
-    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Check status" })).toBeEnabled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
   });
 
   it.each(["binding", "digest", "receipt"] as const)("fails closed for a recovery %s mismatch", async (kind) => {
@@ -765,7 +792,7 @@ describe("SourceRepairReview", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.recoveryFailed"));
     expect(screen.getByRole("button", { name: "Retry recovery" })).toBeEnabled();
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
     expect(localStorage.getItem(`wenlan.repair.progress.v1:${encodeURIComponent(item.id)}`)).toBeNull();
   });
@@ -803,7 +830,7 @@ describe("SourceRepairReview", () => {
   it("blocks Apply when progress storage fails", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("storage denied"); });
     const { user } = mount(item);
     await screen.findByText(page.title);
@@ -825,7 +852,7 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.storageFailed"));
     expect(api.getPage).toHaveBeenCalledWith(page.id);
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(onBusyChange).toHaveBeenCalledWith(true);
   });
 
@@ -839,7 +866,7 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByText(page.title)).toBeVisible();
     expect(api.getPage).toHaveBeenCalledWith(page.id);
     expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
     expect(onBusyChange).toHaveBeenCalledWith(true);
   });
 
@@ -854,13 +881,16 @@ describe("SourceRepairReview", () => {
     vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
     const onVerified = vi.fn();
     const { user } = mount(item, onVerified);
-    const recover = await screen.findByRole("button", { name: "Recover and apply this change" });
+    const recover = await screen.findByRole("button", { name: "Check status" });
     expect(onVerified).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
+    vi.mocked(api.repairOperationStatus).mockImplementation(async (request) => ({ manifest_id: request.manifest_id, manifest_digest: request.approved_manifest_digest, state: { phase: "indeterminate" } }));
     await user.click(recover);
+    expect(api.repairApply).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Recover and apply this change" }));
     await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
     expect(api.repairApply).toHaveBeenCalledTimes(1);
-    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
   });
 
   it("keeps the manifest before-type visible after the current target changes", async () => {
@@ -890,7 +920,7 @@ describe("SourceRepairReview", () => {
   it("does not verify or complete when the apply receipt targets another manifest", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
-    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    mockPrepared(manifest);
     vi.mocked(api.repairApply).mockResolvedValue({ ...applyReceiptFor(manifest), manifest_id: "other" });
     const onVerified = vi.fn();
     const { user } = mount(item, onVerified);
@@ -920,5 +950,128 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByText("Same scope")).toBeVisible();
     expect(screen.queryByText("Other scope")).toBeNull();
     expect(screen.getByText(/leave the selection empty/i)).toBeVisible();
+  });
+});
+
+
+function preparationFor(item: RepairItem): RepairPreparationRecord {
+  const payload = item.payload as RepairPayload;
+  return { version: 1, reviewId: item.id, checkId: payload.check_id, occurrenceDigest: payload.occurrence_digest, ownerIds: item.sourceIds,
+    operation: { operation_id: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", request: { lint_scope: { kind: "uncategorized" }, choice: { kind: "rename_page_title", review_id: item.id, page_id: item.sourceIds[0], before_title: page.title, after_title: "New title" } } } };
+}
+
+function readyPreparation(operationId: string, manifest: RepairManifest) {
+  return { operation_id: operationId, state: { phase: "ready" as const, manifest, operation: { manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "prepared" as const } } } };
+}
+
+describe("durable repair operation controls", () => {
+  it("persists before prepare and recovers a lost response after remount without preparing again", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    let sent: RepairPrepareOperationRequest | undefined;
+    vi.mocked(api.repairPrepareOperation).mockImplementation(async (request) => {
+      sent = request;
+      expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toContain(request.operation_id);
+      throw new Error("response lost");
+    });
+    const first = render(<SourceRepairReview item={item} onBusyChange={vi.fn()} onVerified={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("New page title"), "New title");
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    await screen.findByText(i18n.t("sourceRepair.preparationUnknown"));
+    expect(api.repairApply).not.toHaveBeenCalled();
+    first.unmount();
+    vi.mocked(api.repairPrepareOperationStatus).mockResolvedValue(readyPreparation(sent!.operation_id, manifest));
+    mount(item);
+    expect(await screen.findByRole("button", { name: "Apply this change" })).toBeEnabled();
+    expect(api.repairPrepareOperationStatus).toHaveBeenCalledWith(sent);
+    expect(api.repairPrepareOperation).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toBeNull();
+    expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it("only reports cancellation after a durable acknowledgement and never completes the review", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const saved = preparationFor(item);
+    writeRepairPreparation(saved);
+    vi.mocked(api.repairPrepareOperationStatus).mockResolvedValue({ operation_id: saved.operation.operation_id, state: { phase: "not_started" } });
+    vi.mocked(api.repairPrepareOperationCancel)
+      .mockResolvedValueOnce({ operation_id: saved.operation.operation_id, state: { phase: "in_progress" } })
+      .mockResolvedValueOnce({ operation_id: saved.operation.operation_id, state: { phase: "cancelled", cancelled_at: 123 } });
+    const { user, onVerified, onBusyChange } = mount(item);
+    await user.click(await screen.findByRole("button", { name: "Cancel this repair" }));
+    expect(await screen.findByText(i18n.t("sourceRepair.preparationInProgress"))).toBeVisible();
+    expect(screen.queryByText(i18n.t("sourceRepair.cancelledChange"))).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel this repair" }));
+    expect(await screen.findByText(i18n.t("sourceRepair.cancelledChange"))).toBeVisible();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toBeNull();
+  });
+
+  it("recognizes a cancelled saved manifest before offering apply", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    writeRepairProgress({ ...preparationFor(item), phase: "prepared", manifest });
+    vi.mocked(api.repairOperationStatus).mockResolvedValue({ manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "cancelled", cancelled_at: 123 } });
+    const { onVerified } = mount(item);
+    expect(await screen.findByText(i18n.t("sourceRepair.cancelledChange"))).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Apply this change" })).toBeNull();
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(localStorage.getItem(repairProgressKey(item.id))).toBeNull();
+  });
+
+  it("uses the returned apply receipt for verification instead of applying again", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    writeRepairProgress({ ...preparationFor(item), phase: "applying", manifest });
+    vi.mocked(api.repairOperationStatus).mockResolvedValue({ manifest_id: manifest.manifest_id, manifest_digest: manifest.manifest_digest, state: { phase: "applied_unverified", apply_receipt: receipt } });
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
+    const { user } = mount(item);
+    await user.click(await screen.findByRole("button", { name: "Check status" }));
+    expect(api.repairApply).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "Retry verification" }));
+    await waitFor(() => expect(api.repairVerify).toHaveBeenCalledTimes(1));
+    expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it("keeps a mismatched cancellation response unresolved", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const saved = preparationFor(item);
+    writeRepairPreparation(saved);
+    vi.mocked(api.repairPrepareOperationStatus).mockResolvedValue({ operation_id: saved.operation.operation_id, state: { phase: "interrupted" } });
+    vi.mocked(api.repairPrepareOperationCancel).mockResolvedValue({ operation_id: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", state: { phase: "cancelled", cancelled_at: 123 } });
+    const { user, onVerified } = mount(item);
+    await user.click(await screen.findByRole("button", { name: "Cancel this repair" }));
+    expect(screen.queryByText(i18n.t("sourceRepair.cancelledChange"))).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late prepare reply after the component switches to another proposal", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    let resolve!: (value: ReturnType<typeof readyPreparation>) => void;
+    let sent: RepairPrepareOperationRequest | undefined;
+    vi.mocked(api.repairPrepareOperation).mockImplementation((request) => { sent = request; return new Promise((done) => { resolve = done; }); });
+    const view = render(<SourceRepairReview item={item} onBusyChange={vi.fn()} onVerified={vi.fn()} />);
+    const user = userEvent.setup();
+    await user.type(await screen.findByLabelText("New page title"), "New title");
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    const other = { ...itemFor("pages.duplicate_active_titles", "page-other"), id: "other-review" };
+    vi.mocked(api.getPage).mockResolvedValue({ ...page, id: "page-other", title: "Other page" });
+    view.rerender(<SourceRepairReview item={other} onBusyChange={vi.fn()} onVerified={vi.fn()} />);
+    await screen.findByText("Other page");
+    await act(async () => resolve(readyPreparation(sent!.operation_id, manifest)));
+    expect(screen.queryByRole("button", { name: "Apply this change" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Prepare change" })).toBeEnabled();
+    expect(localStorage.getItem(repairProgressKey(other.id))).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
   });
 });

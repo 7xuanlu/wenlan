@@ -71,6 +71,14 @@
   outline-offset: 3px;
 }
 
+.source-repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
 .source-repair button:disabled, .source-repair-actions button:disabled { opacity: 0.5; cursor: default; }
 
 .source-repair-preview {
