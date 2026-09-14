@@ -1588,6 +1588,151 @@ describe("SetupWizard", () => {
     expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent("Loading…");
   });
 
+  // ── Pins when the on-device model finishes loading ─────────────────────
+  // The download resolves only after the daemon has loaded the model, often
+  // minutes after the user pressed Continue, Open Wenlan, or hid the window.
+  // Entering at setting-up gives wireRouting=false, so DoneStep's own write
+  // can never mask the download's.
+
+  const loadedOnDeviceRouting = (
+    pins: { everyday?: string | null; synthesis?: string | null } = {},
+  ) => {
+    const route = (pin: string | null) =>
+      pin === null
+        ? { source: "none", model: null, mode: "unconfigured", pin: null }
+        : { source: pin, model: null, mode: "pinned", pin };
+    return {
+      everyday: route(pins.everyday ?? null),
+      synthesis: route(pins.synthesis ?? null),
+      pool: {
+        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
+      },
+    };
+  };
+
+  function deferred<T = void>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  async function continueToDoneWhileDownloading() {
+    await waitFor(() =>
+      expect(downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-4b-instruct-2507"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Wenlan is ready.");
+  }
+
+  it("pins unset jobs when the model download resolves after the user already continued to Done", async () => {
+    const download = deferred();
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(download.promise);
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
+
+    renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+    await continueToDoneWhileDownloading();
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(setSourcePin).not.toHaveBeenCalled();
+
+    await act(async () => {
+      download.resolve();
+    });
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+    expect(setSourcePin).toHaveBeenCalledTimes(1);
+  });
+
+  it("still pins when the download resolves after Open Wenlan unmounted the wizard", async () => {
+    const download = deferred();
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(download.promise);
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
+
+    const { onComplete, unmount } = renderWizard({
+      initialStep: "setting-up",
+      initialPendingModelId: "qwen3-4b-instruct-2507",
+    });
+    await continueToDoneWhileDownloading();
+    fireEvent.click(screen.getByRole("button", { name: "Open Wenlan" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    unmount();
+    expect(setSourcePin).not.toHaveBeenCalled();
+
+    download.resolve();
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+  });
+
+  // Patch semantics are the preservation contract: a job the user already
+  // pinned is omitted from the write (null), so the daemon keeps whatever that
+  // job holds when the write lands, including a change made after the read.
+  it("fills only the unpinned job, so a pin the user changes while the fill is in flight survives", async () => {
+    const daemonPins: { everyday: string | null; synthesis: string | null } = {
+      everyday: null,
+      synthesis: "anthropic",
+    };
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      const snapshot = loadedOnDeviceRouting({ ...daemonPins });
+      // The user re-pins synthesis in Settings after this read, before the write.
+      daemonPins.synthesis = "external";
+      return snapshot;
+    });
+    (setSourcePin as ReturnType<typeof vi.fn>).mockImplementation(
+      async (everyday: string | null, synthesis: string | null) => {
+        if (everyday !== null) daemonPins.everyday = everyday;
+        if (synthesis !== null) daemonPins.synthesis = synthesis;
+      },
+    );
+
+    renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", null));
+    expect(daemonPins).toEqual({ everyday: "on_device", synthesis: "external" });
+  });
+
+  it("retries a failed pin write after the download resolves, then pins", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
+    // Not mockRejectedValueOnce: an unconsumed once-queue survives
+    // clearAllMocks and would fail a later test's write.
+    let writes = 0;
+    (setSourcePin as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      writes += 1;
+      if (writes === 1) throw new Error("daemon busy");
+    });
+
+    renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "on_device");
+    // The retry re-reads routing rather than replaying the first read.
+    expect(getResolvedRouting).toHaveBeenCalledTimes(2);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  it("a rejected model download writes no pins", async () => {
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
+
+    renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent("Couldn't set up");
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getResolvedRouting).not.toHaveBeenCalled();
+    expect(setSourcePin).not.toHaveBeenCalled();
+  });
+
   // REACHABILITY, not just behavior. Every other test here mocks
   // downloadOnDeviceModel as resolving immediately — but the real command is a
   // single blocking request that only returns once the download AND engine init
@@ -2190,6 +2335,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   function renderDone(
     wireRouting: boolean,
     chatImportResult: { memories_stored: number } | null = null,
+    onComplete: () => void | Promise<void> = vi.fn(),
   ) {
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
@@ -2200,7 +2346,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
           importResult={null}
           chatImportResult={chatImportResult}
           connectedAgents={[]}
-          onComplete={vi.fn()}
+          onComplete={onComplete}
         />
       </QueryClientProvider>,
     );
@@ -2286,5 +2432,157 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(
       await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/),
     ).toBeInTheDocument();
+  });
+
+  // Done and the download's success both fill pins; both must obey the same
+  // contract, so Done never replaces a pin that is already set.
+  it("does not overwrite a job that is already pinned; fills the other and summarizes both", async () => {
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
+      everyday: { source: "anthropic", model: null, mode: "pinned", pin: "anthropic" },
+      synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
+      pool: {
+        anthropic: { configured: true, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
+      },
+    });
+    renderDone(true);
+
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith(null, "anthropic"));
+    expect(setSourcePin).toHaveBeenCalledTimes(1);
+    expect(
+      await screen.findByText(
+        "Everyday tasks: Anthropic. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("every job already pinned (the download filled them first): writes nothing, still summarizes", async () => {
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
+      everyday: { source: "on_device", model: null, mode: "pinned", pin: "on_device" },
+      synthesis: { source: "on_device", model: null, mode: "pinned", pin: "on_device" },
+      pool: {
+        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
+      },
+    });
+    renderDone(true);
+
+    expect(
+      await screen.findByText(
+        "Everyday tasks: On-device. Page synthesis: On-device. Change this anytime in Settings → Intelligence.",
+      ),
+    ).toBeInTheDocument();
+    expect(setSourcePin).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("an on-device model that is not loaded yet is left to the download's own fill", async () => {
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
+      routing({
+        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: false },
+      }),
+    );
+    renderDone(true);
+
+    expect(
+      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/),
+    ).toBeInTheDocument();
+    expect(setSourcePin).not.toHaveBeenCalled();
+  });
+
+  // Done fills pins through the same bounded retry as the download, so one
+  // transient daemon failure does not leave both jobs unpinned.
+  it("retries a transient pin write failure on Done, then pins and summarizes", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
+      routing({
+        anthropic: { configured: true, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
+      }),
+    );
+    // Not mockRejectedValueOnce: an unconsumed once-queue survives
+    // clearAllMocks and would fail a later test's write.
+    let writes = 0;
+    (setSourcePin as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      writes += 1;
+      if (writes === 1) throw new Error("daemon busy");
+    });
+    renderDone(true);
+
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledTimes(2), { timeout: 4000 });
+    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "anthropic");
+    expect(getResolvedRouting).toHaveBeenCalledTimes(2);
+    expect(
+      await screen.findByText(
+        "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+    ).not.toBeInTheDocument();
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
+
+  // Completion writes setup_completed to the daemon. When that rejects, the
+  // user must stay on Done with their picks intact and a retryable button,
+  // not an unhandled rejection behind a button that silently did nothing.
+  it.each([
+    { variant: "skip path", chatImportResult: null, label: "Open Wenlan" },
+    { variant: "imported", chatImportResult: { memories_stored: 4 }, label: "Get started" },
+  ])(
+    "$variant: a rejected completion shows an inline alert and stays on Done; a second click that resolves completes",
+    async ({ chatImportResult, label }) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const onComplete = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("HTTP PUT /api/config: connection refused"))
+        .mockResolvedValueOnce(undefined);
+      renderDone(false, chatImportResult, onComplete);
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("The Wenlan daemon isn't reachable.");
+      await waitFor(() => expect(screen.getByRole("button", { name: label })).toBeEnabled());
+      expect(onComplete).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole("button", { name: label }));
+      await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+      error.mockRestore();
+    },
+  );
+
+  // Both clicks land inside one act() scope, so the second runs before React
+  // re-renders with completing=true: only a guard that does not wait for a
+  // render can stop it.
+  it("ignores a second click before re-render, and allows a retry after a rejection", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const onComplete = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("HTTP PUT /api/config: connection refused"))
+      .mockResolvedValueOnce(undefined);
+    renderDone(false, null, onComplete);
+    const button = screen.getByRole("button", { name: "Open Wenlan" });
+
+    act(() => {
+      button.click();
+      button.click();
+    });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+
+    await screen.findByRole("alert");
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open Wenlan" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Open Wenlan" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
+    error.mockRestore();
   });
 });

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider, onlineManager } from "@tanstack/react-query";
 import App from "./App";
 
@@ -83,7 +83,23 @@ vi.mock("./components/memory/Main", () => ({
 }));
 
 vi.mock("./components/SetupWizard", () => ({
-  default: () => <div data-testid="setup-wizard">wizard</div>,
+  // Mirrors the Done step's contract with onComplete: await it and keep the
+  // wizard on a rejection (the real step shows an inline alert).
+  default: (props: { onComplete: () => void | Promise<void> }) => (
+    <div data-testid="setup-wizard">
+      wizard
+      <button
+        type="button"
+        onClick={() => {
+          void Promise.resolve()
+            .then(() => props.onComplete())
+            .catch(() => {});
+        }}
+      >
+        Finish setup
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./components/RuntimeOverlays", () => ({
@@ -107,7 +123,7 @@ vi.mock("./components/UpdaterDialog", () => ({
   default: () => null,
 }));
 
-import { shouldShowWizard } from "./lib/tauri";
+import { setSetupCompleted, shouldShowWizard } from "./lib/tauri";
 import { resources } from "./i18n/resources";
 
 const STARTING_RUNTIME = resources.en.translation.common.startingRuntime;
@@ -234,6 +250,52 @@ describe("App - first-run wizard gate", () => {
     expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
     // Proves retries actually happened, not just a single failed attempt.
     expect(vi.mocked(shouldShowWizard).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // A failed setSetupCompleted must leave the gate alone. Invalidating it would
+  // refetch a query with no data, which react-query reports as pending, so App
+  // would swap the wizard for the starting-runtime screen and drop every pick.
+  it("a failed completion keeps the fail-closed wizard mounted and does not re-check the gate", async () => {
+    vi.mocked(shouldShowWizard).mockRejectedValue(new Error("connection refused"));
+    vi.mocked(setSetupCompleted).mockReset().mockRejectedValue(new Error("connection refused"));
+    renderApp();
+
+    const finish = await screen.findByRole("button", { name: "Finish setup" });
+    const wizard = screen.getByTestId("setup-wizard");
+    const gateChecks = vi.mocked(shouldShowWizard).mock.calls.length;
+    fireEvent.click(finish);
+    await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledWith(true));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // The same node, not a remount: a remount would reset every wizard pick.
+    expect(screen.getByTestId("setup-wizard")).toBe(wizard);
+    expect(screen.queryByText(STARTING_RUNTIME)).not.toBeInTheDocument();
+    expect(vi.mocked(shouldShowWizard).mock.calls.length).toBe(gateChecks);
+    vi.mocked(setSetupCompleted).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("a completion that fails once and then saves opens Home", async () => {
+    vi.mocked(shouldShowWizard).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(setSetupCompleted)
+      .mockReset()
+      .mockRejectedValueOnce(new Error("connection refused"))
+      .mockResolvedValue(undefined);
+    renderApp();
+
+    const finish = await screen.findByRole("button", { name: "Finish setup" });
+    fireEvent.click(finish);
+    await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(screen.getByTestId("setup-wizard")).toBeInTheDocument();
+    expect(shouldShowWizard).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    expect(await screen.findByTestId("home-main")).toBeInTheDocument();
+    expect(setSetupCompleted).toHaveBeenCalledTimes(2);
   });
 
   it("waits for the active editor guard before an explicit quit reaches Tauri", async () => {

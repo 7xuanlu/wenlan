@@ -10,8 +10,6 @@ import {
   downloadOnDeviceModel,
   getOnDeviceModel,
   onDeviceModelDownloadBytes,
-  getResolvedRouting,
-  setSourcePin,
   addSource,
   syncRegisteredSource,
   storeMemory,
@@ -21,11 +19,10 @@ import {
   type ImportResult,
   type ImportChatExportResponse,
   type SyncStats,
-  type ResolvedRouting,
   type UndeterminedInput,
 } from "../lib/tauri";
 import { readingIsYes } from "../lib/reading";
-import { deriveOnboardingPins, type SourcePin } from "../lib/routingPins";
+import { fillUnsetPinsWithRetry, type SourcePin } from "../lib/routingPins";
 import { dragStripHeight } from "../lib/windowChrome";
 import { ImportFlow } from "./ChatImport/ImportFlow";
 import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectCard";
@@ -53,7 +50,9 @@ export type WizardStep =
   | "done";
 
 interface SetupWizardProps {
-  onComplete: () => void;
+  // May return a promise: the Done step awaits it and, on a rejection, stays
+  // put with an inline alert so the user can try again.
+  onComplete: () => void | Promise<void>;
   initialStep?: WizardStep;
   // Preview-harness seams. The model and import rows of the setting-up step are
   // conditional on picks made in earlier steps, so entering at `setting-up`
@@ -121,12 +120,16 @@ function StepShell({
   activeStep,
   leftActions,
   primaryAction,
+  alert,
   children,
 }: {
   hideDots: boolean;
   activeStep: WizardStep;
   leftActions?: StepShellAction[];
   primaryAction?: StepShellAction;
+  // Shown just above the action bar, outside the scroll area, so a failed
+  // primary action is explained next to the button whatever the scroll.
+  alert?: string | null;
   children: React.ReactNode;
 }) {
   return (
@@ -144,6 +147,24 @@ function StepShell({
           {children}
         </div>
       </main>
+
+      {alert && (
+        <p
+          role="alert"
+          className="shrink-0 text-center"
+          style={{
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "var(--mem-text-sm)",
+            color: "var(--mem-status-danger-text)",
+            lineHeight: "1.5",
+            margin: 0,
+            padding: "8px 24px",
+            borderTop: "1px solid var(--mem-border)",
+          }}
+        >
+          {alert}
+        </p>
+      )}
 
       <div
         data-testid="wizard-action-bar"
@@ -1114,7 +1135,18 @@ function SettingUpStep({
           // Resolving here only means the request landed — not that the
           // model is loaded. The row stays "running"; the poll below (keyed
           // on modelDownloadStarted) is what actually proves it.
-          () => setModelDownloadStarted(true),
+          () => {
+            setModelDownloadStarted(true);
+            // Pin here, not only in DoneStep: the daemon answers once the model
+            // is loaded, often after the user pressed Continue or Open Wenlan
+            // or hid the window, and a job with no pin runs nothing. Only
+            // unset jobs are filled. This promise outlives the step, but only
+            // while the webview survives (unmount, hide); a quit or reload
+            // before it settles drops the pin.
+            void fillUnsetPinsWithRetry().then(() =>
+              queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] }),
+            );
+          },
           (err) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
             setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
@@ -1735,7 +1767,7 @@ export function DoneStep({
   importResult: ImportResult | null;
   chatImportResult?: Pick<ImportChatExportResponse, "memories_stored"> | null;
   connectedAgents: string[];
-  onComplete: () => void;
+  onComplete: () => void | Promise<void>;
   hideDots: boolean;
   wireRouting: boolean;
 }) {
@@ -1777,9 +1809,14 @@ export function DoneStep({
   // configured, so the defaults are visible instead of silent. Only on the
   // full first-onboarding run (wireRouting) — the same DoneStep is reused for
   // the in-app "connect agent" flow, which must NOT rewrite an existing user's
-  // pins. Feature-detect first (a legacy daemon returns null → wire nothing);
-  // the write is non-blocking (a failure must not break completion) and the
-  // summary line only shows on a write that actually landed.
+  // pins. Feature-detect first (a legacy daemon returns null → wire nothing).
+  // It is the model download's own fill (fillUnsetPinsWithRetry): only jobs
+  // still unset are written, so a pin chosen earlier (a key saved at the model
+  // step, or the download that finished first) is never replaced, and a
+  // transient failure is retried with backoff. The write is non-blocking (it
+  // never throws and never holds up completion, and it keeps going if Done
+  // unmounts); the summary shows the pins in effect once every job has one,
+  // whether written here or before.
   const [wired, setWired] = useState<{ everyday: OnboardingPin; synthesis: OnboardingPin } | null>(null);
   // Whether the wiring effect has run to a conclusion (wired or not). Gates the
   // no-model assurance line so it never flashes before the async determination
@@ -1788,28 +1825,15 @@ export function DoneStep({
   useEffect(() => {
     if (!wireRouting) return; // re-run paths (e.g. connect-agent) leave pins alone.
     let cancelled = false;
-    (async () => {
-      try {
-        let routing: ResolvedRouting | null = null;
-        try {
-          routing = await getResolvedRouting();
-        } catch (e) {
-          console.error("onboarding: routing lookup failed; skipping pin wiring", e);
-          return;
-        }
-        if (cancelled || !routing) return; // LEGACY daemon: no endpoint to pin.
-        const { everyday, synthesis } = deriveOnboardingPins(routing.pool);
-        if (!everyday || !synthesis) return; // nothing configured → no write, no line.
-        try {
-          await setSourcePin(everyday, synthesis);
-          if (!cancelled) setWired({ everyday, synthesis });
-        } catch (e) {
-          console.error("onboarding: pin write failed; continuing without wiring", e);
-        }
-      } finally {
-        if (!cancelled) setWiringSettled(true);
-      }
-    })();
+    void fillUnsetPinsWithRetry().then((fill) => {
+      if (cancelled) return;
+      // null: a legacy daemon, or every attempt failed (already logged). A job
+      // still unpinned after the fill shows no summary line either.
+      const everyday = fill?.inEffect.everyday ?? null;
+      const synthesis = fill?.inEffect.synthesis ?? null;
+      if (everyday && synthesis) setWired({ everyday, synthesis });
+      setWiringSettled(true);
+    });
     return () => {
       cancelled = true;
     };
@@ -1828,11 +1852,40 @@ export function DoneStep({
       })
     : null;
   // Counterpart to routingSummary: when the effect concluded without wiring a
-  // pin (nothing configured, legacy daemon, or a write failure), reassure the
-  // user the wiki still updates through their AI tools. Mutually exclusive with
-  // routingSummary by the !wired guard; never on re-run entries (wireRouting).
+  // pin (nothing configured, a job left unpinned, legacy daemon, or a write
+  // failure), reassure the user the wiki still updates through their AI tools.
+  // Mutually exclusive with routingSummary by the !wired guard; never on re-run
+  // entries (wireRouting).
   const assurance =
     wireRouting && wiringSettled && !wired ? t("setup.done.noModelAssurance") : null;
+  // Finishing saves setup_completed to the daemon, which can be unreachable.
+  // A rejection keeps the user here with every pick intact and the button live
+  // to try again; the parent must not re-check its gate on that failure.
+  const [completing, setCompleting] = useState(false);
+  const [completeFailed, setCompleteFailed] = useState(false);
+  // The state above disables the button only after a re-render, so a second
+  // click in the same tick would see it still false and finish twice. The ref
+  // flips synchronously; it clears when the attempt settles, so a rejection
+  // leaves the button retryable.
+  const completingRef = useRef(false);
+  const handleComplete = () => {
+    if (completingRef.current) return;
+    completingRef.current = true;
+    setCompleting(true);
+    setCompleteFailed(false);
+    void (async () => {
+      try {
+        await onComplete();
+      } catch (e) {
+        console.error("onboarding: could not finish setup", e);
+        setCompleteFailed(true);
+      } finally {
+        completingRef.current = false;
+        setCompleting(false);
+      }
+    })();
+  };
+  const completeError = completeFailed ? t("setup.settingUp.daemonUnreachable") : null;
   const routingSummaryStyle = {
     fontFamily: "var(--mem-font-body)",
     fontSize: "13px",
@@ -1846,7 +1899,12 @@ export function DoneStep({
       <StepShell
         hideDots={hideDots}
         activeStep="done"
-        primaryAction={{ label: t("setup.done.openWenlan"), onClick: onComplete }}
+        primaryAction={{
+          label: t("setup.done.openWenlan"),
+          onClick: handleComplete,
+          loading: completing,
+        }}
+        alert={completeError}
       >
       <div
         className="flex flex-col items-center text-center"
@@ -1893,7 +1951,12 @@ export function DoneStep({
     <StepShell
       hideDots={hideDots}
       activeStep="done"
-      primaryAction={{ label: t("setup.getStarted"), onClick: onComplete }}
+      primaryAction={{
+        label: t("setup.getStarted"),
+        onClick: handleComplete,
+        loading: completing,
+      }}
+      alert={completeError}
     >
     <div
       className="flex flex-col items-center text-center"
