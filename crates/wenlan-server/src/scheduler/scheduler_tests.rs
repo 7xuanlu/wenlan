@@ -1084,6 +1084,80 @@ fn periodic_directory_sync_requires_resource_admission() {
     assert!(!periodic_directory_sync_allowed(false));
 }
 
+/// A closed periodic gate still lets a never-synced folder through when only
+/// CPU load closed it, but never past memory, thermal, missing host
+/// telemetry, or the startup model reservation.
+#[test]
+fn directory_sync_scope_allows_first_sync_only_past_cpu_load_but_not_other_guards() {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    let idle = ResourceSnapshot {
+        cpu_usage_percent: 8.0,
+        available_memory_bytes: 8 * GIB,
+        total_memory_bytes: 16 * GIB,
+    };
+    let nominal = || HostActivitySnapshot::Observed {
+        thermal_state: 0,
+        idle_for: Duration::ZERO,
+    };
+    let admitted = ResourceStatus {
+        admitted: true,
+        snapshot: Some(idle),
+        block_reason: None,
+    };
+    let cpu_busy = ResourceStatus {
+        admitted: false,
+        snapshot: Some(ResourceSnapshot {
+            cpu_usage_percent: 45.0,
+            ..idle
+        }),
+        block_reason: Some(ResourceBlockReason::CpuBusy),
+    };
+    let memory_pressure = ResourceStatus {
+        admitted: false,
+        snapshot: Some(ResourceSnapshot {
+            available_memory_bytes: 512 * 1024 * 1024,
+            ..idle
+        }),
+        block_reason: Some(ResourceBlockReason::MemoryPressure),
+    };
+
+    assert_eq!(
+        directory_sync_scope(
+            admitted,
+            || panic!("an admitted scan needs no host sample"),
+            true
+        ),
+        Some(DirectorySyncScope::All),
+        "the ordinary gate is unchanged"
+    );
+    assert_eq!(
+        directory_sync_scope(cpu_busy, nominal, false),
+        Some(DirectorySyncScope::FirstSyncOnly),
+        "recent input and CPU load do not hold back a first sync"
+    );
+    assert_eq!(directory_sync_scope(memory_pressure, nominal, false), None);
+    assert_eq!(
+        directory_sync_scope(
+            cpu_busy,
+            || HostActivitySnapshot::Observed {
+                thermal_state: 2,
+                idle_for: FOREGROUND_INPUT_IDLE_THRESHOLD,
+            },
+            false
+        ),
+        None
+    );
+    assert_eq!(
+        directory_sync_scope(cpu_busy, || HostActivitySnapshot::Unavailable, false),
+        None
+    );
+    assert_eq!(
+        directory_sync_scope(cpu_busy, nominal, true),
+        None,
+        "the startup model reservation holds back the first-only scan"
+    );
+}
+
 #[test]
 fn resource_admission_requires_two_idle_samples_and_resets_on_pressure() {
     let policy = ResourcePolicy::conservative();
@@ -2152,6 +2226,106 @@ async fn document_prep_outcome_distinguishes_retryable_and_exhausted_rows() {
             );
         }
     }
+}
+
+/// A first-sync-only pass queues a never-synced folder and reports it, leaves a
+/// previously synced folder's new file and a paused never-synced folder
+/// unqueued, and finds nothing to do when repeated.
+#[tokio::test]
+async fn first_sync_only_directory_pass_queues_only_never_synced_active_sources() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let knowledge_root = tempfile::tempdir().unwrap();
+    let fresh_root = tempfile::tempdir().unwrap();
+    let synced_root = tempfile::tempdir().unwrap();
+    let paused_root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        fresh_root.path().join("first.txt"),
+        "A note in a folder that was registered but never synced.",
+    )
+    .unwrap();
+    std::fs::write(
+        synced_root.path().join("changed.txt"),
+        "A note added to a folder that already synced once.",
+    )
+    .unwrap();
+    std::fs::write(
+        paused_root.path().join("paused.txt"),
+        "A note in a never-synced folder the user paused.",
+    )
+    .unwrap();
+    let mut paused = directory_source("directory-paused", paused_root.path(), None);
+    paused.status = wenlan_types::sources::SyncStatus::Paused;
+    save_directory_sources_with_scratch_pages(
+        vec![
+            directory_source("directory-fresh", fresh_root.path(), None),
+            directory_source(
+                "directory-synced",
+                synced_root.path(),
+                Some(chrono::Utc::now().timestamp() - 60),
+            ),
+            paused,
+        ],
+        knowledge_root.path(),
+    );
+    let (db, _db_dir) = new_test_db().await;
+    let queued = |source_id: &'static str, root: std::path::PathBuf, file: &'static str| {
+        let db = db.clone();
+        async move {
+            db.get_queue_entry(source_id, &root.join(file).to_string_lossy())
+                .await
+                .unwrap()
+                .is_some()
+        }
+    };
+
+    assert!(
+        sync_directory_sources_in_scope(&db, DirectorySyncScope::FirstSyncOnly).await,
+        "the never-synced folder queued its file"
+    );
+    assert!(
+        queued(
+            "directory-fresh",
+            fresh_root.path().to_path_buf(),
+            "first.txt"
+        )
+        .await
+    );
+    assert!(
+        !queued(
+            "directory-synced",
+            synced_root.path().to_path_buf(),
+            "changed.txt"
+        )
+        .await,
+        "a previously synced folder waits for the ordinary admitted scan"
+    );
+    assert!(
+        !queued(
+            "directory-paused",
+            paused_root.path().to_path_buf(),
+            "paused.txt"
+        )
+        .await,
+        "a paused folder is never scanned"
+    );
+
+    assert!(
+        !sync_directory_sources_in_scope(&db, DirectorySyncScope::FirstSyncOnly).await,
+        "a repeated first-only pass does not re-trigger the import lane"
+    );
+    assert!(
+        !queued(
+            "directory-synced",
+            synced_root.path().to_path_buf(),
+            "changed.txt"
+        )
+        .await,
+        "the repeated first-only pass still leaves the synced folder alone"
+    );
 }
 
 /// Only the first sync of a never-synced source that queued files asks for
