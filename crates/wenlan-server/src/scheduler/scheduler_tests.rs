@@ -1995,6 +1995,224 @@ async fn directory_sync_and_document_slice_are_separate_steps() {
     assert_eq!(q.status, "waiting_for_provider");
 }
 
+fn save_directory_sources_with_scratch_pages(
+    sources: Vec<wenlan_types::sources::Source>,
+    knowledge_path: &std::path::Path,
+) {
+    wenlan_core::config::save_config(&wenlan_core::config::Config {
+        sources,
+        knowledge_path: Some(knowledge_path.to_path_buf()),
+        ..wenlan_core::config::Config::default()
+    })
+    .unwrap();
+}
+
+fn directory_source(
+    id: &str,
+    path: &std::path::Path,
+    last_sync: Option<i64>,
+) -> wenlan_types::sources::Source {
+    wenlan_types::sources::Source {
+        id: id.to_string(),
+        source_type: wenlan_types::sources::SourceType::Directory,
+        path: path.to_path_buf(),
+        status: wenlan_types::sources::SyncStatus::Active,
+        last_sync,
+        file_count: 0,
+        memory_count: 0,
+        last_sync_errors: 0,
+        last_sync_error_detail: None,
+    }
+}
+
+/// The import lane's model-free prep turn makes a queued folder file
+/// searchable without any provider and parks it for later model enrichment.
+#[tokio::test]
+async fn import_document_prep_slice_makes_folder_file_searchable_without_provider() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let source_root = tempfile::tempdir().unwrap();
+    let knowledge_root = tempfile::tempdir().unwrap();
+    let file_path = source_root.path().join("prep-note.txt");
+    std::fs::write(
+        &file_path,
+        "Quillfenwick is the code name for the onboarding folder preparation lane.\n\n\
+         It parses and embeds a queued folder file before any model is configured.",
+    )
+    .unwrap();
+    let source_id = "directory-notes".to_string();
+    save_directory_sources_with_scratch_pages(
+        vec![directory_source(&source_id, source_root.path(), None)],
+        knowledge_root.path(),
+    );
+    let (db, _db_dir) = new_test_db().await;
+    let prompts = wenlan_core::prompts::PromptRegistry::default();
+    let mut claim_log = DocumentPrepClaimLog::default();
+
+    assert!(sync_directory_sources(&db).await);
+    let report =
+        run_import_document_prep_slice(&db, &prompts, knowledge_root.path(), &mut claim_log).await;
+    assert_eq!(report.outcome, DocumentPrepOutcome::Prepared);
+    assert!(!report.panicked);
+
+    let doc_source_id = wenlan_core::sources::directory::document_source_id(
+        &source_id,
+        &file_path,
+        Some(knowledge_root.path()),
+    );
+    let results = db
+        .search_memory(
+            "Quillfenwick",
+            30,
+            None,
+            &wenlan_core::read_scope::ReadScope::Global,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        results.iter().any(|r| r.source_id == doc_source_id),
+        "the prepared folder file must be searchable"
+    );
+    let queued = db
+        .get_queue_entry(&source_id, &file_path.to_string_lossy())
+        .await
+        .unwrap()
+        .expect("queue row remains for later model enrichment");
+    assert_eq!(queued.status, "waiting_for_provider");
+
+    let drained =
+        run_import_document_prep_slice(&db, &prompts, knowledge_root.path(), &mut claim_log).await;
+    assert_eq!(
+        drained.outcome,
+        DocumentPrepOutcome::Idle,
+        "a parked row is not claimed again without a provider"
+    );
+}
+
+/// A persistent claim error warns once per consecutive run instead of on
+/// every two-second import-priority tick.
+#[test]
+fn document_prep_claim_failure_warns_once_per_consecutive_run() {
+    let mut log = DocumentPrepClaimLog::default();
+    assert!(log.note_failure(), "the first failure warns");
+    assert!(!log.note_failure(), "a repeat logs at debug");
+    assert!(!log.note_failure(), "a repeat logs at debug");
+    log.note_success();
+    assert!(
+        log.note_failure(),
+        "a failure after a successful claim warns again"
+    );
+    assert!(!log.note_failure());
+}
+
+/// Retryable and exhausted prep failures are told apart from the queue row,
+/// and the server's attempt cap matches the claim query's exclusion.
+#[tokio::test]
+async fn document_prep_outcome_distinguishes_retryable_and_exhausted_rows() {
+    let (db, _db_dir) = new_test_db().await;
+    let source_id = "directory-notes";
+    let file_path = "/tmp/wenlan-prep-outcome/failing.txt";
+    db.enqueue_document(source_id, file_path, Some("hash-failing"))
+        .await
+        .unwrap();
+
+    let waiting = db.get_queue_entry(source_id, file_path).await.unwrap();
+    assert_eq!(
+        document_prep_outcome(waiting.as_ref()),
+        DocumentPrepOutcome::Prepared
+    );
+
+    for attempt in 1..=5_i64 {
+        db.mark_paused(source_id, file_path, "parse task failed", Some(0))
+            .await
+            .unwrap();
+        let row = db.get_queue_entry(source_id, file_path).await.unwrap();
+        let claimable = db.claim_next_pending_for_provider(false).await.unwrap();
+        if attempt < 5 {
+            assert_eq!(
+                document_prep_outcome(row.as_ref()),
+                DocumentPrepOutcome::RetryableFailure { retry_at: Some(0) }
+            );
+            assert!(claimable.is_some(), "attempt {attempt} is still retryable");
+        } else {
+            assert_eq!(
+                document_prep_outcome(row.as_ref()),
+                DocumentPrepOutcome::Exhausted
+            );
+            assert!(
+                claimable.is_none(),
+                "an exhausted row is never claimed again"
+            );
+        }
+    }
+}
+
+/// Only the first sync of a never-synced source that queued files asks for
+/// the import lane. Already-synced sources get no trigger by design.
+#[tokio::test]
+async fn directory_sync_reports_first_sync_queued_only_once() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let knowledge_root = tempfile::tempdir().unwrap();
+    let fresh_root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        fresh_root.path().join("first.txt"),
+        "A first folder note that is queued by the very first poll.",
+    )
+    .unwrap();
+    save_directory_sources_with_scratch_pages(
+        vec![directory_source("directory-fresh", fresh_root.path(), None)],
+        knowledge_root.path(),
+    );
+    let (db, _db_dir) = new_test_db().await;
+
+    assert!(
+        sync_directory_sources(&db).await,
+        "first sync queued a file"
+    );
+    assert!(
+        !sync_directory_sources(&db).await,
+        "the second poll of the same source is not a first sync"
+    );
+
+    let synced_root = tempfile::tempdir().unwrap();
+    std::fs::write(
+        synced_root.path().join("later.txt"),
+        "A later folder note added after the source had already synced.",
+    )
+    .unwrap();
+    save_directory_sources_with_scratch_pages(
+        vec![directory_source(
+            "directory-synced",
+            synced_root.path(),
+            Some(chrono::Utc::now().timestamp() - 60),
+        )],
+        knowledge_root.path(),
+    );
+    assert!(
+        !sync_directory_sources(&db).await,
+        "an already-synced source queues the file without a first-sync trigger"
+    );
+    assert!(db
+        .get_queue_entry(
+            "directory-synced",
+            &synced_root.path().join("later.txt").to_string_lossy()
+        )
+        .await
+        .unwrap()
+        .is_some());
+}
+
 /// A paused queue row whose backoff has not elapsed must be SKIPPED by the
 /// tick (backoff auto-resume): `claim_next_pending` never returns it, so it
 /// is not processed and no chunks materialize.
