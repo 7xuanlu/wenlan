@@ -211,10 +211,13 @@ fn manifest_counts_match_the_spec() {
     // Then 173 after #708 added POST `/api/memory/entities/query`, `/archive`
     // and `/restore` (detected-entities index). Then 175 after the import
     // batch-status lane added GET `/api/import/batches/active` and GET
-    // `/api/import/batches/{batch_id}/status`.
+    // `/api/import/batches/{batch_id}/status`. Then 178 after the activity
+    // status lane added GET `/api/activity` (counts-only, not page-bearing).
+    // Then 177 after the debug pipeline diagnostic route was removed
+    // (Diagnostics migrated to `/api/activity`).
     assert_eq!(
         HTTP_READERS.len(),
-        183,
+        184,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -409,7 +412,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        171 // includes the GET/PUT telemetry consent routes, which carry no page markers
+        171 // includes the GET/PUT telemetry consent routes and GET /api/activity, which carry no page markers
     );
 }
 

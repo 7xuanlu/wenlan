@@ -54,6 +54,9 @@ vi.mock("../../lib/tauri", () => ({
   openFile: openFileMock,
   openSearchResult: openSearchResultMock,
   deleteFileChunks: vi.fn().mockResolvedValue(undefined),
+  // Never settles, so the toolbar Activity button stays the plain navigation
+  // button these routing tests click.
+  getActivity: vi.fn(() => new Promise(() => {})),
 }));
 
 vi.mock("./ActivityFeed", () => ({ default: () => <div data-testid="activity-feed" /> }));

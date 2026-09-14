@@ -5,6 +5,7 @@
 //! wenlan-core, wenlan-server, and the Tauri app. Dependencies are
 //! limited to serde and serde_json -- no heavy runtime deps.
 
+pub mod activity;
 pub mod brand;
 pub mod brief;
 pub mod briefing;

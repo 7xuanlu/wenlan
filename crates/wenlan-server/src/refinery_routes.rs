@@ -154,7 +154,9 @@ pub async fn handle_accept_refinement(
     }))
 }
 
-fn parse_action(s: &str) -> Option<ProposalAction> {
+/// The actions the review queue can list. Shared with `activity_routes` so
+/// "ready for review" has one rule.
+pub(crate) fn parse_action(s: &str) -> Option<ProposalAction> {
     match s {
         "entity_merge" => Some(ProposalAction::EntityMerge),
         "relation_conflict" => Some(ProposalAction::RelationConflict),

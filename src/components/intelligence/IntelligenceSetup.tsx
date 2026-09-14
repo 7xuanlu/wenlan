@@ -11,6 +11,8 @@ import {
   setApiKey,
   setModelChoice,
 } from "../../lib/tauri";
+import { fillUnsetPinsAfterSave } from "../../lib/routingPins";
+import { ACTIVITY_QUERY_KEY } from "../../lib/useActivity";
 import { Card, Field, Input, Button, Select, StatusChip } from "../memory/settings/primitives";
 
 type AnthropicModelDescriptionKey =
@@ -72,6 +74,7 @@ export function AnthropicFields({
     queryClient.invalidateQueries({ queryKey: ["external-llm"] });
     queryClient.invalidateQueries({ queryKey: ["external-llm-key-configured"] });
     queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
+    queryClient.invalidateQueries({ queryKey: ACTIVITY_QUERY_KEY });
   };
 
   const handleSave = async () => {
@@ -80,6 +83,9 @@ export function AnthropicFields({
     try {
       await setApiKey(keyInput);
       setKeyInput("");
+      // A key with no job pinned to it would change nothing: choose it for
+      // any job that has no model yet.
+      await fillUnsetPinsAfterSave();
       invalidateIntelligenceQueries();
     } catch (e) {
       setError(String(e));
@@ -331,7 +337,13 @@ export function OnDeviceModelCard({
     setError(null);
     try {
       await downloadOnDeviceModel(current.id);
+      // Only Settings reaches this (the wizard defers the download and its
+      // Done step pins), so a model turned on here is chosen for any job
+      // without one.
+      await fillUnsetPinsAfterSave();
       queryClient.invalidateQueries({ queryKey: ["onDeviceModel"] });
+      queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
+      queryClient.invalidateQueries({ queryKey: ACTIVITY_QUERY_KEY });
       setPickedId(null);
     } catch (e) {
       setError(String(e));

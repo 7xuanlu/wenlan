@@ -260,16 +260,34 @@ smoke_assert_ownership() {
 
 # Isolation readback, from the LIVE daemon, both halves.
 smoke_assert_isolation() {
-    local reported logged_root logged_cmp want_cmp
+    local reported logged_root logged_cmp want_cmp log_candidate
     reported="$(curl -sf --max-time 5 "$HOST/api/knowledge/path")" ||
         fail "pages readback request FAILED — unmeasured, not a match"
     [ "$reported" = "{\"path\":\"$NATIVE_PAGES_DIR\"}" ] ||
         fail "pages readback mismatch: got [$reported] want [{\"path\":\"$NATIVE_PAGES_DIR\"}]"
+    # The startup line does not always reach stdout. On macOS the tracing
+    # subscriber installs a rotating FILE writer under the data root (see the
+    # `target_os = "macos"` branch of `crates/wenlan-server/src/main.rs`), so
+    # `daemon.log` — a plain stdout capture — holds only the
+    # `WENLAN_LISTENING_ON=` println and this assertion failed on every macOS
+    # run. Ask both places rather than branching on the platform, so the two
+    # cannot drift apart again; carrying the line in neither is still fatal.
+    #
     # One process, no pipe: `sed … | head -1` CAN SIGPIPE sed, and under
     # pipefail that is indistinguishable from a parse failure.
-    logged_root="$(sed -n '/Wenlan data root: /{s/.*Wenlan data root: //;s/\r$//;s/ (database [^)]*)$//;p;q;}' "$DATA_DIR/daemon.log")" ||
-        fail "extracting the logged data root FAILED — unmeasured, not a match"
-    [ -n "$logged_root" ] || fail "the daemon log has no 'Wenlan data root:' line at all"
+    # Choose the file BEFORE parsing, so this function keeps exactly ONE line
+    # that assigns logged_root:
+    # `bind_addr_tests::smoke_common_sed_strips_the_database_suffix_the_daemon_logs`
+    # lifts the sed program out of the first such line it finds, so a second one
+    # would silently feed that test the wrong text.
+    log_candidate="$DATA_DIR/daemon.log"
+    if ! grep -q 'Wenlan data root: ' "$log_candidate" 2>/dev/null; then
+        log_candidate="$DATA_DIR/logs/wenlan-server.log"
+    fi
+    logged_root="$(sed -n '/Wenlan data root: /{s/.*Wenlan data root: //;s/\r$//;s/ (database [^)]*)$//;p;q;}' "$log_candidate")" ||
+        fail "extracting the logged data root from [$log_candidate] FAILED — unmeasured, not a match"
+    [ -n "$logged_root" ] ||
+        fail "no daemon log carries a 'Wenlan data root:' line (looked in $DATA_DIR/daemon.log and $DATA_DIR/logs/wenlan-server.log)"
     if (( HOST_IS_WINDOWS == 1 )); then
         # Windows spells one directory many ways; compare the way the production
         # guard does, folding separator and case and nothing else.

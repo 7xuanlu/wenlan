@@ -219,7 +219,9 @@ describe("FirstUseGuide live view", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(screen.getByTestId("import-phase-detect")).toHaveAttribute("data-state", "running");
+    expect(screen.getByTestId("import-phase-store")).toHaveAttribute("data-state", "complete");
+    expect(screen.queryByTestId("import-phase-detect")).not.toBeInTheDocument();
+    expect(screen.queryByText("Background work finished.")).not.toBeInTheDocument();
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(5_000);
@@ -237,14 +239,26 @@ describe("FirstUseGuide live view", () => {
   });
 
   it("renders observed running phases without inventing a finished result", async () => {
-    mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
+    mockedBatches.mockResolvedValue({ batches: [makeBatch({
+      phases: [
+        entry("ingest", "complete", 4, 4),
+        entry("store", "running", 2, 4),
+        entry("detect", "pending", 0, 0),
+        entry("enrich", "pending", 0, 0),
+        entry("link", "pending", 0, 0),
+        entry("distill", "pending", 0, 0),
+      ],
+    })] });
     renderGuide();
     enterLive();
     expect(await screen.findByText("Import progress")).toBeInTheDocument();
-    expect(screen.getByTestId("import-phase-detect")).toHaveAttribute(
+    expect(screen.getByTestId("import-phase-store")).toHaveAttribute(
       "data-state",
       "running",
     );
+    // Nothing is stored yet, so nothing is searchable yet, so the handoff
+    // sentence must not claim it is.
+    expect(screen.queryByTestId("import-handoff")).not.toBeInTheDocument();
     expect(
       screen.queryByText(/No knowledge page was created in this batch/),
     ).not.toBeInTheDocument();
@@ -282,9 +296,12 @@ describe("FirstUseGuide live view", () => {
     expect(
       screen.getByText(/No knowledge page was created in this batch/),
     ).toBeInTheDocument();
-    expect(screen.getByTestId("import-phase-detect")).toHaveAttribute(
+    // A background phase failed, and the import surface has no row for it any
+    // more. The failure still reaches the user, through the note above.
+    expect(screen.queryByTestId("import-phase-detect")).not.toBeInTheDocument();
+    expect(screen.getByTestId("import-phase-store")).toHaveAttribute(
       "data-state",
-      "failed",
+      "complete",
     );
     fireEvent.click(screen.getByRole("button", { name: "Set up intelligence" }));
     expect(onOpenIntelligence).toHaveBeenCalledOnce();

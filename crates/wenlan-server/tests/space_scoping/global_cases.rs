@@ -34,6 +34,7 @@ pub async fn global_routes_ignore_space_header() {
         ("/api/memory/rejections", "/api/memory/rejections"),
         ("/api/refinery/queue", "/api/refinery/queue"),
         ("/api/capture-stats", "/api/capture-stats"),
+        ("/api/activity", "/api/activity"),
         ("/api/decisions/domains", "/api/decisions/domains"),
         ("/api/snapshots", "/api/snapshots"),
     ];

@@ -2219,6 +2219,7 @@ async fn ambient_status_reports_pending_queue_and_gate_snapshot() {
 
     let gate = Some(AmbientGateSnapshot {
         admitted: false,
+        import_priority_admitted: false,
         blocked_reason: Some("HostActive".to_string()),
         sampled_at_epoch: 1_700_000_000,
     });

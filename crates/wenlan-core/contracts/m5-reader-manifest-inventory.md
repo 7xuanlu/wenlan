@@ -541,6 +541,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
+| `GET` | `/api/activity` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/activities` | main | yes | automatic | `none` | `handle_list_activities` | AgentActivityRow.detail = title={page.title} |
 | `GET` | `/api/agents` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `DELETE` | `/api/agents/{name}` | main | yes | automatic | `none` | `handle_delete_agent` | opaque response type — fail-closed |
@@ -562,7 +563,6 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `PUT` | `/api/config` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/config/routing` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/context` | main | yes | automatic | `none` | `handle_context` | ChatContextResponse.context, KnowledgeContext.graph_context, Searc |
-| `GET` | `/api/debug/pipeline` | main | yes | automatic | `none` | `handle_pipeline_status` | opaque response type — fail-closed |
 | `GET` | `/api/decisions` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/decisions/domains` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/distill` | main | yes | automatic | `none` | `handle_distill` | opaque response type — fail-closed |

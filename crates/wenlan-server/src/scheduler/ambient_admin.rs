@@ -109,8 +109,19 @@ pub(crate) async fn force_ambient_sweep(
 #[derive(Debug, Clone)]
 pub struct AmbientGateSnapshot {
     pub admitted: bool,
+    /// The import-priority lane could run work this tick, even with the
+    /// ordinary gate closed: it skips foreground activity and the CPU check
+    /// for a short window after an import.
+    pub import_priority_admitted: bool,
     pub blocked_reason: Option<String>,
     pub sampled_at_epoch: i64,
+}
+
+impl AmbientGateSnapshot {
+    /// Some background work could run this tick, through either lane.
+    pub fn work_can_run(&self) -> bool {
+        self.admitted || self.import_priority_admitted
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

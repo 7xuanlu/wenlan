@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import GeneralSection from "./GeneralSection";
+import {
+  __resetActivityNowLayoutForTests,
+  getActivityNowLayout,
+} from "../../../../lib/activityNowLayout";
 import {
   getTelemetryStatus,
   isRunAtLoginEnabled,
@@ -93,6 +97,24 @@ describe("GeneralSection app card merge", () => {
     expect(merged.textContent).toContain("Run Wenlan in background at login");
     expect(merged.textContent).toContain("Theme");
     expect(merged.textContent).toContain("Language");
+  });
+});
+
+// The Now placement preference lives here rather than in a Settings,
+// Appearance section: Appearance was folded into General alongside Theme.
+describe("GeneralSection activity Now placement", () => {
+  it("writes the chosen placement to the per-device preference", async () => {
+    localStorage.clear();
+    __resetActivityNowLayoutForTests();
+    renderGeneralSection();
+
+    const control = await screen.findByLabelText("Activity summary placement");
+    expect(getActivityNowLayout()).toBe("rail");
+
+    fireEvent.click(within(control).getByText("In the feed"));
+
+    expect(getActivityNowLayout()).toBe("timeline");
+    expect(localStorage.getItem("wenlan-activity-now-layout")).toBe("timeline");
   });
 });
 

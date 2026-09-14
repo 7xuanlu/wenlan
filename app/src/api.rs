@@ -7,7 +7,7 @@
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::time::Duration;
 use wenlan_types::responses::HealthResponse;
 
@@ -56,29 +56,6 @@ pub struct SetupStatusResponse {
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
 struct CaptureStatsResponse {
     total_chunks: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PipelineStatusResponse {
-    pub enrichment: BTreeMap<String, u64>,
-    pub entity_linking: PipelineEntityLinkingStatus,
-    pub refinement_queue: Vec<PipelineQueueEntry>,
-    pub recaps: u64,
-    pub types: BTreeMap<String, u64>,
-    pub quality: BTreeMap<String, u64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PipelineEntityLinkingStatus {
-    pub linked: u64,
-    pub unlinked: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PipelineQueueEntry {
-    pub action: String,
-    pub status: String,
-    pub count: u64,
 }
 
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
@@ -766,8 +743,8 @@ impl WenlanClient {
         Ok(counts)
     }
 
-    pub async fn pipeline_status(&self) -> Result<PipelineStatusResponse, String> {
-        self.get_json("/api/debug/pipeline").await
+    pub async fn activity(&self) -> Result<wenlan_types::activity::ActivityResponse, String> {
+        self.get_json("/api/activity").await
     }
 
     pub async fn list_tags(&self) -> Result<Vec<String>, String> {
@@ -2383,54 +2360,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pipeline_status_uses_daemon_debug_pipeline_endpoint() {
-        let body = r#"{"enrichment":{"done":3,"pending":1},"entity_linking":{"linked":7,"unlinked":2},"refinement_queue":[{"action":"merge","status":"pending","count":4}],"recaps":5,"types":{"fact":6},"quality":{"high":2}}"#;
+    async fn activity_uses_daemon_activity_endpoint() {
+        let body = r#"{"state":"organizing","last_activity_at":1700000100,"assets":[{"kind":"memories","state":"running","done":7,"total":10,"blocked":0,"steps":[]}],"everyday":{"job":"everyday","lane":"on_device","model":"qwen3-4b","mode":"pinned","available":true},"synthesis":{"job":"synthesis","lane":"none","model":null,"mode":"unconfigured","available":false}}"#;
         let (base_url, request) = serve_json_once(body).await;
         let client = WenlanClient {
             client: reqwest::Client::new(),
             base_url,
         };
 
-        let status = client.pipeline_status().await.unwrap();
+        let activity = client.activity().await.unwrap();
 
-        assert_eq!(status.enrichment.get("done"), Some(&3));
-        assert_eq!(status.entity_linking.linked, 7);
-        assert_eq!(status.entity_linking.unlinked, 2);
-        assert_eq!(status.refinement_queue[0].action, "merge");
-        assert_eq!(status.refinement_queue[0].status, "pending");
-        assert_eq!(status.refinement_queue[0].count, 4);
-        assert_eq!(status.recaps, 5);
-        assert_eq!(status.types.get("fact"), Some(&6));
-        assert_eq!(status.quality.get("high"), Some(&2));
+        assert_eq!(
+            activity.state,
+            wenlan_types::activity::ActivityState::Organizing
+        );
+        assert_eq!(activity.last_activity_at, Some(1_700_000_100));
+        assert_eq!(activity.assets.len(), 1);
+        assert_eq!(
+            activity.assets[0].kind,
+            wenlan_types::activity::ActivityAssetKind::Memories
+        );
+        assert_eq!(
+            activity.everyday.lane,
+            wenlan_types::activity::ActivityLane::OnDevice
+        );
+        assert!(!activity.synthesis.available);
         let request = request.await.unwrap();
         assert_eq!(
             request.lines().next().unwrap_or_default(),
-            "GET /api/debug/pipeline HTTP/1.1"
+            "GET /api/activity HTTP/1.1"
         );
-    }
-
-    #[test]
-    fn pipeline_status_response_deserializes_daemon_payload() {
-        let status: PipelineStatusResponse = serde_json::from_value(serde_json::json!({
-            "enrichment": {"raw": 1, "classified": 2},
-            "entity_linking": {"linked": 3, "unlinked": 4},
-            "refinement_queue": [
-                {"action": "merge", "status": "pending", "count": 5}
-            ],
-            "recaps": 6,
-            "types": {"fact": 7},
-            "quality": {"trusted": 8},
-            "future_additive_key": {"ignored": true}
-        }))
-        .expect("daemon pipeline status payload should deserialize");
-
-        assert_eq!(status.enrichment.get("classified"), Some(&2));
-        assert_eq!(status.entity_linking.linked, 3);
-        assert_eq!(status.entity_linking.unlinked, 4);
-        assert_eq!(status.refinement_queue.len(), 1);
-        assert_eq!(status.recaps, 6);
-        assert_eq!(status.types.get("fact"), Some(&7));
-        assert_eq!(status.quality.get("trusted"), Some(&8));
     }
 
     #[tokio::test]

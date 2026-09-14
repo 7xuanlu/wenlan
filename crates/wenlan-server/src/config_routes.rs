@@ -292,7 +292,7 @@ pub async fn handle_get_setup_status(
 
 /// Resolved route for one job class: the source that serves it, the model, and
 /// how it was chosen.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct JobRoute {
     /// The RESOLVED source that serves this job.
     /// everyday: "anthropic" | "external" | "on_device" | "basic";
@@ -344,19 +344,18 @@ pub struct ResolvedRoutingResponse {
     pub pool: RoutingPool,
 }
 
-/// GET /api/config/routing — resolved per-job routing derived at request time
-/// from the live provider slots, using the SAME hard-pin resolvers the refinery
-/// runs so what the app displays cannot drift from what the daemon does. Never
-/// includes key material.
-pub async fn handle_get_resolved_routing(
-    State(state): State<SharedState>,
-) -> Result<Json<ResolvedRoutingResponse>, ServerError> {
-    let cfg = config::load_config();
-    let s = state.read().await;
-
+/// Resolve both job routes from config pins against the live provider slots.
+///
+/// Shared by `GET /api/config/routing` and `GET /api/activity` so the two
+/// routes cannot drift: both run the exact hard-pin resolvers background work
+/// runs. Missing pins authorize no inference; an unavailable pin remains
+/// pinned and never falls back across sources.
+pub(crate) fn resolve_job_routes(
+    cfg: &config::Config,
+    s: &crate::state::ServerState,
+) -> (JobRoute, JobRoute) {
     // Live resolution — the exact hard-pin resolvers background work runs, so
-    // display cannot drift from behavior. Missing pins authorize no inference;
-    // an unavailable pin remains pinned and never falls back across sources.
+    // display cannot drift from behavior.
     let everyday_pin = wenlan_core::refinery::EverydaySource::parse(cfg.everyday_source.as_deref());
     let everyday_route = wenlan_core::refinery::resolve_everyday(
         everyday_pin,
@@ -385,6 +384,20 @@ pub async fn handle_get_resolved_routing(
         mode: synth_route.mode.as_str().to_string(),
         pin: cfg.synthesis_source.clone(),
     };
+    (everyday, synthesis)
+}
+
+/// GET /api/config/routing — resolved per-job routing derived at request time
+/// from the live provider slots, using the SAME hard-pin resolvers the refinery
+/// runs so what the app displays cannot drift from what the daemon does. Never
+/// includes key material.
+pub async fn handle_get_resolved_routing(
+    State(state): State<SharedState>,
+) -> Result<Json<ResolvedRoutingResponse>, ServerError> {
+    let cfg = config::load_config();
+    let s = state.read().await;
+
+    let (everyday, synthesis) = resolve_job_routes(&cfg, &s);
 
     // Pool — the configuration view (what each lane WOULD use). Anthropic model
     // names come from the live slot when loaded, else the configured default,

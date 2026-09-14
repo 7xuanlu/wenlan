@@ -172,12 +172,13 @@ pub struct CliReader {
     pub adapter: &'static str,
 }
 
-/// All 183 registered `(method, path, handler)` triples.
+/// All 184 registered `(method, path, handler)` triples.
 ///
-/// 65 page-bearing, 118 not. Expands to 188 `(builder, method, path)`
+/// 65 page-bearing, 119 not. Expands to 188 `(builder, method, path)`
 /// runtime entries: 178 in `main`, 10 in `repair`.
 #[rustfmt::skip]
 pub const HTTP_READERS: &[HttpReader] = &[
+    HttpReader { method: ReaderMethod::Get, path: "/api/activity", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Get, path: "/api/activities", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_list_activities", evidence: "AgentActivityRow.detail = title={page.title}" },
     HttpReader { method: ReaderMethod::Get, path: "/api/agents", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
     HttpReader { method: ReaderMethod::Delete, path: "/api/agents/{name}", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_delete_agent", evidence: "opaque response type — fail-closed" },
@@ -199,7 +200,6 @@ pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Put, path: "/api/config", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
     HttpReader { method: ReaderMethod::Get, path: "/api/config/routing", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/context", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_context", evidence: "ChatContextResponse.context, KnowledgeContext.graph_context, Searc" },
-    HttpReader { method: ReaderMethod::Get, path: "/api/debug/pipeline", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_pipeline_status", evidence: "opaque response type — fail-closed" },
     HttpReader { method: ReaderMethod::Get, path: "/api/decisions", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
     HttpReader { method: ReaderMethod::Get, path: "/api/decisions/domains", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/distill", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_distill", evidence: "opaque response type — fail-closed" },

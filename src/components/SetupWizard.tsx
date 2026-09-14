@@ -25,6 +25,7 @@ import {
   type UndeterminedInput,
 } from "../lib/tauri";
 import { readingIsYes } from "../lib/reading";
+import { deriveOnboardingPins, type SourcePin } from "../lib/routingPins";
 import { dragStripHeight } from "../lib/windowChrome";
 import { ImportFlow } from "./ChatImport/ImportFlow";
 import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectCard";
@@ -1715,41 +1716,7 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 // ── Done Step ───────────────────────────────────────────────────────────
 
-type OnboardingPin = "anthropic" | "external" | "on_device";
-
-/** First-onboarding routing derivation from what the daemon reports configured.
- *  everyday prefers on-device (private, free, the recommended everyday source),
- *  then a connected provider; synthesis prefers a connected provider (better
- *  synthesis quality), with on-device as the fallback. When both cloud and an
- *  external provider are configured, synthesis prefers Anthropic — the summary
- *  names it, so the choice is visible.
- *
- *  Invariant: everyday and synthesis are both null or both set — "nothing
- *  configured at all" is the only null case, so a partial pin write never
- *  happens (the caller relies on this to decide write-or-skip). */
-export function deriveOnboardingPins(pool: ResolvedRouting["pool"]): {
-  everyday: OnboardingPin | null;
-  synthesis: OnboardingPin | null;
-} {
-  const hasAnthropic = pool.anthropic.configured;
-  const hasExternal = pool.external != null;
-  const hasOnDevice = pool.on_device != null;
-  const everyday: OnboardingPin | null = hasOnDevice
-    ? "on_device"
-    : hasAnthropic
-      ? "anthropic"
-      : hasExternal
-        ? "external"
-        : null;
-  const synthesis: OnboardingPin | null = hasAnthropic
-    ? "anthropic"
-    : hasExternal
-      ? "external"
-      : hasOnDevice
-        ? "on_device"
-        : null;
-  return { everyday, synthesis };
-}
+type OnboardingPin = SourcePin;
 
 // Defect 4: raw canonical agent ids (e.g. two ids that both mean "Codex")
 // must never render. Every entry is resolved through resolveAgentDisplayName

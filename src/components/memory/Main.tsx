@@ -17,6 +17,7 @@ import {
 } from "../../lib/tauri";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
+import ActivityStatus from "./activity/ActivityStatus";
 import { useSearch } from "../../hooks/useSearch";
 import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
@@ -125,6 +126,10 @@ export default function Main({
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
+  // The Activity button's summary. Owned here, beside the toolbar that renders
+  // it, so the toggle keeps a stable identity for the outside-click listener.
+  const [activityOpen, setActivityOpen] = useState(false);
+  const toggleActivity = useCallback(() => setActivityOpen((open) => !open), []);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [pageSavePending, setPageSavePending] = useState(false);
   const [pageEditDirty, setPageEditDirty] = useState(false);
@@ -575,24 +580,19 @@ export default function Main({
                 <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
               </svg>
             </button>
-            <button
-              aria-current={view.kind === "activity" ? "page" : undefined}
-              className="flex items-center gap-2 rounded-md px-2 py-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
-              onClick={() => {
+            <ActivityStatus
+              current={view.kind === "activity"}
+              expanded={activityOpen}
+              onToggle={toggleActivity}
+              onOpenActivity={() => {
                 afterNavigationGuards(() => {
                   setActiveTab("activity");
                   setView({ kind: "activity" });
                   setViewHistory([]);
                 });
               }}
-              style={{ color: view.kind === "activity" ? "var(--mem-text)" : "var(--mem-text-secondary)", fontFamily: "var(--mem-font-body)", fontSize: "12px" }}
-              type="button"
-            >
-              <svg aria-hidden="true" fill="none" height="16" viewBox="0 0 24 24" width="16">
-                <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8M3 3v5h5M12 7v5l3 2" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
-              </svg>
-              <span>{t("main.activity")}</span>
-            </button>
+              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
+            />
             {/* Quick Capture */}
             <button
               onClick={() => void invoke("open_quick_capture", { placement: "centered-over-main" })}
@@ -997,6 +997,9 @@ export default function Main({
           ) : view.kind === "activity" ? (
             <ActivityFeed
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+              onOpenIntelligence={() =>
+                navigateTo({ kind: "settings", section: "intelligence" })
+              }
             />
           ) : view.kind === "recaps" ? (
             <RecapsList
