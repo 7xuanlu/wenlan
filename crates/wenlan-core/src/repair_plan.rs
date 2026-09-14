@@ -35,6 +35,7 @@ use wenlan_types::{
 };
 
 mod deterministic;
+pub mod relation;
 mod semantic;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -550,6 +551,9 @@ pub(crate) fn semantic_review_occurrence_digest(
 
 fn affected_record_for_target(target: &RepairTarget) -> Result<RepairAffectedRecord, WenlanError> {
     let (kind, durable_id) = match target {
+        RepairTarget::EntityRelation { relation_id, .. } => {
+            (RepairAffectedRecordKind::Relation, relation_id.clone())
+        }
         RepairTarget::Memory { source_id, .. } => {
             (RepairAffectedRecordKind::Memory, source_id.clone())
         }

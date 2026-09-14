@@ -22,6 +22,7 @@ type RepairPayload = Extract<RefinementPayload, { action: "lint_repair_review" }
 vi.mock("../../lib/tauri", async (original) => ({
   ...(await original<typeof import("../../lib/tauri")>()),
   getMemoryDetail: vi.fn(),
+  getEntityDetail: vi.fn(),
   getPage: vi.fn(),
   listEntities: vi.fn(),
   repairLint: vi.fn(),
@@ -281,6 +282,49 @@ async function savedVerifiedRepair() {
 }
 
 describe("SourceRepairReview", () => {
+  it("previews a relation with all owners and verifies its own deep check before continuing", async () => {
+    const checkId = "kg.semantic.entity_relations";
+    const item = { ...itemFor(checkId), sourceIds: ["entity-1", "entity-2", memory.source_id] };
+    vi.mocked(api.getEntityDetail).mockImplementation(async (id) => {
+      const entity = entities.find((entry) => entry.id === id);
+      if (!entity) throw new Error("entity not found");
+      return { entity, observations: [], relations: [] };
+    });
+    vi.mocked(api.getMemoryDetail).mockImplementation(async (id) => id === memory.source_id ? memory : null);
+    const base = await manifestFor(item);
+    const target = { kind: "entity_relation" as const, relation_id: "edge-new", from_entity: "entity-1", to_entity: "entity-2", review_owner_ids: item.sourceIds, scope: { kind: "global" as const } };
+    const manifest: RepairManifest = {
+      ...base, manifest_schema_version: 7, target, writer: "entity_relation",
+      source: { ...base.source, lint_scope: { kind: "global" }, report_scope: { kind: "global" } },
+      mutation: { kind: "entity_relation", change: { kind: "add", requested_relation_type: "works_on", canonical_relation_type: "works_on", source_memory_id: memory.source_id, confidence_basis_points: 8000, retire_relation_ids: [], vocabulary_promotion: null } },
+      allowed_effects: { owner: target, fields: ["relation_edges", "community_graph_state", "relation_vocabulary", "relation_activity", "relation_review_queue"] },
+      post_assertions: { ...base.post_assertions, verification_policy: { kind: "applicable_checks", required_deep_check_ids: [checkId] } },
+    };
+    mockPrepared(manifest);
+    const applied = { ...applyReceiptFor(manifest), receipt_schema_version: 6 };
+    vi.mocked(api.repairApply).mockResolvedValue(applied);
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, applied));
+    vi.mocked(api.repairLint).mockImplementation(async (query) => lintReport(query.profile, checkId));
+    const { user, onVerified } = mount(item);
+    await user.selectOptions(await screen.findByLabelText("From entity"), "entity-1");
+    await user.selectOptions(screen.getByLabelText("To entity"), "entity-2");
+    await user.type(screen.getByLabelText("Relationship name", { exact: false }), "works_on");
+    await user.selectOptions(screen.getByLabelText("Supporting memory"), memory.source_id);
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    await screen.findByText("Add Same scope → Other scope · works_on.");
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(vi.mocked(api.repairPrepareOperation).mock.calls[0][0].request).toEqual({
+      lint_scope: { kind: "global" }, choice: { kind: "entity_relation", selection: { review_id: item.id, choice: {
+        kind: "add", from_entity: "entity-1", to_entity: "entity-2", relation_type: "works_on", source_memory_id: memory.source_id,
+      } } },
+    });
+    await user.click(screen.getByRole("button", { name: i18n.t("sourceRepair.applyChange") }));
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(api.repairLint).toHaveBeenCalledWith(expect.objectContaining({ profile: "deep" }));
+    expect(vi.mocked(api.repairVerify).mock.calls[0][0].deep_report?.checks[0].check_id).toBe(checkId);
+    expect(onVerified).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for native resumption and Activity before Continue on remount", async () => {
     const { item, manifest, verification } = await savedVerifiedRepair();
     let resumed!: () => void;

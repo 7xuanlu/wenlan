@@ -253,7 +253,7 @@ fn oversized_plan_artifact_is_not_published() {
     assert!(!final_path.exists());
 }
 
-fn with_semantic_finding(
+pub(super) fn with_semantic_finding(
     report: LintReport,
     check_id: &str,
     finding: wenlan_types::lint::LintSemanticFinding,
@@ -300,7 +300,7 @@ fn with_semantic_finding(
     .unwrap()
 }
 
-fn with_completed_agent_work(report: LintReport) -> LintReport {
+pub(super) fn with_completed_agent_work(report: LintReport) -> LintReport {
     let populations = wenlan_types::lint::LintSemanticCheckId::ALL
         .into_iter()
         .map(|check_id| {

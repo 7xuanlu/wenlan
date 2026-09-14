@@ -35,7 +35,24 @@ pub async fn prepare_current_repair_with_pages(
     page_root: Option<&Path>,
     now_epoch: i64,
 ) -> Result<RepairManifest, WenlanError> {
+    if let CurrentRepairChoice::EntityRelation { selection } = request.choice() {
+        return super::relation::prepare(
+            db,
+            store,
+            request.lint_scope().clone(),
+            selection,
+            None,
+            &general_report,
+            deep_report.as_ref(),
+            page_root,
+            now_epoch,
+        )
+        .await;
+    }
     let (choice, review_id) = match request.choice() {
+        CurrentRepairChoice::EntityRelation { .. } => {
+            unreachable!("relation choice prepared above")
+        }
         CurrentRepairChoice::ReclassifyMemory {
             review_id,
             memory_id,

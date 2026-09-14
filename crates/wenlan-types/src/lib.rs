@@ -27,6 +27,7 @@ pub mod repair_operation;
 pub mod repair_plan;
 pub mod repair_prepare_operation;
 pub mod repair_recovery;
+pub mod repair_relation;
 pub mod repair_runtime;
 pub mod requests;
 pub mod responses;
@@ -67,6 +68,7 @@ pub use repair::*;
 pub use repair_current::*;
 pub use repair_plan::*;
 pub use repair_recovery::*;
+pub use repair_relation::*;
 pub use requests::{
     AcceptRefinementRequest, ArchiveEntitiesRequest, CreatePageDraftRequest, EntitySelection,
     ListEntitiesRequest, PageDraftVersionRequest, RestoreEntitiesRequest, UpdatePageDraftRequest,
@@ -132,6 +134,10 @@ mod repair_tests;
 #[cfg(test)]
 #[path = "repair_plan_tests.rs"]
 mod repair_plan_tests;
+
+#[cfg(test)]
+#[path = "repair_relation_manifest_tests.rs"]
+mod repair_relation_manifest_tests;
 
 #[cfg(test)]
 #[path = "entities_freeze_tests.rs"]

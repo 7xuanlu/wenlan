@@ -53,6 +53,7 @@ import type {
   RepairPrepareOperationStatus,
 } from "../../lib/repairTypes";
 import { readRepairPreparation, writeRepairPreparation, clearRepairPreparation, validateRepairPreparationStatus, type RepairPreparationRecord } from "../../lib/repairPreparation";
+import { loadRelationRepairSources, type RelationRepairSources } from "../../lib/relationRepair";
 
 type RepairReviewItem = Extract<ReviewItem, { kind: "refinement" }>;
 type RepairPayload = Extract<RefinementPayload, { action: "lint_repair_review" }>;
@@ -69,6 +70,7 @@ const MEMORY_TYPES: MemoryType[] = [
 const CHECK_CLASSIFICATION = "memories.semantic.classification";
 const CHECK_DUPLICATE_TITLES = "pages.duplicate_active_titles";
 const CHECK_ENRICHMENT = "memories.enrichment_failures";
+const CHECK_RELATIONS = "kg.semantic.entity_relations";
 const CHECK_PROVENANCE = "pages.semantic.provenance_adequacy";
 const CHECK_FAITHFULNESS = "pages.semantic.faithfulness";
 
@@ -182,9 +184,9 @@ function hasApplicableCheck(report: RepairLintReport | undefined, checkId: strin
 function needsDeepVerification(manifest: RepairManifest, checkId: string | null): boolean {
   const policy = manifest.post_assertions?.verification_policy;
   if (policy?.kind === "applicable_checks") {
-    return policy.required_deep_check_ids.includes(CHECK_CLASSIFICATION);
+    return policy.required_deep_check_ids.length > 0;
   }
-  return checkId === CHECK_CLASSIFICATION;
+  return checkId === CHECK_CLASSIFICATION || checkId === CHECK_RELATIONS;
 }
 
 export interface SourceRepairReviewProps {
@@ -239,7 +241,7 @@ export default function SourceRepairReview({
   const targetId = targetIdFor(item);
   const checkId = payload?.check_id ?? null;
   const supported = item.action === "lint_repair_review" &&
-    (checkId === CHECK_CLASSIFICATION || checkId === CHECK_DUPLICATE_TITLES || checkId === CHECK_ENRICHMENT);
+    (checkId === CHECK_CLASSIFICATION || checkId === CHECK_DUPLICATE_TITLES || checkId === CHECK_ENRICHMENT || checkId === CHECK_RELATIONS);
   // These semantic page findings are deliberately read-only here. They may
   // show the page that needs review, but this UI has no claim writer yet.
   const readOnlyPageCheck = item.action === "lint_repair_review" &&
@@ -265,6 +267,13 @@ export default function SourceRepairReview({
   const [verificationReceipt, setVerificationReceipt] = useState<RepairVerificationReceipt | null>(null);
   const [selectedType, setSelectedType] = useState<MemoryType | "">("");
   const [newTitle, setNewTitle] = useState("");
+  const [relationSources, setRelationSources] = useState<RelationRepairSources | null>(null);
+  const [relationAction, setRelationAction] = useState<"add" | "retire">("add");
+  const [relationFrom, setRelationFrom] = useState("");
+  const [relationTo, setRelationTo] = useState("");
+  const [relationType, setRelationType] = useState("");
+  const [relationSource, setRelationSource] = useState("");
+  const [retireRelationId, setRetireRelationId] = useState("");
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
@@ -440,6 +449,10 @@ export default function SourceRepairReview({
     setSelectedEntities(new Set());
     setSelectedType("");
     setNewTitle("");
+    setRelationSources(null);
+    setRelationAction("add");
+    setRelationFrom(""); setRelationTo(""); setRelationType("");
+    setRelationSource(""); setRetireRelationId("");
     setRecoveryRetryable(false);
     serviceEpochRef.current += 1;
     // Reset for this identity/request before any branch below can set it.
@@ -590,12 +603,16 @@ export default function SourceRepairReview({
           recoveryReadFailed = false;
         }
         if (cancelled || !mountedRef.current) return;
-        if (!targetId) throw new Error("the proposal has no single target");
-        let loadedTarget: MemoryItem | Page | null;
-        if (checkId === CHECK_DUPLICATE_TITLES || readOnlyPageCheck) {
+        if (!targetId && checkId !== CHECK_RELATIONS) throw new Error("the proposal has no single target");
+        let loadedTarget: MemoryItem | Page | null = null;
+        if (checkId === CHECK_RELATIONS) {
+          const sources = await loadRelationRepairSources(identity.ownerIds);
+          if (cancelled || !mountedRef.current) return;
+          setRelationSources(sources);
+        } else if ((checkId === CHECK_DUPLICATE_TITLES || readOnlyPageCheck) && targetId) {
           loadedTarget = await getPage(targetId);
           if (!loadedTarget || loadedTarget.id !== targetId) throw new Error("page target is no longer available");
-        } else {
+        } else if (targetId) {
           loadedTarget = await getMemoryDetail(targetId);
           if (!loadedTarget || loadedTarget.source_id !== targetId) throw new Error("memory target is no longer available");
         }
@@ -877,7 +894,7 @@ export default function SourceRepairReview({
 
   const prepare = async () => {
     // Check all local prerequisites before taking the host navigation lock.
-    if (!identity || !payload || !supported || !target || !beginRequest()) return;
+    if (!identity || !payload || !supported || (!target && !relationSources) || !beginRequest()) return;
     const epoch = operationEpochRef.current;
     // A fresh prepare must never overwrite a saved manifest. An unreadable
     // progress record fails closed to existing recovery.
@@ -902,7 +919,9 @@ export default function SourceRepairReview({
     setErrorDetail(null);
     setPrepareRefusal(null);
     try {
-      const lintScope = scopeFor(targetSpace(target));
+      // A relation can intentionally cross spaces. Fresh preparation checks
+      // every queued owner; do not infer its scope from one endpoint.
+      const lintScope: RepairLintScope = checkId === CHECK_RELATIONS ? { kind: "global" } : scopeFor(targetSpace(target));
       let choice: CurrentRepairChoice;
       if (checkId === CHECK_CLASSIFICATION) {
         if (!currentMemory || !selectedType || selectedType === currentType) {
@@ -932,6 +951,13 @@ export default function SourceRepairReview({
           // The daemon's contract permits an empty, explicit selection.
           entity_ids: entityIds,
         };
+      } else if (checkId === CHECK_RELATIONS && relationSources) {
+        choice = { kind: "entity_relation", selection: { review_id: item.id, choice:
+          relationAction === "retire"
+            ? { kind: "retire", relation_id: retireRelationId }
+            : { kind: "add", from_entity: relationFrom, to_entity: relationTo,
+                relation_type: relationType, ...(relationSource ? { source_memory_id: relationSource } : {}) },
+        } };
       } else {
         throw new Error("unsupported source repair check");
       }
@@ -987,7 +1013,7 @@ export default function SourceRepairReview({
         : undefined;
       const requiredDeepCheckIds = nextManifest.post_assertions?.verification_policy?.kind === "applicable_checks"
         ? nextManifest.post_assertions.verification_policy.required_deep_check_ids
-        : deep ? [CHECK_CLASSIFICATION] : [];
+        : deep ? [nextManifest.source.check_id] : [];
       if (!reportReady(general, "general") ||
           (deep && (!hasApplicableCheck(deep, requiredDeepCheckIds[0] ?? CHECK_CLASSIFICATION) ||
             requiredDeepCheckIds.some((required) => !hasApplicableCheck(deep, required))))) {
@@ -1193,6 +1219,20 @@ export default function SourceRepairReview({
     : [];
   const previewEntitiesMissing = mutationPreview?.kind === "complete_entity_extraction" &&
     previewEntities.length !== mutationPreview.entity_ids.length;
+  const relationName = (id: string) => relationSources?.entities.find((entity) => entity.id === id)?.name;
+  const relationLabel = (id: string) => {
+    const edge = relationSources?.relations.find((relation) => relation.id === id);
+    return edge ? `${relationName(edge.from_entity)} → ${relationName(edge.to_entity)} · ${edge.relation_type}` : null;
+  };
+  const relationChange = mutationPreview?.kind === "entity_relation" ? mutationPreview.change : null;
+  const relationTarget = manifest?.target.kind === "entity_relation" ? manifest.target : null;
+  const relationPreviewMissing = !!relationTarget && (!relationName(relationTarget.from_entity) ||
+    !relationName(relationTarget.to_entity) || (relationChange?.kind === "add" &&
+      relationChange.retire_relation_ids.some((id) => !relationLabel(id))) ||
+    (relationChange?.kind === "retire" && !relationLabel(relationTarget.relation_id)));
+  const relationChoiceReady = relationAction === "retire"
+    ? !!relationSources?.relations.some((edge) => edge.id === retireRelationId)
+    : !!relationFrom && !!relationTo && relationFrom !== relationTo && /^[a-z][a-z0-9_]*$/.test(relationType);
 
   const actions = <>
       {flow === "uncertain_prepare" && preparation && <>
@@ -1207,8 +1247,8 @@ export default function SourceRepairReview({
       {flow === "applied_unverified" && applyReceipt && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.retryVerification")}</button>}
       {flow === "verified_service_unavailable" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void retryNormalService()}>{t("sourceRepair.checkAgain")}</button>}
       {flow === "verified" && <button type="button" style={buttonStyle} disabled={busy || !serviceReadyRef.current} onClick={finishVerified}>{t("sourceRepair.continueVerified")}</button>}
-      {flow === "prepared" && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)", fontWeight: 600 }} disabled={busy || errorKind === "storage" || previewEntitiesMissing} onClick={() => void apply()}>{t("sourceRepair.applyChange")}</button>}
-      {editable && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", borderColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)" }} disabled={busy} onClick={() => void prepare()}>{t("sourceRepair.prepareChange")}</button>}
+      {flow === "prepared" && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)", fontWeight: 600 }} disabled={busy || errorKind === "storage" || previewEntitiesMissing || relationPreviewMissing} onClick={() => void apply()}>{t("sourceRepair.applyChange")}</button>}
+      {editable && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", borderColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)" }} disabled={busy || (checkId === CHECK_RELATIONS && !relationChoiceReady)} onClick={() => void prepare()}>{t("sourceRepair.prepareChange")}</button>}
   </>;
 
   const diagnosticDetails = (
@@ -1359,6 +1399,58 @@ export default function SourceRepairReview({
         </div>
       )}
 
+      {relationSources && <div className="source-repair-source">
+        <p style={{ margin: "0 0 6px", fontWeight: 600 }}>{relationSources.entities.map((entity) => entity.name).join(" · ")}</p>
+        {relationSources.memories.map((memory) => <div key={memory.source_id} style={{ marginTop: 12 }}>
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>{memory.title || t("sourceRepair.untitledMemory")}</p>
+          <p className="source-repair-content">{memory.content}</p>
+        </div>)}
+        {relationSources.relations.length > 0 && <ul style={{ marginBottom: 0 }}>
+          {relationSources.relations.map((edge) => <li key={edge.id}>{relationLabel(edge.id)}</li>)}
+        </ul>}
+      </div>}
+
+      {editable && checkId === CHECK_RELATIONS && relationSources && <fieldset className="source-repair-entities" disabled={busy}>
+        <legend>{t("sourceRepair.relationChange")}</legend>
+        <label style={labelStyle}>{t("sourceRepair.relationAction")}
+          <select aria-label={t("sourceRepair.relationAction")} value={relationAction} onChange={(event) => setRelationAction(event.target.value as "add" | "retire")}>
+            <option value="add">{t("sourceRepair.relationAdd")}</option>
+            <option value="retire" disabled={relationSources.relations.length === 0}>{t("sourceRepair.relationRetire")}</option>
+          </select>
+        </label>
+        {relationAction === "retire" ? <label style={labelStyle}>{t("sourceRepair.relationToRetire")}
+          <select aria-label={t("sourceRepair.relationToRetire")} value={retireRelationId} onChange={(event) => setRetireRelationId(event.target.value)}>
+            <option value="">{t("sourceRepair.relationChoose")}</option>
+            {relationSources.relations.map((edge) => <option key={edge.id} value={edge.id}>{relationLabel(edge.id)}</option>)}
+          </select>
+        </label> : <>
+          <div className="source-repair-relation-endpoints">
+          <label style={labelStyle}>{t("sourceRepair.relationFrom")}
+            <select aria-label={t("sourceRepair.relationFrom")} value={relationFrom} onChange={(event) => setRelationFrom(event.target.value)}>
+              <option value="">{t("sourceRepair.relationChoose")}</option>
+              {relationSources.entities.map((entity) => <option key={entity.id} value={entity.id} disabled={entity.id === relationTo}>{entity.name}</option>)}
+            </select>
+          </label>
+          <label style={labelStyle}>{t("sourceRepair.relationTo")}
+            <select aria-label={t("sourceRepair.relationTo")} value={relationTo} onChange={(event) => setRelationTo(event.target.value)}>
+              <option value="">{t("sourceRepair.relationChoose")}</option>
+              {relationSources.entities.map((entity) => <option key={entity.id} value={entity.id} disabled={entity.id === relationFrom}>{entity.name}</option>)}
+            </select>
+          </label>
+          </div>
+          <label style={labelStyle}>{t("sourceRepair.relationType")}
+            <input aria-label={t("sourceRepair.relationType")} value={relationType} onChange={(event) => setRelationType(event.target.value)} aria-describedby="relation-type-help" />
+            <span id="relation-type-help">{t("sourceRepair.relationTypeHelp")}</span>
+          </label>
+          {relationSources.memories.length > 0 && <label style={labelStyle}>{t("sourceRepair.relationSource")}
+            <select aria-label={t("sourceRepair.relationSource")} value={relationSource} onChange={(event) => setRelationSource(event.target.value)}>
+              <option value="">{t("sourceRepair.relationNoSource")}</option>
+              {relationSources.memories.map((memory) => <option key={memory.source_id} value={memory.source_id}>{memory.title || t("sourceRepair.untitledMemory")}</option>)}
+            </select>
+          </label>}
+        </>}
+      </fieldset>}
+
       {editable && checkId === CHECK_CLASSIFICATION && (
         <label style={labelStyle}>
           {t("sourceRepair.newMemoryType")}
@@ -1402,6 +1494,25 @@ export default function SourceRepairReview({
           {mutationPreview?.kind === "reclassify_memory" && <p style={{ margin: 0 }}>{t("sourceRepair.typePreview", { before: isMemoryType(mutationPreview.before_memory_type) ? t(`importView.typeLabels.${mutationPreview.before_memory_type}`) : t("sourceRepair.unclassified"), after: t(`importView.typeLabels.${mutationPreview.after_memory_type}`) })}</p>}
           {mutationPreview?.kind === "rename_page_title" && <p style={{ margin: 0 }}>{t("sourceRepair.titlePreview", { before: mutationPreview.before_title, after: mutationPreview.after_title })}</p>}
           {mutationPreview?.kind === "complete_entity_extraction" && <p style={{ margin: 0 }}>{previewEntitiesMissing ? t("sourceRepair.selectedEntitiesUnavailable") : previewEntities.length > 0 ? t("sourceRepair.entityPreview", { entities: previewEntities.join(", ") }) : t("sourceRepair.entityPreviewEmpty")}</p>}
+          {relationTarget && relationChange && <>
+            {relationPreviewMissing && <p role="alert">{t("sourceRepair.relationPreviewMissing")}</p>}
+            <p>{t(relationChange.kind === "add" ? "sourceRepair.relationAddPreview" : "sourceRepair.relationRetirePreview", {
+              from: relationName(relationTarget.from_entity) ?? t("sourceRepair.relationUnavailable"),
+              to: relationName(relationTarget.to_entity) ?? t("sourceRepair.relationUnavailable"),
+              type: relationChange.kind === "add" ? relationChange.canonical_relation_type : relationSources?.relations.find((edge) => edge.id === relationTarget.relation_id)?.relation_type ?? t("sourceRepair.relationUnavailable"),
+            })}</p>
+            {relationChange.kind === "add" && <>
+              {relationChange.requested_relation_type !== relationChange.canonical_relation_type && <p>{t("sourceRepair.relationNormalized", { requested: relationChange.requested_relation_type, canonical: relationChange.canonical_relation_type })}</p>}
+              {relationChange.vocabulary_promotion && <p>{t("sourceRepair.relationPromotion", { type: relationChange.vocabulary_promotion })}</p>}
+              {relationChange.retire_relation_ids.length > 0 && <>
+                <p>{t("sourceRepair.relationReplaces")}</p>
+                <ul>{relationChange.retire_relation_ids.map((id) => <li key={id}>{relationLabel(id) ?? t("sourceRepair.relationUnavailable")}</li>)}</ul>
+              </>}
+              <p>{relationChange.source_memory_id
+                ? t("sourceRepair.relationSourcePreview", { source: relationSources?.memories.find((memory) => memory.source_id === relationChange.source_memory_id)?.title || t("sourceRepair.untitledMemory") })
+                : t("sourceRepair.relationNoSource")}</p>
+            </>}
+          </>}
         </div>
       )}
 
