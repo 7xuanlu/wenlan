@@ -116,6 +116,14 @@ pub async fn handle_import_memories(
 /// Maximum ZIP file size we accept (512 MB).
 const MAX_IMPORT_ZIP_SIZE: u64 = 512 * 1024 * 1024;
 
+/// Serializes chat-export ingest across the daemon. The per-conversation dedup
+/// reads committed rows once, before the import writes anything, so a retry
+/// that overlaps a still-running import of the same export (the client timed
+/// out, the daemon did not) would store every conversation twice. Holding
+/// this lock makes the retry wait for the running import, then dedup against
+/// what it committed.
+static CHAT_EXPORT_INGEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// POST /api/import/chat-export
 ///
 /// Reads a chat-export ZIP from disk, auto-detects the vendor, bulk-ingests
@@ -146,21 +154,135 @@ pub async fn handle_chat_export_import(
     let batch = wenlan_core::chat_import::dispatch_parse(&bytes)
         .map_err(|e| ServerError::ChatImport(format!("parse failed: {e}")))?;
 
-    // 4. Snapshot Arc<MemoryDB> out of the RwLock guard before any awaits.
-    let db = {
+    // 4. Snapshot Arc<MemoryDB> and the maintenance coordinator together, out
+    //    of the RwLock guard before any awaits.
+    let (db, maintenance) = {
         let guard = state.read().await;
-        guard
-            .db
-            .as_ref()
-            .ok_or_else(|| ServerError::ChatImport("database not initialized".into()))?
-            .clone()
+        (
+            guard
+                .db
+                .as_ref()
+                .ok_or_else(|| ServerError::ChatImport("database not initialized".into()))?
+                .clone(),
+            guard.maintenance_coordinator.clone(),
+        )
     };
 
-    // 5. Create import_state row.
+    // The import is a detached writer on the shared connection. Take the
+    // immediate background fence before any writer starts, so startup
+    // recovery, a pending or leased repair, or live analysis refuses the
+    // import instead of racing it. Never wait for the fence here: the request
+    // may already be running inside a window that holds it.
+    let maintenance_guard = maintenance
+        .try_begin_background()
+        .ok_or_else(|| ServerError::Conflict("repair_write_fence_conflict".to_string()))?;
+
+    // 5-7 run in a spawned task that the handler only awaits. The ingest opens
+    // transactions on the shared writer connection; dropping the request
+    // future (client timeout or disconnect) must not abandon one part way or
+    // leave import_state short of Done/Error, so the import always finishes.
+    // The id is chosen here so a task that panics can still end its row. That
+    // cleanup runs in a second spawned task that owns the ingest's outcome, so
+    // it also happens when the request was dropped before the panic. The
+    // supervisor owns the fence lease too, so a repair stays shut out until
+    // the ingest and that cleanup have both finished, even with no request
+    // left to hold it.
     let import_id = format!("imp_{}", Uuid::new_v4());
-    db.start_import_state(&import_id, batch.vendor, &req.path)
+    let ingest = tokio::spawn(ingest_chat_export(
+        state,
+        db.clone(),
+        batch,
+        req.path,
+        import_id.clone(),
+    ));
+    tokio::spawn(async move {
+        let _maintenance_guard = maintenance_guard;
+        match ingest.await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => {
+                fail_unfinished_import(&db, &import_id, &error.to_string()).await;
+                Err(error)
+            }
+            Err(join_error) => {
+                let msg = format!("import task failed: {join_error}");
+                fail_unfinished_import(&db, &import_id, &msg).await;
+                Err(ServerError::Internal(format!(
+                    "chat import task {import_id} failed: {join_error}"
+                )))
+            }
+        }
+    })
+    .await
+    .map_err(|e| ServerError::Internal(format!("chat import task: {e}")))?
+}
+
+/// Best-effort: end an import whose task died before it reached Done/Error,
+/// so `GET /api/import/state` does not report it pending forever. The task is
+/// gone, so nothing else writes this row; a missing row (the task failed
+/// before creating it) or a row that already reached a terminal stage is left
+/// alone, and a failed write is only logged (startup ends leftover rows).
+async fn fail_unfinished_import(db: &wenlan_core::db::MemoryDB, import_id: &str, msg: &str) {
+    use wenlan_core::chat_import::bulk_ingest::ImportStage;
+    match db.load_import_state(import_id).await {
+        Ok(Some(import)) if !matches!(import.stage, ImportStage::Done | ImportStage::Error) => {
+            if let Err(error) = db
+                .update_import_state_stage_with_error(
+                    import_id,
+                    ImportStage::Error,
+                    None,
+                    None,
+                    Some(msg),
+                )
+                .await
+            {
+                tracing::warn!("[import] failed to mark {import_id} as error: {error}");
+            }
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!("[import] failed to load {import_id}: {error}"),
+    }
+}
+
+/// Test-only fault: panic inside the ingest task, once its import_state row
+/// is in StageA and it holds the ingest lock, for imports of an armed archive
+/// path. Keyed by path so a
+/// fault cannot fire in another test's import running in parallel.
+#[cfg(test)]
+static PANIC_IN_INGEST_PATHS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Fault the ordinary Result error path after the import row exists.
+#[cfg(test)]
+static ERROR_BEFORE_STAGE_A_PATHS: std::sync::Mutex<Vec<String>> =
+    std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn panic_in_ingest_if_armed(path: &str) {
+    let armed = PANIC_IN_INGEST_PATHS
+        .lock()
+        .map(|paths| paths.iter().any(|armed| armed == path))
+        .unwrap_or(false);
+    if armed {
+        panic!("injected chat import task panic");
+    }
+}
+
+async fn ingest_chat_export(
+    state: Arc<RwLock<ServerState>>,
+    db: Arc<wenlan_core::db::MemoryDB>,
+    batch: wenlan_core::chat_import::ParsedConversationBatch,
+    path: String,
+    import_id: String,
+) -> Result<Json<ImportChatExportResponse>, ServerError> {
+    // 5. Create import_state row.
+    db.start_import_state(&import_id, batch.vendor, &path)
         .await
         .map_err(|e| ServerError::ChatImport(format!("start_import_state: {e}")))?;
+    #[cfg(test)]
+    if ERROR_BEFORE_STAGE_A_PATHS.lock().unwrap().contains(&path) {
+        return Err(ServerError::ChatImport(format!(
+            "injected stage transition failure: {import_id}"
+        )));
+    }
     db.update_import_state_stage(
         &import_id,
         wenlan_core::chat_import::bulk_ingest::ImportStage::StageA,
@@ -171,6 +293,11 @@ pub async fn handle_chat_export_import(
     .map_err(|e| ServerError::ChatImport(format!("update_import_state_stage: {e}")))?;
 
     // 6. Bulk ingest conversations. On failure, mark import_state as Error (I3).
+    //    The dedup inside runs only once this import holds the single-flight
+    //    lock, so an overlapping retry dedups against this import's commits.
+    let _ingest_guard = CHAT_EXPORT_INGEST_LOCK.lock().await;
+    #[cfg(test)]
+    panic_in_ingest_if_armed(&path);
     // TODO: Replace NoopEmitter with a broadcast-channel emitter that forwards
     // progress events to /ws/updates so the Tauri app can display live progress.
     let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
@@ -199,7 +326,8 @@ pub async fn handle_chat_export_import(
         }
     };
 
-    // 7. The import is complete once its durable batch is searchable. Automatic
+    // 7. The import is complete once every slice is committed and embedded, so
+    //    it is keyword- and vector-searchable without a restart. Automatic
     //    classification/extraction remains a global ambient backlog represented
     //    by NULL fields plus versioned enrichment receipts; import_state does
     //    not attempt to track that unrelated, potentially multi-day work.
@@ -211,6 +339,7 @@ pub async fn handle_chat_export_import(
     )
     .await
     .map_err(|e| ServerError::ChatImport(format!("update_import_state_stage: {e}")))?;
+    drop(_ingest_guard);
 
     if result.memories_stored > 0 {
         request_import_priority(&state, &db, None).await;
@@ -444,6 +573,8 @@ mod chat_export_route_tests {
             llm: Some(provider.clone()),
             ..Default::default()
         }));
+        // Real startup finishes recovery before the routes serve.
+        state.read().await.maintenance_coordinator.finish_recovery();
 
         let response = super::handle_chat_export_import(
             axum::extract::State(state),
@@ -465,6 +596,22 @@ mod chat_export_route_tests {
             wenlan_core::chat_import::bulk_ingest::ImportStage::Done
         );
         assert!(db.list_pending_imports().await.unwrap().is_empty());
+        // The HTTP result is vector-searchable at once: rows exist, and none of
+        // them waits for the startup NULL-embedding recovery.
+        let source_id = "import_claude_route-conv-1";
+        let rows = db
+            .get_memories_by_source_id("memory", source_id)
+            .await
+            .unwrap();
+        assert_eq!(response.memories_stored, 1);
+        assert_eq!(rows.len(), response.memories_stored);
+        assert_eq!(
+            db.count_unembedded_chunks("memory", source_id)
+                .await
+                .unwrap(),
+            0,
+            "chat-export rows must be embedded at write time"
+        );
         assert!(db.get_classification_candidate(3).await.unwrap().is_some());
         assert!(
             tokio::time::timeout(
@@ -476,6 +623,408 @@ mod chat_export_route_tests {
             "chat import must leave enrichment to the ambient scheduler"
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+    }
+
+    async fn chat_export_state() -> (
+        Arc<RwLock<ServerState>>,
+        Arc<wenlan_core::db::MemoryDB>,
+        std::path::PathBuf,
+        tempfile::TempDir,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let archive_path = dir.path().join("claude-export.zip");
+        write_claude_export(&archive_path);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(
+                &dir.path().join("db"),
+                Arc::new(wenlan_core::events::NoopEmitter),
+            )
+            .await
+            .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        // Real startup finishes recovery before the routes serve.
+        state.read().await.maintenance_coordinator.finish_recovery();
+        (state, db, archive_path, dir)
+    }
+
+    type ChatExportResult = Result<
+        axum::Json<wenlan_types::import::ImportChatExportResponse>,
+        crate::error::ServerError,
+    >;
+
+    fn chat_export_request(
+        state: &Arc<RwLock<ServerState>>,
+        archive_path: &std::path::Path,
+    ) -> impl std::future::Future<Output = ChatExportResult> + Send + 'static {
+        super::handle_chat_export_import(
+            axum::extract::State(state.clone()),
+            axum::Json(wenlan_types::import::ImportChatExportRequest {
+                path: archive_path.to_string_lossy().into_owned(),
+            }),
+        )
+    }
+
+    /// Wait (bounded) until `db` shows `count` imports queued or running.
+    async fn wait_for_pending_imports(db: &wenlan_core::db::MemoryDB, count: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while db.list_pending_imports().await.unwrap().len() < count {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("imports never reached the ingest lock");
+    }
+
+    #[tokio::test]
+    async fn chat_import_overlapping_retry_stores_each_conversation_once() {
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+
+        // Hold the ingest lock so both requests are in flight at once, the way
+        // a client retry overlaps a timed-out import that is still running.
+        let held = super::CHAT_EXPORT_INGEST_LOCK.lock().await;
+        let first = tokio::spawn(chat_export_request(&state, &archive_path));
+        wait_for_pending_imports(&db, 1).await;
+        let retry = tokio::spawn(chat_export_request(&state, &archive_path));
+        wait_for_pending_imports(&db, 2).await;
+        drop(held);
+
+        let first = first.await.unwrap().unwrap().0;
+        let retry = retry.await.unwrap().unwrap().0;
+        // Whichever request takes the lock first ingests; the other dedups.
+        assert_eq!(first.conversations_new + retry.conversations_new, 1);
+        assert_eq!(
+            first.conversations_skipped_existing + retry.conversations_skipped_existing,
+            1,
+            "the overlapping request must dedup against the committed import"
+        );
+        let source_id = "import_claude_route-conv-1";
+        let rows = db
+            .get_memories_by_source_id("memory", source_id)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "overlapping imports must not duplicate rows");
+        assert_eq!(
+            db.count_unembedded_chunks("memory", source_id)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_import_finishes_after_the_request_is_dropped() {
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+
+        // Pin the import before its ingest, then drop the request future the
+        // way a client timeout or disconnect does.
+        let held = super::CHAT_EXPORT_INGEST_LOCK.lock().await;
+        let mut request = Box::pin(chat_export_request(&state, &archive_path));
+        let import_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let poll =
+                    tokio::time::timeout(std::time::Duration::from_millis(10), request.as_mut())
+                        .await;
+                assert!(poll.is_err(), "request finished while the lock was held");
+                if let Some(import) = db.list_pending_imports().await.unwrap().pop() {
+                    break import.id;
+                }
+            }
+        })
+        .await
+        .expect("import never started");
+        drop(request);
+        drop(held);
+
+        let finished = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+            loop {
+                let import = db.load_import_state(&import_id).await.unwrap().unwrap();
+                use wenlan_core::chat_import::bulk_ingest::ImportStage;
+                if matches!(import.stage, ImportStage::Done | ImportStage::Error) {
+                    break import.stage;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a dropped request must not abandon the import");
+        assert_eq!(
+            finished,
+            wenlan_core::chat_import::bulk_ingest::ImportStage::Done
+        );
+        let source_id = "import_claude_route-conv-1";
+        let rows = db
+            .get_memories_by_source_id("memory", source_id)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            db.count_unembedded_chunks("memory", source_id)
+                .await
+                .unwrap(),
+            0
+        );
+
+        // The writer connection is not left inside a transaction: a later
+        // import of the same export runs and dedups.
+        let again = chat_export_request(&state, &archive_path).await.unwrap().0;
+        assert_eq!(again.conversations_skipped_existing, 1);
+    }
+
+    #[tokio::test]
+    async fn chat_import_stage_transition_error_does_not_leave_a_pending_row() {
+        use wenlan_core::chat_import::bulk_ingest::ImportStage;
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+        let path = archive_path.to_string_lossy().into_owned();
+        super::ERROR_BEFORE_STAGE_A_PATHS
+            .lock()
+            .unwrap()
+            .push(path.clone());
+        let result = chat_export_request(&state, &archive_path).await;
+        super::ERROR_BEFORE_STAGE_A_PATHS
+            .lock()
+            .unwrap()
+            .retain(|armed| armed != &path);
+        let Err(crate::error::ServerError::ChatImport(message)) = result else {
+            panic!("the injected stage transition must fail");
+        };
+        let import_id = message
+            .strip_prefix("injected stage transition failure: ")
+            .unwrap();
+        let row = db
+            .load_import_state(import_id)
+            .await
+            .unwrap()
+            .expect("row was created before failure");
+        assert_eq!(row.stage, ImportStage::Error);
+        assert!(row
+            .error_message
+            .unwrap_or_default()
+            .contains("injected stage transition failure"));
+        assert!(db.list_pending_imports().await.unwrap().is_empty());
+        assert!(db
+            .get_memories_by_source_id("memory", "import_claude_route-conv-1")
+            .await
+            .unwrap()
+            .is_empty());
+        let retried = chat_export_request(&state, &archive_path).await.unwrap().0;
+        assert_eq!(retried.memories_stored, 1);
+    }
+
+    #[tokio::test]
+    async fn chat_import_task_panic_ends_the_import_as_error() {
+        use wenlan_core::chat_import::bulk_ingest::ImportStage;
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+        let path = archive_path.to_string_lossy().into_owned();
+
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .push(path.clone());
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/import/chat-export")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&serde_json::json!({ "path": path })).unwrap(),
+            ))
+            .unwrap();
+        let response = crate::router::build_router(state.clone())
+            .oneshot(request)
+            .await
+            .unwrap();
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .retain(|armed| armed != &path);
+
+        assert_eq!(response.status(), 500);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let message = body["error"].as_str().unwrap_or_default().to_string();
+        let import_id = message
+            .split_whitespace()
+            .find(|word| word.starts_with("imp_"))
+            .unwrap_or_else(|| panic!("error names no import id: {message}"));
+        let import = db
+            .load_import_state(import_id)
+            .await
+            .unwrap()
+            .expect("the task created its import row before it panicked");
+        assert_eq!(import.stage, ImportStage::Error);
+        let reason = import.error_message.unwrap_or_default();
+        assert!(
+            reason.starts_with("import task failed: "),
+            "unexpected reason: {reason}"
+        );
+        assert!(
+            db.list_pending_imports().await.unwrap().is_empty(),
+            "a panicked import must not stay pending"
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_import_task_panic_after_the_request_is_dropped_ends_the_import() {
+        use wenlan_core::chat_import::bulk_ingest::ImportStage;
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+        let path = archive_path.to_string_lossy().into_owned();
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .push(path.clone());
+
+        // Hold the ingest lock so the import is queued, drop the request, then
+        // let the ingest reach its panic with nobody awaiting the response.
+        let held = super::CHAT_EXPORT_INGEST_LOCK.lock().await;
+        let mut request = Box::pin(chat_export_request(&state, &archive_path));
+        let import_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let poll =
+                    tokio::time::timeout(std::time::Duration::from_millis(10), request.as_mut())
+                        .await;
+                assert!(poll.is_err(), "request finished while the lock was held");
+                if let Some(import) = db.list_pending_imports().await.unwrap().pop() {
+                    break import.id;
+                }
+            }
+        })
+        .await
+        .expect("import never started");
+        drop(request);
+        drop(held);
+
+        let import = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let import = db.load_import_state(&import_id).await.unwrap().unwrap();
+                if matches!(import.stage, ImportStage::Done | ImportStage::Error) {
+                    break import;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("a panicked import must not stay pending after its request is dropped");
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .retain(|armed| armed != &path);
+        assert_eq!(import.stage, ImportStage::Error);
+        assert!(
+            import
+                .error_message
+                .as_deref()
+                .is_some_and(|reason| reason.starts_with("import task failed: ")),
+            "unexpected reason: {:?}",
+            import.error_message
+        );
+    }
+    fn is_fence_conflict(result: &ChatExportResult) -> bool {
+        matches!(
+            result,
+            Err(crate::error::ServerError::Conflict(code)) if code == "repair_write_fence_conflict"
+        )
+    }
+
+    #[tokio::test]
+    async fn chat_import_is_refused_before_any_write_while_the_maintenance_fence_is_closed() {
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+        let source_id = "import_claude_route-conv-1";
+
+        // Startup recovery not finished: the default coordinator is sealed.
+        let sealed = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        assert!(is_fence_conflict(
+            &chat_export_request(&sealed, &archive_path).await
+        ));
+
+        // Recovery finished, but a repair holds the fence.
+        let maintenance = state.read().await.maintenance_coordinator.clone();
+        let repair = maintenance
+            .acquire_repair("repair_during_import", std::time::Duration::from_secs(1))
+            .await
+            .expect("an idle coordinator grants the repair");
+        assert!(is_fence_conflict(
+            &chat_export_request(&state, &archive_path).await
+        ));
+
+        assert!(db.list_pending_imports().await.unwrap().is_empty());
+        assert!(db
+            .get_memories_by_source_id("memory", source_id)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // The refusal was the fence: once the repair ends, the same import runs.
+        drop(repair);
+        let response = chat_export_request(&state, &archive_path).await.unwrap().0;
+        assert_eq!(response.memories_stored, 1);
+    }
+
+    #[tokio::test]
+    async fn chat_import_holds_the_repair_fence_through_ingest_and_cleanup_after_the_request_is_dropped(
+    ) {
+        use wenlan_core::chat_import::bulk_ingest::ImportStage;
+        let (state, db, archive_path, _dir) = chat_export_state().await;
+        let maintenance = state.read().await.maintenance_coordinator.clone();
+        let path = archive_path.to_string_lossy().into_owned();
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .push(path.clone());
+
+        // Block the ingest at its lock, then drop the request.
+        let held = super::CHAT_EXPORT_INGEST_LOCK.lock().await;
+        let mut request = Box::pin(chat_export_request(&state, &archive_path));
+        let import_id = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let poll =
+                    tokio::time::timeout(std::time::Duration::from_millis(10), request.as_mut())
+                        .await;
+                assert!(poll.is_err(), "request finished while the lock was held");
+                if let Some(import) = db.list_pending_imports().await.unwrap().pop() {
+                    break import.id;
+                }
+            }
+        })
+        .await
+        .expect("import never started");
+        drop(request);
+
+        assert!(
+            matches!(
+                maintenance
+                    .acquire_repair("repair_during_import", std::time::Duration::from_millis(50))
+                    .await,
+                Err(crate::maintenance_coordinator::MaintenanceFenceError::Busy)
+            ),
+            "a dropped request must not release the import's fence"
+        );
+
+        // Let the ingest reach its panic; the supervisor ends the row, then
+        // releases the fence.
+        drop(held);
+        let repair = maintenance
+            .acquire_repair("repair_during_import", std::time::Duration::from_secs(30))
+            .await
+            .expect("the fence opens once the import and its cleanup finish");
+        let import = db.load_import_state(&import_id).await.unwrap().unwrap();
+        super::PANIC_IN_INGEST_PATHS
+            .lock()
+            .unwrap()
+            .retain(|armed| armed != &path);
+        assert_eq!(
+            import.stage,
+            ImportStage::Error,
+            "the repair must not start before the cleanup ended the import"
+        );
+        drop(repair);
     }
 }
 
