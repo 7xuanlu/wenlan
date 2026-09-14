@@ -85,6 +85,7 @@ pub(crate) async fn prepare(
         from_entity: &resolved.from_entity,
         to_entity: &resolved.to_entity,
         owner_ids: resolved.review_binding.owner_ids(),
+        canonical_relation_type: Some(&resolved.canonical_relation_type),
         vocabulary_promotion: resolved.vocabulary_promotion.as_deref(),
     };
     let before = relation_snapshot::capture(&RelationReader::Snapshot(&snapshot), &context).await?;
@@ -296,12 +297,9 @@ async fn recover(
         .ok()
         .and_then(|receipt| verify_stored_apply_receipt(receipt, manifest).ok());
     let current = db.capture_relation_repair_state(manifest).await?;
-    let binding = manifest
-        .source()
-        .review_binding()
-        .ok_or_else(|| WenlanError::Validation("repair_relation_review_binding_missing".into()))?;
+    let context = crate::db::repair_relation_cas::capture_context(manifest)?;
     if let Some(receipt) = parsed {
-        if relation_snapshot::applied_receipt(&current, binding.review_id())?
+        if relation_snapshot::applied_receipt(&current, &context)?
             == *receipt.after_target_receipt()
         {
             publish_no_replace(&pending_path, &final_path, "repair_already_applied")?;

@@ -273,6 +273,19 @@ async fn relation_current_prepare_apply_verify_closes_only_bound_review_and_repl
     let applied = apply_repair(&db, &store, apply_request(), 1721000010)
         .await
         .unwrap();
+    // Real background writes after apply must not strand semantic verification.
+    // Fresh reports below still bind the resulting database state.
+    db.test_primary_session()
+        .await
+        .execute_batch(
+            "UPDATE relation_type_vocabulary SET count=COALESCE(count,0)+1;
+         INSERT INTO relation_type_vocabulary(canonical,aliases,category,count)
+         VALUES ('background_predicate','[]','other',1);
+         UPDATE pages SET content=content || ' background enrichment';
+         UPDATE space_graph_state SET graph_generation=graph_generation+1;",
+        )
+        .await
+        .unwrap();
     let verify_request = |general, deep| {
         VerifyRepairRequest::try_new(
             manifest.manifest_id().into(),
@@ -701,4 +714,126 @@ async fn relation_provenance_requires_live_memory_bound_to_the_finding() {
     assert!(
         matches!(resolve_on_snapshot(&snapshot, &RepairLintScope::global(), &selected, candidate).await, Err(WenlanError::Conflict(code)) if code == "repair_target_stale")
     );
+}
+
+#[tokio::test]
+async fn relation_prepare_distinguishes_noop_source_fill_confidence_and_retirements() {
+    // prior source, selected source, prior confidence, conflicting edge, accepted
+    for (had_source, select_source, confidence, conflict_edge, accepted) in [
+        (true, true, 0.9, false, false),
+        (true, false, 0.9, false, false),
+        (false, false, 0.9, false, false),
+        (false, true, 0.9, false, true),
+        (true, true, 0.6, false, true),
+        (false, false, 0.6, false, true),
+        (false, false, 0.9, true, true),
+    ] {
+        let (db, _dir, mut candidate, from, to) =
+            fixture(LintSemanticAction::AddEntityRelation, None).await;
+        db.test_primary_session().await.execute_batch(
+            "INSERT INTO memories (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,space)
+             VALUES ('row-relation-source','Alpha works with Beta','memory','relation-source','Source',0,10,'text','work');"
+        ).await.unwrap();
+        candidate.affected_records.push(
+            RepairAffectedRecord::try_new(
+                RepairAffectedRecordKind::Memory,
+                "relation-source".into(),
+            )
+            .unwrap(),
+        );
+        candidate.affected_records.sort();
+        let mut evidence = candidate.finding.evidence_ids().to_vec();
+        evidence.push(crate::lint::semantic_record_digest(
+            "memory",
+            "relation-source",
+        ));
+        candidate.finding = LintSemanticFinding::try_new(
+            candidate.finding.candidate_id(),
+            candidate.finding.proposed_action(),
+            candidate.finding.reason_code(),
+            8000,
+            LintSemanticProviderRoute::CallingAgent,
+            evidence,
+            vec![],
+        )
+        .unwrap();
+        db.create_relation(
+            &from,
+            &to,
+            "related_to",
+            None,
+            Some(confidence),
+            None,
+            had_source.then_some("relation-source"),
+        )
+        .await
+        .unwrap();
+        let conflicting = if conflict_edge {
+            Some(
+                db.create_relation(&from, &to, "works_on", None, Some(0.9), None, None)
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let selected = selection(
+            &db,
+            &candidate,
+            EntityRelationRepairChoice::Add {
+                from_entity: from,
+                to_entity: to,
+                relation_type: "related_to".into(),
+                source_memory_id: select_source.then_some("relation-source".into()),
+            },
+        )
+        .await;
+        let snapshot = db.open_lint_snapshot().await.unwrap();
+        let result =
+            resolve_on_snapshot(&snapshot, &RepairLintScope::global(), &selected, candidate).await;
+        if accepted {
+            assert_eq!(
+                result.unwrap().retire_relation_ids,
+                conflicting.into_iter().collect::<Vec<_>>()
+            );
+        } else {
+            assert!(
+                matches!(result, Err(WenlanError::Conflict(code)) if code == "repair_relation_unchanged")
+            );
+        }
+        snapshot.finish().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn relation_retire_null_predicate_returns_choice_mismatch() {
+    let (db, _dir, candidate, from, to) =
+        fixture(LintSemanticAction::RemoveEntityRelation, Some("related_to")).await;
+    let target = db
+        .create_relation(&from, &to, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    db.test_primary_session()
+        .await
+        .execute(
+            "UPDATE edges SET semantic_type=NULL WHERE edge_id=?1",
+            libsql::params![target.clone()],
+        )
+        .await
+        .unwrap();
+    let selected = selection(
+        &db,
+        &candidate,
+        EntityRelationRepairChoice::Retire {
+            relation_id: target,
+        },
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let result =
+        resolve_on_snapshot(&snapshot, &RepairLintScope::global(), &selected, candidate).await;
+    assert!(
+        matches!(result, Err(WenlanError::Conflict(code)) if code == "repair_relation_choice_mismatch")
+    );
+    snapshot.finish().await.unwrap();
 }

@@ -35836,7 +35836,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {e}")))
     }
 
-    pub(crate) async fn increment_relation_type_count_on_connection(
+    async fn increment_relation_type_count_on_connection(
         conn: &libsql::Connection,
         canonical: &str,
     ) -> Result<u64, libsql::Error> {
@@ -45780,7 +45780,7 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))
     }
 
-    pub(crate) async fn insert_vocab_promote_proposal_on_connection(
+    async fn insert_vocab_promote_proposal_on_connection(
         conn: &libsql::Connection,
         kind: &str,
         old_value: &str,
@@ -48620,7 +48620,7 @@ impl MemoryDB {
         .map_err(|e| WenlanError::VectorDb(format!("log_agent_activity insert: {e}")))
     }
 
-    pub(crate) async fn log_agent_activity_on_connection(
+    async fn log_agent_activity_on_connection(
         conn: &libsql::Connection,
         agent_name: &str,
         action: &str,

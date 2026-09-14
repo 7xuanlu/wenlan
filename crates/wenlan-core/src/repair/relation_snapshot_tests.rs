@@ -142,6 +142,7 @@ fn context_for(owners: &[String]) -> RelationCaptureContext<'_> {
         from_entity: "ent-a",
         to_entity: "ent-b",
         owner_ids: owners,
+        canonical_relation_type: Some("works_on"),
         vocabulary_promotion: None,
     }
 }
@@ -300,13 +301,16 @@ async fn applied_receipt_survives_review_completion_but_binds_review_payload() {
     let fixture = relation_snapshot_fixture().await;
     let owners = vec!["ent-a".to_string(), "ent-b".to_string()];
     let before = capture_now(&fixture.db, &owners).await;
-    let applied = applied_receipt(&before, "rv-1").unwrap();
+    let applied = applied_receipt(&before, &context_for(&owners)).unwrap();
     fixture.db.test_primary_session().await.execute(
         "UPDATE refinement_queue SET status='resolved', resolved_at=datetime(100,'unixepoch') WHERE id='rv-1'", (),
     ).await.unwrap();
     let completed = capture_now(&fixture.db, &owners).await;
     assert_ne!(receipt(&before).unwrap(), receipt(&completed).unwrap());
-    assert_eq!(applied, applied_receipt(&completed, "rv-1").unwrap());
+    assert_eq!(
+        applied,
+        applied_receipt(&completed, &context_for(&owners)).unwrap()
+    );
     fixture
         .db
         .test_primary_session()
@@ -318,7 +322,88 @@ async fn applied_receipt_survives_review_completion_but_binds_review_payload() {
         .await
         .unwrap();
     let altered = capture_now(&fixture.db, &owners).await;
-    assert_ne!(applied, applied_receipt(&altered, "rv-1").unwrap());
+    assert_ne!(
+        applied,
+        applied_receipt(&altered, &context_for(&owners)).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn applied_receipt_ignores_background_dependencies_but_binds_owned_result() {
+    let fixture = relation_snapshot_fixture().await;
+    let owners = vec!["ent-a".to_string(), "ent-b".to_string()];
+    let before = capture_now(&fixture.db, &owners).await;
+    let context = context_for(&owners);
+    let applied = applied_receipt(&before, &context).unwrap();
+    fixture
+        .db
+        .test_primary_session()
+        .await
+        .execute_batch(
+            "UPDATE memories SET access_count=COALESCE(access_count,0)+1, last_accessed=1721000200;
+         UPDATE pages SET content=content || ' background enrichment';
+         UPDATE space_graph_state SET graph_generation=graph_generation+1;
+         UPDATE relation_type_vocabulary SET count=COALESCE(count,0)+1;
+         INSERT INTO relation_type_vocabulary(canonical,aliases,category,count)
+         VALUES ('background_predicate','[]','other',1);",
+        )
+        .await
+        .unwrap();
+    let background = capture_now(&fixture.db, &owners).await;
+    assert_ne!(receipt(&before).unwrap(), receipt(&background).unwrap());
+    assert_eq!(applied, applied_receipt(&background, &context).unwrap());
+
+    // The projection must still detect tampering with any durable result,
+    // including vocabulary meaning and this manifest's activity witness.
+    for (kind, key, changed) in [
+        (RepairRelationTable::Edges, "payload", "changed edge"),
+        (
+            RepairRelationTable::RelationTypeVocabulary,
+            "aliases",
+            "changed aliases",
+        ),
+        (
+            RepairRelationTable::RefinementQueue,
+            "payload",
+            "changed review",
+        ),
+        (
+            RepairRelationTable::AgentActivity,
+            "detail",
+            "changed activity",
+        ),
+        (
+            RepairRelationTable::EntityPageMap,
+            "page_id",
+            "changed endpoint",
+        ),
+    ] {
+        let mut tampered = background.clone();
+        let target = tampered
+            .tables
+            .iter_mut()
+            .find(|table| table.table == kind)
+            .unwrap();
+        let index = target.columns.iter().position(|name| name == key).unwrap();
+        let row = if kind == RepairRelationTable::RelationTypeVocabulary {
+            let canonical = target
+                .columns
+                .iter()
+                .position(|name| name == "canonical")
+                .unwrap();
+            target.rows.iter_mut().find(|row| matches!(&row[canonical], RepairRelationSqlValue::Text { value } if value == "works_on")).unwrap()
+        } else {
+            &mut target.rows[0]
+        };
+        row[index] = RepairRelationSqlValue::Text {
+            value: changed.to_string(),
+        };
+        assert_ne!(
+            applied,
+            applied_receipt(&tampered, &context).unwrap(),
+            "{kind:?}"
+        );
+    }
 }
 
 #[tokio::test]

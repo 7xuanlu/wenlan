@@ -225,6 +225,7 @@ async fn resolve_on_snapshot(
             // The canonical relation writer preserves the first source on
             // reassertion (including reactivation). Do not approve a preview
             // that promises to replace it with a different memory.
+            let mut fills_source = false;
             if let Some(selected_source) = source_memory_id {
                 let mut prior = snapshot.query(
                     "SELECT json_extract(payload,'$.source_memory_id') FROM edges WHERE edge_id=?1",
@@ -238,18 +239,27 @@ async fn resolve_on_snapshot(
                     {
                         return Err(conflict("repair_relation_source_binding_conflict"));
                     }
+                    fills_source = first_source.is_none();
                 }
             }
             let mut rows = snapshot.query(
-                "SELECT edge_id,semantic_type FROM edges WHERE edge_type='relates' AND valid_until IS NULL
+                "SELECT edge_id,semantic_type,json_extract(payload,'$.confidence') FROM edges WHERE edge_type='relates' AND valid_until IS NULL
                  AND src_id=?1 AND dst_id=?2 ORDER BY edge_id", params(&[from_entity, to_entity]),
             ).await.map_err(snapshot_error)?;
             let mut retire_ids = Vec::new();
+            let mut unchanged_target = false;
             while let Some(row) = rows.next().await.map_err(snapshot_error)? {
                 let id = row.get::<String>(0).map_err(database_error)?;
                 let predicate = row.get::<Option<String>>(1).map_err(database_error)?;
-                if id == target_id && source_memory_id.is_none() {
-                    return Err(conflict("repair_relation_unchanged"));
+                if id == target_id {
+                    // This route supplies the fresh finding's confidence to
+                    // the canonical higher-confidence merge, even though the
+                    // user selection has no editable confidence field.
+                    let prior_confidence = row.get::<Option<f64>>(2).map_err(database_error)?;
+                    let confidence =
+                        f64::from(candidate.finding.confidence_basis_points()) / 10_000.0;
+                    let raises_confidence = Some(confidence) > prior_confidence;
+                    unchanged_target = !fills_source && !raises_confidence;
                 }
                 // Match the canonical post-write conflict rule, including aliases.
                 if id != target_id
@@ -259,6 +269,9 @@ async fn resolve_on_snapshot(
                 {
                     retire_ids.push(id);
                 }
+            }
+            if unchanged_target && retire_ids.is_empty() {
+                return Err(conflict("repair_relation_unchanged"));
             }
             (
                 from_entity.clone(),
@@ -285,7 +298,10 @@ async fn resolve_on_snapshot(
                 .ok_or_else(|| conflict("repair_target_stale"))?;
             let from = row.get::<String>(0).map_err(database_error)?;
             let to = row.get::<String>(1).map_err(database_error)?;
-            let predicate = row.get::<String>(2).map_err(database_error)?;
+            let predicate = row
+                .get::<Option<String>>(2)
+                .map_err(database_error)?
+                .ok_or_else(|| conflict("repair_relation_choice_mismatch"))?;
             // Endpoint ownership alone cannot distinguish two predicates between
             // the same pair. Require both exact relation evidence keys too.
             for key in [

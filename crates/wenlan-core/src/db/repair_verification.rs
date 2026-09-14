@@ -320,10 +320,7 @@ pub(crate) async fn record_repair_verification_atomic(
                 )
                 .await?;
                 (
-                    crate::repair::relation_snapshot::applied_receipt(
-                        &snapshot,
-                        context.review_id,
-                    )?,
+                    crate::repair::relation_snapshot::applied_receipt(&snapshot, &context)?,
                     1,
                 )
             }

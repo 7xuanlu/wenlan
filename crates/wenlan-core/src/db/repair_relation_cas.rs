@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! One transaction owns relation input validation, canonical writes and proof.
 
-use super::MemoryDB;
+use super::{repair_memory_cas::rollback_repair_transaction, MemoryDB};
 use crate::{
     error::WenlanError,
     post_write::RepairWriteProof,
@@ -62,6 +62,13 @@ pub(crate) fn capture_context(
         from_entity,
         to_entity,
         owner_ids: review_owner_ids,
+        canonical_relation_type: match change {
+            RepairRelationMutation::Add {
+                canonical_relation_type,
+                ..
+            } => Some(canonical_relation_type),
+            RepairRelationMutation::Retire => None,
+        },
         vocabulary_promotion: promotion,
     })
 }
@@ -161,19 +168,6 @@ fn validate_prepared_review(
     Ok(())
 }
 
-async fn rollback(connection: &libsql::Connection, cause: &WenlanError) -> Result<(), WenlanError> {
-    connection
-        .execute("ROLLBACK", ())
-        .await
-        .map(|_| ())
-        .map_err(|error| {
-            log::error!(
-                "relation repair outcome uncertain after {cause}; rollback failed: {error}"
-            );
-            WenlanError::Conflict("repair_apply_recovery_required".into())
-        })
-}
-
 impl MemoryDB {
     pub(crate) async fn relation_repair_cas<F>(
         &self,
@@ -268,7 +262,7 @@ impl MemoryDB {
             if non_target_before != non_target_after {
                 return Err(WenlanError::VectorDb("repair_effect_escape".into()));
             }
-            let after_receipt = relation_snapshot::applied_receipt(&after, context.review_id)?;
+            let after_receipt = relation_snapshot::applied_receipt(&after, &context)?;
             let post_apply_db_digest = repair::database_content_digest(&connection).await?;
             Ok((
                 RepairWriteProof::from_parts(
@@ -285,17 +279,17 @@ impl MemoryDB {
         let (proof, graph_updates) = match result {
             Ok(value) => value,
             Err(error) => {
-                rollback(&connection, &error).await?;
+                rollback_repair_transaction(&connection, &error, false).await?;
                 return Err(error);
             }
         };
         if let Err(error) = before_commit(&proof) {
-            rollback(&connection, &error).await?;
+            rollback_repair_transaction(&connection, &error, false).await?;
             return Err(error);
         }
         if let Err(error) = connection.execute("COMMIT", ()).await {
             let error = WenlanError::VectorDb(format!("repair commit failed: {error}"));
-            rollback(&connection, &error).await?;
+            rollback_repair_transaction(&connection, &error, false).await?;
             return Err(error);
         }
         drop(connection);

@@ -26,6 +26,7 @@ pub(crate) struct RelationCaptureContext<'a> {
     pub from_entity: &'a str,
     pub to_entity: &'a str,
     pub owner_ids: &'a [String],
+    pub canonical_relation_type: Option<&'a str>,
     pub vocabulary_promotion: Option<&'a str>,
 }
 
@@ -226,16 +227,56 @@ pub(crate) fn receipt(snapshot: &RepairRelationSnapshot) -> Result<RepairDigest,
     Ok(repair_digest(&serde_json::to_vec(snapshot)?))
 }
 
-/// Verification changes the bound review row after the relation transaction.
-/// Its full original bytes remain in the prepare snapshot and are compared by
-/// CAS. Applied-state replay normalizes only its completion fields; all owner
-/// and payload bytes remain bound. Completion has its own status CAS and marker.
+/// Bind the durable result, not the read dependencies or shared counters.
+/// Prepare/apply still compare the full lossless snapshot and validate every
+/// transaction effect. After commit, recall counters, page enrichment and graph
+/// generations can advance independently while Deep verification runs. They
+/// must not strand verification or pending-receipt recovery. Fresh lint reports
+/// separately establish semantic correctness against the current source state.
+/// Pair edges, endpoint identities, this manifest's activity and review payload
+/// stay bound, including retired edges and their original provenance.
 pub(crate) fn applied_receipt(
     snapshot: &RepairRelationSnapshot,
-    review_id: &str,
+    context: &RelationCaptureContext<'_>,
 ) -> Result<RepairDigest, WenlanError> {
     snapshot.validate().map_err(WenlanError::Validation)?;
     let mut applied = snapshot.clone();
+    applied.tables.retain(|table| {
+        !matches!(
+            table.table,
+            RepairRelationTable::Pages
+                | RepairRelationTable::Memories
+                | RepairRelationTable::SpaceGraphState
+        )
+    });
+    let vocabulary = applied
+        .tables
+        .iter_mut()
+        .find(|table| table.table == RepairRelationTable::RelationTypeVocabulary)
+        .ok_or_else(|| {
+            WenlanError::Validation("repair_relation_snapshot_schema_mismatch".into())
+        })?;
+    let canonical = vocabulary
+        .columns
+        .iter()
+        .position(|name| name == "canonical")
+        .ok_or_else(|| {
+            WenlanError::Validation("repair_relation_snapshot_schema_mismatch".into())
+        })?;
+    let count = vocabulary
+        .columns
+        .iter()
+        .position(|name| name == "count")
+        .ok_or_else(|| {
+            WenlanError::Validation("repair_relation_snapshot_schema_mismatch".into())
+        })?;
+    vocabulary.rows.retain(|row| {
+        matches!((&row[canonical], context.canonical_relation_type),
+            (RepairRelationSqlValue::Text { value }, Some(expected)) if value == expected)
+    });
+    for row in &mut vocabulary.rows {
+        row[count] = RepairRelationSqlValue::Null;
+    }
     let queue = applied
         .tables
         .iter_mut()
@@ -262,14 +303,14 @@ pub(crate) fn applied_receipt(
     let [status, resolved_at] = completion_columns;
     let (status, resolved_at) = (status?, resolved_at?);
     for row in &mut queue.rows {
-        if matches!(row.get(id_index), Some(RepairRelationSqlValue::Text { value }) if value == review_id)
+        if matches!(row.get(id_index), Some(RepairRelationSqlValue::Text { value }) if value == context.review_id)
         {
             row[status] = RepairRelationSqlValue::Null;
             row[resolved_at] = RepairRelationSqlValue::Null;
         }
     }
     Ok(repair_digest(&serde_json::to_vec(&serde_json::json!({
-        "relation_applied_state_version": 1,
+        "relation_applied_state_version": 2,
         "snapshot": applied,
     }))?))
 }

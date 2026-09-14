@@ -191,6 +191,7 @@ async fn fixture_with_replacement(
         from_entity: &from,
         to_entity: &to,
         owner_ids: &owners,
+        canonical_relation_type: (!retire_grounded).then_some("related_to"),
         vocabulary_promotion: promotion,
     };
     let snapshot = db.open_lint_snapshot().await.unwrap();
@@ -336,7 +337,7 @@ async fn relation_apply_replays_same_receipt_without_duplicate_activity() {
     let receipt = apply_repair(&f.db, &f.store, request(), 1721000010)
         .await
         .unwrap();
-    let after =
+    let committed =
         f.db.capture_relation_repair_state(&f.manifest)
             .await
             .unwrap();
@@ -347,6 +348,24 @@ async fn relation_apply_replays_same_receipt_without_duplicate_activity() {
     let pending_path = directory.join(APPLY_RECEIPT_PENDING_FILE);
     fs::rename(&final_path, &pending_path).unwrap();
     sync_dir(&directory).unwrap();
+    // Normal daemon work between commit and receipt publication must not
+    // turn a proven commit into an unrecoverable/duplicate apply.
+    f.db.test_primary_session()
+        .await
+        .execute_batch(
+            "UPDATE relation_type_vocabulary SET count=COALESCE(count,0)+1;
+         INSERT INTO relation_type_vocabulary(canonical,aliases,category,count)
+         VALUES ('background_predicate','[]','other',1);
+         UPDATE pages SET content=content || ' background enrichment';
+         UPDATE space_graph_state SET graph_generation=graph_generation+1;",
+        )
+        .await
+        .unwrap();
+    let after =
+        f.db.capture_relation_repair_state(&f.manifest)
+            .await
+            .unwrap();
+    assert_ne!(committed, after);
     let again = apply_repair(&f.db, &f.store, request(), 1721000020)
         .await
         .unwrap();
@@ -363,7 +382,7 @@ async fn relation_apply_replays_same_receipt_without_duplicate_activity() {
         receipt.after_target_receipt(),
         &relation_snapshot::applied_receipt(
             &after,
-            f.manifest.source().review_binding().unwrap().review_id()
+            &crate::db::repair_relation_cas::capture_context(&f.manifest).unwrap()
         )
         .unwrap()
     );

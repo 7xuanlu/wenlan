@@ -39,7 +39,7 @@ impl MemoryDB {
     /// offsets, source provenance fill, same/cross-space classification,
     /// `dual_write_edge_with_payload` and generation bumps.
     /// Caller owns the transaction and post-commit publication.
-    pub(crate) async fn create_relation_on_connection(
+    pub(super) async fn create_relation_on_connection(
         conn: &libsql::Connection,
         input: RelationWriteInput<'_>,
     ) -> Result<(String, bool, Vec<CommunityGenerationUpdate>), libsql::Error> {
@@ -238,7 +238,7 @@ impl MemoryDB {
     /// relates/active filters, archived snapshot, soft invalidation with
     /// superseded_by=None, generation bump. Never deletes entities or
     /// sources. Caller owns the transaction and post-commit publication.
-    pub(crate) async fn retire_relation_on_connection(
+    pub(super) async fn retire_relation_on_connection(
         conn: &libsql::Connection,
         loser_id: &str,
     ) -> Result<(Option<serde_json::Value>, Vec<CommunityGenerationUpdate>), libsql::Error> {

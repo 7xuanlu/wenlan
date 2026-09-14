@@ -24,7 +24,7 @@ pub(crate) struct RelationWriteEffects {
 }
 
 impl MemoryDB {
-    pub(crate) async fn execute_relation_repair_on_connection(
+    pub(super) async fn execute_relation_repair_on_connection(
         conn: &libsql::Connection,
         manifest: &RepairManifest,
         now: i64,
