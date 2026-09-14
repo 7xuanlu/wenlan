@@ -434,7 +434,8 @@ describe("DistillReviewPanel review queue", () => {
     await waitFor(() => {
       expect(acceptPendingRevision).toHaveBeenCalledWith("mem_target");
     });
-    expect(await within(dialog).findByText("Every pending change has been reviewed.")).toBeInTheDocument();
+    expect(await within(dialog).findByRole("heading", { name: "Review complete" })).toBeInTheDocument();
+    expect(within(dialog).getByText("You can close this review.")).toBeInTheDocument();
   });
 
   it("advances into discovery items after the last decision resolves", async () => {

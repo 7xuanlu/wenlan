@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
   daemonErrorMessage,
+  getActivity,
   getMemoryDetail,
   getPage,
   listEntities,
@@ -17,6 +18,7 @@ import {
   type MemoryType,
   type Page,
   type RefinementPayload,
+  type ActivityResponse,
 } from "../../lib/tauri";
 import type { ReviewItem } from "./useReviewQueue";
 import "./SourceRepairReview.css";
@@ -192,10 +194,25 @@ type FlowState =
   | "uncertain_apply"
   | "verifying"
   | "applied_unverified"
+  | "verified_service_unavailable"
   | "verified"
   | "error";
 
-type ErrorKind = "target" | "unsupported" | "stale" | "storage" | "recovery" | "check_unavailable" | "prepare" | "pre_apply" | "verify" | "unknown_apply";
+type ErrorKind = "target" | "unsupported" | "stale" | "storage" | "recovery" | "check_unavailable" | "prepare" | "pre_apply" | "verify" | "unknown_apply" | "service_unavailable";
+
+const ACTIVITY_STATES: ActivityResponse["state"][] = [
+  "up_to_date",
+  "organizing",
+  "waiting_for_idle",
+  "blocked",
+  "unknown",
+];
+
+function isActivityResponse(value: unknown): value is ActivityResponse {
+  if (typeof value !== "object" || value === null) return false;
+  const state = (value as { state?: unknown }).state;
+  return typeof state === "string" && ACTIVITY_STATES.includes(state as ActivityResponse["state"]);
+}
 
 export default function SourceRepairReview({
   item,
@@ -238,6 +255,7 @@ export default function SourceRepairReview({
   const [selectedEntities, setSelectedEntities] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
+  const [recoveryRetryable, setRecoveryRetryable] = useState(false);
   const requestInFlightRef = useRef(false);
   const retainedBusyRef = useRef(false);
   const approvalPreflightRef = useRef(false);
@@ -314,25 +332,32 @@ export default function SourceRepairReview({
     setSelectedEntities(new Set());
     setSelectedType("");
     setNewTitle("");
+    setRecoveryRetryable(false);
 
     const saved = supported ? readRepairProgress(identity) : { record: null, error: null };
     // Capture this before any asynchronous target read. React state from the
     // render that started the request is stale inside the catch handler; the
     // immutable local read result is the authority for whether recovery must
     // stay blocked.
-    const localProgressUnreadable = saved.error != null;
+    let localRecoveryBlocked = saved.error != null;
+    let localRecoveryDetail: unknown = saved.error;
+    let verifiedRecoveryReady = false;
     if (saved.error) {
       setErrorKind("storage");
       setErrorDetail(diagnostic(saved.error));
+      setRecoveryRetryable(true);
     } else if (saved.record) {
+      const receipt = saved.record.applyReceipt;
+      const hasValidReceipt = receipt != null && validateRepairApplyReceipt(receipt, saved.record.manifest);
+      const verification = saved.record.verificationReceipt;
+      const hasValidVerification = hasValidReceipt && verification != null &&
+        validateRepairVerificationReceipt(verification, saved.record.manifest, receipt);
       setManifest(saved.record.manifest);
-      setApplyReceipt(saved.record.applyReceipt ?? null);
-      setVerificationReceipt(saved.record.verificationReceipt ?? null);
+      setApplyReceipt(hasValidReceipt ? receipt : null);
+      setVerificationReceipt(hasValidVerification ? verification : null);
       if (saved.record.phase !== "prepared") {
-        const receipt = saved.record.applyReceipt;
-        const hasValidReceipt = receipt != null && validateRepairApplyReceipt(receipt, saved.record.manifest);
-        setFlow(hasValidReceipt ? "applied_unverified" : "uncertain_apply");
-        if (!hasValidReceipt) setApplyReceipt(null);
+        setFlow(hasValidVerification ? "verified" : hasValidReceipt ? "applied_unverified" : "uncertain_apply");
+        verifiedRecoveryReady = saved.record.phase === "verified" && hasValidVerification;
         retainedBusyRef.current = true;
       } else {
         setFlow("prepared");
@@ -341,27 +366,31 @@ export default function SourceRepairReview({
 
     let recoveryRecord = saved.record;
     const load = async () => {
-      let recoveryDigestFailed = false;
       let recoveryReadFailed = false;
       try {
         if (saved.record) {
-          recoveryDigestFailed = true;
-          const validDigest = await validateRepairManifestDigest(saved.record.manifest);
-          recoveryDigestFailed = false;
-          if (!validDigest) {
+          try {
+            const validDigest = await validateRepairManifestDigest(saved.record.manifest);
+            if (cancelled || !mountedRef.current) return;
+            if (!validDigest) throw new Error("saved repair manifest digest is invalid");
+          } catch (error) {
+            if (cancelled || !mountedRef.current) return;
+            // The local artifact is no longer trusted. Keep the session locked
+            // while asking the daemon for its durable copy of this proposal.
+            localRecoveryBlocked = true;
+            localRecoveryDetail = error;
             setManifest(null);
-            setFlow("error");
-            setErrorKind("stale");
-            setErrorDetail("saved repair manifest digest is invalid");
-            finishRequest(false);
-            return;
+            setApplyReceipt(null);
+            setVerificationReceipt(null);
+            setRecoveryRetryable(true);
           }
         }
 
-        // A local prepared/recovery record is authoritative. Only a cold cache
-        // asks the daemon for the exact pending artifact; a failed read must
-        // never be mistaken for an empty recovery state.
-        if (supported && !saved.error && !saved.record) {
+        // A local read or integrity failure may hide an already-started repair.
+        // Ask the daemon for the exact durable artifact before considering any
+        // editable state. A failed read must never be mistaken for no recovery.
+        const shouldReadDurableRecovery = supported && (localRecoveryBlocked || (!saved.error && !saved.record));
+        if (shouldReadDurableRecovery) {
           let recovered: ReturnType<typeof parseRepairRecovery>;
           try {
             recovered = parseRepairRecovery(await repairRecovery(identity.reviewId));
@@ -370,7 +399,8 @@ export default function SourceRepairReview({
             if (cancelled || !mountedRef.current) return;
             setFlow("error");
             setErrorKind("recovery");
-            setErrorDetail(diagnostic(error));
+            setErrorDetail(diagnostic(localRecoveryDetail ? new Error(`${diagnostic(error)}; local recovery data: ${diagnostic(localRecoveryDetail)}`) : error));
+            setRecoveryRetryable(true);
             finishRequest(true);
             return;
           }
@@ -405,10 +435,18 @@ export default function SourceRepairReview({
             }
             recoveryRecord = hydratedRecord;
             recoveryReadFailed = false;
+            localRecoveryBlocked = false;
+            localRecoveryDetail = null;
+            setRecoveryRetryable(false);
             setManifest(recovered.manifest);
             setApplyReceipt(recovered.applyReceipt);
             setFlow(recovered.applyReceipt ? "applied_unverified" : "uncertain_apply");
             retainedBusyRef.current = true;
+          } else {
+            // Keep the storage failure visible when the daemon has no copy.
+            // The local evidence is not discarded and no replacement proposal
+            // may be prepared from the current source.
+            recoveryRecord = null;
           }
         }
 
@@ -437,12 +475,24 @@ export default function SourceRepairReview({
           finishRequest(false);
           return;
         }
-        if (localProgressUnreadable) {
-          // An unreadable progress record may describe an already-started
-          // repair. Never overwrite it with a newly prepared change.
+        if (localRecoveryBlocked) {
+          // An unreadable or invalid local record may describe an already
+          // started repair. A null durable response does not make it safe to
+          // prepare a replacement.
           setFlow("error");
           setErrorKind("storage");
+          setErrorDetail(diagnostic(localRecoveryDetail ?? "local repair progress is unavailable"));
+          setRecoveryRetryable(true);
           finishRequest(true);
+          return;
+        }
+        if (verifiedRecoveryReady && recoveryRecord) {
+          if (!(await probeNormalService(() => cancelled))) return;
+          if (cancelled || !mountedRef.current) return;
+          setErrorKind(null);
+          setErrorDetail(null);
+          setFlow("verified");
+          finishRequest(false);
           return;
         }
         // A saved uncertain/applied record keeps the host busy; no mutation or
@@ -458,21 +508,23 @@ export default function SourceRepairReview({
         }
       } catch (error) {
         if (cancelled || !mountedRef.current) return;
-        if (localProgressUnreadable) {
-          setFlow("error");
-          setErrorKind("storage");
-          setErrorDetail(diagnostic(error));
-          finishRequest(true);
-          return;
-        }
         if (recoveryReadFailed) {
           setFlow("error");
           setErrorKind("recovery");
-          setErrorDetail(diagnostic(error));
+          setErrorDetail(diagnostic(localRecoveryDetail ? new Error(`${diagnostic(error)}; local recovery data: ${diagnostic(localRecoveryDetail)}`) : error));
+          setRecoveryRetryable(true);
           finishRequest(true);
           return;
         }
-        const recovering = !recoveryDigestFailed && recoveryRecord != null &&
+        if (localRecoveryBlocked) {
+          setFlow("error");
+          setErrorKind("storage");
+          setErrorDetail(diagnostic(localRecoveryDetail ?? error));
+          setRecoveryRetryable(true);
+          finishRequest(true);
+          return;
+        }
+        const recovering = recoveryRecord != null &&
           (recoveryRecord.phase === "applying" || recoveryRecord.phase === "applied_unverified" || recoveryRecord.phase === "verified");
         if (recovering && recoveryRecord) {
           // Keep the exact saved manifest recoverable even if its target detail
@@ -487,7 +539,7 @@ export default function SourceRepairReview({
           return;
         }
         setFlow("error");
-        setErrorKind(recoveryDigestFailed ? "storage" : "target");
+        setErrorKind("target");
         setErrorDetail(diagnostic(error));
         finishRequest(false);
       }
@@ -528,6 +580,25 @@ export default function SourceRepairReview({
   const setWorkflowError = (kind: ErrorKind, detail: unknown) => {
     setFlow("error");
     setError(kind, detail, false);
+  };
+
+  const probeNormalService = async (isCancelled?: () => boolean): Promise<boolean> => {
+    try {
+      const activity = await getActivity();
+      if (!isActivityResponse(activity)) {
+        throw new Error("the normal activity route returned a malformed response");
+      }
+      return true;
+    } catch (error) {
+      if (!mountedRef.current || isCancelled?.()) return false;
+      setFlow("verified_service_unavailable");
+      setErrorKind("service_unavailable");
+      setErrorDetail(diagnostic(error));
+      // Keep the queue item anchored while the service is unavailable. The
+      // check-again control remains local and usable after the probe settles.
+      finishRequest(true);
+      return false;
+    }
   };
 
   const prepare = async () => {
@@ -643,6 +714,8 @@ export default function SourceRepairReview({
       }
       if (!mountedRef.current) return;
       setVerificationReceipt(verified);
+      if (!(await probeNormalService())) return;
+      if (!mountedRef.current) return;
       setFlow("verified");
       finishRequest(false);
       if (!reportedVerifiedRef.current) {
@@ -772,6 +845,19 @@ export default function SourceRepairReview({
     }
   };
 
+  const retryNormalService = async () => {
+    if (busy || !manifest || !applyReceipt || !verificationReceipt ||
+        !validateRepairApplyReceipt(applyReceipt, manifest) ||
+        !validateRepairVerificationReceipt(verificationReceipt, manifest, applyReceipt) ||
+        !beginRequest()) return;
+    if (!(await probeNormalService())) return;
+    if (!mountedRef.current) return;
+    setErrorKind(null);
+    setErrorDetail(null);
+    setFlow("verified");
+    finishRequest(false);
+  };
+
   const retryRecoveryRead = () => {
     if (busy || !mountedRef.current) return;
     // Recovery failures keep the host locked. Reserve the next read
@@ -805,6 +891,7 @@ export default function SourceRepairReview({
   const actions = <>
       {flow === "uncertain_apply" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.recoverApply")}</button>}
       {flow === "applied_unverified" && applyReceipt && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.retryVerification")}</button>}
+      {flow === "verified_service_unavailable" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void retryNormalService()}>{t("sourceRepair.checkAgain")}</button>}
       {flow === "verified" && <button type="button" style={buttonStyle} onClick={finishVerified}>{t("sourceRepair.continueVerified")}</button>}
       {flow === "prepared" && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)", fontWeight: 600 }} disabled={busy || errorKind === "storage" || previewEntitiesMissing} onClick={() => void apply()}>{t("sourceRepair.applyChange")}</button>}
       {editable && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", borderColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)" }} disabled={busy} onClick={() => void prepare()}>{t("sourceRepair.prepareChange")}</button>}
@@ -869,6 +956,7 @@ export default function SourceRepairReview({
       {errorKind === "storage" && (
         <div role="alert" className="source-repair-notice" style={paneStyle}>
           <p>{t("sourceRepair.storageFailed")}</p>
+          {recoveryRetryable && (actionHost ? createPortal(recoveryRetryAction, actionHost) : recoveryRetryAction)}
         </div>
       )}
       {errorKind === "prepare" && (
@@ -890,6 +978,12 @@ export default function SourceRepairReview({
         <div role="alert" className="source-repair-notice" style={paneStyle}>
           <p>{t("sourceRepair.unknownApply")}</p>
           <p>{t("sourceRepair.recoverSameChange")}</p>
+        </div>
+      )}
+      {errorKind === "service_unavailable" && flow === "verified_service_unavailable" && (
+        <div role="alert" className="source-repair-notice" style={paneStyle}>
+          <p>{t("sourceRepair.verifiedServiceUnavailable")}</p>
+          {busy && <p role="status">{t("sourceRepair.checkingService")}</p>}
         </div>
       )}
       {boundApplyReceipt && (flow === "verifying" || flow === "applied_unverified") && (

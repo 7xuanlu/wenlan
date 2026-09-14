@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::*;
 use wenlan_types::repair_current::{CurrentRepairChoice, PrepareCurrentRepairRequest};
 use wenlan_types::repair_plan::{RepairAffectedRecord, RepairAffectedRecordKind};
 
@@ -78,9 +79,7 @@ fn deep_with_classification_outcome(
         .count();
     let actionable_findings = checks
         .iter()
-        .filter(|check| {
-            check["outcome"] == "finding" && check["gate_effect"] == "actionable"
-        })
+        .filter(|check| check["outcome"] == "finding" && check["gate_effect"] == "actionable")
         .count();
     let incomplete = checks.len() - passed - findings;
     value["totals"] = serde_json::json!({

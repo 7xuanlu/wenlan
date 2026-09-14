@@ -364,9 +364,26 @@ async function getPageVia(a: any, headers?: Record<string, string>): Promise<unk
   }
 }
 
+// Source repair approval validates Rust's canonical manifest digest in Tauri.
+// This general browser preview must fail explicitly instead of falling through
+// to null or issuing an unvalidated write against its configured daemon.
+const nativeRepairRequired = async (): Promise<never> => {
+  throw new Error("Source repair requires the native Wenlan app.");
+};
+
 // Exported (not just module-local) so the parity test below can read the
 // covered-command key sets without re-parsing this file.
 export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
+  repair_lint: nativeRepairRequired,
+  repair_prepare: nativeRepairRequired,
+  repair_prepare_current: nativeRepairRequired,
+  repair_validate_manifest: nativeRepairRequired,
+  repair_apply: nativeRepairRequired,
+  repair_verify: nativeRepairRequired,
+  repair_plan: nativeRepairRequired,
+  repair_plan_entries: nativeRepairRequired,
+  repair_recovery: nativeRepairRequired,
+
   // --- import ---
   // The import view is the one screen whose whole point is what happens
   // after the request lands, so a null stub is not a stand-in for it: the

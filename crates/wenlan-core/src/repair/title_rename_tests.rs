@@ -31,7 +31,8 @@ use wenlan_types::{
 
 const OCCURRENCE: &str = "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
 
-include!("current_title_tests.rs");
+#[path = "current_title_tests.rs"]
+mod current_title_tests;
 
 struct RenameFixture {
     db: MemoryDB,

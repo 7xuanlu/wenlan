@@ -922,6 +922,18 @@ describe("liveInvoke on-device model download ramp", () => {
   });
 });
 
+describe("native source repair boundary", () => {
+  it.each([
+    "repair_lint", "repair_prepare", "repair_prepare_current", "repair_validate_manifest",
+    "repair_apply", "repair_verify", "repair_plan", "repair_plan_entries", "repair_recovery",
+  ])("rejects %s explicitly without reaching a daemon", async (command) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke(command, {})).rejects.toThrow("Source repair requires the native Wenlan app.");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 // DEBT: 78 commands with no harness stub as of 2026-07-13, predating this fix
 // and out of scope for it — spaces CRUD, entity/observation CRUD, snapshots,
 // agent management, obsidian export/import, avatar, remote-access token

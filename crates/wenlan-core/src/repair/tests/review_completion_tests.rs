@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::*;
 
 #[tokio::test]
 #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
@@ -38,7 +39,7 @@ async fn verified_review_bound_repair_resolves_its_exact_queue_row() {
     assert_eq!(after.status, "resolved");
 }
 
-async fn queue_status(db: &MemoryDB, review_id: &str) -> Option<String> {
+pub(super) async fn queue_status(db: &MemoryDB, review_id: &str) -> Option<String> {
     let connection = db.test_primary_session().await;
     let mut rows = connection
         .query(
@@ -70,7 +71,7 @@ fn unrelated_review_payload(occurrence: &RepairDigest, source_ids: &[String]) ->
 #[tokio::test]
 #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
 async fn verification_replay_is_idempotent_and_preserves_unrelated_review() {
-    let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+    let (db, db_dir, repair_root, manifest) = prepared_fixture().await;
     let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
     let binding = manifest.source().review_binding().unwrap();
     let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
@@ -87,22 +88,34 @@ async fn verification_replay_is_idempotent_and_preserves_unrelated_review() {
     .await
     .unwrap();
 
-    let unrelated_occurrence = RepairDigest::parse(
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    )
-    .unwrap();
+    let marker = store
+        .manifest_dir(manifest.manifest_id())
+        .unwrap()
+        .join(REVIEW_COMPLETION_MARKER_FILE);
+    std::fs::remove_file(&marker).unwrap();
+    assert_eq!(
+        store.pending_verification_manifest_ids().unwrap(),
+        vec![manifest.manifest_id().to_string()]
+    );
+    drop(db);
+    let reopened = MemoryDB::open_for_repair(db_dir.path()).await.unwrap();
+
+    let unrelated_occurrence =
+        RepairDigest::parse("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap();
     let unrelated_source_ids = vec!["mem_unrelated".to_string()];
     let unrelated_id = format!("lint_review_{}", unrelated_occurrence.as_str());
-    db.insert_lint_review_if_absent(
-        &unrelated_id,
-        &unrelated_source_ids,
-        &unrelated_review_payload(&unrelated_occurrence, &unrelated_source_ids),
-    )
-    .await
-    .unwrap();
+    reopened
+        .insert_lint_review_if_absent(
+            &unrelated_id,
+            &unrelated_source_ids,
+            &unrelated_review_payload(&unrelated_occurrence, &unrelated_source_ids),
+        )
+        .await
+        .unwrap();
 
     let second = record_repair_verification(
-        &db,
+        &reopened,
         &store,
         exact_verify(&manifest, &apply_receipt, general, deep),
         None,
@@ -112,8 +125,17 @@ async fn verification_replay_is_idempotent_and_preserves_unrelated_review() {
     .unwrap();
 
     assert_eq!(first.receipt_digest(), second.receipt_digest());
-    assert_eq!(queue_status(&db, binding.review_id()).await.as_deref(), Some("resolved"));
-    assert_eq!(queue_status(&db, &unrelated_id).await.as_deref(), Some("awaiting_review"));
+    assert_eq!(
+        queue_status(&reopened, binding.review_id())
+            .await
+            .as_deref(),
+        Some("resolved")
+    );
+    assert_eq!(
+        queue_status(&reopened, &unrelated_id).await.as_deref(),
+        Some("awaiting_review")
+    );
+    assert!(marker.is_file());
 }
 
 #[tokio::test]
@@ -121,7 +143,12 @@ async fn verification_replay_is_idempotent_and_preserves_unrelated_review() {
 async fn failed_verification_leaves_the_bound_review_open() {
     let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
     let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
-    let review_id = manifest.source().review_binding().unwrap().review_id().to_string();
+    let review_id = manifest
+        .source()
+        .review_binding()
+        .unwrap()
+        .review_id()
+        .to_string();
     let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
         .await
         .unwrap();
@@ -137,7 +164,10 @@ async fn failed_verification_leaves_the_bound_review_open() {
     .await;
 
     assert!(result.is_err());
-    assert_eq!(queue_status(&db, &review_id).await.as_deref(), Some("awaiting_review"));
+    assert_eq!(
+        queue_status(&db, &review_id).await.as_deref(),
+        Some("awaiting_review")
+    );
     assert!(!store
         .manifest_dir(manifest.manifest_id())
         .unwrap()
@@ -150,7 +180,12 @@ async fn failed_verification_leaves_the_bound_review_open() {
 async fn dismissed_review_is_a_completion_conflict_and_keeps_its_status() {
     let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
     let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
-    let review_id = manifest.source().review_binding().unwrap().review_id().to_string();
+    let review_id = manifest
+        .source()
+        .review_binding()
+        .unwrap()
+        .review_id()
+        .to_string();
     let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
         .await
         .unwrap();
@@ -173,7 +208,10 @@ async fn dismissed_review_is_a_completion_conflict_and_keeps_its_status() {
     .await;
 
     assert!(matches!(result, Err(WenlanError::Conflict(_))));
-    assert_eq!(queue_status(&db, &review_id).await.as_deref(), Some("dismissed"));
+    assert_eq!(
+        queue_status(&db, &review_id).await.as_deref(),
+        Some("dismissed")
+    );
 }
 
 #[tokio::test]
@@ -205,7 +243,10 @@ async fn rebound_review_is_a_completion_conflict_and_keeps_its_payload() {
     .await;
 
     assert!(matches!(result, Err(WenlanError::Conflict(_))));
-    assert_eq!(queue_status(&db, &review_id).await.as_deref(), Some("awaiting_review"));
+    assert_eq!(
+        queue_status(&db, &review_id).await.as_deref(),
+        Some("awaiting_review")
+    );
 }
 
 #[tokio::test]
@@ -213,7 +254,12 @@ async fn rebound_review_is_a_completion_conflict_and_keeps_its_payload() {
 async fn missing_review_is_a_completion_conflict() {
     let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
     let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
-    let review_id = manifest.source().review_binding().unwrap().review_id().to_string();
+    let review_id = manifest
+        .source()
+        .review_binding()
+        .unwrap()
+        .review_id()
+        .to_string();
     let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
         .await
         .unwrap();
@@ -247,13 +293,13 @@ async fn unbound_manifest_completion_is_a_noop() {
     std::fs::create_dir(&manifest_dir).unwrap();
     std::fs::write(
         manifest_dir.join(MANIFEST_FILE),
-        include_bytes!("../../../wenlan-types/testdata/repair/v1/manifest.json"),
+        include_bytes!("../../../../wenlan-types/testdata/repair/v1/manifest.json"),
     )
     .unwrap();
     let store = RepairArtifactStore::new(root.path().to_path_buf());
     let manifest = store.load_manifest(manifest_id).unwrap();
     let receipt: RepairVerificationReceipt = serde_json::from_slice(include_bytes!(
-        "../../../wenlan-types/testdata/repair/v1/verification-receipt.json"
+        "../../../../wenlan-types/testdata/repair/v1/verification-receipt.json"
     ))
     .unwrap();
     assert!(manifest.source().review_binding().is_none());

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+use super::*;
 use wenlan_types::repair_current::{CurrentRepairChoice, PrepareCurrentRepairRequest};
 
 #[tokio::test]

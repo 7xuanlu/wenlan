@@ -8,10 +8,10 @@ const ATOMIC_DECLARATION: &str = "pub(crate) async fn record_repair_verification
 const RESULT_MATCH: &str = "    let receipt = match result {";
 const ATOMIC_END: &str = "\n    Ok(receipt)\n}";
 const RENAME_PERSISTENCE_BRANCH: &str =
-    "        if let Some(session) = rename_projection_session {";
+    "        let receipt = if let Some(session) = rename_projection_session {";
 const PAGE_ROOT_PERSISTENCE_BRANCH: &str = "        } else if let Some(page_root) = page_root {";
 const NO_PAGE_ROOT_PERSISTENCE_BRANCH: &str = "        } else {";
-const PERSISTENCE_TAIL_END: &str = "\n        }\n    }\n    .await;";
+const PERSISTENCE_TAIL_END: &str = "\n        }?;";
 
 fn bounded_atomic_source(child: &str) -> (&str, &str, &str) {
     let start = child

@@ -29,6 +29,7 @@ vi.mock("../../lib/tauri", async (original) => ({
   repairApply: vi.fn(),
   repairVerify: vi.fn(),
   repairValidateManifest: vi.fn(),
+  getActivity: vi.fn(),
 }));
 
 const memory: MemoryItem = {
@@ -217,6 +218,17 @@ function verificationFor(manifest: RepairManifest, receipt: RepairApplyReceipt):
   };
 }
 
+function activityResponse(): api.ActivityResponse {
+  return {
+    state: "up_to_date",
+    last_activity_at: null,
+    assets: [],
+    everyday: { job: "everyday", lane: "on_device", model: "test", mode: "pinned", available: true },
+    synthesis: { job: "synthesis", lane: "on_device", model: "test", mode: "pinned", available: true },
+    refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
+  };
+}
+
 function mount(item: RepairItem, onVerified = vi.fn(), onBusyChange = vi.fn()) {
   render(<SourceRepairReview item={item} onBusyChange={onBusyChange} onVerified={onVerified} />);
   return { user: userEvent.setup(), onVerified, onBusyChange };
@@ -230,6 +242,7 @@ beforeEach(async () => {
   vi.mocked(api.getPage).mockResolvedValue(page);
   vi.mocked(api.listEntities).mockResolvedValue([]);
   vi.mocked(api.repairRecovery).mockResolvedValue(null);
+  vi.mocked(api.getActivity).mockResolvedValue(activityResponse());
   (api.repairValidateManifest as unknown as { mockResolvedValue: (value: boolean) => void }).mockResolvedValue(true);
   vi.mocked(api.repairLint).mockImplementation(async (query) => lintReport(query.profile, query.profile === "deep" ? "memories.semantic.classification" : "pages.duplicate_active_titles"));
 });
@@ -385,6 +398,68 @@ describe("SourceRepairReview", () => {
     expect(recover).toBeEnabled();
   });
 
+  it("probes the normal activity route after a successful verification", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    vi.mocked(api.repairApply).mockResolvedValue(receipt);
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
+    const onVerified = vi.fn();
+    const { user } = mount(item, onVerified);
+    await screen.findByText(page.title);
+    await user.type(screen.getByLabelText("New page title"), "New title");
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    await user.click(await screen.findByRole("button", { name: "Apply this change" }));
+    await waitFor(() => expect(onVerified).toHaveBeenCalledTimes(1));
+    expect(api.getActivity).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a verified repair blocked when the normal activity route is unavailable", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    vi.mocked(api.repairApply).mockResolvedValue(receipt);
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
+    vi.mocked(api.getActivity).mockRejectedValue(new Error("404 activity"));
+    const onVerified = vi.fn();
+    const { user, onBusyChange } = mount(item, onVerified);
+    await screen.findByText(page.title);
+    await user.type(screen.getByLabelText("New page title"), "New title");
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    await user.click(await screen.findByRole("button", { name: "Apply this change" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Repair verified\. Restart the Wenlan service/);
+    expect(screen.getByRole("button", { name: "Check again" })).toBeEnabled();
+    expect(onVerified).not.toHaveBeenCalled();
+    expect(onBusyChange.mock.calls[onBusyChange.mock.calls.length - 1]).toEqual([true]);
+    expect(api.repairApply).toHaveBeenCalledTimes(1);
+    expect(api.repairVerify).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks the normal activity route without reapplying or reverifying", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    vi.mocked(api.repairPrepareCurrent).mockResolvedValue(manifest);
+    vi.mocked(api.repairApply).mockResolvedValue(receipt);
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
+    vi.mocked(api.getActivity).mockRejectedValueOnce(new Error("404 activity")).mockResolvedValue(activityResponse());
+    const onVerified = vi.fn();
+    const { user } = mount(item, onVerified);
+    await screen.findByText(page.title);
+    await user.type(screen.getByLabelText("New page title"), "New title");
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    await user.click(await screen.findByRole("button", { name: "Apply this change" }));
+    await user.click(await screen.findByRole("button", { name: "Check again" }));
+    const continueButton = await screen.findByRole("button", { name: "Continue" });
+    await user.click(continueButton);
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(api.getActivity).toHaveBeenCalledTimes(2);
+    expect(api.repairApply).toHaveBeenCalledTimes(1);
+    expect(api.repairVerify).toHaveBeenCalledTimes(1);
+  });
+
   it("retries verification without reapplying after a verification failure", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const manifest = await manifestFor(item);
@@ -466,6 +541,90 @@ describe("SourceRepairReview", () => {
     expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
   });
 
+  it("probes the normal activity route before continuing a saved verified record", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    const verification = verificationFor(manifest, receipt);
+    writeRepairProgress({
+      version: 1,
+      reviewId: item.id,
+      checkId: (item.payload as RepairPayload).check_id,
+      occurrenceDigest: (item.payload as RepairPayload).occurrence_digest,
+      ownerIds: item.sourceIds,
+      phase: "verified",
+      manifest,
+      applyReceipt: receipt,
+      verificationReceipt: verification,
+    });
+    vi.mocked(api.getActivity).mockRejectedValueOnce(new Error("404 activity")).mockResolvedValue(activityResponse());
+    const onVerified = vi.fn();
+    const { user } = mount(item, onVerified);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Repair verified\. Restart the Wenlan service/);
+    expect(onVerified).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Check again" }));
+    await user.click(await screen.findByRole("button", { name: "Continue" }));
+    expect(onVerified).toHaveBeenCalledTimes(1);
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(api.repairVerify).not.toHaveBeenCalled();
+    expect(api.getActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces malformed local progress with an authenticated pending daemon recovery", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const receipt = applyReceiptFor(manifest);
+    localStorage.setItem(repairProgressKey(item.id), "{malformed");
+    vi.mocked(api.repairRecovery).mockResolvedValue({ manifest, apply_receipt: null });
+    vi.mocked(api.repairApply).mockResolvedValue(receipt);
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(manifest, receipt));
+    const { user } = mount(item);
+    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
+    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(localStorage.getItem(repairProgressKey(item.id))).not.toBe("{malformed");
+    await user.click(screen.getByRole("button", { name: "Recover and apply this change" }));
+    await waitFor(() => expect(api.repairApply).toHaveBeenCalledTimes(1));
+  });
+
+  it("replaces a local digest failure with an authenticated daemon recovery", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const localManifest = await manifestFor(item);
+    localManifest.mutation = { ...localManifest.mutation, after_title: "Tampered" } as RepairManifest["mutation"];
+    writeRepairProgress({ version: 1, reviewId: item.id, checkId: (item.payload as RepairPayload).check_id, occurrenceDigest: (item.payload as RepairPayload).occurrence_digest, ownerIds: item.sourceIds, phase: "prepared", manifest: localManifest });
+    const durableManifest = await manifestFor(item);
+    const receipt = applyReceiptFor(durableManifest);
+    vi.mocked(api.repairValidateManifest).mockResolvedValueOnce(false).mockResolvedValue(true);
+    vi.mocked(api.repairRecovery).mockResolvedValue({ manifest: durableManifest, apply_receipt: receipt });
+    vi.mocked(api.repairVerify).mockResolvedValue(verificationFor(durableManifest, receipt));
+    mount(item);
+    expect(await screen.findByRole("button", { name: "Retry verification" })).toBeEnabled();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
+    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it.each(["identity", "binding"] as const)("replaces a local %s failure with an authenticated daemon recovery", async (failure) => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const localManifest = await manifestFor(item);
+    if (failure === "binding") localManifest.source.review_binding!.review_id = "another-review";
+    localStorage.setItem(repairProgressKey(item.id), JSON.stringify({
+      version: 1,
+      reviewId: failure === "identity" ? "another-review" : item.id,
+      checkId: (item.payload as RepairPayload).check_id,
+      occurrenceDigest: (item.payload as RepairPayload).occurrence_digest,
+      ownerIds: item.sourceIds,
+      phase: "applying",
+      manifest: localManifest,
+    }));
+    const durableManifest = await manifestFor(item);
+    vi.mocked(api.repairRecovery).mockResolvedValue({ manifest: durableManifest, apply_receipt: null });
+    mount(item);
+    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
+    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+  });
+
   it("uses a normal ready flow when recovery reports no pending artifact", async () => {
     const item = itemFor("pages.duplicate_active_titles", page.id);
     const { user } = mount(item);
@@ -489,6 +648,33 @@ describe("SourceRepairReview", () => {
     await user.click(screen.getByRole("button", { name: "Retry recovery" }));
     expect(await screen.findByLabelText("New page title")).toBeVisible();
     expect(api.repairRecovery).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a corrupt local record blocked when daemon recovery is empty", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    localStorage.setItem(repairProgressKey(item.id), "{malformed");
+    const { user } = mount(item);
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.storageFailed"));
+    expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
+    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Retry recovery" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Retry recovery" }));
+    await waitFor(() => expect(api.repairRecovery).toHaveBeenCalledTimes(2));
+  });
+
+  it("recovers a corrupt local record after the recovery retry succeeds", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    localStorage.setItem(repairProgressKey(item.id), "{malformed");
+    vi.mocked(api.repairRecovery).mockRejectedValueOnce(new Error("daemon unavailable")).mockResolvedValueOnce({ manifest, apply_receipt: null });
+    const { user } = mount(item);
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.recoveryFailed"));
+    expect(screen.getByRole("button", { name: "Retry recovery" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Retry recovery" }));
+    expect(await screen.findByRole("button", { name: "Recover and apply this change" })).toBeEnabled();
+    expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
   });
 
   it.each(["binding", "digest", "receipt"] as const)("fails closed for a recovery %s mismatch", async (kind) => {
@@ -562,7 +748,7 @@ describe("SourceRepairReview", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.storageFailed"));
     expect(api.getPage).toHaveBeenCalledWith(page.id);
-    expect(api.repairRecovery).not.toHaveBeenCalled();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
     expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
     expect(onBusyChange).toHaveBeenCalledWith(true);
   });
@@ -576,7 +762,7 @@ describe("SourceRepairReview", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.storageFailed"));
     expect(await screen.findByText(page.title)).toBeVisible();
     expect(api.getPage).toHaveBeenCalledWith(page.id);
-    expect(api.repairRecovery).not.toHaveBeenCalled();
+    expect(api.repairRecovery).toHaveBeenCalledWith(item.id);
     expect(api.repairPrepareCurrent).not.toHaveBeenCalled();
     expect(onBusyChange).toHaveBeenCalledWith(true);
   });

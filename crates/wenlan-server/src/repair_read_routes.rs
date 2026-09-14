@@ -105,20 +105,37 @@ fn validate_bound_review(
     manifest: &RepairManifest,
     proposal: &RefinementProposal,
 ) -> Result<RefinementProposalSummary, ServerError> {
+    validate_bound_review_with_status(manifest, proposal, false)
+}
+
+fn validate_bound_review_with_authenticated_receipt(
+    manifest: &RepairManifest,
+    proposal: &RefinementProposal,
+) -> Result<RefinementProposalSummary, ServerError> {
+    validate_bound_review_with_status(manifest, proposal, true)
+}
+
+fn validate_bound_review_with_status(
+    manifest: &RepairManifest,
+    proposal: &RefinementProposal,
+    allow_resolved: bool,
+) -> Result<RefinementProposalSummary, ServerError> {
     let binding = manifest
         .source()
         .review_binding()
         .ok_or_else(review_conflict)?;
 
-    validate_bound_review_fields(
+    validate_bound_review_fields_with_status(
         binding.review_id(),
         manifest.source().check_id(),
         binding.occurrence_digest(),
         binding.owner_ids(),
         proposal,
+        allow_resolved,
     )
 }
 
+#[cfg(test)]
 fn validate_bound_review_fields(
     review_id: &str,
     check_id: &str,
@@ -126,9 +143,28 @@ fn validate_bound_review_fields(
     owner_ids: &[String],
     proposal: &RefinementProposal,
 ) -> Result<RefinementProposalSummary, ServerError> {
+    validate_bound_review_fields_with_status(
+        review_id,
+        check_id,
+        occurrence_digest,
+        owner_ids,
+        proposal,
+        false,
+    )
+}
+
+fn validate_bound_review_fields_with_status(
+    review_id: &str,
+    check_id: &str,
+    occurrence_digest: &wenlan_types::repair::RepairDigest,
+    owner_ids: &[String],
+    proposal: &RefinementProposal,
+    allow_resolved: bool,
+) -> Result<RefinementProposalSummary, ServerError> {
     if proposal.id != review_id
         || proposal.action != "lint_repair_review"
-        || proposal.status != "awaiting_review"
+        || !(proposal.status == "awaiting_review"
+            || (allow_resolved && proposal.status == "resolved"))
         || proposal.source_ids != owner_ids
     {
         return Err(review_conflict());
@@ -188,7 +224,16 @@ pub async fn handle_list_repair_queue(
         .await
         .map_err(ServerError::from)?
         .ok_or_else(review_conflict)?;
-    let summary = validate_bound_review(&context.manifest, &proposal)?;
+    let summary = if proposal.status == "resolved"
+        && context
+            .store
+            .has_authenticated_review_verification_receipt(context.manifest.manifest_id())
+            .map_err(ServerError::from)?
+    {
+        validate_bound_review_with_authenticated_receipt(&context.manifest, &proposal)?
+    } else {
+        validate_bound_review(&context.manifest, &proposal)?
+    };
 
     if query
         .action
@@ -249,7 +294,16 @@ pub async fn handle_get_repair_recovery(
         .await
         .map_err(ServerError::from)?
         .ok_or_else(review_conflict)?;
-    validate_bound_review(&recovery.manifest, &proposal)?;
+    if proposal.status == "resolved"
+        && context
+            .store
+            .has_authenticated_review_verification_receipt(recovery.manifest.manifest_id())
+            .map_err(ServerError::from)?
+    {
+        validate_bound_review_with_authenticated_receipt(&recovery.manifest, &proposal)?;
+    } else {
+        validate_bound_review(&recovery.manifest, &proposal)?;
+    }
     Ok(Json(Some(recovery)))
 }
 

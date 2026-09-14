@@ -3229,7 +3229,7 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
     );
     assert_eq!(
         analysis.support_calls.len(),
-        1059,
+        1076,
         "PR-D integration must expose the frozen 967 support calls, the 6 PR-D test identities, \
          the 5 M5 derivation-marker fixture calls, the 10 M6 shadow-promoter fixture calls, \
          the 7 G6 BindPageLink repair-test calls (G6 Stage 2 PR 2b, item 3: \
@@ -3364,7 +3364,10 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
          calls: importer.rs::legacy_overview_archive_preserves_edits_and_original_content \
          contributes test_primary_session|1..3 + TestDbSession::execute|1..3, and \
          synthesis/overview.rs::user_edited_overview_is_untouched contributes \
-         test_primary_session|1 + TestDbSession::execute|1"
+         test_primary_session|1 + TestDbSession::execute|1; plus 17 Review source-repair calls: \
+         4 provider semantic fixture calls, 4 stale current-source fixture calls, and 9 \
+         review completion queue-read/CAS fixture calls. The commit-failure test was renamed \
+         with its same two test-control identities retained."
     );
 }
 
