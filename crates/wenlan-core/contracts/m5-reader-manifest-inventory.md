@@ -689,6 +689,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/repairs/prepare-current` | main | yes | automatic | `none` | `handle_prepare_current` | RepairMutation.after_title, RepairMutation.before_title, RepairTar |
 | `GET` | `/api/repairs/recovery/{review_id}` | main + repair | yes | automatic | `none` | `handle_get_repair_recovery` | RepairManifest and optional RepairApplyReceipt |
 | `POST` | `/api/repairs/verify` | main + repair | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/repairs/runtime` | main + repair | no | not_applicable | `none` | — | process identity and lifecycle flags only |
+| `POST` | `/api/repairs/runtime/resume` | main + repair | no | not_applicable | `none` | — | process identity and lifecycle flags only |
 | `GET` | `/api/retrievals/recent` | main | yes | automatic | `none` | `handle_recent_retrievals` | RetrievalEvent.memory_snippets, RetrievalEvent.page_titles |
 | `POST` | `/api/search` | main | yes | automatic | `none` | `handle_search` | SearchResult.content, SearchResult.content_hash, SearchResult.last |
 | `DELETE` | `/api/setup/anthropic-key` | main | no | not_applicable | `none` | — | no prose fields |

@@ -838,6 +838,20 @@ impl WenlanClient {
         self.get_json(&path).await
     }
 
+    pub async fn repair_runtime_status(
+        &self,
+    ) -> Result<wenlan_types::repair_runtime::RepairRuntimeStatus, String> {
+        self.get_json("/api/repairs/runtime").await
+    }
+
+    pub async fn resume_repair_runtime(
+        &self,
+        request: wenlan_types::repair_runtime::ResumeRepairRuntimeRequest,
+    ) -> Result<wenlan_types::repair_runtime::RepairRuntimeStatus, String> {
+        self.post_json("/api/repairs/runtime/resume", &request)
+            .await
+    }
+
     pub async fn apply_repair(
         &self,
         request: wenlan_types::repair::ApplyRepairRequest,

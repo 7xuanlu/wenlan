@@ -72,6 +72,8 @@ impl LintServerConfig {
 /// handlers actually need. It does NOT include Tauri-specific fields (app_handle,
 /// sensors, triggers, ambient overlay, etc.).
 pub struct ServerState {
+    /// A new identity for every daemon incarnation, independent of PID reuse.
+    pub runtime_instance_id: String,
     /// Sticky daemon-lifecycle signal shared by HTTP and background workers.
     pub shutdown: ShutdownHandle,
     /// Port of this daemon's bound listener for loopback durable workers.
@@ -176,6 +178,7 @@ impl Default for ServerState {
     fn default() -> Self {
         Self {
             shutdown: ShutdownHandle::default(),
+            runtime_instance_id: uuid::Uuid::new_v4().to_string(),
             bound_port: 0,
             db: None,
             brief_status_root: None,
