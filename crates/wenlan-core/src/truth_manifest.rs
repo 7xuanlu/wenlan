@@ -172,10 +172,10 @@ pub struct CliReader {
     pub adapter: &'static str,
 }
 
-/// All 184 registered `(method, path, handler)` triples.
+/// All 183 registered `(method, path, handler)` triples.
 ///
-/// 65 page-bearing, 119 not. Expands to 188 `(builder, method, path)`
-/// runtime entries: 178 in `main`, 10 in `repair`.
+/// 65 page-bearing, 118 not. Expands to 189 `(builder, method, path)`
+/// runtime entries: 178 in `main`, 11 in `repair`.
 #[rustfmt::skip]
 pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Get, path: "/api/activity", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
@@ -330,8 +330,7 @@ pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Post, path: "/api/search", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_search", evidence: "SearchResult.content, SearchResult.content_hash, SearchResult.last" },
     HttpReader { method: ReaderMethod::Delete, path: "/api/setup/anthropic-key", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Put, path: "/api/setup/anthropic-key", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
-    HttpReader { method: ReaderMethod::Get, path: "/api/setup/status", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
-    HttpReader { method: ReaderMethod::Get, path: "/api/setup/status", builder: Builder::Repair, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
+    HttpReader { method: ReaderMethod::Get, path: "/api/setup/status", builder: Builder::MainAndRepair, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/shutdown", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_shutdown", evidence: "opaque response type — fail-closed" },
     HttpReader { method: ReaderMethod::Get, path: "/api/snapshots", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
     HttpReader { method: ReaderMethod::Get, path: "/api/snapshots/{id}/captures", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },

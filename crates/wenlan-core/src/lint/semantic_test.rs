@@ -410,8 +410,10 @@ async fn provider_and_calling_agent_share_candidate_contract() {
         .iter()
         .map(|candidate| candidate.reference())
         .collect::<BTreeSet<_>>();
-    let prompts = provider.prompts.lock().unwrap();
-    let second: Value = serde_json::from_str(&prompts[1]).unwrap();
+    let second: Value = {
+        let prompts = provider.prompts.lock().unwrap();
+        serde_json::from_str(&prompts[1]).unwrap()
+    };
     let second_refs = second["candidates"]
         .as_array()
         .unwrap()
@@ -421,12 +423,12 @@ async fn provider_and_calling_agent_share_candidate_contract() {
         .collect::<BTreeSet<_>>();
     assert!(second_refs.is_subset(&primary_refs));
     assert_ne!(second_refs, primary_refs);
-    let grammars = provider.grammars.lock().unwrap();
-    assert_eq!(grammars[0], provider_verdict_grammar(work, &primary_refs));
-    assert_eq!(grammars[1], provider_verdict_grammar(work, &second_refs));
-    assert_ne!(grammars[0], grammars[1]);
-    drop(grammars);
-    drop(prompts);
+    {
+        let grammars = provider.grammars.lock().unwrap();
+        assert_eq!(grammars[0], provider_verdict_grammar(work, &primary_refs));
+        assert_eq!(grammars[1], provider_verdict_grammar(work, &second_refs));
+        assert_ne!(grammars[0], grammars[1]);
+    }
     assert_eq!(primary["records"], work_json["records"]);
     assert_eq!(primary["candidates"], work_json["candidates"]);
     assert_eq!(primary["response_contract"]["verdict_item"], "array");
