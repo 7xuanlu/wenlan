@@ -8,6 +8,15 @@ use std::sync::Arc;
 
 pub use wenlan_types::onboarding::{MilestoneId, MilestoneRecord};
 
+/// Reserved agent name of the setup wizard's store-and-recall check. That
+/// check writes a throwaway memory and deletes it right away, so it is not a
+/// user's first memory and not an agent joining.
+pub(crate) const SETUP_PROBE_AGENT: &str = "wenlan-setup";
+
+fn is_setup_probe_agent(agent: &str) -> bool {
+    crate::db::canonicalize_agent_id(agent) == SETUP_PROBE_AGENT
+}
+
 /// Evaluates onboarding milestones at well-defined callsites. Each `check_*`
 /// method is idempotent — it delegates to `MemoryDB::record_milestone` which
 /// is an `INSERT ... ON CONFLICT DO NOTHING`, so milestones fire exactly once
@@ -46,7 +55,7 @@ impl<'a> MilestoneEvaluator<'a> {
     /// Called after a memory is successfully ingested. Fires `first-memory`
     /// on any non-manual source. Manual entries are user-driven and don't
     /// count as an agent writing memory — they shouldn't claim the onboarding
-    /// milestone for the user.
+    /// milestone for the user. The setup probe doesn't claim it either.
     ///
     /// Payload includes a short preview of the memory content (first ~100
     /// chars, char-safe) and the source agent name, so the UI toast can
@@ -57,7 +66,7 @@ impl<'a> MilestoneEvaluator<'a> {
         memory_id: &str,
         source: &str,
     ) -> Result<(), WenlanError> {
-        if source == "manual" {
+        if source == "manual" || is_setup_probe_agent(source) {
             return Ok(());
         }
         let preview = self
@@ -134,13 +143,14 @@ impl<'a> MilestoneEvaluator<'a> {
 
     /// Called after an agent registers or records a write. Fires
     /// `second-agent` once ≥2 distinct agents have actually written memory
-    /// (per `agent_connections.memory_count >= 1`).
+    /// (per `agent_connections.memory_count >= 1`). The setup probe neither
+    /// counts toward that total nor triggers the milestone.
     ///
     /// Payload carries the triggering agent name so the UI toast can render a
     /// specific subtitle ("Cursor just joined — your memories now follow you
     /// across tools.") without re-fetching.
     pub async fn check_after_agent_register(&self, agent: &str) -> Result<(), WenlanError> {
-        if agent == "unknown" || agent == "manual" {
+        if agent == "unknown" || agent == "manual" || is_setup_probe_agent(agent) {
             return Ok(());
         }
         let written_count = self.db.count_agents_with_writes().await?;
@@ -250,6 +260,82 @@ mod tests {
 
         ev.check_after_ingest("m1", "manual").await.unwrap();
         assert_eq!(emitter.events.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_check_after_ingest_setup_probe_leaves_first_memory_for_a_real_agent() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let emitter = Arc::new(CapturingEmitter::new());
+        let ev = MilestoneEvaluator::new(&db, emitter.clone() as Arc<dyn EventEmitter>);
+
+        ev.check_after_ingest("probe", SETUP_PROBE_AGENT)
+            .await
+            .unwrap();
+        assert_eq!(
+            emitter.events.lock().unwrap().len(),
+            0,
+            "the setup probe must not claim first-memory"
+        );
+
+        ev.check_after_ingest("m1", "claude").await.unwrap();
+
+        let events = emitter.events.lock().unwrap();
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|(k, _)| k == "onboarding-milestone")
+            .collect();
+        assert_eq!(
+            fires.len(),
+            1,
+            "the real agent's memory is the first memory"
+        );
+        assert!(fires[0].1.contains("first-memory"));
+        assert!(fires[0].1.contains("claude"));
+        assert!(!fires[0].1.contains(SETUP_PROBE_AGENT));
+    }
+
+    #[tokio::test]
+    async fn test_second_agent_ignores_setup_probe_writes() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let emitter = Arc::new(CapturingEmitter::new());
+        let ev = MilestoneEvaluator::new(&db, emitter.clone() as Arc<dyn EventEmitter>);
+
+        for agent in [SETUP_PROBE_AGENT, "claude"] {
+            db.register_agent(agent).await.unwrap();
+            db.touch_agent(agent).await.unwrap();
+        }
+        assert_eq!(db.count_agents_with_writes().await.unwrap(), 1);
+        ev.check_after_agent_register("claude").await.unwrap();
+        ev.check_after_agent_register(SETUP_PROBE_AGENT)
+            .await
+            .unwrap();
+        assert_eq!(
+            emitter.events.lock().unwrap().len(),
+            0,
+            "the probe plus one real agent is not a second agent"
+        );
+
+        db.register_agent("cursor").await.unwrap();
+        db.touch_agent("cursor").await.unwrap();
+        assert_eq!(db.count_agents_with_writes().await.unwrap(), 2);
+        ev.check_after_agent_register(SETUP_PROBE_AGENT)
+            .await
+            .unwrap();
+        assert_eq!(
+            emitter.events.lock().unwrap().len(),
+            0,
+            "a probe write must not announce itself as the joining agent"
+        );
+        ev.check_after_agent_register("cursor").await.unwrap();
+
+        let events = emitter.events.lock().unwrap();
+        let fires: Vec<_> = events
+            .iter()
+            .filter(|(k, _)| k == "onboarding-milestone")
+            .collect();
+        assert_eq!(fires.len(), 1, "two real agents fire second-agent");
+        assert!(fires[0].1.contains("second-agent"));
+        assert!(fires[0].1.contains("cursor"));
     }
 
     #[tokio::test]
