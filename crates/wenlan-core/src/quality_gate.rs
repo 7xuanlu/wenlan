@@ -100,9 +100,43 @@ static RE_TIMESTAMP: LazyLock<Regex> =
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+/// True for a character in one of the CJK scripts that write without spaces
+/// between words: CJK Unified Ideographs, Hiragana, Katakana, Hangul syllables.
+fn is_cjk_char(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
+        | '\u{3040}'..='\u{309F}' // Hiragana
+        | '\u{30A0}'..='\u{30FF}' // Katakana
+        | '\u{AC00}'..='\u{D7A3}' // Hangul syllables
+    )
+}
+
+/// Count each maximal run of CJK characters as `ceil(run_len / 2)` words,
+/// since CJK scripts carry no whitespace between words the way Latin text does.
+fn cjk_run_word_count(text: &str) -> usize {
+    let mut total = 0;
+    let mut run_len = 0usize;
+    for c in text.chars() {
+        if is_cjk_char(c) {
+            run_len += 1;
+        } else if run_len > 0 {
+            total += run_len.div_ceil(2);
+            run_len = 0;
+        }
+    }
+    if run_len > 0 {
+        total += run_len.div_ceil(2);
+    }
+    total
+}
+
 /// Count "meaningful" words: length > 1, or single-char alphanumeric.
+/// A whitespace token made entirely of CJK characters is excluded here and
+/// counted instead by `cjk_run_word_count`, so CJK runs are not double-counted.
 fn meaningful_word_count(text: &str) -> usize {
-    text.split_whitespace()
+    let whitespace_words = text
+        .split_whitespace()
+        .filter(|w| !w.chars().any(is_cjk_char))
         .filter(|w| {
             let trimmed: String = w.chars().filter(|c| !c.is_ascii_punctuation()).collect();
             if trimmed.is_empty() {
@@ -113,7 +147,9 @@ fn meaningful_word_count(text: &str) -> usize {
             }
             true
         })
-        .count()
+        .count();
+
+    whitespace_words + cjk_run_word_count(text)
 }
 
 /// Instruction-density keywords.
@@ -206,6 +242,14 @@ fn is_heartbeat(lower: &str) -> bool {
 fn is_timestamp_only(text: &str) -> bool {
     let mut non_ts_words = 0;
     for token in text.split_whitespace() {
+        if token.chars().any(is_cjk_char) {
+            // A CJK run never looks like a bare timestamp fragment (digits,
+            // dashes, colons); weight it the same way meaningful_word_count
+            // does so a long CJK paragraph with no whitespace — one single
+            // token here — isn't mistaken for a string of stray timestamps.
+            non_ts_words += cjk_run_word_count(token);
+            continue;
+        }
         if !RE_TIMESTAMP.is_match(token) {
             // Also treat bare date/time fragments as timestamp-like
             let is_ts_fragment = token.len() >= 4
@@ -787,6 +831,47 @@ mod tests {
         let g = gate();
         let r = g.check_content("Wenlan uses Tauri 2 with a Rust backend and React 19 frontend");
         assert!(r.admitted);
+    }
+
+    #[test]
+    fn test_admits_traditional_chinese_paragraph() {
+        // One realistic Traditional Chinese paragraph, no internal whitespace,
+        // well over the floor of 5 once CJK runs are counted as ceil(chars/2).
+        let g = gate();
+        let r = g.check_content(
+            "今天下午我們決定採用新的檔案管理方案，並且會在下週開始逐步導入到所有專案中，同時也會準備教學文件給團隊成員參考使用。",
+        );
+        assert!(r.admitted, "reason: {:?}", r.reason);
+    }
+
+    #[test]
+    fn test_admits_japanese_twelve_kana_sentence() {
+        // 12 kana characters -> ceil(12/2) = 6 words, at/above the floor of 5.
+        let g = gate();
+        let r = g.check_content("わたしはねこがすきです");
+        assert_eq!(r.scores.word_count, 6);
+        assert!(r.admitted, "reason: {:?}", r.reason);
+    }
+
+    #[test]
+    fn test_rejects_short_chinese_greeting() {
+        // "你好嗎" is 3 CJK chars -> ceil(3/2) = 2 words, below the floor of 5.
+        let g = gate();
+        let r = g.check_content("你好嗎");
+        assert!(!r.admitted);
+        assert!(matches!(r.reason, Some(RejectionReason::TooShort(2))));
+    }
+
+    #[test]
+    fn test_counts_ascii_pair_as_two_words() {
+        assert_eq!(meaningful_word_count("hello world"), 2);
+    }
+
+    #[test]
+    fn test_counts_mixed_ascii_and_cjk_run_separately() {
+        // "meeting" and "notes" are 2 whitespace words; the trailing 9-char CJK
+        // run counts as ceil(9/2) = 5 words, for 7 total.
+        assert_eq!(meaningful_word_count("meeting notes 今天決定採用新方案"), 7);
     }
 
     #[test]

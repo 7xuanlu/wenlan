@@ -319,7 +319,7 @@ async fn handle_store_memory_inner(
         .resolve_write_space(&req.space, header_space.as_deref())
         .await?;
     let trimmed_content = req.content.trim();
-    if trimmed_content.len() < 10 {
+    if trimmed_content.chars().count() < 10 {
         return Err(ServerError::ValidationError(
             "Memory content must be at least 10 characters".into(),
         ));
@@ -2666,6 +2666,91 @@ mod novelty_store_tests {
             "record_near_duplicate_flag must log the flag from the batcher branch too"
         );
         assert_eq!(rejections[0].rejection_reason, "near_duplicate");
+    }
+}
+
+#[cfg(test)]
+mod content_length_gate_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    async fn empty_state() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            ..ServerState::default()
+        }));
+        (state, tmp)
+    }
+
+    fn store_request(content: &str) -> StoreMemoryRequest {
+        StoreMemoryRequest {
+            content: content.to_string(),
+            memory_type: None,
+            space: (None).into(),
+            source_agent: Some("length-gate-test".to_string()),
+            title: None,
+            confidence: None,
+            supersedes: None,
+            entity: None,
+            entity_id: None,
+            structured_fields: None,
+            retrieval_cue: None,
+        }
+    }
+
+    /// 9 ASCII characters must still be rejected by the minimum-length gate.
+    #[tokio::test]
+    async fn nine_ascii_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(store_request("123456789")),
+        )
+        .await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+    }
+
+    /// 10 Chinese characters is the same "10" floor as ASCII once the gate
+    /// counts `chars()` instead of UTF-8 bytes (each CJK char is 3 bytes, so
+    /// the old byte-length gate would have passed this at just 4 characters).
+    #[tokio::test]
+    async fn ten_chinese_chars_are_accepted() {
+        let (state, _tmp) = empty_state().await;
+        let result = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(store_request("今天天氣非常晴朗好啊")),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "10-char CJK content should clear the length floor: {result:?}"
+        );
+    }
+
+    /// 4 Chinese characters must still be rejected: under the old byte-length
+    /// gate (`content.len() < 10`) this would have passed at 12 UTF-8 bytes.
+    #[tokio::test]
+    async fn four_chinese_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(store_request("你好嗎呀")),
+        )
+        .await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
     }
 }
 

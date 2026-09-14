@@ -32,6 +32,16 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
     },
   });
 
+  // Surfaced verbatim below the textarea on rejection -- same policy other
+  // inline mutation errors in the app use. The draft stays in `content`
+  // either way: nothing here clears it, so a rejected capture (e.g. the
+  // quality gate's "too short" floor) keeps the user's text for a retry.
+  const errorMessage = captureMutation.isError
+    ? captureMutation.error instanceof Error
+      ? captureMutation.error.message
+      : String(captureMutation.error)
+    : null;
+
   const handleSubmit = () => {
     if (!content.trim() || captureMutation.isPending) return;
     captureMutation.mutate({ content: content.trim() });
@@ -188,6 +198,22 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
           autoFocus
           disabled={isPending || saved}
         />
+
+        {errorMessage && (
+          <p
+            role="alert"
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "11px",
+              lineHeight: "1.4",
+              color: "var(--mem-status-danger-text)",
+              marginTop: 4,
+              overflowWrap: "anywhere",
+            }}
+          >
+            {t("quickCapture.saveError", { message: errorMessage })}
+          </p>
+        )}
 
         {/* Bottom bar */}
         <div
