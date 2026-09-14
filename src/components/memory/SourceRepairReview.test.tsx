@@ -341,14 +341,17 @@ describe("SourceRepairReview", () => {
 
   it("preserves the prepare identity when its source check could not run", async () => {
     vi.mocked(api.repairPrepareOperation).mockRejectedValue(new Error('HTTP POST /api/repairs/prepare-current returned 409: {"error":"repair_current_check_unavailable"}'));
-    const { user } = mount(itemFor("memories.semantic.classification"));
+    const item = itemFor("memories.semantic.classification");
+    const { user } = mount(item);
     const choice = await screen.findByLabelText("New memory type");
     await user.selectOptions(choice, "decision");
     await user.click(screen.getByRole("button", { name: "Prepare change" }));
     expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("sourceRepair.preparationUnknown"));
+    expect(await screen.findByRole("alert")).toHaveTextContent(i18n.t("sourceRepair.checkUnavailable"));
     expect(screen.getByRole("button", { name: "Check status" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Cancel this repair" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
     expect(api.repairApply).not.toHaveBeenCalled();
   });
 
@@ -360,8 +363,14 @@ describe("SourceRepairReview", () => {
     await user.type(screen.getByLabelText("New page title"), "Unnecessary title");
     await user.click(screen.getByRole("button", { name: "Prepare change" }));
     expect(await screen.findByRole("status")).toHaveTextContent(i18n.t("sourceRepair.preparationUnknown"));
+    const refusal = await screen.findByRole("alert");
+    expect(refusal).toHaveTextContent(i18n.t("sourceRepair.staleProposal"));
+    expect(refusal).toHaveTextContent(i18n.t("sourceRepair.pendingUntilReviewed"));
+    expect(screen.getByRole("button", { name: "Check status" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel this repair" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Prepare change" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Apply this change" })).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
     expect(api.repairApply).not.toHaveBeenCalled();
   });
 
@@ -1052,6 +1061,62 @@ describe("durable repair operation controls", () => {
     expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).not.toBeNull();
     expect(onVerified).not.toHaveBeenCalled();
     expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it("hands a cancelled preparation with saved progress to manifest recovery without clearing it", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const saved = preparationFor(item);
+    writeRepairPreparation(saved);
+    const payload = item.payload as RepairPayload;
+    writeRepairProgress({ version: 1, reviewId: item.id, checkId: payload.check_id,
+      occurrenceDigest: payload.occurrence_digest, ownerIds: item.sourceIds, phase: "prepared", manifest });
+    vi.mocked(api.repairPrepareOperationStatus).mockResolvedValue(
+      { operation_id: saved.operation.operation_id, state: { phase: "cancelled", cancelled_at: 123 } });
+    mount(item);
+    expect(await screen.findByRole("button", { name: "Apply this change" })).toBeEnabled();
+    expect(screen.queryByText(i18n.t("sourceRepair.cancelledChange"))).toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toBeNull();
+    expect(localStorage.getItem(repairProgressKey(item.id))).not.toBeNull();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+  });
+
+  it("does not send a fresh prepare over a saved progress record", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const { user } = mount(item);
+    await user.type(await screen.findByLabelText("New page title"), "New title");
+    const payload = item.payload as RepairPayload;
+    writeRepairProgress({ version: 1, reviewId: item.id, checkId: payload.check_id,
+      occurrenceDigest: payload.occurrence_digest, ownerIds: item.sourceIds, phase: "prepared", manifest });
+    await user.click(screen.getByRole("button", { name: "Prepare change" }));
+    expect(await screen.findByRole("button", { name: "Apply this change" })).toBeEnabled();
+    expect(api.repairPrepareOperation).not.toHaveBeenCalled();
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(localStorage.getItem(repairProgressKey(item.id))).not.toBeNull();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toBeNull();
+  });
+
+  it("continues a not-started preparation to ready with the same UUID and one send", async () => {
+    const item = itemFor("pages.duplicate_active_titles", page.id);
+    const manifest = await manifestFor(item);
+    const saved = preparationFor(item);
+    writeRepairPreparation(saved);
+    vi.mocked(api.repairPrepareOperationStatus).mockResolvedValue(
+      { operation_id: saved.operation.operation_id, state: { phase: "not_started" } });
+    vi.mocked(api.repairPrepareOperation).mockImplementation(async (request) =>
+      readyPreparation(request.operation_id, manifest));
+    const { user } = mount(item);
+    await user.click(await screen.findByRole("button", { name: "Continue preparing" }));
+    expect(await screen.findByRole("button", { name: "Apply this change" })).toBeEnabled();
+    expect(api.repairPrepareOperation).toHaveBeenCalledTimes(1);
+    expect(api.repairPrepareOperation).toHaveBeenCalledWith(saved.operation);
+    expect(vi.mocked(api.repairPrepareOperation).mock.calls[0][0].operation_id)
+      .toBe(saved.operation.operation_id);
+    expect(api.repairApply).not.toHaveBeenCalled();
+    expect(localStorage.getItem(`wenlan.repair.prepare.v1:${encodeURIComponent(item.id)}`)).toBeNull();
+    expect(localStorage.getItem(repairProgressKey(item.id))).not.toBeNull();
   });
 
   it("ignores a late prepare reply after the component switches to another proposal", async () => {

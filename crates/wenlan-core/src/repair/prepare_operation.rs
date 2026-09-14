@@ -385,6 +385,26 @@ impl RepairArtifactStore {
         Ok(self.root().join(PREPARE_OPERATIONS_DIR).join(operation_id))
     }
 
+    fn ensure_prepare_op_dir(&self, operation_id: &str) -> Result<PathBuf, WenlanError> {
+        let operations_dir = self.root().join(PREPARE_OPERATIONS_DIR);
+        ensure_private_dir(&operations_dir)?;
+        let op_dir = self.prepare_op_dir(operation_id)?;
+        ensure_private_dir(&op_dir)?;
+        // Sync directory entries before admitting work or acknowledging a
+        // cancellation. Syncing request.json's containing directory alone
+        // does not make its own entry in .prepare-operations durable.
+        sync_dir(&operations_dir)?;
+        sync_dir(self.root())?;
+        if let Some(parent) = self
+            .root()
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+        {
+            sync_dir(parent)?;
+        }
+        Ok(op_dir)
+    }
+
     fn read_prepare_record<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, WenlanError> {
         if !artifact_present(path)? {
             return Ok(None);
@@ -637,9 +657,7 @@ impl RepairArtifactStore {
         request.validate().map_err(WenlanError::Validation)?;
         ensure_repair_artifacts_supported()?;
         let operation_id = request.operation_id.clone();
-        ensure_private_dir(&self.root().join(PREPARE_OPERATIONS_DIR))?;
-        let op_dir = self.prepare_op_dir(&operation_id)?;
-        ensure_private_dir(&op_dir)?;
+        let op_dir = self.ensure_prepare_op_dir(&operation_id)?;
         let lock = match self.lock_prepare_operation(&op_dir) {
             Ok(lock) => lock,
             Err(error) if prepare_lock_contended(&error) => {
@@ -749,9 +767,7 @@ impl RepairArtifactStore {
             ));
         }
         let operation_id = request.operation_id.clone();
-        ensure_private_dir(&self.root().join(PREPARE_OPERATIONS_DIR))?;
-        let op_dir = self.prepare_op_dir(&operation_id)?;
-        ensure_private_dir(&op_dir)?;
+        let op_dir = self.ensure_prepare_op_dir(&operation_id)?;
         let lock = match self.lock_prepare_operation(&op_dir) {
             Ok(lock) => lock,
             Err(error) if prepare_lock_contended(&error) => {
