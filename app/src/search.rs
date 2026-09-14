@@ -4803,24 +4803,28 @@ pub async fn sync_registered_source(
     state: tauri::State<'_, State>,
     id: String,
 ) -> Result<SyncStats, String> {
-    let local_source = config::load_config()
-        .sources
-        .iter()
-        .find(|s| s.id == id)
-        .cloned();
+    sync_registered_source_for_state(&state, &id).await
+}
 
-    if matches!(
-        local_source.as_ref().map(|s| &s.source_type),
-        Some(crate::sources::SourceType::Directory)
-    ) {
-        return Err("Only Obsidian sources support manual sync; directory sources use the live file watcher".to_string());
-    }
-
+/// The whole body of `sync_registered_source`, kept apart from the Tauri
+/// wrapper so a test drives the command path with a Directory source
+/// registered in local config. It must not branch on the local source type.
+async fn sync_registered_source_for_state(state: &State, id: &str) -> Result<SyncStats, String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
     };
-    let stats = client.sync_source(&id).await?;
+    sync_registered_source_response(&client, id).await
+}
+
+/// Every registered source syncs through the daemon. For a Directory source
+/// the daemon queues changed files and gives newly queued ones the import
+/// lane, so a folder added in the setup wizard does not wait for the idle gate.
+async fn sync_registered_source_response(
+    client: &crate::api::WenlanClient,
+    id: &str,
+) -> Result<SyncStats, String> {
+    let stats = client.sync_source(id).await?;
     Ok(SyncStats {
         files_found: stats.files_found,
         ingested: stats.ingested,
@@ -4828,6 +4832,111 @@ pub async fn sync_registered_source(
         errors: stats.errors,
         error_detail: None,
     })
+}
+
+#[cfg(test)]
+mod sync_registered_source_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn serve_status_once(
+        status: &'static str,
+        response_body: &'static str,
+    ) -> (crate::api::WenlanClient, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0_u8; 8192];
+            let size = stream.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..size]).to_string();
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body,
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        (
+            crate::api::WenlanClient::with_base_url(format!("http://{address}")),
+            handle,
+        )
+    }
+
+    #[tokio::test]
+    async fn directory_source_sync_forwards_to_the_daemon_sync_route() {
+        let (client, request) = serve_status_once(
+            "200 OK",
+            r#"{"files_found":2,"ingested":2,"skipped":0,"errors":0}"#,
+        )
+        .await;
+
+        let stats = sync_registered_source_response(&client, "directory-notes")
+            .await
+            .expect("a folder source sync must reach the daemon");
+        let request = request.await.unwrap();
+
+        assert!(request.starts_with("POST /api/sources/directory-notes/sync HTTP/1.1\r\n"));
+        assert_eq!(stats.files_found, 2);
+        assert_eq!(stats.ingested, 2);
+    }
+
+    /// Drives the command's own path with a Directory source registered in
+    /// local config, so a restored "only Obsidian sources sync" early return
+    /// fails here instead of silently skipping the daemon sync.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn directory_source_sync_command_path_reaches_the_daemon() {
+        use wenlan_types::sources::{Source, SourceType, SyncStatus};
+
+        let _env = crate::test_env::EnvGuard::capture(&["WENLAN_DATA_DIR", "ORIGIN_DATA_DIR"]);
+        let data_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("WENLAN_DATA_DIR", data_dir.path());
+        std::env::remove_var("ORIGIN_DATA_DIR");
+        config::save_config(&config::Config {
+            sources: vec![Source {
+                id: "directory-notes".to_string(),
+                source_type: SourceType::Directory,
+                path: data_dir.path().join("notes"),
+                status: SyncStatus::Active,
+                last_sync: None,
+                file_count: 0,
+                memory_count: 0,
+                last_sync_errors: 0,
+                last_sync_error_detail: None,
+            }],
+            ..config::Config::default()
+        })
+        .unwrap();
+        assert!(
+            config::load_config()
+                .sources
+                .iter()
+                .any(|source| source.id == "directory-notes"
+                    && source.source_type == SourceType::Directory),
+            "precondition: local config registers the id as a Directory source"
+        );
+
+        let (client, request) = serve_status_once(
+            "200 OK",
+            r#"{"files_found":3,"ingested":3,"skipped":0,"errors":0}"#,
+        )
+        .await;
+        let state: State = Arc::new(RwLock::new(AppState {
+            client,
+            ..AppState::default()
+        }));
+
+        let stats = sync_registered_source_for_state(&state, "directory-notes")
+            .await
+            .expect("the wizard's folder sync must reach the daemon");
+        let request = request.await.unwrap();
+
+        assert!(request.starts_with("POST /api/sources/directory-notes/sync HTTP/1.1\r\n"));
+        assert_eq!(stats.files_found, 3);
+        assert_eq!(stats.ingested, 3);
+    }
 }
 
 #[tauri::command]
