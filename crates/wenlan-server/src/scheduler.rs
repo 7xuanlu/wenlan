@@ -460,6 +460,40 @@ fn periodic_directory_sync_allowed(resource_admitted: bool) -> bool {
     resource_admitted
 }
 
+/// Which registered Directory sources a poll may scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DirectorySyncScope {
+    /// The ordinary resource-admitted pass over every pollable source.
+    All,
+    /// Only sources that have never synced. A folder the app just registered
+    /// must reach the import lane even while ordinary periodic scans defer to
+    /// CPU load; later changes to a synced folder still wait for admission.
+    FirstSyncOnly,
+}
+
+/// Choose this poll's Directory scan. The ordinary scan keeps its resource
+/// gate. When that gate is closed, a first-sync-only scan is allowed under
+/// the import lane's model-free document-prep admission, which ignores CPU
+/// load and input idleness but still defers to memory pressure, thermal
+/// pressure, unavailable host telemetry, and the startup model reservation.
+/// `host_activity` is sampled only when the ordinary gate is closed.
+fn directory_sync_scope(
+    filesystem_resource_status: ResourceStatus,
+    host_activity: impl FnOnce() -> HostActivitySnapshot,
+    startup_model_load_reserved: bool,
+) -> Option<DirectorySyncScope> {
+    if periodic_directory_sync_allowed(filesystem_resource_status.admitted) {
+        return Some(DirectorySyncScope::All);
+    }
+    import_document_prep_block_reason(
+        filesystem_resource_status,
+        host_activity(),
+        startup_model_load_reserved,
+    )
+    .is_none()
+    .then_some(DirectorySyncScope::FirstSyncOnly)
+}
+
 fn automatic_heavy_turn_allowed(
     system_resources_idle: bool,
     ambient_turn_owed: bool,
@@ -1350,8 +1384,19 @@ pub fn spawn_scheduler(
             // Directory source (mtime+hash diff, deletion propagation — no LLM),
             // Changed files are queued here; the ambient controller claims at
             // most one bounded document slice after resource/cooldown admission.
-            if periodic_directory_sync_allowed(filesystem_resource_status.admitted) {
-                if sync_directory_sources(&db).await {
+            let directory_scope = directory_sync_scope(
+                filesystem_resource_status,
+                sample_host_activity,
+                startup_model_load_reserved,
+            );
+            if let Some(scope) = directory_scope {
+                if scope == DirectorySyncScope::FirstSyncOnly {
+                    tracing::debug!(
+                        "[scheduler] periodic directory sync deferred reason={:?}; scanning never-synced sources only",
+                        filesystem_resource_status.block_reason
+                    );
+                }
+                if sync_directory_sources_in_scope(&db, scope).await {
                     // A never-synced source just queued files (the app adds
                     // folders without calling sync). Give them the import
                     // lane once; later polls of that source never re-arm it.
@@ -2133,14 +2178,24 @@ fn should_poll_directory_source(source: &wenlan_types::sources::Source) -> bool 
 /// caller can give that first import the bounded import lane. Intentional
 /// bound: a source that has synced before (including one first synced while
 /// empty) gets no trigger, and its later files wait for the idle-gated lap.
+#[cfg(test)]
 async fn sync_directory_sources(db: &Arc<wenlan_core::db::MemoryDB>) -> bool {
+    sync_directory_sources_in_scope(db, DirectorySyncScope::All).await
+}
+
+/// [`sync_directory_sources`] restricted to `scope`. `FirstSyncOnly` skips
+/// every source that has synced before, so a repeated first-only pass finds
+/// nothing once the first scan recorded its `last_sync`.
+async fn sync_directory_sources_in_scope(
+    db: &Arc<wenlan_core::db::MemoryDB>,
+    scope: DirectorySyncScope,
+) -> bool {
     let config = wenlan_core::config::load_config();
     let mut first_sync_queued = false;
-    for source in config
-        .sources
-        .iter()
-        .filter(|source| should_poll_directory_source(source))
-    {
+    for source in config.sources.iter().filter(|source| {
+        should_poll_directory_source(source)
+            && (scope == DirectorySyncScope::All || source.last_sync.is_none())
+    }) {
         match crate::source_routes::sync_directory_source(db.clone(), source, &config).await {
             Ok(outcome) => {
                 first_sync_queued |= source.last_sync.is_none() && outcome.newly_queued > 0;
