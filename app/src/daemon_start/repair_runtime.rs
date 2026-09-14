@@ -14,6 +14,7 @@ struct PendingResume {
     instance_id: String,
     identity: SidecarIdentity,
     owner: ResumeOwner,
+    uncertain_request: bool,
 }
 
 #[derive(Clone)]
@@ -82,15 +83,42 @@ fn capture_owner(pid: u32) -> Result<(SidecarIdentity, ResumeOwner), String> {
     Ok((identity, ResumeOwner::Service(service)))
 }
 
-fn pending_for(approval: &RepairRuntimeResumeApproval) -> Result<Option<PendingResume>, String> {
-    let pending = PENDING
+fn pending_for(
+    approval: &RepairRuntimeResumeApproval,
+    status: Option<&wenlan_types::repair_runtime::RepairRuntimeStatus>,
+) -> Result<Option<PendingResume>, String> {
+    let mut pending = PENDING
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    // A positively gone owner cannot authorize this new cold instance. Drop
+    // its record before approval matching, then measure the new owner afresh.
+    // Offline retry keeps the old record; it is needed to restart that owner.
+    if pending.as_ref().is_some_and(|previous| {
+        status.is_some_and(|status| {
+            status.repair_only
+                && status.instance_id != previous.instance_id
+                && previous.identity.presence() == ProcessPresence::Gone
+        })
+    }) {
+        *pending = None;
+    }
     match pending.as_ref() {
         Some(pending) if &pending.approval != approval => {
             Err("repair_runtime_other_resume_pending".into())
         }
         pending => Ok(pending.cloned()),
+    }
+}
+
+fn record_resume_failure(
+    saved: &mut Option<PendingResume>,
+    error: &crate::api::RepairRuntimeRequestError,
+) {
+    let uncertain = saved.as_ref().is_some_and(|p| p.uncertain_request);
+    if error.definitive_refusal(uncertain) {
+        *saved = None;
+    } else if let Some(saved) = saved.as_mut() {
+        saved.uncertain_request = true;
     }
 }
 
@@ -102,7 +130,8 @@ async fn attest_normal(
     ensure_not_quitting()?;
     let status = client
         .resume_repair_runtime(approval.for_instance(instance_id.clone()))
-        .await?;
+        .await
+        .map_err(|error| error.to_string())?;
     if status.instance_id != instance_id || status.repair_only || status.shutdown_requested {
         return Err("repair_runtime_not_normal".into());
     }
@@ -122,15 +151,20 @@ pub async fn resume_repair_runtime(
     // later start decision. There is no synchronous guard across an await.
     let _version_heal = version_heal_lock().lock().await;
     let _admission = ResumeAdmission::acquire()?;
-    let mut pending = pending_for(&approval)?;
-    match client.repair_runtime_status().await {
-        Ok(status) if !status.repair_only => {
-            attest_normal(client, &approval, status.instance_id).await?;
+    let current = client.repair_runtime_status().await;
+    // A normal successor authenticates the caller's current receipt directly;
+    // an obsolete in-memory approval must not block that attestation.
+    if let Ok(status) = &current {
+        if !status.repair_only {
+            attest_normal(client, &approval, status.instance_id.clone()).await?;
             *PENDING
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
             return Ok(());
         }
+    }
+    let mut pending = pending_for(&approval, current.as_ref().ok())?;
+    match current {
         Ok(status) => {
             ensure_not_quitting()?;
             if let Some(previous) = pending.as_ref() {
@@ -152,6 +186,7 @@ pub async fn resume_repair_runtime(
                     instance_id: status.instance_id.clone(),
                     identity,
                     owner,
+                    uncertain_request: false,
                 };
                 *PENDING
                     .lock()
@@ -163,8 +198,26 @@ pub async fn resume_repair_runtime(
                 // cannot erase the identity needed for a safe retry.
                 let response = client
                     .resume_repair_runtime(approval.for_instance(status.instance_id.clone()))
-                    .await?;
-                validate_shutdown_response(&status, &response)?;
+                    .await;
+                let response = match response {
+                    Ok(response) => response,
+                    Err(error) => {
+                        let mut saved = PENDING
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        record_resume_failure(&mut saved, &error);
+                        return Err(error.to_string());
+                    }
+                };
+                if let Err(error) = validate_shutdown_response(&status, &response) {
+                    record_resume_failure(
+                        &mut PENDING
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                        &crate::api::RepairRuntimeRequestError::Uncertain(error.clone()),
+                    );
+                    return Err(error);
+                }
             }
         }
         Err(error) if pending.is_none() => return Err(error),
@@ -282,6 +335,116 @@ async fn listener_occupied(client: &crate::api::WenlanClient) -> Result<bool, St
 mod tests {
     use super::*;
     use wenlan_types::repair_runtime::RepairRuntimeStatus;
+
+    fn approval(digit: char) -> RepairRuntimeResumeApproval {
+        use wenlan_types::repair::{ApplyRepairRequest, RepairDigest};
+        let id = format!("repair_550e8400-e29b-41d4-a716-44665544000{digit}");
+        let digest = RepairDigest::parse(&"ab".repeat(32)).unwrap();
+        RepairRuntimeResumeApproval {
+            apply: ApplyRepairRequest::try_new(
+                id.clone(),
+                digest.clone(),
+                format!("apply repair {id} {}", digest.as_str()),
+            )
+            .unwrap(),
+            verification_receipt_digest: RepairDigest::parse(&"cd".repeat(32)).unwrap(),
+        }
+    }
+
+    fn pending_fixture() -> PendingResume {
+        PendingResume {
+            approval: approval('1'),
+            instance_id: "old".into(),
+            identity: SidecarIdentity::capture(std::process::id()),
+            owner: ResumeOwner::Sidecar { generation: 17 },
+            uncertain_request: false,
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_runtime_refusal_releases_old_approval_for_next_repair() {
+        for code in [
+            "repair_background_writer_busy",
+            "repair_runtime_receipt_mismatch",
+            "repair_runtime_pending_repairs",
+        ] {
+            let mut saved = PENDING.lock().unwrap();
+            *saved = Some(pending_fixture());
+            record_resume_failure(
+                &mut saved,
+                &crate::api::RepairRuntimeRequestError::Http {
+                    status: 409,
+                    body: format!(r#"{{"error":"{code}"}}"#),
+                },
+            );
+            assert!(saved.is_none());
+            drop(saved);
+            assert!(pending_for(&approval('2'), None).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_runtime_lost_response_retains_exact_owner_for_offline_retry() {
+        let mut saved = PENDING.lock().unwrap();
+        *saved = Some(pending_fixture());
+        record_resume_failure(
+            &mut saved,
+            &crate::api::RepairRuntimeRequestError::Uncertain("response lost".into()),
+        );
+        // A still-running earlier request can own the provisional seal.
+        record_resume_failure(
+            &mut saved,
+            &crate::api::RepairRuntimeRequestError::Http {
+                status: 409,
+                body: r#"{"error":"repair_background_writer_busy"}"#.into(),
+            },
+        );
+        assert!(saved.as_ref().unwrap().uncertain_request);
+        drop(saved);
+        let retry = pending_for(&approval('1'), None).unwrap().unwrap();
+        assert_eq!(retry.instance_id, "old");
+        assert_eq!(retry.identity.pid.as_u32(), std::process::id());
+        assert!(matches!(
+            retry.owner,
+            ResumeOwner::Sidecar { generation: 17 }
+        ));
+        assert!(pending_for(&approval('2'), None).is_err());
+        *PENDING.lock().unwrap() = None;
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn repair_runtime_new_cold_owner_replaces_only_a_positively_gone_record() {
+        let current = RepairRuntimeStatus {
+            instance_id: "new".into(),
+            pid: std::process::id(),
+            repair_only: true,
+            shutdown_requested: false,
+        };
+        *PENDING.lock().unwrap() = Some(pending_fixture());
+        assert!(pending_for(&approval('2'), Some(&current)).is_err());
+        PENDING
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .identity
+            .started_at = None;
+        assert!(pending_for(&approval('2'), Some(&current)).is_err());
+        // This PID is alive, but a different start time proves the old owner ended.
+        PENDING
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .identity
+            .started_at = Some(u64::MAX);
+        assert!(pending_for(&approval('2'), Some(&current))
+            .unwrap()
+            .is_none());
+    }
 
     #[test]
     #[serial_test::serial]

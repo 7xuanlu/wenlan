@@ -152,9 +152,11 @@ mod tests {
         let manifest = RepairArtifactStore::new(root.path().to_path_buf())
             .load_manifest(receipt.manifest_id())
             .unwrap();
-        let mut server = ServerState::default();
-        server.optional_runtime_workers_suspended = true;
-        server.repair_root = Some(root.path().to_path_buf());
+        let server = ServerState {
+            optional_runtime_workers_suspended: true,
+            repair_root: Some(root.path().to_path_buf()),
+            ..ServerState::default()
+        };
         let request = ResumeRepairRuntimeRequest {
             instance_id: server.runtime_instance_id.clone(),
             apply: ApplyRepairRequest::try_new(
@@ -282,8 +284,10 @@ mod tests {
 
     #[tokio::test]
     async fn external_shutdown_wins_before_resumption_admission() {
-        let mut server = ServerState::default();
-        server.optional_runtime_workers_suspended = true;
+        let server = ServerState {
+            optional_runtime_workers_suspended: true,
+            ..ServerState::default()
+        };
         server.shutdown.request();
         let request = request(&server.runtime_instance_id);
         let state = Arc::new(RwLock::new(server));
@@ -298,9 +302,11 @@ mod tests {
     #[tokio::test]
     async fn missing_durable_artifacts_cannot_retire_runtime_and_release_provisional_seal() {
         let root = tempfile::tempdir().unwrap();
-        let mut server = ServerState::default();
-        server.optional_runtime_workers_suspended = true;
-        server.repair_root = Some(root.path().to_path_buf());
+        let server = ServerState {
+            optional_runtime_workers_suspended: true,
+            repair_root: Some(root.path().to_path_buf()),
+            ..ServerState::default()
+        };
         let request = request(&server.runtime_instance_id);
         let coordinator = server.maintenance_coordinator.clone();
         coordinator

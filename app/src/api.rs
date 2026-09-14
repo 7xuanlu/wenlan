@@ -57,6 +57,42 @@ pub(crate) enum PageUpdateRequestError {
     Http { status: u16, body: String },
 }
 
+#[derive(Debug)]
+pub(crate) enum RepairRuntimeRequestError {
+    Uncertain(String),
+    Http { status: u16, body: String },
+}
+
+impl RepairRuntimeRequestError {
+    pub(crate) fn definitive_refusal(&self, earlier_uncertain: bool) -> bool {
+        let Self::Http { status, body } = self else {
+            return false;
+        };
+        // A retry can encounter a prior accepted request while it drains.
+        // Busy is also ambiguous after a lost response: the earlier request
+        // could still hold the provisional resumption seal.
+        #[derive(Deserialize)]
+        struct Refusal {
+            error: String,
+        }
+        let Ok(refusal) = serde_json::from_str::<Refusal>(body) else {
+            return false;
+        };
+        (400..500).contains(status)
+            && refusal.error != "repair_runtime_shutting_down"
+            && !(earlier_uncertain && refusal.error == "repair_background_writer_busy")
+    }
+}
+
+impl std::fmt::Display for RepairRuntimeRequestError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uncertain(message) => f.write_str(message),
+            Self::Http { status, body } => write!(f, "repair runtime returned {status}: {body}"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SetupStatusResponse {
     pub setup_completed: bool,
@@ -844,12 +880,29 @@ impl WenlanClient {
         self.get_json("/api/repairs/runtime").await
     }
 
-    pub async fn resume_repair_runtime(
+    pub(crate) async fn resume_repair_runtime(
         &self,
         request: wenlan_types::repair_runtime::ResumeRepairRuntimeRequest,
-    ) -> Result<wenlan_types::repair_runtime::RepairRuntimeStatus, String> {
-        self.post_json("/api/repairs/runtime/resume", &request)
+    ) -> Result<wenlan_types::repair_runtime::RepairRuntimeStatus, RepairRuntimeRequestError> {
+        let response = self
+            .client
+            .post(self.url("/api/repairs/runtime/resume"))
+            .json(&request)
+            .send()
             .await
+            .map_err(|error| RepairRuntimeRequestError::Uncertain(error.to_string()))?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response
+                .text()
+                .await
+                .map_err(|error| RepairRuntimeRequestError::Uncertain(error.to_string()))?;
+            return Err(RepairRuntimeRequestError::Http { status, body });
+        }
+        response
+            .json()
+            .await
+            .map_err(|error| RepairRuntimeRequestError::Uncertain(error.to_string()))
     }
 
     pub async fn apply_repair(
@@ -1749,6 +1802,68 @@ mod tests {
             request
         });
         (format!("http://{}", addr), handle)
+    }
+
+    #[tokio::test]
+    async fn repair_runtime_http_refusal_is_distinct_from_a_lost_response() {
+        use wenlan_types::repair::{ApplyRepairRequest, RepairDigest};
+        use wenlan_types::repair_runtime::ResumeRepairRuntimeRequest;
+        let id = "repair_550e8400-e29b-41d4-a716-446655440001";
+        let digest = RepairDigest::parse(&"ab".repeat(32)).unwrap();
+        let request = ResumeRepairRuntimeRequest {
+            instance_id: "instance".into(),
+            apply: ApplyRepairRequest::try_new(
+                id.into(),
+                digest.clone(),
+                format!("apply repair {id} {}", digest.as_str()),
+            )
+            .unwrap(),
+            verification_receipt_digest: RepairDigest::parse(&"cd".repeat(32)).unwrap(),
+        };
+        for (status, body, definitive) in [
+            (
+                "409 Conflict",
+                r#"{"error":"repair_runtime_pending_repairs"}"#,
+                true,
+            ),
+            (
+                "409 Conflict",
+                r#"{"error":"repair_runtime_shutting_down"}"#,
+                false,
+            ),
+            ("200 OK", "truncated JSON", false),
+        ] {
+            let (base_url, server) = serve_response_once(status, body).await;
+            let client = WenlanClient {
+                client: reqwest::Client::new(),
+                base_url,
+            };
+            let error = client
+                .resume_repair_runtime(request.clone())
+                .await
+                .unwrap_err();
+            assert_eq!(error.definitive_refusal(false), definitive);
+            assert!(server
+                .await
+                .unwrap()
+                .starts_with("POST /api/repairs/runtime/resume "));
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).await.unwrap() > 0);
+            // The daemon can commit shutdown and close before the HTTP response arrives.
+        });
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let error = client.resume_repair_runtime(request).await.unwrap_err();
+        assert!(matches!(error, RepairRuntimeRequestError::Uncertain(_)));
+        assert!(!error.definitive_refusal(false));
+        server.await.unwrap();
     }
 
     #[tokio::test]
