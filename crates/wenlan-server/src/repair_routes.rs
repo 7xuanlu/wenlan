@@ -25,7 +25,7 @@ const REPAIR_HANDOFF_TTL: Duration = Duration::from_secs(120);
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     register_execution(
-        router
+        crate::repair_prepare_operation_routes::register_prepare(router)
             .route("/api/repairs/plan", post(handle_plan))
             .route("/api/repairs/plan-current", post(handle_plan_current))
             .route("/api/repairs/plan/entries", post(handle_plan_entries))
@@ -35,9 +35,11 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
 }
 
 pub(crate) fn register_execution(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
-    crate::repair_runtime_routes::register(router)
-        .route("/api/repairs/apply", post(handle_apply))
-        .route("/api/repairs/verify", post(handle_verify))
+    crate::repair_prepare_operation_routes::register_control(
+        crate::repair_operation_routes::register(crate::repair_runtime_routes::register(router)),
+    )
+    .route("/api/repairs/apply", post(handle_apply))
+    .route("/api/repairs/verify", post(handle_verify))
 }
 
 async fn handle_plan(
@@ -134,7 +136,7 @@ pub(crate) fn validate_repair_scope_binding(
     }
 }
 
-fn validate_repair_scope_header(
+pub(crate) fn validate_repair_scope_header(
     header_space: Option<&str>,
     lint_scope: &RepairLintScope,
 ) -> Result<(), ServerError> {
@@ -223,7 +225,7 @@ async fn repair_context(
     ))
 }
 
-fn now_epoch_seconds() -> Result<i64, ServerError> {
+pub(crate) fn now_epoch_seconds() -> Result<i64, ServerError> {
     let seconds = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| ServerError::Internal(format!("system clock before epoch: {error}")))?

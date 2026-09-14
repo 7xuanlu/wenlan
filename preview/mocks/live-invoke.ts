@@ -384,6 +384,11 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   repair_plan_entries: nativeRepairRequired,
   repair_recovery: nativeRepairRequired,
   repair_resume_runtime: nativeRepairRequired,
+  repair_operation_status: nativeRepairRequired,
+  repair_cancel: nativeRepairRequired,
+  repair_prepare_operation: nativeRepairRequired,
+  repair_prepare_operation_status: nativeRepairRequired,
+  repair_prepare_operation_cancel: nativeRepairRequired,
 
   // --- import ---
   // The import view is the one screen whose whole point is what happens

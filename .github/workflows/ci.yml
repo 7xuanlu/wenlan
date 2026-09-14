@@ -351,6 +351,7 @@ jobs:
               # refusal, so they now carry a platform route and must schedule
               # the lanes that prove the gate on both sides.
               - 'crates/wenlan-core/src/repair_plan_tests.rs'
+              - 'crates/wenlan-core/src/db/repair_deterministic_test.rs'
               - 'crates/wenlan-core/src/db/repair_memory_cas_test.rs'
               - 'crates/wenlan-core/src/db/repair_page_regenerate_test.rs'
               - 'crates/wenlan-core/src/db/repair_page_rename_test.rs'
@@ -380,6 +381,8 @@ jobs:
               - 'crates/wenlan-server/src/main/startup.rs'
               - 'crates/wenlan-server/src/presence_review_test.rs'
               - 'crates/wenlan-server/src/repair_runtime_routes.rs'
+              - 'crates/wenlan-server/src/repair_operation_routes.rs'
+              - 'crates/wenlan-server/src/repair_prepare_operation_routes.rs'
               - 'crates/wenlan-server/src/scheduler.rs'
               - 'crates/wenlan-server/src/scheduler/scheduler_tests.rs'
               - 'crates/wenlan-server/src/telemetry.rs'
@@ -411,6 +414,8 @@ jobs:
               - 'crates/wenlan-server/src/main/startup.rs'
               - 'crates/wenlan-server/src/presence_review_test.rs'
               - 'crates/wenlan-server/src/repair_runtime_routes.rs'
+              - 'crates/wenlan-server/src/repair_operation_routes.rs'
+              - 'crates/wenlan-server/src/repair_prepare_operation_routes.rs'
               - 'crates/wenlan-server/src/telemetry.rs'
               - 'crates/wenlan-server/tests/graceful_shutdown.rs'
               - 'crates/wenlan-mcp/npm/install.js'
@@ -429,6 +434,7 @@ jobs:
               # refusal, so they now carry a platform route and must schedule
               # the lanes that prove the gate on both sides.
               - 'crates/wenlan-core/src/repair_plan_tests.rs'
+              - 'crates/wenlan-core/src/db/repair_deterministic_test.rs'
               - 'crates/wenlan-core/src/db/repair_memory_cas_test.rs'
               - 'crates/wenlan-core/src/db/repair_page_regenerate_test.rs'
               - 'crates/wenlan-core/src/db/repair_page_rename_test.rs'

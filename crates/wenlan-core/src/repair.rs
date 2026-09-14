@@ -34,6 +34,7 @@ use std::{
     str::FromStr,
 };
 use uuid::Uuid;
+
 use wenlan_types::{
     lint::{
         LintCheckResult, LintDigest, LintEvidenceRef, LintGateEffect, LintMetricCode,
@@ -91,11 +92,14 @@ const REPAIR_ROLLBACK_ARTIFACT_MAX_BYTES: u64 = 40 * 1024 * 1024;
 mod title_rename_tests;
 
 pub mod current;
+pub mod operation;
+pub mod prepare_operation;
 pub(crate) mod review_completion;
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
     root: PathBuf,
+    prepare_binding: Option<prepare_operation::PrepareBinding>,
 }
 
 pub(crate) enum RenamePageTitleRecoveryArtifact {
@@ -198,7 +202,10 @@ fn review_completion_marker_mismatch() -> WenlanError {
 
 impl RepairArtifactStore {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            prepare_binding: None,
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -469,6 +476,18 @@ impl RepairArtifactStore {
         manifest: &RepairManifest,
         rollback_bytes: &[u8],
     ) -> Result<(), WenlanError> {
+        self.persist_prepared_with_hook(manifest, rollback_bytes, || Ok(()))
+    }
+
+    fn persist_prepared_with_hook<F>(
+        &self,
+        manifest: &RepairManifest,
+        rollback_bytes: &[u8],
+        before_publish: F,
+    ) -> Result<(), WenlanError>
+    where
+        F: FnOnce() -> Result<(), WenlanError>,
+    {
         ensure_private_dir(&self.root)?;
         let final_dir = self.manifest_dir(manifest.manifest_id())?;
         if final_dir.exists() {
@@ -491,6 +510,8 @@ impl RepairArtifactStore {
                 &serde_json::to_vec_pretty(manifest)?,
             )?;
             sync_dir(&temp_dir)?;
+            self.bind_prepared_result(manifest)?;
+            before_publish()?;
             fs::rename(&temp_dir, &final_dir)?;
             sync_dir(&self.root)?;
             Ok::<(), WenlanError>(())
@@ -2437,6 +2458,7 @@ async fn apply_repair_with_pages_inner(
         ));
     }
     let _operation_lock = store.lock_manifest_operation(manifest.manifest_id())?;
+    store.ensure_not_cancelled(&manifest)?;
     let _tag_record_set_lock = store.lock_tag_record_set(&manifest)?;
     if manifest.writer() == RepairWriter::RenamePageTitle {
         let page_root = page_root.ok_or_else(|| {
@@ -7146,7 +7168,7 @@ mod tests {
         assert!(!rollback_targets_retired_store(&rollback));
     }
 
-    async fn fixture() -> (MemoryDB, tempfile::TempDir) {
+    pub(super) async fn fixture() -> (MemoryDB, tempfile::TempDir) {
         let (db, dir) = test_db().await;
         db.test_primary_session()
             .await
@@ -7168,7 +7190,7 @@ mod tests {
         (db, dir)
     }
 
-    async fn request(db: &MemoryDB) -> PrepareRepairRequest {
+    pub(super) async fn request(db: &MemoryDB) -> PrepareRepairRequest {
         request_for_scope(db, RepairLintScope::global(), None).await
     }
 

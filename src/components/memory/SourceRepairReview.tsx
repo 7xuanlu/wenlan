@@ -10,7 +10,11 @@ import {
   listEntities,
   repairApply,
   repairLint,
-  repairPrepareCurrent,
+  repairPrepareOperation,
+  repairPrepareOperationStatus,
+  repairPrepareOperationCancel,
+  repairOperationStatus,
+  repairCancel,
   repairRecovery,
   repairResumeRuntime,
   repairVerify,
@@ -26,6 +30,8 @@ import "./SourceRepairReview.css";
 import {
   applyRequestForManifest,
   classifyApplyFailure,
+  clearRepairProgress,
+  validateRepairOperationStatus,
   readRepairProgress,
   validateRepairApplyReceipt,
   validateRepairManifestBinding,
@@ -43,7 +49,10 @@ import type {
   RepairManifest,
   RepairApplyReceipt,
   RepairVerificationReceipt,
+  RepairOperationStatus,
+  RepairPrepareOperationStatus,
 } from "../../lib/repairTypes";
+import { readRepairPreparation, writeRepairPreparation, clearRepairPreparation, validateRepairPreparationStatus, type RepairPreparationRecord } from "../../lib/repairPreparation";
 
 type RepairReviewItem = Extract<ReviewItem, { kind: "refinement" }>;
 type RepairPayload = Extract<RefinementPayload, { action: "lint_repair_review" }>;
@@ -190,6 +199,8 @@ type FlowState =
   | "inspecting"
   | "ready"
   | "preparing"
+  | "uncertain_prepare"
+  | "cancelled"
   | "prepared"
   | "applying"
   | "uncertain_apply"
@@ -200,7 +211,7 @@ type FlowState =
   | "verified"
   | "error";
 
-type ErrorKind = "target" | "unsupported" | "stale" | "storage" | "recovery" | "check_unavailable" | "prepare" | "pre_apply" | "verify" | "unknown_apply" | "service_unavailable";
+type ErrorKind = "target" | "unsupported" | "stale" | "storage" | "recovery" | "check_unavailable" | "prepare" | "pre_apply" | "verify" | "unknown_apply" | "service_unavailable" | "operation";
 
 const ACTIVITY_STATES: ActivityResponse["state"][] = [
   "up_to_date",
@@ -258,6 +269,14 @@ export default function SourceRepairReview({
   const [busy, setBusy] = useState(false);
   const [recoveryAttempt, setRecoveryAttempt] = useState(0);
   const [recoveryRetryable, setRecoveryRetryable] = useState(false);
+  const [preparationGate, setPreparationGate] = useState<"checking" | "ready" | "held">("checking");
+  const [preparation, setPreparation] = useState<RepairPreparationRecord | null>(null);
+  const [preparationPhase, setPreparationPhase] = useState<RepairPrepareOperationStatus["state"]["phase"] | "unknown">("unknown");
+  const [operationPhase, setOperationPhase] = useState<RepairOperationStatus["state"]["phase"] | "unknown">("unknown");
+  // A persisted prepare send refused by the daemon keeps its exact
+  // preparation record for query/cancel and shows the refusal reason visibly.
+  const [prepareRefusal, setPrepareRefusal] = useState<"stale" | "check_unavailable" | null>(null);
+  const operationEpochRef = useRef(0);
   const requestInFlightRef = useRef(false);
   const retainedBusyRef = useRef(false);
   const approvalPreflightRef = useRef(false);
@@ -318,7 +337,88 @@ export default function SourceRepairReview({
     };
   }, []);
 
+  const progressForOperation = (nextManifest: RepairManifest, status: RepairOperationStatus): RepairProgressRecord | null => {
+    if (!identity || !validateRepairOperationStatus(status, nextManifest)) throw new Error("repair operation status is not bound to this manifest");
+    const state = status.state;
+    if (state.phase === "cancelled") return null;
+    const phase: RepairProgressPhase = state.phase === "prepared" ? "prepared" : state.phase === "verified" ? "verified" : state.phase === "applied_unverified" ? "applied_unverified" : "applying";
+    return { ...identity, version: 1, phase, manifest: nextManifest,
+      ...((state.phase === "applied_unverified" || state.phase === "verified") ? { applyReceipt: state.apply_receipt } : {}),
+      ...(state.phase === "verified" ? { verificationReceipt: state.verification_receipt } : {}),
+    };
+  };
+
+  // Resolve a saved client ID before the older manifest recovery path can
+  // expose editable inputs. A lost prepare response is not permission to start over.
   useEffect(() => {
+    let stopped = false;
+    operationEpochRef.current += 1;
+    setPreparationGate("checking");
+    setPreparation(null);
+    setPreparationPhase("unknown");
+    setOperationPhase("unknown");
+    setPrepareRefusal(null);
+    if (!supported || !identity) { setPreparationGate("ready"); return; }
+    requestInFlightRef.current = true;
+    setBusyState(true);
+    const savedPreparation = readRepairPreparation(identity);
+    if (savedPreparation.error) {
+      setPreparationGate("held"); setFlow("error"); setErrorKind("storage");
+      setErrorDetail(diagnostic(savedPreparation.error)); setRecoveryRetryable(true); finishRequest(true);
+      return;
+    }
+    if (!savedPreparation.record) { setPreparationGate("ready"); return; }
+    const saved = savedPreparation.record;
+    setPreparation(saved);
+    setFlow("uncertain_prepare");
+    setPreparationGate("held");
+    const load = async () => {
+      try {
+        const result = await repairPrepareOperationStatus(saved.operation);
+        if (stopped || !mountedRef.current) return;
+        if (!validateRepairPreparationStatus(result, saved.operation, identity)) throw new Error("invalid preparation recovery response");
+        const existing = readRepairProgress(identity);
+        if (existing.error) throw existing.error;
+        if (result.state.phase === "ready") {
+          const nextManifest = result.state.manifest;
+          if (existing.record && (existing.record.manifest.manifest_id !== nextManifest.manifest_id || existing.record.manifest.manifest_digest !== nextManifest.manifest_digest)) throw new Error("preparation conflicts with saved manifest recovery");
+          if (!(await validateRepairManifestDigest(nextManifest))) throw new Error("invalid recovered manifest digest");
+          if (stopped || !mountedRef.current) return;
+          const record = progressForOperation(nextManifest, result.state.operation);
+          if (record) writeRepairProgress(record); else clearRepairProgress(identity.reviewId);
+          clearRepairPreparation(identity.reviewId);
+          setPreparation(null);
+          if (record) setPreparationGate("ready");
+          else { setFlow("cancelled"); setErrorKind(null); finishRequest(false); }
+        } else {
+          if (result.state.phase === "cancelled" && existing.record) {
+            // An acknowledged cancellation meets an unrelated saved manifest:
+            // drop only the preparation and let existing progress recovery own
+            // the UI. The saved manifest is never cleared or marked cancelled.
+            clearRepairPreparation(identity.reviewId);
+            if (stopped || !mountedRef.current) return;
+            setPreparation(null); setPrepareRefusal(null); setPreparationGate("ready");
+            return;
+          }
+          if (existing.record) throw new Error("unresolved preparation conflicts with saved manifest recovery");
+          setPreparationPhase(result.state.phase);
+          setPrepareRefusal(null);
+          if (result.state.phase === "cancelled") {
+            clearRepairPreparation(identity.reviewId); setPreparation(null); setFlow("cancelled"); setErrorKind(null); finishRequest(false);
+          } else { setFlow("uncertain_prepare"); finishRequest(true); }
+        }
+      } catch (error) {
+        if (stopped || !mountedRef.current) return;
+        setFlow("uncertain_prepare"); setErrorKind("operation"); setErrorDetail(diagnostic(error)); finishRequest(true);
+      }
+    };
+    void load();
+    return () => { stopped = true; operationEpochRef.current += 1; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [identity?.reviewId, identity?.occurrenceDigest, supported, recoveryAttempt]);
+
+  useEffect(() => {
+    if (preparationGate !== "ready") return;
     if ((!supported && !readOnlyPageCheck) || !identity || !payload) {
       setFlow("error");
       setErrorKind("unsupported");
@@ -372,6 +472,7 @@ export default function SourceRepairReview({
         // Activity probe before Continue is real; do not claim "verified"
         // until that async work actually succeeds (see probeNormalService).
         setFlow(verifiedRecoveryReady ? "restoring_service" : hasValidReceipt ? "applied_unverified" : "uncertain_apply");
+        if (!hasValidReceipt) setErrorKind("operation");
         retainedBusyRef.current = true;
       } else {
         setFlow("prepared");
@@ -455,6 +556,7 @@ export default function SourceRepairReview({
             setManifest(recovered.manifest);
             setApplyReceipt(recovered.applyReceipt);
             setFlow(recovered.applyReceipt ? "applied_unverified" : "uncertain_apply");
+            if (!recovered.applyReceipt) setErrorKind("operation");
             retainedBusyRef.current = true;
           } else {
             // Keep the storage failure visible when the daemon has no copy.
@@ -464,6 +566,29 @@ export default function SourceRepairReview({
           }
         }
 
+        if (recoveryRecord?.phase === "prepared" && !localRecoveryBlocked) {
+          const nextManifest = recoveryRecord.manifest;
+          recoveryReadFailed = true;
+          const status = await repairOperationStatus(applyRequestForManifest(nextManifest));
+          if (cancelled || !mountedRef.current) return;
+          if (!validateRepairOperationStatus(status, nextManifest)) throw new Error("invalid saved repair operation status");
+          const nextRecord = progressForOperation(nextManifest, status);
+          if (!nextRecord) {
+            clearRepairProgress(identity.reviewId); setManifest(null); setFlow("cancelled"); setErrorKind(null); finishRequest(false); return;
+          }
+          writeRepairProgress(nextRecord);
+          recoveryRecord = nextRecord;
+          setOperationPhase(status.state.phase);
+          setApplyReceipt(nextRecord.applyReceipt ?? null);
+          setVerificationReceipt(nextRecord.verificationReceipt ?? null);
+          // An in_progress/indeterminate manifest status keeps the conservative
+          // applying phase (no new mutations under an unknown lock owner) and
+          // still explains the operation next to the explicit recovery actions.
+          if (nextRecord.phase === "applying") setErrorKind("operation");
+          verifiedRecoveryReady = nextRecord.phase === "verified";
+          setFlow(nextRecord.phase === "prepared" ? "prepared" : nextRecord.phase === "verified" ? "restoring_service" : nextRecord.applyReceipt ? "applied_unverified" : "uncertain_apply");
+          recoveryReadFailed = false;
+        }
         if (cancelled || !mountedRef.current) return;
         if (!targetId) throw new Error("the proposal has no single target");
         let loadedTarget: MemoryItem | Page | null;
@@ -525,7 +650,7 @@ export default function SourceRepairReview({
         const recovering = recoveryRecord &&
           (recoveryRecord.phase === "applying" || recoveryRecord.phase === "applied_unverified" || recoveryRecord.phase === "verified");
         if (!recovering) {
-          setFlow(saved.record ? "prepared" : "ready");
+          setFlow(recoveryRecord ? "prepared" : "ready");
           retainedBusyRef.current = false;
           finishRequest(false);
         } else {
@@ -578,7 +703,7 @@ export default function SourceRepairReview({
   // The keyed host component remounts for a new proposal; these are the
   // identity fields needed to prevent a late reply crossing that boundary.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkId, identity?.occurrenceDigest, identity?.reviewId, readOnlyPageCheck, recoveryAttempt, supported, targetId]);
+  }, [checkId, identity?.occurrenceDigest, identity?.reviewId, readOnlyPageCheck, recoveryAttempt, supported, targetId, preparationGate]);
 
   const writeProgress = (record: RepairProgressRecord): boolean => {
     try {
@@ -650,12 +775,132 @@ export default function SourceRepairReview({
     }
   };
 
+  const consumeOperationStatus = async (nextManifest: RepairManifest, status: RepairOperationStatus, epoch: number) => {
+    if (!identity || !validateRepairOperationStatus(status, nextManifest) || !validateRepairManifestBinding(nextManifest, identity).ok) throw new Error("repair status does not match this proposal");
+    if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+    const record = progressForOperation(nextManifest, status);
+    if (!record) {
+      clearRepairProgress(identity.reviewId);
+      clearRepairPreparation(identity.reviewId);
+      setPreparation(null); setPrepareRefusal(null); setManifest(null); setApplyReceipt(null); setVerificationReceipt(null);
+      setFlow("cancelled"); setErrorKind(null); setErrorDetail(null); finishRequest(false);
+      return;
+    }
+    writeRepairProgress(record);
+    clearRepairPreparation(identity.reviewId);
+    setPrepareRefusal(null);
+    setPreparation(null); setManifest(nextManifest); setApplyReceipt(record.applyReceipt ?? null);
+    setVerificationReceipt(record.verificationReceipt ?? null); setOperationPhase(status.state.phase);
+    setErrorKind(null); setErrorDetail(null);
+    switch (record.phase) {
+      case "prepared": setFlow("prepared"); finishRequest(false); break;
+      case "applying": setFlow("uncertain_apply"); setErrorKind("operation"); finishRequest(true); break;
+      case "applied_unverified": setFlow("applied_unverified"); finishRequest(true); break;
+      case "verified":
+        if (record.verificationReceipt && await probeNormalService(nextManifest, record.verificationReceipt, () => operationEpochRef.current !== epoch)) {
+          if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+          setFlow("verified"); finishRequest(false);
+        }
+        break;
+    }
+  };
+
+  const consumePreparationStatus = async (saved: RepairPreparationRecord, result: unknown, epoch: number) => {
+    if (!identity || !validateRepairPreparationStatus(result, saved.operation, identity)) throw new Error("invalid repair preparation status");
+    if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+    if (result.state.phase === "ready") {
+      const existing = readRepairProgress(identity);
+      if (existing.error) throw existing.error;
+      if (existing.record && (existing.record.manifest.manifest_id !== result.state.manifest.manifest_id || existing.record.manifest.manifest_digest !== result.state.manifest.manifest_digest)) throw new Error("preparation conflicts with saved manifest recovery");
+      if (!(await validateRepairManifestDigest(result.state.manifest))) throw new Error("invalid prepared manifest digest");
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      await consumeOperationStatus(result.state.manifest, result.state.operation, epoch);
+      return;
+    }
+    const existing = readRepairProgress(identity);
+    if (existing.error) throw existing.error;
+    if (existing.record) {
+      if (result.state.phase === "cancelled") {
+        // An acknowledged cancellation meets an unrelated saved manifest:
+        // drop only the preparation and hand off to existing progress
+        // recovery. The saved manifest is never cleared or marked cancelled.
+        clearRepairPreparation(identity.reviewId);
+        if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+        setPreparation(null); setPrepareRefusal(null);
+        setPreparationGate("checking");
+        setRecoveryAttempt((attempt) => attempt + 1);
+        return;
+      }
+      throw new Error("unresolved preparation conflicts with saved manifest recovery");
+    }
+    setPreparationPhase(result.state.phase);
+    setPrepareRefusal(null);
+    setErrorKind(null); setErrorDetail(null);
+    if (result.state.phase === "cancelled") {
+      clearRepairPreparation(identity.reviewId);
+      setPreparation(null); setFlow("cancelled"); finishRequest(false);
+    } else {
+      setPreparation(saved); setFlow("uncertain_prepare"); finishRequest(true);
+    }
+  };
+
+  const checkPreparation = async (action: "status" | "cancel" | "retry") => {
+    const saved = preparation;
+    if (!saved || !beginRequest()) return;
+    const epoch = operationEpochRef.current;
+    try {
+      const result = action === "cancel" ? await repairPrepareOperationCancel(saved.operation)
+        : action === "retry" ? await repairPrepareOperation(saved.operation)
+        : await repairPrepareOperationStatus(saved.operation);
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      await consumePreparationStatus(saved, result, epoch);
+    } catch (error) {
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      setFlow("uncertain_prepare"); setErrorKind("operation"); setErrorDetail(diagnostic(error)); finishRequest(true);
+    }
+  };
+
+  const checkManifestOperation = async (cancel = false) => {
+    const nextManifest = manifest;
+    if (!nextManifest || !beginRequest()) return;
+    const epoch = operationEpochRef.current;
+    try {
+      const request = applyRequestForManifest(nextManifest);
+      const status = cancel ? await repairCancel(request) : await repairOperationStatus(request);
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      await consumeOperationStatus(nextManifest, status, epoch);
+    } catch (error) {
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      setOperationPhase("unknown"); setFlow("uncertain_apply"); setErrorKind("operation"); setErrorDetail(diagnostic(error)); finishRequest(true);
+    }
+  };
+
   const prepare = async () => {
     // Check all local prerequisites before taking the host navigation lock.
     if (!identity || !payload || !supported || !target || !beginRequest()) return;
+    const epoch = operationEpochRef.current;
+    // A fresh prepare must never overwrite a saved manifest. An unreadable
+    // progress record fails closed to existing recovery.
+    const guardedProgress = readRepairProgress(identity);
+    if (guardedProgress.error) {
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      setFlow("error"); setErrorKind("storage"); setErrorDetail(diagnostic(guardedProgress.error));
+      setRecoveryRetryable(true); finishRequest(true); return;
+    }
+    if (guardedProgress.record) {
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      // Preserve the saved manifest and let existing progress recovery own
+      // the UI instead of sending a replacement prepare.
+      setPreparationGate("checking");
+      setRecoveryAttempt((attempt) => attempt + 1);
+      return;
+    }
+    let savedPreparation: RepairPreparationRecord | null = null;
+    let preparationPersisted = false;
     setFlow("preparing");
     setErrorKind(null);
     setErrorDetail(null);
+    setPrepareRefusal(null);
     try {
       const lintScope = scopeFor(targetSpace(target));
       let choice: CurrentRepairChoice;
@@ -690,28 +935,33 @@ export default function SourceRepairReview({
       } else {
         throw new Error("unsupported source repair check");
       }
-      const prepared = await repairPrepareCurrent({
-        lint_scope: lintScope,
-        choice,
-      });
-      const binding = validateRepairManifestBinding(prepared, identity);
-      if (!binding.ok) {
-        setWorkflowError("stale", binding.reason);
-        return;
-      }
-      const record = baseRecord(prepared, "prepared");
-      if (!writeProgress(record)) {
-        setWorkflowError("storage", "local repair progress could not be saved");
-        return;
-      }
-      if (!mountedRef.current) return;
-      setManifest(prepared);
-      setApplyReceipt(null);
-      setVerificationReceipt(null);
-      setFlow("prepared");
-      finishRequest(false);
+      savedPreparation = { ...identity, version: 1, operation: {
+        operation_id: crypto.randomUUID(), request: { lint_scope: lintScope, choice },
+      } };
+      // A storage failure must happen before any request is sent.
+      writeRepairPreparation(savedPreparation);
+      preparationPersisted = true;
+      setPreparation(savedPreparation);
+      setPreparationPhase("unknown");
+      const result = await repairPrepareOperation(savedPreparation.operation);
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      await consumePreparationStatus(savedPreparation, result, epoch);
     } catch (error) {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current || operationEpochRef.current !== epoch) return;
+      // Only a successfully persisted ID may have been sent; preserve it for
+      // lookup. A daemon refusal keeps the exact record and its query/cancel
+      // actions, and maps stale/unavailable codes to visible diagnostic copy.
+      if (savedPreparation && preparationPersisted) {
+        const code = daemonErrorMessage(error);
+        const staleRefusal = code === "repair_current_finding_missing" ||
+          code === "repair_target_stale" || code === "unsupported_repair_finding";
+        setPrepareRefusal(staleRefusal ? "stale" : code === "repair_current_check_unavailable" ? "check_unavailable" : null);
+        setPreparation(savedPreparation); setFlow("uncertain_prepare"); setErrorKind("operation");
+        setErrorDetail(diagnostic(error)); finishRequest(true); return;
+      }
+      if (savedPreparation && !preparationPersisted) {
+        setWorkflowError("storage", error); setRecoveryRetryable(true); return;
+      }
       const code = daemonErrorMessage(error);
       const noCurrentFinding = code === "repair_current_finding_missing" ||
         code === "repair_target_stale" || code === "unsupported_repair_finding";
@@ -886,7 +1136,7 @@ export default function SourceRepairReview({
   const recover = async () => {
     if (!manifest) return;
     if (flow === "uncertain_apply") {
-      await apply();
+      await checkManifestOperation();
       return;
     }
     if (flow === "applied_unverified" && applyReceipt) {
@@ -945,7 +1195,15 @@ export default function SourceRepairReview({
     previewEntities.length !== mutationPreview.entity_ids.length;
 
   const actions = <>
-      {flow === "uncertain_apply" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.recoverApply")}</button>}
+      {flow === "uncertain_prepare" && preparation && <>
+        <button type="button" style={buttonStyle} disabled={busy} onClick={() => void checkPreparation("status")}>{t("sourceRepair.checkOperation")}</button>
+        <button type="button" style={buttonStyle} disabled={busy} onClick={() => void checkPreparation("cancel")}>{t("sourceRepair.cancelChange")}</button>
+        {preparationPhase === "not_started" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void checkPreparation("retry")}>{t("sourceRepair.retryPreparation")}</button>}
+      </>}
+      {flow === "cancelled" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => { setPreparationGate("checking"); setRecoveryAttempt((old) => old + 1); }}>{t("sourceRepair.chooseAgain")}</button>}
+      {(flow === "prepared" || (flow === "error" && errorKind === "target" && manifest)) && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void checkManifestOperation(true)}>{t("sourceRepair.cancelChange")}</button>}
+      {flow === "uncertain_apply" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.checkOperation")}</button>}
+      {flow === "uncertain_apply" && operationPhase === "indeterminate" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void apply()}>{t("sourceRepair.recoverApply")}</button>}
       {flow === "applied_unverified" && applyReceipt && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.retryVerification")}</button>}
       {flow === "verified_service_unavailable" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void retryNormalService()}>{t("sourceRepair.checkAgain")}</button>}
       {flow === "verified" && <button type="button" style={buttonStyle} disabled={busy || !serviceReadyRef.current} onClick={finishVerified}>{t("sourceRepair.continueVerified")}</button>}
@@ -976,9 +1234,30 @@ export default function SourceRepairReview({
     return <div role="status" style={paneStyle}>{t("sourceRepair.inspecting")}</div>;
   }
 
+  if (flow === "uncertain_prepare" || flow === "cancelled") {
+    const copy = flow === "cancelled" ? "sourceRepair.cancelledChange" : preparationPhase === "in_progress" ? "sourceRepair.preparationInProgress" : preparationPhase === "interrupted" ? "sourceRepair.preparationInterrupted" : preparationPhase === "not_started" ? "sourceRepair.preparationNotStarted" : "sourceRepair.preparationUnknown";
+    return <div className="source-repair" style={paneStyle}>
+      <p role="status" style={{ margin: 0 }}>{t(copy)}</p>
+      {flow === "uncertain_prepare" && prepareRefusal === "stale" && (
+        <div role="alert" className="source-repair-notice" style={paneStyle}>
+          <p>{t("sourceRepair.staleProposal")}</p>
+          <p>{t("sourceRepair.pendingUntilReviewed")}</p>
+        </div>
+      )}
+      {flow === "uncertain_prepare" && prepareRefusal === "check_unavailable" && (
+        <div role="alert" className="source-repair-notice" style={paneStyle}>
+          <p>{t("sourceRepair.checkUnavailable")}</p>
+        </div>
+      )}
+      {actionHost ? createPortal(actions, actionHost) : actions}
+      {errorDetail && diagnosticDetails}
+    </div>;
+  }
+
   if (flow === "error" && errorKind === "target") {
     return <div role="alert" className="source-repair-notice" style={paneStyle}>
       <p>{t("sourceRepair.targetMissing")}</p>
+      {actionHost ? createPortal(actions, actionHost) : actions}
       {diagnosticDetails}
     </div>;
   }
@@ -1028,6 +1307,11 @@ export default function SourceRepairReview({
       {errorKind === "pre_apply" && (
         <div role="alert" className="source-repair-notice" style={paneStyle}>
           <p>{t("sourceRepair.notApplied")}</p>
+        </div>
+      )}
+      {errorKind === "operation" && (
+        <div role="status" className="source-repair-notice" style={paneStyle}>
+          <p>{t(operationPhase === "in_progress" ? "sourceRepair.operationInProgress" : operationPhase === "indeterminate" ? "sourceRepair.operationIndeterminate" : "sourceRepair.operationUnknown")}</p>
         </div>
       )}
       {errorKind === "unknown_apply" && (

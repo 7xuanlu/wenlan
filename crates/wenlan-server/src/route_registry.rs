@@ -374,6 +374,8 @@ where
 #[rustfmt::skip]
 const NON_SENSITIVE_PATHS: &[&str] = &[
     "/api/repairs/runtime", "/api/repairs/runtime/resume",
+    "/api/repairs/status", "/api/repairs/cancel",
+    "/api/repairs/prepare-operation", "/api/repairs/prepare-operation/status", "/api/repairs/prepare-operation/cancel",
     "/api/health", "/api/status", "/api/lint", "/api/repairs/plan", "/api/repairs/plan-current", "/api/repairs/plan/entries", "/api/repairs/prepare", "/api/repairs/prepare-current", "/api/repairs/recovery/{review_id}", "/api/repairs/apply", "/api/repairs/verify", "/api/llm/test", "/api/shutdown", "/api/telemetry",
     "/api/ambient/status", "/api/ambient/sweep",
     "/api/steep", "/api/distill", "/api/distill/{page_id}",

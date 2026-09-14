@@ -86,6 +86,11 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "get_memory_revisions",
     "repair_recovery",
     "repair_resume_runtime",
+    "repair_operation_status",
+    "repair_cancel",
+    "repair_prepare_operation",
+    "repair_prepare_operation_status",
+    "repair_prepare_operation_cancel",
   ],
   memoryActions: [
     "update_memory_cmd",
