@@ -12,6 +12,7 @@ import {
   repairLint,
   repairPrepareCurrent,
   repairRecovery,
+  repairResumeRuntime,
   repairVerify,
   type Entity,
   type MemoryItem,
@@ -194,6 +195,7 @@ type FlowState =
   | "uncertain_apply"
   | "verifying"
   | "applied_unverified"
+  | "restoring_service"
   | "verified_service_unavailable"
   | "verified"
   | "error";
@@ -261,6 +263,12 @@ export default function SourceRepairReview({
   const approvalPreflightRef = useRef(false);
   const mountedRef = useRef(true);
   const reportedVerifiedRef = useRef(false);
+  // Distinct from `flow === "verified"`: set only after native runtime
+  // resumption AND a fresh Activity probe both succeed for the current
+  // identity. Continue/finishVerified gate on this, not on `flow` alone, so a
+  // synchronous pre-probe render can never make the button clickable.
+  const serviceReadyRef = useRef(false);
+  const serviceEpochRef = useRef(0);
 
   const setBusyState = (next: boolean) => {
     if (!mountedRef.current) return;
@@ -333,6 +341,9 @@ export default function SourceRepairReview({
     setSelectedType("");
     setNewTitle("");
     setRecoveryRetryable(false);
+    serviceEpochRef.current += 1;
+    // Reset for this identity/request before any branch below can set it.
+    serviceReadyRef.current = false;
 
     const saved = supported ? readRepairProgress(identity) : { record: null, error: null };
     // Capture this before any asynchronous target read. React state from the
@@ -356,8 +367,11 @@ export default function SourceRepairReview({
       setApplyReceipt(hasValidReceipt ? receipt : null);
       setVerificationReceipt(hasValidVerification ? verification : null);
       if (saved.record.phase !== "prepared") {
-        setFlow(hasValidVerification ? "verified" : hasValidReceipt ? "applied_unverified" : "uncertain_apply");
         verifiedRecoveryReady = saved.record.phase === "verified" && hasValidVerification;
+        // A verified record still needs native resumption and a fresh
+        // Activity probe before Continue is real; do not claim "verified"
+        // until that async work actually succeeds (see probeNormalService).
+        setFlow(verifiedRecoveryReady ? "restoring_service" : hasValidReceipt ? "applied_unverified" : "uncertain_apply");
         retainedBusyRef.current = true;
       } else {
         setFlow("prepared");
@@ -487,7 +501,18 @@ export default function SourceRepairReview({
           return;
         }
         if (verifiedRecoveryReady && recoveryRecord) {
-          if (!(await probeNormalService(() => cancelled))) return;
+          // hasValidVerification guarantees this record carries a bound
+          // verification receipt; the guard below is defensive, not expected.
+          const resumeVerification = recoveryRecord.verificationReceipt;
+          if (!resumeVerification) {
+            setFlow("error");
+            setErrorKind("recovery");
+            setErrorDetail("verified recovery is missing its verification receipt");
+            setRecoveryRetryable(true);
+            finishRequest(true);
+            return;
+          }
+          if (!(await probeNormalService(recoveryRecord.manifest, resumeVerification, () => cancelled))) return;
           if (cancelled || !mountedRef.current) return;
           setErrorKind(null);
           setErrorDetail(null);
@@ -547,6 +572,7 @@ export default function SourceRepairReview({
     void load();
     return () => {
       cancelled = true;
+      serviceEpochRef.current += 1;
       requestInFlightRef.current = false;
     };
   // The keyed host component remounts for a new proposal; these are the
@@ -582,15 +608,38 @@ export default function SourceRepairReview({
     setError(kind, detail, false);
   };
 
-  const probeNormalService = async (isCancelled?: () => boolean): Promise<boolean> => {
+  // Takes the frozen manifest and authenticated verification receipt as
+  // explicit arguments rather than reading component state, so a stale
+  // setter never substitutes a different approval than the one the caller
+  // just validated.
+  const probeNormalService = async (
+    approvedManifest: RepairManifest,
+    approvedVerification: RepairVerificationReceipt,
+    isCancelled?: () => boolean,
+  ): Promise<boolean> => {
+    const epoch = serviceEpochRef.current;
+    const current = () => mountedRef.current && serviceEpochRef.current === epoch && !isCancelled?.();
+    if (!current()) return false;
+    serviceReadyRef.current = false;
+    setFlow("restoring_service");
     try {
+      // Native measures process identity and only restarts positively owned
+      // services; it resolves once lifecycle handoff is finished, which is
+      // not yet proof the daemon answers requests again.
+      await repairResumeRuntime({
+        apply: applyRequestForManifest(approvedManifest),
+        verification_receipt_digest: approvedVerification.receipt_digest,
+      });
+      if (!current()) return false;
       const activity = await getActivity();
+      if (!current()) return false;
       if (!isActivityResponse(activity)) {
         throw new Error("the normal activity route returned a malformed response");
       }
+      serviceReadyRef.current = true;
       return true;
     } catch (error) {
-      if (!mountedRef.current || isCancelled?.()) return false;
+      if (!current()) return false;
       setFlow("verified_service_unavailable");
       setErrorKind("service_unavailable");
       setErrorDetail(diagnostic(error));
@@ -714,7 +763,8 @@ export default function SourceRepairReview({
       }
       if (!mountedRef.current) return;
       setVerificationReceipt(verified);
-      if (!(await probeNormalService())) return;
+      setFlow("restoring_service");
+      if (!(await probeNormalService(nextManifest, verified))) return;
       if (!mountedRef.current) return;
       setFlow("verified");
       finishRequest(false);
@@ -846,11 +896,16 @@ export default function SourceRepairReview({
   };
 
   const retryNormalService = async () => {
-    if (busy || !manifest || !applyReceipt || !verificationReceipt ||
-        !validateRepairApplyReceipt(applyReceipt, manifest) ||
-        !validateRepairVerificationReceipt(verificationReceipt, manifest, applyReceipt) ||
+    // Freeze the approval locally before the async probe; component state
+    // could otherwise change out from under an in-flight retry.
+    const nextManifest = manifest;
+    const receipt = applyReceipt;
+    const verification = verificationReceipt;
+    if (busy || !nextManifest || !receipt || !verification ||
+        !validateRepairApplyReceipt(receipt, nextManifest) ||
+        !validateRepairVerificationReceipt(verification, nextManifest, receipt) ||
         !beginRequest()) return;
-    if (!(await probeNormalService())) return;
+    if (!(await probeNormalService(nextManifest, verification))) return;
     if (!mountedRef.current) return;
     setErrorKind(null);
     setErrorDetail(null);
@@ -868,6 +923,7 @@ export default function SourceRepairReview({
 
   const finishVerified = () => {
     if (!manifest || !applyReceipt || !verificationReceipt || reportedVerifiedRef.current) return;
+    if (!mountedRef.current || busy || !serviceReadyRef.current) return;
     if (!validateRepairVerificationReceipt(verificationReceipt, manifest, applyReceipt)) return;
     reportedVerifiedRef.current = true;
     onVerified();
@@ -892,7 +948,7 @@ export default function SourceRepairReview({
       {flow === "uncertain_apply" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.recoverApply")}</button>}
       {flow === "applied_unverified" && applyReceipt && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void recover()}>{t("sourceRepair.retryVerification")}</button>}
       {flow === "verified_service_unavailable" && <button type="button" style={buttonStyle} disabled={busy} onClick={() => void retryNormalService()}>{t("sourceRepair.checkAgain")}</button>}
-      {flow === "verified" && <button type="button" style={buttonStyle} onClick={finishVerified}>{t("sourceRepair.continueVerified")}</button>}
+      {flow === "verified" && <button type="button" style={buttonStyle} disabled={busy || !serviceReadyRef.current} onClick={finishVerified}>{t("sourceRepair.continueVerified")}</button>}
       {flow === "prepared" && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)", fontWeight: 600 }} disabled={busy || errorKind === "storage" || previewEntitiesMissing} onClick={() => void apply()}>{t("sourceRepair.applyChange")}</button>}
       {editable && <button type="button" style={{ ...buttonStyle, backgroundColor: "var(--mem-accent-indigo)", borderColor: "var(--mem-accent-indigo)", color: "var(--mem-bg)" }} disabled={busy} onClick={() => void prepare()}>{t("sourceRepair.prepareChange")}</button>}
   </>;
@@ -1056,7 +1112,7 @@ export default function SourceRepairReview({
         </fieldset>
       )}
 
-      {manifest && (flow === "prepared" || flow === "applying" || flow === "uncertain_apply" || flow === "verifying" || flow === "applied_unverified" || flow === "verified") && (
+      {manifest && (flow === "prepared" || flow === "applying" || flow === "uncertain_apply" || flow === "verifying" || flow === "applied_unverified" || flow === "restoring_service" || flow === "verified") && (
         <div className="source-repair-preview">
           <p style={{ margin: "0 0 8px", fontWeight: 600 }}>{t("sourceRepair.previewTitle")}</p>
           {mutationPreview?.kind === "reclassify_memory" && <p style={{ margin: 0 }}>{t("sourceRepair.typePreview", { before: isMemoryType(mutationPreview.before_memory_type) ? t(`importView.typeLabels.${mutationPreview.before_memory_type}`) : t("sourceRepair.unclassified"), after: t(`importView.typeLabels.${mutationPreview.after_memory_type}`) })}</p>}
@@ -1069,6 +1125,7 @@ export default function SourceRepairReview({
       {flow === "preparing" && <p role="status" style={{ margin: 0 }}>{t("sourceRepair.preparing")}</p>}
       {flow === "applying" && <p role="status" style={{ margin: 0 }}>{t("sourceRepair.applying")}</p>}
       {flow === "verifying" && <p role="status" style={{ margin: 0 }}>{t("sourceRepair.verifying")}</p>}
+      {flow === "restoring_service" && <p role="status" style={{ margin: 0 }}>{t("sourceRepair.restoringService")}</p>}
       {diagnosticDetails}
     </div>
   );

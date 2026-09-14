@@ -49,7 +49,10 @@ pub(super) async fn prepare_startup_state(
             wenlan_core::migrate_rename::migrate_and_log(&dl.join("origin"), &dl.join("wenlan"));
         }
     }
-    if !repair_recovery_pending {
+    // An isolated daemon must not migrate the user's legacy home either.
+    // This applies again when a verified cold runtime resumes normally.
+    if !repair_recovery_pending && wenlan_core::env_compat::var_compat("WENLAN_DATA_DIR").is_none()
+    {
         if let Some(home) = dirs::home_dir() {
             wenlan_core::migrate_rename::migrate_and_log(
                 &home.join(".origin"),

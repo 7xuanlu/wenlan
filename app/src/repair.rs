@@ -24,6 +24,16 @@ use crate::state::AppState;
 
 type State = Arc<RwLock<AppState>>;
 
+#[tauri::command]
+pub async fn repair_resume_runtime(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, State>,
+    request: wenlan_types::repair_runtime::RepairRuntimeResumeApproval,
+) -> Result<(), String> {
+    let client = { state.read().await.client.clone() };
+    crate::daemon_start::resume_repair_runtime(&app, &client, request).await
+}
+
 /// Validate a manifest's daemon-issued digest after the frontend has sent it
 /// back through JSON. Deserializing into the shared contract first restores
 /// Rust's canonical number representation; hashing the typed unsigned draft

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   ApplyRepairRequest, PrepareRepairRequest, PrepareCurrentRepairRequest, RepairApplyReceipt, RepairLintQuery,
   RepairLintReport, RepairManifest, RepairPlanEntriesPage, RepairPlanEntriesRequest, RepairRecovery,
-  RepairPlanRequest, RepairPlanSummary, RepairVerificationReceipt, VerifyRepairRequest,
+  RepairPlanRequest, RepairPlanSummary, RepairRuntimeResumeApproval, RepairVerificationReceipt, VerifyRepairRequest,
 } from "./repairTypes";
 export { daemonMeetsFloor } from "./daemonVersion";
 
@@ -33,6 +33,18 @@ export async function repairApply(request: ApplyRepairRequest): Promise<RepairAp
 
 export async function repairVerify(request: VerifyRepairRequest): Promise<RepairVerificationReceipt> {
   return invoke("repair_verify", { request });
+}
+
+/**
+ * Ask native code to resume normal runtime service after a terminal
+ * verification receipt. Native measures process identity and only restarts
+ * positively owned services; it resolves once lifecycle handoff has
+ * finished. Callers must still confirm normal service (e.g. `getActivity`)
+ * before treating the repair as usable — a resolved promise here is not
+ * itself proof the daemon answers requests again.
+ */
+export async function repairResumeRuntime(request: RepairRuntimeResumeApproval): Promise<void> {
+  return invoke("repair_resume_runtime", { request });
 }
 
 export async function repairPlan(request: RepairPlanRequest): Promise<RepairPlanSummary> {

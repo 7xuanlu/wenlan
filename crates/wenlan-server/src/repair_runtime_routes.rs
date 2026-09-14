@@ -53,17 +53,17 @@ async fn handle_resume(
     if status.shutdown_requested {
         return Err(conflict("repair_runtime_shutting_down"));
     }
-    // A normal daemon is never retired by this operation. Native retries must
-    // check normal Activity themselves before reporting successful resumption.
-    if !status.repair_only {
-        return Ok(Json(status));
-    }
-
     // Seal admission first, then inspect durable artifacts. Failed validation
     // drops the provisional seal; no lock is held across an async operation.
-    let seal = coordinator
-        .begin_runtime_resumption(&request.apply)
-        .map_err(|error| conflict(&error.to_string()))?;
+    let seal = if status.repair_only {
+        Some(
+            coordinator
+                .begin_runtime_resumption(&request.apply)
+                .map_err(|error| conflict(&error.to_string()))?,
+        )
+    } else {
+        None
+    };
     let store =
         RepairArtifactStore::new(root.ok_or_else(|| conflict("repair_runtime_root_unavailable"))?);
     validate_manifest_scope_binding(
@@ -86,6 +86,11 @@ async fn handle_resume(
     if shutdown.is_requested() {
         return Err(conflict("repair_runtime_shutting_down"));
     }
+    // Even an already-normal listener must authenticate the exact receipt.
+    // A different data root responding on the reused port is not resumption.
+    let Some(seal) = seal else {
+        return Ok(Json(status));
+    };
     seal.commit();
     // Axum drains the current response after this sticky shutdown request.
     // This process only stops itself; the native owner decides how to restart
@@ -175,6 +180,18 @@ mod tests {
             .release_after_verification()
             .unwrap();
         let state = Arc::new(RwLock::new(server));
+        state.write().await.optional_runtime_workers_suspended = false;
+        let normal = handle_resume(
+            State(state.clone()),
+            SpaceHeader(None),
+            Json(request.clone()),
+        )
+        .await
+        .unwrap()
+        .0;
+        assert!(!normal.shutdown_requested);
+        assert!(!normal.repair_only);
+        state.write().await.optional_runtime_workers_suspended = true;
         let mut wrong = request.clone();
         wrong.verification_receipt_digest = RepairDigest::parse(&"ff".repeat(32)).unwrap();
         let error = handle_resume(State(state.clone()), SpaceHeader(None), Json(wrong))
@@ -251,15 +268,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn normal_runtime_is_idempotent_and_never_requests_shutdown() {
+    async fn unrelated_normal_runtime_without_receipt_cannot_claim_resumption() {
         let state = Arc::new(RwLock::new(ServerState::default()));
         let request = request(&state.read().await.runtime_instance_id);
-        let status = handle_resume(State(state.clone()), SpaceHeader(None), Json(request))
+        let error = handle_resume(State(state.clone()), SpaceHeader(None), Json(request))
             .await
-            .unwrap()
-            .0;
-        assert!(!status.repair_only);
-        assert!(!status.shutdown_requested);
+            .unwrap_err();
+        assert!(
+            matches!(error, ServerError::Conflict(code) if code == "repair_runtime_root_unavailable")
+        );
         assert!(!state.read().await.shutdown.is_requested());
     }
 

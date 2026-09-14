@@ -22,3 +22,21 @@ pub struct ResumeRepairRuntimeRequest {
     pub apply: ApplyRepairRequest,
     pub verification_receipt_digest: RepairDigest,
 }
+
+/// The UI supplies repair authority; native code measures process identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RepairRuntimeResumeApproval {
+    pub apply: ApplyRepairRequest,
+    pub verification_receipt_digest: RepairDigest,
+}
+
+impl RepairRuntimeResumeApproval {
+    pub fn for_instance(&self, instance_id: String) -> ResumeRepairRuntimeRequest {
+        ResumeRepairRuntimeRequest {
+            instance_id,
+            apply: self.apply.clone(),
+            verification_receipt_digest: self.verification_receipt_digest.clone(),
+        }
+    }
+}

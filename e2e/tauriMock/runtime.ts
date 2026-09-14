@@ -171,6 +171,7 @@ export class TauriMockRuntime {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
     switch (command) {
+      case "repair_resume_runtime": return undefined;
       case "repair_recovery": {
         requiredString(command, args, "reviewId");
         // This fixture has no durable native repair artifacts.

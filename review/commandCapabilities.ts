@@ -85,6 +85,7 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "get_version_chain_cmd",
     "get_memory_revisions",
     "repair_recovery",
+    "repair_resume_runtime",
   ],
   memoryActions: [
     "update_memory_cmd",
