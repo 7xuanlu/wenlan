@@ -114,6 +114,16 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "remove_raw_mcp_entry",
   "remove_source",
   "remove_watch_path",
+  // Receipt-bound repair execution requires a real daemon and source store.
+  // Fixtures support recovery reads; they do not simulate successful writes.
+  "repair_lint",
+  "repair_prepare",
+  "repair_prepare_current",
+  "repair_validate_manifest",
+  "repair_apply",
+  "repair_verify",
+  "repair_plan",
+  "repair_plan_entries",
   "reset_onboarding_milestones",
   "restart_daemon",
   "save_temp_file",
