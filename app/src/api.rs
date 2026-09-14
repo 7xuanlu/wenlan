@@ -21,6 +21,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 /// never respond (wedged, or bound-but-still-initializing); the probe must
 /// not inherit the ingest-sized backstop above.
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
+/// The on-device model download request stays open until the whole model is
+/// fetched and loaded. The largest catalog model is 5.5 GB (the default is
+/// 2.7 GB), which at a slow 2 Mbps takes about 6.1 hours of transfer alone
+/// (5.5 GB x 8 bits / 2 Mbps = 22,000 s), far past [`REQUEST_TIMEOUT`]. Eight
+/// hours leaves room for that plus engine init and a link that dips below
+/// 2 Mbps. Timing out early rejects the wizard's download even though the
+/// daemon may still be fetching.
+const MODEL_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(8 * 60 * 60);
 
 fn build_http_client(connect_timeout: Duration, request_timeout: Duration) -> Client {
     Client::builder()
@@ -1260,11 +1268,29 @@ impl WenlanClient {
         self.get_json("/api/on-device-model").await
     }
 
+    /// Bounded by [`MODEL_DOWNLOAD_TIMEOUT`], not the client's
+    /// [`REQUEST_TIMEOUT`]: the daemon answers only after the download and
+    /// engine init finish.
     pub async fn download_on_device_model(&self, model_id: String) -> Result<(), String> {
+        let path = "/api/on-device-model/download";
         let req = OnDeviceModelRequest { model_id };
-        let _resp: wenlan_types::responses::SuccessResponse = self
-            .post_json("/api/on-device-model/download", &req)
-            .await?;
+        let resp = self
+            .client
+            .post(self.url(path))
+            .timeout(MODEL_DOWNLOAD_TIMEOUT)
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP POST {}: {}", path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP POST {} returned {}: {}", path, status, text));
+        }
+        let _resp: wenlan_types::responses::SuccessResponse = resp
+            .json()
+            .await
+            .map_err(|e| format!("Parse {}: {}", path, e))?;
         Ok(())
     }
 
@@ -2008,6 +2034,64 @@ mod tests {
         assert!(
             err.contains("HTTP GET /api/setup/status"),
             "unexpected error shape: {err}"
+        );
+    }
+
+    /// Accepts one connection, reads the request, waits `delay`, then answers
+    /// 200 with `body`.
+    async fn serve_json_after(delay: std::time::Duration, body: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(delay).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        });
+        format!("http://{}", addr)
+    }
+
+    /// The download request stays open until the whole model is fetched and
+    /// loaded, which outlasts the client's total backstop on a slow link. A
+    /// client whose backstop is shorter than the daemon's reply must still see
+    /// the download succeed; the control request on the same client shape
+    /// proves the delay really exceeds that backstop.
+    #[tokio::test]
+    async fn model_download_is_not_cut_off_by_the_client_request_timeout() {
+        let base_timeout = std::time::Duration::from_millis(300);
+        let reply_delay = std::time::Duration::from_millis(1500);
+
+        let control = WenlanClient {
+            client: build_http_client(base_timeout, base_timeout),
+            base_url: serve_json_after(reply_delay, r#"{"ok":true}"#).await,
+        };
+        let control_result: Result<wenlan_types::responses::SuccessResponse, String> = control
+            .post_json(
+                "/api/on-device-model/download",
+                &OnDeviceModelRequest {
+                    model_id: "qwen3-4b".into(),
+                },
+            )
+            .await;
+        assert!(
+            control_result.is_err(),
+            "control request should hit the short client timeout"
+        );
+
+        let client = WenlanClient {
+            client: build_http_client(base_timeout, base_timeout),
+            base_url: serve_json_after(reply_delay, r#"{"ok":true}"#).await,
+        };
+        let result = client.download_on_device_model("qwen3-4b".into()).await;
+        assert!(
+            result.is_ok(),
+            "model download inherited the client request timeout: {result:?}"
         );
     }
 

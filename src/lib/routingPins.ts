@@ -63,21 +63,46 @@ export function pinsToFill(routing: ResolvedRouting): {
   };
 }
 
-/** Called after a model or provider is turned on in Settings. Without it the
- *  new source sits in the pool while both jobs stay unpinned, and background
- *  work waits for a model the user believes they already chose. Returns what
- *  was written, or null when nothing was (a daemon without the routing
- *  endpoint, or every job already pinned). */
-export async function fillUnsetPins(): Promise<{
-  everyday: SourcePin | null;
-  synthesis: SourcePin | null;
-} | null> {
+/** A pin string from the daemon as a source, or null when it names none. */
+function asSourcePin(pin: string | null): SourcePin | null {
+  return pin === "anthropic" || pin === "external" || pin === "on_device" ? pin : null;
+}
+
+/** What a fill did, from the routing read it acted on. `written` is what this
+ *  fill sent (null for a job left alone, both null when nothing was sent);
+ *  `inEffect` is each job's pin once that write lands: the written pin, or the
+ *  one the job already held. */
+export interface PinFill {
+  written: { everyday: SourcePin | null; synthesis: SourcePin | null };
+  inEffect: { everyday: SourcePin | null; synthesis: SourcePin | null };
+}
+
+/** Called after a model or provider is turned on, in Settings, when the setup
+ *  wizard's on-device download finishes, or when onboarding reaches Done.
+ *  Without it the new source sits in the pool while both jobs stay unpinned,
+ *  and background work waits for a model the user believes they already
+ *  chose. Returns null only on a daemon without the routing endpoint; a fill
+ *  with every job already pinned writes nothing and still reports the pins in
+ *  effect.
+ *
+ *  Preservation rests on the daemon's patch semantics: a job already pinned at
+ *  the read is sent as null, which the daemon leaves untouched even if the user
+ *  changes it before the write lands. The one unguarded window is a job that
+ *  was unset at the read and pinned before the write. */
+export async function fillUnsetPins(): Promise<PinFill | null> {
   const routing = await getResolvedRouting();
   if (!routing) return null;
-  const pins = pinsToFill(routing);
-  if (pins.everyday === null && pins.synthesis === null) return null;
-  await setSourcePin(pins.everyday, pins.synthesis);
-  return pins;
+  const written = pinsToFill(routing);
+  if (written.everyday !== null || written.synthesis !== null) {
+    await setSourcePin(written.everyday, written.synthesis);
+  }
+  return {
+    written,
+    inEffect: {
+      everyday: written.everyday ?? asSourcePin(routing.everyday.pin),
+      synthesis: written.synthesis ?? asSourcePin(routing.synthesis.pin),
+    },
+  };
 }
 
 /** `fillUnsetPins` for a save handler whose own write already succeeded: a
@@ -88,5 +113,36 @@ export async function fillUnsetPinsAfterSave(): Promise<void> {
     await fillUnsetPins();
   } catch (e) {
     console.error("routing: could not choose the new source for unpinned jobs", e);
+  }
+}
+
+const PIN_FILL_ATTEMPTS = 3;
+const PIN_FILL_FIRST_BACKOFF_MS = 1000;
+
+/** `fillUnsetPins` for a write nobody is waiting on, such as the wizard's model
+ *  download resolving after the user left the step, or onboarding's Done step,
+ *  which must never hold up completion. A failed routing read or pin write is
+ *  retried with doubling backoff (1 s, then 2 s), because the daemon is local
+ *  and failures are usually transient; each attempt re-reads routing, so a job
+ *  pinned in the meantime is left alone. After the last attempt the failure is
+ *  logged and null returned; this never throws.
+ *
+ *  The retries live in this webview's JS context. They survive a step
+ *  unmounting and the window hiding, but not a quit or a reload. */
+export async function fillUnsetPinsWithRetry(): Promise<PinFill | null> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fillUnsetPins();
+    } catch (e) {
+      if (attempt >= PIN_FILL_ATTEMPTS) {
+        console.error(
+          `routing: could not choose the new source for unpinned jobs after ${attempt} attempts`,
+          e,
+        );
+        return null;
+      }
+      const backoff = PIN_FILL_FIRST_BACKOFF_MS * 2 ** (attempt - 1);
+      await new Promise((resolve) => setTimeout(resolve, backoff));
+    }
   }
 }
