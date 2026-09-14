@@ -300,7 +300,7 @@ pub(super) fn with_semantic_finding(
     .unwrap()
 }
 
-fn with_completed_agent_work(report: LintReport) -> LintReport {
+pub(super) fn with_completed_agent_work(report: LintReport) -> LintReport {
     let populations = wenlan_types::lint::LintSemanticCheckId::ALL
         .into_iter()
         .map(|check_id| {

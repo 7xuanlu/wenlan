@@ -136,6 +136,10 @@ mod repair_tests;
 mod repair_plan_tests;
 
 #[cfg(test)]
+#[path = "repair_relation_manifest_tests.rs"]
+mod repair_relation_manifest_tests;
+
+#[cfg(test)]
 #[path = "entities_freeze_tests.rs"]
 mod entities_freeze_tests;
 

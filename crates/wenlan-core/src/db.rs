@@ -68,6 +68,8 @@ mod repair_memory_cas;
 pub(crate) mod repair_page_regenerate;
 pub(crate) mod repair_page_rename;
 mod repair_receipt;
+pub(crate) mod repair_relation;
+pub(crate) mod repair_relation_cas;
 pub(crate) mod repair_stale_projection;
 pub(crate) mod repair_target_receipt;
 pub(crate) mod repair_verification;
@@ -35828,13 +35830,21 @@ impl MemoryDB {
     /// Increment the usage count for a canonical relation type.
     pub async fn increment_relation_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::increment_relation_type_count_on_connection(&conn, canonical)
+            .await
+            .map(|_| ())
+            .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {e}")))
+    }
+
+    pub(crate) async fn increment_relation_type_count_on_connection(
+        conn: &libsql::Connection,
+        canonical: &str,
+    ) -> Result<u64, libsql::Error> {
         conn.execute(
             "UPDATE relation_type_vocabulary SET count = count + 1 WHERE canonical = ?1",
             libsql::params![canonical.to_string()],
         )
         .await
-        .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {}", e)))?;
-        Ok(())
     }
 
     /// Resolve an entity type against the vocabulary. Canonical-first, then a
@@ -45763,24 +45773,29 @@ impl MemoryDB {
         old_value: &str,
         category: Option<&str>,
     ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        Self::insert_vocab_promote_proposal_on_connection(&conn, kind, old_value, category)
+            .await
+            .map(|affected| affected > 0)
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))
+    }
+
+    pub(crate) async fn insert_vocab_promote_proposal_on_connection(
+        conn: &libsql::Connection,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<u64, libsql::Error> {
         let id = Self::vocab_proposal_fingerprint(kind, old_value);
         let payload = serde_json::json!({
-            "action": "vocab_promote",
-            "kind": kind,
-            "old_value": old_value,
-            "category": category,
+            "action": "vocab_promote", "kind": kind, "old_value": old_value, "category": category,
         })
         .to_string();
-        let conn = self.conn.lock().await;
-        let affected = conn
-            .execute(
-                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
-                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
-                libsql::params![id, payload],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))?;
-        Ok(affected > 0)
+        conn.execute(
+            "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
+             VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
+            libsql::params![id, payload],
+        ).await
     }
 
     /// Record `entity_id` on the open `vocab_promote` proposal for
@@ -48590,9 +48605,31 @@ impl MemoryDB {
         // left `"Claude Code"` as `"claude code"` (space, not hyphen) — not
         // matching the hyphenated form the CLI sends. Migration 31 backfilled
         // the history; this keeps new writes aligned with `agent_connections.name`.
-        let agent_name_norm = canonicalize_agent_id(agent_name);
         let conn = self.conn.lock().await;
-        let now = chrono::Utc::now().timestamp();
+        Self::log_agent_activity_on_connection(
+            &conn,
+            agent_name,
+            action,
+            memory_ids,
+            query,
+            detail,
+            chrono::Utc::now().timestamp(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| WenlanError::VectorDb(format!("log_agent_activity insert: {e}")))
+    }
+
+    pub(crate) async fn log_agent_activity_on_connection(
+        conn: &libsql::Connection,
+        agent_name: &str,
+        action: &str,
+        memory_ids: &[String],
+        query: Option<&str>,
+        detail: &str,
+        now: i64,
+    ) -> Result<u64, libsql::Error> {
+        let agent_name_norm = canonicalize_agent_id(agent_name);
         let ids_str = if memory_ids.is_empty() {
             None
         } else {
@@ -48611,8 +48648,6 @@ impl MemoryDB {
             ],
         )
         .await
-        .map_err(|e| WenlanError::VectorDb(format!("log_agent_activity insert: {}", e)))?;
-        Ok(())
     }
 
     /// Return up to `limit` most recent retrieval events joined to page titles.

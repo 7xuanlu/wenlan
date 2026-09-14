@@ -49,6 +49,21 @@ pub async fn resolve_entity_relation_repair(
     request: &RepairPlanRequest,
     selection: &EntityRelationRepairSelection,
 ) -> Result<EntityRelationRepairResolution, WenlanError> {
+    let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
+    let resolved = resolve_entity_relation_on_snapshot(&snapshot, request, selection).await?;
+    let deep = request
+        .deep_report()
+        .ok_or_else(|| conflict("repair_deep_report_missing"))?;
+    let receipt = snapshot.finish().await.map_err(snapshot_error)?;
+    super::validate_report_source_receipts(&[request.general_report(), deep], receipt)?;
+    Ok(resolved)
+}
+
+pub(crate) async fn resolve_entity_relation_on_snapshot(
+    snapshot: &LintReadSnapshot<'_>,
+    request: &RepairPlanRequest,
+    selection: &EntityRelationRepairSelection,
+) -> Result<EntityRelationRepairResolution, WenlanError> {
     selection.validate().map_err(WenlanError::Validation)?;
     let deep = request
         .deep_report()
@@ -64,10 +79,9 @@ pub async fn resolve_entity_relation_repair(
     if !matches!(check.outcome(), LintOutcome::Pass | LintOutcome::Finding) {
         return Err(conflict("repair_current_check_unavailable"));
     }
-    let snapshot = db.open_lint_snapshot().await.map_err(snapshot_error)?;
-    super::validate_durable_scope(&snapshot, request.scope(), request.general_report().scope())
+    super::validate_durable_scope(snapshot, request.scope(), request.general_report().scope())
         .await?;
-    let candidates = semantic::resolve_current(&snapshot, deep).await?;
+    let candidates = semantic::resolve_current(snapshot, deep).await?;
     let mut selected = None;
     for candidate in candidates {
         let semantic::SemanticResolution::Review(candidate) = candidate else {
@@ -89,10 +103,7 @@ pub async fn resolve_entity_relation_repair(
         }
     }
     let candidate = selected.ok_or_else(|| conflict("repair_current_finding_missing"))?;
-    let resolved = resolve_on_snapshot(&snapshot, request.scope(), selection, candidate).await?;
-    let receipt = snapshot.finish().await.map_err(snapshot_error)?;
-    super::validate_report_source_receipts(&[request.general_report(), deep], receipt)?;
-    Ok(resolved)
+    resolve_on_snapshot(snapshot, request.scope(), selection, candidate).await
 }
 
 async fn resolve_on_snapshot(
@@ -211,6 +222,24 @@ async fn resolve_on_snapshot(
                 to_entity,
                 &canonical,
             );
+            // The canonical relation writer preserves the first source on
+            // reassertion (including reactivation). Do not approve a preview
+            // that promises to replace it with a different memory.
+            if let Some(selected_source) = source_memory_id {
+                let mut prior = snapshot.query(
+                    "SELECT json_extract(payload,'$.source_memory_id') FROM edges WHERE edge_id=?1",
+                    params(&[&target_id]),
+                ).await.map_err(snapshot_error)?;
+                if let Some(row) = prior.next().await.map_err(snapshot_error)? {
+                    let first_source = row.get::<Option<String>>(0).map_err(database_error)?;
+                    if first_source
+                        .as_deref()
+                        .is_some_and(|source| source != selected_source)
+                    {
+                        return Err(conflict("repair_relation_source_binding_conflict"));
+                    }
+                }
+            }
             let mut rows = snapshot.query(
                 "SELECT edge_id,semantic_type FROM edges WHERE edge_type='relates' AND valid_until IS NULL
                  AND src_id=?1 AND dst_id=?2 ORDER BY edge_id", params(&[from_entity, to_entity]),

@@ -312,6 +312,21 @@ pub(crate) async fn record_repair_verification_atomic(
                 })?;
                 (target_now, 1)
             }
+            RepairTarget::EntityRelation { .. } => {
+                let context = super::repair_relation_cas::capture_context(manifest)?;
+                let snapshot = crate::repair::relation_snapshot::capture(
+                    &crate::repair::relation_snapshot::RelationReader::Connection(&connection),
+                    &context,
+                )
+                .await?;
+                (
+                    crate::repair::relation_snapshot::applied_receipt(
+                        &snapshot,
+                        context.review_id,
+                    )?,
+                    1,
+                )
+            }
             _ => repair_target_receipt_on_connection(&connection, manifest.target()).await?,
         };
         if target_now != *apply_receipt.after_target_receipt() {
