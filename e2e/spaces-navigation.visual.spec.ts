@@ -36,7 +36,9 @@ async function settle(page: Page): Promise<void> {
 async function assertRedesignedSurface(page: Page, name: string): Promise<boolean> {
   const spaces = name.startsWith("spaces-");
   const wikiReferences = name.startsWith("home-");
-  if (!spaces && !wikiReferences) return false;
+  const entityPage = name.startsWith("entity-");
+  const wikiLibrary = name.startsWith("pages-");
+  if (!spaces && !wikiReferences && !entityPage && !wikiLibrary) return false;
   const viewport = page.viewportSize()!;
   const overflow = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth - window.innerWidth,
@@ -44,7 +46,69 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
   }));
   expect(overflow.page).toBeLessThanOrEqual(1);
   expect(overflow.main).toBeLessThanOrEqual(1);
-  if (spaces) {
+  if (wikiLibrary) {
+    await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
+    const cards = page.getByTestId("wiki-cards").locator('[data-testid^="wiki-card-"]');
+    await expect(cards).toHaveCount(6);
+    await expect(cards.first()).toContainText("Fixture architecture summary");
+    const controls = page.locator(".wiki-filters select, .wiki-new-page-action");
+    await expect(controls).toHaveCount(4);
+    const controlBounds = await controls.evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, height: box.height, fontSize: Number.parseFloat(getComputedStyle(node).fontSize) };
+    }));
+    for (const box of controlBounds) {
+      expect(box.fontSize, "Wiki controls must use the readable control role").toBeGreaterThanOrEqual(14);
+      expect(box.height).toBeGreaterThanOrEqual(32);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+    }
+    const cardBounds = await cards.evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width, scrollWidth: node.scrollWidth };
+    }));
+    for (const box of cardBounds) {
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+      expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: ".wiki-overview h1", label: "Wiki title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".wiki-filters select", label: "Wiki filter controls", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+  } else if (entityPage) {
+    // The readability update intentionally changes these pixels. Preserve
+    // content, legibility, contrast and responsive containment as live contracts
+    // while keeping the complete light/dark captures as review artifacts.
+    const detail = page.locator(".page-detail");
+    await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+    await expect(detail.locator(".page-detail-dateline")).toContainText("from 1 memory");
+    await expect(detail.getByRole("group", { name: "Page info" })).toContainText("1 source");
+    await expect(detail.locator(".page-detail-prose")).toContainText("Deterministic content for the integrated Wenlan journey.");
+    await expect(detail.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();
+    const typography = await detail.locator(".page-detail-dateline").evaluate((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      width: node.getBoundingClientRect().width,
+      scrollWidth: node.scrollWidth,
+    }));
+    expect(typography.fontSize, "source metadata must remain readable").toBeGreaterThanOrEqual(13);
+    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
+    const bounds = await detail.locator("h1, .page-detail-prose, .page-detail-dateline").evaluateAll((nodes) => nodes.map((node) => {
+      const box = node.getBoundingClientRect();
+      return { left: box.left, right: box.right, width: box.width };
+    }));
+    for (const box of bounds) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.left).toBeGreaterThanOrEqual(0);
+      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
+    }
+    const contrast = await renderedContrast(page, [
+      { selector: ".page-detail-title", label: "Entity page title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".page-detail-dateline", label: "Source metadata", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+  } else if (spaces) {
     await expect(page.locator(".spaces-suggestions")).not.toHaveAttribute("open");
     await expect(page.locator("summary").filter({ hasText: "Suggested (2)" })).toBeVisible();
     await expect(page.getByTestId("space-row-space-suggested")).toBeHidden();
@@ -102,6 +166,9 @@ async function capture(page: Page, name: string): Promise<void> {
   });
   await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
   await settle(page);
+  if (name.startsWith("entity-")) {
+    await expect(page.locator(".page-detail-dateline")).toContainText("from 1 memory");
+  }
   await page.screenshot({ path: path.join(evidenceDir, `${name}.png`), fullPage: false });
   await test.info().attach(name, { path: path.join(evidenceDir, `${name}.png`), contentType: "image/png" });
   if (!(await assertRedesignedSurface(page, name))) {
