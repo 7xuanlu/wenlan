@@ -139,6 +139,11 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
     if (busyRef.current) return;
     busyRef.current = true;
     lastOperationRef.current = operation;
+    // A new import does not inherit the last one's lost poll. Without this
+    // the strip opens in the error style, with "lost track of this import"
+    // still on it, before the new import has done anything at all.
+    pollFailuresRef.current = 0;
+    setPollLost(false);
     setBusy(true);
     setLocalAction({ kind: "reading" });
     setDismissed(false);

@@ -2264,6 +2264,37 @@ describe("SetupWizard", () => {
     expect(storeMemory).toHaveBeenCalled();
   });
 
+  // Two spawns of the same service, and a re-probe racing one of them, can
+  // only produce a result nobody can read.
+  it("spawns once however many times the button is pressed, and holds Retry back", async () => {
+    (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
+      mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+      clients: [],
+    });
+    let release: (() => void) | null = null;
+    (startDaemonSidecar as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((resolve) => { release = () => resolve({ status: "started" }); }),
+    );
+
+    renderWizard({ initialStep: "setting-up" });
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+    });
+
+    const start = screen.getByTestId("task-start-daemon");
+    fireEvent.click(start);
+    fireEvent.click(start);
+    fireEvent.click(start);
+
+    expect(startDaemonSidecar).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(screen.getByTestId("task-retry-daemon")).toBeDisabled();
+    });
+
+    await act(async () => { release!(); });
+  });
+
   it("a refused start keeps the row red and shows the reason verbatim under a sentence", async () => {
     (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
       daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
@@ -2329,26 +2360,37 @@ describe("SetupWizard", () => {
 
   // Item 3, wizard half: the gate never got an answer, so this is not a
   // first run and the wizard must not say it is.
-  it("leads with the connection problem, not welcome copy, when the boot gate errored", async () => {
+  it("leads with the connection problem, not a welcome, when the boot gate errored", async () => {
     renderWizard({ daemonGateErrored: true });
 
     expect(
       await screen.findByTestId("welcome-connection-problem"),
     ).toHaveTextContent("Wenlan could not reach its background service while starting up.");
+    // The title is what changes. "Welcome to Wenlan" over a dead service is
+    // the sentence that reads as a wiped install.
     expect(
-      screen.queryByText(
+      screen.getByRole("heading", { name: "Could not reach the background service" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Wenlan")).not.toBeInTheDocument();
+    // The body stays. Someone seeing this screen may genuinely be new, and
+    // dropping the only sentence that says what Wenlan is helps nobody.
+    expect(
+      screen.getByText(
         "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
       ),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
   });
 
-  it("keeps the plain welcome copy when the gate answered normally", async () => {
+  it("keeps the plain welcome title when the gate answered normally", async () => {
     renderWizard();
 
     expect(
       await screen.findByText(
         "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
       ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Welcome to Wenlan" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("welcome-connection-problem")).not.toBeInTheDocument();
   });
@@ -2417,6 +2459,134 @@ describe("SetupWizard", () => {
         "Download stalled",
       );
       expect(downloadOnDeviceModel).toHaveBeenCalledTimes(2);
+
+      // The byte count is still frozen at the same number, so the only thing
+      // standing between Retry and an instant re-stall is the progress stamp
+      // being cleared with it. Five seconds is a hundred ticks of the
+      // detector: if the old stamp survived, this is red.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(screen.getByTestId("task-status-on-device-model")).not.toHaveTextContent(
+        "Download stalled",
+      );
+    } finally {
+      vi.useRealTimers();
+      (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    }
+  });
+
+  // The catalog is what tells us a transfer is even expected. Until it
+  // answers, `cached` is unknown and the row is optimistically "downloading" —
+  // which is exactly the window in which an already-cached model, which will
+  // never move a single byte, used to be declared stalled.
+  it("never calls it a stall while the catalog has not named the model", async () => {
+    (getOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [],
+    });
+    (onDeviceModelDownloadBytes as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<void>(() => {}),
+    );
+
+    vi.useFakeTimers();
+    try {
+      renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS + 10_000);
+      });
+      expect(screen.getByTestId("task-status-on-device-model")).not.toHaveTextContent(
+        "Download stalled",
+      );
+    } finally {
+      vi.useRealTimers();
+      (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    }
+  });
+
+  // A stall is a guess, and the transfer is allowed to prove it wrong.
+  it("un-stalls the row when the download resolves after all", async () => {
+    let finishDownload: (() => void) | null = null;
+    (getOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [{
+        id: "qwen3-4b-instruct-2507",
+        display_name: "Qwen3 4B",
+        param_count: "4B",
+        ram_required_gb: 8,
+        file_size_gb: 2.7,
+        cached: false,
+      }],
+    });
+    (onDeviceModelDownloadBytes as ReturnType<typeof vi.fn>).mockResolvedValue(500_000_000);
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<void>((resolve) => { finishDownload = () => resolve(); }),
+    );
+
+    vi.useFakeTimers();
+    try {
+      renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS + 3_000);
+      });
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent(
+        "Download stalled",
+      );
+
+      await act(async () => {
+        finishDownload!();
+        await vi.advanceTimersByTimeAsync(200);
+      });
+      expect(screen.getByTestId("task-status-on-device-model")).not.toHaveTextContent(
+        "Download stalled",
+      );
+      // And it does not simply re-stall on the next tick off the old stamp.
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(screen.getByTestId("task-status-on-device-model")).not.toHaveTextContent(
+        "Download stalled",
+      );
+      expect(screen.queryByTestId("task-retry-on-device-model")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    }
+  });
+
+  // The rail hides a terminal state until every row above it is terminal, so
+  // that completions read top-to-bottom. A stall is the one state that cannot
+  // wait its turn: the word underneath it would be "Downloading".
+  it("says stalled even while a row above it is still running", async () => {
+    (getWireState as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    (getOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [{
+        id: "qwen3-4b-instruct-2507",
+        display_name: "Qwen3 4B",
+        param_count: "4B",
+        ram_required_gb: 8,
+        file_size_gb: 2.7,
+        cached: false,
+      }],
+    });
+    (onDeviceModelDownloadBytes as ReturnType<typeof vi.fn>).mockResolvedValue(500_000_000);
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<void>(() => {}),
+    );
+
+    vi.useFakeTimers();
+    try {
+      renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS + 3_000);
+      });
+      // The daemon row above never answered, so it is still mid-flight, and
+      // the rail is therefore withholding every terminal state below it.
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Setting up");
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent(
+        "Download stalled",
+      );
     } finally {
       vi.useRealTimers();
       (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);

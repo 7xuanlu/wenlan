@@ -383,6 +383,9 @@ describe("ImportFlow", () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByTestId("chat-import-retry")).toBeInTheDocument();
+    // The whole point: the sentence claiming work is in progress is gone,
+    // not merely joined by a second one contradicting it.
+    expect(screen.queryByText(/stage_b|classifying/i)).toBeNull();
   });
 
   it("a status poll that recovers before the third failure never trips the error state", async () => {
@@ -402,6 +405,42 @@ describe("ImportFlow", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
     }
 
+    expect(screen.queryByTestId("chat-import-retry")).toBeNull();
+  });
+
+  // Dismissing or simply moving on used to leave `pollLost` set, so the next
+  // import opened red, with the previous import's "lost track" sentence on it.
+  it("a new import starts clean after the previous one's status was lost", async () => {
+    mockListPendingImports.mockRejectedValue(new Error("status unavailable"));
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(
+      screen.getByText(
+        "Wenlan lost track of this import. It may still be running in the background.",
+      ),
+    ).toBeInTheDocument();
+
+    const mockOpen = open as ReturnType<typeof vi.fn>;
+    mockOpen.mockResolvedValue("/tmp/export.zip");
+    mockImportChatExport.mockResolvedValue({
+      import_id: "imp-2",
+      vendor: "chatgpt",
+      conversations_total: 2,
+      conversations_new: 2,
+      memories_stored: 5,
+    });
+    await act(async () => {
+      screen.getByRole("button", { name: /choose file/i }).click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(
+      screen.queryByText(
+        "Wenlan lost track of this import. It may still be running in the background.",
+      ),
+    ).toBeNull();
     expect(screen.queryByTestId("chat-import-retry")).toBeNull();
   });
 

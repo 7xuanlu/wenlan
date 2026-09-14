@@ -15,6 +15,7 @@ const en = {
   },
   boot: {
     stillWaiting: "Still waiting for Wenlan's background service to answer.",
+    connectionTitle: "Could not reach the background service",
     connectionProblem:
       "Wenlan could not reach its background service while starting up.",
     fallbackBanner:
@@ -22,6 +23,7 @@ const en = {
     startService: "Start the service",
     starting: "Starting…",
     startFailed: "Wenlan could not start its background service.",
+    startNotReachable: "The service still is not answering.",
     dismiss: "Dismiss",
   },
   setup: {
@@ -2040,12 +2042,14 @@ const zhHans = {
   },
   boot: {
     stillWaiting: "仍在等待文澜的后台服务响应。",
+    connectionTitle: "无法连接到后台服务",
     connectionProblem: "启动时文澜无法连接到后台服务。",
     fallbackBanner:
       "文澜正在没有后台服务的情况下运行。在服务启动之前，记忆不会同步。",
     startService: "启动服务",
     starting: "正在启动…",
     startFailed: "文澜无法启动后台服务。",
+    startNotReachable: "服务仍然没有响应。",
     dismiss: "关闭",
   },
   setup: {
@@ -2135,7 +2139,7 @@ const zhHans = {
       startingService: "正在启动…",
       startServiceFailed: "文澜无法启动后台服务。",
       statusStalled: "下载已停滞",
-      modelStalledSub: "下载已经没有进展。重试可以接着下载。",
+      modelStalledSub: "下载已停滞，没有新的进度。重试可从断点继续。",
     },
     errors: {
       connection: "文澜无法连接到后台服务。",
@@ -4009,12 +4013,14 @@ const zhHant = {
   },
   boot: {
     stillWaiting: "仍在等待文瀾的背景服務回應。",
+    connectionTitle: "無法連線到背景服務",
     connectionProblem: "啟動時文瀾無法連線到背景服務。",
     fallbackBanner:
       "文瀾正在沒有背景服務的情況下執行。在服務啟動之前，記憶不會同步。",
     startService: "啟動服務",
     starting: "正在啟動…",
     startFailed: "文瀾無法啟動背景服務。",
+    startNotReachable: "服務仍然沒有回應。",
     dismiss: "關閉",
   },
   setup: {
@@ -4104,7 +4110,7 @@ const zhHant = {
       startingService: "正在啟動…",
       startServiceFailed: "文瀾無法啟動背景服務。",
       statusStalled: "下載已停滯",
-      modelStalledSub: "下載已經沒有進展。重試可以接著下載。",
+      modelStalledSub: "下載已停滯，沒有新的進度。重試可從斷點繼續。",
     },
     errors: {
       connection: "文瀾無法連線到背景服務。",

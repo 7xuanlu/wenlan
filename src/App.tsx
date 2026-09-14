@@ -12,6 +12,7 @@ import {
   shouldShowWizard,
   setSetupCompleted,
   startDaemonSidecar,
+  getWireState,
 } from "./lib/tauri";
 import {
   BOOT_QUERY_RETRY,
@@ -343,8 +344,13 @@ function FallbackServiceBanner({ onDismiss }: { onDismiss: () => void }) {
   const { t } = useTranslation();
   const [starting, setStarting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // `starting` renders the button; this refuses the second click that lands
+  // before React has re-rendered with it.
+  const startingRef = useRef(false);
 
   async function handleStart() {
+    if (startingRef.current) return;
+    startingRef.current = true;
     setStarting(true);
     setFailure(null);
     try {
@@ -353,13 +359,21 @@ function FallbackServiceBanner({ onDismiss }: { onDismiss: () => void }) {
         setFailure(result.message);
         return;
       }
-      // started / already_running / launchd_managed: the degraded mode is
-      // over as far as this webview can tell. The banner goes; a service
-      // that dies again re-emits the event and brings it back.
+      // started / already_running / launchd_managed says a process was
+      // spawned, not that it answers. The wizard's daemon row never trusted
+      // that word on its own and neither does this banner: dismissing on a
+      // spawn alone would retire the only warning the user has while sync is
+      // still silently dead.
+      const wire = await getWireState();
+      if (!wire.daemon.reachable) {
+        setFailure(wire.daemon.error ?? t("boot.startNotReachable"));
+        return;
+      }
       onDismiss();
     } catch (err) {
       setFailure(err instanceof Error ? err.message : String(err));
     } finally {
+      startingRef.current = false;
       setStarting(false);
     }
   }

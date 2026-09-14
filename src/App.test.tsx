@@ -26,6 +26,9 @@ const emitMock = vi.hoisted(() => vi.fn());
 const startDaemonSidecarMock = vi.hoisted(
   () => vi.fn<() => Promise<{ status: string; message?: string }>>(),
 );
+const getWireStateMock = vi.hoisted(
+  () => vi.fn<() => Promise<{ daemon: { reachable: boolean; error: string | null } }>>(),
+);
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: emitMock,
@@ -43,6 +46,7 @@ vi.mock("./lib/tauri", () => ({
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
   setTrafficLightsVisible: vi.fn().mockResolvedValue(undefined),
   startDaemonSidecar: startDaemonSidecarMock,
+  getWireState: getWireStateMock,
 }));
 
 // No setSize/setPosition/scaleFactor/currentMonitor here on purpose: App no
@@ -537,6 +541,9 @@ describe("App - origin-fallback-mode banner", () => {
     emitMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(shouldShowWizard).mockReset().mockResolvedValue(false);
     startDaemonSidecarMock.mockReset().mockResolvedValue({ status: "started" });
+    getWireStateMock
+      .mockReset()
+      .mockResolvedValue({ daemon: { reachable: true, error: null } });
   });
 
   function fireFallback() {
@@ -569,7 +576,7 @@ describe("App - origin-fallback-mode banner", () => {
     expect(screen.getByTestId(testid)).toBeInTheDocument();
   });
 
-  it("starts the service and clears itself on success", async () => {
+  it("starts the service, proves it answers, and only then clears itself", async () => {
     renderApp();
     await screen.findByTestId("home-main");
     fireFallback();
@@ -577,9 +584,48 @@ describe("App - origin-fallback-mode banner", () => {
     fireEvent.click(screen.getByTestId("fallback-start-service"));
 
     await waitFor(() => expect(startDaemonSidecarMock).toHaveBeenCalledTimes(1));
+    // A spawn is not a service. The banner is the user's only warning that
+    // nothing is syncing, so only a probe that came back may retire it.
+    await waitFor(() => expect(getWireStateMock).toHaveBeenCalledTimes(1));
     await waitFor(() =>
       expect(screen.queryByTestId("fallback-service-banner")).not.toBeInTheDocument(),
     );
+  });
+
+  it("keeps the banner when the spawn succeeds but the service still does not answer", async () => {
+    getWireStateMock.mockResolvedValue({
+      daemon: { reachable: false, error: "tcp connect error: connection refused" },
+    });
+    renderApp();
+    await screen.findByTestId("home-main");
+    fireFallback();
+
+    fireEvent.click(screen.getByTestId("fallback-start-service"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("fallback-service-banner")).toHaveTextContent(
+        "tcp connect error: connection refused",
+      ),
+    );
+    expect(screen.getByTestId("fallback-service-banner")).toBeInTheDocument();
+  });
+
+  it("refuses a second start while the first is still in flight", async () => {
+    let release: (() => void) | null = null;
+    startDaemonSidecarMock.mockReturnValue(
+      new Promise((resolve) => { release = () => resolve({ status: "started" }); }),
+    );
+    renderApp();
+    await screen.findByTestId("home-main");
+    fireFallback();
+
+    const button = screen.getByTestId("fallback-start-service");
+    fireEvent.click(button);
+    fireEvent.click(button);
+    fireEvent.click(button);
+
+    expect(startDaemonSidecarMock).toHaveBeenCalledTimes(1);
+    await act(async () => { release!(); });
   });
 
   it("keeps the banner and shows the raw reason when the start fails", async () => {

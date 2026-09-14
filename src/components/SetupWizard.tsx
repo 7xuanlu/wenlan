@@ -256,7 +256,7 @@ function WelcomeStep({
             letterSpacing: "-0.02em",
           }}
         >
-          {t("setup.welcomeTitle")}
+          {daemonGateErrored ? t("boot.connectionTitle") : t("setup.welcomeTitle")}
         </h1>
         <p
           style={{
@@ -268,10 +268,11 @@ function WelcomeStep({
         >
           {t("setup.tagline")}
         </p>
-        {daemonGateErrored ? (
-          // Not welcome copy: this user may well have years of memories, and
-          // the only true thing we know is that we could not reach the
-          // service that holds them.
+        {/* The title carries the news, because this user may well have years
+            of memories and the only true thing we know is that we could not
+            reach the service holding them. The body below still explains what
+            Wenlan is: a first-run user who arrives here needs both. */}
+        {daemonGateErrored && (
           <p
             data-testid="welcome-connection-problem"
             style={{
@@ -283,18 +284,17 @@ function WelcomeStep({
           >
             {t("boot.connectionProblem")}
           </p>
-        ) : (
-          <p
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "var(--mem-text-lg)",
-              color: "var(--mem-text-secondary)",
-              lineHeight: "1.5",
-            }}
-          >
-            {t("setup.welcomeBody")}
-          </p>
         )}
+        <p
+          style={{
+            fontFamily: "var(--mem-font-body)",
+            fontSize: "var(--mem-text-lg)",
+            color: "var(--mem-text-secondary)",
+            lineHeight: "1.5",
+          }}
+        >
+          {t("setup.welcomeBody")}
+        </p>
       </div>
 
       {/* Privacy badge */}
@@ -1060,6 +1060,20 @@ function SettingUpStep({
   const [modelStalled, setModelStalled] = useState(false);
   // An on-demand daemon start is in flight from the daemon row.
   const [startingDaemon, setStartingDaemon] = useState(false);
+  // The state above drives the button; this drives the guard. A second click
+  // that lands in the same tick reads the state before React has re-rendered
+  // it, so only a ref can refuse the second spawn.
+  const startingDaemonRef = useRef(false);
+
+  // Last moment the byte count actually MOVED, not the last poll. A poll that
+  // keeps returning the same number is the stall, so its timestamp is worth
+  // nothing here. Declared up here, above `runRow`, because Retry has to
+  // clear it: a stale timestamp from the previous attempt is already older
+  // than the threshold, so the retried download would trip the stall again
+  // on the next tick without ever being given a chance to move.
+  const lastProgressRef = useRef<{ bytes: number; at: number } | null>(null);
+  // Wall-clock deadline for the load phase, armed once the download resolves.
+  const loadDeadlineRef = useRef<number | null>(null);
 
   // Runs exactly one row's work. Shared by the initial concurrent kickoff
   // and by Retry, so a retry re-exercises the same path a first attempt
@@ -1067,7 +1081,13 @@ function SettingUpStep({
   const runRow = useCallback(
     (row: TaskRow) => {
       setStatuses((prev) => ({ ...prev, [row.id]: "running" }));
-      if (row.kind === "model") setModelStalled(false);
+      if (row.kind === "model") {
+        setModelStalled(false);
+        // Without this the next tick compares against a timestamp from the
+        // attempt that already stalled, which is by definition older than
+        // the threshold, and Retry re-stalls within a second.
+        lastProgressRef.current = null;
+      }
       setErrors((prev) => {
         if (!(row.id in prev)) return prev;
         const next = { ...prev };
@@ -1217,6 +1237,17 @@ function SettingUpStep({
           // on modelDownloadStarted) is what actually proves it.
           () => {
             setModelDownloadStarted(true);
+            // The bytes did arrive after all. Whatever the detector concluded
+            // while they were not moving is now wrong, and the load poll
+            // below is what decides this row from here.
+            setModelStalled(false);
+            setStatuses((prev) =>
+              prev[row.id] === "failed" ? { ...prev, [row.id]: "running" } : prev,
+            );
+            // The catalog still reads uncached until its next poll, so the
+            // detector is briefly still armed against a stamp taken before
+            // the transfer finished. Start its clock over with the phase.
+            lastProgressRef.current = null;
             // Pin here, not only in DoneStep: the daemon answers once the model
             // is loaded, often after the user pressed Continue or Open Wenlan
             // or hid the window, and a job with no pin runs nothing. Only
@@ -1260,6 +1291,8 @@ function SettingUpStep({
   // reachable only from a Settings pane the fail-closed wizard hides.
   const startDaemon = useCallback(
     (row: TaskRow) => {
+      if (startingDaemonRef.current) return;
+      startingDaemonRef.current = true;
       setStartingDaemon(true);
       setErrors((prev) => {
         if (!(row.id in prev)) return prev;
@@ -1269,6 +1302,7 @@ function SettingUpStep({
       });
       startDaemonSidecar().then(
         (result) => {
+          startingDaemonRef.current = false;
           setStartingDaemon(false);
           if (result.status === "failed") {
             setErrors((prev) => ({
@@ -1286,6 +1320,7 @@ function SettingUpStep({
           runRow(row);
         },
         (err) => {
+          startingDaemonRef.current = false;
           setStartingDaemon(false);
           setErrors((prev) => ({
             ...prev,
@@ -1387,6 +1422,10 @@ function SettingUpStep({
   // the row name the real file size instead of "a few minutes".
   const modelEntry = modelPoll?.models.find((m) => m.id === pendingModelId);
   const modelDownloading = statuses[MODEL_ROW_ID] === "running" && !modelEntry?.cached;
+  // A primitive, deliberately: `modelEntry` is a fresh object on every poll,
+  // and depending on it would tear down and rebuild the one-second stall
+  // interval faster than it can tick.
+  const modelEntryKnown = modelEntry !== undefined;
 
   // The registry's `file_size_gb` is a rounded-up hand estimate, not the real
   // blob size — so it can only ever make the bar run early, never overshoot.
@@ -1415,10 +1454,6 @@ function SettingUpStep({
     setByteSamples((prev) => [...prev, { t: Date.now(), bytes: downloadBytes }].slice(-5));
   }, [modelDownloading, downloadBytes]);
 
-  // Last moment the byte count actually MOVED, not the last poll. A poll that
-  // keeps returning the same number is the stall, so its timestamp is worth
-  // nothing here.
-  const lastProgressRef = useRef<{ bytes: number; at: number } | null>(null);
   useEffect(() => {
     if (!modelDownloading) {
       lastProgressRef.current = null;
@@ -1433,8 +1468,16 @@ function SettingUpStep({
 
   // A ticking check, not a derived value: the whole point is that NOTHING is
   // arriving, so there is no incoming render to notice the silence in.
+  //
+  // Armed only against a catalog entry we have actually seen. `modelEntry`
+  // is undefined until the first poll answers, which makes `modelDownloading`
+  // true by default — so without this guard a model that was already cached,
+  // and therefore never transfers a byte, shows "Download stalled" ninety
+  // seconds in. An unknown catalog leaves the load deadline as the only exit,
+  // which is the correct one for a phase that is not a download.
   useEffect(() => {
     if (!modelDownloading || modelStalled) return;
+    if (!modelEntryKnown) return;
     const id = setInterval(() => {
       const seen = lastProgressRef.current;
       if (!seen) return;
@@ -1444,12 +1487,11 @@ function SettingUpStep({
       }
     }, 1_000);
     return () => clearInterval(id);
-  }, [modelDownloading, modelStalled]);
+  }, [modelDownloading, modelStalled, modelEntryKnown]);
 
   // The load phase, after downloadOnDeviceModel resolved. Two ways out that
   // did not exist: the poll itself failing (a daemon that died after the POST
   // returned), and a deadline (a load that never lands).
-  const loadDeadlineRef = useRef<number | null>(null);
   useEffect(() => {
     if (!modelDownloadStarted) {
       loadDeadlineRef.current = null;
@@ -1559,6 +1601,14 @@ function SettingUpStep({
   };
 
   const statusTextOf = (row: TaskRow): string => {
+    // Read before the gate. `displayedStatusOf` withholds a terminal state
+    // until every row above it is terminal, so a stalled model row under a
+    // still-running row reads back as "running" and would say "Downloading"
+    // over bytes that stopped moving ninety seconds ago. That is the one
+    // word this whole change exists to stop showing.
+    if (row.kind === "model" && modelStalled && statusOf(row) === "failed") {
+      return t("setup.settingUp.statusStalled");
+    }
     const status = displayedStatusOf(row);
     if (status === "pending") return t("setup.settingUp.statusPending");
     if (status === "running") {
@@ -1583,10 +1633,8 @@ function SettingUpStep({
     }
     // A stall is a failure for control-flow purposes (Retry is live, the row
     // is terminal) but "Couldn't set up" is the wrong word for it: nothing
-    // refused, the bytes just stopped.
-    if (row.kind === "model" && modelStalled) {
-      return t("setup.settingUp.statusStalled");
-    }
+    // refused, the bytes just stopped. Handled at the top of this function,
+    // ahead of the display gate.
     return t("setup.settingUp.statusFailed");
   };
 
@@ -1846,6 +1894,10 @@ function SettingUpStep({
                       <Button
                         variant="ghost"
                         size="sm"
+                        // Two probes of the same row at once, one of them
+                        // racing a spawn, can only produce a result nobody
+                        // can read.
+                        disabled={startingDaemon && row.kind === "daemon"}
                         onClick={() => runRow(row)}
                         data-testid={`task-retry-${row.id}`}
                       >
