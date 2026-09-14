@@ -1726,7 +1726,13 @@ const en = {
         "Wenlan compiles pages from your memories once a local model or an API key is turned on, or you can write one yourself.",
       compiling:
         "Wenlan compiles pages as patterns emerge in your memories, usually within a day of regular use.",
+      needsRouting:
+        "Pages start compiling once a model is chosen for background work. Pick one in Settings → Intelligence.",
+      pinUnavailable:
+        "The model chosen for background work is not available right now, so pages are not compiling. Check Settings → Intelligence.",
       turnOnModel: "Turn on a model",
+      chooseModel: "Choose a model",
+      openSettings: "Open Settings",
       writePage: "Write a page",
     },
     reasons: {
@@ -3676,7 +3682,13 @@ const zhHans = {
         "启用本地模型或填入 API 密钥后，文澜会从你的记忆整理出页面；你也可以自己写一个。",
       compiling:
         "当你的记忆中浮现出模式时，文澜会整理成页面，通常会在规律使用一天内出现。",
+      needsRouting:
+        "选定用于后台工作的模型后，文澜就会开始整理页面。可在“设置 → 智能”中选择。",
+      pinUnavailable:
+        "当前用于后台工作的模型不可用，页面暂时无法整理。请在“设置 → 智能”中查看。",
       turnOnModel: "启用模型",
+      chooseModel: "选择模型",
+      openSettings: "打开设置",
       writePage: "自己写一个页面",
     },
     reasons: {
@@ -5621,7 +5633,13 @@ const zhHant = {
         "啟用本機模型或填入 API 金鑰後，文瀾會從你的記憶整理出頁面；你也可以自己寫一個。",
       compiling:
         "當你的記憶中浮現出模式時，文瀾會整理成頁面，通常會在規律使用一天內出現。",
+      needsRouting:
+        "選定用於背景工作的模型後，文瀾就會開始整理頁面。可在「設定 → 智慧」中選擇。",
+      pinUnavailable:
+        "目前用於背景工作的模型無法使用，頁面暫時無法整理。請在「設定 → 智慧」中查看。",
       turnOnModel: "啟用模型",
+      chooseModel: "選擇模型",
+      openSettings: "開啟設定",
       writePage: "自己寫一個頁面",
     },
     reasons: {
