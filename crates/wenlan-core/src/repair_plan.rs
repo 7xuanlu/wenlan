@@ -35,6 +35,7 @@ use wenlan_types::{
 };
 
 mod deterministic;
+pub mod relation;
 mod semantic;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
