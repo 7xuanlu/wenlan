@@ -133,7 +133,11 @@ fn cjk_run_word_count(text: &str) -> usize {
 /// Count "meaningful" words: length > 1, or single-char alphanumeric.
 /// A whitespace token made entirely of CJK characters is excluded here and
 /// counted instead by `cjk_run_word_count`, so CJK runs are not double-counted.
-fn meaningful_word_count(text: &str) -> usize {
+///
+/// `pub(crate)` so `sources::directory`'s own min-text heuristic can share
+/// this CJK-aware count instead of keeping a second, CJK-blind word counter
+/// that disagrees with the quality gate on the same content.
+pub(crate) fn meaningful_word_count(text: &str) -> usize {
     let whitespace_words = text
         .split_whitespace()
         .filter(|w| !w.chars().any(is_cjk_char))

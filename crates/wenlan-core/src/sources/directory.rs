@@ -9,7 +9,7 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use crate::quality_gate::QualityGate;
+use crate::quality_gate::{meaningful_word_count, QualityGate};
 use crate::sources::obsidian::note_to_documents;
 use crate::sources::RawDocument;
 use crate::tuning::GateConfig;
@@ -494,10 +494,10 @@ fn normalize_extracted_text(content: &str) -> String {
 /// Reject content with too little real text (image-only/garbage PDFs, near-empty
 /// files). Returns a human reason when below floor, `None` when it passes.
 fn min_text_rejection_detail(content: &str) -> Option<String> {
-    let words = content
-        .split_whitespace()
-        .filter(|word| word.chars().any(|c| c.is_alphanumeric()))
-        .count();
+    // Shared with the quality gate's own floor so a CJK file isn't skipped
+    // here by a plain split_whitespace count and then admitted (or vice
+    // versa) by quality_gate.rs's CJK-aware one.
+    let words = meaningful_word_count(content);
     let non_ws_chars = content.chars().filter(|c| !c.is_whitespace()).count();
 
     if words == 0 || non_ws_chars == 0 {
@@ -836,6 +836,41 @@ mod tests {
                 assert!(reason.contains("no extractable text") || reason.contains("too short"));
             }
             other => panic!("expected skipped image-only pdf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_to_documents_admits_one_paragraph_chinese_markdown() {
+        let tmp = TempDir::new().unwrap();
+        let path = create_file(
+            tmp.path(),
+            "chinese-note.md",
+            "今天下午我們決定採用新的檔案管理方案，並且會在下週開始逐步導入到所有專案中，同時也會準備教學文件給團隊成員參考使用。"
+                .as_bytes(),
+        );
+
+        match file_to_documents("src1", &path, Some(tmp.path())) {
+            FileOutcome::Ingested(docs) => assert!(!docs.is_empty()),
+            FileOutcome::Skipped(reason) => {
+                panic!("one-paragraph Chinese note should not be skipped as too short: {reason}")
+            }
+            other => panic!("expected ingest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_to_documents_skips_three_char_chinese_file() {
+        // 3 CJK chars -> ceil(3/2) = 2 words, below MIN_EXTRACTED_WORDS (5).
+        // CJK fairness must not disable the floor entirely.
+        let tmp = TempDir::new().unwrap();
+        let path = create_file(tmp.path(), "too-short.md", "你好嗎".as_bytes());
+
+        match file_to_documents("src1", &path, Some(tmp.path())) {
+            FileOutcome::Skipped(reason) => assert!(
+                reason.contains("too short"),
+                "expected a too-short skip, got: {reason}"
+            ),
+            other => panic!("expected skip for 3-char CJK file, got {other:?}"),
         }
     }
 
