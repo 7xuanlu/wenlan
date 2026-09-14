@@ -71,6 +71,13 @@ pub struct BulkImportResult {
     pub memories_stored: usize,
 }
 
+/// Entries a chat import accumulates before it stores them. Each stored slice
+/// is one embedding pass and one transaction, so this bounds the vector buffer
+/// and how long one slice holds the writer connection. A slice only ends at a
+/// conversation boundary, so a conversation longer than this is stored alone,
+/// as one slice, rather than split.
+const RAW_IMPORT_FLUSH_ENTRIES: usize = 128;
+
 /// Store all memories from a batch of parsed conversations, skipping any
 /// conversation whose `external_id` is already in the database.
 ///
@@ -81,11 +88,31 @@ pub struct BulkImportResult {
 ///
 /// Memories are stored with `source = 'memory'` and `memory_type = NULL`;
 /// post-ingest classification runs via `post_ingest.rs` on each stored memory.
+///
+/// Conversations are stored and embedded in slices of whole conversations
+/// that each commit on their own. An import that fails part way keeps every
+/// finished slice, and a retry resumes through the per-conversation dedup.
+/// The dedup reads committed rows once, before any write, so callers that can
+/// overlap on the same export must serialize (the daemon's chat-export route
+/// holds a process-wide lock for this).
 pub async fn bulk_import_conversations(
     db: Arc<MemoryDB>,
     batch: &[ParsedConversation],
     emitter: Arc<dyn EventEmitter>,
     import_id: &str,
+) -> Result<BulkImportResult, WenlanError> {
+    bulk_import_conversations_with_flush(db, batch, emitter, import_id, RAW_IMPORT_FLUSH_ENTRIES)
+        .await
+}
+
+/// [`bulk_import_conversations`] with the slice size as a parameter, so tests
+/// can exercise slice boundaries with a handful of messages.
+pub(crate) async fn bulk_import_conversations_with_flush(
+    db: Arc<MemoryDB>,
+    batch: &[ParsedConversation],
+    emitter: Arc<dyn EventEmitter>,
+    import_id: &str,
+    flush_entries: usize,
 ) -> Result<BulkImportResult, WenlanError> {
     if batch.is_empty() {
         return Ok(BulkImportResult {
@@ -113,7 +140,10 @@ pub async fn bulk_import_conversations(
 
     let skipped = batch.len() - new_conversations.len();
 
-    // 3. Collect all memories into a batch for transactional insert.
+    // 3. Store memories in slices of whole conversations, each one embedded and
+    //    committed as a unit. A slice is stored before the next conversation
+    //    would push it past `flush_entries`. It never splits a conversation:
+    //    dedup would then skip a half-stored conversation on every retry.
     //    Emit progress events every 10 memories accumulated (conversation boundary).
     let total_estimate: usize = new_conversations.iter().map(|c| c.messages.len()).sum();
     #[allow(clippy::type_complexity)]
@@ -124,9 +154,14 @@ pub async fn bulk_import_conversations(
         Option<chrono::DateTime<chrono::Utc>>,
         i64,
     )> = Vec::new();
+    let mut memories_stored: usize = 0;
     let mut last_emitted_count: usize = 0;
 
     for conv in &new_conversations {
+        if !entries.is_empty() && entries.len() + conv.messages.len() > flush_entries {
+            memories_stored += db.store_raw_import_memories_batch(&entries).await?;
+            entries.clear();
+        }
         let source_id = conv.vendor.build_source_id(&conv.external_id);
         for (ordinal, msg) in conv.messages.iter().enumerate() {
             entries.push((
@@ -139,7 +174,7 @@ pub async fn bulk_import_conversations(
         }
 
         // Emit progress if we crossed a multiple-of-10 boundary since last emission.
-        let current_count = entries.len();
+        let current_count = memories_stored + entries.len();
         if current_count / 10 > last_emitted_count / 10 {
             let payload = serde_json::json!({
                 "import_id": import_id,
@@ -156,12 +191,14 @@ pub async fn bulk_import_conversations(
         }
     }
 
-    let memories_stored = db.store_raw_import_memories_batch(&entries).await?;
+    if !entries.is_empty() {
+        memories_stored += db.store_raw_import_memories_batch(&entries).await?;
+    }
 
     // Final progress emission — always fire so the frontend sees the
     // definitive 100% signal regardless of whether the count landed on an
     // exact multiple of 10 during the loop above.
-    if !entries.is_empty() {
+    if total_estimate > 0 {
         let payload = serde_json::json!({
             "import_id": import_id,
             "stage": "stage_a",
@@ -225,6 +262,219 @@ mod tests {
         assert_eq!(result.conversations_ingested, 2);
         assert_eq!(result.conversations_skipped_existing, 0);
         assert_eq!(result.memories_stored, 4);
+    }
+
+    /// Chunk indexes stored for one imported conversation, in order.
+    async fn stored_chunk_indexes(db: &MemoryDB, external_id: &str) -> Vec<i32> {
+        db.get_memories_by_source_id("memory", &Vendor::Claude.build_source_id(external_id))
+            .await
+            .unwrap()
+            .iter()
+            .map(|row| row.chunk_index)
+            .collect()
+    }
+
+    async fn unembedded(db: &MemoryDB, external_id: &str) -> usize {
+        db.count_unembedded_chunks("memory", &Vendor::Claude.build_source_id(external_id))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bulk_import_embeds_every_stored_row() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let db_arc = Arc::new(db);
+
+        let batch = vec![
+            make_convo(
+                "c1",
+                &["m1", "my dog Biscuit loves running on the beach", "m3"],
+            ),
+            make_convo("c2", &["m4"]),
+        ];
+        let result = bulk_import_conversations(db_arc.clone(), &batch, noop_emitter(), "imp_test")
+            .await
+            .unwrap();
+        assert_eq!(result.memories_stored, 4);
+
+        // The rows must exist before "zero unembedded" means anything.
+        assert_eq!(stored_chunk_indexes(&db_arc, "c1").await, vec![0, 1, 2]);
+        assert_eq!(stored_chunk_indexes(&db_arc, "c2").await, vec![0]);
+        assert_eq!(unembedded(&db_arc, "c1").await, 0);
+        assert_eq!(unembedded(&db_arc, "c2").await, 0);
+
+        // Vector-only proof: the row is in the DiskANN index, so a query with
+        // no word overlap reaches it without FTS.
+        let hits = db_arc
+            .naive_vector_search("pet canine seaside", 10, None)
+            .await
+            .unwrap();
+        assert!(
+            hits.iter()
+                .any(|hit| hit.content == "my dog Biscuit loves running on the beach"),
+            "imported row missing from vector-only search: {:?}",
+            hits.iter().map(|hit| &hit.content).collect::<Vec<_>>()
+        );
+    }
+
+    async fn import_with_fault(
+        db: &Arc<MemoryDB>,
+        batch: &[ParsedConversation],
+        flush_entries: usize,
+        marker: &'static str,
+        fault: crate::db::RawImportEmbeddingFault,
+    ) -> Result<BulkImportResult, WenlanError> {
+        crate::db::with_raw_import_embedding_fault(
+            marker,
+            fault,
+            bulk_import_conversations_with_flush(
+                db.clone(),
+                batch,
+                noop_emitter(),
+                "imp_test",
+                flush_entries,
+            ),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn bulk_import_flushes_only_at_conversation_boundaries() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let db_arc = Arc::new(db);
+
+        // Slice size 2 over conversations of 3, 1, 3 and 1 messages. The fault
+        // fires on the slice holding c's last message. A slice cut at the
+        // flush size would already have committed c's first messages; whole
+        // conversation slices commit a and b and leave no row of c or d.
+        let batch = vec![
+            make_convo("a", &["a0", "a1", "a2"]),
+            make_convo("b", &["b0"]),
+            make_convo("c", &["c0", "c1", "c2 boom"]),
+            make_convo("d", &["d0"]),
+        ];
+        let failed = import_with_fault(
+            &db_arc,
+            &batch,
+            2,
+            "boom",
+            crate::db::RawImportEmbeddingFault::Fail,
+        )
+        .await;
+        assert!(
+            matches!(failed, Err(WenlanError::Embedding(_))),
+            "the faulted slice must fail the import"
+        );
+        assert_eq!(stored_chunk_indexes(&db_arc, "a").await, vec![0, 1, 2]);
+        assert_eq!(stored_chunk_indexes(&db_arc, "b").await, vec![0]);
+        assert_eq!(stored_chunk_indexes(&db_arc, "c").await, Vec::<i32>::new());
+        assert_eq!(stored_chunk_indexes(&db_arc, "d").await, Vec::<i32>::new());
+
+        // The retry resumes through dedup and completes every conversation.
+        let retry =
+            bulk_import_conversations_with_flush(db_arc.clone(), &batch, noop_emitter(), "imp", 2)
+                .await
+                .unwrap();
+        assert_eq!(retry.conversations_skipped_existing, 2);
+        assert_eq!(retry.conversations_ingested, 2);
+        assert_eq!(retry.memories_stored, 4);
+        for (id, len) in [("a", 3), ("b", 1), ("c", 3), ("d", 1)] {
+            assert_eq!(
+                stored_chunk_indexes(&db_arc, id).await,
+                (0..len).collect::<Vec<i32>>(),
+                "conversation {id} must be stored whole"
+            );
+            assert_eq!(unembedded(&db_arc, id).await, 0, "conversation {id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn bulk_import_stores_an_oversized_conversation_as_its_own_slice() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let db_arc = Arc::new(db);
+        let big: Vec<String> = (0..5).map(|i| format!("big{i}")).collect();
+        let big: Vec<&str> = big.iter().map(String::as_str).collect();
+
+        // Fault after the oversized conversation: it was committed whole, so it
+        // shared no slice with the faulted conversation after it.
+        let after = vec![
+            make_convo("x1", &["x1"]),
+            make_convo("big1", &big),
+            make_convo("y1", &["y1 boom"]),
+        ];
+        let failed = import_with_fault(
+            &db_arc,
+            &after,
+            2,
+            "boom",
+            crate::db::RawImportEmbeddingFault::Fail,
+        )
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(stored_chunk_indexes(&db_arc, "x1").await, vec![0]);
+        assert_eq!(
+            stored_chunk_indexes(&db_arc, "big1").await,
+            vec![0, 1, 2, 3, 4]
+        );
+        assert_eq!(unembedded(&db_arc, "big1").await, 0);
+        assert_eq!(stored_chunk_indexes(&db_arc, "y1").await, Vec::<i32>::new());
+
+        // Fault inside the oversized conversation: the conversation before it
+        // stays committed, and no part of the oversized one lands.
+        let mut big_boom = big.clone();
+        big_boom[4] = "big4 boom";
+        let inside = vec![
+            make_convo("x2", &["x2"]),
+            make_convo("big2", &big_boom),
+            make_convo("y2", &["y2"]),
+        ];
+        let failed = import_with_fault(
+            &db_arc,
+            &inside,
+            2,
+            "boom",
+            crate::db::RawImportEmbeddingFault::Fail,
+        )
+        .await;
+        assert!(failed.is_err());
+        assert_eq!(stored_chunk_indexes(&db_arc, "x2").await, vec![0]);
+        assert_eq!(
+            stored_chunk_indexes(&db_arc, "big2").await,
+            Vec::<i32>::new()
+        );
+        assert_eq!(stored_chunk_indexes(&db_arc, "y2").await, Vec::<i32>::new());
+    }
+
+    #[tokio::test]
+    async fn bulk_import_embedding_failure_leaves_no_rows() {
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        let db_arc = Arc::new(db);
+        let batch = vec![
+            make_convo("c1", &["m1", "m2 boom"]),
+            make_convo("c2", &["m3"]),
+        ];
+
+        for fault in [
+            crate::db::RawImportEmbeddingFault::Fail,
+            crate::db::RawImportEmbeddingFault::MissingVector,
+        ] {
+            let failed =
+                import_with_fault(&db_arc, &batch, RAW_IMPORT_FLUSH_ENTRIES, "boom", fault).await;
+            assert!(
+                matches!(failed, Err(WenlanError::Embedding(_))),
+                "{fault:?} must fail the import"
+            );
+            assert_eq!(stored_chunk_indexes(&db_arc, "c1").await, Vec::<i32>::new());
+            assert_eq!(stored_chunk_indexes(&db_arc, "c2").await, Vec::<i32>::new());
+        }
+
+        // Nothing was half-written, so a clean retry imports both whole.
+        let retry = bulk_import_conversations(db_arc.clone(), &batch, noop_emitter(), "imp")
+            .await
+            .unwrap();
+        assert_eq!(retry.conversations_skipped_existing, 0);
+        assert_eq!(retry.memories_stored, 3);
+        assert_eq!(unembedded(&db_arc, "c1").await, 0);
     }
 
     #[tokio::test]
@@ -331,5 +581,56 @@ mod tests {
         assert_eq!(loaded.stage, ImportStage::Done);
         // total_conversations should be preserved from prior update
         assert_eq!(loaded.total_conversations, Some(42));
+    }
+
+    #[tokio::test]
+    async fn fail_unfinished_imports_ends_only_non_terminal_rows() {
+        use super::ImportStage;
+
+        let (db, _tmp) = crate::db::tests::test_db().await;
+        for (id, stage, error) in [
+            ("imp_parsing", ImportStage::Parsing, None),
+            ("imp_stage_a", ImportStage::StageA, None),
+            ("imp_done", ImportStage::Done, None),
+            (
+                "imp_error",
+                ImportStage::Error,
+                Some("bulk ingest: disk full"),
+            ),
+        ] {
+            db.start_import_state(id, Vendor::Claude, "/tmp/export.zip")
+                .await
+                .unwrap();
+            db.update_import_state_stage_with_error(id, stage, Some(3), Some(1), error)
+                .await
+                .unwrap();
+        }
+        let done_before = db.load_import_state("imp_done").await.unwrap().unwrap();
+        assert_eq!(db.list_pending_imports().await.unwrap().len(), 2);
+
+        let message = "interrupted: the daemon restarted before this import finished";
+        assert_eq!(db.fail_unfinished_imports(message).await.unwrap(), 2);
+
+        for id in ["imp_parsing", "imp_stage_a"] {
+            let row = db.load_import_state(id).await.unwrap().unwrap();
+            assert_eq!(row.stage, ImportStage::Error, "{id}");
+            assert_eq!(row.error_message.as_deref(), Some(message), "{id}");
+            assert_eq!(row.processed_conversations, 1, "{id} keeps its progress");
+        }
+        let done = db.load_import_state("imp_done").await.unwrap().unwrap();
+        assert_eq!(done.stage, ImportStage::Done);
+        assert_eq!(done.error_message, None);
+        assert_eq!(done.updated_at, done_before.updated_at);
+        let error = db.load_import_state("imp_error").await.unwrap().unwrap();
+        assert_eq!(error.stage, ImportStage::Error);
+        assert_eq!(
+            error.error_message.as_deref(),
+            Some("bulk ingest: disk full"),
+            "an already failed import keeps its own reason"
+        );
+        assert!(db.list_pending_imports().await.unwrap().is_empty());
+
+        // Idempotent: a second boot finds nothing left to end.
+        assert_eq!(db.fail_unfinished_imports(message).await.unwrap(), 0);
     }
 }

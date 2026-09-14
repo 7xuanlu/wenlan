@@ -1536,6 +1536,66 @@ fn take_fail_before_commit(_page_id: &str) -> bool {
     false
 }
 
+/// Test-only fault injection for `store_raw_import_memories_batch`: the
+/// embedding pass of a batch whose content contains the armed marker fails,
+/// or comes back one vector short. Keyed by content so a test can fail one
+/// chosen slice of a multi-slice import, and task-local so a fault cannot
+/// fire in another test's import running in parallel.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RawImportEmbeddingFault {
+    Fail,
+    MissingVector,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static RAW_IMPORT_EMBEDDING_FAULT: (&'static str, RawImportEmbeddingFault);
+}
+
+/// Run `future` with raw-import embedding passes over `marker` armed to fault.
+#[cfg(test)]
+pub(crate) async fn with_raw_import_embedding_fault<T>(
+    marker: &'static str,
+    fault: RawImportEmbeddingFault,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    RAW_IMPORT_EMBEDDING_FAULT
+        .scope((marker, fault), future)
+        .await
+}
+
+#[cfg(test)]
+fn raw_import_embedding_fault<'a>(
+    mut contents: impl Iterator<Item = &'a str>,
+    embeddings: Result<Vec<Vec<f32>>, WenlanError>,
+) -> Result<Vec<Vec<f32>>, WenlanError> {
+    let Ok((marker, fault)) = RAW_IMPORT_EMBEDDING_FAULT.try_with(|armed| *armed) else {
+        return embeddings;
+    };
+    if !contents.any(|content| content.contains(marker)) {
+        return embeddings;
+    }
+    match fault {
+        RawImportEmbeddingFault::Fail => Err(WenlanError::Embedding(
+            "injected raw import embedding failure".to_string(),
+        )),
+        RawImportEmbeddingFault::MissingVector => embeddings.map(|mut vectors| {
+            vectors.pop();
+            vectors
+        }),
+    }
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn raw_import_embedding_fault<'a>(
+    _contents: impl Iterator<Item = &'a str>,
+    embeddings: Result<Vec<Vec<f32>>, WenlanError>,
+) -> Result<Vec<Vec<f32>>, WenlanError> {
+    embeddings
+}
+
 /// `COMMIT`, rolling the transaction back when the commit itself fails.
 ///
 /// SQLite leaves the transaction open when `COMMIT` returns an error —
@@ -1600,6 +1660,40 @@ pub(crate) async fn with_failing_commit_at<T>(
         .await
 }
 
+/// Test-only faults for one memory embedding recovery batch: SQL that runs
+/// after the batch embedded its rows and before it writes them (a concurrent
+/// edit or write-time embed), and a cap on how many vectors the model returns.
+#[cfg(test)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct NullEmbedRecoveryFault {
+    pub(crate) race_sql: &'static [&'static str],
+    pub(crate) keep_vectors: Option<usize>,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static NULL_EMBED_RECOVERY_FAULT: std::cell::Cell<Option<NullEmbedRecoveryFault>>;
+}
+
+/// Run `future` with the next recovery batch staged to meet `fault`.
+#[cfg(test)]
+pub(crate) async fn with_null_embed_recovery_fault<T>(
+    fault: NullEmbedRecoveryFault,
+    future: impl std::future::Future<Output = T>,
+) -> T {
+    NULL_EMBED_RECOVERY_FAULT
+        .scope(std::cell::Cell::new(Some(fault)), future)
+        .await
+}
+
+#[cfg(test)]
+fn take_null_embed_recovery_fault() -> Option<NullEmbedRecoveryFault> {
+    NULL_EMBED_RECOVERY_FAULT
+        .try_with(|fault| fault.take())
+        .ok()
+        .flatten()
+}
+
 /// Stage a deferred foreign-key violation inside the caller's open
 /// transaction when `site` is the armed one, so the `COMMIT` that follows
 /// fails while the transaction stays open on the connection.
@@ -1637,6 +1731,43 @@ async fn arm_commit_failure(conn: &libsql::Connection, site: &'static str) {
             .await
             .expect("stage the deferred foreign-key violation");
     }
+}
+
+/// When a constructor re-embeds memory rows that have no embedding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MemoryEmbeddingRecovery {
+    /// Before the constructor returns: CLI commands, evals and tests.
+    #[default]
+    AtOpen,
+    /// Left to the caller, which runs
+    /// [`MemoryDB::recover_null_memory_embeddings_batch`] itself. The daemon
+    /// uses this so a backlog is recovered after it serves, not before.
+    Deferred,
+}
+
+/// Largest batch one recovery step embeds and writes in one transaction.
+pub const NULL_EMBEDDING_RECOVERY_BATCH: usize = 64;
+
+/// What one bounded recovery batch did.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NullEmbeddingBatch {
+    /// Rows this batch filled.
+    pub recovered: usize,
+    /// Rows this batch selected but left alone: the model returned no vector
+    /// for them, the write failed, or the row changed (embedded, edited or
+    /// moved to another space) between the read and the write.
+    pub skipped: usize,
+    /// The last id this batch selected. The next batch starts after it, so a
+    /// skipped row is never selected again in the same run. `None` when
+    /// nothing was left to select: the run is finished.
+    pub next_cursor: Option<String>,
+}
+
+/// Totals for a whole recovery run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NullEmbeddingRecoveryReport {
+    pub recovered: usize,
+    pub skipped: usize,
 }
 
 /// One recorded version of a page, as stored in `page_history`.
@@ -4797,7 +4928,23 @@ impl MemoryDB {
         })
     }
 
+    /// Open, migrate and fully initialize the database. Memory rows left with
+    /// no embedding are re-embedded before this returns, so a CLI command or
+    /// eval run sees a complete vector index.
     pub async fn new(db_path: &Path, emitter: Arc<dyn EventEmitter>) -> Result<Self, WenlanError> {
+        Self::new_with_embedding_recovery(db_path, emitter, MemoryEmbeddingRecovery::AtOpen).await
+    }
+
+    /// [`Self::new`] with a choice of when memory rows left with no embedding
+    /// are re-embedded. The daemon passes [`MemoryEmbeddingRecovery::Deferred`]
+    /// so a large backlog cannot hold its health check shut; it then drives
+    /// [`Self::recover_null_memory_embeddings_batch`] itself after it serves.
+    /// Every other open effect is identical.
+    pub async fn new_with_embedding_recovery(
+        db_path: &Path,
+        emitter: Arc<dyn EventEmitter>,
+        recovery: MemoryEmbeddingRecovery,
+    ) -> Result<Self, WenlanError> {
         std::fs::create_dir_all(db_path)?;
         let db_file = db_path.join("origin_memory.db");
         // Decided before the open: `Builder::new_local` creates the file.
@@ -5026,6 +5173,11 @@ impl MemoryDB {
 
         // Run schema migrations for existing databases
         instance.run_migrations(emitter.as_ref()).await?;
+        if recovery == MemoryEmbeddingRecovery::AtOpen {
+            instance
+                .recover_null_memory_embeddings(emitter.as_ref())
+                .await?;
+        }
         instance.retire_empty_overview().await?;
 
         // Ensure a default profile always exists
@@ -5041,6 +5193,24 @@ impl MemoryDB {
         db_path: &Path,
         emitter: Arc<dyn EventEmitter>,
         embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+    ) -> Result<Self, WenlanError> {
+        Self::new_with_shared_embedder_and_recovery(
+            db_path,
+            emitter,
+            embedder,
+            MemoryEmbeddingRecovery::AtOpen,
+        )
+        .await
+    }
+
+    /// [`Self::new_with_shared_embedder`] with the recovery choice of
+    /// [`Self::new_with_embedding_recovery`]; tests use it to open the same
+    /// store both ways without loading a second model.
+    pub(crate) async fn new_with_shared_embedder_and_recovery(
+        db_path: &Path,
+        emitter: Arc<dyn EventEmitter>,
+        embedder: Arc<std::sync::Mutex<TextEmbedding>>,
+        recovery: MemoryEmbeddingRecovery,
     ) -> Result<Self, WenlanError> {
         std::fs::create_dir_all(db_path)?;
         let db_file = db_path.join("origin_memory.db");
@@ -5119,6 +5289,11 @@ impl MemoryDB {
         };
 
         instance.run_migrations(emitter.as_ref()).await?;
+        if recovery == MemoryEmbeddingRecovery::AtOpen {
+            instance
+                .recover_null_memory_embeddings(emitter.as_ref())
+                .await?;
+        }
         instance.retire_empty_overview().await?;
         instance.bootstrap_profile().await?;
 
@@ -6582,114 +6757,13 @@ impl MemoryDB {
             }
         }
 
-        // Crash recovery: if app crashed during Phase 2 re-embedding, some memories
-        // may have NULL embeddings permanently (user_version is already 24 so migration
-        // won't re-run). This unconditional pass is a no-op if all embeddings exist.
-        {
-            let null_count = {
-                let conn = self.conn.lock().await;
-                let mut rows = conn
-                    .query("SELECT COUNT(*) FROM memories WHERE embedding IS NULL", ())
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(format!("null embed check: {}", e)))?;
-                let count: i64 = if let Some(row) = rows
-                    .next()
-                    .await
-                    .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                {
-                    row.get(0).unwrap_or(0)
-                } else {
-                    0
-                };
-                count as usize
-            };
-
-            if null_count > 0 {
-                log::warn!(
-                    "[memory_db] found {} memories with NULL embeddings, re-embedding...",
-                    null_count
-                );
-                let batch_size = 64;
-                let mut recovered = 0usize;
-
-                loop {
-                    let batch: Vec<(String, String, Option<String>)> = {
-                        let conn = self.conn.lock().await;
-                        let mut rows = conn.query(
-                            "SELECT id, COALESCE(source_text, content), space FROM memories WHERE embedding IS NULL LIMIT ?1",
-                            libsql::params![batch_size as i64],
-                        ).await.map_err(|e| WenlanError::VectorDb(format!("null embed batch: {}", e)))?;
-                        let mut batch = Vec::new();
-                        while let Some(row) = rows
-                            .next()
-                            .await
-                            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
-                        {
-                            let id: String = row.get(0).unwrap_or_default();
-                            let text: String = row.get(1).unwrap_or_default();
-                            let space: Option<String> = row.get(2).unwrap_or(None);
-                            batch.push((id, text, space));
-                        }
-                        batch
-                    };
-
-                    if batch.is_empty() {
-                        break;
-                    }
-
-                    let texts: Vec<String> = batch
-                        .iter()
-                        .map(|(_, t, d)| {
-                            if let Some(ref space) = d {
-                                format!("[{}] {}", space, t)
-                            } else {
-                                t.clone()
-                            }
-                        })
-                        .collect();
-                    let embeddings = self.generate_embeddings(&texts)?;
-
-                    let conn = self.conn.lock().await;
-                    if let Err(e) = conn.execute("BEGIN", ()).await {
-                        log::warn!("[memory_db] null embed recovery begin: {}", e);
-                    }
-                    for (idx, (id, _, _)) in batch.iter().enumerate() {
-                        if idx < embeddings.len() {
-                            if let Err(e) = conn
-                                .execute(
-                                    "UPDATE memories SET embedding = vector32(?1) WHERE id = ?2",
-                                    libsql::params![Self::vec_to_sql(&embeddings[idx]), id.clone()],
-                                )
-                                .await
-                            {
-                                log::warn!(
-                                    "[memory_db] null embed recovery update id={}: {}",
-                                    id,
-                                    e
-                                );
-                            }
-                        }
-                    }
-                    #[cfg(test)]
-                    arm_commit_failure(&conn, "null_embed_recovery").await;
-                    // Same unbounded-loop reason as migration 24's batches.
-                    commit_or_rollback(&conn).await.map_err(|e| {
-                        WenlanError::VectorDb(format!("null embed recovery commit: {e}"))
-                    })?;
-                    drop(conn);
-
-                    recovered += batch.len();
-                    if let Ok(payload) = serde_json::to_string(&MigrationProgress {
-                        current: recovered,
-                        total: null_count,
-                        phase: "Recovering embeddings...".into(),
-                    }) {
-                        let _ = emitter.emit("migration-progress", &payload);
-                    }
-                }
-                log::info!("[memory_db] null embedding recovery complete");
-            }
-        }
+        // Memory rows with no embedding (a crash during migration 24/25's
+        // re-embed, or a chat import from a build that stored them bare) are
+        // recovered after the chain by `recover_null_memory_embeddings`, which
+        // the ordinary constructors call before returning and the daemon runs
+        // in the background after it serves. No later migration reads
+        // `memories.embedding`, so moving the pass out of the chain changes no
+        // migration's input.
 
         let _ = emitter.emit("migration-complete", "{}");
 
@@ -25207,6 +25281,229 @@ impl MemoryDB {
         embedder
             .embed(text_refs, None)
             .map_err(|e| WenlanError::Embedding(e.to_string()))
+    }
+
+    /// [`Self::generate_embeddings`] on the blocking pool, for async callers.
+    /// The embedder sits behind a synchronous `std::sync::Mutex`, so an inline
+    /// model pass holds a runtime worker for its whole length; this takes
+    /// owned texts and holds no database lock while it runs.
+    async fn generate_embeddings_blocking(
+        &self,
+        texts: Vec<String>,
+    ) -> Result<Vec<Vec<f32>>, WenlanError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+        let embedder = self.embedder.clone().ok_or_else(|| {
+            WenlanError::Embedding("embedding_unavailable_in_repair_mode".to_string())
+        })?;
+        tokio::task::spawn_blocking(move || {
+            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let mut embedder = embedder
+                .lock()
+                .map_err(|_| WenlanError::Embedding("embedder mutex poisoned".to_string()))?;
+            embedder
+                .embed(text_refs, None)
+                .map_err(|e| WenlanError::Embedding(e.to_string()))
+        })
+        .await
+        .map_err(|e| WenlanError::Embedding(format!("embedding task failed: {e}")))?
+    }
+
+    /// How many memory rows have no embedding.
+    pub async fn count_null_memory_embeddings(&self) -> Result<usize, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM memories WHERE embedding IS NULL", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed check: {e}")))?;
+        let count: i64 = match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+        {
+            Some(row) => row.get(0).unwrap_or(0),
+            None => 0,
+        };
+        Ok(count.max(0) as usize)
+    }
+
+    /// Re-embed every memory row that has no embedding, one bounded batch at a
+    /// time, before returning. The ordinary constructors call this after the
+    /// migration chain; the daemon drives the batches itself instead.
+    ///
+    /// A batch whose commit fails, or whose embedding call errors, ends the
+    /// run with that error. Rows the batch leaves alone are counted as
+    /// skipped and are not selected again in this run, so it always ends.
+    pub async fn recover_null_memory_embeddings(
+        &self,
+        emitter: &dyn EventEmitter,
+    ) -> Result<NullEmbeddingRecoveryReport, WenlanError> {
+        let pending = self.count_null_memory_embeddings().await?;
+        if pending == 0 {
+            return Ok(NullEmbeddingRecoveryReport::default());
+        }
+        log::warn!("[memory_db] found {pending} memories with NULL embeddings, re-embedding...");
+        let mut report = NullEmbeddingRecoveryReport::default();
+        let mut cursor: Option<String> = None;
+        loop {
+            let batch = self
+                .recover_null_memory_embeddings_batch(
+                    cursor.as_deref(),
+                    NULL_EMBEDDING_RECOVERY_BATCH,
+                )
+                .await?;
+            let Some(next_cursor) = batch.next_cursor else {
+                break;
+            };
+            report.recovered += batch.recovered;
+            report.skipped += batch.skipped;
+            cursor = Some(next_cursor);
+            if let Ok(payload) = serde_json::to_string(&MigrationProgress {
+                current: (report.recovered + report.skipped).min(pending),
+                total: pending,
+                phase: "Recovering embeddings...".into(),
+            }) {
+                let _ = emitter.emit("migration-progress", &payload);
+            }
+        }
+        log::info!(
+            "[memory_db] null embedding recovery complete: {} recovered, {} skipped",
+            report.recovered,
+            report.skipped
+        );
+        // The chain already emitted completion before this pass; say it again
+        // so a listener's progress state clears after the last progress event.
+        let _ = emitter.emit("migration-complete", "{}");
+        Ok(report)
+    }
+
+    /// Re-embed at most `batch_size` (capped at
+    /// [`NULL_EMBEDDING_RECOVERY_BATCH`]) memory rows that have no embedding,
+    /// taking ids in order after `after_id`.
+    ///
+    /// The rows are read under the connection lock, embedded on the blocking
+    /// pool with no lock held, then written in one transaction. Each write
+    /// lands only if the row still has no embedding and still has the text
+    /// and space that were embedded, so a row embedded, edited or moved in
+    /// the meantime keeps its own state and counts as skipped. A failed
+    /// `BEGIN` or commit returns an error and writes nothing.
+    pub async fn recover_null_memory_embeddings_batch(
+        &self,
+        after_id: Option<&str>,
+        batch_size: usize,
+    ) -> Result<NullEmbeddingBatch, WenlanError> {
+        let limit = batch_size.clamp(1, NULL_EMBEDDING_RECOVERY_BATCH) as i64;
+        let batch: Vec<(String, Option<String>, Option<String>)> = {
+            let conn = self.conn.lock().await;
+            let mut rows = conn
+                .query(
+                    "SELECT id, COALESCE(source_text, content), space FROM memories \
+                     WHERE embedding IS NULL AND (?1 IS NULL OR id > ?1) \
+                     ORDER BY id LIMIT ?2",
+                    libsql::params![after_id.map(str::to_string), limit],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("null embed batch: {e}")))?;
+            let mut batch = Vec::new();
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(e.to_string()))?
+            {
+                let id: String = row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("null embed batch id: {e}")))?;
+                let text: Option<String> = row.get(1).unwrap_or(None);
+                let space: Option<String> = row.get(2).unwrap_or(None);
+                batch.push((id, text, space));
+            }
+            batch
+        };
+        let Some(next_cursor) = batch.last().map(|(id, _, _)| id.clone()) else {
+            return Ok(NullEmbeddingBatch::default());
+        };
+
+        let texts: Vec<String> = batch
+            .iter()
+            .map(|(_, text, space)| {
+                let text = text.as_deref().unwrap_or_default();
+                match space {
+                    Some(space) => format!("[{space}] {text}"),
+                    None => text.to_string(),
+                }
+            })
+            .collect();
+        #[allow(unused_mut)]
+        let mut embeddings = self.generate_embeddings_blocking(texts).await?;
+        #[cfg(test)]
+        let fault = take_null_embed_recovery_fault();
+        #[cfg(test)]
+        if let Some(keep) = fault.and_then(|fault| fault.keep_vectors) {
+            embeddings.truncate(keep);
+        }
+        if embeddings.len() < batch.len() {
+            log::warn!(
+                "[memory_db] null embed recovery: model returned {} vectors for {} rows; \
+                 the rest stay unembedded this run",
+                embeddings.len(),
+                batch.len()
+            );
+        }
+
+        let conn = self.conn.lock().await;
+        #[cfg(test)]
+        for sql in fault.map(|fault| fault.race_sql).unwrap_or_default() {
+            conn.execute(sql, ())
+                .await
+                .expect("stage a concurrent memory change");
+        }
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed recovery begin: {e}")))?;
+        let mut recovered = 0usize;
+        let mut skipped = 0usize;
+        for (idx, (id, text, space)) in batch.iter().enumerate() {
+            let Some(embedding) = embeddings.get(idx) else {
+                skipped += 1;
+                continue;
+            };
+            match conn
+                .execute(
+                    "UPDATE memories SET embedding = vector32(?1) \
+                     WHERE id = ?2 AND embedding IS NULL \
+                       AND COALESCE(source_text, content) IS ?3 AND space IS ?4",
+                    libsql::params![
+                        Self::vec_to_sql(embedding),
+                        id.clone(),
+                        text.clone(),
+                        space.clone()
+                    ],
+                )
+                .await
+            {
+                Ok(0) => skipped += 1,
+                Ok(_) => recovered += 1,
+                Err(e) => {
+                    log::warn!("[memory_db] null embed recovery update id={id}: {e}");
+                    skipped += 1;
+                }
+            }
+        }
+        #[cfg(test)]
+        arm_commit_failure(&conn, "null_embed_recovery").await;
+        // A failed commit is rolled back and returned: swallowing it would
+        // report rows as recovered that went back to NULL.
+        commit_or_rollback(&conn)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("null embed recovery commit: {e}")))?;
+        drop(conn);
+
+        Ok(NullEmbeddingBatch {
+            recovered,
+            skipped,
+            next_cursor: Some(next_cursor),
+        })
     }
 
     // ==================== document_tags ====================
@@ -57603,6 +57900,8 @@ impl MemoryDB {
     /// extraction, and event emission — those happen later via the refinery
     /// steep cycle. Uses `source = 'memory'` and `memory_type = NULL` so the row
     /// matches the `memory_type IS NULL` filter in `get_unclassified_imports`.
+    /// No production caller (tests only); chat imports store through the
+    /// embedding batch writer `store_raw_import_memories_batch`.
     pub async fn store_raw_import_memory(
         &self,
         source_id: &str,
@@ -57669,7 +57968,13 @@ impl MemoryDB {
     /// Store multiple raw import memories inside a single transaction.
     ///
     /// Each entry is `(source_id, content, title, created_at, chunk_index)`.
-    /// On error the entire batch is rolled back.
+    /// Every row is embedded at write time, so it is vector-searchable (and
+    /// passes the embedding lint) without waiting for the startup NULL-embedding
+    /// recovery. The embed text is the raw content, the same text that recovery
+    /// embeds for these rows (they carry no space and no source text). The model
+    /// pass runs before the connection lock is taken; an embedding failure or a
+    /// count mismatch fails the batch before BEGIN. On error the entire batch is
+    /// rolled back.
     #[allow(clippy::type_complexity)]
     pub async fn store_raw_import_memories_batch(
         &self,
@@ -57681,13 +57986,28 @@ impl MemoryDB {
             i64,
         )],
     ) -> Result<usize, WenlanError> {
+        let texts: Vec<String> = entries.iter().map(|entry| entry.1.clone()).collect();
+        let embeddings = raw_import_embedding_fault(
+            entries.iter().map(|entry| entry.1.as_str()),
+            self.generate_embeddings_blocking(texts).await,
+        )?;
+        if embeddings.len() != entries.len() {
+            return Err(WenlanError::Embedding(format!(
+                "batch import: expected {} embeddings, got {}",
+                entries.len(),
+                embeddings.len()
+            )));
+        }
+
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("batch import begin: {e}")))?;
 
         let mut count = 0usize;
-        for (source_id, content, title, created_at, chunk_index) in entries {
+        for ((source_id, content, title, created_at, chunk_index), embedding) in
+            entries.iter().zip(&embeddings)
+        {
             let memory_id = format!("mem_{}", uuid::Uuid::new_v4());
             let now_ts = chrono::Utc::now().timestamp();
             let created_ts = created_at.map(|ts| ts.timestamp()).unwrap_or(now_ts);
@@ -57697,8 +58017,8 @@ impl MemoryDB {
             if let Err(e) = conn.execute(
                 // `origin_class` pinned for the same reason as the single-row
                 // `store_raw_import_memory` above: a chat export is `generated`.
-                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, word_count, created_at, origin_class)
-                 VALUES (?1, ?2, 'memory', ?3, ?4, ?5, ?6, 'text', ?7, ?8, ?9)",
+                "INSERT INTO memories (id, content, source, source_id, title, chunk_index, last_modified, chunk_type, word_count, created_at, origin_class, embedding)
+                 VALUES (?1, ?2, 'memory', ?3, ?4, ?5, ?6, 'text', ?7, ?8, ?9, vector32(?10))",
                 libsql::params![
                     memory_id,
                     content.clone(),
@@ -57709,6 +58029,7 @@ impl MemoryDB {
                     word_count,
                     created_ts,
                     crate::origin::OriginClass::Generated.as_str(),
+                    Self::vec_to_sql(embedding),
                 ],
             ).await {
                 let _ = conn.execute("ROLLBACK", ()).await;
@@ -57964,6 +58285,24 @@ impl MemoryDB {
         }
 
         Ok(result)
+    }
+
+    /// Mark every import whose stage is not terminal (done/error) as `error`
+    /// with `message`, and return how many rows changed. For daemon startup:
+    /// imports run inside the daemon process and nothing resumes them, so a
+    /// row still short of done/error in a fresh process belongs to an import
+    /// the previous process never finished, and would otherwise show as
+    /// pending forever.
+    pub async fn fail_unfinished_imports(&self, message: &str) -> Result<u64, WenlanError> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "UPDATE import_state SET stage = 'error', updated_at = ?1, error_message = ?2
+             WHERE stage NOT IN ('done', 'error')",
+            libsql::params![now, message],
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("fail_unfinished_imports: {e}")))
     }
 
     // ==================== App Metadata ====================

@@ -100,7 +100,15 @@ pub(super) async fn prepare_startup_state(
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::NoopEmitter);
         tracing::info!("Initializing MemoryDB at {}", data_dir.display());
-        wenlan_core::db::MemoryDB::new(&data_dir, emitter).await?
+        // Memory rows with no embedding are recovered in the background after
+        // the daemon serves (runtime.rs); a large backlog recovered here held
+        // the health check shut for many minutes, past the app's startup wait.
+        wenlan_core::db::MemoryDB::new_with_embedding_recovery(
+            &data_dir,
+            emitter,
+            wenlan_core::db::MemoryEmbeddingRecovery::Deferred,
+        )
+        .await?
     };
     let db_arc = Arc::new(db);
     server_state.db = Some(db_arc.clone());
@@ -159,6 +167,24 @@ pub(super) async fn prepare_startup_state(
             Ok(0) => {}
             Ok(n) => tracing::info!("[doc-enrich] requeued {n} in-progress document(s) for resume"),
             Err(e) => tracing::warn!("[doc-enrich] reset_in_progress_documents failed: {e}"),
+        }
+    }
+
+    // A chat-export import runs inside the daemon process and nothing resumes
+    // it, so an import_state row still short of done/error before the routes
+    // serve belongs to an import the previous process never finished. End it,
+    // or the app polls it as pending forever. The retry dedups against the
+    // conversations that import already committed.
+    if !repair_recovery_pending {
+        match db_arc
+            .fail_unfinished_imports(
+                "interrupted: the daemon restarted before this import finished",
+            )
+            .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!("[import] marked {n} interrupted chat import(s) as failed"),
+            Err(e) => tracing::warn!("[import] fail_unfinished_imports failed: {e}"),
         }
     }
 

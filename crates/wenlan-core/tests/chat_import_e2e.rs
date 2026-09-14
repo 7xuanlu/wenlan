@@ -108,6 +108,21 @@ async fn e2e_claude_import_stores_memories_and_skips_on_reimport() {
     assert_eq!(result.conversations_skipped_existing, 0);
     assert_eq!(result.memories_stored, 1);
 
+    // Every stored row is embedded at write time, with no restart recovery.
+    let stored = db_arc
+        .get_memories_by_source_id("memory", "import_claude_conv-e2e-1")
+        .await
+        .expect("stored rows");
+    assert_eq!(stored.len(), 1, "the imported row must exist");
+    assert_eq!(
+        db_arc
+            .count_unembedded_chunks("memory", "import_claude_conv-e2e-1")
+            .await
+            .expect("count unembedded"),
+        0,
+        "first import must embed every stored row"
+    );
+
     // ---- Step 4: Verify dedup — reimport the same batch ----
     let result2 = bulk_import_conversations(
         db_arc.clone(),
@@ -317,6 +332,30 @@ async fn chatgpt_end_to_end_imports_and_dedupes() {
             sid
         );
     }
+
+    // Every stored row is embedded at write time, with no restart recovery.
+    let mut stored_rows = 0;
+    for sid in &candidate_ids {
+        let rows = db_arc
+            .get_memories_by_source_id("memory", sid)
+            .await
+            .expect("stored rows")
+            .len();
+        assert!(rows > 0, "'{sid}' must have stored rows");
+        stored_rows += rows;
+        assert_eq!(
+            db_arc
+                .count_unembedded_chunks("memory", sid)
+                .await
+                .expect("count unembedded"),
+            0,
+            "first import must embed every row of '{sid}'"
+        );
+    }
+    assert_eq!(
+        stored_rows, result.memories_stored,
+        "every stored memory must be a row before zero unembedded counts"
+    );
 
     // ---- Step 5: Re-import same ZIP — all should be deduped ----
     let result2 = bulk_import_conversations(
