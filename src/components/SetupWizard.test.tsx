@@ -1,7 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, within, fireEvent, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { SetupWizard, displayedStatuses } from "./SetupWizard";
+import {
+  SetupWizard,
+  displayedStatuses,
+  DOWNLOAD_STALL_MS,
+  MODEL_LOAD_DEADLINE_MS,
+} from "./SetupWizard";
 import { i18n } from "../i18n";
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -117,6 +122,7 @@ vi.mock("../lib/tauri", () => ({
     }),
   ),
   deleteMemory: vi.fn().mockResolvedValue(undefined),
+  startDaemonSidecar: vi.fn().mockResolvedValue({ status: "started" }),
 }));
 
 import {
@@ -141,6 +147,7 @@ import {
   listRecentMemories,
   getMemoryDetail,
   deleteMemory,
+  startDaemonSidecar,
 } from "../lib/tauri";
 import { open } from "@tauri-apps/plugin-dialog";
 import { DoneStep } from "./SetupWizard";
@@ -160,6 +167,7 @@ function renderWizard(
     initialStep?: "welcome" | "intelligence-choice" | "import" | "connect" | "setting-up" | "done";
     initialPendingModelId?: string | null;
     initialPendingImportPick?: { sourceType: "obsidian" | "directory"; path: string; label: string } | null;
+    daemonGateErrored?: boolean;
   } = {},
 ) {
   const queryClient = new QueryClient({
@@ -177,6 +185,7 @@ function renderWizard(
           initialStep={props.initialStep}
           initialPendingModelId={props.initialPendingModelId}
           initialPendingImportPick={props.initialPendingImportPick}
+          daemonGateErrored={props.daemonGateErrored}
         />
       </QueryClientProvider>,
     ),
@@ -2219,7 +2228,265 @@ describe("SetupWizard", () => {
     });
     expect(screen.getByText("Wenlan is in Cursor's configuration file.")).toBeInTheDocument();
   });
+
+  // ── Dead ends ──────────────────────────────────────────────────────────
+  // Retry only re-probes. A service that is not running stays not running,
+  // however many times it is asked, and the wizard replaces Main, so the one
+  // control that could actually start it was behind a Settings pane the user
+  // could not reach.
+  it("the daemon row can start the service, then re-probes and goes green", async () => {
+    (getWireState as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
+        mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+        clients: [],
+      })
+      .mockResolvedValue({
+        daemon: { base_url: "http://127.0.0.1:7878", reachable: true, version: "0.12.0", error: null },
+        mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+        clients: [],
+      });
+    (startDaemonSidecar as ReturnType<typeof vi.fn>).mockResolvedValue({ status: "started" });
+
+    renderWizard({ initialStep: "setting-up" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+    });
+    fireEvent.click(screen.getByTestId("task-start-daemon"));
+
+    await waitFor(() => expect(startDaemonSidecar).toHaveBeenCalledTimes(1));
+    // Not "started, therefore fine": the row re-runs its own probe, so only
+    // a real store-and-read-back round trip turns it green.
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
+    });
+    expect(storeMemory).toHaveBeenCalled();
+  });
+
+  it("a refused start keeps the row red and shows the reason verbatim under a sentence", async () => {
+    (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
+      mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+      clients: [],
+    });
+    (startDaemonSidecar as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "failed",
+      message: "launchctl bootstrap: Operation not permitted",
+    });
+
+    renderWizard({ initialStep: "setting-up" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+    });
+    const probes = (getWireState as ReturnType<typeof vi.fn>).mock.calls.length;
+    fireEvent.click(screen.getByTestId("task-start-daemon"));
+
+    await waitFor(() => {
+      expect(screen.getByText("Wenlan could not start its background service.")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("task-error-detail-daemon")).toHaveTextContent(
+      "launchctl bootstrap: Operation not permitted",
+    );
+    // A refused start must not be followed by a probe that would read as a
+    // second, unrelated failure.
+    expect((getWireState as ReturnType<typeof vi.fn>).mock.calls.length).toBe(probes);
+  });
+
+  // Item 5: every row's failure gets a sentence. The raw text stays, demoted.
+  it.each([
+    ["permission denied", "Wenlan was not allowed to do this."],
+    ["No space left on device (os error 28)", "There is not enough room on this disk."],
+    ["operation timed out", "This took too long, so Wenlan stopped waiting."],
+    ["the registry returned 500", "Something went wrong here."],
+  ])("a config row failing with %j is headed %j", async (raw, heading) => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Cursor",
+        client_type: "cursor",
+        config_path: "/path/to/cursor",
+        detected: YES,
+        already_configured: NO,
+        has_raw_entry: NO,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+      },
+    ]);
+    (writeMcpConfig as ReturnType<typeof vi.fn>).mockRejectedValue(new Error(raw));
+
+    renderWizard({ initialStep: "connect" });
+    const cursorCheckbox = await screen.findByRole("checkbox", { name: "Cursor" });
+    await waitFor(() => expect(cursorCheckbox).toBeChecked());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Couldn't set up");
+    });
+    expect(screen.getByText(heading)).toBeInTheDocument();
+    expect(screen.getByTestId("task-error-detail-cursor")).toHaveTextContent(raw);
+  });
+
+  // Item 3, wizard half: the gate never got an answer, so this is not a
+  // first run and the wizard must not say it is.
+  it("leads with the connection problem, not welcome copy, when the boot gate errored", async () => {
+    renderWizard({ daemonGateErrored: true });
+
+    expect(
+      await screen.findByTestId("welcome-connection-problem"),
+    ).toHaveTextContent("Wenlan could not reach its background service while starting up.");
+    expect(
+      screen.queryByText(
+        "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
+      ),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain welcome copy when the gate answered normally", async () => {
+    renderWizard();
+
+    expect(
+      await screen.findByText(
+        "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("welcome-connection-problem")).not.toBeInTheDocument();
+  });
+
+  it("carries the connection problem onto the daemon row", async () => {
+    renderWizard({ initialStep: "setting-up", daemonGateErrored: true });
+
+    expect(await screen.findByTestId("daemon-gate-problem")).toBeInTheDocument();
+  });
+
+  it("shows no gate problem on the daemon row when the gate answered", async () => {
+    renderWizard({ initialStep: "setting-up" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
+    });
+    expect(screen.queryByTestId("daemon-gate-problem")).not.toBeInTheDocument();
+  });
+
+  // Item 4. The download row only ever failed on a rejected promise, and the
+  // request behind it has an EIGHT HOUR timeout, so a dead transfer read as
+  // "Downloading…" for the rest of the working day.
+  //
+  // Fake timers are installed BEFORE render in these three, not after: the
+  // stall check is an interval, and an interval created under real timers is
+  // untouched by advanceTimersByTime. Assertions step the clock explicitly
+  // rather than going through waitFor, which polls on real time.
+  it("a byte count that stops moving flips the row to stalled with Retry", async () => {
+    (getOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [{
+        id: "qwen3-4b-instruct-2507",
+        display_name: "Qwen3 4B",
+        param_count: "4B",
+        ram_required_gb: 8,
+        file_size_gb: 2.7,
+        cached: false,
+      }],
+    });
+    (onDeviceModelDownloadBytes as ReturnType<typeof vi.fn>).mockResolvedValue(500_000_000);
+    // Never resolves: the real command blocks for the whole transfer.
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<void>(() => {}),
+    );
+
+    vi.useFakeTimers();
+    try {
+      renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent("Downloading…");
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(DOWNLOAD_STALL_MS + 3_000); });
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent("Download stalled");
+      expect(screen.getByTestId("task-retry-on-device-model")).toBeInTheDocument();
+      expect(
+        screen.getByText("The download stopped making progress. Retry to pick it up again."),
+      ).toBeInTheDocument();
+
+      // Retry re-exercises the same path a first attempt took, and clears the
+      // stalled word rather than leaving it under a running row.
+      (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      fireEvent.click(screen.getByTestId("task-retry-on-device-model"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByTestId("task-status-on-device-model")).not.toHaveTextContent(
+        "Download stalled",
+      );
+      expect(downloadOnDeviceModel).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+      (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    }
+  });
+
+  it("a load poll that errors gives up instead of running forever", async () => {
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (getOnDeviceModel as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({
+        loaded: null,
+        selected: "qwen3-4b-instruct-2507",
+        models: [{
+          id: "qwen3-4b-instruct-2507",
+          display_name: "Qwen3 4B",
+          param_count: "4B",
+          ram_required_gb: 8,
+          file_size_gb: 2.7,
+          cached: true,
+        }],
+      })
+      // The daemon dies AFTER the download POST resolved. The poll used to
+      // swallow this and leave the row running until the window closed.
+      .mockRejectedValue(new Error("connection refused"));
+
+    renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent(
+        "Download stalled",
+      );
+    }, { timeout: 5_000 });
+    expect(screen.getByTestId("task-retry-on-device-model")).toBeInTheDocument();
+  });
+
+  it("a load that never lands gives up at the deadline", async () => {
+    (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    // cached: true, so this is the load phase, not the transfer: the stall
+    // detector above is off and only the deadline can end this row.
+    (getOnDeviceModel as ReturnType<typeof vi.fn>).mockResolvedValue({
+      loaded: null,
+      selected: "qwen3-4b-instruct-2507",
+      models: [{
+        id: "qwen3-4b-instruct-2507",
+        display_name: "Qwen3 4B",
+        param_count: "4B",
+        ram_required_gb: 8,
+        file_size_gb: 2.7,
+        cached: true,
+      }],
+    });
+
+    vi.useFakeTimers();
+    try {
+      renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent("Loading…");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(MODEL_LOAD_DEADLINE_MS + 5_000);
+      });
+      expect(screen.getByTestId("task-status-on-device-model")).toHaveTextContent(
+        "Download stalled",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+
 
 // Pure display-gating rule behind the setting-up rail: a row's terminal
 // state only reveals once every row above it is also terminal, so

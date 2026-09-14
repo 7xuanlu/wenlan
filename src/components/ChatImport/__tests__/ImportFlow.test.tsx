@@ -306,4 +306,119 @@ describe("ImportFlow", () => {
 
     expect(mockSendNotification).not.toHaveBeenCalled();
   });
+
+  // Item 6. The raw string embeds `req.path` (import_routes.rs), so what the
+  // user used to read was a file path with no sentence and no way out.
+  it("heads a failed import with the localized sentence and keeps the raw detail", async () => {
+    const mockOpen = open as ReturnType<typeof vi.fn>;
+    mockOpen.mockResolvedValue("/tmp/export.zip");
+    mockImportChatExport.mockRejectedValue(
+      new Error("POST /api/import/chat-export: no such file or directory"),
+    );
+
+    render(<ImportFlow />);
+    await act(async () => {
+      screen.getByRole("button", { name: /choose file/i }).click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(screen.getByText("Import failed")).toBeInTheDocument();
+    expect(screen.getByTestId("chat-import-error-detail")).toHaveTextContent(
+      "POST /api/import/chat-export: no such file or directory",
+    );
+  });
+
+  it("retries a failed import through the same path the first attempt took", async () => {
+    const mockOpen = open as ReturnType<typeof vi.fn>;
+    mockOpen.mockResolvedValue("/tmp/export.zip");
+    mockImportChatExport.mockRejectedValueOnce(new Error("daemon busy"));
+
+    render(<ImportFlow />);
+    await act(async () => {
+      screen.getByRole("button", { name: /choose file/i }).click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    expect(screen.getByTestId("chat-import-retry")).toBeInTheDocument();
+
+    mockImportChatExport.mockResolvedValue({
+      import_id: "imp-1",
+      vendor: "chatgpt",
+      conversations_total: 2,
+      conversations_new: 2,
+      memories_stored: 5,
+    });
+    await act(async () => {
+      screen.getByTestId("chat-import-retry").click();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(mockImportChatExport).toHaveBeenCalledTimes(2);
+    expect(mockImportChatExport).toHaveBeenLastCalledWith("/tmp/export.zip");
+    expect(screen.queryByText("Import failed")).toBeNull();
+  });
+
+  // The strip used to derive "refining" from `pending !== null` alone, and
+  // the poll swallowed every rejection — so a daemon that went away left it
+  // claiming refinement for as long as the window stayed open.
+  it("stops claiming refinement after three consecutive status failures", async () => {
+    mockListPendingImports
+      .mockResolvedValueOnce([
+        { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 3 },
+      ])
+      .mockRejectedValue(new Error("status unavailable"));
+
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    expect(screen.getByText(/stage_b|classifying/i)).toBeInTheDocument();
+
+    // Two failures is still noise: a restart, a raced request.
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.queryByTestId("chat-import-retry")).toBeNull();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(
+      screen.getByText(
+        "Wenlan lost track of this import. It may still be running in the background.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("chat-import-retry")).toBeInTheDocument();
+  });
+
+  it("a status poll that recovers before the third failure never trips the error state", async () => {
+    mockListPendingImports
+      .mockResolvedValueOnce([
+        { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 3 },
+      ])
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockRejectedValueOnce(new Error("status unavailable"))
+      .mockResolvedValue([
+        { id: "imp_1", vendor: "chatgpt", stage: "stage_b", total_conversations: 3 },
+      ]);
+
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    }
+
+    expect(screen.queryByTestId("chat-import-retry")).toBeNull();
+  });
+
+  it("retrying a lost status resumes the poll", async () => {
+    mockListPendingImports.mockRejectedValue(new Error("status unavailable"));
+    render(<ImportFlow />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+    expect(screen.getByTestId("chat-import-retry")).toBeInTheDocument();
+
+    mockListPendingImports.mockResolvedValue([]);
+    await act(async () => {
+      screen.getByTestId("chat-import-retry").click();
+      await vi.advanceTimersByTimeAsync(100);
+    });
+
+    expect(screen.queryByTestId("chat-import-retry")).toBeNull();
+  });
 });

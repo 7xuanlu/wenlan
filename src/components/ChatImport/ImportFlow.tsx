@@ -9,13 +9,14 @@ import {
   type ImportChatExportResponse,
   type PendingImport,
 } from "../../lib/tauri";
+import { formatImportErrorDetail } from "../memory/importCopy";
 
 /** What the user just triggered in this session. */
 type LocalAction =
   | null
   | { kind: "reading" }
   | { kind: "done"; result: ImportChatExportResponse }
-  | { kind: "error"; message: string };
+  | { kind: "error"; detail: string };
 
 export interface ImportFlowProps {
   /** Reports the short frontend read/upload window to a containing flow. */
@@ -25,6 +26,18 @@ export interface ImportFlowProps {
 }
 
 const POLL_INTERVAL_MS = 5_000;
+
+/**
+ * Consecutive status-poll rejections before the strip stops claiming the
+ * import is still being refined.
+ *
+ * One rejection is noise: the daemon restarts, a request races a reload, and
+ * the next tick answers fine. Three in a row is fifteen seconds of a daemon
+ * that will not say anything, and the strip's "refining" spinner has by then
+ * become a claim nobody is checking. Losing the status is NOT the same as the
+ * import failing, and the copy says so.
+ */
+const POLL_FAILURE_LIMIT = 3;
 
 async function maybeNotify(title: string, body: string) {
   try {
@@ -49,8 +62,16 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
   const [pending, setPending] = useState<PendingImport | null>(null);
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+  // The daemon stopped answering about this import. Distinct from a failed
+  // import: we do not know that it failed, only that we cannot see it.
+  const [pollLost, setPollLost] = useState(false);
+  const [pollNonce, setPollNonce] = useState(0);
   const prevPendingRef = useRef<PendingImport | null>(null);
   const busyRef = useRef(false);
+  const pollFailuresRef = useRef(0);
+  // What Retry re-runs. Held as the operation, not the path, so a dropped
+  // file retries through the same read/upload path a first attempt took.
+  const lastOperationRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     onBusyChange?.(busy);
@@ -78,13 +99,25 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
             setPending(null);
           }
           prevPendingRef.current = imports[0] ?? null;
+          pollFailuresRef.current = 0;
+          setPollLost((lost) => (lost ? false : lost));
         })
-        .catch(() => {});
+        .catch(() => {
+          if (!alive) return;
+          pollFailuresRef.current += 1;
+          if (pollFailuresRef.current < POLL_FAILURE_LIMIT) return;
+          // Clearing `pending` is the point: `isRefining` is derived from it,
+          // so leaving it set is what used to spin "refining" forever behind
+          // a daemon that had gone away.
+          setPollLost(true);
+          setPending(null);
+          prevPendingRef.current = null;
+        });
     };
     poll();
     const id = setInterval(poll, POLL_INTERVAL_MS);
     return () => { alive = false; clearInterval(id); };
-  }, [t]);
+  }, [t, pollNonce]);
 
   const acceptImport = useCallback(async (path: string) => {
     const result = await importChatExport(path);
@@ -105,13 +138,18 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
   const beginImport = useCallback(async (operation: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
+    lastOperationRef.current = operation;
     setBusy(true);
     setLocalAction({ kind: "reading" });
     setDismissed(false);
     try {
       await operation();
     } catch (e: unknown) {
-      setLocalAction({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      // Same treatment ImportView already gives a failed import: a localized
+      // heading, with the backend detail demoted rather than dropped. The raw
+      // string embeds `req.path` (import_routes.rs), so it is a file path on
+      // screen, not a sentence.
+      setLocalAction({ kind: "error", detail: formatImportErrorDetail(e) });
     } finally {
       busyRef.current = false;
       setBusy(false);
@@ -134,12 +172,29 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
     await runImport(path);
   }, [runImport]);
 
+  const handleRetry = useCallback(() => {
+    if (pollLost) {
+      pollFailuresRef.current = 0;
+      setPollLost(false);
+      setPollNonce((n) => n + 1);
+    }
+    const operation = lastOperationRef.current;
+    if (localAction?.kind === "error" && operation) {
+      setLocalAction(null);
+      void beginImport(operation);
+    }
+  }, [beginImport, localAction, pollLost]);
+
   // Derive display state from local action + daemon state
   const isRefining = pending !== null;
   const pendingFailed = pending?.stage === "error";
+  const errored = localAction?.kind === "error" || pollLost;
   const showLocal = localAction !== null && !dismissed;
   const showRefining = isRefining && !dismissed;
-  const showStrip = showLocal || showRefining;
+  const showPollLost = pollLost && !dismissed;
+  const showStrip = showLocal || showRefining || showPollLost;
+  const canRetry =
+    (localAction?.kind === "error" && lastOperationRef.current !== null) || pollLost;
 
   return (
     <div>
@@ -161,11 +216,11 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
             display: "flex",
             alignItems: "center",
             gap: 8,
-            background: localAction?.kind === "error"
+            background: errored
               ? "var(--mem-status-danger-bg)"
               : "color-mix(in srgb, var(--mem-accent-indigo) 8%, transparent)",
             border: `1px solid ${
-              localAction?.kind === "error"
+              errored
                 ? "var(--mem-status-danger-border)"
                 : "color-mix(in srgb, var(--mem-accent-indigo) 16%, transparent)"
             }`,
@@ -174,19 +229,57 @@ export function ImportFlow({ onBusyChange, onImportAccepted }: ImportFlowProps =
         >
           <StatusIcon
             reading={localAction?.kind === "reading"}
-            error={localAction?.kind === "error" || pendingFailed}
-            refining={isRefining && !pendingFailed}
+            error={errored || pendingFailed}
+            refining={isRefining && !pendingFailed && !errored}
           />
 
           <span style={{
             flex: 1,
-            color: localAction?.kind === "error" ? "var(--mem-status-danger-text)" : "var(--mem-text-secondary)",
+            minWidth: 0,
+            color: errored ? "var(--mem-status-danger-text)" : "var(--mem-text-secondary)",
           }}>
             {localAction?.kind === "reading" && t("chatImport.importFlow.importing")}
             {localAction?.kind === "done" && formatDoneMessage(t, localAction.result, isRefining, pending)}
-            {localAction?.kind === "error" && localAction.message}
-            {!localAction && isRefining && formatRefiningMessage(t, pending)}
+            {localAction?.kind === "error" && (
+              <>
+                <span style={{ display: "block" }}>{t("importView.importFailedTitle")}</span>
+                {localAction.detail && (
+                  <span
+                    data-testid="chat-import-error-detail"
+                    style={{
+                      display: "block",
+                      color: "var(--mem-text-tertiary)",
+                      overflowWrap: "anywhere",
+                    }}
+                  >
+                    {localAction.detail}
+                  </span>
+                )}
+              </>
+            )}
+            {!localAction && pollLost && t("chatImport.importFlow.statusUnavailable")}
+            {!localAction && !pollLost && isRefining && formatRefiningMessage(t, pending)}
           </span>
+
+          {canRetry && (
+            <button
+              onClick={handleRetry}
+              data-testid="chat-import-retry"
+              style={{
+                flexShrink: 0,
+                padding: "2px 8px",
+                borderRadius: 6,
+                border: "1px solid var(--mem-status-danger-border)",
+                background: "transparent",
+                color: "inherit",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontSize: "inherit",
+              }}
+            >
+              {t("chatImport.importFlow.retry")}
+            </button>
+          )}
 
           {localAction?.kind !== "reading" && (
             <button

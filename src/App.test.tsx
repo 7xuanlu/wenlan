@@ -23,6 +23,9 @@ const hideWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const showWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const focusWindowMock = vi.hoisted(() => vi.fn<() => Promise<void>>());
 const emitMock = vi.hoisted(() => vi.fn());
+const startDaemonSidecarMock = vi.hoisted(
+  () => vi.fn<() => Promise<{ status: string; message?: string }>>(),
+);
 
 vi.mock("@tauri-apps/api/event", () => ({
   emit: emitMock,
@@ -39,6 +42,7 @@ vi.mock("./lib/tauri", () => ({
   shouldShowWizard: vi.fn(),
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
   setTrafficLightsVisible: vi.fn().mockResolvedValue(undefined),
+  startDaemonSidecar: startDaemonSidecarMock,
 }));
 
 // No setSize/setPosition/scaleFactor/currentMonitor here on purpose: App no
@@ -63,6 +67,9 @@ vi.mock("./lib/bootRetryPolicy", () => ({
   ATTEMPT_TIMEOUT_MS: 5000,
   RUST_HEALTH_LOOP_BUDGET_MS: 152_200,
   BOOT_QUERY_RETRY: 1,
+  // Shrunk with the rest of the ladder: the production 15s would outlast the
+  // two-attempt policy above, so the notice could never render here.
+  BOOT_SLOW_NOTICE_MS: 20,
   bootQueryRetryDelay: () => 10,
   bootQueryBudgetMs: () => 10_010,
 }));
@@ -85,8 +92,11 @@ vi.mock("./components/memory/Main", () => ({
 vi.mock("./components/SetupWizard", () => ({
   // Mirrors the Done step's contract with onComplete: await it and keep the
   // wizard on a rejection (the real step shows an inline alert).
-  default: (props: { onComplete: () => void | Promise<void> }) => (
-    <div data-testid="setup-wizard">
+  default: (props: {
+    onComplete: () => void | Promise<void>;
+    daemonGateErrored?: boolean;
+  }) => (
+    <div data-testid="setup-wizard" data-gate-errored={String(!!props.daemonGateErrored)}>
       wizard
       <button
         type="button"
@@ -127,6 +137,7 @@ import { setSetupCompleted, shouldShowWizard } from "./lib/tauri";
 import { resources } from "./i18n/resources";
 
 const STARTING_RUNTIME = resources.en.translation.common.startingRuntime;
+const BOOT = resources.en.translation.boot;
 
 function renderApp() {
   const queryClient = new QueryClient({
@@ -157,6 +168,7 @@ describe("App - first-run wizard gate", () => {
     quitWenlanFullMock.mockReset().mockResolvedValue(undefined);
     showWindowMock.mockReset().mockResolvedValue(undefined);
     vi.mocked(shouldShowWizard).mockReset();
+    startDaemonSidecarMock.mockReset().mockResolvedValue({ status: "started" });
   });
 
   it("renders Home when shouldShowWizard resolves false", async () => {
@@ -250,6 +262,39 @@ describe("App - first-run wizard gate", () => {
     expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
     // Proves retries actually happened, not just a single failed attempt.
     expect(vi.mocked(shouldShowWizard).mock.calls.length).toBeGreaterThan(1);
+  });
+
+  // The gate answering "show the wizard" is a fact about setup. The gate
+  // ERRORING is a fact about the daemon, and a returning user must not be
+  // greeted as brand new while their memories are simply out of reach.
+  it("tells the wizard when the gate errored rather than answered", async () => {
+    vi.mocked(shouldShowWizard).mockRejectedValue(new Error("connection refused"));
+    renderApp();
+
+    const wizard = await screen.findByTestId("setup-wizard");
+    expect(wizard).toHaveAttribute("data-gate-errored", "true");
+  });
+
+  it("does not claim a connection problem when the gate simply says first run", async () => {
+    vi.mocked(shouldShowWizard).mockResolvedValue(true);
+    renderApp();
+
+    const wizard = await screen.findByTestId("setup-wizard");
+    expect(wizard).toHaveAttribute("data-gate-errored", "false");
+  });
+
+  // "Starting Wenlan" can hold for the better part of three minutes. For all
+  // of it the screen used to say one sentence that named nothing.
+  it("names what it is waiting for once the boot wait runs long", async () => {
+    vi.mocked(shouldShowWizard).mockReturnValue(new Promise<boolean>(() => {}));
+    renderApp();
+
+    await screen.findByRole("status");
+    expect(screen.queryByTestId("boot-slow-notice")).not.toBeInTheDocument();
+    // The mocked policy above shrinks the 15s threshold to 20ms.
+    expect(await screen.findByTestId("boot-slow-notice")).toHaveTextContent(
+      BOOT.stillWaiting,
+    );
   });
 
   // A failed setSetupCompleted must leave the gate alone. Invalidating it would
@@ -483,5 +528,90 @@ describe("App - first-run wizard gate", () => {
     expect(cancelGuardedQuitRequestMock).toHaveBeenCalledWith(1, 1);
     expect(emitMock).not.toHaveBeenCalledWith("quit-cancelled");
     expect(title).toHaveFocus();
+  });
+});
+
+describe("App - origin-fallback-mode banner", () => {
+  beforeEach(() => {
+    eventListeners.clear();
+    emitMock.mockReset().mockResolvedValue(undefined);
+    vi.mocked(shouldShowWizard).mockReset().mockResolvedValue(false);
+    startDaemonSidecarMock.mockReset().mockResolvedValue({ status: "started" });
+  });
+
+  function fireFallback() {
+    act(() => {
+      eventListeners.get("origin-fallback-mode")?.({ payload: null });
+    });
+  }
+
+  it("stays silent until Rust says it is running degraded", async () => {
+    renderApp();
+    expect(await screen.findByTestId("home-main")).toBeInTheDocument();
+    expect(screen.queryByTestId("fallback-service-banner")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Home", false, "home-main"],
+    ["the wizard", true, "setup-wizard"],
+  ])("renders over %s when the event fires", async (_label, showWizard, testid) => {
+    vi.mocked(shouldShowWizard).mockResolvedValue(showWizard);
+    renderApp();
+    await screen.findByTestId(testid);
+
+    fireFallback();
+
+    const banner = screen.getByTestId("fallback-service-banner");
+    expect(banner).toHaveTextContent(BOOT.fallbackBanner);
+    // Both surfaces paint a full-viewport box of their own, so the banner is
+    // fixed rather than stacked, or one of them would push it off screen.
+    expect(banner).toHaveStyle({ position: "fixed" });
+    expect(screen.getByTestId(testid)).toBeInTheDocument();
+  });
+
+  it("starts the service and clears itself on success", async () => {
+    renderApp();
+    await screen.findByTestId("home-main");
+    fireFallback();
+
+    fireEvent.click(screen.getByTestId("fallback-start-service"));
+
+    await waitFor(() => expect(startDaemonSidecarMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByTestId("fallback-service-banner")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the banner and shows the raw reason when the start fails", async () => {
+    startDaemonSidecarMock.mockResolvedValue({
+      status: "failed",
+      message: "launchctl bootstrap: Operation not permitted",
+    });
+    renderApp();
+    await screen.findByTestId("home-main");
+    fireFallback();
+
+    fireEvent.click(screen.getByTestId("fallback-start-service"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("fallback-service-banner")).toHaveTextContent(
+        "launchctl bootstrap: Operation not permitted",
+      ),
+    );
+    expect(screen.getByTestId("fallback-service-banner")).toHaveTextContent(
+      BOOT.startFailed,
+    );
+  });
+
+  it("dismisses on request and comes back if Rust says it again", async () => {
+    renderApp();
+    await screen.findByTestId("home-main");
+    fireFallback();
+
+    fireEvent.click(screen.getByRole("button", { name: BOOT.dismiss }));
+    expect(screen.queryByTestId("fallback-service-banner")).not.toBeInTheDocument();
+
+    fireFallback();
+    expect(screen.getByTestId("fallback-service-banner")).toBeInTheDocument();
   });
 });

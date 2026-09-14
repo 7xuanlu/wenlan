@@ -61,3 +61,15 @@ export function bootQueryBudgetMs(retry: number = BOOT_QUERY_RETRY): number {
   }
   return total;
 }
+
+/**
+ * How long "Starting Wenlan" may stay a single unexplained line.
+ *
+ * The gate above can legitimately hold this screen for the better part of
+ * three minutes, and for all of it the user is looking at one sentence with
+ * no subject: they cannot tell a slow cold start from a machine that will
+ * never finish booting. After this much, the screen names what it is waiting
+ * for. Well inside `bootQueryBudgetMs()`, on purpose — this is a caption on a
+ * wait that is still healthy, not a deadline.
+ */
+export const BOOT_SLOW_NOTICE_MS = 15_000;
