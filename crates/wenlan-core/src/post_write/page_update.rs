@@ -1,5 +1,8 @@
 use super::{page_dispatch::PageGrowthCommit, WriteOutcome, WriteResult};
-use crate::{db::MemoryDB, error::WenlanError};
+use crate::{
+    db::{MemoryDB, PageFence},
+    error::WenlanError,
+};
 use std::path::Path;
 use wenlan_types::{requests::UpdatePageRequest, RawDocument};
 
@@ -137,6 +140,60 @@ pub async fn stage_page_revision_card(
     edited_by: &str,
     retry: Option<&RetryIdentity>,
 ) -> Result<WriteResult, WenlanError> {
+    stage_page_revision_card_inner(
+        db,
+        page,
+        content,
+        source_memory_ids,
+        source_revision,
+        None,
+        edited_by,
+        retry,
+    )
+    .await?
+    .ok_or_else(|| {
+        WenlanError::VectorDb("unfenced revision card staging reported a lost page fence".into())
+    })
+}
+
+/// [`stage_page_revision_card`] for a caller that captured the page fence
+/// before it began compiling. The card commits only while `page` is still
+/// the exact row it was computed from (active, same version, same source
+/// revision, same incarnation), checked inside the insert's transaction.
+/// `Ok(None)` when the fence no longer holds; nothing was staged or logged.
+pub(crate) async fn stage_page_revision_card_at_fence(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+    content: &str,
+    source_memory_ids: &[String],
+    fence: &PageFence,
+    edited_by: &str,
+    retry: Option<&RetryIdentity>,
+) -> Result<Option<WriteResult>, WenlanError> {
+    stage_page_revision_card_inner(
+        db,
+        page,
+        content,
+        source_memory_ids,
+        fence.source_revision,
+        Some(fence),
+        edited_by,
+        retry,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn stage_page_revision_card_inner(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+    content: &str,
+    source_memory_ids: &[String],
+    source_revision: i64,
+    fence: Option<&PageFence>,
+    edited_by: &str,
+    retry: Option<&RetryIdentity>,
+) -> Result<Option<WriteResult>, WenlanError> {
     crate::export::provenance::validate_canonical_page_content(content)?;
 
     let revision_card_id = format!(
@@ -192,28 +249,39 @@ pub async fn stage_page_revision_card(
         outcome: WriteOutcome::Gated,
         acknowledged: false,
     };
-    if let Some(retry_identity @ (caller, operation, digest)) = retry {
-        let response = serde_json::to_string(&result)?;
-        let write = db
-            .upsert_documents_with_operation_receipt(
-                vec![row],
-                crate::db::OperationReceipt {
-                    caller_id: caller,
-                    operation_id: operation,
-                    request_digest: digest,
-                    response: &response,
-                },
-            )
-            .await;
-        match write {
-            Ok(_) => {}
-            Err(error @ WenlanError::Conflict(_)) => {
-                return replay_matching_operation_receipt(db, retry_identity, error).await;
-            }
-            Err(error) => return Err(error),
+    let response = match retry {
+        Some(_) => Some(serde_json::to_string(&result)?),
+        None => None,
+    };
+    let receipt = match (retry, response.as_deref()) {
+        (Some((caller, operation, digest)), Some(response)) => Some(crate::db::OperationReceipt {
+            caller_id: caller,
+            operation_id: operation,
+            request_digest: digest,
+            response,
+        }),
+        _ => None,
+    };
+    let write = match (fence, receipt) {
+        (Some(fence), receipt) => {
+            db.upsert_documents_at_page_fence(vec![row], receipt, &page.id, page.version, fence)
+                .await
         }
-    } else {
-        db.upsert_documents(vec![row]).await?;
+        (None, Some(receipt)) => db
+            .upsert_documents_with_operation_receipt(vec![row], receipt)
+            .await
+            .map(|_| true),
+        (None, None) => db.upsert_documents(vec![row]).await.map(|_| true),
+    };
+    match (write, retry) {
+        (Ok(true), _) => {}
+        (Ok(false), _) => return Ok(None),
+        (Err(error @ WenlanError::Conflict(_)), Some(retry_identity)) => {
+            return replay_matching_operation_receipt(db, retry_identity, error)
+                .await
+                .map(Some);
+        }
+        (Err(error), _) => return Err(error),
     }
     if let Err(e) = db
         .log_agent_activity(
@@ -228,7 +296,7 @@ pub async fn stage_page_revision_card(
         log::warn!("[page_revision_card] activity log failed: {e}");
     }
 
-    Ok(result)
+    Ok(Some(result))
 }
 
 /// Parse WENLAN_MERGE_SHRINK_GUARD env var as f64 threshold.
@@ -461,6 +529,8 @@ pub(super) async fn update_page_impl(
     citations: Option<(String, String)>,
     page_growth: Option<PageGrowthCommit<'_>>,
     preserve_sources: bool,
+    user_forced: bool,
+    page_fence: Option<&PageFence>,
 ) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
@@ -472,6 +542,30 @@ pub(super) async fn update_page_impl(
     // CAS. It is intentionally human-only: a machine writer must declare the
     // source set its output was computed from.
     let writer = Writer::classify(edited_by);
+    // A user-forced rebuild may replace a `user_edited` body, so it must be a
+    // machine rewrite fenced on the page fence (source revision AND
+    // incarnation) it captured before compiling. The revision alone cannot
+    // see the page deleted and recreated under the same id. Every terminal
+    // action below (body write, staged card, acknowledgement, staleness
+    // clear) carries that one fence.
+    if user_forced
+        && (!writer.is_machine()
+            || preserve_sources
+            || require_stale
+            || expected_source_revision.is_none()
+            || page_fence.map(|fence| fence.source_revision) != expected_source_revision
+            || page_growth.is_some())
+    {
+        return Err(WenlanError::Validation(
+            "a user-forced page rebuild requires a machine write under a source-revision fence"
+                .into(),
+        ));
+    }
+    if !user_forced && page_fence.is_some() {
+        return Err(WenlanError::Validation(
+            "a page incarnation fence is only carried by a user-forced page rebuild".into(),
+        ));
+    }
     if preserve_sources && writer.is_machine() {
         return Err(WenlanError::Validation(
             "only human Page writes may preserve server-owned sources".into(),
@@ -648,8 +742,15 @@ pub(super) async fn update_page_impl(
 
             // Ownership gate, re-evaluated on every attempt. Inside the CAS loop
             // it is no longer advisory: whatever it decided is what the write
-            // guards on.
-            if writer.is_machine() && page_is_human_owned(&current) {
+            // guards on. A user-forced rebuild overrides `user_edited` (the
+            // write releases it together with the new body) but never an
+            // authored page, which still gets a revision card.
+            let human_owned = if user_forced {
+                current.creation_kind == "authored"
+            } else {
+                page_is_human_owned(&current)
+            };
+            if writer.is_machine() && human_owned {
                 // `expected_source_revision` is the caller's compile fence
                 // when it supplied one. A caller with none (e.g. the generic
                 // `update_page` wrapper) gets an acceptance-time staging
@@ -661,29 +762,65 @@ pub(super) async fn update_page_impl(
                     Some(source_revision) => source_revision,
                     None => db.get_page_source_revision(page_id).await?,
                 };
-                let result = stage_page_revision_card(
-                    db,
-                    &current,
-                    &req.content,
-                    effective_sources,
-                    staged_source_revision,
-                    edited_by,
-                    retry.as_ref(),
-                )
-                .await?;
+                let result = match page_fence {
+                    Some(fence) => match stage_page_revision_card_at_fence(
+                        db,
+                        &current,
+                        &req.content,
+                        effective_sources,
+                        fence,
+                        edited_by,
+                        retry.as_ref(),
+                    )
+                    .await?
+                    {
+                        Some(result) => result,
+                        None => {
+                            log::info!(
+                                "[update_page] {page_id}: page changed or was replaced after the rebuild began; no revision card staged"
+                            );
+                            return terminal_result_with_receipt(
+                                db,
+                                retry.as_ref(),
+                                no_op(WriteOutcome::Unchanged, vec![]),
+                            )
+                            .await;
+                        }
+                    },
+                    None => {
+                        stage_page_revision_card(
+                            db,
+                            &current,
+                            &req.content,
+                            effective_sources,
+                            staged_source_revision,
+                            edited_by,
+                            retry.as_ref(),
+                        )
+                        .await?
+                    }
+                };
                 // A gated compile still consumed the staleness it was dispatched
                 // for: the work landed as a revision card awaiting review, so the
                 // page must not be re-compiled on the next sweep. Clearing at the
                 // source revision keeps that safe — a source that moved since
-                // dispatch leaves the page stale.
-                if require_stale {
-                    let _ = db
-                        .clear_page_staleness_at_source_revision(
-                            page_id,
-                            current.version,
-                            expected_source_revision,
-                        )
-                        .await?;
+                // dispatch leaves the page stale. A fenced rebuild also requires
+                // the same row incarnation.
+                if require_stale || user_forced {
+                    let _ = match page_fence {
+                        Some(fence) => {
+                            db.clear_page_staleness_at_fence(page_id, current.version, fence)
+                                .await?
+                        }
+                        None => {
+                            db.clear_page_staleness_at_source_revision(
+                                page_id,
+                                current.version,
+                                expected_source_revision,
+                            )
+                            .await?
+                        }
+                    };
                 }
                 return Ok(result);
             }
@@ -736,37 +873,63 @@ pub(super) async fn update_page_impl(
             // compile done, so acknowledge it; otherwise the sweep re-dispatches the
             // same no-op work forever.
             if delta_summary.is_none() && old_set == new_set {
-                let acknowledged = if require_stale {
+                let acknowledged = if require_stale || user_forced {
                     if let Some((caller, operation, digest)) = retry.as_ref() {
                         let acknowledged_result = WriteResult {
                             acknowledged: true,
                             ..no_op(WriteOutcome::Unchanged, vec![])
                         };
                         let response = serde_json::to_string(&acknowledged_result)?;
-                        let acknowledged = db
-                            .acknowledge_page_compile_with_receipt(
-                                page_id,
-                                current_version,
-                                expected_source_revision,
-                                crate::db::OperationReceipt {
-                                    caller_id: caller,
-                                    operation_id: operation,
-                                    request_digest: digest,
-                                    response: &response,
-                                },
-                            )
-                            .await?;
+                        let receipt = crate::db::OperationReceipt {
+                            caller_id: caller,
+                            operation_id: operation,
+                            request_digest: digest,
+                            response: &response,
+                        };
+                        let acknowledged = match page_fence {
+                            Some(fence) => {
+                                db.acknowledge_page_compile_at_fence(
+                                    page_id,
+                                    current_version,
+                                    fence,
+                                    Some(receipt),
+                                )
+                                .await?
+                            }
+                            None => {
+                                db.acknowledge_page_compile_with_receipt(
+                                    page_id,
+                                    current_version,
+                                    expected_source_revision,
+                                    receipt,
+                                )
+                                .await?
+                            }
+                        };
                         if acknowledged {
                             return Ok(acknowledged_result);
                         }
                         false
                     } else {
-                        db.acknowledge_page_compile(
-                            page_id,
-                            current_version,
-                            expected_source_revision,
-                        )
-                        .await?
+                        match page_fence {
+                            Some(fence) => {
+                                db.acknowledge_page_compile_at_fence(
+                                    page_id,
+                                    current_version,
+                                    fence,
+                                    None,
+                                )
+                                .await?
+                            }
+                            None => {
+                                db.acknowledge_page_compile(
+                                    page_id,
+                                    current_version,
+                                    expected_source_revision,
+                                )
+                                .await?
+                            }
+                        }
                     }
                 } else {
                     false
@@ -856,6 +1019,19 @@ pub(super) async fn update_page_impl(
                     guard.expected_source_revision,
                     guard.source_id,
                     guard.expected_memory_version,
+                )
+                .await?
+            } else if let (true, Some(fence)) = (user_forced, page_fence) {
+                db.try_user_forced_page_content_at_source_revision(
+                    page_id,
+                    &req.content,
+                    &source_refs,
+                    edited_by,
+                    &new_changelog,
+                    citations.as_ref().map(|(json, _)| json.as_str()),
+                    fence.source_revision,
+                    &fence.incarnation,
+                    receipt,
                 )
                 .await?
             } else if let Some(source_revision) = expected_source_revision {

@@ -26950,9 +26950,8 @@ async fn test_stale_concepts_lifecycle() {
 
 /// A stale page whose last automatic refresh was discarded
 /// (`refresh_blocked_reason` set) is skipped by the ambient sweep's
-/// `get_stale_page_after` until a mark-stale site (a real source change, or
-/// the explicit re-distill's `clear_user_edited`) re-arms it by clearing the
-/// marker.
+/// `get_stale_page_after` until a mark-stale site (a real source change)
+/// re-arms it by clearing the marker.
 #[tokio::test]
 async fn refresh_blocked_reason_pauses_stale_sweep_until_rearmed() {
     let (db, _dir) = test_db().await;
@@ -31241,41 +31240,6 @@ async fn list_pages_stale_filters_and_orders() {
 }
 
 #[tokio::test]
-async fn clear_user_edited_unlocks_page_and_sets_stale() {
-    let (db, _tmp) = test_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page("page_x", "X", None, "body", None, None, &["mem_1"], &now)
-        .await
-        .unwrap();
-    // Promote user_edited via fs_edit.
-    db.try_update_page_content_with_changelog(
-        "page_x",
-        "user prose",
-        &["mem_1"],
-        "fs_edit",
-        false,
-        "user-edited",
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let before = db.get_page("page_x").await.unwrap().unwrap();
-    assert!(before.user_edited, "precondition: page should be locked");
-
-    db.clear_user_edited("page_x").await.unwrap();
-
-    let after = db.get_page("page_x").await.unwrap().unwrap();
-    assert!(!after.user_edited, "clear_user_edited should unlock");
-    assert_eq!(
-        after.stale_reason.as_deref(),
-        Some("manual_force"),
-        "clear_user_edited should mark stale so refinery picks it up"
-    );
-}
-
-#[tokio::test]
 async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
     let (db, _tmp) = test_db().await;
     let page_id = "page_draft_isolation_floor";
@@ -31320,7 +31284,22 @@ async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
             db.update_page_content(page_id, "mutated", &[], "manual_edit")
                 .await,
         ),
-        ("clear_user_edited", db.clear_user_edited(page_id).await),
+        (
+            "try_user_forced_page_content_at_source_revision",
+            db.try_user_forced_page_content_at_source_revision(
+                page_id,
+                "mutated",
+                &[],
+                "distill",
+                changelog,
+                Some(citations),
+                0,
+                "draft-incarnation",
+                None,
+            )
+            .await
+            .map(|_| ()),
+        ),
         (
             "replace_page_links",
             db.replace_page_links(page_id, &[link]).await,
@@ -31437,6 +31416,28 @@ async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
     assert_eq!(archived.status, "archived");
     assert_eq!(archived.content, "Archived body with [[Unresolved target]]");
 
+    // The user-forced rebuild write is not rejected as a draft on an archived
+    // page; it only lands on an active page, so it reports no write.
+    let archived_fence = db.try_get_page_fence(page_id).await.unwrap().unwrap();
+    assert!(!db
+        .try_user_forced_page_content_at_source_revision(
+            page_id,
+            "Forced rebuild body",
+            &[],
+            "distill",
+            "[]",
+            None,
+            archived_fence.source_revision,
+            &archived_fence.incarnation,
+            None,
+        )
+        .await
+        .unwrap());
+    assert_eq!(
+        db.get_page(page_id).await.unwrap().unwrap().content,
+        "Archived body with [[Unresolved target]]"
+    );
+
     {
         let conn = db.conn.lock().await;
         conn.execute(
@@ -31451,7 +31452,20 @@ async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
     db.update_page_summary("missing_page", Some("ignored"))
         .await
         .unwrap();
-    db.clear_user_edited("missing_page").await.unwrap();
+    assert!(!db
+        .try_user_forced_page_content_at_source_revision(
+            "missing_page",
+            "ignored",
+            &[],
+            "distill",
+            "[]",
+            None,
+            0,
+            "missing-incarnation",
+            None,
+        )
+        .await
+        .unwrap());
     db.delete_page("missing_page").await.unwrap();
 }
 
@@ -54103,6 +54117,7 @@ async fn combine_version_and_source_revision_cas_rejected_for_non_growth_non_bac
             None,
             None,
             None,
+            false,
             false,
         )
         .await

@@ -35,6 +35,23 @@ pub enum PageWrite<'a> {
         knowledge_path: Option<&'a Path>,
         citations: Option<(String, String)>,
     },
+    /// Explicit user-forced rebuild of a Page body (Re-distill). Like `Update`
+    /// under a source-revision fence with no stale requirement, except a
+    /// `user_edited` Page is rewritten rather than staged, and that flag and
+    /// the Page's staleness are released by the same UPDATE that lands the
+    /// body. Authored Pages still stage a revision card. `expected_fence` is
+    /// the page fence captured before the page and its sources were read;
+    /// every terminal action (body write, card, acknowledgement) matches its
+    /// source revision AND incarnation, so a page deleted and recreated under
+    /// the same id during generation is never touched.
+    UserForcedUpdate {
+        page_id: &'a str,
+        req: UpdatePageRequest,
+        edited_by: &'a str,
+        expected_fence: &'a crate::db::PageFence,
+        knowledge_path: Option<&'a Path>,
+        citations: Option<(String, String)>,
+    },
     /// Human content edit that preserves the source set from the exact Page
     /// generation selected inside the update CAS. HTTP callers do not own the
     /// source list, so it must not be snapshotted outside the gate.
@@ -125,6 +142,32 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 citations,
                 None,
                 false,
+                false,
+                None,
+            )
+            .await
+        }
+        PageWrite::UserForcedUpdate {
+            page_id,
+            req,
+            edited_by,
+            expected_fence,
+            knowledge_path,
+            citations,
+        } => {
+            update_page_impl(
+                db,
+                page_id,
+                req,
+                edited_by,
+                false,
+                Some(expected_fence.source_revision),
+                knowledge_path,
+                citations,
+                None,
+                false,
+                true,
+                Some(expected_fence),
             )
             .await
         }
@@ -145,6 +188,8 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 None,
                 None,
                 true,
+                false,
+                None,
             )
             .await
         }
@@ -392,6 +437,8 @@ pub(crate) async fn update_page_growth_at_versions(
             expected_source_revision,
         }),
         false,
+        false,
+        None,
     )
     .await
 }
