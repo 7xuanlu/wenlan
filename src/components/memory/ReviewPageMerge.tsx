@@ -44,7 +44,7 @@ const paneStyle: React.CSSProperties = {
 /** Replicated from ReviewDialog.tsx:333-340 (not exported). */
 const paneLabelStyle: React.CSSProperties = {
   fontFamily: "var(--mem-font-body)",
-  fontSize: 11,
+  fontSize: "var(--mem-text-meta)",
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   color: "var(--mem-text-tertiary)",
@@ -120,7 +120,7 @@ function VerdictBanner({
     borderRadius: 10,
     padding: "10px 14px",
     fontFamily: "var(--mem-font-body)",
-    fontSize: 13.5,
+    fontSize: "var(--mem-text-control)",
   };
 
   if (loading) return <div style={{ ...base, height: 20, ...shimmerStyle }} />;
@@ -205,13 +205,13 @@ function BeforePane({
         <div style={{ ...box, height: 200, ...shimmerStyle }} />
       ) : isError || !page ? (
         <div style={box}>
-          <div style={{ fontFamily: "var(--mem-font-mono)", fontSize: 12, color: "var(--mem-text)" }}>
+          <div style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-meta)", color: "var(--mem-text)" }}>
             {pageId}
           </div>
           <div
             style={{
               fontFamily: "var(--mem-font-body)",
-              fontSize: 12.5,
+              fontSize: "var(--mem-text-meta)",
               color: "var(--mem-text-tertiary)",
               marginTop: 4,
             }}
@@ -245,7 +245,7 @@ function BeforePane({
             style={{
               fontFamily: "var(--mem-font-mono)",
               fontVariantNumeric: "tabular-nums",
-              fontSize: 11.5,
+              fontSize: "var(--mem-text-meta)",
               color: "var(--mem-text-tertiary)",
               margin: "4px 0 0",
             }}
@@ -259,7 +259,7 @@ function BeforePane({
           <div style={{ borderTop: "1px solid var(--mem-detail-divider)", margin: "8px 0" }} />
           <div
             style={{
-              fontSize: 13.5,
+              fontSize: "var(--mem-text-control)",
               lineHeight: 1.6,
               maxHeight: 200,
               overflowY: "auto",
@@ -287,7 +287,7 @@ function SourceChip({
       className="transition-colors duration-150 hover:bg-[var(--mem-hover)]"
       style={{
         fontFamily: "var(--mem-font-body)",
-        fontSize: 12,
+        fontSize: "var(--mem-text-meta)",
         color: "var(--mem-text)",
         backgroundColor: "var(--mem-surface)",
         border: "1px solid var(--mem-border)",
@@ -323,7 +323,7 @@ function SourceGroup({
           display: "flex",
           alignItems: "center",
           fontFamily: "var(--mem-font-body)",
-          fontSize: 12.5,
+          fontSize: "var(--mem-text-meta)",
           color: "var(--mem-text-secondary)",
           marginBottom: 6,
         }}
@@ -346,7 +346,7 @@ function SourceGroup({
           style={{
             margin: 0,
             fontFamily: "var(--mem-font-body)",
-            fontSize: 12.5,
+            fontSize: "var(--mem-text-meta)",
             color:
               emptyTone === "success"
                 ? "var(--mem-status-success-text)"
@@ -393,6 +393,35 @@ function LedgerSkeleton() {
   );
 }
 
+export function usePageMergeEvidence(keepId: string, retireId: string) {
+  const keepPageQ = useQuery({
+    queryKey: ["page", keepId],
+    queryFn: () => getPage(keepId),
+    enabled: Boolean(keepId),
+    staleTime: 60_000,
+  });
+  const retirePageQ = useQuery({
+    queryKey: ["page", retireId],
+    queryFn: () => getPage(retireId),
+    enabled: Boolean(retireId),
+    staleTime: 60_000,
+  });
+  const keepSourcesQ = useQuery({
+    queryKey: ["page-sources", keepId],
+    queryFn: () => getPageSources(keepId),
+    enabled: Boolean(keepId),
+    staleTime: 60_000,
+  });
+  const retireSourcesQ = useQuery({
+    queryKey: ["page-sources", retireId],
+    queryFn: () => getPageSources(retireId),
+    enabled: Boolean(retireId),
+    staleTime: 60_000,
+  });
+
+  return { keepPageQ, retirePageQ, keepSourcesQ, retireSourcesQ };
+}
+
 export function PageMergeStripOff({
   keepId,
   retireId,
@@ -419,33 +448,13 @@ export function PageMergeStripOff({
 }) {
   const { t } = useTranslation();
 
-  const keepPageQ = useQuery({
-    queryKey: ["page", keepId],
-    queryFn: () => getPage(keepId),
-    enabled: Boolean(keepId),
-    staleTime: 60_000,
-  });
-  const retirePageQ = useQuery({
-    queryKey: ["page", retireId],
-    queryFn: () => getPage(retireId),
-    enabled: Boolean(retireId),
-    staleTime: 60_000,
-  });
-  const keepSourcesQ = useQuery({
-    queryKey: ["page-sources", keepId],
-    queryFn: () => getPageSources(keepId),
-    enabled: Boolean(keepId),
-    staleTime: 60_000,
-  });
-  const retireSourcesQ = useQuery({
-    queryKey: ["page-sources", retireId],
-    queryFn: () => getPageSources(retireId),
-    enabled: Boolean(retireId),
-    staleTime: 60_000,
-  });
+  const { keepPageQ, retirePageQ, keepSourcesQ, retireSourcesQ } = usePageMergeEvidence(keepId, retireId);
 
   const sourcesLoading = keepSourcesQ.isLoading || retireSourcesQ.isLoading;
-  const sourcesError = keepSourcesQ.isError || retireSourcesQ.isError;
+  const sourcesError = keepSourcesQ.isError || retireSourcesQ.isError ||
+    keepPageQ.isError || retirePageQ.isError ||
+    (!keepPageQ.isLoading && !keepPageQ.data) || (!retirePageQ.isLoading && !retirePageQ.data) ||
+    [keepSourcesQ.data, retireSourcesQ.data].some((sources) => sources?.some((entry) => entry.memory == null));
   const pagesLoading = keepPageQ.isLoading || retirePageQ.isLoading;
 
   const ledger = useMemo(
@@ -507,7 +516,7 @@ export function PageMergeStripOff({
             style={{
               margin: 0,
               fontFamily: "var(--mem-font-body)",
-              fontSize: 12.5,
+              fontSize: "var(--mem-text-meta)",
               color: "var(--mem-text-tertiary)",
             }}
           >
@@ -571,13 +580,13 @@ export function PageMergeStripOff({
                     marginLeft: "auto",
                     fontFamily: "var(--mem-font-mono)",
                     fontVariantNumeric: "tabular-nums",
-                    fontSize: 12,
+                    fontSize: "var(--mem-text-meta)",
                   }}
                 >
                   {t("review.sources", { count: union })}
                 </ins>
               </div>
-              <div style={{ marginTop: 6, fontSize: 13.5 }}>
+              <div style={{ marginTop: 6, fontSize: "var(--mem-text-control)" }}>
                 <del style={DEL_STYLE}>{retirePageQ.data?.title ?? retireId}</del>{" "}
                 {ledger.onlyRetire.length === 0
                   ? t("review.mergeAfterSafe", { count: ledger.shared.length })
@@ -587,7 +596,7 @@ export function PageMergeStripOff({
                 style={{
                   margin: "8px 0 0",
                   fontFamily: "var(--mem-font-body)",
-                  fontSize: 12,
+                  fontSize: "var(--mem-text-meta)",
                   color: "var(--mem-text-tertiary)",
                 }}
               >

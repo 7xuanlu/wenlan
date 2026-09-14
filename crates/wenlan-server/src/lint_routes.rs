@@ -4,10 +4,15 @@ use crate::runtime_observation::RuntimeObservationInput;
 use crate::state::SharedState;
 use axum::extract::{Query, State};
 use axum::Json;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 use wenlan_core::lint::context::CancellationToken;
 use wenlan_core::lint::runner::{LintRunError, LintRunner};
-use wenlan_types::lint::{LintAgentSubmission, LintQuery, LintReport, LintRequestQuery};
+use wenlan_core::repair::RepairArtifactStore;
+use wenlan_types::lint::{
+    LintAgentSubmission, LintProfile, LintQuery, LintReport, LintRequestQuery,
+};
+use wenlan_types::repair::{RepairLintScope, RepairManifest};
+use wenlan_types::repair_current::PrepareCurrentRepairRequest;
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     router.route("/api/lint", get(handle_lint).post(handle_lint_submission))
@@ -68,23 +73,176 @@ async fn run_lint(
         )
     };
     let _analysis_guard = maintenance.begin_analysis().await;
+    run_lint_with_context(
+        &db,
+        &config,
+        runtime,
+        lint_observer,
+        semantic_provider,
+        query,
+        request.external_egress(),
+        request.agent_assist(),
+        submission,
+    )
+    .await
+}
+
+/// Fresh reports plus the exact state they were produced against. Keeping the
+/// analysis guard in this value extends the single writer exclusion through
+/// the caller's preparation operation, closing the report-to-plan freshness
+/// gap.
+pub(crate) struct FreshRepairReports {
+    pub(crate) db: Arc<wenlan_core::db::MemoryDB>,
+    pub(crate) store: RepairArtifactStore,
+    pub(crate) page_root: Option<PathBuf>,
+    pub(crate) general: LintReport,
+    pub(crate) deep: Option<LintReport>,
+    _analysis_guard: crate::maintenance_coordinator::AnalysisGuard,
+}
+
+pub(crate) async fn fresh_repair_reports(
+    state: SharedState,
+    scope: &RepairLintScope,
+    include_deep: bool,
+) -> Result<FreshRepairReports, ServerError> {
+    let (
+        db,
+        config,
+        general_runtime,
+        deep_runtime,
+        lint_observer,
+        semantic_provider,
+        maintenance,
+        repair_root,
+    ) = {
+        let state = state.read().await;
+        let db = state.db.clone().ok_or(ServerError::DbNotInitialized)?;
+        let repair_root = state.repair_root.clone().ok_or_else(|| {
+            ServerError::Internal("repair artifact root not configured".to_string())
+        })?;
+        (
+            db,
+            state.lint_config.clone(),
+            RuntimeObservationInput::capture(&state),
+            RuntimeObservationInput::capture(&state),
+            Arc::clone(&state.lint_observer),
+            select_semantic_provider(&state, &lint_query(scope, LintProfile::Deep), false),
+            state.maintenance_coordinator.clone(),
+            repair_root,
+        )
+    };
+
+    let analysis_guard = maintenance.begin_analysis().await;
+    let general_query = lint_query(scope, LintProfile::General);
+    let general = run_lint_with_context(
+        &db,
+        &config,
+        general_runtime,
+        Arc::clone(&lint_observer),
+        None,
+        &general_query,
+        false,
+        false,
+        None,
+    )
+    .await?;
+    let deep = if include_deep {
+        let deep_query = lint_query(scope, LintProfile::Deep);
+        Some(
+            run_lint_with_context(
+                &db,
+                &config,
+                deep_runtime,
+                lint_observer,
+                semantic_provider,
+                &deep_query,
+                false,
+                false,
+                None,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let page_root = config.page_root().map(std::path::Path::to_path_buf);
+    Ok(FreshRepairReports {
+        db,
+        store: RepairArtifactStore::new(repair_root),
+        page_root,
+        general,
+        deep,
+        _analysis_guard: analysis_guard,
+    })
+}
+
+/// Run the reports needed by the compact current-repair request and prepare
+/// its manifest while a single analysis fence is held. The existing lint
+/// endpoint remains on its original one-report path; this function is the
+/// atomic seam used by `POST /api/repairs/prepare-current`.
+pub(crate) async fn prepare_current_repair(
+    state: SharedState,
+    request: PrepareCurrentRepairRequest,
+    now_epoch: i64,
+) -> Result<RepairManifest, ServerError> {
+    let classification = matches!(
+        request.choice(),
+        wenlan_types::repair_current::CurrentRepairChoice::ReclassifyMemory { .. }
+    );
+    let mut fresh = fresh_repair_reports(state, request.lint_scope(), classification).await?;
+    wenlan_core::repair::current::prepare_current_repair_with_pages(
+        &fresh.db,
+        &fresh.store,
+        request,
+        fresh.general,
+        fresh.deep.take(),
+        fresh.page_root.as_deref(),
+        now_epoch,
+    )
+    .await
+    .map_err(ServerError::from)
+}
+
+fn lint_query(scope: &RepairLintScope, profile: LintProfile) -> LintQuery {
+    let space = match scope {
+        RepairLintScope::Global => None,
+        RepairLintScope::Registered { space } => Some(space.clone()),
+        RepairLintScope::Uncategorized => Some("uncategorized".to_string()),
+    };
+    LintQuery::new(Some(profile), space)
+}
+
+// Both entry points pass their frozen inputs explicitly; this helper must not
+// re-read shared state between the reports in a repair preparation.
+#[allow(clippy::too_many_arguments)]
+async fn run_lint_with_context(
+    db: &wenlan_core::db::MemoryDB,
+    config: &crate::state::LintServerConfig,
+    runtime: RuntimeObservationInput,
+    lint_observer: Arc<dyn wenlan_core::lint::observation::LintRunObserver>,
+    semantic_provider: Option<Arc<dyn wenlan_core::llm_provider::LlmProvider>>,
+    query: &LintQuery,
+    external_egress: bool,
+    agent_assist: bool,
+    submission: Option<LintAgentSubmission>,
+) -> Result<LintReport, ServerError> {
     let observation = runtime.observe().await;
     let runner = LintRunner::new(config.clock(), CancellationToken::new())
         .with_observer(lint_observer)
         .with_sources(config.sources())
         .with_runtime_observation(observation)
-        .with_semantic_external_egress_enabled(request.external_egress())
+        .with_semantic_external_egress_enabled(external_egress)
         .with_semantic_provider(semantic_provider);
     let runner = match submission {
         Some(submission) => runner.with_semantic_agent_submission(submission),
-        None if request.agent_assist() => runner.with_semantic_agent_assist(),
+        None if agent_assist => runner.with_semantic_agent_assist(),
         None => runner,
     };
-    let report = runner
-        .run(&db, query, config.page_root(), config.page_root().is_some())
+    runner
+        .run(db, query, config.page_root(), config.page_root().is_some())
         .await
-        .map_err(map_lint_error)?;
-    Ok(report)
+        .map_err(map_lint_error)
 }
 
 fn external_egress_allowed_for_bind() -> bool {

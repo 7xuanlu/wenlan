@@ -16,6 +16,7 @@ pub(crate) struct RuntimeObservationInput {
     external_llm: Option<Arc<dyn LlmProvider>>,
     llm: Option<Arc<dyn LlmProvider>>,
     loaded_on_device_model: Option<String>,
+    configured_on_device_model: Option<String>,
     reranker: Option<Arc<dyn wenlan_core::reranker::Reranker>>,
     reranker_status: RerankerStatus,
     reranker_light: Option<Arc<dyn wenlan_core::reranker::Reranker>>,
@@ -33,6 +34,7 @@ impl RuntimeObservationInput {
             external_llm: state.external_llm.clone(),
             llm: state.llm.clone(),
             loaded_on_device_model: state.loaded_on_device_model.clone(),
+            configured_on_device_model: configured_on_device_model(),
             reranker: state.reranker.clone(),
             reranker_status: state.reranker_status.clone(),
             reranker_light: state.reranker_light.clone(),
@@ -67,16 +69,27 @@ impl RuntimeObservationInput {
             self.external_llm.as_ref(),
         );
         if let Some(provider) = &self.llm {
+            let provider_model_id = provider.model_id();
             let model_id = self
                 .loaded_on_device_model
                 .clone()
-                .unwrap_or_else(|| provider.model_id());
+                .unwrap_or_else(|| provider_model_id.clone());
             let readiness = if provider.is_available() && self.loaded_on_device_model.is_some() {
                 RuntimeReadiness::Ready
             } else {
                 RuntimeReadiness::Failed
             };
-            observation = observation.with_provider(ProviderClass::OnDevice, model_id, readiness);
+            observation =
+                observation.with_provider(ProviderClass::OnDevice, model_id.clone(), readiness);
+            if self.optional_runtime_workers_suspended
+                && readiness == RuntimeReadiness::Ready
+                && provider.kind() == "on-device"
+                && provider_model_id == model_id
+                && self.loaded_on_device_model.as_deref()
+                    == self.configured_on_device_model.as_deref()
+            {
+                observation = observation.with_repair_verification_model(model_id);
+            }
         }
         observation = observe_reranker(
             observation,
@@ -108,6 +121,40 @@ impl RuntimeObservationInput {
         };
         observation.with_status_files(status)
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        llm: Option<Arc<dyn LlmProvider>>,
+        loaded_on_device_model: Option<&str>,
+        configured_on_device_model: Option<&str>,
+        optional_runtime_workers_suspended: bool,
+    ) -> Self {
+        Self {
+            api_llm: None,
+            synthesis_llm: None,
+            external_llm: None,
+            llm,
+            loaded_on_device_model: loaded_on_device_model.map(str::to_owned),
+            configured_on_device_model: configured_on_device_model.map(str::to_owned),
+            reranker: None,
+            reranker_status: RerankerStatus::Disabled,
+            reranker_light: None,
+            reranker_light_status: RerankerStatus::Disabled,
+            ingest_worker_closed: None,
+            db: None,
+            optional_runtime_workers_suspended,
+        }
+    }
+}
+
+fn configured_on_device_model() -> Option<String> {
+    wenlan_core::config::load_config()
+        .on_device_model
+        .as_deref()
+        .filter(|model_id| !model_id.is_empty())
+        .and_then(|model_id| {
+            wenlan_core::on_device_models::get_model(model_id).map(|model| model.id.to_string())
+        })
 }
 
 fn observe_provider(

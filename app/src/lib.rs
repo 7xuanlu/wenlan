@@ -32,6 +32,7 @@ pub mod plugin_install;
 mod presence;
 mod quick_capture;
 pub mod remote_access;
+mod repair;
 mod search;
 pub mod sources;
 pub mod state;
@@ -1650,6 +1651,16 @@ pub fn run() {
             search::get_nurture_cards_cmd,
             search::correct_memory_cmd,
             // Quality gate commands
+            repair::repair_validate_manifest,
+            repair::repair_lint,
+            repair::repair_lint_submit,
+            repair::repair_prepare,
+            repair::repair_prepare_current,
+            repair::repair_recovery,
+            repair::repair_apply,
+            repair::repair_verify,
+            repair::repair_plan,
+            repair::repair_plan_entries,
             // Page commands
             search::get_page,
             search::create_page,

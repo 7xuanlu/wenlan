@@ -23,7 +23,7 @@ const secondaryTextStyle: React.CSSProperties = {
 const sectionTitleStyle: React.CSSProperties = {
   margin: "0 0 10px",
   fontFamily: "var(--mem-font-body)",
-  fontSize: "12px",
+  fontSize: "var(--mem-text-meta)",
   fontWeight: 600,
   letterSpacing: "0.08em",
   textTransform: "uppercase",
@@ -36,7 +36,7 @@ const sectionTitleStyle: React.CSSProperties = {
 /** Mirrors ReviewDialog's pane-label recipe (not exported there). */
 const paneLabelStyle: React.CSSProperties = {
   fontFamily: "var(--mem-font-body)",
-  fontSize: 11,
+  fontSize: "var(--mem-text-meta)",
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   color: "var(--mem-text-tertiary)",
@@ -142,7 +142,7 @@ function RecentRevisionRow({
       </span>
       <span
         style={{
-          fontSize: 11,
+          fontSize: "var(--mem-text-meta)",
           letterSpacing: "0.04em",
           borderRadius: 5,
           padding: "2px 8px",
@@ -157,7 +157,7 @@ function RecentRevisionRow({
         style={{
           fontFamily: "var(--mem-font-mono)",
           fontVariantNumeric: "tabular-nums",
-          fontSize: 12,
+          fontSize: "var(--mem-text-meta)",
           color: "var(--mem-text-tertiary)",
           whiteSpace: "nowrap",
         }}
@@ -195,11 +195,11 @@ export function RecentRevisionsSection({
             <ShimmerRow />
           </>
         ) : query.isError ? (
-          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: 12 }}>
+          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-meta)" }}>
             {t("review.recentRevisionsFailed")}
           </p>
         ) : changes.length === 0 ? (
-          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: 12 }}>
+          <p style={{ ...secondaryTextStyle, margin: 0, fontSize: "var(--mem-text-meta)" }}>
             {t("review.recentRevisionsEmpty")}
           </p>
         ) : (
@@ -212,7 +212,7 @@ export function RecentRevisionsSection({
           ))
         )}
       </div>
-      <p style={{ ...secondaryTextStyle, margin: "8px 0 0", fontSize: 12 }}>
+      <p style={{ ...secondaryTextStyle, margin: "8px 0 0", fontSize: "var(--mem-text-meta)" }}>
         {t("review.recentRevisionsHint")}
       </p>
     </section>
@@ -254,7 +254,7 @@ function MemoryRevisionRow({
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: 12.5,
+            fontSize: "var(--mem-text-meta)",
             color: "var(--mem-text-secondary)",
           }}
         >
@@ -263,7 +263,7 @@ function MemoryRevisionRow({
         {entry.supersede_mode === "protected_revision" && (
           <span
             style={{
-              fontSize: 10.5,
+              fontSize: "var(--mem-text-meta)",
               letterSpacing: "0.04em",
               borderRadius: 5,
               padding: "1px 7px",
@@ -279,7 +279,7 @@ function MemoryRevisionRow({
           style={{
             fontFamily: "var(--mem-font-mono)",
             fontVariantNumeric: "tabular-nums",
-            fontSize: 11.5,
+            fontSize: "var(--mem-text-meta)",
             color: "var(--mem-text-tertiary)",
             whiteSpace: "nowrap",
           }}
@@ -290,7 +290,7 @@ function MemoryRevisionRow({
       {preview && (
         <span
           style={{
-            fontSize: 12,
+            fontSize: "var(--mem-text-meta)",
             lineHeight: 1.4,
             color: "var(--mem-text-tertiary)",
           }}
@@ -319,7 +319,7 @@ function PageRevisionRow({ entry }: { entry: PageChangelogEntry }) {
         <span
           style={{
             fontFamily: "var(--mem-font-mono)",
-            fontSize: 11,
+            fontSize: "var(--mem-text-meta)",
             fontWeight: 600,
             color: "var(--mem-accent-page)",
           }}
@@ -333,7 +333,7 @@ function PageRevisionRow({ entry }: { entry: PageChangelogEntry }) {
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
-            fontSize: 12.5,
+            fontSize: "var(--mem-text-meta)",
             color: "var(--mem-text-secondary)",
           }}
         >
@@ -342,7 +342,7 @@ function PageRevisionRow({ entry }: { entry: PageChangelogEntry }) {
         <span
           style={{
             fontFamily: "var(--mem-font-mono)",
-            fontSize: 10.5,
+            fontSize: "var(--mem-text-meta)",
             color: "var(--mem-text-tertiary)",
           }}
         >
@@ -352,7 +352,7 @@ function PageRevisionRow({ entry }: { entry: PageChangelogEntry }) {
       {entry.delta_summary && (
         <span
           style={{
-            fontSize: 12,
+            fontSize: "var(--mem-text-meta)",
             lineHeight: 1.4,
             color: "var(--mem-text-tertiary)",
           }}

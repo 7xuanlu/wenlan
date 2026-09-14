@@ -19,6 +19,8 @@ use wenlan_types::{
 
 const OCCURRENCE: &str = "abababababababababababababababababababababababababababababababab";
 
+include!("current_entity_tests.rs");
+
 struct EntityExtractionFixture {
     db: MemoryDB,
     _db_dir: tempfile::TempDir,

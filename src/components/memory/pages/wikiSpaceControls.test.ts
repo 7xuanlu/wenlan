@@ -12,7 +12,7 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
 
     expect(css).toMatch(/--mem-control-height:\s*34px;/);
     expect(css).toMatch(/--mem-control-radius:\s*6px;/);
-    expect(css).toMatch(/--mem-control-font-size:\s*13px;/);
+    expect(css).toMatch(/--mem-control-font-size:\s*14px;/);
     expect(css).toMatch(/--mem-icon-action-size:\s*32px;/);
     expect(css).toMatch(/--mem-icon-glyph-size:\s*16px;/);
     expect(css).toMatch(/--mem-popover-radius:\s*6px;/);
@@ -62,7 +62,7 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
       /\.spaces-primary-action,[\s\S]*?\.spaces-danger\s*\{[^}]*min-height:\s*var\(--mem-control-height\);[^}]*padding:\s*0 12px;/s,
     );
     expect(spaces).toMatch(
-      /\.spaces-suggestion-action\s*\{[^}]*padding:\s*4px 10px;[^}]*font-size:\s*12px;/s,
+      /\.spaces-suggestion-action\s*\{[^}]*padding:\s*4px 10px;[^}]*font-size:\s*var\(--mem-text-control\);/s,
     );
     expect(dossier).toMatch(
       /\.space-dossier-suggestion-action\s*\{[^}]*border-radius:\s*var\(--mem-control-radius\);[^}]*font-size:\s*12px;[^}]*padding:\s*4px 10px;/s,

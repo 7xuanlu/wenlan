@@ -109,10 +109,19 @@ pub async fn handle_reject_refinement(
 ) -> Result<Json<RejectRefinementResponse>, ServerError> {
     let agent = extract_agent_name(&headers, None);
 
-    let db = {
+    let (db, maintenance_coordinator) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.maintenance_coordinator.clone(),
+        )
     };
+    // Rejection is a queue mutation. Acquire the immediate background fence
+    // before resolving the row so a repair, pending verification, or live
+    // analysis cannot race a dismissal through a separate DB connection.
+    let _maintenance_guard = maintenance_coordinator
+        .try_begin_background()
+        .ok_or_else(|| ServerError::Conflict("repair_write_fence_conflict".to_string()))?;
 
     let result = resolve_proposal(&db, &id, ResolveStatus::Dismissed, &agent)
         .await

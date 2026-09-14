@@ -1936,8 +1936,11 @@ fn review_choices_validate_exact_canonical_payloads() {
         vec!["entity_a".into(), "entity_b".into()],
     )
     .is_ok());
+    assert!(
+        RepairChoice::complete_entity_extraction("review".into(), "mem_exact".into(), vec![])
+            .is_ok()
+    );
     for ids in [
-        vec![],
         vec!["entity_b".into(), "entity_a".into()],
         vec!["entity_a".into(), "entity_a".into()],
         vec![" ".into()],
@@ -1946,6 +1949,71 @@ fn review_choices_validate_exact_canonical_payloads() {
             RepairChoice::complete_entity_extraction("review".into(), "mem_exact".into(), ids,)
                 .is_err()
         );
+    }
+}
+
+#[test]
+fn empty_entity_extraction_target_mutation_and_choice_roundtrip() {
+    let target = RepairTarget::memory_entity_extraction(
+        "mem_exact".into(),
+        RepairEnrichmentStep::EntityExtract,
+        vec![],
+        RepairScope::uncategorized(),
+    )
+    .unwrap();
+    let target_roundtrip: RepairTarget =
+        serde_json::from_value(serde_json::to_value(&target).unwrap()).unwrap();
+    assert_eq!(target_roundtrip, target);
+
+    let mutation = RepairMutation::complete_entity_extraction(vec![]).unwrap();
+    let mutation_roundtrip: RepairMutation =
+        serde_json::from_value(serde_json::to_value(&mutation).unwrap()).unwrap();
+    assert_eq!(mutation_roundtrip, mutation);
+
+    let choice =
+        RepairChoice::complete_entity_extraction("review".into(), "mem_exact".into(), vec![])
+            .unwrap();
+    let choice_roundtrip: RepairChoice =
+        serde_json::from_value(serde_json::to_value(&choice).unwrap()).unwrap();
+    assert_eq!(choice_roundtrip, choice);
+}
+
+#[test]
+fn entity_extraction_rejects_blank_duplicate_and_unsorted_ids() {
+    let target = RepairTarget::memory_entity_extraction(
+        "mem_exact".to_owned(),
+        RepairEnrichmentStep::EntityExtract,
+        vec![],
+        RepairScope::uncategorized(),
+    )
+    .unwrap();
+    let mutation = RepairMutation::complete_entity_extraction(vec![]).unwrap();
+    let choice = RepairChoice::complete_entity_extraction(
+        "review".to_owned(),
+        "mem_exact".to_owned(),
+        vec![],
+    )
+    .unwrap();
+    let target_value = serde_json::to_value(target).unwrap();
+    let mutation_value = serde_json::to_value(mutation).unwrap();
+    let choice_value = serde_json::to_value(choice).unwrap();
+
+    for ids in [
+        vec![" ".to_owned()],
+        vec!["entity_a".to_owned(), "entity_a".to_owned()],
+        vec!["entity_b".to_owned(), "entity_a".to_owned()],
+    ] {
+        let mut target_value = target_value.clone();
+        target_value["entity_ids"] = serde_json::to_value(&ids).unwrap();
+        assert!(serde_json::from_value::<RepairTarget>(target_value).is_err());
+
+        let mut mutation_value = mutation_value.clone();
+        mutation_value["entity_ids"] = serde_json::to_value(&ids).unwrap();
+        assert!(serde_json::from_value::<RepairMutation>(mutation_value).is_err());
+
+        let mut choice_value = choice_value.clone();
+        choice_value["entity_ids"] = serde_json::to_value(&ids).unwrap();
+        assert!(serde_json::from_value::<RepairChoice>(choice_value).is_err());
     }
 }
 

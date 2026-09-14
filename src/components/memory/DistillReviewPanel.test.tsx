@@ -205,6 +205,19 @@ beforeEach(() => {
 });
 
 describe("DistillReviewPanel", () => {
+  it("accepts vocabulary through the existing command and refreshes affected entity caches", async () => {
+    vi.mocked(listRefinements).mockResolvedValueOnce({ proposals: [{ id: "vocab", action: "vocab_promote", source_ids: ["ent_1"], payload: { action: "vocab_promote", kind: "entity", old_value: "research-method" }, confidence: 0.9, created_at: "2026-09-13T10:00:00Z" }] }).mockResolvedValue({ proposals: [] });
+    const { user, client } = renderPanel();
+    client.setQueryData(["entities", "all"], [{ id: "ent_1", entity_type: "concept" }]);
+    client.setQueryData(["entityDetail", "ent_1"], { entity: { entity_type: "concept" } });
+    await user.click(await screen.findByRole("button", { name: "Review research-method" }));
+    const button = screen.getByRole("button", { name: "Add to vocabulary" });
+    await waitFor(() => expect(button).toBeEnabled());
+    await user.click(button);
+    await waitFor(() => expect(acceptRefinement).toHaveBeenCalledWith("vocab"));
+    await waitFor(() => expect(client.getQueryState(["entities", "all"])?.isInvalidated).toBe(true));
+    expect(client.getQueryState(["entityDetail", "ent_1"])?.isInvalidated).toBe(true);
+  });
   it("loads the page review once on mount", async () => {
     const { client } = renderPanel();
 
@@ -494,7 +507,7 @@ describe("DistillReviewPanel review queue", () => {
           {
             id: "prop_1",
             action: "entity_merge",
-            source_ids: ["ent_1", "ent_2"],
+            source_ids: ["ent_2", "ent_1"],
             payload: { action: "entity_merge", existing_id: "ent_1", new_id: "ent_2", similarity: 0.94 },
             confidence: 0.94,
             created_at: "2026-07-09T00:00:00Z",
@@ -764,7 +777,7 @@ describe("DistillReviewPanel review filter", () => {
           {
             id: "prop_conflict",
             action: "relation_conflict",
-            source_ids: ["ent_a", "ent_b"],
+            source_ids: ["ent_b", "ent_a"],
             payload: {
               action: "relation_conflict",
               existing_id: "ent_a",

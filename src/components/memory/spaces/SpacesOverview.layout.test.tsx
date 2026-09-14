@@ -75,7 +75,7 @@ describe("SpacesOverview layout contract", () => {
     expect(css).not.toMatch(/\.spaces-overview-header \.spaces-new-action\s*\{[^}]*background:/s);
     expect(baseCss).not.toMatch(/\.spaces-new-action\s*\{/);
     expect(baseCss).not.toMatch(/\.spaces-new-action:hover/);
-    expect(css).toMatch(/\.spaces-suggestion-action\s*\{[^}]*font-size:\s*12px[^}]*padding:\s*4px 10px/s);
+    expect(css).toMatch(/\.spaces-suggestion-action\s*\{[^}]*font-size:\s*var\(--mem-text-control\)[^}]*padding:\s*4px 10px/s);
     expect(baseCss).toMatch(/\.spaces-suggestion-keep\s*\{[^}]*background:\s*transparent[^}]*color:\s*var\(--mem-accent-indigo\)/s);
     expect(baseCss).toMatch(/\.spaces-suggestion-keep:hover\s*\{[^}]*background:\s*var\(--mem-indigo-bg\)/s);
   });

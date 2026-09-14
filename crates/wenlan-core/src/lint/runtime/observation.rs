@@ -54,6 +54,7 @@ pub struct RuntimeObservation {
     pub(super) providers: Vec<ProviderObservation>,
     pub(super) rerankers: Vec<RerankerObservation>,
     pub(super) optional_workers_suspended: bool,
+    pub(super) repair_verification_model: Option<String>,
     pub(super) ingest_worker_closed: Option<bool>,
     pub(super) status_files: StatusFilesObservation,
     pub(super) working_memory: WorkingMemoryObservation,
@@ -65,6 +66,7 @@ impl RuntimeObservation {
             providers: Vec::new(),
             rerankers: Vec::new(),
             optional_workers_suspended: false,
+            repair_verification_model: None,
             ingest_worker_closed: None,
             status_files: StatusFilesObservation::Unavailable,
             working_memory: WorkingMemoryObservation::Unavailable,
@@ -109,6 +111,14 @@ impl RuntimeObservation {
         self
     }
 
+    /// Identify the local provider restored for read-only repair verification.
+    /// This does not authorize ordinary background workers or bypass readiness checks.
+    pub fn with_repair_verification_model(mut self, model_id: impl Into<String>) -> Self {
+        let model_id = model_id.into();
+        self.repair_verification_model = (!model_id.is_empty()).then_some(model_id);
+        self
+    }
+
     pub const fn with_status_files(mut self, value: StatusFilesObservation) -> Self {
         self.status_files = value;
         self
@@ -129,6 +139,10 @@ impl RuntimeObservation {
 
     pub const fn optional_workers_suspended(&self) -> bool {
         self.optional_workers_suspended
+    }
+
+    pub fn repair_verification_model(&self) -> Option<&str> {
+        self.repair_verification_model.as_deref()
     }
 
     pub fn provider_readiness(

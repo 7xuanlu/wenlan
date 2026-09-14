@@ -176,7 +176,7 @@ export default function Sidebar({
             onNavigateSpaces={closeAfterNavigation(onNavigateSpaces, closeOverlay)}
             recentPagesSection={onSelectPage !== undefined && recentPages.length > 0 ? (
               <section>
-                <p className="mb-2 px-1" style={{ color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-mono)", fontSize: "10px", fontWeight: 600, letterSpacing: "0.055em", textTransform: "uppercase" }}>
+                <p className="mb-2 px-1" style={{ color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-label)", fontWeight: 600, letterSpacing: "0.055em", textTransform: "uppercase" }}>
                   {t("sidebar.recentPages")}
                 </p>
                 <RecentPages
@@ -189,7 +189,7 @@ export default function Sidebar({
             ) : undefined}
             recentSpacesSection={recentSpaces.length > 0 ? (
               <section>
-                <p className="mb-2 px-1" style={{ color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-mono)", fontSize: "10px", fontWeight: 600, letterSpacing: "0.055em", textTransform: "uppercase" }}>
+                <p className="mb-2 px-1" style={{ color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-label)", fontWeight: 600, letterSpacing: "0.055em", textTransform: "uppercase" }}>
                   {t("sidebar.recentSpaces")}
                 </p>
                 <RecentSpaces

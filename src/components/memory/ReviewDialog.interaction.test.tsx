@@ -5,20 +5,21 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n";
-import { getPage } from "../../lib/tauri";
+import { getPage, getPageSources } from "../../lib/tauri";
 import ReviewDialog from "./ReviewDialog";
 import { reviewItemId, type ReviewItem } from "./useReviewQueue";
 
 vi.mock("../../lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/tauri")>()),
   getPage: vi.fn(),
+  getPageSources: vi.fn(),
 }));
 
 const validCleanupItem: ReviewItem = {
   kind: "refinement",
   id: "cleanup-valid",
   action: "page_keep_or_archive",
-  sourceIds: ["memory-evidence"],
+  sourceIds: ["page-thin"],
   payload: {
     action: "page_keep_or_archive",
     page_id: "page-thin",
@@ -66,6 +67,7 @@ function deferred<T>() {
 describe("ReviewDialog interaction safety", () => {
   beforeEach(async () => {
     await i18n.changeLanguage("en");
+    vi.mocked(getPageSources).mockResolvedValue([]);
     vi.mocked(getPage).mockReset();
     vi.mocked(getPage).mockResolvedValue({
       id: "page-thin",
@@ -107,7 +109,8 @@ describe("ReviewDialog interaction safety", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Archive" }));
     await waitFor(() => expect(onResolve).toHaveBeenCalledTimes(2));
-    expect(await within(dialog).findByRole("heading", { name: "All caught up" })).toBeVisible();
+    expect(await within(dialog).findByRole("heading", { name: "Review complete" })).toBeVisible();
+    expect(within(dialog).queryByText("Every pending change has been reviewed.")).toBeNull();
   });
 
   it("does not reopen a review after a pending decision finishes late", async () => {
@@ -130,7 +133,7 @@ describe("ReviewDialog interaction safety", () => {
     expect(
       await screen.findByRole("button", { name: "Archive" }),
     ).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "All caught up" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Review complete" })).toBeNull();
   });
 
   it("does not show an older decision failure on a skipped-to review", async () => {
@@ -139,6 +142,7 @@ describe("ReviewDialog interaction safety", () => {
     const nextItem: ReviewItem = {
       ...validCleanupItem,
       id: "cleanup-next",
+      sourceIds: ["page-next"],
       payload: {
         action: "page_keep_or_archive",
         page_id: "page-next",

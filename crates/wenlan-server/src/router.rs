@@ -11,8 +11,8 @@ use crate::{
     ingest_routes, knowledge_routes, lint_routes, memory_detail_routes, memory_revision_routes,
     memory_routes, onboarding_routes, outbox_routes, page_map_routes, page_routes,
     pinned_memory_routes, profile_agents_routes, profile_narrative_routes, refinery_routes,
-    repair_routes, routes, security, snapshot_routes, source_routes, spaces_routes,
-    telemetry_routes, truth_guard, websocket,
+    repair_read_routes, repair_routes, routes, security, snapshot_routes, source_routes,
+    spaces_routes, telemetry_routes, truth_guard, websocket,
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use wenlan_core::truth_manifest::Builder;
@@ -47,7 +47,9 @@ pub fn build_router_with_shutdown(state: SharedState, shutdown: ShutdownHandle) 
         .allow_methods(Any)
         .allow_headers(Any);
 
-    let router = repair_routes::register(lint_routes::register(TrackedRouter::new(Builder::Main)));
+    let router = repair_read_routes::register_recovery(repair_routes::register(
+        lint_routes::register(TrackedRouter::new(Builder::Main)),
+    ));
     let router = routes::register(router);
     let router = ambient_routes::register(router);
     let router = brief_routes::register(router);
@@ -119,20 +121,28 @@ pub fn build_repair_router(state: SharedState) -> AppRouter {
         .allow_methods(Any)
         .allow_headers(Any);
 
-    repair_routes::register_execution(lint_routes::register(TrackedRouter::new(Builder::Repair)))
-        .route("/api/health", get(routes::handle_health))
-        .route("/api/status", get(routes::handle_status))
-        .finish_restricted()
-        .route_layer(axum::middleware::from_fn_with_state(
-            truth_guard::TruthGuardState {
-                state: state.clone(),
-                builder: Builder::Repair,
-            },
-            truth_guard::guard,
-        ))
-        .layer(cors)
-        .layer(axum::middleware::from_fn(security::guard_local_only))
-        .with_state(state)
+    repair_read_routes::register_recovery(repair_read_routes::register(
+        repair_routes::register_execution(lint_routes::register(TrackedRouter::new(
+            Builder::Repair,
+        ))),
+    ))
+    .route("/api/health", get(routes::handle_health))
+    .route("/api/status", get(routes::handle_status))
+    .route(
+        "/api/setup/status",
+        get(crate::config_routes::handle_get_setup_status),
+    )
+    .finish_restricted()
+    .route_layer(axum::middleware::from_fn_with_state(
+        truth_guard::TruthGuardState {
+            state: state.clone(),
+            builder: Builder::Repair,
+        },
+        truth_guard::guard,
+    ))
+    .layer(cors)
+    .layer(axum::middleware::from_fn(security::guard_local_only))
+    .with_state(state)
 }
 
 #[cfg(test)]
@@ -202,6 +212,10 @@ mod repair_only_tests {
     #[tokio::test]
     async fn repair_only_router_exposes_only_read_only_diagnostics_and_exact_execution() {
         assert_eq!(status(Method::GET, "/api/health").await, StatusCode::OK);
+        assert_eq!(
+            status(Method::GET, "/api/setup/status").await,
+            StatusCode::OK
+        );
         assert_ne!(
             status(Method::GET, "/api/lint").await,
             StatusCode::NOT_FOUND
@@ -214,6 +228,18 @@ mod repair_only_tests {
             status(Method::POST, "/api/repairs/verify").await,
             StatusCode::NOT_FOUND
         );
+        for path in [
+            "/api/refinery/queue",
+            "/api/memory/recovery-memory/detail",
+            "/api/pages/recovery-page",
+            "/api/repairs/recovery/recovery-review",
+        ] {
+            assert_ne!(
+                status(Method::GET, path).await,
+                StatusCode::NOT_FOUND,
+                "repair-only router did not expose recovery read {path}"
+            );
+        }
 
         for path in [
             "/api/repairs/plan",
@@ -221,11 +247,23 @@ mod repair_only_tests {
             "/api/memory/store",
             "/api/pages",
             "/api/config",
+            "/api/refinery/queue/recovery-review/reject",
         ] {
             assert_eq!(
                 status(Method::POST, path).await,
                 StatusCode::NOT_FOUND,
                 "repair-only router unexpectedly exposed {path}"
+            );
+        }
+        for path in [
+            "/api/memory/recovery-memory/detail",
+            "/api/pages/recovery-page",
+            "/api/repairs/recovery/recovery-review",
+        ] {
+            assert_eq!(
+                status(Method::POST, path).await,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "repair-only router unexpectedly exposed a mutation at {path}"
             );
         }
     }

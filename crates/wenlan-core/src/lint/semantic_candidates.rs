@@ -978,10 +978,21 @@ fn scope_clause(scope: &ScopeFilter, column: &str) -> (String, libsql::params::P
 }
 
 fn memory_record(memory: &Memory) -> Record {
+    let stored_memory_type = match memory.memory_type.as_deref() {
+        None => "missing",
+        Some("") => "empty",
+        Some(value) => value,
+    };
     Record {
         key: format!("memory:{}", memory.id),
         kind: LintAgentRecordKind::Memory,
-        excerpt: contextual_excerpt(memory.space.as_deref(), &memory.content),
+        excerpt: contextual_excerpt_with(
+            &[
+                ("scope", memory.space.as_deref().unwrap_or("uncategorized")),
+                ("stored_memory_type", stored_memory_type),
+            ],
+            &memory.content,
+        ),
         memory_type: memory.memory_type.clone(),
         evidence_count: None,
         source_excerpt: None,

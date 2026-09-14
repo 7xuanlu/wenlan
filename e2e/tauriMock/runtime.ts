@@ -121,7 +121,7 @@ export class TauriMockRuntime {
   private pageSequence: number;
 
   constructor(
-    fixture: SpacesNavigationFixture,
+    private readonly fixture: SpacesNavigationFixture,
     failures: readonly MockFailure[] = [],
     rawActions: readonly string[] = [],
     private readonly pageScenario: TauriMockPageScenario = {},
@@ -171,6 +171,11 @@ export class TauriMockRuntime {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
     switch (command) {
+      case "repair_recovery": {
+        requiredString(command, args, "reviewId");
+        // This fixture has no durable native repair artifacts.
+        return null;
+      }
       case "list_spaces": return this.spaces.map((space) => ({ ...space }));
       case "get_space": return this.spaces.find((space) => space.name === requiredString(command, args, "name")) ?? null;
       case "create_space": return this.createSpace(args);
@@ -191,6 +196,15 @@ export class TauriMockRuntime {
       };
       case "record_page_editor_diagnostic": return null;
       case "list_pages": return this.listPages(args);
+      case "get_page_sources": {
+        const pageId = requiredString(command, args, "pageId");
+        const page = this.pages.find((entry) => entry.id === pageId);
+        if (!page) throw new TauriMockArgumentError(command, "pageId");
+        return page.source_memory_ids.map((id) => ({
+          source: { page_id: pageId, memory_source_id: id, linked_at: 1_783_728_000 },
+          memory: this.memories.find((memory) => memory.source_id === id) ?? null,
+        }));
+      }
       case "get_page": return this.pages.find((page) => page.id === requiredString(command, args, "id")) ?? null;
       // Explicit-browse variants attach a human-intent header at the HTTP
       // layer; this fixture has no HTTP layer, so they resolve identically
@@ -221,6 +235,7 @@ export class TauriMockRuntime {
       case "publish_page_draft": return this.publishPageDraft(args);
       case "discard_page_draft": return this.discardPageDraft(args);
       case "distill_review": return structuredClone(this.distillReview);
+      case "list_pending_revisions": return structuredClone(this.fixture.pendingRevisions ?? []);
       case "list_refinements": return { proposals: structuredClone(this.refinements) };
       case "accept_refinement": return this.resolveRefinement(args, true);
       case "reject_refinement": return this.resolveRefinement(args, false);
@@ -548,9 +563,17 @@ export class TauriMockRuntime {
     if (index < 0 || !proposal) throw new TauriMockArgumentError(command, "id");
     this.refinements.splice(index, 1);
     if (approve && proposal.payload?.action === "page_keep_or_archive") {
-      const pageId = proposal.payload.page_id;
+      const pageId = proposal.source_ids[0];
       this.pages = this.pages.map((page) =>
         page.id === pageId ? { ...page, status: "archived" } : page
+      );
+    }
+    if (approve && proposal.payload?.action === "vocab_promote" && proposal.payload.kind === "entity") {
+      const canonical = proposal.payload.old_value.toLowerCase();
+      this.entityDetails = this.entityDetails.map((detail) =>
+        proposal.source_ids.includes(detail.entity.id) && detail.entity.entity_type === "concept" && detail.entity.status !== "archived"
+          ? { ...detail, entity: { ...detail.entity, entity_type: canonical } }
+          : detail
       );
     }
     return approve ? { id, action_applied: proposal.action } : { id };

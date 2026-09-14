@@ -47,7 +47,7 @@ export default function MemoryListSurface({
             backgroundColor: "var(--mem-text)",
             color: "var(--mem-bg)",
             fontFamily: "var(--mem-font-body)",
-            fontSize: "13px",
+            fontSize: "var(--mem-text-control)",
             animation: "mem-fade-up 300ms cubic-bezier(0.16, 1, 0.3, 1)",
           }}
         >

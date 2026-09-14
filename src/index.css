@@ -147,7 +147,7 @@ body {
   /* Wiki / Space / Page microcontrols */
   --mem-control-height: 34px;
   --mem-control-radius: 6px;
-  --mem-control-font-size: 13px;
+  --mem-control-font-size: 14px;
   --mem-icon-action-size: 32px;
   --mem-icon-glyph-size: 16px;
   --mem-popover-radius: 6px;
@@ -168,19 +168,31 @@ body {
   --mem-space-12: 48px;
 
   /* ── Type scale ───────────────────────────────────────────
-     Two bands. UI band (10–14px) uses 1px steps because a 13px-
+     Two bands. UI band (12–15px) uses 1px steps because a 14px-
      base desktop UI needs finer granularity than a modular scale
      gives. Display band (16→20→26) runs ~1.25–1.3 (major third),
-     which is where Fraunces starts earning its keep. */
-  --mem-text-2xs: 10px;  /* mono eyebrows, uppercase micro-labels */
-  --mem-text-xs: 11px;   /* captions, metadata, sidebar footer   */
-  --mem-text-sm: 12px;   /* descriptions, secondary body         */
-  --mem-text-base: 13px; /* control text: inputs, buttons, lists */
-  --mem-text-md: 14px;   /* row titles, primary body             */
+     which is where Fraunces starts earning its keep.
+     Bumped from 10/11/12/13/14 (2026-09-13 typography audit): that
+     band measured too small across controls, descriptions and
+     metadata; lg and up were already fine and stay unchanged. */
+  --mem-text-2xs: 12px;  /* mono eyebrows, uppercase micro-labels */
+  --mem-text-xs: 13px;   /* captions, metadata, sidebar footer   */
+  --mem-text-sm: 14px;   /* descriptions, secondary body         */
+  --mem-text-base: 14px; /* control text: inputs, buttons, lists */
+  --mem-text-md: 15px;   /* row titles, primary body             */
   --mem-text-lg: 16px;   /* card/dialog headings (sans)          */
   --mem-text-xl: 20px;   /* page & section titles, stat numerals (serif) */
   --mem-text-2xl: 26px;  /* wizard step titles (serif)           */
   --mem-destination-title-size: 34px; /* Home, Wiki, Spaces top-level titles */
+
+  /* ── Semantic UI text roles ─────────────────────────────────
+     Fixed px, not scale aliases — a caller that hardcoded a small
+     literal fontSize now names the role instead of guessing a rung. */
+  --mem-text-control: 14px;     /* buttons, inputs, selects, nav controls */
+  --mem-text-description: 14px; /* required reading: descriptions, errors, warnings */
+  --mem-text-meta: 13px;        /* captions, timestamps, source/status metadata */
+  --mem-text-label: 12px;       /* uppercase field/column labels */
+  --mem-text-card-title: 16px;  /* list/card primary titles */
 
   /* ── Tracking (letter-spacing) ──────────────────────────────*/
   --mem-tracking-caps: 0.08em;    /* uppercase chip text (StatusChip)  */
@@ -461,7 +473,7 @@ html[data-theme="light"] {
   --mem-popover-border: #8B93A3;
   --mem-text: #1A1A2E;
   --mem-text-secondary: #586174;
-  --mem-text-tertiary: #8B93A3;
+  --mem-text-tertiary: #687184;
   --mem-text-meta-aa: #5D687A;
   --mem-brand-text: #1A1A2E;
   --mem-accent-warm: #B46A3A;
@@ -667,7 +679,7 @@ html[data-theme="light"] {
   color: var(--mem-text-secondary);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   padding: 5px 11px;
   transition:
     background-color 150ms ease,
@@ -703,7 +715,7 @@ html[data-theme="light"] {
   align-items: center;
   gap: 8px 10px;
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-label);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mem-text-tertiary);
@@ -711,7 +723,7 @@ html[data-theme="light"] {
 
 .memory-detail-eyebrow-button {
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-control);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--mem-text-secondary);
@@ -785,7 +797,7 @@ html[data-theme="light"] {
 .memory-detail-strip-label {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -810,7 +822,7 @@ html[data-theme="light"] {
   background: color-mix(in srgb, var(--mem-accent-warm) 5%, transparent);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   line-height: 1.6;
   padding: 12px 14px;
   white-space: pre-wrap;
@@ -893,7 +905,7 @@ html[data-theme="light"] {
   background: var(--mem-confirm-bg);
   color: var(--mem-accent-warm);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.05em;
   line-height: 1.35;
@@ -972,7 +984,7 @@ html[data-theme="light"] {
   color: var(--mem-text-secondary);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   padding: 5px 10px;
   transition:
@@ -1018,7 +1030,7 @@ html[data-theme="light"] {
   margin-bottom: 8px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1041,7 +1053,7 @@ html[data-theme="light"] {
 .memory-detail-field-label {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1051,7 +1063,7 @@ html[data-theme="light"] {
   min-width: 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -1066,14 +1078,14 @@ html[data-theme="light"] {
 
 .memory-detail-pending-title {
   margin-bottom: 6px;
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   font-weight: 600;
 }
 
 .memory-detail-pending-copy {
   margin: 0 0 10px;
   color: var(--mem-text-secondary);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -1095,7 +1107,7 @@ html[data-theme="light"] {
   margin: 0;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1146,7 +1158,7 @@ html[data-theme="light"] {
 .memory-detail-panel-heading .memory-detail-rail-title {
   flex: 0 1 auto;
   border-bottom: 0;
-  font-size: 13px;
+  font-size: var(--mem-text-meta);
   padding-bottom: 0;
 }
 
@@ -1161,7 +1173,7 @@ html[data-theme="light"] {
   color: var(--mem-text-tertiary);
   cursor: pointer;
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   letter-spacing: 0.02em;
   line-height: 1.25;
@@ -1238,7 +1250,7 @@ html[data-theme="light"] {
   max-width: min(100%, 340px);
   color: var(--mem-text);
   font-family: var(--mem-font-heading);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   font-weight: 600;
   line-height: 1.35;
 }
@@ -1265,7 +1277,7 @@ html[data-theme="light"] {
 .memory-detail-context-row-agent {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
   line-height: 1.35;
 }
 
@@ -1278,7 +1290,7 @@ html[data-theme="light"] {
 .memory-detail-related-copy {
   margin: 0;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.45;
 }
 
@@ -1300,7 +1312,7 @@ html[data-theme="light"] {
   flex: 0 0 24px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   line-height: 1.4;
 }
 
@@ -1309,7 +1321,7 @@ html[data-theme="light"] {
   min-width: 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   line-height: 1.4;
 }
 
@@ -1329,7 +1341,7 @@ html[data-theme="light"] {
   border-left: 1px solid var(--mem-detail-divider);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.55;
   padding: 4px 0 4px 10px;
   white-space: pre-wrap;
@@ -1361,7 +1373,7 @@ html[data-theme="light"] {
 .memory-detail-entity-name {
   color: var(--mem-accent-sage);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   line-height: 1.35;
   overflow-wrap: anywhere;
 }
@@ -1408,7 +1420,7 @@ html[data-theme="light"] {
   margin-top: 4px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
   line-height: 1.35;
 }
 
@@ -1470,7 +1482,7 @@ html[data-theme="light"] {
 
 .memory-detail-facet-button {
   border-width: 1px;
-  font-size: 10px;
+  font-size: var(--mem-text-control);
   font-weight: 600;
   line-height: 1.35;
   padding: 3px 7px;
@@ -1487,7 +1499,7 @@ html[data-theme="light"] {
   border: 1px solid var(--mem-border);
   background: var(--mem-detail-surface);
   color: var(--mem-text);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   padding: 3px 8px;
 }
 
@@ -1508,7 +1520,7 @@ html[data-theme="light"] {
   color: var(--mem-accent-sage);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   padding: 3px 0;
   text-decoration: underline;
   text-decoration-color: color-mix(in srgb, var(--mem-accent-sage) 30%, transparent);
@@ -1545,7 +1557,7 @@ html[data-theme="light"] {
   border: 1px solid transparent;
   background: transparent;
   color: var(--mem-text-tertiary);
-  font-size: 10px;
+  font-size: var(--mem-text-control);
   font-weight: 600;
   line-height: 1.35;
   padding: 3px 7px;
@@ -1558,7 +1570,7 @@ html[data-theme="light"] {
   border-width: 1px;
   border-radius: 7px;
   font-family: var(--mem-font-body);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   line-height: 1.35;
   padding: 3px 7px;
@@ -1573,7 +1585,7 @@ html[data-theme="light"] {
   background: var(--mem-detail-surface);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.03em;
   line-height: 1.35;
@@ -1728,7 +1740,7 @@ html[data-theme="light"] {
 .memory-list-row-archived {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
 }
 
 .memory-list-row-preview {
@@ -1737,7 +1749,7 @@ html[data-theme="light"] {
   margin: 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   line-height: 1.55;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -1760,7 +1772,7 @@ html[data-theme="light"] {
 .memory-list-row-metadata dt {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.04em;
   line-height: 1.35;
@@ -1771,7 +1783,7 @@ html[data-theme="light"] {
   margin: 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1792,13 +1804,13 @@ html[data-theme="light"] {
   margin: 4px 0 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.45;
 }
 
 .memory-list-row-update-label {
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -1821,7 +1833,7 @@ html[data-theme="light"] {
   color: var(--mem-text-secondary);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   font-weight: 600;
   line-height: 1.2;
   padding: 6px 9px;
@@ -1850,7 +1862,7 @@ html[data-theme="light"] {
   background: var(--mem-detail-surface);
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   padding: 24px;
   text-align: center;
 }
@@ -1960,7 +1972,7 @@ html[data-theme="light"] {
   margin-top: 10px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-meta);
 }
 
 .memory-detail-icon-button:focus-visible,
@@ -2069,7 +2081,7 @@ html[data-theme="light"] {
 .memory-detail-metadata-label {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.05em;
   line-height: 1.4;
@@ -2080,7 +2092,7 @@ html[data-theme="light"] {
   min-width: 0;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   line-height: 1.45;
 }
 
@@ -2124,7 +2136,7 @@ html[data-theme="light"] {
   background: var(--mem-detail-surface);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-label);
   font-weight: 600;
   letter-spacing: 0.03em;
   line-height: 1.35;
@@ -2204,7 +2216,7 @@ html[data-theme="light"] {
   margin-top: 10px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
 }
 
 .page-detail-dateline-item {
@@ -2425,7 +2437,7 @@ html[data-theme="light"] {
   background: var(--mem-detail-surface-raised);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   line-height: 1.5;
   padding: 11px 13px;
 }
@@ -2467,7 +2479,7 @@ html[data-theme="light"] {
   background: var(--mem-bg);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-mono);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.5;
   padding: 9px 10px;
   white-space: pre-wrap;
@@ -2484,7 +2496,7 @@ html[data-theme="light"] {
   color: var(--mem-text-secondary);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   line-height: 1;
   padding: 7px 10px;
@@ -2783,7 +2795,7 @@ html[data-theme="light"] {
 .entity-delete-question {
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 11px;
+  font-size: var(--mem-text-description);
 }
 
 .entity-delete-confirm {
@@ -2793,7 +2805,7 @@ html[data-theme="light"] {
   color: var(--mem-status-warning-text);
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 11px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   padding: 3px 9px;
 }
@@ -2802,13 +2814,13 @@ html[data-theme="light"] {
   margin: 0;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
 }
 
 .entity-count {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
   font-variant-numeric: tabular-nums;
 }
 
@@ -2843,7 +2855,7 @@ html[data-theme="light"] {
   color: var(--mem-text);
   cursor: text;
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   line-height: 1.55;
   overflow-wrap: anywhere;
   padding: 0;
@@ -2862,7 +2874,7 @@ html[data-theme="light"] {
   background: transparent;
   color: var(--mem-text);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-control);
   line-height: 1.55;
   outline: none;
   padding: 0 0 1px;
@@ -2878,7 +2890,7 @@ html[data-theme="light"] {
   margin-top: 2px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
   font-variant-numeric: tabular-nums;
 }
 
@@ -3121,14 +3133,14 @@ html[data-theme="light"] {
   min-width: 120px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
   line-height: 1.4;
 }
 
 .entity-relation-name {
   color: var(--mem-accent-sage-text);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-meta);
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -3142,21 +3154,21 @@ html[data-theme="light"] {
 .entity-meta-mono {
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-meta);
   overflow-wrap: anywhere;
 }
 
 .entity-appears-hint {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 10px;
+  font-size: var(--mem-text-meta);
 }
 
 .entity-error {
   margin: 0;
   color: var(--mem-status-warning-text);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
 }
 
 /* Block form (About card) gets breathing room; inline span (header) stays flush */
@@ -3258,7 +3270,7 @@ p.entity-error {
 .mem-infotip-h {
   display: block;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-meta);
   font-weight: 600;
   color: var(--mem-text);
   margin-bottom: 4px;
@@ -3266,7 +3278,7 @@ p.entity-error {
 .mem-infotip-b {
   display: block;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   color: var(--mem-text-secondary);
   line-height: 1.5;
 }
@@ -3333,7 +3345,7 @@ p.entity-error {
   background: none;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -3404,7 +3416,7 @@ p.entity-error {
   background-color: var(--mem-surface);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 11px;
+  font-size: var(--mem-text-label);
   white-space: nowrap;
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease;
@@ -3434,7 +3446,7 @@ p.entity-error {
   border-radius: 5px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-label);
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -3446,7 +3458,7 @@ p.entity-error {
   background-color: var(--mem-surface);
   color: var(--mem-accent-amber);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.45;
 }
 
@@ -3454,7 +3466,7 @@ p.entity-error {
   margin: 0;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-description);
   line-height: 1.5;
 }
 
@@ -3551,7 +3563,7 @@ p.entity-error {
   background: none;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -3605,7 +3617,7 @@ p.entity-error {
   background-color: var(--mem-surface);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   line-height: 1;
   cursor: pointer;
   transition: background-color 120ms ease, color 120ms ease;
@@ -3649,7 +3661,7 @@ p.entity-error {
   padding-top: 8px;
   border-top: 1px solid var(--mem-border);
   color: var(--mem-text-tertiary);
-  font-size: 11px;
+  font-size: var(--mem-text-label);
   line-height: 1.45;
 }
 
@@ -3676,7 +3688,7 @@ p.entity-error {
 .page-canvas-help-row span {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-body);
-  font-size: 11px;
+  font-size: var(--mem-text-description);
   line-height: 1.6;
 }
 
@@ -3756,7 +3768,7 @@ p.entity-error {
   background-color: var(--mem-surface);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   font-weight: 500;
   cursor: pointer;
 }
@@ -3781,7 +3793,7 @@ p.entity-error {
   max-width: 46ch;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
   line-height: 1.6;
 }
 

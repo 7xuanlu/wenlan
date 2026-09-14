@@ -93,16 +93,25 @@ pub(super) async fn register_optional_runtime_workers(
     //
     // This intentionally does NOT trigger a download — users opt in explicitly
     // via the settings UI (POST /api/on-device-model/download).
-    if optional_runtime_workers_allowed(repair_recovery_pending) {
-        let selected_model = config
-            .on_device_model
-            .as_deref()
-            .map(|id| wenlan_core::on_device_models::resolve_or_default(Some(id)));
+    // A restored repair still needs read-only local inference for its Deep
+    // verification. Keep all ordinary runtime writers suspended, and use a
+    // cache-only constructor here so recovery cannot download or change config.
+    {
+        let selected_model = config.on_device_model.as_deref().and_then(|id| {
+            if repair_recovery_pending {
+                wenlan_core::on_device_models::get_model(id)
+            } else {
+                Some(wenlan_core::on_device_models::resolve_or_default(Some(id)))
+            }
+        });
         match selected_model {
             None => tracing::info!(
                 "[on-device] no local model selected, skipping init (run `wenlan models install` to enable)"
             ),
-            Some(model) if !wenlan_core::on_device_models::is_cached(model) => tracing::info!(
+            // Recovery's cache-only constructor is the authority, including
+            // HF_HOME. The normal preload probe scans the default cache and
+            // must not reject a selected model in a configured cache root.
+            Some(model) if !repair_recovery_pending && !wenlan_core::on_device_models::is_cached(model) => tracing::info!(
                 "[on-device] model {} not cached, skipping init (use settings to download)",
                 model.id
             ),
@@ -123,12 +132,15 @@ pub(super) async fn register_optional_runtime_workers(
                 let import_signal = shared.read().await.write_signal.clone();
                 tokio::spawn(async move {
                     let _reservation = StartupModelLoadReservation(reservation);
-                    if !scheduler::wait_for_startup_model_admission(
-                        working_set_bytes,
-                        &import_signal,
-                        &mut load_shutdown,
-                    )
-                    .await
+                    // Restore inference for an already approved repair without
+                    // the quiet-CPU delay used by optional background preload.
+                    if !repair_recovery_pending
+                        && !scheduler::wait_for_startup_model_admission(
+                            working_set_bytes,
+                            &import_signal,
+                            &mut load_shutdown,
+                        )
+                        .await
                     {
                         tracing::info!(
                             "[on-device] shutdown requested before startup load admission"
@@ -137,10 +149,11 @@ pub(super) async fn register_optional_runtime_workers(
                     }
                     let model_id = model.id;
                     let result = tokio::task::spawn_blocking(move || {
-                        let provider =
-                            wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some(
-                                model_id,
-                            ))?;
+                        let provider = if repair_recovery_pending {
+                            wenlan_core::llm_provider::OnDeviceProvider::new_cached_with_model(model_id)?
+                        } else {
+                            wenlan_core::llm_provider::OnDeviceProvider::new_with_model(Some(model_id))?
+                        };
                         let arc: Arc<dyn wenlan_core::llm_provider::LlmProvider> =
                             Arc::new(provider);
                         Ok::<_, wenlan_core::error::WenlanError>((

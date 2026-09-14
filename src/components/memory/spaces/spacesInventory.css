@@ -28,7 +28,7 @@
 }
 
 .spaces-suggestion-action {
-  font-size: 12px;
+  font-size: var(--mem-text-control);
   padding: 4px 10px;
 }
 
@@ -90,7 +90,7 @@
   min-height: 38px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 11px;
+  font-size: var(--mem-text-meta);
   text-transform: uppercase;
 }
 
@@ -115,7 +115,7 @@
 .spaces-row-updated {
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
-  font-size: 13px;
+  font-size: var(--mem-text-meta);
   text-align: right;
   white-space: nowrap;
 }
@@ -239,7 +239,7 @@
 
   .spaces-row-suggested .spaces-row-description {
     overflow: hidden;
-    font-size: 12px;
+    font-size: var(--mem-text-meta);
     text-overflow: ellipsis;
     white-space: nowrap;
   }

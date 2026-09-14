@@ -45788,12 +45788,107 @@ impl MemoryDB {
     /// Atomic resolve: flip the proposal's status only if currently non-terminal.
     /// Returns the rows_affected count (1 if flipped, 0 if missing or already terminal).
     /// Caller distinguishes missing-vs-terminal via a follow-up `get_refinement_proposal`.
+    ///
+    /// Lint Review Items are immutable contracts, so a generic resolve may only
+    /// dismiss an awaiting, valid row. Read and validate the complete row while
+    /// holding the connection mutex, then include the raw owner/payload columns
+    /// in the compare-and-set update. Verified completion uses its receipt-backed
+    /// connection path for the `resolved` transition.
     pub async fn resolve_refinement_if_open(
         &self,
         id: &str,
         status: &str,
     ) -> Result<u64, WenlanError> {
         let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT action,source_ids,payload,status
+                   FROM refinement_queue
+                  WHERE id=?1
+                  LIMIT 2",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("resolve_refinement_if_open read: {e}")))?;
+        let Some(row) = rows.next().await.map_err(|e| {
+            WenlanError::VectorDb(format!("resolve_refinement_if_open read row: {e}"))
+        })?
+        else {
+            return Ok(0);
+        };
+
+        // Read every column before probing for an unexpected duplicate: libSQL
+        // rows may reuse their backing row buffer after `next()`.
+        let action = row.get::<String>(0).map_err(|e| {
+            WenlanError::VectorDb(format!("resolve_refinement_if_open action: {e}"))
+        })?;
+        let source_ids_json = row.get::<String>(1).map_err(|e| {
+            WenlanError::VectorDb(format!("resolve_refinement_if_open source_ids: {e}"))
+        })?;
+        let payload = row.get::<Option<String>>(2).map_err(|e| {
+            WenlanError::VectorDb(format!("resolve_refinement_if_open payload: {e}"))
+        })?;
+        let current_status = row.get::<String>(3).map_err(|e| {
+            WenlanError::VectorDb(format!("resolve_refinement_if_open status: {e}"))
+        })?;
+        if rows
+            .next()
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("resolve_refinement_if_open duplicate read: {e}"))
+            })?
+            .is_some()
+        {
+            return Err(WenlanError::Conflict(
+                "refinement proposal id is not unique".to_string(),
+            ));
+        }
+
+        if action == "lint_repair_review" {
+            if status != "dismissed" {
+                return Err(WenlanError::Validation(
+                    "lint repair reviews may only be dismissed through generic resolution"
+                        .to_string(),
+                ));
+            }
+            if current_status != "awaiting_review" {
+                return Err(WenlanError::Validation(format!(
+                    "refinement proposal {id} already resolved (status={current_status})"
+                )));
+            }
+            let source_ids =
+                serde_json::from_str::<Vec<String>>(&source_ids_json).map_err(|e| {
+                    WenlanError::Validation(format!(
+                        "lint repair review has invalid source_ids: {e}"
+                    ))
+                })?;
+            let payload = payload.ok_or_else(|| {
+                WenlanError::Validation("lint repair review has no payload".to_string())
+            })?;
+            validate_lint_review_contract(id, &source_ids, &payload)?;
+
+            let changed = conn
+                .execute(
+                    "UPDATE refinement_queue
+                        SET status=?1, resolved_at=datetime('now')
+                      WHERE id=?2
+                        AND action='lint_repair_review'
+                        AND status='awaiting_review'
+                        AND source_ids=?3
+                        AND payload=?4",
+                    libsql::params![status, id, source_ids_json, payload],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("resolve_refinement_if_open: {e}")))?;
+            if changed != 1 {
+                return Err(WenlanError::Conflict(
+                    "lint repair review changed while resolving".to_string(),
+                ));
+            }
+            return Ok(changed);
+        }
+
         let rows = conn
             .execute(
                 "UPDATE refinement_queue \

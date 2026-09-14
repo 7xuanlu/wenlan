@@ -9,7 +9,10 @@ use crate::{
         repair_page_rename::recover_rename_page_title_apply_receipt,
         repair_stale_projection::recover_stale_page_projection_apply_receipt,
         repair_target_receipt::read_current_repair_target_receipt,
-        repair_verification::{record_repair_verification_atomic, RepairVerificationAtomicInput},
+        repair_verification::{
+            reconcile_repair_review_completion, record_repair_verification_atomic,
+            RepairVerificationAtomicInput,
+        },
         MemoryDB,
     },
     error::WenlanError,
@@ -52,7 +55,7 @@ use wenlan_types::{
         RepairAffectedRecord, RepairAffectedRecordKind, RepairPlan, RepairPlanEntriesPage,
         RepairPlanEntriesRequest, RepairPlanEntry, StoredRepairPlan,
     },
-    MemoryType,
+    MemoryType, RepairRecovery,
 };
 
 #[cfg(test)]
@@ -83,6 +86,9 @@ const REPAIR_ROLLBACK_ARTIFACT_MAX_BYTES: u64 = 40 * 1024 * 1024;
 
 #[cfg(test)]
 mod title_rename_tests;
+
+pub mod current;
+pub(crate) mod review_completion;
 
 #[derive(Debug, Clone)]
 pub struct RepairArtifactStore {
@@ -982,6 +988,44 @@ impl RepairArtifactStore {
         }
         pending.sort();
         Ok(pending)
+    }
+
+    /// Load the durable recovery state for one manifest without changing any
+    /// artifact or database state. A final apply receipt is returned only
+    /// after the existing authenticated receipt loader validates it. A
+    /// provisional pending receipt is intentionally opaque: its existence is
+    /// the recovery signal, while publication and salvage remain owned by the
+    /// apply recovery path.
+    pub fn load_pending_recovery(
+        &self,
+        manifest_id: &str,
+    ) -> Result<Option<RepairRecovery>, WenlanError> {
+        let manifest_dir = self.manifest_dir(manifest_id)?;
+        if !manifest_dir.join(MANIFEST_FILE).is_file() {
+            return Ok(None);
+        }
+        let manifest = self.load_manifest(manifest_id)?;
+        let apply_path = manifest_dir.join(APPLY_RECEIPT_FILE);
+        if apply_path.is_file() {
+            let apply_receipt = self.load_apply_receipt(&manifest)?;
+            if self
+                .load_verification_receipt(&manifest, &apply_receipt)?
+                .is_some()
+            {
+                return Ok(None);
+            }
+            return Ok(Some(RepairRecovery {
+                manifest,
+                apply_receipt: Some(apply_receipt),
+            }));
+        }
+        if manifest_dir.join(APPLY_RECEIPT_PENDING_FILE).is_file() {
+            return Ok(Some(RepairRecovery {
+                manifest,
+                apply_receipt: None,
+            }));
+        }
+        Ok(None)
     }
 
     fn clear_pending_apply_receipt(&self, manifest_id: &str) -> Result<(), WenlanError> {
@@ -2793,6 +2837,7 @@ async fn record_repair_verification_inner(
     }
     if apply_receipt.post_apply_db_digest().is_none() {
         if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+            reconcile_repair_review_completion(db, &manifest, &receipt).await?;
             store.clear_pending_apply_receipt(manifest.manifest_id())?;
             return Ok(receipt);
         }
@@ -2809,6 +2854,7 @@ async fn record_repair_verification_inner(
         ));
     }
     if let Some(receipt) = store.load_verification_receipt(&manifest, &apply_receipt)? {
+        reconcile_repair_review_completion(db, &manifest, &receipt).await?;
         store.clear_pending_apply_receipt(manifest.manifest_id())?;
         return Ok(receipt);
     }
@@ -3231,6 +3277,7 @@ pub(crate) async fn validate_current_page_report_receipt(
     if report.snapshots().pages().before_scan_digest() != &current_page
         || report.snapshots().pages().after_scan_digest() != Some(&current_page)
     {
+        log::warn!("[repair] source report rejected: page projection snapshot changed");
         return Err(WenlanError::Conflict(
             "repair_verification_reports_stale".to_string(),
         ));
@@ -6329,6 +6376,7 @@ pub(crate) fn validate_report_source_receipts(
     for report in reports {
         let db = report.snapshots().db();
         if db.analysis_digest() != &current || db.post_run_digest() != Some(&current) {
+            log::warn!("[repair] preparation rejected: database source snapshot changed");
             return Err(WenlanError::Conflict(
                 "repair_source_reports_stale".to_string(),
             ));
@@ -6673,6 +6721,9 @@ mod entity_extraction_tests;
 
 #[cfg(test)]
 mod tests {
+    include!("repair/review_completion_tests.rs");
+    include!("repair/current_tests.rs");
+
     use super::*;
     use crate::{
         db::{
@@ -8191,6 +8242,67 @@ mod tests {
         assert!(store
             .has_completed_verification(manifest.manifest_id())
             .unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_returns_manifest_and_validated_apply_receipt() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        assert!(store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .is_none());
+
+        let apply_receipt = apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        let recovery = store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .expect("applied-unverified repair should be recoverable");
+        assert_eq!(recovery.manifest, manifest);
+        assert_eq!(recovery.apply_receipt, Some(apply_receipt));
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_keeps_uncertain_pending_receipt_opaque() {
+        let (_db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        let manifest_dir = store.manifest_dir(manifest.manifest_id()).unwrap();
+        std::fs::write(
+            manifest_dir.join(APPLY_RECEIPT_PENDING_FILE),
+            b"not a receipt and must not be parsed here",
+        )
+        .unwrap();
+
+        let recovery = store
+            .load_pending_recovery(manifest.manifest_id())
+            .unwrap()
+            .expect("provisional pending artifact should remain recoverable");
+        assert_eq!(recovery.manifest, manifest);
+        assert!(recovery.apply_receipt.is_none());
+    }
+
+    #[tokio::test]
+    #[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+    async fn load_pending_recovery_rejects_an_invalid_final_apply_receipt() {
+        let (db, _db_dir, repair_root, manifest) = prepared_fixture().await;
+        let store = RepairArtifactStore::new(repair_root.path().to_path_buf());
+        apply_repair(&db, &store, exact_apply(&manifest), 1_721_000_001)
+            .await
+            .unwrap();
+        std::fs::write(
+            store
+                .manifest_dir(manifest.manifest_id())
+                .unwrap()
+                .join(APPLY_RECEIPT_FILE),
+            b"tampered final receipt",
+        )
+        .unwrap();
+
+        assert!(store.load_pending_recovery(manifest.manifest_id()).is_err());
     }
 
     #[test]

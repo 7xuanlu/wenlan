@@ -63,7 +63,7 @@ function renderHome(
   } = {},
 ) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={qc}>
       <HomePage
         onNavigateMemory={() => {}}
@@ -77,6 +77,7 @@ function renderHome(
       />
     </QueryClientProvider>,
   );
+  return { ...rendered, queryClient: qc };
 }
 
 /**
@@ -588,7 +589,7 @@ describe("HomePage redesign", () => {
     const pageUpdates = screen.getByTestId("wiki-page-updates");
     expect(pageUpdates).toHaveTextContent("Needs review");
     await within(pageUpdates).findByText(/The durable updated wording/);
-    expect(pageUpdates).toHaveTextContent("Memory revision");
+    expect(pageUpdates).toHaveTextContent("Review the proposed changes");
     // The rail meta is now "kind · age" per the mockup; the proposing agent
     // stays in the review dialog, not the rail row.
     expect(pageUpdates).not.toHaveTextContent("proposed by");
@@ -922,7 +923,7 @@ describe("HomePage redesign", () => {
           : ["m1", "m2", "m3", "m4", "m5"];
       return ids.map((m) => ({
         source: { page_id: id, memory_source_id: m, linked_at: 0 },
-        memory: null,
+        memory: { source_id: m, title: `Source ${m}`, content: `Evidence ${m}` },
       })) as any;
     });
 
@@ -1172,7 +1173,7 @@ describe("HomePage redesign", () => {
         {
           id: "ref-archive",
           action: "page_keep_or_archive",
-          source_ids: ["memory-evidence"],
+          source_ids: ["page-thin"],
           payload: {
             action: "page_keep_or_archive",
             page_id: "page-thin",
@@ -1249,6 +1250,31 @@ describe("HomePage redesign", () => {
     await within(strip).findByText(/Entity merge/);
   });
 
+  it.each([
+    ["en", "Review this page’s supporting sources and whether they adequately support its claims."],
+    ["zh-Hans", "请查阅此页面的支持来源，确认它们是否足以支持页面主张。"],
+    ["zh-Hant", "請查閱此頁面的支援來源，確認它們是否足以支持頁面主張。"],
+  ])("explains the source-review decision in the %s Home rail", async (language, hint) => {
+    await i18n.changeLanguage(language);
+    vi.mocked(tauri.getPage).mockResolvedValue(page({ id: "page-proof", title: "Source review notes" }));
+    vi.mocked(tauri.listRefinements).mockResolvedValue({
+      proposals: [{
+        id: "ref-proof", action: "lint_repair_review", source_ids: ["page-proof"],
+        payload: {
+          action: "lint_repair_review", check_id: "pages.semantic.provenance_adequacy",
+          occurrence_digest: "a".repeat(64), owner_binding_digest: "b".repeat(64),
+          issue: "Technical provenance finding", choices: [], suggested_research_queries: [],
+        },
+        confidence: 0.9, created_at: nowIso,
+      }],
+    });
+    renderHome();
+    const rail = await screen.findByTestId("worth-a-glance");
+    await within(rail).findByText("Source review notes");
+    expect(within(rail).getByText((text) => text.startsWith(hint))).toBeInTheDocument();
+    expect(within(rail).queryByText("Technical provenance finding")).not.toBeInTheDocument();
+  });
+
   it("does not render inline approval actions in the needs-review rail", async () => {
     vi.mocked(tauri.listRefinements).mockResolvedValue({
       proposals: [
@@ -1312,6 +1338,51 @@ describe("HomePage redesign", () => {
     expect(await screen.findByTestId("wiki-home")).toBeInTheDocument();
     expect(screen.queryByTestId("wiki-page-empty")).toBeNull();
     expect(screen.getByTestId("wiki-page-list")).toBeInTheDocument();
+  });
+
+  it("keeps an open review dialog mounted during a deferred failed-pages refetch", async () => {
+    let resolveBackgroundRefetch!: (pages: tauri.Page[]) => void;
+    vi.mocked(tauri.listPages)
+      .mockRejectedValueOnce(new Error("pages unavailable"))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveBackgroundRefetch = resolve;
+          }),
+      );
+    vi.mocked(tauri.listPendingRevisions).mockResolvedValue([
+      {
+        target_source_id: "mem-target",
+        revision_source_id: "mem-revision",
+        revision_content: "The durable updated wording from the daemon.",
+        source_agent: "claude-code",
+        last_modified: 1_782_365_076,
+        target_kind: "memory" as const,
+      },
+    ]);
+
+    const { queryClient } = renderHome();
+
+    const reviewButton = await screen.findByRole("button", { name: /Review Target memory/ });
+    reviewButton.click();
+    const dialog = await screen.findByRole("dialog");
+
+    // A repair-only runtime can keep the ambient pages read pending while the
+    // already-open decision remains authoritative and actionable.
+    void queryClient.refetchQueries({ queryKey: ["recent-concepts"] });
+    await waitFor(() => expect(tauri.listPages).toHaveBeenCalledTimes(2));
+
+    await waitFor(() => {
+      const state = queryClient.getQueryState(["recent-concepts"]);
+      expect(state?.status).toBe("pending");
+      expect(state?.fetchStatus).toBe("fetching");
+      expect(screen.getByRole("dialog")).toBe(dialog);
+    });
+
+    resolveBackgroundRefetch([]);
+    await waitFor(() => {
+      expect(queryClient.getQueryState(["recent-concepts"])?.status).toBe("success");
+    });
   });
 
   it("renders one wiki home with the not-ready empty state and both actions wired", async () => {

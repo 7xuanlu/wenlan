@@ -214,7 +214,7 @@ fn manifest_counts_match_the_spec() {
     // `/api/import/batches/{batch_id}/status`.
     assert_eq!(
         HTTP_READERS.len(),
-        177,
+        183,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -225,7 +225,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        181,
+        188,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -233,7 +233,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        175,
+        178,
         "main builder entries"
     );
     assert_eq!(
@@ -241,7 +241,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Repair)
             .count(),
-        6,
+        10,
         "repair builder entries"
     );
 
@@ -249,7 +249,7 @@ fn manifest_counts_match_the_spec() {
         .iter()
         .filter(|r| r.page_bearing == PageBearing::Yes)
         .count();
-    assert_eq!(bearing, 62, "page-bearing HTTP routes");
+    assert_eq!(bearing, 65, "page-bearing HTTP routes");
 }
 
 #[test]

@@ -534,6 +534,28 @@ impl LlmEngine {
         self.backend_plan.configure_context_params(params)
     }
 
+    /// Build the sampler chain shared by single-sequence inference paths.
+    ///
+    /// The grammar sampler runs before the final temperature/distribution
+    /// sampler so constrained tokens remain the only selectable candidates.
+    /// Initialization is fallible; callers propagate `None` to fail closed.
+    fn sampler_chain(&self, temperature: f32, grammar: Option<&str>) -> Option<LlamaSampler> {
+        let mut samplers = vec![LlamaSampler::penalties(256, 1.2, 0.0, 0.0)];
+        if let Some(grammar) = grammar {
+            let constrained = match LlamaSampler::grammar(&self.model, grammar, "root") {
+                Ok(sampler) => sampler,
+                Err(_) => {
+                    log::warn!("[llm_engine] constrained sampler initialization failed");
+                    return None;
+                }
+            };
+            samplers.push(constrained);
+        }
+        samplers.push(LlamaSampler::temp(temperature));
+        samplers.push(LlamaSampler::dist(42));
+        Some(LlamaSampler::chain_simple(samplers))
+    }
+
     pub(crate) fn reload_on_cpu(
         model_path: &Path,
         prompts: crate::prompts::PromptRegistry,
@@ -594,6 +616,30 @@ impl LlmEngine {
         ctx_size: u32,
         label: Option<&str>,
     ) -> Option<String> {
+        self.run_inference_with_grammar(
+            prompt,
+            max_output_tokens,
+            temperature,
+            ctx_size,
+            label,
+            None,
+        )
+    }
+
+    /// Run single-sequence inference with an optional GBNF grammar.
+    ///
+    /// Grammar constrained decoding is deliberately private to the provider
+    /// path.  An invalid grammar returns `None` instead of silently falling
+    /// back to unconstrained generation.
+    pub(crate) fn run_inference_with_grammar(
+        &self,
+        prompt: &str,
+        max_output_tokens: i32,
+        temperature: f32,
+        ctx_size: u32,
+        label: Option<&str>,
+        grammar: Option<&str>,
+    ) -> Option<String> {
         let start = Instant::now();
 
         let tokens = match self.model.str_to_token(prompt, AddBos::Always) {
@@ -648,11 +694,7 @@ impl LlmEngine {
             return None;
         }
 
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::penalties(256, 1.2, 0.0, 0.0),
-            LlamaSampler::temp(temperature),
-            LlamaSampler::dist(42),
-        ]);
+        let mut sampler = self.sampler_chain(temperature, grammar)?;
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -665,8 +707,8 @@ impl LlmEngine {
                 break;
             }
 
+            // sample() also accepts the token; accepting twice corrupts grammar state.
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
 
             if self.model.is_eog_token(token) {
                 break;
@@ -758,6 +800,32 @@ impl LlmEngine {
         strip_think: bool,
         label: Option<&str>,
     ) -> Option<String> {
+        self.run_inference_persistent_with_grammar(
+            ctx,
+            prompt,
+            max_output_tokens,
+            temperature,
+            timeout_secs,
+            strip_think,
+            label,
+            None,
+        )
+    }
+
+    /// Persistent single-sequence inference with optional GBNF constrained
+    /// decoding. An invalid grammar fails closed.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_inference_persistent_with_grammar(
+        &self,
+        ctx: &mut LlamaContext<'_>,
+        prompt: &str,
+        max_output_tokens: i32,
+        temperature: f32,
+        timeout_secs: u64,
+        strip_think: bool,
+        label: Option<&str>,
+        grammar: Option<&str>,
+    ) -> Option<String> {
         let start = Instant::now();
 
         // Reset KV cache from previous request. Cheap (no allocation) compared
@@ -802,11 +870,7 @@ impl LlmEngine {
             return None;
         }
 
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::penalties(256, 1.2, 0.0, 0.0),
-            LlamaSampler::temp(temperature),
-            LlamaSampler::dist(42),
-        ]);
+        let mut sampler = self.sampler_chain(temperature, grammar)?;
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -824,8 +888,8 @@ impl LlmEngine {
                 break;
             }
 
+            // sample() also accepts the token; accepting twice corrupts grammar state.
             let token = sampler.sample(ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
 
             if self.model.is_eog_token(token) {
                 break;
@@ -1216,8 +1280,8 @@ impl LlmEngine {
                     failed[req] = true;
                     true
                 } else {
+                    // sample() already advances stateful samplers exactly once.
                     let token = st.sampler.sample(ctx, st.logits_idx);
-                    st.sampler.accept(token);
                     if self.model.is_eog_token(token) {
                         true
                     } else {
@@ -1490,6 +1554,27 @@ impl LlmEngine {
         timeout_secs: u64,
         ctx_size: u32,
     ) -> Option<String> {
+        self.run_inference_raw_with_grammar(
+            prompt,
+            max_output_tokens,
+            temperature,
+            timeout_secs,
+            ctx_size,
+            None,
+        )
+    }
+
+    /// Raw single-sequence inference with optional GBNF constrained decoding.
+    /// An invalid grammar fails closed instead of using an unconstrained sampler.
+    pub(crate) fn run_inference_raw_with_grammar(
+        &self,
+        prompt: &str,
+        max_output_tokens: i32,
+        temperature: f32,
+        timeout_secs: u64,
+        ctx_size: u32,
+        grammar: Option<&str>,
+    ) -> Option<String> {
         let start = Instant::now();
 
         let tokens = match self.model.str_to_token(prompt, AddBos::Always) {
@@ -1544,11 +1629,7 @@ impl LlmEngine {
             return None;
         }
 
-        let mut sampler = LlamaSampler::chain_simple([
-            LlamaSampler::penalties(256, 1.2, 0.0, 0.0),
-            LlamaSampler::temp(temperature),
-            LlamaSampler::dist(42),
-        ]);
+        let mut sampler = self.sampler_chain(temperature, grammar)?;
 
         let mut decoder = encoding_rs::UTF_8.new_decoder();
         let mut output = String::new();
@@ -1561,8 +1642,8 @@ impl LlmEngine {
                 break;
             }
 
+            // sample() also accepts the token; accepting twice corrupts grammar state.
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
 
             if self.model.is_eog_token(token) {
                 break;
@@ -1684,8 +1765,8 @@ impl LlmEngine {
                 break;
             }
 
+            // sample() already advances stateful samplers exactly once.
             let token = sampler.sample(&ctx, batch.n_tokens() - 1);
-            sampler.accept(token);
 
             if self.model.is_eog_token(token) {
                 break;

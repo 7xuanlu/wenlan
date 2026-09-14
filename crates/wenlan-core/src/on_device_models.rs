@@ -24,6 +24,8 @@
 //!   below the trained context to account for quality degradation of quantized
 //!   models at long contexts.
 
+use std::path::PathBuf;
+
 #[derive(Debug, Clone)]
 pub struct OnDeviceModel {
     pub id: &'static str,
@@ -166,9 +168,55 @@ pub fn is_cached(model: &OnDeviceModel) -> bool {
     false
 }
 
+/// Resolve an already cached model file without consulting the Hub or changing
+/// the cache. The cache API reads the model's existing `refs/main` pointer and
+/// snapshot file only; callers decide whether a missing result is fatal.
+pub(crate) fn cached_model_path(
+    model: &'static OnDeviceModel,
+    cache: &hf_hub::Cache,
+) -> Option<PathBuf> {
+    cache.model(model.repo_id.to_string()).get(model.filename)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_model_path_uses_existing_hf_snapshot_without_download() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = hf_hub::Cache::new(temp.path().to_path_buf());
+        let model = get_model("qwen3-4b").unwrap();
+        let snapshot = "snapshot-test";
+        let snapshot_dir = temp
+            .path()
+            .join("models--unsloth--Qwen3-4B-Instruct-2507-GGUF")
+            .join("snapshots")
+            .join(snapshot);
+        std::fs::create_dir_all(&snapshot_dir).unwrap();
+        let expected = snapshot_dir.join(model.filename);
+        std::fs::write(&expected, b"fixture").unwrap();
+        cache
+            .model(model.repo_id.to_string())
+            .create_ref(snapshot)
+            .unwrap();
+
+        assert_eq!(cached_model_path(model, &cache), Some(expected));
+    }
+
+    #[test]
+    fn cached_model_path_returns_none_without_an_existing_snapshot_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache = hf_hub::Cache::new(temp.path().to_path_buf());
+        let model = get_model("qwen3-4b").unwrap();
+
+        assert!(cached_model_path(model, &cache).is_none());
+        cache
+            .model(model.repo_id.to_string())
+            .create_ref("snapshot-test")
+            .unwrap();
+        assert!(cached_model_path(model, &cache).is_none());
+    }
 
     #[test]
     fn thinking_mode_follows_the_model_family() {

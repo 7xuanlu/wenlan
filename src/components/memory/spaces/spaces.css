@@ -31,7 +31,7 @@
   margin: 0 0 12px;
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: var(--mem-text-meta);
 }
 
 .spaces-filter,
@@ -39,7 +39,7 @@
   display: grid;
   gap: 6px;
   color: var(--mem-text-secondary);
-  font-size: 13px;
+  font-size: var(--mem-text-meta);
 }
 
 .spaces-filter {
@@ -110,7 +110,7 @@
 
 .spaces-suggestion-action {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--mem-text-control);
 }
 
 .spaces-primary-action {
@@ -185,7 +185,7 @@
 .spaces-empty,
 .spaces-state {
   color: var(--mem-text-tertiary);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
 }
 
 .spaces-row-pages,
@@ -267,7 +267,7 @@
 .spaces-validation {
   margin: 12px 0 0;
   color: var(--mem-status-warning-text);
-  font-size: 13px;
+  font-size: var(--mem-text-description);
 }
 
 .spaces-error {

@@ -51,8 +51,10 @@ main|get|/api/pages/{id}/sources|wenlan_server::page_routes::handle_get_page_sou
 main|get|/api/profile|wenlan_server::profile_agents_routes::handle_get_profile
 main|get|/api/profile/narrative|wenlan_server::profile_narrative_routes::handle_get_profile_narrative
 main|get|/api/refinery/queue|wenlan_server::refinery_routes::handle_list_refinements
+main|get|/api/repairs/recovery/{review_id}|wenlan_server::repair_read_routes::handle_get_repair_recovery
 main|get|/api/retrievals/recent|wenlan_server::routes::handle_recent_retrievals
 main|get|/api/setup/status|wenlan_server::config_routes::handle_get_setup_status
+repair|get|/api/setup/status|wenlan_server::config_routes::handle_get_setup_status
 main|get|/api/snapshots|wenlan_server::snapshot_routes::handle_list_snapshots
 main|get|/api/snapshots/{id}/captures|wenlan_server::snapshot_routes::handle_get_snapshot_captures
 main|get|/api/snapshots/{id}/captures-with-content|wenlan_server::snapshot_routes::handle_get_snapshot_captures_with_content
@@ -123,8 +125,10 @@ main|post|/api/refinery/queue/{id}/accept|wenlan_server::refinery_routes::handle
 main|post|/api/refinery/queue/{id}/reject|wenlan_server::refinery_routes::handle_reject_refinement
 main|post|/api/repairs/apply|wenlan_server::repair_routes::handle_apply
 main|post|/api/repairs/plan|wenlan_server::repair_routes::handle_plan
+main|post|/api/repairs/plan-current|wenlan_server::repair_routes::handle_plan_current
 main|post|/api/repairs/plan/entries|wenlan_server::repair_routes::handle_plan_entries
 main|post|/api/repairs/prepare|wenlan_server::repair_routes::handle_prepare
+main|post|/api/repairs/prepare-current|wenlan_server::repair_routes::handle_prepare_current
 main|post|/api/repairs/verify|wenlan_server::repair_routes::handle_verify
 main|post|/api/search|wenlan_server::routes::handle_search
 main|post|/api/shutdown|wenlan_server::routes::handle_shutdown
@@ -176,6 +180,10 @@ main|patch|/api/pages/{id}/map/edges/{edge_id}|wenlan_server::page_map_routes::h
 main|patch|/api/pages/{id}/map/nodes/{node_id}|wenlan_server::page_map_routes::handle_patch_map_node
 repair|get|/api/health|wenlan_server::routes::handle_health
 repair|get|/api/lint|wenlan_server::lint_routes::handle_lint
+repair|get|/api/memory/{id}/detail|wenlan_server::repair_read_routes::handle_get_repair_memory_detail
+repair|get|/api/pages/{id}|wenlan_server::repair_read_routes::handle_get_repair_page
+repair|get|/api/refinery/queue|wenlan_server::repair_read_routes::handle_list_repair_queue
+repair|get|/api/repairs/recovery/{review_id}|wenlan_server::repair_read_routes::handle_get_repair_recovery
 repair|get|/api/status|wenlan_server::routes::handle_status
 repair|post|/api/lint|wenlan_server::lint_routes::handle_lint_submission
 repair|post|/api/repairs/apply|wenlan_server::repair_routes::handle_apply
