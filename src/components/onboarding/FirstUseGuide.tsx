@@ -14,6 +14,7 @@ import {
 import {
   getActiveImportBatches,
   getImportBatchStatus,
+  getMemoryStats,
   getResolvedRouting,
   type ImportBatchStatus,
 } from "../../lib/tauri";
@@ -261,19 +262,10 @@ function FirstUseLive({
     refetchInterval: LIVE_BATCH_POLL_MS,
   });
 
-  const retry = () => {
-    void routingQuery.refetch();
-    void pagesQuery.refetch();
-    void activeBatchesQuery.refetch();
-    if (batchId) void batchStatusQuery.refetch();
-  };
-
-  const pending = pagesQuery.isPending
+  const listPending = pagesQuery.isPending
     || activeBatchesQuery.isPending
     || (Boolean(batchId) && batchStatusQuery.isPending);
-  // A failed query is a failure, never an empty success: it gets its own
-  // state with an explicit retry, not the empty-state copy.
-  const failed = pagesQuery.isError
+  const listFailed = pagesQuery.isError
     || activeBatchesQuery.isError
     || (Boolean(batchId) && batchStatusQuery.isError);
 
@@ -289,11 +281,31 @@ function FirstUseLive({
   const knowledgePages = (pagesQuery.data ?? [])
     .filter(isKnowledgePage)
     .slice(0, LIVE_PAGE_COUNT);
+
+  // Pages and batches decide the view before the memory count is ever read:
+  // the count stays off whenever there is real progress to show.
+  const decidesEmpty = !listPending && !listFailed
+    && batches.length === 0 && knowledgePages.length === 0;
+  const memoryStatsQuery = useQuery({
+    queryKey: ["memoryStats"],
+    queryFn: getMemoryStats,
+    enabled: decidesEmpty,
+    refetchInterval: LIVE_PAGE_POLL_MS,
+  });
+  const savedCount = memoryStatsQuery.data?.total ?? 0;
+
+  // A failed query is a failure, never an empty success: it gets its own
+  // state with an explicit retry, not the empty-state copy.
+  const pending = listPending || (decidesEmpty && memoryStatsQuery.isPending);
+  const failed = listFailed || (decidesEmpty && memoryStatsQuery.isError);
+
   const routing = routingQuery.data;
   const everydayBlocked = routing != null && routing.everyday.mode !== "pinned";
   const synthesisBlocked = routing != null && routing.synthesis.mode !== "pinned";
   const needsIntelligence = batches.some((batch) => !batch.complete)
     && (everydayBlocked || synthesisBlocked);
+  // Same blocked check, for the saved-with-no-batches state below.
+  const savedNeedsIntelligence = everydayBlocked || synthesisBlocked;
   const canReportRunning = routing != null && !routingQuery.isError && !needsIntelligence;
   // Batch counters describe queued work, not whether a model can run it.
   const displayPhases = summary.phases.map((phase) => {
@@ -306,6 +318,14 @@ function FirstUseLive({
     t(`importBatch.phases.${phase}`),
   );
   const settled = batches.length > 0 && batches.every((batch) => batch.complete);
+
+  const retry = () => {
+    void routingQuery.refetch();
+    void pagesQuery.refetch();
+    void activeBatchesQuery.refetch();
+    if (batchId) void batchStatusQuery.refetch();
+    if (decidesEmpty) void memoryStatsQuery.refetch();
+  };
 
   return (
     <div data-testid="first-use-live" className="fug-guide">
@@ -407,7 +427,8 @@ function FirstUseLive({
         </section>
       ) : null}
 
-      {!pending && !failed && batches.length === 0 && knowledgePages.length === 0 ? (
+      {!pending && !failed && batches.length === 0 && knowledgePages.length === 0
+      && savedCount === 0 ? (
         <div className="fus-state">
           <p className="fus-section-title">{t("firstUse.live.emptyTitle")}</p>
           <p className="fus-note">{t("firstUse.live.emptyBody")}</p>
@@ -427,6 +448,32 @@ function FirstUseLive({
               {t("firstUse.live.intelligenceAction")}
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {!pending && !failed && batches.length === 0 && knowledgePages.length === 0
+      && savedCount > 0 ? (
+        <div className="fus-state" data-testid="first-use-live-saved">
+          <p className="fus-section-title">{t("firstUse.live.savedTitle")}</p>
+          <p className="fus-note">
+            {t("firstUse.live.savedBody", { count: savedCount })}
+          </p>
+          {savedNeedsIntelligence ? (
+            <>
+              <p className="fus-note" role="status">{t("firstUse.live.needsIntelligence")}</p>
+              <div className="fus-cta-row">
+                <button
+                  type="button"
+                  className="fug-button-secondary"
+                  onClick={onOpenIntelligence}
+                >
+                  {t("firstUse.live.intelligenceAction")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <p className="fus-note">{t("firstUse.live.savedNote")}</p>
+          )}
         </div>
       ) : null}
     </div>
