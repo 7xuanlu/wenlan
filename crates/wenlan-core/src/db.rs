@@ -26279,15 +26279,69 @@ impl MemoryDB {
     /// derived from `docs` here (previously each wrapper re-derived them).
     async fn upsert_documents_with_derived_channels(
         &self,
-        mut docs: Vec<RawDocument>,
+        docs: Vec<RawDocument>,
         episode_enabled_override: Option<bool>,
         fact_enabled_override: Option<bool>,
         enrichment_origin: Option<EnrichmentOrigin>,
         operation_receipt: Option<OperationReceipt<'_>>,
         write_spaces: Option<HashMap<String, crate::space_context::ResolvedWriteSpace>>,
     ) -> Result<usize, WenlanError> {
+        self.upsert_documents_at_optional_page_fence(
+            docs,
+            episode_enabled_override,
+            fact_enabled_override,
+            enrichment_origin,
+            operation_receipt,
+            write_spaces,
+            None,
+        )
+        .await
+        .map(|written| written.unwrap_or(0))
+    }
+
+    /// Stage page-bound rows (a revision card) only while the page they were
+    /// computed from is still that exact row: active, at `expected_version`,
+    /// at the fence's source revision, and of the fence's incarnation. The
+    /// predicate is read inside the same transaction as the insert and the
+    /// optional receipt, so a page edited, re-armed, or deleted and recreated
+    /// under the same id after the caller's snapshot gets no card. Returns
+    /// `Ok(false)` without writing anything when the fence no longer holds.
+    pub(crate) async fn upsert_documents_at_page_fence(
+        &self,
+        docs: Vec<RawDocument>,
+        operation_receipt: Option<OperationReceipt<'_>>,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        self.upsert_documents_at_optional_page_fence(
+            docs,
+            None,
+            None,
+            None,
+            operation_receipt,
+            None,
+            Some((page_id, expected_version, fence)),
+        )
+        .await
+        .map(|written| written.is_some())
+    }
+
+    /// Shared body of the `upsert_documents*` family. `Ok(None)` only when a
+    /// `page_fence` was supplied and did not hold; nothing was written then.
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_documents_at_optional_page_fence(
+        &self,
+        mut docs: Vec<RawDocument>,
+        episode_enabled_override: Option<bool>,
+        fact_enabled_override: Option<bool>,
+        enrichment_origin: Option<EnrichmentOrigin>,
+        operation_receipt: Option<OperationReceipt<'_>>,
+        write_spaces: Option<HashMap<String, crate::space_context::ResolvedWriteSpace>>,
+        page_fence: Option<(&str, i64, &PageFence)>,
+    ) -> Result<Option<usize>, WenlanError> {
         if docs.is_empty() {
-            return Ok(0);
+            return Ok(Some(0));
         }
         let has_memory_docs = docs.iter().any(|doc| doc.source == "memory");
         let episode_enabled =
@@ -26617,7 +26671,7 @@ impl MemoryDB {
         }
 
         if memory_rows.is_empty() {
-            return Ok(0);
+            return Ok(Some(0));
         }
 
         // Generate embeddings for all memory rows
@@ -26651,7 +26705,33 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("begin transaction: {}", e)))?;
 
         let total = memory_rows.len();
-        let transaction_result: Result<(), WenlanError> = async {
+        let transaction_result: Result<bool, WenlanError> = async {
+            if let Some((page_id, expected_version, fence)) = page_fence {
+                let mut rows = conn
+                    .query(
+                        "SELECT 1 FROM pages
+                         WHERE id = ?1 AND status = 'active' AND version = ?2
+                           AND COALESCE(source_revision, 0) = ?3
+                           AND incarnation = ?4",
+                        libsql::params![
+                            page_id,
+                            expected_version,
+                            fence.source_revision,
+                            fence.incarnation.as_str()
+                        ],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("upsert page fence: {e}")))?;
+                let held = rows
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("upsert page fence row: {e}")))?
+                    .is_some();
+                drop(rows);
+                if !held {
+                    return Ok(false);
+                }
+            }
             if let Some(write_spaces) = write_spaces.as_ref() {
                 let mut finalized_names: HashMap<String, Option<String>> = HashMap::new();
                 for (source_id, resolved) in write_spaces {
@@ -27110,17 +27190,28 @@ impl MemoryDB {
                 })?;
             }
 
-            Ok(())
+            Ok(true)
         }
         .await;
 
-        if let Err(error) = transaction_result {
-            if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
-                return Err(WenlanError::VectorDb(format!(
-                    "{error}; rollback failed: {rollback_error}"
-                )));
+        match transaction_result {
+            Ok(true) => {}
+            Ok(false) => {
+                if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                    return Err(WenlanError::VectorDb(format!(
+                        "upsert page fence rollback: {rollback_error}"
+                    )));
+                }
+                return Ok(None);
             }
-            return Err(error);
+            Err(error) => {
+                if let Err(rollback_error) = conn.execute("ROLLBACK", ()).await {
+                    return Err(WenlanError::VectorDb(format!(
+                        "{error}; rollback failed: {rollback_error}"
+                    )));
+                }
+                return Err(error);
+            }
         }
 
         if let Err(error) = conn.execute("COMMIT", ()).await {
@@ -27135,7 +27226,7 @@ impl MemoryDB {
         }
 
         log::info!("[memory_db] upserted {} memories", total);
-        Ok(total)
+        Ok(Some(total))
     }
 
     /// Hybrid search: vector similarity + FTS, combined with Reciprocal Rank Fusion.
@@ -51246,22 +51337,6 @@ impl MemoryDB {
         Ok(results)
     }
 
-    /// Clear the user_edited flag and mark the page stale with reason "manual_force".
-    /// Used by the `/distill rebuild` force path so the next refinery pass regenerates
-    /// the page from sources. The stale_reason ensures the CAS branch of update_page
-    /// can write through afterwards.
-    pub async fn clear_user_edited(&self, page_id: &str) -> Result<(), WenlanError> {
-        let conn = self.conn.lock().await;
-        Self::reject_page_draft_on_conn(&conn, page_id).await?;
-        conn.execute(
-            "UPDATE pages SET user_edited = 0, stale_reason = 'manual_force', refresh_blocked_reason = NULL WHERE id = ?1",
-            libsql::params![page_id],
-        )
-        .await
-        .map_err(|e| WenlanError::VectorDb(format!("clear_user_edited: {e}")))?;
-        Ok(())
-    }
-
     /// List pages, optionally filtered by space.
     pub async fn list_pages_by_space(
         &self,
@@ -51441,6 +51516,7 @@ impl MemoryDB {
             None,
             None,
             false,
+            false,
         )
         .await
         .map(|_| ())
@@ -51474,6 +51550,7 @@ impl MemoryDB {
             None,
             None,
             None,
+            false,
             false,
         )
         .await
@@ -51510,6 +51587,46 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
+        )
+        .await
+    }
+
+    /// User-forced Re-distill write (`POST /api/distill/{id}` and the force
+    /// target of `POST /api/distill`). Lands the new body under the
+    /// source-revision and incarnation fence without requiring the page to be
+    /// stale, and releases `user_edited` and the page's staleness in that same
+    /// UPDATE. Nothing is cleared unless the body lands; authored pages never
+    /// match, and neither does a page deleted and recreated under the same id.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn try_user_forced_page_content_at_source_revision(
+        &self,
+        id: &str,
+        content: &str,
+        source_memory_ids: &[&str],
+        link_reason: &str,
+        changelog: &str,
+        citations_json: Option<&str>,
+        expected_source_revision: i64,
+        expected_incarnation: &str,
+        receipt: Option<OperationReceipt<'_>>,
+    ) -> Result<bool, WenlanError> {
+        self.try_update_page_content(
+            id,
+            content,
+            source_memory_ids,
+            link_reason,
+            false,
+            Some(changelog),
+            citations_json,
+            None,
+            Some(expected_source_revision),
+            Some(expected_incarnation),
+            None,
+            receipt,
+            None,
+            false,
+            true,
         )
         .await
     }
@@ -51556,6 +51673,7 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51589,6 +51707,7 @@ impl MemoryDB {
             None,
             receipt,
             None,
+            false,
             false,
         )
         .await
@@ -51637,6 +51756,7 @@ impl MemoryDB {
             receipt,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51679,6 +51799,7 @@ impl MemoryDB {
             None,
             Some((source_id, expected_memory_version)),
             true,
+            false,
         )
         .await
     }
@@ -51712,6 +51833,7 @@ impl MemoryDB {
             None,
             None,
             false,
+            false,
         )
         .await
     }
@@ -51741,7 +51863,29 @@ impl MemoryDB {
         receipt: Option<OperationReceipt<'_>>,
         page_growth_guard: Option<(&str, i64)>,
         machine_owned_only: bool,
+        user_forced: bool,
     ) -> Result<bool, WenlanError> {
+        // A user-forced rebuild releases edit protection in this UPDATE, so it
+        // only rides the one shape that fences it: a machine changelog write
+        // under a source-revision AND incarnation CAS, with no stale
+        // requirement. The revision alone cannot see a delete-and-recreate
+        // under the same id, which restarts the revision counter.
+        if user_forced
+            && (require_stale
+                || changelog.is_none()
+                || expected_version.is_some()
+                || expected_source_revision.is_none()
+                || expected_incarnation.is_none()
+                || consume_revision_id.is_some()
+                || page_growth_guard.is_some()
+                || machine_owned_only
+                || matches!(link_reason, "manual_edit" | "fs_edit"))
+        {
+            return Err(WenlanError::Validation(
+                "a user-forced page rebuild requires a machine changelog write under a source-revision fence"
+                    .to_string(),
+            ));
+        }
         // Page growth and the citation backfill are the two machine writers
         // that snapshot both counters BEFORE reading evidence, so combining
         // both fences for them is stricter, not looser, than either alone.
@@ -51763,14 +51907,15 @@ impl MemoryDB {
                 "only page growth, citation backfill, and revision accept may combine version and source-revision CAS".to_string(),
             ));
         }
-        // The incarnation fence only rides with a fully fenced changelog
-        // write (the citation backfill's shape): that is the one SQL builder
-        // below that binds it, so accepting it anywhere else would silently
-        // drop the fence.
+        // The incarnation fence only rides with a changelog write under a
+        // source-revision CAS: the citation backfill's fully fenced shape, or
+        // the user-forced rebuild's revision-only shape. Those are the only
+        // SQL bindings below that carry it, so accepting it anywhere else
+        // would silently drop the fence.
         if expected_incarnation.is_some()
-            && (expected_version.is_none()
-                || expected_source_revision.is_none()
-                || changelog.is_none())
+            && (expected_source_revision.is_none()
+                || changelog.is_none()
+                || (expected_version.is_none() && !user_forced))
         {
             return Err(WenlanError::Validation(
                 "the page incarnation fence requires version, source-revision, and changelog"
@@ -51879,7 +52024,30 @@ impl MemoryDB {
         }
         let affected = if let Some(cl) = changelog {
             // Changelog-aware variant: write changelog atomically with content.
-            let mut sql = if require_stale {
+            let mut sql = if user_forced {
+                // User-forced rebuild: the new body, `user_edited = 0`, and the
+                // consumed staleness land together or not at all. There is no
+                // `user_edited = 0` guard; the source-revision fence appended
+                // below is what stops a human edit that landed mid-generation
+                // from being overwritten. Authored pages never take this path.
+                "UPDATE pages SET \
+                   content = ?1, \
+                   source_memory_ids = ?2, \
+                   version = version + 1, \
+                   last_compiled = ?3, \
+                   last_modified = ?3, \
+                   user_edited = 0, \
+                   review_status = CASE WHEN ?4 IN ('manual_edit', 'fs_edit') THEN 'unconfirmed' ELSE review_status END, \
+                   changelog = ?6, \
+                   citations = ?7, \
+                   stale_reason = NULL, \
+                   refresh_blocked_reason = NULL, \
+                   sources_updated_count = 0, \
+                   source_revision = COALESCE(source_revision, 0) + 1 \
+                 WHERE id = ?5 \
+                   AND status = 'active' \
+                   AND COALESCE(creation_kind, 'distilled') <> 'authored'"
+            } else if require_stale {
                 "UPDATE pages SET \
                    content = ?1, \
                    source_memory_ids = ?2, \
@@ -51940,7 +52108,11 @@ impl MemoryDB {
                 }
             }
             if expected_incarnation.is_some() {
-                sql.push_str(" AND incarnation = ?10");
+                if expected_version.is_some() {
+                    sql.push_str(" AND incarnation = ?10");
+                } else {
+                    sql.push_str(" AND incarnation = ?9");
+                }
             }
             let update_result = match (expected_version, expected_source_revision) {
                 (Some(version), None) => {
@@ -51959,22 +52131,41 @@ impl MemoryDB {
                     )
                     .await
                 }
-                (None, Some(revision)) => {
-                    conn.execute(
-                        &sql,
-                        libsql::params![
-                            content,
-                            source_ids_json,
-                            now,
-                            link_reason,
-                            id,
-                            cl,
-                            citations_bind,
-                            revision
-                        ],
-                    )
-                    .await
-                }
+                (None, Some(revision)) => match expected_incarnation {
+                    Some(incarnation) => {
+                        conn.execute(
+                            &sql,
+                            libsql::params![
+                                content,
+                                source_ids_json,
+                                now,
+                                link_reason,
+                                id,
+                                cl,
+                                citations_bind,
+                                revision,
+                                incarnation
+                            ],
+                        )
+                        .await
+                    }
+                    None => {
+                        conn.execute(
+                            &sql,
+                            libsql::params![
+                                content,
+                                source_ids_json,
+                                now,
+                                link_reason,
+                                id,
+                                cl,
+                                citations_bind,
+                                revision
+                            ],
+                        )
+                        .await
+                    }
+                },
                 (None, None) => {
                     conn.execute(
                         &sql,
@@ -52158,6 +52349,7 @@ impl MemoryDB {
             }
         };
         if (require_stale
+            || user_forced
             || expected_version.is_some()
             || expected_source_revision.is_some()
             || consume_revision_id.is_some()
@@ -56434,6 +56626,43 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// [`Self::set_page_refresh_blocked_reason`] fenced to the compile input
+    /// the discarded refresh started from: the marker lands only while the
+    /// page is still active at the captured `fence`. Every canonical page
+    /// write and every mark-stale site advances `source_revision` and clears
+    /// the marker, so a generation that raced one of them cannot pin its
+    /// obsolete discard on the newer state and pause that state's retry. The
+    /// incarnation catches the one change the revision cannot: the page
+    /// deleted and recreated under the same id, which restarts the revision.
+    /// Staleness is not required: a user-forced refresh may start on a fresh
+    /// page. Returns whether the marker was written.
+    pub async fn set_page_refresh_blocked_reason_at_fence(
+        &self,
+        page_id: &str,
+        reason: &str,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE pages SET refresh_blocked_reason = ?1
+                 WHERE id = ?2 AND status = 'active'
+                   AND COALESCE(source_revision, 0) = ?3
+                   AND incarnation = ?4",
+                libsql::params![
+                    reason,
+                    page_id,
+                    fence.source_revision,
+                    fence.incarnation.as_str()
+                ],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("set_page_refresh_blocked_reason_at_fence: {e}"))
+            })?;
+        Ok(affected == 1)
+    }
+
     /// Monotonic compile-input token for page synthesis. It advances whenever
     /// the source set or source content is invalidated and never resets when
     /// pending staleness is acknowledged.
@@ -56625,6 +56854,131 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("acknowledge_page_compile commit: {e}")))?;
         Ok(acknowledged)
+    }
+
+    /// [`Self::acknowledge_page_compile`] and
+    /// [`Self::acknowledge_page_compile_with_receipt`] under the full page
+    /// fence: the exact version, the captured source revision, and the row
+    /// incarnation, so an identical-body result computed for a page that was
+    /// deleted and recreated under the same id cannot clear the replacement's
+    /// staleness or refresh marker. The receipt, when present, commits in the
+    /// same transaction and only if the acknowledgement matched.
+    pub(crate) async fn acknowledge_page_compile_at_fence(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+        receipt: Option<OperationReceipt<'_>>,
+    ) -> Result<bool, WenlanError> {
+        const SQL: &str = "UPDATE pages
+             SET last_compiled = ?1, stale_reason = NULL, refresh_blocked_reason = NULL, sources_updated_count = 0
+             WHERE id = ?2 AND version = ?3 AND stale_reason IS NOT NULL
+               AND COALESCE(source_revision, 0) = ?4
+               AND incarnation = ?5";
+        let now = chrono::Utc::now().to_rfc3339();
+        let conn = self.conn.lock().await;
+        let Some(receipt) = receipt else {
+            let affected = conn
+                .execute(
+                    SQL,
+                    libsql::params![
+                        now,
+                        page_id,
+                        expected_version,
+                        fence.source_revision,
+                        fence.incarnation.as_str()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence: {e}"))
+                })?;
+            return Ok(affected == 1);
+        };
+        conn.execute("BEGIN", ()).await.map_err(|e| {
+            WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence begin: {e}"))
+        })?;
+        let result = async {
+            let affected = conn
+                .execute(
+                    SQL,
+                    libsql::params![
+                        now,
+                        page_id,
+                        expected_version,
+                        fence.source_revision,
+                        fence.incarnation.as_str()
+                    ],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence: {e}"))
+                })?;
+            if affected == 0 {
+                return Ok(false);
+            }
+            conn.execute(
+                "INSERT INTO operation_receipts \
+                   (caller_id, operation_id, request_digest, response, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                libsql::params![
+                    receipt.caller_id,
+                    receipt.operation_id,
+                    receipt.request_digest,
+                    receipt.response,
+                    chrono::Utc::now().timestamp()
+                ],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::Conflict(format!(
+                    "operation id '{}' for '{}' was already used: {e}",
+                    receipt.operation_id, receipt.caller_id
+                ))
+            })?;
+            Ok(true)
+        }
+        .await;
+        let acknowledged = match result {
+            Ok(acknowledged) => acknowledged,
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                return Err(error);
+            }
+        };
+        commit_or_rollback(&conn).await.map_err(|e| {
+            WenlanError::VectorDb(format!("acknowledge_page_compile_at_fence commit: {e}"))
+        })?;
+        Ok(acknowledged)
+    }
+
+    /// [`Self::clear_page_staleness_at_source_revision`] under the full page
+    /// fence (version, source revision, and incarnation), for the user-forced
+    /// rebuild that staged a card from a snapshot of one exact row.
+    pub(crate) async fn clear_page_staleness_at_fence(
+        &self,
+        page_id: &str,
+        expected_version: i64,
+        fence: &PageFence,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        let affected = conn
+            .execute(
+                "UPDATE pages
+                 SET stale_reason = NULL, refresh_blocked_reason = NULL, sources_updated_count = 0
+                 WHERE id = ?1 AND version = ?2 AND stale_reason IS NOT NULL
+                   AND COALESCE(source_revision, 0) = ?3
+                   AND incarnation = ?4",
+                libsql::params![
+                    page_id,
+                    expected_version,
+                    fence.source_revision,
+                    fence.incarnation.as_str()
+                ],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("clear_page_staleness_at_fence: {e}")))?;
+        Ok(affected == 1)
     }
 
     /// Clear a human-owned page's queued stale item after its review card was
@@ -56876,6 +57230,31 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("update_page_summary: {e}")))?;
         Ok(())
+    }
+
+    /// [`Self::update_page_summary`] for the row generation a fenced refresh
+    /// just wrote: a page deleted and recreated under the same id after that
+    /// write keeps its own summary. Returns whether the summary was written.
+    pub(crate) async fn update_page_summary_at_incarnation(
+        &self,
+        page_id: &str,
+        summary: Option<&str>,
+        expected_incarnation: &str,
+    ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        Self::reject_page_draft_on_conn(&conn, page_id).await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let affected = conn
+            .execute(
+                "UPDATE pages SET summary = ?1, last_modified = ?2
+                 WHERE id = ?3 AND incarnation = ?4",
+                libsql::params![summary, now, page_id, expected_incarnation],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("update_page_summary_at_incarnation: {e}"))
+            })?;
+        Ok(affected == 1)
     }
 
     /// Read the current `stale_reason` for a page without loading the rest

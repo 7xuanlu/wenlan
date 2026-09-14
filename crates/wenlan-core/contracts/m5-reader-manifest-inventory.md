@@ -1163,6 +1163,7 @@ carrying the authority of agreement.
 | `core/db.rs::try_update_page_content_with_changelog_at_version` | `pub` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db.rs::try_update_page_content_with_changelog_at_versions` | `pub` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db.rs::try_update_page_growth_at_versions` | `pub` | no | no | — | `core/db.rs::try_update_page_content` |
+| `core/db.rs::try_user_forced_page_content_at_source_revision` | `pub(crate)` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db.rs::update_page_content` | `pub` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db/claim_derivation.rs::run_page_linked_truth_promotion_turn` | `pub` | no | **yes** | `server/main/runtime.rs::register_optional_runtime_workers` | `core/db/claim_derivation.rs::run_leased_page_linked_truth_promotion` |
 | `core/db/presence_review.rs::review_page_with_presence` | `pub` | no | **yes** | `server/page_routes.rs::handle_review_page` | `core/db/presence_review.rs::review_in_txn` |
