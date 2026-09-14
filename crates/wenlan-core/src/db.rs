@@ -43082,13 +43082,14 @@ impl MemoryDB {
 
     /// Count agent connections that have recorded at least one memory write.
     /// Used to detect when a second agent starts contributing (the
-    /// `second-agent` milestone fires at ≥2).
+    /// `second-agent` milestone fires at ≥2). The setup wizard's probe agent
+    /// is not a contributing agent and is excluded.
     pub async fn count_agents_with_writes(&self) -> Result<i64, WenlanError> {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT COUNT(*) FROM agent_connections WHERE memory_count >= 1",
-                (),
+                "SELECT COUNT(*) FROM agent_connections WHERE memory_count >= 1 AND name != ?1",
+                libsql::params![crate::onboarding::SETUP_PROBE_AGENT],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("count_agents_with_writes query: {}", e)))?;
