@@ -45,7 +45,10 @@ function makeBatch(overrides: Record<string, unknown> = {}) {
     updated_at: 1_700_000_100,
     chunks_received: 1,
     memories_imported: 3,
-    memories_skipped: 1,
+    // The daemon always reports this as 0 (db.rs: not recoverable from the
+    // database after the fact); the summary reads the chunk responses
+    // instead, so the default here matches what a real batch poll returns.
+    memories_skipped: 0,
     entities_detected: 4,
     entities_established: 2,
     pages_distilled: 7,
@@ -302,6 +305,47 @@ describe("ImportView", () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/idle and has enough resources/)).not.toBeInTheDocument();
     expect(screen.queryByText(/keep climbing/)).not.toBeInTheDocument();
+  });
+
+  it("uses singular copy for one memory and keeps the real skipped count through the status poll", async () => {
+    (importMemories as ReturnType<typeof vi.fn>).mockResolvedValue(
+      chunkResult({ imported: 1, skipped: 2, breakdown: { fact: 1 } }),
+    );
+    // The daemon's batch status always reports memories_skipped as 0; the
+    // real count from the chunk response must survive this poll landing.
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ memories_imported: 1 }),
+    );
+
+    renderImport();
+    startImport("Memory 1");
+
+    await waitFor(() => {
+      expect(screen.getByText("1 memory imported from ChatGPT")).toBeInTheDocument();
+    });
+    expect(screen.getByText(/2 skipped/i)).toBeInTheDocument();
+  });
+
+  it("sums skipped counts across every chunk response in the summary", async () => {
+    // 600 lines at a 500-line chunk size is two uploads; each chunk reports
+    // its own parse-time and duplicate drops, and the summary must add them.
+    (importMemories as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(chunkResult({ imported: 498, skipped: 2, breakdown: { fact: 498 } }))
+      .mockResolvedValueOnce(chunkResult({ imported: 97, skipped: 3, breakdown: { fact: 97 } }));
+    // The batch poll reports memories_skipped as 0, as the daemon does.
+    (getImportBatchStatus as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeBatch({ complete: true, chunks_received: 2, memories_imported: 595 }),
+    );
+
+    renderImport();
+    startImport(Array.from({ length: 600 }, (_, i) => `Memory ${i}`).join("\n"));
+
+    await waitFor(() => {
+      expect(screen.getByText("595 memories imported from ChatGPT")).toBeInTheDocument();
+    });
+    expect(importMemories).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(/^5 skipped/)).toBeInTheDocument();
+    expect(screen.queryByText(/^[23] skipped/)).not.toBeInTheDocument();
   });
 
   it("waits for Store before claiming anything is searchable", async () => {
