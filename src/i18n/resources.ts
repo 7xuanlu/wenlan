@@ -726,6 +726,7 @@ const en = {
     saveShortcut: "⌘⏎ save",
     saved: "Saved",
     save: "Save",
+    saveError: "Couldn't save: {{message}}",
   },
   toast: {
     clipboard: "Clipboard",
@@ -2697,6 +2698,7 @@ const zhHans = {
     saveShortcut: "⌘⏎ 保存",
     saved: "已保存",
     save: "保存",
+    saveError: "保存失败：{{message}}",
   },
   toast: {
     clipboard: "剪贴板",
@@ -4641,6 +4643,7 @@ const zhHant = {
     saveShortcut: "⌘⏎ 儲存",
     saved: "已儲存",
     save: "儲存",
+    saveError: "儲存失敗：{{message}}",
   },
   toast: {
     clipboard: "剪貼簿",
