@@ -286,6 +286,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
     dialog?.kind === "source" && dialog.citationId ? citationById(dialog.citationId) : undefined;
 
   const commands = data.commands[client];
+  const handoffCommand = commands.handoff;
   const clientTabs: Array<{ id: SampleClient; label: string }> = [
     { id: "chatgpt", label: t("firstUse.sample.clientChatgpt") },
     { id: "codex", label: t("firstUse.sample.clientCodex") },
@@ -463,35 +464,45 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
             </div>
             <ul className="fus-secondary-commands">
               <li>
-                <div>
-                  <code>{commands.handoff}</code>
-                  <span>
-                    {t("firstUse.sample.handoffLabel")} — {t("firstUse.sample.handoffHint")}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  className="fus-icon-button"
-                  onClick={() => copyCommand("handoff", commands.handoff)}
-                  aria-label={t("firstUse.sample.copyCommand")}
-                >
-                  {copiedKey === "handoff" ? (
-                    <Check aria-hidden="true" weight="bold" data-testid="copy-ok" />
-                  ) : (
-                    <Copy aria-hidden="true" weight="regular" />
-                  )}
-                </button>
-                {copyFailedKey === "handoff" ? (
-                  <p role="alert" className="fus-copy-error">
-                    {t("firstUse.sample.copyFailed")}
-                  </p>
-                ) : null}
+                {handoffCommand != null ? (
+                  <>
+                    <div>
+                      <code>{handoffCommand}</code>
+                      <span>
+                        {t("firstUse.sample.handoffLabel")}. {t("firstUse.sample.handoffHint")}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      className="fus-icon-button"
+                      onClick={() => copyCommand("handoff", handoffCommand)}
+                      aria-label={t("firstUse.sample.copyCommand")}
+                    >
+                      {copiedKey === "handoff" ? (
+                        <Check aria-hidden="true" weight="bold" data-testid="copy-ok" />
+                      ) : (
+                        <Copy aria-hidden="true" weight="regular" />
+                      )}
+                    </button>
+                    {copyFailedKey === "handoff" ? (
+                      <p role="alert" className="fus-copy-error">
+                        {t("firstUse.sample.copyFailed")}
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <div>
+                    <span>
+                      {t("firstUse.sample.handoffLabel")}. {t("firstUse.sample.handoffReadOnlyNote")}
+                    </span>
+                  </div>
+                )}
               </li>
               <li>
                 <div>
                   <code>{commands.brief}</code>
                   <span>
-                    {t("firstUse.sample.briefLabel")} — {t("firstUse.sample.briefHint")}
+                    {t("firstUse.sample.briefLabel")}. {t("firstUse.sample.briefHint")}
                   </span>
                 </div>
                 <button

@@ -44,7 +44,11 @@ describe("sample dataset integrity", () => {
     expect(codex.recall.startsWith("/recall")).toBe(true);
     expect(claude.recall.startsWith("/recall")).toBe(true);
     expect(chatgpt.recall).not.toBe(codex.recall);
-    for (const commands of [chatgpt, codex, claude]) {
+    // The ChatGPT web connector cannot write, so it offers no handoff command.
+    expect(chatgpt.handoff).toBeNull();
+    expect(chatgpt.recall).toBeTruthy();
+    expect(chatgpt.brief).toBeTruthy();
+    for (const commands of [codex, claude]) {
       expect(commands.recall).toBeTruthy();
       expect(commands.handoff).toBeTruthy();
       expect(commands.brief).toBeTruthy();

@@ -911,7 +911,7 @@ describe("HomePage redesign", () => {
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText("Existing memory")).toBeInTheDocument();
-    expect(within(dialog).getByText("New memory — newer")).toBeInTheDocument();
+    expect(within(dialog).getByText("Newer memory")).toBeInTheDocument();
     // Existing pane keeps the old wording; the new pane shows the replacement.
     await within(dialog).findByText(/SQLite/);
     await within(dialog).findByText(/redb/);

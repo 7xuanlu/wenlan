@@ -165,7 +165,7 @@ describe("OnDeviceModelCard", () => {
         <OnDeviceModelCard />
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("Model catalog unavailable — check your connection.")).toBeInTheDocument();
+    expect(await screen.findByText("Model catalog unavailable. Check your connection.")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 

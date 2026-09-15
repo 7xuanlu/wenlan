@@ -287,6 +287,17 @@ describe("FirstUseSample AI-use panel", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows a read-only note instead of a handoff command for ChatGPT", () => {
+    renderSample();
+    openAiPanel();
+    expect(
+      screen.getByText(/ChatGPT can read your memories here but cannot write them back/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/note today's decisions/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.getByText("/handoff")).toBeInTheDocument();
+  });
+
   it("reports a clipboard copy as copied", async () => {
     renderSample();
     openAiPanel();
@@ -319,6 +330,8 @@ describe("FirstUseSample AI-use panel", () => {
     );
     renderSample();
     openAiPanel();
+    // ChatGPT offers no handoff command to copy, so run this against Codex.
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const panel = screen.getByRole("tabpanel");
     fireEvent.click(
       within(panel).getByRole("button", { name: "Copy command" }),

@@ -1035,7 +1035,7 @@ describe("SetupWizard", () => {
     expect(screen.queryByText(/^Memories will appear/i)).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Use your AI tools normally. As they work, Wenlan turns what they learn into source-cited pages — and keeps the memories behind them. You can always return to Settings to connect more tools.",
+        "Use your AI tools normally. As they work, Wenlan turns what they learn into source-cited pages and keeps the memories behind them. You can always return to Settings to connect more tools.",
       ),
     ).toBeInTheDocument();
     expect(
@@ -2075,7 +2075,7 @@ describe("SetupWizard", () => {
     expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
     expect(
       screen.queryByText(
-        "Couldn't remove the test memory — you can delete it from your knowledge base.",
+        "Couldn't remove the test memory. You can delete it from your knowledge base.",
       ),
     ).not.toBeInTheDocument();
   });
@@ -2098,7 +2098,7 @@ describe("SetupWizard", () => {
     expect(screen.queryByText("delete failed")).not.toBeInTheDocument();
 
     const warningText =
-      "Couldn't remove the test memory — you can delete it from your knowledge base.";
+      "Couldn't remove the test memory. You can delete it from your knowledge base.";
     await waitFor(() => {
       expect(screen.getByText(warningText)).toBeInTheDocument();
     });
