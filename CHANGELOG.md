@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.18.9](https://github.com/7xuanlu/wenlan/compare/v0.18.8...v0.18.9) (2026-09-15)
+
+
+### Bug Fixes
+
+* **app:** fail the boot gate closed when the background service is down, even while the window is hidden ([#756](https://github.com/7xuanlu/wenlan/issues/756)) ([413e18a](https://github.com/7xuanlu/wenlan/commit/413e18a2f81d2b9dfe2ba7d6653038bff775b91d))
+* **ingest:** gate quick capture at ten characters like the memory store route ([#754](https://github.com/7xuanlu/wenlan/issues/754)) ([dd73953](https://github.com/7xuanlu/wenlan/commit/dd73953ad484c6ac1a5d73ad69799232a66a7b91))
+* **onboard:** say configured, not connected, and write copy without em-dashes ([#755](https://github.com/7xuanlu/wenlan/issues/755)) ([7f1f0c2](https://github.com/7xuanlu/wenlan/commit/7f1f0c2c81c8099b1d788ee5681f81b8305c1ada))
+
 ## [0.18.8](https://github.com/7xuanlu/wenlan/compare/v0.18.7...v0.18.8) (2026-09-15)
 
 
