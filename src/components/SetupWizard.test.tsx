@@ -2395,10 +2395,27 @@ describe("SetupWizard", () => {
     expect(screen.queryByTestId("welcome-connection-problem")).not.toBeInTheDocument();
   });
 
-  it("carries the connection problem onto the daemon row", async () => {
+  it("carries the connection problem onto the daemon row while it is still down", async () => {
+    (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
+      daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
+      mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+      clients: [],
+    });
     renderWizard({ initialStep: "setting-up", daemonGateErrored: true });
 
-    expect(await screen.findByTestId("daemon-gate-problem")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+    });
+    expect(screen.getByTestId("daemon-gate-problem")).toBeInTheDocument();
+  });
+
+  it("drops the gate problem once the daemon row has answered", async () => {
+    renderWizard({ initialStep: "setting-up", daemonGateErrored: true });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
+    });
+    expect(screen.queryByTestId("daemon-gate-problem")).not.toBeInTheDocument();
   });
 
   it("shows no gate problem on the daemon row when the gate answered", async () => {

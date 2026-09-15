@@ -1793,8 +1793,9 @@ function SettingUpStep({
                     </p>
                     {/* The gate never got an answer during boot. Say that
                         here, above the row that is about to try again, rather
-                        than letting the user read a generic "Setting up". */}
-                    {row.kind === "daemon" && daemonGateErrored && (
+                        than letting the user read a generic "Setting up". Once
+                        the row has answered the problem is over, so drop it. */}
+                    {row.kind === "daemon" && daemonGateErrored && !isDone && (
                       <p
                         data-testid="daemon-gate-problem"
                         style={{
