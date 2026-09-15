@@ -13,6 +13,19 @@ const en = {
     close: "Close",
     startingRuntime: "Starting the local runtime…",
   },
+  boot: {
+    stillWaiting: "Still waiting for Wenlan's background service to answer.",
+    connectionTitle: "Could not reach the background service",
+    connectionProblem:
+      "Wenlan could not reach its background service while starting up.",
+    fallbackBanner:
+      "Wenlan is running without its background service. Memories will not sync until it starts.",
+    startService: "Start the service",
+    starting: "Starting…",
+    startFailed: "Wenlan could not start its background service.",
+    startNotReachable: "The service still is not answering.",
+    dismiss: "Dismiss",
+  },
   setup: {
     welcomeTitle: "Welcome to Wenlan",
     tagline: "A living knowledge base your AI tools build as they work.",
@@ -104,6 +117,19 @@ const en = {
       importSub: "Importing {{name}}.",
       importDoneSub: "{{ingested}} indexed, {{skipped}} skipped",
       retry: "Retry",
+      startService: "Start the service",
+      startingService: "Starting…",
+      startServiceFailed: "Wenlan could not start its background service.",
+      statusStalled: "Download stalled",
+      modelStalledSub:
+        "The download stopped making progress. Retry to pick it up again.",
+    },
+    errors: {
+      connection: "Wenlan could not reach its background service.",
+      timeout: "This took too long, so Wenlan stopped waiting.",
+      permission: "Wenlan was not allowed to do this.",
+      disk: "There is not enough room on this disk.",
+      unknown: "Something went wrong here.",
     },
     done: {
       readyTitle: "Wenlan is ready.",
@@ -1773,6 +1799,9 @@ const en = {
       allAlreadyImported:
         "All {{count}} conversations already imported{{stageSuffix}}",
       refining: "{{count}} {{vendor}} conversations · {{stage}}",
+      retry: "Retry",
+      statusUnavailable:
+        "Wenlan lost track of this import. It may still be running in the background.",
     },
     stage: {
       parsing: "reading archive",
@@ -2011,6 +2040,18 @@ const zhHans = {
     close: "关闭",
     startingRuntime: "正在启动本地运行时…",
   },
+  boot: {
+    stillWaiting: "仍在等待文澜的后台服务响应。",
+    connectionTitle: "无法连接到后台服务",
+    connectionProblem: "启动时文澜无法连接到后台服务。",
+    fallbackBanner:
+      "文澜正在没有后台服务的情况下运行。在服务启动之前，记忆不会同步。",
+    startService: "启动服务",
+    starting: "正在启动…",
+    startFailed: "文澜无法启动后台服务。",
+    startNotReachable: "服务仍然没有响应。",
+    dismiss: "关闭",
+  },
   setup: {
     welcomeTitle: "欢迎使用文澜",
     tagline: "一个由你的 AI 工具在工作中不断构建的活知识库。",
@@ -2094,6 +2135,18 @@ const zhHans = {
       importSub: "正在导入 {{name}}。",
       importDoneSub: "已索引 {{ingested}} 项，跳过 {{skipped}} 项",
       retry: "重试",
+      startService: "启动服务",
+      startingService: "正在启动…",
+      startServiceFailed: "文澜无法启动后台服务。",
+      statusStalled: "下载已停滞",
+      modelStalledSub: "下载已停滞，没有新的进度。重试可从断点继续。",
+    },
+    errors: {
+      connection: "文澜无法连接到后台服务。",
+      timeout: "等待时间过长，文澜已停止等待。",
+      permission: "文澜没有权限执行这项操作。",
+      disk: "这块磁盘的可用空间不足。",
+      unknown: "这一步出了问题。",
     },
     done: {
       readyTitle: "文澜已准备好。",
@@ -3722,6 +3775,9 @@ const zhHans = {
       allAlreadyImported:
         "全部 {{count}} 个对话都已导入过{{stageSuffix}}",
       refining: "{{count}} 个 {{vendor}} 对话 · {{stage}}",
+      retry: "重试",
+      statusUnavailable:
+        "文澜无法获取这次导入的状态，它可能仍在后台运行。",
     },
     stage: {
       parsing: "读取压缩包",
@@ -3955,6 +4011,18 @@ const zhHant = {
     close: "關閉",
     startingRuntime: "正在啟動本機執行時…",
   },
+  boot: {
+    stillWaiting: "仍在等待文瀾的背景服務回應。",
+    connectionTitle: "無法連線到背景服務",
+    connectionProblem: "啟動時文瀾無法連線到背景服務。",
+    fallbackBanner:
+      "文瀾正在沒有背景服務的情況下執行。在服務啟動之前，記憶不會同步。",
+    startService: "啟動服務",
+    starting: "正在啟動…",
+    startFailed: "文瀾無法啟動背景服務。",
+    startNotReachable: "服務仍然沒有回應。",
+    dismiss: "關閉",
+  },
   setup: {
     welcomeTitle: "歡迎使用文瀾",
     tagline: "一個由你的 AI 工具在工作中不斷建立的活知識庫。",
@@ -4038,6 +4106,18 @@ const zhHant = {
       importSub: "正在匯入 {{name}}。",
       importDoneSub: "已索引 {{ingested}} 項，跳過 {{skipped}} 項",
       retry: "重試",
+      startService: "啟動服務",
+      startingService: "正在啟動…",
+      startServiceFailed: "文瀾無法啟動背景服務。",
+      statusStalled: "下載已停滯",
+      modelStalledSub: "下載已停滯，沒有新的進度。重試可從斷點繼續。",
+    },
+    errors: {
+      connection: "文瀾無法連線到背景服務。",
+      timeout: "等待時間過長，文瀾已停止等待。",
+      permission: "文瀾沒有權限執行這項操作。",
+      disk: "這個磁碟的可用空間不足。",
+      unknown: "這一步出了問題。",
     },
     done: {
       readyTitle: "文瀾已準備好。",
@@ -5666,6 +5746,9 @@ const zhHant = {
       allAlreadyImported:
         "全部 {{count}} 個對話都已匯入過{{stageSuffix}}",
       refining: "{{count}} 個 {{vendor}} 對話 · {{stage}}",
+      retry: "重試",
+      statusUnavailable:
+        "文瀾無法取得這次匯入的狀態，它可能仍在背景執行。",
     },
     stage: {
       parsing: "讀取壓縮檔",
