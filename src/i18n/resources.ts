@@ -753,6 +753,7 @@ const en = {
     saved: "Saved",
     save: "Save",
     saveError: "Couldn't save: {{message}}",
+    tooShort: "Write at least 10 characters before saving.",
   },
   toast: {
     clipboard: "Clipboard",
@@ -2758,6 +2759,7 @@ const zhHans = {
     saved: "已保存",
     save: "保存",
     saveError: "保存失败：{{message}}",
+    tooShort: "请至少输入 10 个字再保存。",
   },
   toast: {
     clipboard: "剪贴板",
@@ -4736,6 +4738,7 @@ const zhHant = {
     saved: "已儲存",
     save: "儲存",
     saveError: "儲存失敗：{{message}}",
+    tooShort: "請至少輸入 10 個字再儲存。",
   },
   toast: {
     clipboard: "剪貼簿",

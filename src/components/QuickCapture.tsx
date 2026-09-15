@@ -15,6 +15,7 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
   const { t } = useTranslation();
   const [content, setContent] = useState("");
   const [saved, setSaved] = useState(false);
+  const [tooShort, setTooShort] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
 
@@ -44,6 +45,10 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
 
   const handleSubmit = () => {
     if (!content.trim() || captureMutation.isPending) return;
+    if (Array.from(content.trim()).length < 10) {
+      setTooShort(true);
+      return;
+    }
     captureMutation.mutate({ content: content.trim() });
   };
 
@@ -184,7 +189,10 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
         <textarea
           ref={textareaRef}
           value={content}
-          onChange={(e) => setContent(e.target.value)}
+          onChange={(e) => {
+            setContent(e.target.value);
+            setTooShort(false);
+          }}
           placeholder={t("quickCapture.placeholder")}
           rows={standalone ? undefined : 7}
           className={`w-full bg-transparent focus:outline-none resize-none pt-3 ${standalone ? "flex-1" : ""}`}
@@ -199,7 +207,7 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
           disabled={isPending || saved}
         />
 
-        {errorMessage && (
+        {(errorMessage || tooShort) && (
           <p
             role="alert"
             style={{
@@ -211,7 +219,9 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
               overflowWrap: "anywhere",
             }}
           >
-            {t("quickCapture.saveError", { message: errorMessage })}
+            {tooShort
+              ? t("quickCapture.tooShort")
+              : t("quickCapture.saveError", { message: errorMessage })}
           </p>
         )}
 

@@ -216,6 +216,13 @@ async fn handle_ingest_memory_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestMemoryRequest>,
 ) -> Result<Json<IngestResponse>, ServerError> {
+    let trimmed_content = req.content.trim();
+    if trimmed_content.chars().count() < 10 {
+        return Err(ServerError::ValidationError(
+            "Memory content must be at least 10 characters".into(),
+        ));
+    }
+
     let document_id = req.source_id.clone();
 
     let mut metadata = req.metadata.unwrap_or_default();
@@ -274,4 +281,83 @@ pub async fn handle_delete_document(
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     Ok(Json(DeleteResponse { deleted: true }))
+}
+
+#[cfg(test)]
+mod content_length_gate_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    async fn empty_state() -> (Arc<RwLock<ServerState>>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            ..ServerState::default()
+        }));
+        (state, tmp)
+    }
+
+    fn ingest_request(content: &str) -> IngestMemoryRequest {
+        IngestMemoryRequest {
+            source: "memory".to_string(),
+            source_id: "mem_length_gate".to_string(),
+            title: "length gate test".to_string(),
+            content: content.to_string(),
+            url: None,
+            tags: None,
+            metadata: None,
+        }
+    }
+
+    /// 9 ASCII characters must still be rejected by the minimum-length gate.
+    #[tokio::test]
+    async fn nine_ascii_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result =
+            handle_ingest_memory_inner(State(state), Json(ingest_request("123456789"))).await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+    }
+
+    /// 10 Chinese characters is the same "10" floor as ASCII once the gate
+    /// counts `chars()` instead of UTF-8 bytes (each CJK char is 3 bytes, so
+    /// the old byte-length gate would have passed this at just 4 characters).
+    #[tokio::test]
+    async fn ten_chinese_chars_are_accepted() {
+        let (state, _tmp) = empty_state().await;
+        let result =
+            handle_ingest_memory_inner(State(state), Json(ingest_request("今天天氣非常晴朗好啊")))
+                .await;
+        assert!(
+            result.is_ok(),
+            "10-char CJK content should clear the length floor: {result:?}"
+        );
+    }
+
+    /// 4 Chinese characters must still be rejected: under the old byte-length
+    /// gate (`content.len() < 10`) this would have passed at 12 UTF-8 bytes.
+    #[tokio::test]
+    async fn four_chinese_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result =
+            handle_ingest_memory_inner(State(state), Json(ingest_request("你好嗎呀"))).await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+    }
+
+    /// 9 Chinese characters is 27 UTF-8 bytes: the old byte-length gate
+    /// (`content.len() < 10`) would have wrongly accepted this at 27 >= 10.
+    /// The char-counting gate must still reject it at 9 < 10.
+    #[tokio::test]
+    async fn nine_chinese_chars_are_rejected() {
+        let (state, _tmp) = empty_state().await;
+        let result =
+            handle_ingest_memory_inner(State(state), Json(ingest_request("今天天氣非常晴朗好")))
+                .await;
+        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+    }
 }
