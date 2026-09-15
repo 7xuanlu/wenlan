@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { fillUnsetPinsWithRetry, type PinFill } from "./routingPins";
 import { shouldShowWizard } from "./tauri";
 
@@ -51,12 +52,34 @@ export async function fillUnsetPinsAtLaunch(): Promise<PinFill | null> {
     console.error("routing: could not read setup status before the launch pin fill", e);
     return null;
   }
-  return fillUnsetPinsWithRetry();
+  const filled = await fillUnsetPinsWithRetry();
+  if (filled === null) {
+    // Nothing was filled, because every attempt failed or this daemon has no
+    // routing endpoint. Release the latch: a daemon that happens to be down
+    // during these few seconds would otherwise disable the fill for the whole
+    // session, which is the stranded state this exists to prevent. On a daemon
+    // with no routing endpoint the only cost is one more routing read if the
+    // shell ever remounts.
+    launchFillStarted = false;
+  }
+  return filled;
 }
 
-/** Mount-once wrapper for `fillUnsetPinsAtLaunch`. */
+/** Mount-once wrapper for `fillUnsetPinsAtLaunch`.
+ *
+ *  Invalidates the routing query when the fill actually wrote a pin. Home reads
+ *  routing to decide between "pages are coming" and "choose a model", and its
+ *  read happens at mount, before this write lands. Without the invalidation the
+ *  user sits looking at "choose a model" until something else refetches, which
+ *  is the exact first paint this fill exists to fix. Nothing written means
+ *  nothing went stale, so that case skips the refetch. */
 export function useLaunchPinFill(): void {
+  const queryClient = useQueryClient();
   useEffect(() => {
-    void fillUnsetPinsAtLaunch();
-  }, []);
+    void fillUnsetPinsAtLaunch().then((filled) => {
+      if (filled && (filled.written.everyday !== null || filled.written.synthesis !== null)) {
+        void queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });
+      }
+    });
+  }, [queryClient]);
 }

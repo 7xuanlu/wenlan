@@ -499,13 +499,19 @@ export async function getResolvedRouting(): Promise<ResolvedRouting | null> {
 // onlyIfUnset makes a fill-the-blanks write atomic on the daemon: a named pin
 // lands only on a job that holds none. Pass it whenever the pins being sent came
 // from an earlier routing read, so a pin the user chose since that read wins.
-// Leave it off for a choice the user just made — that one must overwrite.
+// Leave it off for a choice the user just made, because that one must overwrite.
+//
+// The key is omitted when false, so every call that predates the flag puts the
+// same arguments on the wire as before. This mirrors the Rust side, which adds
+// only_if_unset to the daemon request body only when it is true.
 export async function setSourcePin(
   everydaySource: string | null,
   synthesisSource: string | null,
   onlyIfUnset = false
 ): Promise<void> {
-  return invoke("set_source_pin", { everydaySource, synthesisSource, onlyIfUnset });
+  const args: Record<string, unknown> = { everydaySource, synthesisSource };
+  if (onlyIfUnset) args.onlyIfUnset = true;
+  return invoke("set_source_pin", args);
 }
 
 export interface SystemInfo {

@@ -105,20 +105,25 @@ function withAnthropicKey() {
  * A configured provider only compiles pages once the everyday job is pinned to
  * a source; an unpinned job routes to nothing, whatever the pool holds.
  */
-function routing(mode: "pinned" | "unconfigured"): tauri.ResolvedRouting {
+function routing(
+  mode: "pinned" | "unconfigured" | "pinned_unavailable",
+): tauri.ResolvedRouting {
   const pinned = mode === "pinned";
+  // A pin the daemon cannot serve keeps naming its source, with no model. The
+  // user did choose; the choice just is not loadable right now.
+  const hasPin = pinned || mode === "pinned_unavailable";
   return {
     everyday: {
-      source: pinned ? "anthropic" : "basic",
+      source: hasPin ? "anthropic" : "basic",
       model: pinned ? "claude-haiku-4-5" : null,
       mode,
-      pin: pinned ? "anthropic" : null,
+      pin: hasPin ? "anthropic" : null,
     },
     synthesis: {
-      source: pinned ? "anthropic" : "none",
+      source: hasPin ? "anthropic" : "none",
       model: pinned ? "claude-sonnet-4-6" : null,
       mode,
-      pin: pinned ? "anthropic" : null,
+      pin: hasPin ? "anthropic" : null,
     },
     pool: {
       anthropic: {
@@ -1549,6 +1554,32 @@ describe("HomePage redesign", () => {
     expect(empty).not.toHaveTextContent(/usually within a day/);
 
     await user.click(within(empty).getByRole("button", { name: "Choose a model" }));
+    expect(onOpenIntelligenceSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells a user whose pinned model is unavailable that it is, not to choose one", async () => {
+    const onOpenIntelligenceSettings = vi.fn();
+    const user = userEvent.setup();
+    // This user already chose. Telling them to choose a model reads as if the
+    // choice never registered, and sends them to redo work they have done.
+    withAnthropicKey();
+    vi.mocked(tauri.getResolvedRouting).mockResolvedValue(routing("pinned_unavailable"));
+
+    renderHome({ onOpenIntelligenceSettings });
+
+    const empty = await screen.findByTestId("wiki-page-empty");
+    await waitFor(() =>
+      expect(empty).toHaveTextContent(
+        /The model chosen for background work is not available right now/,
+      ),
+    );
+    // Neither of the other two sentences: no deadline promise, and no
+    // instruction to pick a model.
+    expect(empty).not.toHaveTextContent(/usually within a day/);
+    expect(empty).not.toHaveTextContent(/once a model is chosen for background work/);
+    expect(within(empty).queryByRole("button", { name: "Choose a model" })).toBeNull();
+
+    await user.click(within(empty).getByRole("button", { name: "Open Settings" }));
     expect(onOpenIntelligenceSettings).toHaveBeenCalledTimes(1);
   });
 

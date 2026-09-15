@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
 
 const mocks = vi.hoisted(() => ({
   shouldShowWizard: vi.fn(),
@@ -11,7 +14,11 @@ vi.mock("./tauri", async (importOriginal) => {
   return { ...actual, ...mocks };
 });
 
-import { fillUnsetPinsAtLaunch, resetLaunchPinFillForTest } from "./launchPinFill";
+import {
+  fillUnsetPinsAtLaunch,
+  resetLaunchPinFillForTest,
+  useLaunchPinFill,
+} from "./launchPinFill";
 import type { ResolvedRouting } from "./tauri";
 
 /** Routing with a loaded on-device model and both jobs unpinned. */
@@ -104,7 +111,7 @@ describe("fillUnsetPinsAtLaunch", () => {
     error.mockRestore();
   });
 
-  it("does not surface a failed pin write", async () => {
+  it("does not surface a failed pin write, and stays open to a later attempt", async () => {
     vi.useFakeTimers();
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     mocks.setSourcePin.mockRejectedValue(new Error("daemon down"));
@@ -114,5 +121,73 @@ describe("fillUnsetPinsAtLaunch", () => {
     expect(mocks.setSourcePin).toHaveBeenCalledTimes(3);
     error.mockRestore();
     vi.useRealTimers();
+
+    // Giving up must not disable the fill for the rest of the session. A daemon
+    // that was down for those few seconds is the exact case this exists for, so
+    // the next mount has to be allowed to try again.
+    mocks.setSourcePin.mockReset();
+    mocks.setSourcePin.mockResolvedValue(undefined);
+    await expect(fillUnsetPinsAtLaunch()).resolves.toEqual({
+      written: { everyday: "on_device", synthesis: "on_device" },
+      inEffect: { everyday: "on_device", synthesis: "on_device" },
+    });
+    expect(mocks.setSourcePin).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays open to a later attempt on a daemon with no routing endpoint", async () => {
+    mocks.getResolvedRouting.mockResolvedValueOnce(null);
+    await expect(fillUnsetPinsAtLaunch()).resolves.toBeNull();
+    await fillUnsetPinsAtLaunch();
+    expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true);
+  });
+});
+
+describe("useLaunchPinFill", () => {
+  /** Mounts the hook and returns a spy on the query invalidation it should do. */
+  function mountHook() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(QueryClientProvider, { client: queryClient }, children);
+    renderHook(() => useLaunchPinFill(), { wrapper });
+    return invalidate;
+  }
+
+  /** Lets the fill's promise chain finish under real timers. */
+  async function settle() {
+    for (let i = 0; i < 3; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("refetches routing after it writes a pin", async () => {
+    // Home reads routing at mount, before this write lands. Without the
+    // refetch it would keep telling the user to choose a model they now have.
+    const invalidate = mountHook();
+    await waitFor(() => expect(mocks.setSourcePin).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] }),
+    );
+  });
+
+  it("does not refetch when both jobs were already pinned", async () => {
+    const routing = unpinnedWithLoadedModel();
+    routing.everyday = { source: "external", model: "llama3", mode: "pinned", pin: "external" };
+    routing.synthesis = { source: "external", model: "llama3", mode: "pinned", pin: "external" };
+    mocks.getResolvedRouting.mockResolvedValue(routing);
+
+    const invalidate = mountHook();
+    await waitFor(() => expect(mocks.getResolvedRouting).toHaveBeenCalled());
+    await settle();
+
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
+    // Nothing was written, so nothing in the cache went stale.
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("does not refetch on a daemon with no routing endpoint", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(null);
+    const invalidate = mountHook();
+    await waitFor(() => expect(mocks.getResolvedRouting).toHaveBeenCalled());
+    await settle();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });

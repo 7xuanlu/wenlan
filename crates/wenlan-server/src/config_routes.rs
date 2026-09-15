@@ -7,7 +7,7 @@ use crate::state::SharedState;
 use axum::extract::State;
 use axum::response::Json;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use wenlan_core::config;
 use wenlan_core::on_device_models::{self, OnDeviceModel};
 use wenlan_types::requests::{OnDeviceModelRequest, UpdateConfigRequest};
@@ -56,6 +56,25 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
     }
 }
 
+/// Serializes the load-apply-save section of `handle_update_config`.
+///
+/// `only_if_unset` re-checks the stored pin under the write, but load and save
+/// are two separate file operations. Without this lock two concurrent PUTs can
+/// both load the same unpinned config, both decide to write, and the later save
+/// wins with a config that never saw the earlier one. The lock makes that
+/// section one critical section, which is what the flag's promise rests on.
+///
+/// It is a `std::sync::Mutex`, not a tokio one, and the guard is scoped to that
+/// block so it is always dropped before the handler awaits. Nothing inside the
+/// section awaits, so the guard never spans an await point.
+///
+/// Scope: this serializes PUT /api/config against itself, which is the race the
+/// pin fill is exposed to, because the user's own pin write is the same route.
+/// The other handlers in this file that load-modify-save config (the Anthropic
+/// key routes and the on-device download) do not take it and still race a PUT.
+static CONFIG_WRITE_LOCK: LazyLock<std::sync::Mutex<()>> =
+    LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// GET /api/config — return current config.
 pub async fn handle_get_config() -> Result<Json<ConfigResponse>, ServerError> {
     let cfg = config::load_config();
@@ -67,81 +86,90 @@ pub async fn handle_update_config(
     State(state): State<SharedState>,
     Json(req): Json<UpdateConfigRequest>,
 ) -> Result<Json<ConfigResponse>, ServerError> {
-    let mut cfg = config::load_config();
     let external_touched = req.external_llm_endpoint.is_some()
         || req.external_llm_model.is_some()
         || req.external_llm_api_key.is_some();
-    if let Some(v) = req.skip_apps {
-        cfg.skip_apps = v;
-    }
-    if let Some(v) = req.skip_title_patterns {
-        cfg.skip_title_patterns = v;
-    }
-    if let Some(v) = req.private_browsing_detection {
-        cfg.private_browsing_detection = v;
-    }
-    if let Some(v) = req.setup_completed {
-        cfg.setup_completed = v;
-    }
-    if let Some(v) = req.clipboard_enabled {
-        cfg.clipboard_enabled = v;
-    }
-    if let Some(v) = req.screen_capture_enabled {
-        cfg.screen_capture_enabled = v;
-    }
-    if let Some(v) = req.remote_access_enabled {
-        cfg.remote_access_enabled = v;
-    }
-    if let Some(v) = req.routine_model {
-        cfg.routine_model = Some(v);
-    }
-    if let Some(v) = req.synthesis_model {
-        cfg.synthesis_model = Some(v);
-    }
-    if let Some(v) = req.external_llm_endpoint {
-        cfg.external_llm_endpoint = if v.is_empty() { None } else { Some(v) };
-    }
-    if let Some(v) = req.external_llm_model {
-        cfg.external_llm_model = if v.is_empty() { None } else { Some(v) };
-    }
-    // Key lifecycle contract: omitted = preserve; null/"" = clear; value = replace.
-    match req.external_llm_api_key {
-        None => {}
-        Some(None) => cfg.external_llm_api_key = None,
-        Some(Some(v)) => {
-            let trimmed = v.trim();
-            cfg.external_llm_api_key = if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            };
+    // Everything from the load to the save runs under CONFIG_WRITE_LOCK, so a
+    // concurrent PUT cannot land between them. The guard dies with this block,
+    // before the handler touches shared state behind an await.
+    let cfg = {
+        let _guard = CONFIG_WRITE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut cfg = config::load_config();
+        if let Some(v) = req.skip_apps {
+            cfg.skip_apps = v;
         }
-    }
-    // Per-job source pins. Validated before save so an invalid value 4xxes
-    // without persisting; `""` clears the pin, omitted preserves it.
-    //
-    // `only_if_unset` scopes these two fields to a job that holds no pin yet.
-    // It makes a fill-the-blanks write atomic: the app reads routing, sees a
-    // job unpinned and writes it, and a pin the user chose between those two
-    // requests survives instead of being overwritten. Validation still runs on
-    // a skipped value, so a bad request is a 4xx either way.
-    let only_if_unset = req.only_if_unset.unwrap_or(false);
-    if let Some(v) = req.everyday_source {
-        let pin = validate_everyday_source(&v)?;
-        if !(only_if_unset && cfg.everyday_source.is_some()) {
-            cfg.everyday_source = pin;
+        if let Some(v) = req.skip_title_patterns {
+            cfg.skip_title_patterns = v;
         }
-    }
-    if let Some(v) = req.synthesis_source {
-        let pin = validate_synthesis_source(&v)?;
-        if !(only_if_unset && cfg.synthesis_source.is_some()) {
-            cfg.synthesis_source = pin;
+        if let Some(v) = req.private_browsing_detection {
+            cfg.private_browsing_detection = v;
         }
-    }
-    if let Some(v) = req.page_map_auto_suggest {
-        cfg.page_map_auto_suggest = v;
-    }
-    config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+        if let Some(v) = req.setup_completed {
+            cfg.setup_completed = v;
+        }
+        if let Some(v) = req.clipboard_enabled {
+            cfg.clipboard_enabled = v;
+        }
+        if let Some(v) = req.screen_capture_enabled {
+            cfg.screen_capture_enabled = v;
+        }
+        if let Some(v) = req.remote_access_enabled {
+            cfg.remote_access_enabled = v;
+        }
+        if let Some(v) = req.routine_model {
+            cfg.routine_model = Some(v);
+        }
+        if let Some(v) = req.synthesis_model {
+            cfg.synthesis_model = Some(v);
+        }
+        if let Some(v) = req.external_llm_endpoint {
+            cfg.external_llm_endpoint = if v.is_empty() { None } else { Some(v) };
+        }
+        if let Some(v) = req.external_llm_model {
+            cfg.external_llm_model = if v.is_empty() { None } else { Some(v) };
+        }
+        // Key lifecycle contract: omitted = preserve; null/"" = clear; value = replace.
+        match req.external_llm_api_key {
+            None => {}
+            Some(None) => cfg.external_llm_api_key = None,
+            Some(Some(v)) => {
+                let trimmed = v.trim();
+                cfg.external_llm_api_key = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                };
+            }
+        }
+        // Per-job source pins. Validated before save so an invalid value 4xxes
+        // without persisting; `""` clears the pin, omitted preserves it.
+        //
+        // `only_if_unset` scopes these two fields to a job that holds no pin yet.
+        // It makes a fill-the-blanks write atomic: the app reads routing, sees a
+        // job unpinned and writes it, and a pin the user chose between those two
+        // requests survives instead of being overwritten. Validation still runs on
+        // a skipped value, so a bad request is a 4xx either way.
+        let only_if_unset = req.only_if_unset.unwrap_or(false);
+        if let Some(v) = req.everyday_source {
+            let pin = validate_everyday_source(&v)?;
+            if !(only_if_unset && cfg.everyday_source.is_some()) {
+                cfg.everyday_source = pin;
+            }
+        }
+        if let Some(v) = req.synthesis_source {
+            let pin = validate_synthesis_source(&v)?;
+            if !(only_if_unset && cfg.synthesis_source.is_some()) {
+                cfg.synthesis_source = pin;
+            }
+        }
+        if let Some(v) = req.page_map_auto_suggest {
+            cfg.page_map_auto_suggest = v;
+        }
+        config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+        cfg
+    };
     if external_touched {
         let mut s = state.write().await;
         apply_external_provider(&mut s, &cfg);
@@ -547,6 +575,48 @@ pub async fn handle_get_on_device_model(
     }))
 }
 
+/// The whole config diff the on-device download persists: the selected model,
+/// and setup marked complete because choosing a model completes it.
+///
+/// Extracted from the handler so it can be tested without a real multi-GB
+/// download. What the test is for is the negative: this route must not write a
+/// routing pin. Downloading a model is not choosing it for a job, and a pin
+/// written here would silently overwrite a choice the user made in Settings.
+/// Filling an unpinned job is the app's launch-time job, through
+/// `PUT /api/config` with `only_if_unset`, where the user's pin always wins.
+fn apply_on_device_selection(cfg: &mut config::Config, model_id: &str) {
+    cfg.setup_completed = true;
+    cfg.on_device_model = Some(model_id.to_string());
+}
+
+#[cfg(test)]
+mod on_device_selection_tests {
+    use super::*;
+
+    #[test]
+    fn download_selects_the_model_and_writes_no_routing_pin() {
+        let mut cfg = config::Config::default();
+        apply_on_device_selection(&mut cfg, "qwen3-4b");
+        assert_eq!(cfg.on_device_model.as_deref(), Some("qwen3-4b"));
+        assert!(cfg.setup_completed);
+        // The point of the test: a download leaves both jobs as it found them.
+        assert!(cfg.everyday_source.is_none());
+        assert!(cfg.synthesis_source.is_none());
+    }
+
+    #[test]
+    fn download_leaves_pins_the_user_already_chose_untouched() {
+        let mut cfg = config::Config {
+            everyday_source: Some("anthropic".to_string()),
+            synthesis_source: Some("external".to_string()),
+            ..config::Config::default()
+        };
+        apply_on_device_selection(&mut cfg, "qwen3-4b");
+        assert_eq!(cfg.everyday_source.as_deref(), Some("anthropic"));
+        assert_eq!(cfg.synthesis_source.as_deref(), Some("external"));
+    }
+}
+
 /// POST /api/on-device-model/download — download (if needed) and hot-load a model.
 ///
 /// This is a long-running endpoint: the HTTP request stays open until the
@@ -581,8 +651,7 @@ pub async fn handle_download_on_device_model(
 
     // Persist the selection.
     let mut cfg = config::load_config();
-    cfg.setup_completed = true;
-    cfg.on_device_model = Some(req.model_id.clone());
+    apply_on_device_selection(&mut cfg, &req.model_id);
     config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
 
     // Hot-swap the provider in ServerState. The old provider (if any) is
@@ -1633,6 +1702,61 @@ mod external_llm_lifecycle_tests {
             put_config(&app, serde_json::json!({"everyday_source": "anthropic"})).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["everyday_source"], "anthropic");
+    }
+
+    /// `""` clears a pin. Under the flag it must not, or a fill racing the
+    /// user's own clear could erase the pin they just set instead of leaving
+    /// it. "Only if unset" has to mean every write to a pinned job is skipped,
+    /// including the destructive one.
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_if_unset_never_clears_a_pin() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        let (status, _) = put_config(
+            &app,
+            serde_json::json!({"everyday_source": "on_device", "synthesis_source": "anthropic"}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // The clear is skipped on both pinned jobs.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "everyday_source": "",
+                "synthesis_source": "",
+                "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "anthropic");
+        let cfg = config::load_config();
+        assert_eq!(cfg.everyday_source.as_deref(), Some("on_device"));
+        assert_eq!(cfg.synthesis_source.as_deref(), Some("anthropic"));
+
+        // Without the flag `""` still clears, which is what Settings relies on.
+        let (status, body) = put_config(&app, serde_json::json!({"everyday_source": ""})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["everyday_source"].is_null());
+
+        // On a job that is already unpinned the flagged clear is a no-op, not
+        // an error, and leaves it unpinned.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({"everyday_source": "", "only_if_unset": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body["everyday_source"].is_null());
+        assert!(config::load_config().everyday_source.is_none());
     }
 
     #[tokio::test(flavor = "current_thread")]

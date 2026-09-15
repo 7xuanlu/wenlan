@@ -1727,8 +1727,11 @@ const en = {
         "Wenlan compiles pages as patterns emerge in your memories, usually within a day of regular use.",
       needsRouting:
         "Pages start compiling once a model is chosen for background work. Pick one in Settings → Intelligence.",
+      pinUnavailable:
+        "The model chosen for background work is not available right now, so pages are not compiling. Check Settings → Intelligence.",
       turnOnModel: "Turn on a model",
       chooseModel: "Choose a model",
+      openSettings: "Open Settings",
       writePage: "Write a page",
     },
     reasons: {
@@ -3679,8 +3682,11 @@ const zhHans = {
         "当你的记忆中浮现出模式时，文澜会整理成页面，通常会在规律使用一天内出现。",
       needsRouting:
         "选定用于后台工作的模型后，文澜就会开始整理页面。可在“设置 → 智能”中选择。",
+      pinUnavailable:
+        "当前用于后台工作的模型不可用，页面暂时无法整理。请在“设置 → 智能”中查看。",
       turnOnModel: "启用模型",
       chooseModel: "选择模型",
+      openSettings: "打开设置",
       writePage: "自己写一个页面",
     },
     reasons: {
@@ -5626,8 +5632,11 @@ const zhHant = {
         "當你的記憶中浮現出模式時，文瀾會整理成頁面，通常會在規律使用一天內出現。",
       needsRouting:
         "選定用於背景工作的模型後，文瀾就會開始整理頁面。可在「設定 → 智慧」中選擇。",
+      pinUnavailable:
+        "目前用於背景工作的模型無法使用，頁面暫時無法整理。請在「設定 → 智慧」中查看。",
       turnOnModel: "啟用模型",
       chooseModel: "選擇模型",
+      openSettings: "開啟設定",
       writePage: "自己寫一個頁面",
     },
     reasons: {

@@ -16,6 +16,28 @@ function optionalString(args: unknown, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** Set this global before the app boots to give one spec a routing answer:
+ *  `page.addInitScript(() => { window.__WENLAN_MOCK_RESOLVED_ROUTING__ = {...} })`.
+ *  The shape is `ResolvedRouting` from src/lib/tauri.ts. */
+export const MOCK_RESOLVED_ROUTING_KEY = "__WENLAN_MOCK_RESOLVED_ROUTING__";
+
+/** What `get_resolved_routing` answers.
+ *
+ *  The default is null, and null means one specific thing: a daemon old enough
+ *  to have no routing endpoint. It is NOT "nothing is pinned" — that is a real
+ *  answer with `mode: "unconfigured"`. The fixture claims the older daemon
+ *  because that is the state with no behavior to get wrong: the launch-time pin
+ *  fill reads routing on every mount of the main shell and writes nothing on
+ *  null, and Home keeps its original copy.
+ *
+ *  A spec that needs a real routing state, such as the unpinned everyday job
+ *  that makes Home offer "Choose a model", sets the override above instead of
+ *  changing this default for every other spec. */
+function resolvedRouting(): unknown {
+  const override = Reflect.get(globalThis, MOCK_RESOLVED_ROUTING_KEY);
+  return override === undefined ? null : override;
+}
+
 export function baseResponse(command: string, args: unknown, context: BaseResponseContext): unknown {
   switch (command) {
     case "should_show_wizard": case "get_clipboard_enabled": return false;
@@ -41,10 +63,7 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     };
-    // The fixture has no daemon routing, which is exactly what a daemon
-    // without the routing endpoint reports. The launch-time pin fill reads it
-    // on every mount of the main shell and writes nothing on null.
-    case "get_resolved_routing": return null;
+    case "get_resolved_routing": return resolvedRouting();
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };

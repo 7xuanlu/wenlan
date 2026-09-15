@@ -2672,10 +2672,12 @@ mod tests {
             .unwrap();
 
         let request = request.await.unwrap();
-        assert_eq!(
-            request_body(&request),
-            serde_json::json!({"everyday_source": "external"})
-        );
+        let body = request_body(&request);
+        assert_eq!(body, serde_json::json!({"everyday_source": "external"}));
+        // Stated on its own because it is the compatibility promise: an
+        // unflagged call is byte-identical to what shipped before the flag, so
+        // a daemon that predates it sees nothing new.
+        assert!(body.get("only_if_unset").is_none());
     }
 
     #[tokio::test]

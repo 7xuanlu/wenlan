@@ -69,11 +69,19 @@ function asSourcePin(pin: string | null): SourcePin | null {
 }
 
 /** What a fill did, from the routing read it acted on. `written` is what this
- *  fill sent (null for a job left alone, both null when nothing was sent);
- *  `inEffect` is each job's pin once that write lands: the written pin, or the
- *  one the job already held. Both are read from that one routing snapshot, so
- *  in the rare case where the user pins a job between the read and the write,
- *  the daemon keeps their pin and `inEffect` names the one this fill sent. */
+ *  fill sent: null for a job left alone, both null when nothing was sent.
+ *
+ *  `inEffect` is READ-SIDE ONLY. It is this client's expectation of each job's
+ *  pin, computed from the one routing snapshot the fill acted on plus what it
+ *  sent, and it is never read back from the daemon. It is normally right, and
+ *  it is wrong in exactly the case `onlyIfUnset` exists for: if the user pins a
+ *  job between the read and the write, the daemon keeps their pin and
+ *  `inEffect` still names the pin this fill sent.
+ *
+ *  So use it for copy and logging, never as proof of what the daemon holds. A
+ *  caller that needs the truth must re-read routing after the write. Nothing
+ *  does today, which is why this stays a prediction rather than costing every
+ *  fill a second round trip. */
 export interface PinFill {
   written: { everyday: SourcePin | null; synthesis: SourcePin | null };
   inEffect: { everyday: SourcePin | null; synthesis: SourcePin | null };

@@ -743,6 +743,33 @@ describe('listSources', () => {
   });
 });
 
+describe('setSourcePin', () => {
+  it('omits onlyIfUnset entirely when it is not asked for', async () => {
+    // Every caller that predates the flag must put the same arguments on the
+    // wire as before, so an older daemon sees a request it already understands.
+    await tauri.setSourcePin('on_device', null);
+    expect(mockInvoke).toHaveBeenCalledWith('set_source_pin', {
+      everydaySource: 'on_device',
+      synthesisSource: null,
+    });
+    expect(mockInvoke.mock.calls[0][1]).not.toHaveProperty('onlyIfUnset');
+  });
+
+  it('omits it when passed false, not just when left off', async () => {
+    await tauri.setSourcePin('anthropic', 'anthropic', false);
+    expect(mockInvoke.mock.calls[0][1]).not.toHaveProperty('onlyIfUnset');
+  });
+
+  it('sends onlyIfUnset when filling blanks', async () => {
+    await tauri.setSourcePin('on_device', 'on_device', true);
+    expect(mockInvoke).toHaveBeenCalledWith('set_source_pin', {
+      everydaySource: 'on_device',
+      synthesisSource: 'on_device',
+      onlyIfUnset: true,
+    });
+  });
+});
+
 describe('setDocumentSpace', () => {
   it('passes all args', async () => {
     await tauri.setDocumentSpace('local_files', 'doc1', 'space-1');
