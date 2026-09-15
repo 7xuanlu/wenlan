@@ -181,6 +181,23 @@ describe("translation resources", () => {
     ]);
   });
 
+  it("keeps the setup check memory findable and inside the daemon's duplicate window in every locale", () => {
+    // The daemon rejects a store whose first 200 characters prefix-match an
+    // existing memory, so the per-run nonce must land inside that window or
+    // a second setup run fails as a duplicate.
+    const nonce = "00000000-0000-4000-8000-000000000000";
+    for (const locale of supportedAppLocales) {
+      const copy = resources[locale].translation;
+      const probe = copy.setup.settingUp.probeMemory.replace("{{nonce}}", nonce);
+      expect(Array.from(probe).length).toBeLessThanOrEqual(200);
+      expect(probe.endsWith(`(${nonce})`)).toBe(true);
+      // The cleanup warning tells people what to search for; it has to be
+      // the words the leftover memory opens with.
+      expect(probe.startsWith(copy.connections.internalProbe)).toBe(true);
+      expect(copy.setup.settingUp.daemonCleanupWarning).toContain(copy.connections.internalProbe);
+    }
+  });
+
   it("keeps Simplified and Traditional Chinese key sets in parity with English", () => {
     const englishKeys = flattenKeys(resources.en.translation).sort();
 
