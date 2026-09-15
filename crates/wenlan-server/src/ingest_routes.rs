@@ -321,12 +321,15 @@ mod content_length_gate_tests {
         let (state, _tmp) = empty_state().await;
         let result =
             handle_ingest_memory_inner(State(state), Json(ingest_request("123456789"))).await;
-        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+        assert!(matches!(
+            result,
+            Err(ServerError::ValidationError(ref m)) if m == "Memory content must be at least 10 characters"
+        ));
     }
 
-    /// 10 Chinese characters is the same "10" floor as ASCII once the gate
+    /// 10 Chinese characters is the same "10" floor as ASCII because the gate
     /// counts `chars()` instead of UTF-8 bytes (each CJK char is 3 bytes, so
-    /// the old byte-length gate would have passed this at just 4 characters).
+    /// a byte-length gate would pass this at just 4 characters).
     #[tokio::test]
     async fn ten_chinese_chars_are_accepted() {
         let (state, _tmp) = empty_state().await;
@@ -339,25 +342,31 @@ mod content_length_gate_tests {
         );
     }
 
-    /// 4 Chinese characters must still be rejected: under the old byte-length
-    /// gate (`content.len() < 10`) this would have passed at 12 UTF-8 bytes.
+    /// 4 Chinese characters must be rejected: a byte-length gate
+    /// (`content.len() < 10`) would pass this at 12 UTF-8 bytes.
     #[tokio::test]
     async fn four_chinese_chars_are_rejected() {
         let (state, _tmp) = empty_state().await;
         let result =
             handle_ingest_memory_inner(State(state), Json(ingest_request("你好嗎呀"))).await;
-        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+        assert!(matches!(
+            result,
+            Err(ServerError::ValidationError(ref m)) if m == "Memory content must be at least 10 characters"
+        ));
     }
 
-    /// 9 Chinese characters is 27 UTF-8 bytes: the old byte-length gate
-    /// (`content.len() < 10`) would have wrongly accepted this at 27 >= 10.
-    /// The char-counting gate must still reject it at 9 < 10.
+    /// 9 Chinese characters is 27 UTF-8 bytes: a byte-length gate
+    /// (`content.len() < 10`) would wrongly accept this at 27 >= 10.
+    /// The char-counting gate must reject it at 9 < 10.
     #[tokio::test]
     async fn nine_chinese_chars_are_rejected() {
         let (state, _tmp) = empty_state().await;
         let result =
             handle_ingest_memory_inner(State(state), Json(ingest_request("今天天氣非常晴朗好")))
                 .await;
-        assert!(matches!(result, Err(ServerError::ValidationError(_))));
+        assert!(matches!(
+            result,
+            Err(ServerError::ValidationError(ref m)) if m == "Memory content must be at least 10 characters"
+        ));
     }
 }

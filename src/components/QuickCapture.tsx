@@ -98,7 +98,7 @@ export default function QuickCapture({ isOpen, onClose, standalone }: QuickCaptu
 
   if (!isOpen) return null;
 
-  const charCount = content.trim().length;
+  const charCount = Array.from(content.trim()).length;
   const isEmpty = charCount === 0;
   const isPending = captureMutation.isPending;
 
