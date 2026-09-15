@@ -15,9 +15,11 @@ import {
   getWireState,
 } from "./lib/tauri";
 import {
+  ATTEMPT_TIMEOUT_MS,
   BOOT_QUERY_RETRY,
   BOOT_SLOW_NOTICE_MS,
   bootQueryRetryDelay,
+  runBootGate,
 } from "./lib/bootRetryPolicy";
 import Main from "./components/memory/Main";
 import SetupWizard from "./components/SetupWizard";
@@ -29,18 +31,26 @@ export default function App() {
   const queryClient = useQueryClient();
   const { data: showWizard, isPending: wizardPending, isError: wizardError } = useQuery({
     queryKey: ["shouldShowWizard"],
-    queryFn: shouldShowWizard,
+    queryFn: ({ signal }) => runBootGate(shouldShowWizard, {
+      retry: BOOT_QUERY_RETRY,
+      delay: bootQueryRetryDelay,
+      attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+      signal,
+    }),
     staleTime: Infinity,
-    // Overrides main.tsx's global retry:false — the first-run daemon install
-    // (app/src/lib.rs) is spawned async and races this query, so it needs to
-    // survive that window instead of failing on the first miss.
+    // The first-run daemon install (app/src/lib.rs) is spawned async and
+    // races this query, so the gate must survive that window instead of
+    // failing on the first miss. Retries live in runBootGate, not here:
+    // React Query pauses its own retries while document.visibilityState is
+    // "hidden", and a hidden or occluded WKWebView window reports hidden, so
+    // a gate that relies on query retries parks until the window is visible
+    // again instead of failing closed on its own.
     // The schedule and, more importantly, the total budget live in
     // ./lib/bootRetryPolicy: it has to outlast the Rust health loop's own
     // ~152s wait for this same daemon, or the fail-closed branch below shows
     // the first-run wizard to a configured user while startup is still
     // waiting. Each attempt is separately bounded to 5s (app/src/api.rs).
-    retry: BOOT_QUERY_RETRY,
-    retryDelay: bootQueryRetryDelay,
+    retry: false,
     // This is a Tauri IPC call to a daemon on localhost, not a network request.
     // The default "online" mode would PAUSE it whenever navigator.onLine is
     // false (fetchStatus "paused", never "fetching"), so an offline machine
