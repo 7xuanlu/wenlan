@@ -31,10 +31,11 @@ export default function App() {
   const queryClient = useQueryClient();
   const { data: showWizard, isPending: wizardPending, isError: wizardError } = useQuery({
     queryKey: ["shouldShowWizard"],
-    queryFn: () => runBootGate(shouldShowWizard, {
+    queryFn: ({ signal }) => runBootGate(shouldShowWizard, {
       retry: BOOT_QUERY_RETRY,
       delay: bootQueryRetryDelay,
       attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+      signal,
     }),
     staleTime: Infinity,
     // The first-run daemon install (app/src/lib.rs) is spawned async and

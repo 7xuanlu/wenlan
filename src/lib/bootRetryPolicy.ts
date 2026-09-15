@@ -104,6 +104,30 @@ export interface BootGateOptions {
   delay?: (attemptIndex: number) => number;
   /** Per-attempt ceiling in ms. Default `ATTEMPT_TIMEOUT_MS`. */
   attemptTimeoutMs?: number;
+  /** Stops the waits between attempts. Default none. */
+  signal?: AbortSignal;
+}
+
+/**
+ * One `setTimeout` wait that ends early when `signal` aborts. The timer is
+ * cleared on abort so a cancelled gate holds no timer open.
+ */
+function abortableBootGateDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new DOMException("AbortError"));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason ?? new DOMException("AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 /**
@@ -117,7 +141,9 @@ export interface BootGateOptions {
  *
  * With the default timeout and delay, the worst case equals
  * `bootQueryBudgetMs(retry)` for the same retry count: every attempt burns
- * its full timeout, plus every delay between attempts.
+ * its full timeout, plus every delay between attempts. Passing `signal`
+ * (React Query cancels the query when it unmounts) ends a pending delay at
+ * once and rethrows the last attempt error instead of sleeping on.
  */
 export async function runBootGate<T>(
   attempt: () => Promise<T>,
@@ -126,15 +152,18 @@ export async function runBootGate<T>(
   const retry = options?.retry ?? BOOT_QUERY_RETRY;
   const delay = options?.delay ?? bootQueryRetryDelay;
   const attemptTimeoutMs = options?.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS;
+  const signal = options?.signal;
   let attemptIndex = 0;
   for (;;) {
     try {
       return await withBootAttemptTimeout(attempt(), attemptTimeoutMs);
     } catch (error) {
       if (attemptIndex >= retry) throw error;
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delay(attemptIndex));
-      });
+      try {
+        await abortableBootGateDelay(delay(attemptIndex), signal);
+      } catch {
+        throw error;
+      }
       attemptIndex += 1;
     }
   }

@@ -263,10 +263,7 @@ pub async fn set_setup_completed(
 #[tauri::command]
 pub async fn should_show_wizard(state: tauri::State<'_, State>) -> Result<bool, String> {
     tokio::time::timeout(std::time::Duration::from_secs(6), async {
-        let client = {
-            let s = state.read().await;
-            s.client.clone()
-        };
+        let client = daemon_client(&state).await;
         Ok(!client.get_setup_status().await?.setup_completed)
     })
     .await

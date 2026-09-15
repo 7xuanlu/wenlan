@@ -162,4 +162,33 @@ describe("boot retry policy", () => {
       vi.useRealTimers();
     }
   });
+
+  it("stops the retry sleep when the gate signal aborts", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const attempt = vi.fn<() => Promise<string>>().mockRejectedValue(new Error("down"));
+      let settled: string | null = null;
+      const assertion = runBootGate(attempt, { retry: 2, signal: controller.signal }).then(
+        () => {
+          settled = "resolved";
+        },
+        (error: unknown) => {
+          settled = error instanceof Error ? error.message : String(error);
+        },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(attempt).toHaveBeenCalledTimes(1);
+      expect(settled).toBeNull();
+      controller.abort();
+      await assertion;
+      expect(settled).toBe("down");
+      expect(attempt).toHaveBeenCalledTimes(1);
+      // The cleared delay must not fire a late second attempt.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(attempt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

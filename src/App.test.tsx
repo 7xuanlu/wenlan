@@ -372,6 +372,49 @@ describe("App - first-run wizard gate", () => {
     }
   });
 
+  // Same hidden window, but the hang is inside one IPC call rather than a
+  // fast rejection: the per-attempt timeout is what moves the loop to the
+  // next attempt, and the gate still fails closed to the connection-problem
+  // state instead of waiting on the hung call.
+  it("keeps retrying the gate while the window is hidden and the attempt hangs", async () => {
+    const originalVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    vi.useFakeTimers();
+    try {
+      vi.mocked(shouldShowWizard)
+        .mockReturnValueOnce(new Promise<boolean>(() => {}))
+        .mockRejectedValue(new Error("connection refused"));
+      renderApp();
+
+      await act(async () => {
+        const budget = bootQueryBudgetMs();
+        let elapsed = 0;
+        while (elapsed < budget + 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          elapsed += 1_000;
+        }
+      });
+      expect(vi.mocked(shouldShowWizard).mock.calls.length).toBeGreaterThan(1);
+      const wizard = screen.getByTestId("setup-wizard");
+      expect(wizard).toBeInTheDocument();
+      expect(wizard).toHaveAttribute("data-gate-errored", "true");
+      expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+      if (originalVisibility) {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
+    }
+  });
+
   // A failed setSetupCompleted must leave the gate alone. Invalidating it would
   // refetch a query with no data, which react-query reports as pending, so App
   // would swap the wizard for the starting-runtime screen and drop every pick.
