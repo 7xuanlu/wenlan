@@ -469,7 +469,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                     <div>
                       <code>{handoffCommand}</code>
                       <span>
-                        {t("firstUse.sample.handoffLabel")} — {t("firstUse.sample.handoffHint")}
+                        {t("firstUse.sample.handoffLabel")}. {t("firstUse.sample.handoffHint")}
                       </span>
                     </div>
                     <button
@@ -502,7 +502,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                 <div>
                   <code>{commands.brief}</code>
                   <span>
-                    {t("firstUse.sample.briefLabel")} — {t("firstUse.sample.briefHint")}
+                    {t("firstUse.sample.briefLabel")}. {t("firstUse.sample.briefHint")}
                   </span>
                 </div>
                 <button

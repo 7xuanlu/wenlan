@@ -408,7 +408,7 @@ function Toast({
                 color: "var(--mem-text-tertiary)",
               }}
             >
-              — {sub.source}
+              {t("onboarding.milestone.eyebrow.fromSource", { source: sub.source })}
             </span>
           )}
         </div>

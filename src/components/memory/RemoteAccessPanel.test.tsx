@@ -197,7 +197,7 @@ describe("RemoteAccessPanel", () => {
     mocks.getWireState.mockRejectedValue(new Error("daemon down"));
     renderPanel();
     expect(await screen.findByText("Set up manually")).toBeInTheDocument();
-    expect(screen.getByText("Step 1 — Add Wenlan to claude.ai")).toBeInTheDocument();
+    expect(screen.getByText("Step 1: Add Wenlan to claude.ai")).toBeInTheDocument();
     // The install button shows during the pending window, then the rejection
     // resolves it away — wait for the settled (error) state before asserting.
     await waitFor(() => {

@@ -104,7 +104,7 @@ describe("MilestoneToaster", () => {
         screen.getByText(/I prefer Rust for CLI tools/i),
       ).toBeInTheDocument(),
     );
-    expect(screen.getByText(/— claude/i)).toBeInTheDocument();
+    expect(screen.getByText(/from claude/i)).toBeInTheDocument();
   });
 
   it("omits source attribution when first-memory source is empty", async () => {
@@ -191,7 +191,7 @@ describe("MilestoneToaster", () => {
     await waitFor(() =>
       expect(screen.getByText(/Cloudflare quick tunnels/i)).toBeInTheDocument(),
     );
-    expect(screen.getByText(/— claude-code/i)).toBeInTheDocument();
+    expect(screen.getByText(/from claude-code/i)).toBeInTheDocument();
     // Plain "Called by ..." fallback should NOT render when preview is present.
     expect(document.body.textContent).not.toMatch(/called by/i);
   });

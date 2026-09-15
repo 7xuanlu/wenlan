@@ -161,14 +161,14 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
   // the default mock resolves exactly one model.
   it("singular: exactly one discovered model reads '1 model', not '1 models'", async () => {
     renderCard();
-    expect(await screen.findByText("Connected to Ollama — 1 model")).toBeInTheDocument();
+    expect(await screen.findByText("Connected to Ollama: 1 model")).toBeInTheDocument();
     expect(screen.queryByText(/1 models/)).not.toBeInTheDocument();
   });
 
   it("plural: two discovered models reads '2 models'", async () => {
     mocks.listExternalModels.mockResolvedValue(["llama3.2:3b", "qwen2.5:7b"]);
     renderCard();
-    expect(await screen.findByText("Connected to Ollama — 2 models")).toBeInTheDocument();
+    expect(await screen.findByText("Connected to Ollama: 2 models")).toBeInTheDocument();
   });
 
   // Thread #3: the probe genuinely succeeded (server reachable — chip stays
@@ -177,7 +177,7 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
   it("zero models: reachable server with no models installed gets the no-models label, not the connected label", async () => {
     mocks.listExternalModels.mockResolvedValue([]);
     renderCard();
-    expect(await screen.findByText("Ollama is running — no models installed yet")).toBeInTheDocument();
+    expect(await screen.findByText("Ollama is running. No models installed yet.")).toBeInTheDocument();
     expect(screen.queryByText(/Connected to Ollama/)).not.toBeInTheDocument();
   });
 
@@ -203,7 +203,7 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
     mocks.listExternalModels.mockResolvedValue(["llama3.2:3b", "qwen2.5:7b"]);
     renderCard();
     // Exact interpolated text — guards the {{count}} (not modelCount) i18next key.
-    expect(await screen.findByText("Connected to Ollama — 2 models")).toBeInTheDocument();
+    expect(await screen.findByText("Connected to Ollama: 2 models")).toBeInTheDocument();
     // Exact accessible name: the status-dot span must not fold into the pill's name.
     const ollamaPill = screen.getByRole("button", { name: "Ollama" });
     const lmStudioPill = screen.getByRole("button", { name: "LM Studio" });
@@ -236,7 +236,7 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
     mocks.listExternalModels.mockRejectedValue(new Error("ECONNREFUSED"));
     renderCard();
     expect(
-      await screen.findByText(/Not detected at localhost:11434 — is Ollama running\?/),
+      await screen.findByText(/Not detected at localhost:11434. Is Ollama running\?/),
     ).toBeInTheDocument();
   });
 

@@ -173,7 +173,7 @@ describe("IntelligenceSection", () => {
     expect(await within(everydayRow).findByText("Qwen3 4B Instruct")).toBeInTheDocument();
 
     const synthesisRow = screen.getByText("Synthesis model").closest("button")!;
-    expect(within(synthesisRow).getByText("No model is assigned — pages still update whenever your AI tools use Wenlan.")).toBeInTheDocument();
+    expect(within(synthesisRow).getByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")).toBeInTheDocument();
   });
 
   it("shows the On-device row's capability hint alongside its state-derived meta", async () => {
@@ -264,7 +264,7 @@ describe("IntelligenceSection", () => {
     const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
     await userEvent.click(synthesisRow);
 
-    expect(await screen.findByText("Pinned to Anthropic — currently unavailable, using OpenAI for now.")).toBeInTheDocument();
+    expect(await screen.findByText("Pinned to Anthropic, which is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
   });
 
   // ── Copy truth: a pinned_unavailable route is configured but its model is
@@ -311,7 +311,7 @@ describe("IntelligenceSection", () => {
     const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
     await userEvent.click(synthesisRow);
 
-    expect(await screen.findByText("The pinned source is currently unavailable — using OpenAI for now.")).toBeInTheDocument();
+    expect(await screen.findByText("The pinned source is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
     expect(screen.queryByText(/Pinned to/)).not.toBeInTheDocument();
   });
 
@@ -337,7 +337,7 @@ describe("IntelligenceSection", () => {
     ).toBeInTheDocument();
     // The collapsed meta keeps the cloud-required string; the body no longer repeats it.
     expect(
-      within(rowRoot).getAllByText("No model is assigned — pages still update whenever your AI tools use Wenlan.")
+      within(rowRoot).getAllByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")
     ).toHaveLength(1);
   });
 
@@ -461,7 +461,7 @@ describe("IntelligenceSection", () => {
     renderSection();
 
     const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    await within(everydayRow).findByText("No background model — your wiki updates through your AI tools.");
+    await within(everydayRow).findByText("No background model. Your wiki updates through your AI tools.");
     // The with-model summary must NOT appear when nothing serves the job.
     expect(within(everydayRow).queryByText("Files and links new memories in the background")).not.toBeInTheDocument();
     const header = everydayRow.parentElement!;

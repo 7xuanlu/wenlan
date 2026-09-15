@@ -190,7 +190,7 @@ describe("VaultConnectCard", () => {
     // this is the discarding action.
     await userEvent.click(screen.getByText("Work Notes"));
     await waitFor(() =>
-      expect(screen.getByText(/Obsidian vault — Work Notes/)).toBeInTheDocument()
+      expect(screen.getByText(/Obsidian vault: Work Notes/)).toBeInTheDocument()
     );
 
     // Now the abandoned browse-detection promise resolves, with results for
@@ -202,7 +202,7 @@ describe("VaultConnectCard", () => {
     await waitFor(() => expect(mocks.detectVault).toHaveResolvedTimes(1));
 
     // The picked-vault line is still the source of truth...
-    expect(screen.getByText(/Obsidian vault — Work Notes/)).toBeInTheDocument();
+    expect(screen.getByText(/Obsidian vault: Work Notes/)).toBeInTheDocument();
     // ...and the stale detection result for the discarded folder must not
     // render alongside it.
     expect(screen.queryByText(/42 supported files/)).not.toBeInTheDocument();
@@ -215,10 +215,10 @@ describe("VaultConnectCard", () => {
   it("states Obsidian support even when zero vaults are detected", async () => {
     renderCard();
     expect(
-      await screen.findByText("Obsidian vaults — indexes your Markdown notes"),
+      await screen.findByText("Obsidian vaults: indexes your Markdown notes"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Any folder — indexes .md, .txt, and .pdf files"),
+      screen.getByText("Any folder: indexes .md, .txt, and .pdf files"),
     ).toBeInTheDocument();
     // ...and it is genuinely the no-vault case, not the chip row in disguise.
     expect(screen.queryByText("Your Obsidian vaults")).not.toBeInTheDocument();
