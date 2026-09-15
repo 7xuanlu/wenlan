@@ -42,7 +42,7 @@ export const ATTEMPT_TIMEOUT_MS = 5_000;
  */
 export const RUST_HEALTH_LOOP_BUDGET_MS = 10 * ATTEMPT_TIMEOUT_MS + 200 * 511;
 
-/** Retries AFTER the first attempt, i.e. react-query's `retry`. */
+/** Retries AFTER the first attempt. */
 export const BOOT_QUERY_RETRY = 20;
 
 /** Exponential backoff, capped so late attempts still poll every 3s. */
@@ -94,4 +94,48 @@ export function withBootAttemptTimeout<T>(
   return Promise.race([promise, timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
   });
+}
+
+/** Overrides for `runBootGate`; every field falls back to the policy default. */
+export interface BootGateOptions {
+  /** Retries AFTER the first attempt. Default `BOOT_QUERY_RETRY`. */
+  retry?: number;
+  /** Wait between attempts, by zero-based attempt index. Default `bootQueryRetryDelay`. */
+  delay?: (attemptIndex: number) => number;
+  /** Per-attempt ceiling in ms. Default `ATTEMPT_TIMEOUT_MS`. */
+  attemptTimeoutMs?: number;
+}
+
+/**
+ * Runs one boot gate attempt function to settlement without asking React
+ * Query to retry it. React Query pauses its own retries while
+ * `document.visibilityState` is `"hidden"`, and a hidden or occluded webview
+ * reports hidden, so a gate that relies on query retries parks until the
+ * window is visible again instead of failing closed on its own. This loop
+ * retries with a plain `setTimeout` delay and never consults `document`,
+ * `focusManager`, or `navigator.onLine`.
+ *
+ * With the default timeout and delay, the worst case equals
+ * `bootQueryBudgetMs(retry)` for the same retry count: every attempt burns
+ * its full timeout, plus every delay between attempts.
+ */
+export async function runBootGate<T>(
+  attempt: () => Promise<T>,
+  options?: BootGateOptions,
+): Promise<T> {
+  const retry = options?.retry ?? BOOT_QUERY_RETRY;
+  const delay = options?.delay ?? bootQueryRetryDelay;
+  const attemptTimeoutMs = options?.attemptTimeoutMs ?? ATTEMPT_TIMEOUT_MS;
+  let attemptIndex = 0;
+  for (;;) {
+    try {
+      return await withBootAttemptTimeout(attempt(), attemptTimeoutMs);
+    } catch (error) {
+      if (attemptIndex >= retry) throw error;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delay(attemptIndex));
+      });
+      attemptIndex += 1;
+    }
+  }
 }

@@ -16,6 +16,7 @@ import {
   BOOT_SLOW_NOTICE_MS,
   bootQueryBudgetMs,
   bootQueryRetryDelay,
+  runBootGate,
   withBootAttemptTimeout,
 } from "./bootRetryPolicy";
 
@@ -87,6 +88,76 @@ describe("boot retry policy", () => {
       // must not reject afterwards.
       await vi.advanceTimersByTimeAsync(10_000);
       await expect(fast).resolves.toBe("ok");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a fast gate success without waiting", async () => {
+    vi.useFakeTimers();
+    try {
+      const attempt = vi.fn<() => Promise<string>>().mockResolvedValue("ok");
+      await expect(runBootGate(attempt, { retry: 2 })).resolves.toBe("ok");
+      expect(attempt).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a failing gate with the policy delays and rethrows the last error", async () => {
+    vi.useFakeTimers();
+    try {
+      const attempt = vi
+        .fn<() => Promise<string>>()
+        .mockRejectedValueOnce(new Error("first"))
+        .mockRejectedValueOnce(new Error("second"))
+        .mockRejectedValue(new Error("last"));
+      let settled: string | null = null;
+      const assertion = runBootGate(attempt, { retry: 2 }).then(
+        () => {
+          settled = "resolved";
+        },
+        (error: unknown) => {
+          settled = error instanceof Error ? error.message : String(error);
+        },
+      );
+      // Two immediate failures cost only the real policy delays between them:
+      // 1_000 after the first, 2_000 after the second.
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(attempt).toHaveBeenCalledTimes(2);
+      expect(settled).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+      expect(attempt).toHaveBeenCalledTimes(3);
+      expect(settled).toBe("last");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a hung gate by the budget instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const retry = 2;
+      const budget = bootQueryBudgetMs(retry);
+      let settled: string | null = null;
+      const assertion = runBootGate(() => new Promise<string>(() => {}), {
+        retry,
+      }).then(
+        () => {
+          settled = "resolved";
+        },
+        (error: unknown) => {
+          settled = error instanceof Error ? error.message : String(error);
+        },
+      );
+      await vi.advanceTimersByTimeAsync(budget - 1);
+      expect(settled).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await assertion;
+      expect(settled).toBe(
+        "Boot attempt timed out after 5000 ms waiting for the app to answer",
+      );
     } finally {
       vi.useRealTimers();
     }

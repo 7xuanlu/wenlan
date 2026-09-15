@@ -313,7 +313,7 @@ describe("App - first-run wizard gate", () => {
 
       // A hung IPC call must fail the gate instead of pending forever: each
       // attempt times out, so past the whole budget the gate errors and fails
-      // closed to the wizard. Advance in steps so React Query's retry-delay
+      // closed to the wizard. Advance in steps so the gate's retry-delay
       // timers fire between attempts.
       await act(async () => {
         const budget = bootQueryBudgetMs();
@@ -329,6 +329,46 @@ describe("App - first-run wizard gate", () => {
       expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  // React Query pauses its own retries while document.visibilityState is
+  // "hidden", which is what an occluded WKWebView window reports. The gate
+  // retries in runBootGate with plain setTimeout instead, so it still fails
+  // closed while the window is hidden.
+  it("keeps retrying the gate while the window is hidden", async () => {
+    const originalVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
+    vi.useFakeTimers();
+    try {
+      vi.mocked(shouldShowWizard).mockRejectedValue(new Error("connection refused"));
+      renderApp();
+
+      await act(async () => {
+        const budget = bootQueryBudgetMs();
+        let elapsed = 0;
+        while (elapsed < budget + 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          elapsed += 1_000;
+        }
+      });
+      const wizard = screen.getByTestId("setup-wizard");
+      expect(wizard).toBeInTheDocument();
+      expect(wizard).toHaveAttribute("data-gate-errored", "true");
+      expect(vi.mocked(shouldShowWizard).mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+      if (originalVisibility) {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      } else {
+        Reflect.deleteProperty(document, "visibilityState");
+      }
     }
   });
 
