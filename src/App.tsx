@@ -22,6 +22,7 @@ import {
 import Main from "./components/memory/Main";
 import SetupWizard from "./components/SetupWizard";
 import { RuntimeOverlays } from "./components/RuntimeOverlays";
+import { dragStripHeight } from "./lib/windowChrome";
 
 export default function App() {
   const { t } = useTranslation();
@@ -384,7 +385,10 @@ function FallbackServiceBanner({ onDismiss }: { onDismiss: () => void }) {
       data-testid="fallback-service-banner"
       style={{
         position: "fixed",
-        top: 0,
+        // On macOS the title bar is an overlay: the traffic lights sit in the
+        // top 32px of the webview and would cover the banner's first words.
+        // Start below that strip, like the wizard's own drag region does.
+        top: dragStripHeight(),
         left: 0,
         right: 0,
         zIndex: 70,
