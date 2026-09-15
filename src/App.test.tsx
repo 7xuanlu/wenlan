@@ -139,6 +139,7 @@ vi.mock("./components/UpdaterDialog", () => ({
 
 import { setSetupCompleted, shouldShowWizard } from "./lib/tauri";
 import { resources } from "./i18n/resources";
+import { dragStripHeight } from "./lib/windowChrome";
 
 const STARTING_RUNTIME = resources.en.translation.common.startingRuntime;
 const BOOT = resources.en.translation.boot;
@@ -573,6 +574,9 @@ describe("App - origin-fallback-mode banner", () => {
     // Both surfaces paint a full-viewport box of their own, so the banner is
     // fixed rather than stacked, or one of them would push it off screen.
     expect(banner).toHaveStyle({ position: "fixed" });
+    // Under the macOS overlay title bar the traffic lights own the top strip;
+    // the banner starts below it or its first words are hidden behind them.
+    expect(banner).toHaveStyle({ top: `${dragStripHeight()}px` });
     expect(screen.getByTestId(testid)).toBeInTheDocument();
   });
 
