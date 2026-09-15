@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.18.8](https://github.com/7xuanlu/wenlan/compare/v0.18.7...v0.18.8) (2026-09-15)
+
+
+### Features
+
+* **repair:** authenticate cold runtime resumption ([327dd84](https://github.com/7xuanlu/wenlan/commit/327dd84d00a653ab3f80752520bbfb1aae55cf1e))
+* **repair:** persist preparation status and safe cancellation ([8112e6e](https://github.com/7xuanlu/wenlan/commit/8112e6ea6cdd111e84ad7c8ce2e15dd6b35e4959))
+* **repair:** recover and cancel source repair operations in review ([bce48ca](https://github.com/7xuanlu/wenlan/commit/bce48ca931133c8f34c56c5358d424679f4650fb))
+* **repair:** recover preparation status and safely cancel source changes ([ab2c2bd](https://github.com/7xuanlu/wenlan/commit/ab2c2bd28bf6f0c582fec81e53aba21923ae64a3))
+* **review:** add verified source repairs and improve readability ([#739](https://github.com/7xuanlu/wenlan/issues/739)) ([7806219](https://github.com/7xuanlu/wenlan/commit/780621937ff13493bfa636ad35bd2d0a04e13ab1))
+
+
+### Bug Fixes
+
+* **app:** release refused repair resumption attempts ([8f71044](https://github.com/7xuanlu/wenlan/commit/8f710441fe4abcb498b96848ec8093e4dca173ec))
+* **app:** restore normal service after verified cold repair ([cc9de53](https://github.com/7xuanlu/wenlan/commit/cc9de535a230c1d33a22b82c1dd3b601ae806169))
+* **app:** resume normal service after cold source repair ([0f7089c](https://github.com/7xuanlu/wenlan/commit/0f7089c54f00a6f39ec8c3589797c9a63e23e808))
+* **ci:** route deterministic repair tests to platform owners ([7eb47f3](https://github.com/7xuanlu/wenlan/commit/7eb47f34fab376bbae6103fa2adda2f85cd77606))
+* **ingest:** count Chinese, Japanese and Korean text fairly in the length gates ([#751](https://github.com/7xuanlu/wenlan/issues/751)) ([af44707](https://github.com/7xuanlu/wenlan/commit/af4470799ef37c21f1a6b454d3186dfa3eec1202))
+* **onboarding:** make first-use imports, setup and re-distill reliable ([#747](https://github.com/7xuanlu/wenlan/issues/747)) ([3ac4803](https://github.com/7xuanlu/wenlan/commit/3ac4803b6efa5c1b4d3fb4eeea20aa4ecb3d751e))
+* **onboarding:** recover when setup stalls or the background service never starts ([#753](https://github.com/7xuanlu/wenlan/issues/753)) ([e93a03d](https://github.com/7xuanlu/wenlan/commit/e93a03d0fcf2aefbf55d0fa40265a45a0ccdda97))
+* **repair:** persist operation directories and clarify recovery states ([7ec3139](https://github.com/7xuanlu/wenlan/commit/7ec31397df6b115b274952285ff87ade2b7fd290))
+* **routing:** fill source pins at launch and stop promising pages that cannot come ([#752](https://github.com/7xuanlu/wenlan/issues/752)) ([990d0a1](https://github.com/7xuanlu/wenlan/commit/990d0a1b019e46242e2ee1da0a59b254dcbb980b))
+
 ## [0.18.7](https://github.com/7xuanlu/wenlan/compare/v0.18.6...v0.18.7) (2026-09-13)
 
 
