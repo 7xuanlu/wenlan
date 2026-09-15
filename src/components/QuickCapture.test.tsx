@@ -176,7 +176,7 @@ describe("QuickCapture surfaces a save error instead of swallowing it", () => {
     renderCapture(false);
 
     const textarea = screen.getByPlaceholderText("What's on your mind?");
-    fireEvent.change(textarea, { target: { value: "too short" } });
+    fireEvent.change(textarea, { target: { value: "long enough to save" } });
     fireEvent.click(screen.getByText("Save"));
 
     const alert = await screen.findByRole("alert");
@@ -184,6 +184,19 @@ describe("QuickCapture surfaces a save error instead of swallowing it", () => {
       "Couldn't save: Memory content must be at least 10 characters",
     );
     // The draft is not cleared on a rejected capture -- only onSuccess clears it.
-    expect((textarea as HTMLTextAreaElement).value).toBe("too short");
+    expect((textarea as HTMLTextAreaElement).value).toBe("long enough to save");
+  });
+
+  it("blocks a too-short draft client-side without invoking", async () => {
+    renderCapture(false);
+
+    const textarea = screen.getByPlaceholderText("What's on your mind?");
+    fireEvent.change(textarea, { target: { value: "今天天氣非常晴朗好" } });
+    fireEvent.click(screen.getByText("Save"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Write at least 10 characters before saving.");
+    expect(mockedInvoke).not.toHaveBeenCalled();
+    expect((textarea as HTMLTextAreaElement).value).toBe("今天天氣非常晴朗好");
   });
 });
