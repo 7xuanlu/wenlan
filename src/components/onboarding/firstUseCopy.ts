@@ -75,6 +75,8 @@ export const enFirstUse = {
     recallLabel: "Recall from a new conversation:",
     handoffLabel: "Leave progress behind",
     handoffHint: "Run it when work ends, so the next session can continue.",
+    handoffReadOnlyNote:
+      "ChatGPT can read your memories here but cannot write them back. Capture from a tool that can write, or from Wenlan directly.",
     briefLabel: "Brief a new conversation",
     briefHint: "Run it at the start of a NEW conversation to pick up earlier work.",
     copyCommand: "Copy command",
@@ -184,6 +186,8 @@ export const hansFirstUse = {
     recallLabel: "在新对话中回忆：",
     handoffLabel: "留下工作进度",
     handoffHint: "工作结束时运行，让下一次会话可以接续。",
+    handoffReadOnlyNote:
+      "ChatGPT 可以在这里读取你的记忆，但无法写回。请从能写入的工具或直接从 Wenlan 捕获。",
     briefLabel: "为新对话做简报",
     briefHint: "在新对话开始时运行，接上之前的工作。",
     copyCommand: "复制指令",
@@ -289,6 +293,8 @@ export const hantFirstUse = {
     recallLabel: "在新對話中回憶：",
     handoffLabel: "留下工作進度",
     handoffHint: "工作結束時執行，讓下一次會話可以接續。",
+    handoffReadOnlyNote:
+      "ChatGPT 可以在這裡讀取你的記憶，但無法寫回。請從能寫入的工具或直接從 Wenlan 擷取。",
     briefLabel: "為新對話做簡報",
     briefHint: "在新對話開始時執行，接上之前的工作。",
     copyCommand: "複製指令",

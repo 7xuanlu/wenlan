@@ -267,6 +267,33 @@ describe("IntelligenceSection", () => {
     expect(await screen.findByText("Pinned to Anthropic — currently unavailable, using OpenAI for now.")).toBeInTheDocument();
   });
 
+  // ── Copy truth: a pinned_unavailable route is configured but its model is
+  // not serving, so the COLLAPSED row chip says so instead of plain
+  // "Configured". Mutation proof: dropping the `view.degraded` chip branch
+  // renders "Configured" here and fails the degraded-text assertion.
+  it("pinned_unavailable job: the collapsed row shows the degraded chip, not plain Configured", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(
+      pinnedRouting({
+        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
+      })
+    );
+    renderSection();
+
+    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
+    // Waiting on the routed meta settles the routing query first, so the chip
+    // assertion cannot false-green on the still-loading row. The chip is a
+    // sibling of the name button, so scope chip queries to the header parent.
+    await within(synthesisRow).findByText("OpenAI · gpt-5.2");
+    const synthesisHeader = synthesisRow.parentElement!;
+    expect(within(synthesisHeader).getByText("Configured, model unavailable")).toBeInTheDocument();
+    expect(within(synthesisHeader).queryByText("Running")).not.toBeInTheDocument();
+
+    // The healthy job row keeps the plain Configured chip.
+    const everydayRow = screen.getByText("Everyday model").closest("button")!;
+    await within(everydayRow).findByText("Anthropic · Opus 4.6");
+    expect(within(everydayRow.parentElement!).getByText("Configured")).toBeInTheDocument();
+  });
+
   // ── Headline (d): PINNED_UNAVAILABLE with no pin on the wire (a daemon that
   // predates #357's pin field) — falls back to the generic, unnamed hint
   // rather than rendering "Pinned to null". Mutation proof: forcing

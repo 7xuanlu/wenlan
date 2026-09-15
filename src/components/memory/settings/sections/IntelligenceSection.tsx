@@ -538,7 +538,13 @@ export default function IntelligenceSection({ delay }: { delay: number }) {
         meta={view.meta}
         tip={tip}
         chipState={view.connected ? { kind: "up" } : { kind: "idle" }}
-        chipLabel={view.connected ? t("intelligence.connected") : t("intelligence.notConfigured")}
+        chipLabel={
+          view.degraded
+            ? t("intelligence.pinnedDegradedChip")
+            : view.connected
+              ? t("intelligence.connected")
+              : t("intelligence.notConfigured")
+        }
         expanded={expandedJob === id}
         onToggle={() => toggleJob(id)}
       >

@@ -137,9 +137,24 @@ export default function ClientSetupList({
   };
 
   if (clients && actionable.length === 0) {
+    // A written config is not a live connection. Clients that are configured
+    // but whose family never appeared in the roster still need an editor
+    // restart, so they are named instead of claimed as connected.
+    const pendingRestart = clients.filter(
+      (client) =>
+        readingIsYes(client.already_configured) &&
+        !(connectedFamilies?.has(clientTypeFamily(client.client_type)) ?? false),
+    );
+    if (pendingRestart.length === 0) {
+      return (
+        <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+          {t("connectMatrix.allConnected")}
+        </span>
+      );
+    }
     return (
       <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-        {t("connectMatrix.allConnected")}
+        {t("connectMatrix.allConfiguredRestart", { tools: pendingRestart.map((client) => client.name).join(", ") })}
       </span>
     );
   }
