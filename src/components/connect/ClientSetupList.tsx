@@ -8,7 +8,7 @@ import {
   installClientPlugin,
   type McpClient,
 } from "../../lib/tauri";
-import { readingIsYes } from "../../lib/reading";
+import { readingIsNo, readingIsYes } from "../../lib/reading";
 import { isPluginClient } from "./pluginClients";
 import { unreadPluginWriteRisk } from "./setupRisk";
 import { clientTypeFamily } from "../../lib/agents";
@@ -139,10 +139,12 @@ export default function ClientSetupList({
   if (clients && actionable.length === 0) {
     // A written config is not a live connection. Clients that are configured
     // but whose family never appeared in the roster still need an editor
-    // restart, so they are named instead of claimed as connected.
+    // restart, so they are named instead of claimed as connected. An
+    // undetected client is never named: nothing measured says it is there.
     const pendingRestart = clients.filter(
       (client) =>
         readingIsYes(client.already_configured) &&
+        !readingIsNo(client.detected) &&
         !(connectedFamilies?.has(clientTypeFamily(client.client_type)) ?? false),
     );
     if (pendingRestart.length === 0) {

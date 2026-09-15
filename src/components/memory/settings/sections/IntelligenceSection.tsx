@@ -537,7 +537,7 @@ export default function IntelligenceSection({ delay }: { delay: number }) {
         hint={on ? summary : undefined}
         meta={view.meta}
         tip={tip}
-        chipState={view.connected ? { kind: "up" } : { kind: "idle" }}
+        chipState={view.degraded ? { kind: "unknown" } : view.connected ? { kind: "up" } : { kind: "idle" }}
         chipLabel={
           view.degraded
             ? t("intelligence.pinnedDegradedChip")

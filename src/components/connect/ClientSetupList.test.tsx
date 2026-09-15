@@ -174,7 +174,7 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["claude-code"]));
 
     expect(await screen.findByText("Every detected tool is already connected")).toBeInTheDocument();
-    expect(screen.queryByText(/to activate it/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/to activate/)).not.toBeInTheDocument();
   });
 
   it("names configured-but-unseen tools as needing a restart, not as connected", async () => {
@@ -184,7 +184,7 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     ]);
     renderList();
 
-    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code, Cursor to activate it.")).toBeInTheDocument();
+    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code, Cursor to activate.")).toBeInTheDocument();
     expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
   });
 
@@ -195,7 +195,19 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     ]);
     renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["cursor"]));
 
-    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code to activate it.")).toBeInTheDocument();
+    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code to activate.")).toBeInTheDocument();
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+  });
+
+  it("never names an undetected client under the restart note, even when configured", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+      { name: "Gemini CLI", client_type: "gemini_cli", config_path: "~/.gemini/settings.json", detected: NO, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+    ]);
+    renderList();
+
+    expect(await screen.findByText("Every detected tool is set up. Restart Cursor to activate.")).toBeInTheDocument();
+    expect(screen.queryByText("Gemini CLI")).not.toBeInTheDocument();
     expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
   });
 

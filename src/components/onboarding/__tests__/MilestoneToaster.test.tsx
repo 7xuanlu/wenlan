@@ -123,8 +123,9 @@ describe("MilestoneToaster", () => {
     await waitFor(() =>
       expect(screen.getByText(/Fresh note from the daemon/i)).toBeInTheDocument(),
     );
-    // No "— <source>" attribution line should appear.
-    expect(document.body.textContent).not.toMatch(/— \b/);
+    // No attribution line should appear. The preview itself says "from the
+    // daemon", so the guard excludes that wording.
+    expect(document.body.textContent).not.toMatch(/from (?!the daemon)/);
   });
 
   it("renders agent subtitle for second-agent", async () => {

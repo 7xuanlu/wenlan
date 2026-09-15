@@ -287,11 +287,17 @@ describe("IntelligenceSection", () => {
     const synthesisHeader = synthesisRow.parentElement!;
     expect(within(synthesisHeader).getByText("Configured, model unavailable")).toBeInTheDocument();
     expect(within(synthesisHeader).queryByText("Running")).not.toBeInTheDocument();
+    // Degraded is not success: the chip wears the warning tone, never green.
+    const degradedChipClass = within(synthesisHeader).getByText("Configured, model unavailable").closest("span[aria-live]")?.getAttribute("class") ?? "";
+    expect(degradedChipClass).toContain("mem-status-warning");
+    expect(degradedChipClass).not.toContain("mem-status-success");
 
     // The healthy job row keeps the plain Configured chip.
     const everydayRow = screen.getByText("Everyday model").closest("button")!;
     await within(everydayRow).findByText("Anthropic · Opus 4.6");
     expect(within(everydayRow.parentElement!).getByText("Configured")).toBeInTheDocument();
+    const healthyChipClass = within(everydayRow.parentElement!).getByText("Configured").closest("span[aria-live]")?.getAttribute("class") ?? "";
+    expect(healthyChipClass).toContain("mem-status-success");
   });
 
   // ── Headline (d): PINNED_UNAVAILABLE with no pin on the wire (a daemon that
