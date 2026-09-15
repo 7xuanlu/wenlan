@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { invoke } from "@tauri-apps/api/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import QuickCapture from "./QuickCapture";
+
+const mockedInvoke = vi.mocked(invoke);
 
 // Real user agents from the two webviews that matter here. The quick-capture
 // window is transparent and undecorated on both, but only macOS turns the
@@ -158,5 +161,29 @@ describe("QuickCapture standalone window shadow is platform-scoped", () => {
       expect(card.style.boxShadow).not.toBe("none");
       expect(card.style.boxShadow).toContain("32px");
     }
+  });
+});
+
+describe("QuickCapture surfaces a save error instead of swallowing it", () => {
+  beforeEach(() => {
+    mockedInvoke.mockReset();
+  });
+
+  it("shows an inline localized error and keeps the draft when the capture invoke rejects", async () => {
+    mockedInvoke.mockRejectedValueOnce(
+      new Error("Memory content must be at least 10 characters"),
+    );
+    renderCapture(false);
+
+    const textarea = screen.getByPlaceholderText("What's on your mind?");
+    fireEvent.change(textarea, { target: { value: "too short" } });
+    fireEvent.click(screen.getByText("Save"));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Couldn't save: Memory content must be at least 10 characters",
+    );
+    // The draft is not cleared on a rejected capture -- only onSuccess clears it.
+    expect((textarea as HTMLTextAreaElement).value).toBe("too short");
   });
 });
