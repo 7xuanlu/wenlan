@@ -894,6 +894,34 @@ export const DOWNLOAD_STALL_MS = 90_000;
  */
 export const MODEL_LOAD_DEADLINE_MS = 15 * 60_000;
 
+/**
+ * How long "Start the service" waits for the freshly spawned daemon to answer
+ * before the row is re-probed. `start_daemon_sidecar` returns as soon as the
+ * process is spawned, not once it serves, and the daemon needs a few seconds
+ * to open its database and bind the port. Probing on the spot always found
+ * it still unreachable, so the row went straight back to "Couldn't set up"
+ * and the button read as broken until the user pressed Retry by hand.
+ */
+export const SERVICE_START_WAIT_MS = 30_000;
+/** Interval between reachability polls during that wait. */
+export const SERVICE_START_POLL_MS = 1_000;
+
+/**
+ * Resolve once the daemon answers, or once the wait is spent. Either way the
+ * caller re-runs the row: only its own store-and-read-back round trip may
+ * turn it green, and a still-unreachable daemon after the wait is reported
+ * by that probe, not guessed here.
+ */
+async function waitForDaemonReachable(): Promise<void> {
+  const deadline = Date.now() + SERVICE_START_WAIT_MS;
+  for (;;) {
+    const wire = await getWireState().catch(() => null);
+    if (wire?.daemon.reachable) return;
+    if (Date.now() >= deadline) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, SERVICE_START_POLL_MS));
+  }
+}
+
 /** A failed row: which class of failure, the raw text, and an optional
  *  override heading for failures that have their own sentence (starting the
  *  service, say) rather than a generic class. */
@@ -1302,9 +1330,9 @@ function SettingUpStep({
       });
       startDaemonSidecar().then(
         (result) => {
-          startingDaemonRef.current = false;
-          setStartingDaemon(false);
           if (result.status === "failed") {
+            startingDaemonRef.current = false;
+            setStartingDaemon(false);
             setErrors((prev) => ({
               ...prev,
               [row.id]: {
@@ -1314,10 +1342,16 @@ function SettingUpStep({
             }));
             return;
           }
-          // started / already_running / launchd_managed. Re-run the row
-          // rather than declaring victory: only the probe round trip can
-          // say the service actually serves.
-          runRow(row);
+          // started / already_running / launchd_managed. Give the process a
+          // moment to answer, then re-run the row rather than declaring
+          // victory: only the probe round trip can say the service serves.
+          // The button stays in its starting state for the whole wait so
+          // Retry cannot race the spawn.
+          void waitForDaemonReachable().then(() => {
+            startingDaemonRef.current = false;
+            setStartingDaemon(false);
+            runRow(row);
+          });
         },
         (err) => {
           startingDaemonRef.current = false;

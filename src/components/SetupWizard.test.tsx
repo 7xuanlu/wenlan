@@ -5,6 +5,7 @@ import {
   SetupWizard,
   displayedStatuses,
   DOWNLOAD_STALL_MS,
+  SERVICE_START_POLL_MS,
   MODEL_LOAD_DEADLINE_MS,
 } from "./SetupWizard";
 import { i18n } from "../i18n";
@@ -2261,6 +2262,56 @@ describe("SetupWizard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
     });
+    expect(storeMemory).toHaveBeenCalled();
+  });
+
+  // Live finding (2026-09-14 dev-app run): the sidecar needs a few seconds
+  // to serve after it is spawned, and a probe fired on the spot always found
+  // it unreachable, so the button read as broken until Retry was pressed.
+  it("waits for the freshly started service to answer before re-probing", async () => {
+    const down = {
+      daemon: { base_url: "http://127.0.0.1:7878", reachable: false, version: null, error: "connection refused" },
+      mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+      clients: [],
+    };
+    const up = {
+      daemon: { base_url: "http://127.0.0.1:7878", reachable: true, version: "0.12.0", error: null },
+      mcp_binary: { command: "wenlan-mcp", args: [], candidates: [] },
+      clients: [],
+    };
+    // The row's own first probe, then three polls that still miss, then up.
+    (getWireState as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(down)
+      .mockResolvedValueOnce(down)
+      .mockResolvedValueOnce(down)
+      .mockResolvedValueOnce(down)
+      .mockResolvedValue(up);
+    (startDaemonSidecar as ReturnType<typeof vi.fn>).mockResolvedValue({ status: "started" });
+
+    renderWizard({ initialStep: "setting-up" });
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+    });
+    const probesBefore = (getWireState as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByTestId("task-start-daemon"));
+      // Spawned, first poll missed: still starting, no fresh failure shown.
+      await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+      expect(screen.getByTestId("task-start-daemon")).toBeDisabled();
+      expect(screen.getByTestId("task-retry-daemon")).toBeDisabled();
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
+      // Two more misses, then the daemon answers and the row re-runs itself.
+      await act(async () => { await vi.advanceTimersByTimeAsync(SERVICE_START_POLL_MS * 3 + 100); });
+    } finally {
+      vi.useRealTimers();
+    }
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
+    });
+    // The wait polled (3 misses + 1 hit) and the row probed once more itself.
+    expect((getWireState as ReturnType<typeof vi.fn>).mock.calls.length).toBe(probesBefore + 5);
     expect(storeMemory).toHaveBeenCalled();
   });
 
