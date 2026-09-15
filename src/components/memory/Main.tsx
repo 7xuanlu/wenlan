@@ -54,6 +54,7 @@ import { activeNavigationForView, type View } from "./navigation/viewState";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
+import { useLaunchPinFill } from "../../lib/launchPinFill";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
@@ -92,6 +93,11 @@ export default function Main({
 }: MainProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  // Give the unpinned routing jobs a source once per launch. Main is the first
+  // screen a set-up user reaches, and the only fills before this one lived in
+  // the webview, so a quit during the model download left both jobs blank
+  // forever. See src/lib/launchPinFill.ts.
+  useLaunchPinFill();
   const mainContentRef = useRef<HTMLElement>(null);
   const pageDraftEditorRef = useRef<PageDraftEditorHandle>(null);
   const pendingDraftNavigationRef = useRef<{

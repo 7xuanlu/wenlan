@@ -41,6 +41,10 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     };
+    // The fixture has no daemon routing, which is exactly what a daemon
+    // without the routing endpoint reports. The launch-time pin fill reads it
+    // on every mount of the main shell and writes nothing on null.
+    case "get_resolved_routing": return null;
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };

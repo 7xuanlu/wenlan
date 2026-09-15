@@ -119,11 +119,24 @@ pub async fn handle_update_config(
     }
     // Per-job source pins. Validated before save so an invalid value 4xxes
     // without persisting; `""` clears the pin, omitted preserves it.
+    //
+    // `only_if_unset` scopes these two fields to a job that holds no pin yet.
+    // It makes a fill-the-blanks write atomic: the app reads routing, sees a
+    // job unpinned and writes it, and a pin the user chose between those two
+    // requests survives instead of being overwritten. Validation still runs on
+    // a skipped value, so a bad request is a 4xx either way.
+    let only_if_unset = req.only_if_unset.unwrap_or(false);
     if let Some(v) = req.everyday_source {
-        cfg.everyday_source = validate_everyday_source(&v)?;
+        let pin = validate_everyday_source(&v)?;
+        if !(only_if_unset && cfg.everyday_source.is_some()) {
+            cfg.everyday_source = pin;
+        }
     }
     if let Some(v) = req.synthesis_source {
-        cfg.synthesis_source = validate_synthesis_source(&v)?;
+        let pin = validate_synthesis_source(&v)?;
+        if !(only_if_unset && cfg.synthesis_source.is_some()) {
+            cfg.synthesis_source = pin;
+        }
     }
     if let Some(v) = req.page_map_auto_suggest {
         cfg.page_map_auto_suggest = v;
@@ -1526,6 +1539,100 @@ mod external_llm_lifecycle_tests {
         let (status, _) = put_config(&app, serde_json::json!({"everyday_source": "gpt4"})).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(config::load_config().everyday_source.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_if_unset_fills_a_blank_pin_and_never_overwrites_one() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
+        let app = crate::router::build_router(state);
+
+        // Blank pins: the flagged write fills both, like a plain write would.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "everyday_source": "on_device",
+                "synthesis_source": "on_device",
+                "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "on_device");
+
+        // A second flagged write leaves both alone. This is the whole point:
+        // the app reads routing, then writes what it saw unset, and a pin the
+        // user chose in between must survive.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "everyday_source": "anthropic",
+                "synthesis_source": "external",
+                "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "on_device");
+        let cfg = config::load_config();
+        assert_eq!(cfg.everyday_source.as_deref(), Some("on_device"));
+        assert_eq!(cfg.synthesis_source.as_deref(), Some("on_device"));
+
+        // It scopes the two pins only. Another field in the same request is
+        // written normally.
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "everyday_source": "anthropic",
+                "clipboard_enabled": false,
+                "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["clipboard_enabled"], false);
+
+        // One job pinned, the other blank: only the blank one is filled.
+        let (status, _) = put_config(&app, serde_json::json!({"synthesis_source": ""})).await;
+        assert_eq!(status, StatusCode::OK);
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "everyday_source": "anthropic",
+                "synthesis_source": "external",
+                "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert_eq!(body["synthesis_source"], "external");
+
+        // An invalid value is still a 4xx, flag or not, and persists nothing.
+        let (status, _) = put_config(
+            &app,
+            serde_json::json!({"everyday_source": "gpt4", "only_if_unset": true}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            config::load_config().everyday_source.as_deref(),
+            Some("on_device")
+        );
+
+        // Omitting the flag keeps the overwrite behavior every older client
+        // relies on.
+        let (status, body) =
+            put_config(&app, serde_json::json!({"everyday_source": "anthropic"})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "anthropic");
     }
 
     #[tokio::test(flavor = "current_thread")]

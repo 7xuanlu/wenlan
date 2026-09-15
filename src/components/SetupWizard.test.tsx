@@ -1426,7 +1426,7 @@ describe("SetupWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     // DoneStep's effect runs on the full run: derived pins written, summary shown.
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic"));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
     expect(
       await screen.findByText(
         "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
@@ -1645,7 +1645,7 @@ describe("SetupWizard", () => {
     await act(async () => {
       download.resolve();
     });
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true));
     expect(setSourcePin).toHaveBeenCalledTimes(1);
   });
 
@@ -1665,7 +1665,7 @@ describe("SetupWizard", () => {
     expect(setSourcePin).not.toHaveBeenCalled();
 
     download.resolve();
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true));
   });
 
   // Patch semantics are the preservation contract: a job the user already
@@ -1691,7 +1691,7 @@ describe("SetupWizard", () => {
 
     renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
 
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", null));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", null, true));
     expect(daemonPins).toEqual({ everyday: "on_device", synthesis: "external" });
   });
 
@@ -1709,7 +1709,7 @@ describe("SetupWizard", () => {
     renderWizard({ initialStep: "setting-up", initialPendingModelId: "qwen3-4b-instruct-2507" });
 
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledTimes(2), { timeout: 4000 });
-    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "on_device");
+    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "on_device", true);
     // The retry re-reads routing rather than replaying the first read.
     expect(getResolvedRouting).toHaveBeenCalledTimes(2);
     expect(error).not.toHaveBeenCalled();
@@ -2380,7 +2380,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     );
     renderDone(true);
 
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic"));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
     expect(
       await screen.findByText(
         "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
@@ -2448,7 +2448,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     });
     renderDone(true);
 
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith(null, "anthropic"));
+    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith(null, "anthropic", true));
     expect(setSourcePin).toHaveBeenCalledTimes(1);
     expect(
       await screen.findByText(
@@ -2517,7 +2517,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     renderDone(true);
 
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledTimes(2), { timeout: 4000 });
-    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "anthropic");
+    expect(setSourcePin).toHaveBeenLastCalledWith("on_device", "anthropic", true);
     expect(getResolvedRouting).toHaveBeenCalledTimes(2);
     expect(
       await screen.findByText(

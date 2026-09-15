@@ -1623,10 +1623,17 @@ impl WenlanClient {
     /// Written as raw JSON because the pinned `UpdateConfigRequest` predates these
     /// fields (mirrors `set_external_llm`). Only call once the routing endpoint is
     /// known present — never PATCH unknown fields at an old daemon.
+    ///
+    /// `only_if_unset` asks the daemon to write a named pin only for a job that
+    /// holds none, which is what a fill-the-blanks caller means: it read routing
+    /// first, and a pin the user chose since that read must win. The field is
+    /// sent only when it is true, so an unflagged write is byte-identical to
+    /// what this client sent before the flag existed.
     pub async fn set_source_pin(
         &self,
         everyday_source: Option<String>,
         synthesis_source: Option<String>,
+        only_if_unset: bool,
     ) -> Result<(), String> {
         let mut body = sparse_update_config(empty_update())?;
         if let Some(v) = everyday_source {
@@ -1634,6 +1641,9 @@ impl WenlanClient {
         }
         if let Some(v) = synthesis_source {
             body["synthesis_source"] = serde_json::Value::String(v);
+        }
+        if only_if_unset {
+            body["only_if_unset"] = serde_json::Value::Bool(true);
         }
         let _resp: serde_json::Value = self.put_json("/api/config", &body).await?;
         Ok(())
@@ -1709,6 +1719,7 @@ fn empty_update() -> wenlan_types::requests::UpdateConfigRequest {
         everyday_source: None,
         synthesis_source: None,
         page_map_auto_suggest: None,
+        only_if_unset: None,
         // Tri-state (Option<Option<_>>): outer None = omit from JSON =
         // preserve the stored key. Note sparse_update_config strips nulls,
         // so a future caller passing Some(None) to clear the key must bypass
@@ -2656,7 +2667,7 @@ mod tests {
         };
 
         client
-            .set_source_pin(Some("external".into()), None)
+            .set_source_pin(Some("external".into()), None, false)
             .await
             .unwrap();
 
@@ -2664,6 +2675,27 @@ mod tests {
         assert_eq!(
             request_body(&request),
             serde_json::json!({"everyday_source": "external"})
+        );
+    }
+
+    #[tokio::test]
+    async fn set_source_pin_sends_only_if_unset_when_filling_blanks() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .set_source_pin(Some("on_device".into()), None, true)
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({"everyday_source": "on_device", "only_if_unset": true})
         );
     }
 

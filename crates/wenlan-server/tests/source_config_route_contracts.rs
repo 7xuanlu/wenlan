@@ -184,6 +184,7 @@ fn update_config_request(
         everyday_source: everyday_source.map(str::to_string),
         synthesis_source: None,
         page_map_auto_suggest: None,
+        only_if_unset: None,
     }
 }
 

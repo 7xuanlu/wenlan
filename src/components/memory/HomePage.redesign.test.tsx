@@ -48,6 +48,7 @@ vi.mock("../../lib/tauri", async () => {
     getApiKey: vi.fn(),
     getExternalLlm: vi.fn(),
     getOnDeviceModel: vi.fn(),
+    getResolvedRouting: vi.fn(),
   };
 });
 
@@ -98,6 +99,39 @@ function withAnthropicKey() {
   vi.mocked(tauri.getApiKey).mockResolvedValue("sk-ant-...abcd");
 }
 
+/**
+ * Resolved routing with the everyday job in the given mode.
+ *
+ * A configured provider only compiles pages once the everyday job is pinned to
+ * a source; an unpinned job routes to nothing, whatever the pool holds.
+ */
+function routing(mode: "pinned" | "unconfigured"): tauri.ResolvedRouting {
+  const pinned = mode === "pinned";
+  return {
+    everyday: {
+      source: pinned ? "anthropic" : "basic",
+      model: pinned ? "claude-haiku-4-5" : null,
+      mode,
+      pin: pinned ? "anthropic" : null,
+    },
+    synthesis: {
+      source: pinned ? "anthropic" : "none",
+      model: pinned ? "claude-sonnet-4-6" : null,
+      mode,
+      pin: pinned ? "anthropic" : null,
+    },
+    pool: {
+      anthropic: {
+        configured: true,
+        everyday_model: "claude-haiku-4-5",
+        synthesis_model: "claude-sonnet-4-6",
+      },
+      external: null,
+      on_device: null,
+    },
+  };
+}
+
 const nowIso = new Date().toISOString();
 
 function page(overrides: Partial<tauri.Page> & Pick<tauri.Page, "id" | "title">): tauri.Page {
@@ -145,6 +179,9 @@ beforeEach(async () => {
     selected: null,
     models: [],
   });
+  // Default: whatever provider a test turns on is also pinned for background
+  // work, which is the state the app writes for itself at launch.
+  vi.mocked(tauri.getResolvedRouting).mockResolvedValue(routing("pinned"));
   vi.mocked(tauri.getMemoryStats).mockResolvedValue({
     total: 0,
     new_today: 0,
@@ -1490,6 +1527,73 @@ describe("HomePage redesign", () => {
       expect(empty).toHaveTextContent(/as patterns emerge in your memories/),
     );
     expect(within(empty).queryByRole("button", { name: "Turn on a model" })).toBeNull();
+  });
+
+  it("stops promising pages when the everyday job is unpinned, and offers the fix", async () => {
+    const onOpenIntelligenceSettings = vi.fn();
+    const user = userEvent.setup();
+    // The state a user lands in after quitting during the model download: a
+    // provider is on, nothing routes background work to it, so no page will
+    // ever compile and the deadline promise is a lie.
+    withAnthropicKey();
+    vi.mocked(tauri.getResolvedRouting).mockResolvedValue(routing("unconfigured"));
+
+    renderHome({ onOpenIntelligenceSettings });
+
+    const empty = await screen.findByTestId("wiki-page-empty");
+    await waitFor(() =>
+      expect(empty).toHaveTextContent(
+        /Pages start compiling once a model is chosen for background work/,
+      ),
+    );
+    expect(empty).not.toHaveTextContent(/usually within a day/);
+
+    await user.click(within(empty).getByRole("button", { name: "Choose a model" }));
+    expect(onOpenIntelligenceSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the compiling promise on a daemon with no routing endpoint", async () => {
+    // Pre-#357 daemons answer null: they have no pins, so the promise is as
+    // true there as it was before pins existed.
+    withAnthropicKey();
+    vi.mocked(tauri.getResolvedRouting).mockResolvedValue(null);
+
+    renderHome();
+
+    const empty = await screen.findByTestId("wiki-page-empty");
+    await waitFor(() =>
+      expect(empty).toHaveTextContent(/usually within a day of regular use/),
+    );
+    expect(within(empty).queryByRole("button", { name: "Choose a model" })).toBeNull();
+  });
+
+  it("promises nothing while the routing answer is still unknown", async () => {
+    withAnthropicKey();
+    vi.mocked(tauri.getResolvedRouting).mockImplementation(() => new Promise(() => {}));
+
+    renderHome();
+
+    const empty = await screen.findByTestId("wiki-page-empty");
+    expect(empty).toHaveTextContent("No pages yet.");
+    expect(empty).not.toHaveTextContent(/usually within a day/);
+    expect(empty).not.toHaveTextContent(/once a model is chosen/);
+    expect(within(empty).queryByRole("button", { name: "Choose a model" })).toBeNull();
+    expect(within(empty).getByRole("button", { name: "Write a page" })).toBeInTheDocument();
+  });
+
+  it("names the missing provider, not the missing pin, when there is no provider", async () => {
+    // Both are unset on a fresh install. The precondition the user has to meet
+    // first is the provider, and that copy must not wait on the routing read.
+    vi.mocked(tauri.getResolvedRouting).mockResolvedValue(routing("unconfigured"));
+
+    renderHome();
+
+    const empty = await screen.findByTestId("wiki-page-empty");
+    await waitFor(() =>
+      expect(empty).toHaveTextContent(/once a local model or an API key is turned on/),
+    );
+    expect(within(empty).getByRole("button", { name: "Turn on a model" })).toBeInTheDocument();
+    expect(within(empty).queryByRole("button", { name: "Choose a model" })).toBeNull();
   });
 
   it("commits to neither variant while the provider queries are unresolved", async () => {

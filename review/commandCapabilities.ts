@@ -36,6 +36,10 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "active_import_batches_cmd",
     // The toolbar Activity button reads it on every screen.
     "get_activity",
+    // The main shell reads routing once per launch, to give an unpinned
+    // background job a source. Shared chrome, so it belongs in the contract
+    // rather than in a list of screens that are allowed to fail.
+    "get_resolved_routing",
   ],
   wikiAndPages: [
     "list_pages",

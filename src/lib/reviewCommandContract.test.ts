@@ -74,7 +74,6 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "get_on_device_model",
   "get_profile_narrative",
   "get_remote_access_status",
-  "get_resolved_routing",
   "get_session_snapshots",
   "get_setup_completed",
   "get_telemetry_status",

@@ -5012,18 +5012,27 @@ pub async fn get_resolved_routing(
 /// Patch the per-job source pins (daemon ≥ PR #357). Each arg: `null` leaves the
 /// pin untouched, `""` clears it, a source name pins. Only call once
 /// `get_resolved_routing` returned `Some` — never at an old daemon.
+///
+/// `onlyIfUnset` is how a fill-the-blanks caller keeps its read and its write
+/// from racing the user: the daemon writes a named pin only for a job that has
+/// none. Omitted or false overwrites, which is what an explicit choice means.
 #[tauri::command]
 pub async fn set_source_pin(
     state: tauri::State<'_, State>,
     everyday_source: Option<String>,
     synthesis_source: Option<String>,
+    only_if_unset: Option<bool>,
 ) -> Result<(), String> {
     let client = {
         let s = state.read().await;
         s.client.clone()
     };
     client
-        .set_source_pin(everyday_source, synthesis_source)
+        .set_source_pin(
+            everyday_source,
+            synthesis_source,
+            only_if_unset.unwrap_or(false),
+        )
         .await?;
     log::info!("[settings] Source pin updated — restart daemon to apply");
     Ok(())
