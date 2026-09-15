@@ -7,7 +7,7 @@
  * checked, so the two together still cover what one slow end-to-end test used
  * to cover on its own.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   ATTEMPT_TIMEOUT_MS,
@@ -16,6 +16,7 @@ import {
   BOOT_SLOW_NOTICE_MS,
   bootQueryBudgetMs,
   bootQueryRetryDelay,
+  withBootAttemptTimeout,
 } from "./bootRetryPolicy";
 
 describe("boot retry policy", () => {
@@ -61,5 +62,33 @@ describe("boot retry policy", () => {
     expect(BOOT_SLOW_NOTICE_MS).toBeLessThan(bootQueryBudgetMs());
     // And it must outlast a normal cold start, or every launch flashes it.
     expect(BOOT_SLOW_NOTICE_MS).toBeGreaterThanOrEqual(2 * ATTEMPT_TIMEOUT_MS);
+  });
+
+  it("times out a hung boot attempt instead of waiting forever", async () => {
+    vi.useFakeTimers();
+    try {
+      const hung = withBootAttemptTimeout(new Promise<string>(() => {}), 5000);
+      const timedOut = expect(hung).rejects.toThrow(
+        "Boot attempt timed out after 5000 ms waiting for the app to answer",
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      await timedOut;
+
+      const fast = withBootAttemptTimeout(
+        new Promise<string>((resolve) => {
+          setTimeout(() => resolve("ok"), 10);
+        }),
+        5000,
+      );
+      const settled = expect(fast).resolves.toBe("ok");
+      await vi.advanceTimersByTimeAsync(10);
+      await settled;
+      // The timer is cleared when the promise settles: running well past it
+      // must not reject afterwards.
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(fast).resolves.toBe("ok");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

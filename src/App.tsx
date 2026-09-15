@@ -18,6 +18,7 @@ import {
   BOOT_QUERY_RETRY,
   BOOT_SLOW_NOTICE_MS,
   bootQueryRetryDelay,
+  withBootAttemptTimeout,
 } from "./lib/bootRetryPolicy";
 import Main from "./components/memory/Main";
 import SetupWizard from "./components/SetupWizard";
@@ -29,7 +30,7 @@ export default function App() {
   const queryClient = useQueryClient();
   const { data: showWizard, isPending: wizardPending, isError: wizardError } = useQuery({
     queryKey: ["shouldShowWizard"],
-    queryFn: shouldShowWizard,
+    queryFn: () => withBootAttemptTimeout(shouldShowWizard()),
     staleTime: Infinity,
     // Overrides main.tsx's global retry:false — the first-run daemon install
     // (app/src/lib.rs) is spawned async and races this query, so it needs to

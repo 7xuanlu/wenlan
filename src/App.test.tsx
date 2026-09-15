@@ -67,16 +67,20 @@ vi.mock("@tauri-apps/api/window", () => ({
 // this file substitutes a two-attempt policy and asserts only the branching
 // it owns. The production schedule and its budget are pinned as arithmetic in
 // src/lib/bootRetryPolicy.test.ts.
-vi.mock("./lib/bootRetryPolicy", () => ({
-  ATTEMPT_TIMEOUT_MS: 5000,
-  RUST_HEALTH_LOOP_BUDGET_MS: 152_200,
-  BOOT_QUERY_RETRY: 1,
-  // Shrunk with the rest of the ladder: the production 15s would outlast the
-  // two-attempt policy above, so the notice could never render here.
-  BOOT_SLOW_NOTICE_MS: 20,
-  bootQueryRetryDelay: () => 10,
-  bootQueryBudgetMs: () => 10_010,
-}));
+vi.mock("./lib/bootRetryPolicy", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lib/bootRetryPolicy")>();
+  return {
+    ...actual,
+    ATTEMPT_TIMEOUT_MS: 5000,
+    RUST_HEALTH_LOOP_BUDGET_MS: 152_200,
+    BOOT_QUERY_RETRY: 1,
+    // Shrunk with the rest of the ladder: the production 15s would outlast the
+    // two-attempt policy above, so the notice could never render here.
+    BOOT_SLOW_NOTICE_MS: 20,
+    bootQueryRetryDelay: () => 10,
+    bootQueryBudgetMs: () => 10_010,
+  };
+});
 
 // Heavy real children — swap for markers so this test only pins App's own
 // wizard-vs-home branching, not Main's or SetupWizard's internals.
@@ -138,6 +142,7 @@ vi.mock("./components/UpdaterDialog", () => ({
 }));
 
 import { setSetupCompleted, shouldShowWizard } from "./lib/tauri";
+import { bootQueryBudgetMs } from "./lib/bootRetryPolicy";
 import { resources } from "./i18n/resources";
 import { dragStripHeight } from "./lib/windowChrome";
 
@@ -291,15 +296,40 @@ describe("App - first-run wizard gate", () => {
   // "Starting Wenlan" can hold for the better part of three minutes. For all
   // of it the screen used to say one sentence that named nothing.
   it("names what it is waiting for once the boot wait runs long", async () => {
-    vi.mocked(shouldShowWizard).mockReturnValue(new Promise<boolean>(() => {}));
-    renderApp();
+    vi.useFakeTimers();
+    try {
+      vi.mocked(shouldShowWizard).mockReturnValue(new Promise<boolean>(() => {}));
+      renderApp();
 
-    await screen.findByRole("status");
-    expect(screen.queryByTestId("boot-slow-notice")).not.toBeInTheDocument();
-    // The mocked policy above shrinks the 15s threshold to 20ms.
-    expect(await screen.findByTestId("boot-slow-notice")).toHaveTextContent(
-      BOOT.stillWaiting,
-    );
+      expect(screen.getByRole("status")).toBeInTheDocument();
+      expect(screen.queryByTestId("boot-slow-notice")).not.toBeInTheDocument();
+      // The mocked policy above shrinks the 15s threshold to 20ms.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(20);
+      });
+      expect(screen.getByTestId("boot-slow-notice")).toHaveTextContent(
+        BOOT.stillWaiting,
+      );
+
+      // A hung IPC call must fail the gate instead of pending forever: each
+      // attempt times out, so past the whole budget the gate errors and fails
+      // closed to the wizard. Advance in steps so React Query's retry-delay
+      // timers fire between attempts.
+      await act(async () => {
+        const budget = bootQueryBudgetMs();
+        let elapsed = 0;
+        while (elapsed < budget + 1_000) {
+          await vi.advanceTimersByTimeAsync(1_000);
+          elapsed += 1_000;
+        }
+      });
+      const wizard = screen.getByTestId("setup-wizard");
+      expect(wizard).toBeInTheDocument();
+      expect(wizard).toHaveAttribute("data-gate-errored", "true");
+      expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // A failed setSetupCompleted must leave the gate alone. Invalidating it would

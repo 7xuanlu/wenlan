@@ -73,3 +73,25 @@ export function bootQueryBudgetMs(retry: number = BOOT_QUERY_RETRY): number {
  * wait that is still healthy, not a deadline.
  */
 export const BOOT_SLOW_NOTICE_MS = 15_000;
+
+/**
+ * Bounds one gate attempt: a hung IPC call must cost one attempt, not the
+ * whole gate. React Query only retries after the promise settles, so without
+ * this a `should_show_wizard` that never answers holds the boot gate pending
+ * forever. The timer is cleared as soon as the promise settles, so a fast
+ * answer never trips a late rejection.
+ */
+export function withBootAttemptTimeout<T>(
+  promise: Promise<T>,
+  ms: number = ATTEMPT_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Boot attempt timed out after ${ms} ms waiting for the app to answer`));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+}
