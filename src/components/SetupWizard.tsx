@@ -15,6 +15,7 @@ import {
   storeMemory,
   getMemoryDetail,
   deleteMemory,
+  startDaemonSidecar,
   type McpClient,
   type ImportResult,
   type ImportChatExportResponse,
@@ -22,6 +23,11 @@ import {
   type UndeterminedInput,
 } from "../lib/tauri";
 import { readingIsYes } from "../lib/reading";
+import {
+  describeSetupError,
+  setupErrorHeadingKey,
+  type SetupErrorKind,
+} from "../lib/setupErrors";
 import { fillUnsetPinsWithRetry, type SourcePin } from "../lib/routingPins";
 import { dragStripHeight } from "../lib/windowChrome";
 import { ImportFlow } from "./ChatImport/ImportFlow";
@@ -61,6 +67,11 @@ interface SetupWizardProps {
   // download. The app never passes these; ?model=/?import= in preview do.
   initialPendingModelId?: string | null;
   initialPendingImportPick?: VaultPick | null;
+  // True when App's boot gate ERRORED rather than answered: the daemon never
+  // replied inside the whole bootRetryPolicy budget. The wizard is then
+  // fail-closed scaffolding around a connection problem, not a first run, and
+  // it says so instead of greeting a configured user as brand new.
+  daemonGateErrored?: boolean;
 }
 
 // Exported so the preview harness can drive the wizard by step without keeping
@@ -214,7 +225,15 @@ function StepShell({
 
 // ── Welcome Step ────────────────────────────────────────────────────────
 
-function WelcomeStep({ onNext, hideDots }: { onNext: () => void; hideDots: boolean }) {
+function WelcomeStep({
+  onNext,
+  hideDots,
+  daemonGateErrored,
+}: {
+  onNext: () => void;
+  hideDots: boolean;
+  daemonGateErrored: boolean;
+}) {
   const { t } = useTranslation();
 
   return (
@@ -237,7 +256,7 @@ function WelcomeStep({ onNext, hideDots }: { onNext: () => void; hideDots: boole
             letterSpacing: "-0.02em",
           }}
         >
-          {t("setup.welcomeTitle")}
+          {daemonGateErrored ? t("boot.connectionTitle") : t("setup.welcomeTitle")}
         </h1>
         <p
           style={{
@@ -249,6 +268,23 @@ function WelcomeStep({ onNext, hideDots }: { onNext: () => void; hideDots: boole
         >
           {t("setup.tagline")}
         </p>
+        {/* The title carries the news, because this user may well have years
+            of memories and the only true thing we know is that we could not
+            reach the service holding them. The body below still explains what
+            Wenlan is: a first-run user who arrives here needs both. */}
+        {daemonGateErrored && (
+          <p
+            data-testid="welcome-connection-problem"
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "var(--mem-text-lg)",
+              color: "var(--mem-status-warning-text)",
+              lineHeight: "1.5",
+            }}
+          >
+            {t("boot.connectionProblem")}
+          </p>
+        )}
         <p
           style={{
             fontFamily: "var(--mem-font-body)",
@@ -838,6 +874,35 @@ function modelProgressDescId(rowId: string): string {
   return `setting-up-progress-${rowId}`;
 }
 
+/**
+ * How long the download may make no progress at all before the row stops
+ * calling itself "Downloading". The request timeout behind it is EIGHT HOURS
+ * (app/src/api.rs), and the row only ever failed on a rejected promise, so a
+ * dead transfer read as healthy for the rest of the day.
+ *
+ * Generous on purpose: hf-hub writes to a `.part` file in bursts, and a slow
+ * link plus a coarse poll can legitimately show a flat byte count for a long
+ * time. 90s of exactly zero movement is not that.
+ */
+export const DOWNLOAD_STALL_MS = 90_000;
+
+/**
+ * Ceiling on the load phase — after `downloadOnDeviceModel` has RESOLVED and
+ * only `getOnDeviceModel().loaded` is outstanding. A daemon that dies in this
+ * window used to leave the row "running" forever, because the poll had no
+ * deadline and swallowed its own errors.
+ */
+export const MODEL_LOAD_DEADLINE_MS = 15 * 60_000;
+
+/** A failed row: which class of failure, the raw text, and an optional
+ *  override heading for failures that have their own sentence (starting the
+ *  service, say) rather than a generic class. */
+interface RowError {
+  kind: SetupErrorKind;
+  detail: string;
+  headingKey?: "setup.settingUp.startServiceFailed";
+}
+
 /** One {time, bytes} sample from the download-bytes poll. */
 interface ByteSample {
   t: number;
@@ -916,6 +981,7 @@ function SettingUpStep({
   onConnected,
   wizardEnteredAt,
   hideDots,
+  daemonGateErrored,
 }: {
   selected: McpClient[];
   pendingModelId: string | null;
@@ -925,6 +991,7 @@ function SettingUpStep({
   onConnected: (agents: string[]) => void;
   wizardEnteredAt: number;
   hideDots: boolean;
+  daemonGateErrored: boolean;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -978,7 +1045,7 @@ function SettingUpStep({
   const [statuses, setStatuses] = useState<Record<string, TaskStatus>>(() =>
     Object.fromEntries(rows.map((row) => [row.id, "pending" as TaskStatus])),
   );
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<Record<string, RowError>>({});
   // Non-fatal per-row notes — today only the daemon row's cleanup-delete
   // warning uses this, but it's keyed like `errors` so any future row can.
   // Never fails the row: see the daemon branch of runRow below.
@@ -987,6 +1054,26 @@ function SettingUpStep({
   // Gates the model-load poll below: the download POST resolving is not
   // proof of anything — only `getOnDeviceModel().loaded` is.
   const [modelDownloadStarted, setModelDownloadStarted] = useState(false);
+  // Set when the transfer stops moving, or when the load phase outlives its
+  // deadline or its poll. Distinct from a plain failure: nothing rejected,
+  // which is exactly why this state had to be invented rather than derived.
+  const [modelStalled, setModelStalled] = useState(false);
+  // An on-demand daemon start is in flight from the daemon row.
+  const [startingDaemon, setStartingDaemon] = useState(false);
+  // The state above drives the button; this drives the guard. A second click
+  // that lands in the same tick reads the state before React has re-rendered
+  // it, so only a ref can refuse the second spawn.
+  const startingDaemonRef = useRef(false);
+
+  // Last moment the byte count actually MOVED, not the last poll. A poll that
+  // keeps returning the same number is the stall, so its timestamp is worth
+  // nothing here. Declared up here, above `runRow`, because Retry has to
+  // clear it: a stale timestamp from the previous attempt is already older
+  // than the threshold, so the retried download would trip the stall again
+  // on the next tick without ever being given a chance to move.
+  const lastProgressRef = useRef<{ bytes: number; at: number } | null>(null);
+  // Wall-clock deadline for the load phase, armed once the download resolves.
+  const loadDeadlineRef = useRef<number | null>(null);
 
   // Runs exactly one row's work. Shared by the initial concurrent kickoff
   // and by Retry, so a retry re-exercises the same path a first attempt
@@ -994,6 +1081,13 @@ function SettingUpStep({
   const runRow = useCallback(
     (row: TaskRow) => {
       setStatuses((prev) => ({ ...prev, [row.id]: "running" }));
+      if (row.kind === "model") {
+        setModelStalled(false);
+        // Without this the next tick compares against a timestamp from the
+        // attempt that already stalled, which is by definition older than
+        // the threshold, and Retry re-stalls within a second.
+        lastProgressRef.current = null;
+      }
       setErrors((prev) => {
         if (!(row.id in prev)) return prev;
         const next = { ...prev };
@@ -1042,7 +1136,7 @@ function SettingUpStep({
             // failed, and Continue stays live. No user is trapped in setup
             // because one editor's config file was read-only.
             setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
-            setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
+            setErrors((prev) => ({ ...prev, [row.id]: describeSetupError(err) }));
           },
         );
         return;
@@ -1055,9 +1149,15 @@ function SettingUpStep({
           (wire) => {
             if (!wire.daemon.reachable) {
               setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
+              // Classed, not sniffed: `wire.daemon.error` is whatever
+              // reqwest said in whatever locale, and "unreachable" is already
+              // established here by `reachable: false` itself.
               setErrors((prev) => ({
                 ...prev,
-                [row.id]: wire.daemon.error ?? t("setup.settingUp.daemonUnreachable"),
+                [row.id]: {
+                  kind: "connection",
+                  detail: wire.daemon.error ?? t("setup.settingUp.daemonUnreachable"),
+                },
               }));
               return;
             }
@@ -1116,13 +1216,13 @@ function SettingUpStep({
                 },
                 (err) => {
                   setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
-                  setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
+                  setErrors((prev) => ({ ...prev, [row.id]: describeSetupError(err) }));
                 },
               );
           },
           (err) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
-            setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
+            setErrors((prev) => ({ ...prev, [row.id]: describeSetupError(err) }));
           },
         );
         return;
@@ -1137,6 +1237,17 @@ function SettingUpStep({
           // on modelDownloadStarted) is what actually proves it.
           () => {
             setModelDownloadStarted(true);
+            // The bytes did arrive after all. Whatever the detector concluded
+            // while they were not moving is now wrong, and the load poll
+            // below is what decides this row from here.
+            setModelStalled(false);
+            setStatuses((prev) =>
+              prev[row.id] === "failed" ? { ...prev, [row.id]: "running" } : prev,
+            );
+            // The catalog still reads uncached until its next poll, so the
+            // detector is briefly still armed against a stamp taken before
+            // the transfer finished. Start its clock over with the phase.
+            lastProgressRef.current = null;
             // Pin here, not only in DoneStep: the daemon answers once the model
             // is loaded, often after the user pressed Continue or Open Wenlan
             // or hid the window, and a job with no pin runs nothing. Only
@@ -1149,7 +1260,7 @@ function SettingUpStep({
           },
           (err) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
-            setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
+            setErrors((prev) => ({ ...prev, [row.id]: describeSetupError(err) }));
           },
         );
         return;
@@ -1166,12 +1277,62 @@ function SettingUpStep({
           })
           .catch((err) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "failed" }));
-            setErrors((prev) => ({ ...prev, [row.id]: String(err) }));
+            setErrors((prev) => ({ ...prev, [row.id]: describeSetupError(err) }));
           });
         return;
       }
     },
     [pendingModelId, pendingImportPick, queryClient, t],
+  );
+
+  // Retry only re-probes; it cannot raise a service that is not running. The
+  // command that actually can has existed since Diagnostics shipped
+  // (start_daemon_sidecar, guarded app-side against a double spawn) and was
+  // reachable only from a Settings pane the fail-closed wizard hides.
+  const startDaemon = useCallback(
+    (row: TaskRow) => {
+      if (startingDaemonRef.current) return;
+      startingDaemonRef.current = true;
+      setStartingDaemon(true);
+      setErrors((prev) => {
+        if (!(row.id in prev)) return prev;
+        const next = { ...prev };
+        delete next[row.id];
+        return next;
+      });
+      startDaemonSidecar().then(
+        (result) => {
+          startingDaemonRef.current = false;
+          setStartingDaemon(false);
+          if (result.status === "failed") {
+            setErrors((prev) => ({
+              ...prev,
+              [row.id]: {
+                ...describeSetupError(result.message),
+                headingKey: "setup.settingUp.startServiceFailed",
+              },
+            }));
+            return;
+          }
+          // started / already_running / launchd_managed. Re-run the row
+          // rather than declaring victory: only the probe round trip can
+          // say the service actually serves.
+          runRow(row);
+        },
+        (err) => {
+          startingDaemonRef.current = false;
+          setStartingDaemon(false);
+          setErrors((prev) => ({
+            ...prev,
+            [row.id]: {
+              ...describeSetupError(err),
+              headingKey: "setup.settingUp.startServiceFailed",
+            },
+          }));
+        },
+      );
+    },
+    [runRow],
   );
 
   // Concurrent, not sequential: one slow row must not hold up the others,
@@ -1196,7 +1357,7 @@ function SettingUpStep({
   // Downloading-vs-Loading split, the byte progress bar) silently fell back to
   // generic copy. The download phase was unreachable in the app while rendering
   // fine under a mocked query in tests.
-  const { data: modelPoll } = useQuery({
+  const { data: modelPoll, isError: modelPollFailed } = useQuery({
     queryKey: ["onDeviceModel", "wizard-setup-proof"],
     queryFn: getOnDeviceModel,
     enabled: statuses[MODEL_ROW_ID] === "running" || modelDownloadStarted,
@@ -1261,6 +1422,10 @@ function SettingUpStep({
   // the row name the real file size instead of "a few minutes".
   const modelEntry = modelPoll?.models.find((m) => m.id === pendingModelId);
   const modelDownloading = statuses[MODEL_ROW_ID] === "running" && !modelEntry?.cached;
+  // A primitive, deliberately: `modelEntry` is a fresh object on every poll,
+  // and depending on it would tear down and rebuild the one-second stall
+  // interval faster than it can tick.
+  const modelEntryKnown = modelEntry !== undefined;
 
   // The registry's `file_size_gb` is a rounded-up hand estimate, not the real
   // blob size — so it can only ever make the bar run early, never overshoot.
@@ -1288,6 +1453,73 @@ function SettingUpStep({
     if (downloadBytes == null) return;
     setByteSamples((prev) => [...prev, { t: Date.now(), bytes: downloadBytes }].slice(-5));
   }, [modelDownloading, downloadBytes]);
+
+  useEffect(() => {
+    if (!modelDownloading) {
+      lastProgressRef.current = null;
+      return;
+    }
+    const bytes = downloadBytes ?? 0;
+    const seen = lastProgressRef.current;
+    if (!seen || bytes > seen.bytes) {
+      lastProgressRef.current = { bytes, at: Date.now() };
+    }
+  }, [modelDownloading, downloadBytes]);
+
+  // A ticking check, not a derived value: the whole point is that NOTHING is
+  // arriving, so there is no incoming render to notice the silence in.
+  //
+  // Armed only against a catalog entry we have actually seen. `modelEntry`
+  // is undefined until the first poll answers, which makes `modelDownloading`
+  // true by default — so without this guard a model that was already cached,
+  // and therefore never transfers a byte, shows "Download stalled" ninety
+  // seconds in. An unknown catalog leaves the load deadline as the only exit,
+  // which is the correct one for a phase that is not a download.
+  useEffect(() => {
+    if (!modelDownloading || modelStalled) return;
+    if (!modelEntryKnown) return;
+    const id = setInterval(() => {
+      const seen = lastProgressRef.current;
+      if (!seen) return;
+      if (Date.now() - seen.at >= DOWNLOAD_STALL_MS) {
+        setModelStalled(true);
+        setStatuses((prev) => ({ ...prev, [MODEL_ROW_ID]: "failed" }));
+      }
+    }, 1_000);
+    return () => clearInterval(id);
+  }, [modelDownloading, modelStalled, modelEntryKnown]);
+
+  // The load phase, after downloadOnDeviceModel resolved. Two ways out that
+  // did not exist: the poll itself failing (a daemon that died after the POST
+  // returned), and a deadline (a load that never lands).
+  useEffect(() => {
+    if (!modelDownloadStarted) {
+      loadDeadlineRef.current = null;
+      return;
+    }
+    if (loadDeadlineRef.current == null) {
+      loadDeadlineRef.current = Date.now() + MODEL_LOAD_DEADLINE_MS;
+    }
+  }, [modelDownloadStarted]);
+  useEffect(() => {
+    if (!modelDownloadStarted || modelStalled) return;
+    if (statuses[MODEL_ROW_ID] !== "running") return;
+    const giveUp = () => {
+      setModelStalled(true);
+      setStatuses((prev) =>
+        prev[MODEL_ROW_ID] === "running" ? { ...prev, [MODEL_ROW_ID]: "failed" } : prev,
+      );
+    };
+    if (modelPollFailed) {
+      giveUp();
+      return;
+    }
+    const id = setInterval(() => {
+      const deadline = loadDeadlineRef.current;
+      if (deadline != null && Date.now() >= deadline) giveUp();
+    }, 1_000);
+    return () => clearInterval(id);
+  }, [modelDownloadStarted, modelStalled, modelPollFailed, statuses]);
 
   const downloadedGB = downloadBytes != null ? downloadBytes / 1e9 : null;
   // Gated on modelEntry the same way modelDownloadingSub already is below:
@@ -1330,6 +1562,7 @@ function SettingUpStep({
       if (displayedStatusOf(row) === "done") {
         return t("setup.settingUp.modelDoneSub", { model: pendingModelId ?? "" });
       }
+      if (modelStalled) return t("setup.settingUp.modelStalledSub");
       if (modelDownloading) {
         if (modelEntry && downloadedGB != null) {
           const done = downloadedGB.toFixed(1);
@@ -1368,6 +1601,14 @@ function SettingUpStep({
   };
 
   const statusTextOf = (row: TaskRow): string => {
+    // Read before the gate. `displayedStatusOf` withholds a terminal state
+    // until every row above it is terminal, so a stalled model row under a
+    // still-running row reads back as "running" and would say "Downloading"
+    // over bytes that stopped moving ninety seconds ago. That is the one
+    // word this whole change exists to stop showing.
+    if (row.kind === "model" && modelStalled && statusOf(row) === "failed") {
+      return t("setup.settingUp.statusStalled");
+    }
     const status = displayedStatusOf(row);
     if (status === "pending") return t("setup.settingUp.statusPending");
     if (status === "running") {
@@ -1390,6 +1631,10 @@ function SettingUpStep({
       if (row.kind === "import") return t("setup.settingUp.statusDoneImport");
       return t("setup.settingUp.statusDone");
     }
+    // A stall is a failure for control-flow purposes (Retry is live, the row
+    // is terminal) but "Couldn't set up" is the wrong word for it: nothing
+    // refused, the bytes just stopped. Handled at the top of this function,
+    // ahead of the display gate.
     return t("setup.settingUp.statusFailed");
   };
 
@@ -1546,6 +1791,23 @@ function SettingUpStep({
                     >
                       {labelOf(row)}
                     </p>
+                    {/* The gate never got an answer during boot. Say that
+                        here, above the row that is about to try again, rather
+                        than letting the user read a generic "Setting up". */}
+                    {row.kind === "daemon" && daemonGateErrored && (
+                      <p
+                        data-testid="daemon-gate-problem"
+                        style={{
+                          fontFamily: "var(--mem-font-body)",
+                          fontSize: "var(--mem-text-sm)",
+                          color: "var(--mem-status-warning-text)",
+                          lineHeight: "1.5",
+                          marginTop: "2px",
+                        }}
+                      >
+                        {t("boot.connectionProblem")}
+                      </p>
+                    )}
                     {/* Prose, not data — these are sentences. Mono is reserved
                         for the machine-state column on the right. */}
                     <p
@@ -1615,10 +1877,27 @@ function SettingUpStep({
                     >
                       {statusTextOf(row)}
                     </span>
+                    {canRetry && row.kind === "daemon" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={startingDaemon}
+                        onClick={() => startDaemon(row)}
+                        data-testid="task-start-daemon"
+                      >
+                        {startingDaemon
+                          ? t("setup.settingUp.startingService")
+                          : t("setup.settingUp.startService")}
+                      </Button>
+                    )}
                     {canRetry && (
                       <Button
                         variant="ghost"
                         size="sm"
+                        // Two probes of the same row at once, one of them
+                        // racing a spawn, can only produce a result nobody
+                        // can read.
+                        disabled={startingDaemon && row.kind === "daemon"}
                         onClick={() => runRow(row)}
                         data-testid={`task-retry-${row.id}`}
                       >
@@ -1629,19 +1908,36 @@ function SettingUpStep({
                 </div>
 
                 {error && (
-                  <p
+                  <div
                     id={taskRowDescId(row.id)}
                     role="alert"
                     style={{
+                      marginTop: "8px",
                       fontFamily: "var(--mem-font-body)",
                       fontSize: "var(--mem-text-sm)",
-                      color: "var(--mem-status-danger-text)",
                       lineHeight: "1.5",
-                      marginTop: "8px",
+                      color: "var(--mem-status-danger-text)",
                     }}
                   >
-                    {error}
-                  </p>
+                    <p>
+                      {t(error.headingKey ?? setupErrorHeadingKey(error.kind))}
+                    </p>
+                    {/* The raw text is the only thing a bug report can use, so
+                        it is never dropped — only demoted below a sentence
+                        that says what class of thing went wrong. */}
+                    {error.detail && (
+                      <p
+                        data-testid={`task-error-detail-${row.id}`}
+                        style={{
+                          color: "var(--mem-text-tertiary)",
+                          marginTop: "2px",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {error.detail}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {!error && warning && (
@@ -2161,6 +2457,7 @@ export function SetupWizard({
   initialStep,
   initialPendingModelId = null,
   initialPendingImportPick = null,
+  daemonGateErrored = false,
 }: SetupWizardProps) {
   const startStep = initialStep ?? "welcome";
   const [step, setStep] = useState<WizardStep>(startStep);
@@ -2187,7 +2484,13 @@ export function SetupWizard({
   }, []);
 
   if (step === "welcome") {
-    return <WelcomeStep hideDots={hideDots} onNext={() => setStep("intelligence-choice")} />;
+    return (
+      <WelcomeStep
+        hideDots={hideDots}
+        daemonGateErrored={daemonGateErrored}
+        onNext={() => setStep("intelligence-choice")}
+      />
+    );
   }
 
   if (step === "intelligence-choice") {
@@ -2242,6 +2545,7 @@ export function SetupWizard({
         onBack={() => setStep("connect")}
         onConnected={handleConnectedAgents}
         wizardEnteredAt={wizardEnteredAtRef.current}
+        daemonGateErrored={daemonGateErrored}
       />
     );
   }
