@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_types::requests::{
-    CreateConceptRequest, CreatePageDraftRequest, ExportPagesRequest, PageDraftVersionRequest,
-    SearchPagesRequest, UpdatePageDraftRequest,
+    CreateConceptRequest, CreatePageDraftRequest, ExportFormat, ExportPagesRequest,
+    PageDraftVersionRequest, SearchPagesRequest, UpdatePageDraftRequest,
 };
 use wenlan_types::responses::{CreatePageResponse, PageDraftResponse};
 use wenlan_types::{WriteOutcome, WriteSpaceSource, WriteSpaceTarget};
@@ -715,6 +715,35 @@ pub async fn handle_export_pages(
     }
     if declined > 0 {
         tracing::info!("[export] skipped {declined} page(s) the automatic reader may not see");
+    }
+    // Pure-OKF bundle twin of the Obsidian export below: same pages, same
+    // permit filter, different writer. The obsidian branch underneath is
+    // untouched so absent/`obsidian` keeps today's behavior byte for byte.
+    if matches!(req.format, Some(ExportFormat::Okf)) {
+        let raw = match req.vault_path {
+            Some(path) if !path.trim().is_empty() => path,
+            _ => {
+                return Err(wenlan_core::WenlanError::Validation(
+                    "okf export requires an absolute vault_path (got none)".to_string(),
+                )
+                .into());
+            }
+        };
+        let expanded = if let Some(rest) = raw.strip_prefix("~/") {
+            let home = std::env::var("HOME").unwrap_or_default();
+            format!("{home}/{rest}")
+        } else {
+            raw
+        };
+        if !std::path::Path::new(&expanded).is_absolute() {
+            return Err(wenlan_core::WenlanError::Validation(format!(
+                "okf export requires an absolute vault_path (got relative path {expanded:?})"
+            ))
+            .into());
+        }
+        let stats =
+            wenlan_core::export::okf::export_okf(&exportable, std::path::Path::new(&expanded))?;
+        return Ok(Json(stats));
     }
     let vault_path = req
         .vault_path

@@ -822,6 +822,21 @@ pub struct RefreshPageRequest {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExportPagesRequest {
     pub vault_path: Option<String>,
+    /// Bundle format. Absent (or `obsidian`) keeps the historical
+    /// Obsidian-vault behavior byte for byte; `okf` writes a pure OKF v0.2
+    /// bundle instead. Same scope resolution and `page_write_permit` filter
+    /// either way.
+    #[serde(default)]
+    pub format: Option<ExportFormat>,
+}
+
+/// Bundle format for `POST /api/pages/export`. Serde-only: the daemon
+/// matches on the variant, nothing else reads this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    Obsidian,
+    Okf,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

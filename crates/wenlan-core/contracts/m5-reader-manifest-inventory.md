@@ -810,6 +810,7 @@ the projection-directory reader.
 | `wenlan spaces` | yes | automatic | `none` | subcommand renderer |
 | `wenlan outbox` | yes | automatic | `none` | subcommand renderer |
 | `wenlan entities` | yes | automatic | `none` | subcommand renderer |
+| `wenlan export` | yes | automatic | `none` | subcommand renderer |
 | `wenlan sweep` | yes | automatic | `none` | subcommand renderer |
 
 ## Projection, export, internal

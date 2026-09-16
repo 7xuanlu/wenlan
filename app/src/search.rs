@@ -4492,6 +4492,7 @@ pub async fn export_pages_to_obsidian(
     let client = state.read().await.client.clone();
     let req = requests::ExportPagesRequest {
         vault_path: Some(vault_path),
+        format: None,
     };
     client.post_json("/api/pages/export", &req).await
 }

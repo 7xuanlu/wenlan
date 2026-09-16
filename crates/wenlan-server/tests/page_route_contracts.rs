@@ -11,7 +11,7 @@ use tower::ServiceExt;
 use wenlan_core::truth_contract::{CONTRACT_HEADER, INTENT_HEADER};
 use wenlan_server::{router::build_router, state::ServerState};
 use wenlan_types::requests::{
-    CreateConceptRequest, ExportPageRequest, ExportPagesRequest, RefreshPageRequest,
+    CreateConceptRequest, ExportFormat, ExportPageRequest, ExportPagesRequest, RefreshPageRequest,
     SearchPagesRequest, UpdatePageRequest,
 };
 use wenlan_types::responses::{
@@ -111,6 +111,7 @@ fn page_routes(id: &str) -> Vec<RouteCase> {
             uri: "/api/pages/export".to_string(),
             body: encoded(&ExportPagesRequest {
                 vault_path: Some("/tmp/wenlan-page-route-contract-no-db".to_string()),
+                format: None,
             }),
             marked: false,
         },
@@ -412,6 +413,7 @@ async fn page_routes_preserve_typed_contracts() {
     let bulk_export_dir = tmp.path().join("bulk-export");
     let bulk_export = ExportPagesRequest {
         vault_path: Some(bulk_export_dir.to_string_lossy().into_owned()),
+        format: None,
     };
     let (status, exported): (StatusCode, ExportStats) = request_typed(
         &router,
@@ -507,4 +509,91 @@ async fn page_routes_preserve_typed_contracts() {
         );
         assert_eq!(error.error, "Database not initialized");
     }
+}
+
+#[tokio::test]
+async fn export_okf_format_writes_bundle_and_enforces_safety() {
+    let _config = WritableKnowledgeConfig::new();
+    let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
+    common::create_page_fixture(
+        &db,
+        "OKF Hub",
+        "Links onward to [[OKF Leaf]].",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    common::create_page_fixture(&db, "OKF Leaf", "Leaf body.", None, &[], "authored").await;
+
+    // `format: "okf"` into a temp dir writes the bundle and returns stats.
+    let bundle = tmp.path().join("okf-bundle");
+    let okf = ExportPagesRequest {
+        vault_path: Some(bundle.to_string_lossy().into_owned()),
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, stats): (StatusCode, ExportStats) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(stats.exported >= 2, "{stats:?}");
+    let hub = std::fs::read_to_string(bundle.join("pages/okf-hub.md")).unwrap();
+    assert!(hub.contains("[OKF Leaf](/pages/okf-leaf.md)"), "{hub}");
+    assert!(!hub.contains("[["), "{hub}");
+    assert!(!hub.contains("<!-- origin:"), "{hub}");
+    assert!(bundle.join("index.md").is_file());
+    assert!(bundle.join(".wenlan-okf-export.json").is_file());
+    // A second run over the previous export succeeds.
+    let (status, _): (StatusCode, ExportStats) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Missing or relative `vault_path` is a validation error naming the problem.
+    let missing = ExportPagesRequest {
+        vault_path: None,
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, error): (StatusCode, ErrorEnvelope) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&missing)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(error.error.contains("vault_path"), "{}", error.error);
+    let relative = ExportPagesRequest {
+        vault_path: Some("relative/bundle".to_string()),
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, error): (StatusCode, ErrorEnvelope) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&relative)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(error.error.contains("absolute"), "{}", error.error);
+
+    // A foreign non-empty directory is a conflict naming the problem.
+    let foreign = tmp.path().join("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    std::fs::write(foreign.join("README.md"), b"not yours").unwrap();
+    let foreign_req = ExportPagesRequest {
+        vault_path: Some(foreign.to_string_lossy().into_owned()),
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, error): (StatusCode, ErrorEnvelope) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&foreign_req)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        error.error.contains("not a Wenlan OKF export"),
+        "{}",
+        error.error
+    );
 }

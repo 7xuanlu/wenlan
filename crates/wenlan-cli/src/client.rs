@@ -14,12 +14,12 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wenlan_types::{
     requests::{
-        AddEntityAliasRequest, ListEntitiesRequest, ListMemoriesRequest, MergeEntityRequest,
-        SearchMemoryRequest, SearchRequest, SetDefaultSpaceRequest, StoreMemoryRequest,
-        UpdateAgentRequest,
+        AddEntityAliasRequest, ExportFormat, ExportPagesRequest, ListEntitiesRequest,
+        ListMemoriesRequest, MergeEntityRequest, SearchMemoryRequest, SearchRequest,
+        SetDefaultSpaceRequest, StoreMemoryRequest, UpdateAgentRequest,
     },
     responses::{
-        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, HealthResponse,
+        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, ExportStats, HealthResponse,
         ListEntitiesResponse, ListMemoriesResponse, MemoryDetailResponse, MergeEntityResponse,
         PendingRevisionItem, RevisionAcceptResponse, RevisionDismissResponse, SearchMemoryResponse,
         SearchResponse, StoreMemoryResponse,
@@ -586,12 +586,36 @@ impl WenlanClient {
             .await
             .context("parsing /api/memory/entities/{id}/aliases response")
     }
+
+    /// POST /api/pages/export with `format: "okf"` — write a pure OKF v0.2
+    /// bundle of every exportable page into `dir`. Used by
+    /// `wenlan export okf`. The daemon owns the safety checks (absolute
+    /// path, empty-or-previous-export target); its error text reaches the
+    /// caller through `ensure_daemon_success`.
+    pub async fn export_pages_okf(&self, dir: String) -> Result<ExportStats> {
+        let url = format!("{}/api/pages/export", self.base_url);
+        let req = ExportPagesRequest {
+            vault_path: Some(dir),
+            format: Some(ExportFormat::Okf),
+        };
+        let resp = self
+            .send(
+                self.http.post(&url).json(&req),
+                &format!("POST {} failed", url),
+            )
+            .await?;
+        let resp = ensure_daemon_success(resp, &url).await?;
+        resp.json()
+            .await
+            .context("parsing /api/pages/export response")
+    }
 }
 
 /// Non-success response -> `anyhow::Error` carrying the daemon's own error
 /// message, not just the status line `error_for_status()` alone gives.
-/// Used only by `list_entities`, `merge_entity`, `add_entity_alias`; every
-/// other client method keeps `error_for_status()` as-is.
+/// Used only by `list_entities`, `merge_entity`, `add_entity_alias` and
+/// `export_pages_okf`; every other client method keeps `error_for_status()`
+/// as-is.
 async fn ensure_daemon_success(resp: reqwest::Response, url: &str) -> Result<reqwest::Response> {
     if resp.status().is_success() {
         return Ok(resp);

@@ -1189,23 +1189,6 @@ impl KnowledgeWriter {
         write_regular_nofollow(wenlan, "state.json", &data)
     }
 
-    /// Collapse `\r`/`\n` in an `index.md` field to a single space and
-    /// squeeze runs of whitespace, so a title/description/space that carries
-    /// a newline (typed by a user, or from an offline edit) can't split
-    /// `index.md` into extra lines or bullets.
-    fn sanitize_index_field(s: &str) -> String {
-        s.replace(['\r', '\n'], " ")
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ")
-    }
-
-    /// Escape `[` and `]` in text used as markdown link text, so a title
-    /// containing a bracket can't break the `[title](/file)` link syntax.
-    fn escape_index_link_text(s: &str) -> String {
-        s.replace('[', "\\[").replace(']', "\\]")
-    }
-
     /// Fallback for a legacy `state.json` entry with no `title` field: read
     /// title/description/space straight from the file's frontmatter, the way
     /// `regenerate_index_cap` always used to. `None` means the file is
@@ -1256,9 +1239,10 @@ impl KnowledgeWriter {
         entries.sort_unstable_by(|a, b| a.file.cmp(&b.file));
         entries.dedup_by(|a, b| a.file == b.file);
 
-        let mut by_space: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
-            std::collections::BTreeMap::new();
-        let mut unfiled: Vec<(String, String, String)> = Vec::new();
+        // Raw `(title, file, description, space)` rows; sanitizing, grouping
+        // and sorting live in `render_index_for_entries` so the OKF bundle
+        // shares them.
+        let mut raw_entries: Vec<(String, String, String, Option<String>)> = Vec::new();
 
         for state_entry in entries {
             // `title: Some(_)` means this entry was written by this build and
@@ -1279,41 +1263,11 @@ impl KnowledgeWriter {
                     }
                 }
             };
-            let entry = (
-                Self::sanitize_index_field(&title),
-                state_entry.file.clone(),
-                Self::sanitize_index_field(&description),
-            );
-            match space.map(|s| Self::sanitize_index_field(&s)) {
-                Some(space) if !space.is_empty() => {
-                    by_space.entry(space).or_default().push(entry);
-                }
-                _ => unfiled.push(entry),
-            }
+            raw_entries.push((title, state_entry.file.clone(), description, space));
         }
-        for entries in by_space.values_mut() {
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
-        }
-        unfiled.sort_by(|a, b| a.0.cmp(&b.0));
-
-        let mut out = String::from("---\nokf_version: \"0.2\"\n---\n\n");
-        for (space, entries) in &by_space {
-            out.push_str(&format!("## {space}\n\n"));
-            for (title, filename, description) in entries {
-                let title = Self::escape_index_link_text(title);
-                out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
-            }
-            out.push('\n');
-        }
-        if !unfiled.is_empty() {
-            out.push_str("## Unfiled\n\n");
-            for (title, filename, description) in &unfiled {
-                let title = Self::escape_index_link_text(title);
-                out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
-            }
-            out.push('\n');
-        }
-        let bytes = format!("{}\n", out.trim_end());
+        // The projection links at the vault root (`/file`); the OKF bundle
+        // reuses this renderer with `/pages/`.
+        let bytes = render_index_for_entries(raw_entries, "/");
 
         let temp_filename = format!(
             ".index.{}.{}.tmp",
@@ -1327,6 +1281,88 @@ impl KnowledgeWriter {
             bytes.as_bytes(),
         )
     }
+}
+
+/// Collapse `\r`/`\n` in an `index.md` field to a single space and squeeze
+/// runs of whitespace, so a title/description/space that carries a newline
+/// (typed by a user, or from an offline edit) can't split `index.md` into
+/// extra lines or bullets.
+pub(crate) fn sanitize_index_field(s: &str) -> String {
+    s.replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Escape `[` and `]` in text used as markdown link text, so a title
+/// containing a bracket can't break the `[title](...)` link syntax.
+pub(crate) fn escape_index_link_text(s: &str) -> String {
+    s.replace('[', "\\[").replace(']', "\\]")
+}
+
+/// Pure OKF `index.md` renderer shared by the projection and the OKF export
+/// bundle. Entries must already be sanitized and title-sorted within their
+/// group; `link_prefix` is `"/"` for the projection (links at the vault
+/// root) and `"/pages/"` for the bundle.
+pub(crate) fn render_index_markdown(
+    by_space: &std::collections::BTreeMap<String, Vec<(String, String, String)>>,
+    unfiled: &[(String, String, String)],
+    link_prefix: &str,
+) -> String {
+    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n\n");
+    for (space, entries) in by_space {
+        out.push_str(&format!("## {space}\n\n"));
+        for (title, filename, description) in entries {
+            let title = escape_index_link_text(title);
+            out.push_str(&format!(
+                "* [{title}]({link_prefix}{filename}) - {description}\n"
+            ));
+        }
+        out.push('\n');
+    }
+    if !unfiled.is_empty() {
+        out.push_str("## Unfiled\n\n");
+        for (title, filename, description) in unfiled {
+            let title = escape_index_link_text(title);
+            out.push_str(&format!(
+                "* [{title}]({link_prefix}{filename}) - {description}\n"
+            ));
+        }
+        out.push('\n');
+    }
+    format!("{}\n", out.trim_end())
+}
+
+/// Sanitize, group by space (`## Unfiled` last) and title-sort raw
+/// `(title, file, description, space)` rows, then render them with
+/// [`render_index_markdown`]. The projection builds its rows from
+/// `state.json`; the OKF bundle builds them from its page list — both flow
+/// through this one grouping so the two indexes cannot drift.
+pub(crate) fn render_index_for_entries(
+    rows: Vec<(String, String, String, Option<String>)>,
+    link_prefix: &str,
+) -> String {
+    let mut by_space: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
+        std::collections::BTreeMap::new();
+    let mut unfiled: Vec<(String, String, String)> = Vec::new();
+    for (title, file, description, space) in rows {
+        let entry = (
+            sanitize_index_field(&title),
+            file,
+            sanitize_index_field(&description),
+        );
+        match space.map(|s| sanitize_index_field(&s)) {
+            Some(space) if !space.is_empty() => {
+                by_space.entry(space).or_default().push(entry);
+            }
+            _ => unfiled.push(entry),
+        }
+    }
+    for entries in by_space.values_mut() {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    unfiled.sort_by(|a, b| a.0.cmp(&b.0));
+    render_index_markdown(&by_space, &unfiled, link_prefix)
 }
 
 pub struct KnowledgeProjectionWriteRef<'writer> {
@@ -4431,14 +4467,15 @@ pub(crate) fn page_file_state_value(page: &Page, file: &str) -> serde_json::Valu
     .expect("PageFileState serializes")
 }
 
-fn render_markdown(page: &Page) -> String {
-    use crate::export::provenance::{
-        related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
-    };
+/// Shared OKF page frontmatter (the lines between the `---` delimiters), so
+/// the md projection and the OKF export bundle cannot drift apart.
+///
+/// `include_related` is true for the projection only: the bundle omits
+/// `related:` because its converted body links already carry the edges.
+/// Every other line is identical in both outputs.
+pub(crate) fn page_frontmatter(page: &Page, include_related: bool) -> String {
+    use crate::export::provenance::{related_frontmatter, sources_frontmatter, yaml_quoted};
     let mut out = String::new();
-
-    // Frontmatter — OKF v0.2 conformant (see specs/2026-09-16-okf-projection.md).
-    out.push_str("---\n");
     out.push_str(&format!("title: {}\n", yaml_quoted(&page.title)));
     out.push_str("type: page\n");
     if let Some(ref summary) = page.summary {
@@ -4473,8 +4510,20 @@ fn render_markdown(page: &Page) -> String {
     // forbids fabricating `at`. Add the family back once that column lands.
     // Read-only provenance projection (one-way; the watcher never reads it back).
     out.push_str(&sources_frontmatter(&page.source_memory_ids));
-    let related = related_page_titles(&page.content);
-    out.push_str(&related_frontmatter(&related));
+    if include_related {
+        let related = related_page_titles(&page.content);
+        out.push_str(&related_frontmatter(&related));
+    }
+    out
+}
+
+fn render_markdown(page: &Page) -> String {
+    use crate::export::provenance::render_sources_block;
+    let mut out = String::new();
+
+    // Frontmatter — OKF v0.2 conformant (see specs/2026-09-16-okf-projection.md).
+    out.push_str("---\n");
+    out.push_str(&page_frontmatter(page, true));
     out.push_str("---\n\n");
 
     // Body with wikilinks
