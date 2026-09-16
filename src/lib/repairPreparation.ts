@@ -29,6 +29,7 @@ const PREPARATION_VERSION = 1;
 const CHECK_CLASSIFICATION = "memories.semantic.classification";
 const CHECK_DUPLICATE_TITLES = "pages.duplicate_active_titles";
 const CHECK_ENRICHMENT = "memories.enrichment_failures";
+const CHECK_ENTITY_RELATIONS = "kg.semantic.entity_relations";
 
 const MEMORY_TYPES = ["identity", "preference", "decision", "lesson", "gotcha", "fact"];
 
@@ -78,12 +79,90 @@ function isLintScope(value: unknown): value is RepairLintScope {
 }
 
 /**
+ * Mirrors `is_valid_identifier` in `repair_relation.rs`: nonempty,
+ * trim-stable, and free of control characters.
+ */
+function isRelationIdentifier(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.trim() === value &&
+    !/[\u0000-\u001f\u007f-\u009f]/.test(value);
+}
+
+/**
+ * Mirrors `is_valid_relation_type` in `repair_relation.rs`:
+ * `^[a-z][a-z0-9_]*$`. Canonical vocabulary lookup is the daemon's job.
+ */
+const RELATION_TYPE_PATTERN = /^[a-z][a-z0-9_]*$/;
+
+/**
+ * This family carries several review owner ids: at least two, each a valid
+ * identifier, strictly sorted unique like the Rust wire contract.
+ */
+function isSortedUniqueOwnerIds(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length < 2) return false;
+  if (!value.every((id) => isRelationIdentifier(id))) return false;
+  return value.every((id, index) => index === 0 || value[index - 1] < id);
+}
+
+/** Mirrors serde `deny_unknown_fields` on the strict Rust wire contract. */
+function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  return Object.keys(value).length === keys.length && keys.every((key) => key in value);
+}
+
+/**
+ * The entity-relation choice nests as
+ * `{ kind: "entity_relation", selection: { review_id, choice } }` with no
+ * top-level review id. For Add, both distinct endpoints must be present in the
+ * review owner ids and an optional source memory id must be absent, null, or
+ * a valid owner id. For Retire only the relation id is checked: the daemon
+ * alone resolves its endpoints and the exact finding from fresh reports, so
+ * relation-id membership in owner ids is never invented here.
+ */
+function isEntityRelationChoiceForIdentity(choice: Record<string, unknown>, identity: RepairReviewIdentity): boolean {
+  if (identity.checkId !== CHECK_ENTITY_RELATIONS) return false;
+  if (!isSortedUniqueOwnerIds(identity.ownerIds)) return false;
+  if (!hasExactKeys(choice, ["kind", "selection"])) return false;
+  const selection = choice.selection;
+  if (!isRecord(selection) || !hasExactKeys(selection, ["review_id", "choice"])) return false;
+  if (selection.review_id !== identity.reviewId || !isRelationIdentifier(selection.review_id)) return false;
+  const nested = selection.choice;
+  if (!isRecord(nested) || typeof nested.kind !== "string") return false;
+  const owners = identity.ownerIds;
+  switch (nested.kind) {
+    case "add": {
+      if (
+        !hasExactKeys(nested, ["kind", "from_entity", "to_entity", "relation_type"]) &&
+        !hasExactKeys(nested, ["kind", "from_entity", "to_entity", "relation_type", "source_memory_id"])
+      ) return false;
+      if (!isRelationIdentifier(nested.from_entity) || !isRelationIdentifier(nested.to_entity)) return false;
+      if (nested.from_entity === nested.to_entity) return false;
+      if (!owners.includes(nested.from_entity as string) || !owners.includes(nested.to_entity as string)) return false;
+      if (typeof nested.relation_type !== "string" || !RELATION_TYPE_PATTERN.test(nested.relation_type)) return false;
+      if ("source_memory_id" in nested) {
+        const source = nested.source_memory_id;
+        if (source !== null && source !== undefined) {
+          if (!isRelationIdentifier(source) || !owners.includes(source)) return false;
+        }
+      }
+      return true;
+    }
+    case "retire": {
+      if (!hasExactKeys(nested, ["kind", "relation_id"])) return false;
+      return isRelationIdentifier(nested.relation_id);
+    }
+    default:
+      return false;
+  }
+}
+
+/**
  * The only writers the current review UI can produce. Each choice carries the
  * single owner id and may only appear under its own check; nothing here
- * invents a new repair family.
+ * invents a new repair family. The entity-relation family instead carries
+ * several sorted unique owner ids under its own check.
  */
 function isChoiceForIdentity(choice: unknown, identity: RepairReviewIdentity): choice is CurrentRepairChoice {
   if (!isRecord(choice) || typeof choice.kind !== "string") return false;
+  if (choice.kind === "entity_relation") return isEntityRelationChoiceForIdentity(choice, identity);
   if (choice.review_id !== identity.reviewId) return false;
   // The preparation always describes one review queue item with one target.
   if (!Array.isArray(identity.ownerIds) || identity.ownerIds.length !== 1) return false;

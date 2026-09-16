@@ -3229,7 +3229,7 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
     );
     assert_eq!(
         analysis.support_calls.len(),
-        1088,
+        1153,
         "PR-D integration must expose the frozen 967 support calls, the 6 PR-D test identities, \
          the 5 M5 derivation-marker fixture calls, the 10 M6 shadow-promoter fixture calls, \
          the 7 G6 BindPageLink repair-test calls (G6 Stage 2 PR 2b, item 3: \
@@ -3374,7 +3374,9 @@ fn repository_module_graph_matches_r4_25_group_6_census() {
          test_primary_session|1 + TestDbSession::execute|1, helpers seed_protected_page and \
          recreate_page_under_same_id each contribute the same pair, and \
          pending_revision_card_ids contributes test_primary_session|1 + \
-         TestDbSession::query|1 + TestDbRows::next|1 + TestDbRow::get|1."
+         TestDbSession::query|1 + TestDbRows::next|1 + TestDbRow::get|1; plus 65 PR750 \
+         relation snapshot, transaction, recovery, resolution and current-flow fixture calls, \
+         each individually pinned in r4_test_support_api_manifest.txt."
     );
 }
 

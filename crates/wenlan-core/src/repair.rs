@@ -94,6 +94,9 @@ mod title_rename_tests;
 pub mod current;
 pub mod operation;
 pub mod prepare_operation;
+mod relation;
+pub(crate) mod relation_effects;
+pub(crate) mod relation_snapshot;
 pub(crate) mod review_completion;
 
 #[derive(Debug, Clone)]
@@ -537,6 +540,11 @@ impl RepairArtifactStore {
         }
         let stored = StoredRepairRollbackArtifact::from_slice(&bytes)?;
         let rollback = match stored {
+            StoredRepairRollbackArtifact::V3(_) => {
+                return Err(WenlanError::Validation(
+                    "aggregate repair rollback requires typed writer".to_string(),
+                ));
+            }
             StoredRepairRollbackArtifact::V1(rollback) => StoredRollbackArtifact {
                 format_version: rollback.format_version(),
                 table: rollback.table().to_string(),
@@ -1586,7 +1594,7 @@ fn rollback_matches_target(rollback: &StoredRollbackArtifact, target: &RepairTar
                 && serde_json::from_str::<Vec<String>>(&rollback.source_id)
                     .is_ok_and(|key| key == [memory_id.clone(), entity_id.clone()])
         }
-        RepairTarget::MemoryEntityExtraction { .. } => false,
+        RepairTarget::MemoryEntityExtraction { .. } | RepairTarget::EntityRelation { .. } => false,
         RepairTarget::Tag {
             source,
             source_id,
@@ -1730,6 +1738,24 @@ pub async fn prepare_memory_reclassification_with_pages(
         RepairChoice::CompleteEntityExtraction { .. }
     ) {
         return prepare_complete_entity_extraction(db, store, request, page_root, now_epoch).await;
+    }
+    if let RepairChoice::EntityRelation {
+        selection,
+        selected_finding,
+    } = request.choice()
+    {
+        return relation::prepare(
+            db,
+            store,
+            request.lint_scope().clone(),
+            selection,
+            Some(selected_finding),
+            request.general_report(),
+            request.deep_report(),
+            page_root,
+            now_epoch,
+        )
+        .await;
     }
     validate_selected_finding(&request)?;
     let deep = request
@@ -2460,6 +2486,9 @@ async fn apply_repair_with_pages_inner(
     let _operation_lock = store.lock_manifest_operation(manifest.manifest_id())?;
     store.ensure_not_cancelled(&manifest)?;
     let _tag_record_set_lock = store.lock_tag_record_set(&manifest)?;
+    if manifest.writer() == RepairWriter::EntityRelation {
+        return relation::apply(db, store, &manifest, now_epoch).await;
+    }
     if manifest.writer() == RepairWriter::RenamePageTitle {
         let page_root = page_root.ok_or_else(|| {
             WenlanError::Validation("page projection repair root unavailable".to_string())
@@ -2584,6 +2613,9 @@ async fn apply_repair_with_pages_inner(
             .await
         }
         RepairWriter::QuarantineStalePageProjection => Err(WenlanError::Validation(
+            "repair_writer_dispatch_bypassed".to_string(),
+        )),
+        RepairWriter::EntityRelation => Err(WenlanError::Validation(
             "repair_writer_dispatch_bypassed".to_string(),
         )),
         RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => Err(
@@ -3131,10 +3163,15 @@ async fn record_repair_verification_inner(
     };
     let rollback = if matches!(
         manifest.writer(),
-        RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction
+        RepairWriter::RenamePageTitle
+            | RepairWriter::CompleteEntityExtraction
+            | RepairWriter::EntityRelation
     ) {
         if manifest.writer() == RepairWriter::CompleteEntityExtraction {
             store.load_complete_entity_extraction_rollback(&manifest)?;
+        }
+        if manifest.writer() == RepairWriter::EntityRelation {
+            relation::load_rollback(store, &manifest)?;
         }
         None
     } else {
@@ -3291,6 +3328,37 @@ fn validate_verification_reports(
             .filter(|check| check.check_id() == manifest.post_assertions().target_check_id())
             .any(|check| {
                 check.evidence().iter().any(|evidence| match evidence {
+                    LintEvidenceRef::SemanticFinding { finding }
+                        if manifest.writer() == RepairWriter::EntityRelation =>
+                    {
+                        manifest.source().finding().is_some_and(|selected| {
+                            let RepairTarget::EntityRelation {
+                                from_entity,
+                                to_entity,
+                                ..
+                            } = manifest.target()
+                            else {
+                                return false;
+                            };
+                            let predicate = match manifest.mutation() {
+                                RepairMutation::EntityRelation {
+                                    change:
+                                        wenlan_types::repair_relation::RepairRelationMutation::Add {
+                                            canonical_relation_type,
+                                            ..
+                                        },
+                                } => canonical_relation_type.as_str(),
+                                _ => "",
+                            };
+                            relation::finding_matches_subject(
+                                selected,
+                                from_entity,
+                                to_entity,
+                                predicate,
+                                finding,
+                            )
+                        })
+                    }
                     LintEvidenceRef::SemanticFinding { finding } => finding
                         .evidence_ids()
                         .contains(manifest.post_assertions().target_evidence_id()),
@@ -5267,6 +5335,9 @@ pub(crate) async fn repair_target_receipt_on_connection(
     target: &RepairTarget,
 ) -> Result<(RepairDigest, u64), WenlanError> {
     match target {
+        RepairTarget::EntityRelation { .. } => Err(WenlanError::Validation(
+            "relation receipt requires manifest context".to_string(),
+        )),
         RepairTarget::Memory { source_id, scope } => {
             validate_target_space_on_connection(connection, source_id, scope.space()).await?;
             target_receipt_on_connection(connection, source_id).await
@@ -6715,6 +6786,20 @@ pub(crate) fn lint_review_owner_binding_digest(
 pub(crate) async fn database_content_digest(
     connection: &libsql::Connection,
 ) -> Result<RepairDigest, WenlanError> {
+    database_content_digest_with_exclusions(connection, &BTreeMap::new()).await
+}
+
+/// Predicates are static SQL owned by a repair writer; all identities are
+/// bound values. Exclusions never come from a client or persisted SQL text.
+pub(crate) struct RepairDigestExclusion {
+    pub predicate: &'static str,
+    pub parameters: Vec<libsql::Value>,
+}
+
+pub(crate) async fn database_content_digest_with_exclusions(
+    connection: &libsql::Connection,
+    exclusions: &BTreeMap<&'static str, RepairDigestExclusion>,
+) -> Result<RepairDigest, WenlanError> {
     let mut digest = Sha256::new();
     digest_len_bytes(&mut digest, b"wenlan-repair-db-content-v1")?;
 
@@ -6755,11 +6840,23 @@ pub(crate) async fn database_content_digest(
         } else {
             "_rowid_".to_string()
         };
+        let exclusion = exclusions.get(table.as_str());
+        let filter = exclusion
+            .map(|excluded| format!(" WHERE NOT COALESCE(({}),0)", excluded.predicate))
+            .unwrap_or_default();
         let query = format!(
-            "SELECT * FROM {} ORDER BY {order_by}",
+            "SELECT * FROM {}{filter} ORDER BY {order_by}",
             quote_identifier(&table)
         );
-        let mut rows = connection.query(&query, ()).await.map_err(database_error)?;
+        let parameters = libsql::params::Params::Positional(
+            exclusion
+                .map(|excluded| excluded.parameters.clone())
+                .unwrap_or_default(),
+        );
+        let mut rows = connection
+            .query(&query, parameters)
+            .await
+            .map_err(database_error)?;
         let column_count = rows.column_count();
         digest.update(i64::from(column_count).to_le_bytes());
         while let Some(row) = rows.next().await.map_err(database_error)? {

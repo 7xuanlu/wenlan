@@ -61,11 +61,15 @@ mod page_drafts;
 pub mod page_map;
 mod page_summary_backfill;
 mod presence_review;
+pub(crate) mod relation_write;
+pub(crate) use relation_write::RelationWriteInput;
 pub(crate) mod repair_deterministic;
 mod repair_memory_cas;
 pub(crate) mod repair_page_regenerate;
 pub(crate) mod repair_page_rename;
 mod repair_receipt;
+pub(crate) mod repair_relation;
+pub(crate) mod repair_relation_cas;
 pub(crate) mod repair_stale_projection;
 pub(crate) mod repair_target_receipt;
 pub(crate) mod repair_verification;
@@ -18275,7 +18279,7 @@ struct EntityMergeEdgePlan {
     created_at: i64,
 }
 
-type CommunityGenerationUpdate = (String, i64, BTreeSet<String>);
+pub(crate) type CommunityGenerationUpdate = (String, i64, BTreeSet<String>);
 const COMMUNITY_READ_PAGE_SIZE: i64 = 512;
 
 impl EdgeBackfillCounts {
@@ -35826,13 +35830,21 @@ impl MemoryDB {
     /// Increment the usage count for a canonical relation type.
     pub async fn increment_relation_type_count(&self, canonical: &str) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
+        Self::increment_relation_type_count_on_connection(&conn, canonical)
+            .await
+            .map(|_| ())
+            .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {e}")))
+    }
+
+    async fn increment_relation_type_count_on_connection(
+        conn: &libsql::Connection,
+        canonical: &str,
+    ) -> Result<u64, libsql::Error> {
         conn.execute(
             "UPDATE relation_type_vocabulary SET count = count + 1 WHERE canonical = ?1",
             libsql::params![canonical.to_string()],
         )
         .await
-        .map_err(|e| WenlanError::VectorDb(format!("increment_relation_type_count: {}", e)))?;
-        Ok(())
     }
 
     /// Resolve an entity type against the vocabulary. Canonical-first, then a
@@ -37092,58 +37104,9 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("supersede_relation begin: {e}")))?;
 
-        let exec = async {
-            let mut rows = conn
-                .query(
-                    "SELECT src_id, dst_id, semantic_type, payload, created_at \
-                     FROM edges WHERE edge_id = ?1 AND edge_type = 'relates' \
-                       AND valid_until IS NULL",
-                    libsql::params![loser_id],
-                )
-                .await?;
-
-            let snapshot = rows.next().await?.map(|row| {
-                let payload: serde_json::Value = row
-                    .get::<Option<String>>(3)
-                    .unwrap_or(None)
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str(s).ok())
-                    .unwrap_or(serde_json::Value::Null);
-                serde_json::json!({
-                    "id":               loser_id,
-                    "from_entity":      row.get::<String>(0).ok(),
-                    "to_entity":        row.get::<String>(1).ok(),
-                    "relation_type":    row.get::<Option<String>>(2).unwrap_or(None),
-                    "source_agent":     payload.get("source_agent"),
-                    "confidence":       payload.get("confidence"),
-                    "explanation":      payload.get("explanation"),
-                    "source_memory_id": payload.get("source_memory_id"),
-                    "created_at":       row.get::<i64>(4).ok(),
-                })
-            });
-            drop(rows);
-
-            // G6 Stage 2 PR 2b: the relations hard-delete stops here — the
-            // snapshot above already captured everything the caller needs.
-            // Dual-write (M2 PR-1): soft-invalidate the corresponding edge
-            // rather than hard-delete it (append-only-with-soft-supersession,
-            // spec v3 §2). `loser_id` IS the edge_id now, so no re-derivation
-            // is needed (previously recomputed from the relations snapshot's
-            // from/to/relation_type columns).
-            let mut graph_changes = Vec::new();
-            if snapshot.is_some() {
-                if let Some(change) =
-                    Self::dual_write_invalidate_edge(&conn, loser_id, None).await?
-                {
-                    graph_changes.push(change);
-                }
-            }
-            let generation_updates =
-                Self::bump_community_graph_generations(&conn, graph_changes).await?;
-
-            Ok::<_, libsql::Error>((snapshot, generation_updates))
-        }
-        .await;
+        // Inner write lives in `relation_write.rs`: runs on the caller-owned
+        // transaction above; graph updates publish only after commit below.
+        let exec = Self::retire_relation_on_connection(&conn, loser_id).await;
 
         match exec {
             Ok((snapshot, generation_updates)) => {
@@ -37276,192 +37239,26 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("create_relation begin: {e}")))?;
 
-        let exec = async {
-            // G6 Stage 2 PR 2b: the `relations` upsert (mint/re-assert plus
-            // its "keep the higher confidence" merge) stops here -- `edges`
-            // is the sole live producer of `relates` edges now. `edge_id` is
-            // content-addressed over (edge_type, src, dst, relation_type),
-            // so the row this call targets is locatable without a
-            // relations-table round-trip; read it directly to replicate the
-            // same merge the old UPSERT enforced.
-            let edge_id = crate::provenance::compute_edge_id(
-                "relates", "entity", from_entity, "entity", to_entity, &canonical,
-            );
-            let mut prior_rows = conn
-                .query(
-                    "SELECT json_extract(payload, '$.confidence'), \
-                            json_extract(payload, '$.explanation'), \
-                            json_extract(payload, '$.source_agent'), \
-                            json_extract(payload, '$.asserted_at') \
-                     FROM edges WHERE edge_id = ?1",
-                    libsql::params![edge_id.clone()],
-                )
-                .await?;
-            // The edge's semantic patch mirrors the STORED row, not this
-            // call's arguments — a weaker re-assert must not regress the
-            // edge's confidence/explanation, and `source_agent`/`asserted_at`
-            // stay frozen at the row's first mint (the old `relations`
-            // UPSERT never touched those two columns on conflict either).
-            // `asserted_at` never becomes `now` on a re-assert — that is
-            // its whole point (G6 Stage 1.2 trap 1: edges.created_at is not
-            // a substitute).
-            let existed_before;
-            let (stored_conf, stored_expl, stored_agent, stored_asserted_at): (
-                Option<f64>,
-                Option<String>,
-                Option<String>,
-                Option<i64>,
-            ) = match prior_rows.next().await? {
-                Some(row) => {
-                    existed_before = true;
-                    (
-                        row.get::<Option<f64>>(0).unwrap_or(None),
-                        row.get::<Option<String>>(1).unwrap_or(None),
-                        row.get::<Option<String>>(2).unwrap_or(None),
-                        row.get::<Option<i64>>(3).unwrap_or(None),
-                    )
-                }
-                None => {
-                    existed_before = false;
-                    (None, None, None, None)
-                }
-            };
-            drop(prior_rows);
-            let stronger = confidence.is_some() && confidence > stored_conf;
-            let (merged_conf, merged_expl) = if stronger {
-                (
-                    confidence,
-                    explanation.map(|s| s.to_string()).or(stored_expl),
-                )
-            } else {
-                (stored_conf, stored_expl)
-            };
-            let merged_agent = if existed_before {
-                stored_agent
-            } else {
-                source_agent.map(|s| s.to_string())
-            };
-            let asserted_at = stored_asserted_at.unwrap_or(now);
-            let semantic_patch = Self::relates_semantic_patch(
-                merged_conf,
-                merged_expl.as_deref(),
-                merged_agent.as_deref(),
-                asserted_at,
-            );
-
-            // Dual-write (M2 PR-1): mirror `backfill_edges_from_relations`'s
-            // classification exactly so a live-written edge and a backfilled
-            // edge for the same fact converge on the same edge_id.
-            //
-            // G6 Stage 2 PR 2c item 2: space authority ported from `entities`
-            // to the entity shadow page (`pages` via `entity_page_map`) --
-            // the parity receipt found 965/965 entities mapped, zero
-            // `pages.space`/`entities.space` drift, and every entity-space
-            // move (`update_space`, `delete_space`, `reassign_memories_space`)
-            // syncing the shadow page in the same transaction. Zero rows on
-            // either side (no shadow page) matches the prior "entity not
-            // found" fallback.
-            let mut space_rows = conn
-                .query(
-                    "SELECT pf.space, pt.space FROM entity_page_map mf, pages pf, entity_page_map mt, pages pt \
-                     WHERE mf.entity_id = ?1 AND pf.id = mf.page_id AND mt.entity_id = ?2 AND pt.id = mt.page_id",
-                    libsql::params![from_entity.to_string(), to_entity.to_string()],
-                )
-                .await?;
-            let (from_space, to_space): (Option<String>, Option<String>) =
-                match space_rows.next().await? {
-                    Some(row) => (row.get(0).unwrap_or(None), row.get(1).unwrap_or(None)),
-                    None => (None, None),
-                };
-            drop(space_rows);
-            // `relates` resolves two endpoints, not one destination, so it does
-            // not go through `resolved_space_downgrades`: SAME-SPACE requires
-            // both entity spaces present and equal; anything else (differing, or
-            // either unresolved) is a cross-space/indeterminate downgrade. dst
-            // is always `entity` (never fence-exempt external). Mirrors
-            // `backfill_edges_from_relations`.
-            let (lineage, space, cross_space_downgrade) = match (&from_space, &to_space) {
-                (Some(fs), Some(ts)) if fs == ts => ("assertion", fs.clone(), false),
-                _ => (
-                    "legacy",
-                    from_space
-                        .or(to_space)
-                        .unwrap_or_else(|| UNFILED_SPACE_ID.to_string()),
-                    true,
-                ),
-            };
-            // M3g Stage A span capture (§2.3/§2.4): CODE locates the
-            // model-supplied quote as an exact char-offset substring of the
-            // source memory's content -- never guessed.
-            //
-            // G6 Stage 2 PR 2b: `source_memory_id` is written whenever the
-            // caller supplies one, INDEPENDENT of whether this call also
-            // carries span/model/prompt provenance. Before the cutover the
-            // plain `create_relation` wrapper (all four extraction args
-            // `None`) could leave `payload=NULL` because
-            // `relations.source_memory_id` still held the linkage; now that
-            // `edges` is the sole live store, dropping it here would lose
-            // the provenance outright -- and `payload.$.source_memory_id` is
-            // already the canonical home every migrated reader uses
-            // (migration 116, `supersede_relation`'s archived snapshot, the
-            // M3g candidate scan). Only a call with NO source and NO
-            // extraction data still writes `payload=NULL`.
-            //
-            // Keys are omitted rather than emitted as JSON null: `json_patch`
-            // reads a null as "remove this key", so an absent value must be
-            // absent from the object (same rule as `relates_semantic_patch`).
-            let payload = {
-                let mut obj = serde_json::Map::new();
-                if let Some(sid) = source_memory_id {
-                    obj.insert("source_memory_id".into(), serde_json::json!(sid));
-                }
-                if let Some(quote) = span_quote {
-                    let offsets = source_content
-                        .and_then(|content| crate::extract::locate_span_chars(content, quote));
-                    obj.insert(
-                        "span".into(),
-                        serde_json::json!({
-                            "quote": quote,
-                            "char_start": offsets.map(|(start, _)| start),
-                            "char_end": offsets.map(|(_, end)| end),
-                        }),
-                    );
-                }
-                if let Some(v) = model_version {
-                    obj.insert("model_version".into(), serde_json::json!(v));
-                }
-                if let Some(v) = prompt_version {
-                    obj.insert("prompt_version".into(), serde_json::json!(v));
-                }
-                (!obj.is_empty()).then(|| serde_json::Value::Object(obj).to_string())
-            };
-
-            let (edge_id, graph_changes) = Self::dual_write_edge_with_payload(
-                &conn,
-                "relates",
-                "entity",
+        // Inner write lives in `relation_write.rs`: runs on the caller-owned
+        // transaction above; graph updates publish (and the fresh-mint
+        // vocabulary count runs) only after commit below.
+        let exec = Self::create_relation_on_connection(
+            &conn,
+            RelationWriteInput {
                 from_entity,
-                "entity",
                 to_entity,
-                &canonical,
-                lineage,
-                &space,
-                cross_space_downgrade,
-                None,
-                payload.as_deref(),
-                Some(&canonical),
-                semantic_patch.as_deref(),
-            )
-            .await?;
-            let generation_updates =
-                Self::bump_community_graph_generations(&conn, graph_changes).await?;
-
-            Ok::<(String, bool, Vec<CommunityGenerationUpdate>), libsql::Error>((
-                edge_id,
-                existed_before,
-                generation_updates,
-            ))
-        }
+                canonical: canonical.as_str(),
+                source_agent,
+                confidence,
+                explanation,
+                source_memory_id,
+                span_quote,
+                source_content,
+                model_version,
+                prompt_version,
+                now,
+            },
+        )
         .await;
 
         match exec {
@@ -45976,24 +45773,29 @@ impl MemoryDB {
         old_value: &str,
         category: Option<&str>,
     ) -> Result<bool, WenlanError> {
+        let conn = self.conn.lock().await;
+        Self::insert_vocab_promote_proposal_on_connection(&conn, kind, old_value, category)
+            .await
+            .map(|affected| affected > 0)
+            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))
+    }
+
+    async fn insert_vocab_promote_proposal_on_connection(
+        conn: &libsql::Connection,
+        kind: &str,
+        old_value: &str,
+        category: Option<&str>,
+    ) -> Result<u64, libsql::Error> {
         let id = Self::vocab_proposal_fingerprint(kind, old_value);
         let payload = serde_json::json!({
-            "action": "vocab_promote",
-            "kind": kind,
-            "old_value": old_value,
-            "category": category,
+            "action": "vocab_promote", "kind": kind, "old_value": old_value, "category": category,
         })
         .to_string();
-        let conn = self.conn.lock().await;
-        let affected = conn
-            .execute(
-                "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
-                 VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
-                libsql::params![id, payload],
-            )
-            .await
-            .map_err(|e| WenlanError::VectorDb(format!("insert_vocab_promote: {e}")))?;
-        Ok(affected > 0)
+        conn.execute(
+            "INSERT INTO refinement_queue (id, action, source_ids, payload, confidence, status) \
+             VALUES (?1, 'vocab_promote', '[]', ?2, 1.0, 'awaiting_review') ON CONFLICT(id) DO NOTHING",
+            libsql::params![id, payload],
+        ).await
     }
 
     /// Record `entity_id` on the open `vocab_promote` proposal for
@@ -48803,9 +48605,31 @@ impl MemoryDB {
         // left `"Claude Code"` as `"claude code"` (space, not hyphen) — not
         // matching the hyphenated form the CLI sends. Migration 31 backfilled
         // the history; this keeps new writes aligned with `agent_connections.name`.
-        let agent_name_norm = canonicalize_agent_id(agent_name);
         let conn = self.conn.lock().await;
-        let now = chrono::Utc::now().timestamp();
+        Self::log_agent_activity_on_connection(
+            &conn,
+            agent_name,
+            action,
+            memory_ids,
+            query,
+            detail,
+            chrono::Utc::now().timestamp(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| WenlanError::VectorDb(format!("log_agent_activity insert: {e}")))
+    }
+
+    async fn log_agent_activity_on_connection(
+        conn: &libsql::Connection,
+        agent_name: &str,
+        action: &str,
+        memory_ids: &[String],
+        query: Option<&str>,
+        detail: &str,
+        now: i64,
+    ) -> Result<u64, libsql::Error> {
+        let agent_name_norm = canonicalize_agent_id(agent_name);
         let ids_str = if memory_ids.is_empty() {
             None
         } else {
@@ -48824,8 +48648,6 @@ impl MemoryDB {
             ],
         )
         .await
-        .map_err(|e| WenlanError::VectorDb(format!("log_agent_activity insert: {}", e)))?;
-        Ok(())
     }
 
     /// Return up to `limit` most recent retrieval events joined to page titles.

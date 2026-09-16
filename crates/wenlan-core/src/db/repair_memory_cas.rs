@@ -18,7 +18,7 @@ fn recovery_required_after_rollback_failure(
     WenlanError::Conflict("repair_apply_recovery_required".to_string())
 }
 
-async fn rollback_repair_transaction(
+pub(super) async fn rollback_repair_transaction(
     connection: &libsql::Connection,
     error: &WenlanError,
     force_failure: bool,
