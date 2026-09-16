@@ -240,10 +240,13 @@ pub(super) async fn prepare_startup_state(
                         .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
                 })
                 .unwrap_or(false);
+            // The OKF root `index.md` is a reserved document the projection
+            // regenerates on its own; a folder holding only that is still empty.
             let new_is_empty = std::fs::read_dir(&new_pages)
                 .map(|entries| {
                     !entries
                         .filter_map(|e| e.ok())
+                        .filter(|e| !e.file_name().eq_ignore_ascii_case("index.md"))
                         .any(|e| e.path().extension().and_then(|s| s.to_str()) == Some("md"))
                 })
                 .unwrap_or(true);
