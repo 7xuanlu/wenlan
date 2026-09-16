@@ -148,12 +148,19 @@ fn page(id: &str) -> Page {
 }
 
 /// Exactly what `wenlan pages` would list: top-level `*.md`, by filename stem.
+///
+/// Excludes the reserved OKF `index.md` (see `super::INDEX_FILE`): it is a
+/// generated catalog document, not a page, per the OKF projection spec ("the
+/// page lint must not treat it as a page"). `wenlan-cli/src/commands/pages.rs`
+/// is out of scope for this change and does not yet carry the same exclusion
+/// -- `wenlan pages` will list a bogus "index" entry until it does.
 fn readable_pages(dir: &Path) -> Vec<String> {
     let mut stems: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|x| x.to_str()) == Some("md"))
+        .filter(|path| path.file_name().and_then(|n| n.to_str()) != Some(super::INDEX_FILE))
         .filter_map(|path| {
             path.file_stem()
                 .and_then(|s| s.to_str())

@@ -129,6 +129,15 @@ struct LegacyKnowledgeStateV1 {
 /// where to look.
 const ARCHIVE_DIR: &str = "archive";
 
+/// Reserved OKF v0.2 root document (spec 2026-09-16-okf-projection.md change
+/// 4). Not a page: no `origin_id`, so `sources::page_watcher` already leaves
+/// it alone, and `lint::pages::traversal::scope_for` excludes it from
+/// `EntryScope::PageMarkdown`.
+const INDEX_FILE: &str = "index.md";
+/// Bounded frontmatter read for building `index.md` from projected files —
+/// generous enough for title/description/space/tags, small next to a page body.
+const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
+
 pub struct KnowledgeWriter {
     path: PathBuf,
     tracker: std::sync::Arc<crate::page_projection_tracker::PageProjectionTracker>,
@@ -311,6 +320,12 @@ impl KnowledgeWriter {
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
 
+        if self.write_provenance {
+            if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                log::warn!("[knowledge] index.md regeneration failed: {e}");
+            }
+        }
+
         Ok(file_path.to_string_lossy().to_string())
     }
 
@@ -365,6 +380,19 @@ impl KnowledgeWriter {
                     log::warn!("[reconcile] repair failed for {}: {e}", page.id);
                     stats.errors += 1;
                 }
+            }
+        }
+        // Regenerate unconditionally, not only when a page above was rewritten:
+        // a fresh knowledge root reconciled for the first time has no index.md
+        // at all yet, even though no page was individually behind.
+        if self.write_provenance {
+            if let Err(e) =
+                KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
+                    let state = self.load_state_cap(&capabilities.wenlan);
+                    self.regenerate_index_cap(capabilities, &state)
+                })
+            {
+                log::warn!("[reconcile] index.md regeneration failed: {e}");
             }
         }
         Ok(stats)
@@ -472,6 +500,10 @@ impl KnowledgeWriter {
                 let _ = manifest.save_to(&capabilities.root);
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
+
+                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                    log::warn!("[knowledge] index.md regeneration failed: {e}");
+                }
             }
 
             Ok(())
@@ -1101,6 +1133,94 @@ impl KnowledgeWriter {
     fn save_state_cap(&self, wenlan: &Dir, state: &KnowledgeState) -> Result<(), WenlanError> {
         let data = serde_json::to_vec_pretty(state)?;
         write_regular_nofollow(wenlan, "state.json", &data)
+    }
+
+    /// Regenerate the OKF `index.md` root document from the frontmatter of the
+    /// files currently projected (per `state`), grouped by `space` (`##
+    /// Unfiled` for pages without one), each section's entries sorted by
+    /// title. Read from the projected files rather than a `Page` list because
+    /// `write_page`/`remove_page` only ever have the one page they are
+    /// touching in hand; `reconcile` has the full set but shares this helper
+    /// for one code path.
+    ///
+    /// Best-effort like the stub/manifest projection beside it: a page whose
+    /// frontmatter can't be read this pass is dropped from the index rather
+    /// than failing the write that triggered the regeneration.
+    fn regenerate_index_cap(
+        &self,
+        capabilities: &ProjectionCapabilities,
+        state: &KnowledgeState,
+    ) -> Result<(), WenlanError> {
+        let mut filenames: Vec<&str> = state.pages.values().map(|e| e.file.as_str()).collect();
+        filenames.sort_unstable();
+        filenames.dedup();
+
+        let mut by_space: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
+            std::collections::BTreeMap::new();
+        let mut unfiled: Vec<(String, String, String)> = Vec::new();
+
+        for filename in filenames {
+            let mut options = OpenOptions::new();
+            options.read(true).follow(FollowSymlinks::No);
+            let mut file = match capabilities.root.open_with(filename, &options) {
+                Ok(file) => file,
+                Err(_) => continue,
+            };
+            let mut head = Vec::new();
+            if (&mut file)
+                .take(INDEX_FRONTMATTER_SCAN_BYTES)
+                .read_to_end(&mut head)
+                .is_err()
+            {
+                continue;
+            }
+            // Lossy: the scan cap can land mid-character past 8 KiB, and
+            // frontmatter keys/values of interest here sit at the head.
+            let head = String::from_utf8_lossy(&head);
+            let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+            let title = fm.get_str("title").unwrap_or(filename).to_string();
+            let description = fm.get_str("description").unwrap_or("").to_string();
+            let entry = (title, filename.to_string(), description);
+            match fm.get_str("space") {
+                Some(space) if !space.is_empty() => {
+                    by_space.entry(space.to_string()).or_default().push(entry);
+                }
+                _ => unfiled.push(entry),
+            }
+        }
+        for entries in by_space.values_mut() {
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        unfiled.sort_by(|a, b| a.0.cmp(&b.0));
+
+        let mut out = String::from("---\nokf_version: \"0.2\"\n---\n\n");
+        for (space, entries) in &by_space {
+            out.push_str(&format!("## {space}\n\n"));
+            for (title, filename, description) in entries {
+                out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
+            }
+            out.push('\n');
+        }
+        if !unfiled.is_empty() {
+            out.push_str("## Unfiled\n\n");
+            for (title, filename, description) in &unfiled {
+                out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
+            }
+            out.push('\n');
+        }
+        let bytes = format!("{}\n", out.trim_end());
+
+        let temp_filename = format!(
+            ".index.{}.{}.tmp",
+            std::process::id(),
+            TEMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        write_page_atomically_nofollow(
+            &capabilities.root,
+            INDEX_FILE,
+            &temp_filename,
+            bytes.as_bytes(),
+        )
     }
 }
 
@@ -4192,10 +4312,15 @@ fn render_markdown(page: &Page) -> String {
     };
     let mut out = String::new();
 
-    // Frontmatter
+    // Frontmatter — OKF v0.2 conformant (see specs/2026-09-16-okf-projection.md).
     out.push_str("---\n");
     out.push_str(&format!("title: {}\n", yaml_quoted(&page.title)));
+    out.push_str("type: page\n");
+    if let Some(ref summary) = page.summary {
+        out.push_str(&format!("description: {}\n", yaml_quoted(summary)));
+    }
     if let Some(ref space) = page.space {
+        out.push_str(&format!("tags: [{space}]\n"));
         out.push_str(&format!("space: {}\n", space));
     }
     out.push_str(&format!("origin_id: {}\n", page.id));
@@ -4204,6 +4329,23 @@ fn render_markdown(page: &Page) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    out.push_str(&format!(
+        "generated: {{by: {}, at: {}}}\n",
+        yaml_quoted(&format!("wenlan/{}", crate::version())),
+        yaml_quoted(&page.created_at)
+    ));
+    let status = if page.stale_reason.is_some() {
+        "draft"
+    } else if page.status != "active" {
+        "deprecated"
+    } else {
+        "stable"
+    };
+    out.push_str(&format!("status: {status}\n"));
+    // `verified:` (review_status == "confirmed") is intentionally omitted: no
+    // confirmation-timestamp column exists on `pages` (verified by grepping
+    // migrations and `Page` for `confirmed_at`/`reviewed_at`), and the spec
+    // forbids fabricating `at`. Add the family back once that column lands.
     // Read-only provenance projection (one-way; the watcher never reads it back).
     out.push_str(&sources_frontmatter(&page.source_memory_ids));
     let related = related_page_titles(&page.content);
@@ -5398,6 +5540,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+            .filter(|e| e.file_name().to_string_lossy() != INDEX_FILE)
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
         assert_eq!(
@@ -5480,8 +5623,9 @@ mod tests {
         let mut page = test_concept();
         page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
         let md = render_markdown(&page);
-        // Read-only frontmatter property.
-        assert!(md.contains("sources: [\"[[mem_1]]\", \"[[mem_2]]\"]"));
+        // Read-only frontmatter property, OKF object-list shape.
+        assert!(md.contains("sources:\n  - {id: mem_1, resource: \"wenlan://memory/mem_1\"}"));
+        assert!(md.contains("  - {id: mem_2, resource: \"wenlan://memory/mem_2\"}"));
         // Delimiter-wrapped Sources block in the body.
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_START));
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_END));
@@ -5533,5 +5677,247 @@ mod tests {
         );
         // And the title round-trips intact.
         assert_eq!(fm.get_str("title"), Some("The \"Real\" Architecture"));
+    }
+
+    // ---- OKF v0.2 frontmatter (spec 2026-09-16-okf-projection.md) ----------
+
+    #[test]
+    fn render_markdown_frontmatter_gains_type_page() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("type"), Some("page"));
+    }
+
+    #[test]
+    fn render_markdown_description_reflects_summary_when_present() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("description"), Some("Memory safety without GC"));
+    }
+
+    #[test]
+    fn render_markdown_omits_description_when_no_summary() {
+        let page = Page {
+            summary: None,
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        assert!(!md.contains("description:"));
+    }
+
+    #[test]
+    fn render_markdown_tags_mirror_space_when_present() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.tags(), vec!["rust".to_string()]);
+        // The pre-existing `space:` line is kept alongside the new `tags:`.
+        assert_eq!(fm.get_str("space"), Some("rust"));
+    }
+
+    #[test]
+    fn render_markdown_omits_tags_when_no_space() {
+        let page = Page {
+            space: None,
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        assert!(!md.contains("tags:"));
+    }
+
+    #[test]
+    fn render_markdown_generated_stamps_version_and_created_at() {
+        let page = test_concept();
+        let md = render_markdown(&page);
+        assert!(md.contains(&format!(
+            "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
+            crate::version(),
+            page.created_at
+        )));
+    }
+
+    #[test]
+    fn render_markdown_status_stable_by_default() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("stable"));
+    }
+
+    #[test]
+    fn render_markdown_status_draft_when_stale_reason_set() {
+        let page = Page {
+            stale_reason: Some("source_updated".to_string()),
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("draft"));
+    }
+
+    #[test]
+    fn render_markdown_status_deprecated_when_page_not_active() {
+        let page = Page {
+            status: "archived".to_string(),
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("deprecated"));
+    }
+
+    #[test]
+    fn render_markdown_never_emits_verified_without_a_confirmation_timestamp_column() {
+        // `review_status == "confirmed"` (test_concept()'s default) is the ONLY
+        // signal available; the `pages` table has no `confirmed_at`/`reviewed_at`
+        // column (verified by grepping migrations and `Page`), so `verified:`
+        // must never appear rather than fabricate `at`.
+        let page = test_concept();
+        assert_eq!(page.review_status, "confirmed");
+        let md = render_markdown(&page);
+        assert!(!md.contains("verified:"));
+    }
+
+    #[test]
+    fn render_markdown_body_is_unchanged_by_the_new_frontmatter_fields() {
+        // Obsidian graph edges come from the body, not frontmatter: split the
+        // projection at the closing `---` and check the body is exactly the
+        // wikified content plus the delimiter-wrapped Sources block, same as
+        // before this change.
+        let page = test_concept();
+        let md = render_markdown(&page);
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&md);
+        let expected = format!(
+            "{}\n\n{}",
+            convert_links_to_wikilinks(&page.content),
+            crate::export::provenance::render_sources_block(&page.source_memory_ids)
+        );
+        assert_eq!(body, expected);
+    }
+
+    // ---- OKF v0.2 index.md ---------------------------------------------------
+
+    #[test]
+    fn write_page_regenerates_index_with_only_okf_version_frontmatter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        page_a.space = Some("rust".to_string());
+        let path_a = writer.write_page_for_test(&page_a).unwrap();
+        let filename_a = Path::new(&path_a)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        page_b.space = None;
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let index_path = dir.path().join(INDEX_FILE);
+        assert!(index_path.exists(), "index.md must be projected");
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(
+            fm.fields.len(),
+            1,
+            "index.md's only frontmatter key must be okf_version, got: {:?}",
+            fm.fields
+        );
+        assert_eq!(fm.get_str("okf_version"), Some("0.2"));
+
+        assert!(body.contains("## rust"));
+        assert!(body.contains(&format!("[Alpha](/{filename_a})")));
+        assert!(body.contains("## Unfiled"));
+        assert!(body.contains("[Beta]("));
+    }
+
+    #[test]
+    fn remove_page_regenerates_index_dropping_the_removed_page() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        assert!(std::fs::read_to_string(dir.path().join(INDEX_FILE))
+            .unwrap()
+            .contains(&page.title));
+
+        writer.remove_page_for_test(&page.id).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(!content.contains(&page.title));
+    }
+
+    #[test]
+    fn reconcile_regenerates_index_even_when_no_page_is_rewritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        // Simulate a projection directory reconciled for the first time after
+        // this change ships: every page file is current, but index.md predates
+        // it and is missing.
+        std::fs::remove_file(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(!dir.path().join(INDEX_FILE).exists());
+
+        let stats = writer.reconcile_for_test(&[page]).unwrap();
+        assert_eq!(
+            stats.rewritten, 0,
+            "the page file is current; nothing should be rewritten"
+        );
+        assert!(
+            dir.path().join(INDEX_FILE).exists(),
+            "reconcile must regenerate index.md unconditionally, not only on rewrite"
+        );
+    }
+
+    /// Acceptance 5 fallback (spec 2026-09-16-okf-projection.md): when a
+    /// third-party OKF linter cannot be installed, an in-repo test must assert
+    /// the MUST rules directly -- every non-index `.md` has parseable
+    /// frontmatter with a non-empty `type`, and `index.md` has no other
+    /// frontmatter key. The second half is covered by
+    /// `write_page_regenerates_index_with_only_okf_version_frontmatter`; this
+    /// test covers the first half across every kind of projected file: the
+    /// page itself and its `_sources/` stubs.
+    #[test]
+    fn every_non_index_md_has_parseable_frontmatter_with_a_non_empty_type() {
+        fn collect_md_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_md_files(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
+        writer.write_page_for_test(&page).unwrap();
+
+        let mut md_files = Vec::new();
+        collect_md_files(dir.path(), &mut md_files);
+        let non_index: Vec<_> = md_files
+            .into_iter()
+            .filter(|p| p.file_name().and_then(|n| n.to_str()) != Some(INDEX_FILE))
+            .collect();
+        assert!(
+            non_index.len() >= 3,
+            "expected the page plus two source stubs, got {non_index:?}"
+        );
+        for path in non_index {
+            let content = std::fs::read_to_string(&path).unwrap();
+            let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&content);
+            let ty = fm.get_str("type");
+            assert!(
+                ty.is_some_and(|t| !t.is_empty()),
+                "{path:?} must have a non-empty `type` frontmatter key, got {ty:?}"
+            );
+        }
     }
 }

@@ -98,21 +98,21 @@ pub fn render_sources_block(source_memory_ids: &[String]) -> String {
     out
 }
 
-/// Render the read-only `sources:` frontmatter line (quoted wikilinks, which
-/// Obsidian requires for list properties). Empty string when no sources.
+/// Render the read-only `sources:` frontmatter block as an OKF v0.2 list of
+/// `{id, resource}` objects. Empty string when no sources.
 /// PROJECTION-OUT ONLY — the watcher never reads this back.
-// ids are `mem_*`-shaped (no YAML-specials), but they still route through
-// `yaml_quoted` for uniform safety — unlike `related_frontmatter`, which takes
-// untrusted free-text titles where escaping is load-bearing.
 pub fn sources_frontmatter(source_memory_ids: &[String]) -> String {
     if source_memory_ids.is_empty() {
         return String::new();
     }
-    let quoted: Vec<String> = source_memory_ids
-        .iter()
-        .map(|id| yaml_quoted(&format!("[[{id}]]")))
-        .collect();
-    format!("sources: [{}]\n", quoted.join(", "))
+    let mut out = String::from("sources:\n");
+    for id in source_memory_ids {
+        out.push_str(&format!(
+            "  - {{id: {id}, resource: {}}}\n",
+            yaml_quoted(&format!("wenlan://memory/{id}"))
+        ));
+    }
+    out
 }
 
 /// Render the read-only `related:` frontmatter line from page→page wikilink
@@ -343,7 +343,7 @@ pub fn project_stubs_for_page(
         let path = dir.join(stub_filename(id));
         let quoted = yaml_quoted(id);
         let body = format!(
-            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
+            "---\ntype: source\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
              This is a read-only source projection for memory `{id}`. \
              Edit the memory in Wenlan, not this file.\n"
         );
@@ -365,7 +365,7 @@ pub(crate) fn project_stubs_for_page_in(
     for id in source_memory_ids {
         let quoted = yaml_quoted(id);
         let body = format!(
-            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
+            "---\ntype: source\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
              This is a read-only source projection for memory `{id}`. \
              Edit the memory in Wenlan, not this file.\n"
         );
@@ -505,10 +505,27 @@ mod tests {
     }
 
     #[test]
-    fn sources_frontmatter_quotes_wikilinks() {
+    fn sources_frontmatter_emits_okf_object_list() {
         let ids = ["mem_1".to_string(), "mem_2".to_string()];
         let fm = sources_frontmatter(&ids);
-        assert_eq!(fm, "sources: [\"[[mem_1]]\", \"[[mem_2]]\"]\n");
+        assert_eq!(
+            fm,
+            "sources:\n  - {id: mem_1, resource: \"wenlan://memory/mem_1\"}\n  - {id: mem_2, resource: \"wenlan://memory/mem_2\"}\n"
+        );
+        // Must parse as valid YAML — a flow mapping per list item.
+        let yaml = format!("title: x\n{fm}");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&yaml).expect("OKF sources block must be valid YAML");
+        let sources = parsed
+            .get("sources")
+            .and_then(|v| v.as_sequence())
+            .expect("sources seq");
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].get("id").and_then(|v| v.as_str()), Some("mem_1"));
+        assert_eq!(
+            sources[0].get("resource").and_then(|v| v.as_str()),
+            Some("wenlan://memory/mem_1")
+        );
     }
 
     #[test]
@@ -570,6 +587,14 @@ mod tests {
         // Stub identifies the memory and is marked a read-only projection.
         assert!(body.contains("mem_1"));
         assert!(body.contains("read-only"));
+        // OKF v0.2: `type: source` is the first frontmatter key.
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&body);
+        assert_eq!(fm.get_str("type"), Some("source"));
+        let fm_start = body.find("---\n").unwrap() + 4;
+        assert!(
+            body[fm_start..].starts_with("type: source\n"),
+            "type: source must be the first frontmatter key, got: {body}"
+        );
     }
 
     #[test]

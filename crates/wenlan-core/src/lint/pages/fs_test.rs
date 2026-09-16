@@ -121,6 +121,32 @@ fn scanner_preserves_missing_state_with_and_without_projection() {
 }
 
 #[test]
+fn scanner_excludes_the_reserved_okf_index_from_page_markdown() {
+    // `index.md` (spec 2026-09-16-okf-projection.md change 4) carries no
+    // `origin_id` and must never be scanned as a page.
+    let dir = root();
+    write(
+        dir.path(),
+        "index.md",
+        b"---\nokf_version: \"0.2\"\n---\n\n## rust\n\n* [Alpha](/alpha.md) - \n",
+    );
+    write(
+        dir.path(),
+        "alpha.md",
+        b"---\norigin_id: page_alpha\n---\nbody\n",
+    );
+    let scan = scan_page_root(dir.path()).expect("index scan");
+    assert_eq!(
+        scan.page_markdown().len(),
+        1,
+        "index.md must not be counted as page markdown"
+    );
+    assert_eq!(scan.page_markdown()[0].path, "alpha.md");
+    let index_entry = scan.entry("index.md").expect("index.md entry recorded");
+    assert_eq!(index_entry.scope, EntryScope::Other);
+}
+
+#[test]
 fn scanner_preserves_exact_and_legacy_state_edges() {
     let dir = root();
     write(

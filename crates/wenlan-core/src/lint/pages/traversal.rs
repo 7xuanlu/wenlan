@@ -384,6 +384,11 @@ fn scope_for(path: &str, kind: EntryKind) -> EntryScope {
         EntryScope::StateControl
     } else if first == "_sources" {
         EntryScope::SourceInventory
+    } else if kind == EntryKind::File && path == "index.md" {
+        // The reserved OKF root index (spec 2026-09-16-okf-projection.md change
+        // 4): it carries no `origin_id`, is not a page, and must not be scanned
+        // as one.
+        EntryScope::Other
     } else if kind == EntryKind::File && path.to_ascii_lowercase().ends_with(".md") {
         EntryScope::PageMarkdown
     } else {
