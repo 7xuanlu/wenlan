@@ -151,16 +151,20 @@ fn page(id: &str) -> Page {
 ///
 /// Excludes the reserved OKF `index.md` (see `super::INDEX_FILE`): it is a
 /// generated catalog document, not a page, per the OKF projection spec ("the
-/// page lint must not treat it as a page"). `wenlan-cli/src/commands/pages.rs`
-/// is out of scope for this change and does not yet carry the same exclusion
-/// -- `wenlan pages` will list a bogus "index" entry until it does.
+/// page lint must not treat it as a page"). Mirrors the same exclusion
+/// `wenlan-cli/src/commands/pages.rs` already carries for `wenlan pages`.
 fn readable_pages(dir: &Path) -> Vec<String> {
     let mut stems: Vec<String> = std::fs::read_dir(dir)
         .unwrap()
         .flatten()
         .map(|entry| entry.path())
         .filter(|path| path.extension().and_then(|x| x.to_str()) == Some("md"))
-        .filter(|path| path.file_name().and_then(|n| n.to_str()) != Some(super::INDEX_FILE))
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| !n.eq_ignore_ascii_case(super::INDEX_FILE))
+                .unwrap_or(true)
+        })
         .filter_map(|path| {
             path.file_stem()
                 .and_then(|s| s.to_str())
@@ -860,6 +864,39 @@ async fn an_evicted_page_is_moved_into_archive_not_deleted() {
         "the archived file must be the page, byte for byte, not a stub"
     );
     assert!(root.path().join("archive").join("p3.md").is_file());
+}
+
+/// Review finding 2: eviction used to leave `index.md` stale, still linking
+/// files the ceremony just moved into `archive/` -- exactly the disclosure the
+/// cutover exists to close.
+#[tokio::test]
+async fn eviction_regenerates_index_dropping_evicted_pages() {
+    let (db, _tmp) = db_with_truth_rows().await;
+    let root = tempfile::tempdir().unwrap();
+    let projection = project_all(&db, root.path());
+    let index_before = std::fs::read_to_string(root.path().join(super::INDEX_FILE)).unwrap();
+    assert!(index_before.contains("p1"));
+    assert!(index_before.contains("p2"));
+    db.set_truth_cutover_generation(1).await.unwrap();
+
+    projection
+        .enforce_projection_directory_invariant(&db)
+        .await
+        .unwrap();
+
+    let index_after = std::fs::read_to_string(root.path().join(super::INDEX_FILE)).unwrap();
+    assert!(
+        index_after.contains("p1"),
+        "the surviving page must stay in index.md; got: {index_after}"
+    );
+    assert!(
+        !index_after.contains("p2"),
+        "the evicted page must be gone from index.md; got: {index_after}"
+    );
+    assert!(
+        !index_after.contains("p3"),
+        "the evicted page must be gone from index.md; got: {index_after}"
+    );
 }
 
 /// An archived page must not be rediscovered on the next pass.

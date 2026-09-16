@@ -108,7 +108,8 @@ pub fn sources_frontmatter(source_memory_ids: &[String]) -> String {
     let mut out = String::from("sources:\n");
     for id in source_memory_ids {
         out.push_str(&format!(
-            "  - {{id: {id}, resource: {}}}\n",
+            "  - {{id: {}, resource: {}}}\n",
+            yaml_quoted(id),
             yaml_quoted(&format!("wenlan://memory/{id}"))
         ));
     }
@@ -510,7 +511,7 @@ mod tests {
         let fm = sources_frontmatter(&ids);
         assert_eq!(
             fm,
-            "sources:\n  - {id: mem_1, resource: \"wenlan://memory/mem_1\"}\n  - {id: mem_2, resource: \"wenlan://memory/mem_2\"}\n"
+            "sources:\n  - {id: \"mem_1\", resource: \"wenlan://memory/mem_1\"}\n  - {id: \"mem_2\", resource: \"wenlan://memory/mem_2\"}\n"
         );
         // Must parse as valid YAML — a flow mapping per list item.
         let yaml = format!("title: x\n{fm}");
@@ -525,6 +526,32 @@ mod tests {
         assert_eq!(
             sources[0].get("resource").and_then(|v| v.as_str()),
             Some("wenlan://memory/mem_1")
+        );
+    }
+
+    /// Review finding 1: an id with YAML-hostile characters (colon, hash,
+    /// space) must not break the flow mapping or leak into `resource` —
+    /// `id` needs the same `yaml_quoted` treatment as `resource`.
+    #[test]
+    fn sources_frontmatter_quotes_odd_character_ids() {
+        let ids = ["mem_a: b #c".to_string()];
+        let fm = sources_frontmatter(&ids);
+        let yaml = format!("title: x\n{fm}");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&yaml).expect("odd-character id must still parse as YAML");
+        let sources = parsed
+            .get("sources")
+            .and_then(|v| v.as_sequence())
+            .expect("sources seq");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].get("id").and_then(|v| v.as_str()),
+            Some("mem_a: b #c"),
+            "id must round-trip exactly through YAML"
+        );
+        assert_eq!(
+            sources[0].get("resource").and_then(|v| v.as_str()),
+            Some("wenlan://memory/mem_a: b #c")
         );
     }
 

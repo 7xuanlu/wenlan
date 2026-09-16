@@ -62,6 +62,17 @@ struct PageFileState {
     file: String,
     version: i64,
     last_written: String,
+    /// The index-relevant fields as of the write that produced `file`, so
+    /// `regenerate_index_cap` can build `index.md` from `state.json` instead
+    /// of re-opening and re-parsing every projected file. `None` means a
+    /// legacy entry written before this field existed -- `regenerate_index_cap`
+    /// falls back to a file-head read for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    space: Option<String>,
 }
 
 /// What one `reconcile` pass repaired. Logged as a single summary line at
@@ -206,7 +217,7 @@ impl KnowledgeWriter {
         create_projection_root_nofollow(&self.path)?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
             after_open()?;
-            self.write_page_with_lock_held(capabilities, &guard, page)
+            self.write_page_with_lock_held(capabilities, &guard, page, true)
         })
     }
 
@@ -227,10 +238,26 @@ impl KnowledgeWriter {
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
     ) -> Result<String, WenlanError> {
+        self.write_page_with_regenerate_index(guard, page, true)
+    }
+
+    /// [`Self::write_page`], with the `index.md` regeneration made optional.
+    ///
+    /// `reconcile` rewrites potentially many behind pages in one pass and
+    /// regenerates the index once at the end (see `reconcile` below) — asking
+    /// every per-page rewrite to also regenerate it would turn an O(1)
+    /// regeneration into O(pages rewritten) for no benefit, since only the
+    /// final state matters.
+    fn write_page_with_regenerate_index(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+        regenerate_index: bool,
+    ) -> Result<String, WenlanError> {
         self.validate_guard(guard)?;
         create_projection_root_nofollow(&self.path)?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-            self.write_page_with_lock_held(capabilities, guard, page)
+            self.write_page_with_lock_held(capabilities, guard, page, regenerate_index)
         })
     }
 
@@ -239,8 +266,15 @@ impl KnowledgeWriter {
         capabilities: &ProjectionCapabilities,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
+        regenerate_index: bool,
     ) -> Result<String, WenlanError> {
-        self.write_page_with_lock_held_and_hook(capabilities, guard, page, || Ok(()))
+        self.write_page_with_lock_held_and_hook(
+            capabilities,
+            guard,
+            page,
+            || Ok(()),
+            regenerate_index,
+        )
     }
 
     fn write_page_with_lock_held_and_hook<F>(
@@ -249,6 +283,7 @@ impl KnowledgeWriter {
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
         after_target_write: F,
+        regenerate_index: bool,
     ) -> Result<String, WenlanError>
     where
         F: FnOnce() -> Result<(), WenlanError>,
@@ -316,11 +351,14 @@ impl KnowledgeWriter {
                 file: filename,
                 version: page.version,
                 last_written: page.last_modified.clone(),
+                title: Some(page.title.clone()),
+                description: page.summary.clone(),
+                space: page.space.clone(),
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
 
-        if self.write_provenance {
+        if self.write_provenance && regenerate_index {
             if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
                 log::warn!("[knowledge] index.md regeneration failed: {e}");
             }
@@ -374,7 +412,7 @@ impl KnowledgeWriter {
             if !self.projection_is_behind(&entry.file, page) {
                 continue;
             }
-            match self.write_page(guard, page) {
+            match self.write_page_with_regenerate_index(guard, page, false) {
                 Ok(_) => stats.rewritten += 1,
                 Err(e) => {
                     log::warn!("[reconcile] repair failed for {}: {e}", page.id);
@@ -405,8 +443,21 @@ impl KnowledgeWriter {
         let Ok(raw) = std::fs::read_to_string(self.path.join(filename)) else {
             return true;
         };
-        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&raw);
-        projected_origin_version(&fm) < page.version
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&raw);
+        if projected_origin_version(&fm) < page.version {
+            return true;
+        }
+        // Legacy-shaped file from before the OKF frontmatter existed: no
+        // `type` key at all. Treat it as behind -- and safe to rewrite -- only
+        // when its body matches what we'd render today; a body mismatch means
+        // an offline edit is sitting on top of it, and the watcher must pick
+        // that up first rather than have reconcile clobber it.
+        if fm.fields.contains_key("type") {
+            return false;
+        }
+        let rendered = render_markdown(page);
+        let (_, rendered_body) = crate::sources::obsidian::extract_frontmatter(&rendered);
+        body == rendered_body
     }
 
     /// Remove `write_page` temp files orphaned by a crash between write and
@@ -935,6 +986,9 @@ impl KnowledgeWriter {
                 let _ = manifest.save_to(&capabilities.root);
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
+                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                    log::warn!("[knowledge] index.md regeneration failed: {e}");
+                }
             }
             if !stuck.is_empty() {
                 // Loud at the caller too, not only in the per-page log lines:
@@ -1135,6 +1189,50 @@ impl KnowledgeWriter {
         write_regular_nofollow(wenlan, "state.json", &data)
     }
 
+    /// Collapse `\r`/`\n` in an `index.md` field to a single space and
+    /// squeeze runs of whitespace, so a title/description/space that carries
+    /// a newline (typed by a user, or from an offline edit) can't split
+    /// `index.md` into extra lines or bullets.
+    fn sanitize_index_field(s: &str) -> String {
+        s.replace(['\r', '\n'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// Escape `[` and `]` in text used as markdown link text, so a title
+    /// containing a bracket can't break the `[title](/file)` link syntax.
+    fn escape_index_link_text(s: &str) -> String {
+        s.replace('[', "\\[").replace(']', "\\]")
+    }
+
+    /// Fallback for a legacy `state.json` entry with no `title` field: read
+    /// title/description/space straight from the file's frontmatter, the way
+    /// `regenerate_index_cap` always used to. `None` means the file is
+    /// missing or its frontmatter can't be read this pass -- best-effort, the
+    /// same as the rest of index regeneration.
+    fn read_index_fields_from_file(
+        root: &Dir,
+        filename: &str,
+    ) -> Option<(String, String, Option<String>)> {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = root.open_with(filename, &options).ok()?;
+        let mut head = Vec::new();
+        (&mut file)
+            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+            .read_to_end(&mut head)
+            .ok()?;
+        // Lossy: the scan cap can land mid-character past 8 KiB, and
+        // frontmatter keys/values of interest here sit at the head.
+        let head = String::from_utf8_lossy(&head);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+        let title = fm.get_str("title").unwrap_or(filename).to_string();
+        let description = fm.get_str("description").unwrap_or("").to_string();
+        let space = fm.get_str("space").map(str::to_string);
+        Some((title, description, space))
+    }
+
     /// Regenerate the OKF `index.md` root document from the frontmatter of the
     /// files currently projected (per `state`), grouped by `space` (`##
     /// Unfiled` for pages without one), each section's entries sorted by
@@ -1151,39 +1249,44 @@ impl KnowledgeWriter {
         capabilities: &ProjectionCapabilities,
         state: &KnowledgeState,
     ) -> Result<(), WenlanError> {
-        let mut filenames: Vec<&str> = state.pages.values().map(|e| e.file.as_str()).collect();
-        filenames.sort_unstable();
-        filenames.dedup();
+        // De-duped and sorted by filename: nothing on disk enforces one state
+        // entry per file (a sync conflict can leave two ids pointing at one
+        // file), and `HashMap` iteration order is not stable.
+        let mut entries: Vec<&PageFileState> = state.pages.values().collect();
+        entries.sort_unstable_by(|a, b| a.file.cmp(&b.file));
+        entries.dedup_by(|a, b| a.file == b.file);
 
         let mut by_space: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
             std::collections::BTreeMap::new();
         let mut unfiled: Vec<(String, String, String)> = Vec::new();
 
-        for filename in filenames {
-            let mut options = OpenOptions::new();
-            options.read(true).follow(FollowSymlinks::No);
-            let mut file = match capabilities.root.open_with(filename, &options) {
-                Ok(file) => file,
-                Err(_) => continue,
+        for state_entry in entries {
+            // `title: Some(_)` means this entry was written by this build and
+            // already carries what the index needs — no file open/parse. A
+            // `None` title is a `state.json` entry from before these fields
+            // existed, so fall back to the file-head read this function used
+            // to always do, for that one file only.
+            let (title, description, space) = match &state_entry.title {
+                Some(title) => (
+                    title.clone(),
+                    state_entry.description.clone().unwrap_or_default(),
+                    state_entry.space.clone(),
+                ),
+                None => {
+                    match Self::read_index_fields_from_file(&capabilities.root, &state_entry.file) {
+                        Some(fields) => fields,
+                        None => continue,
+                    }
+                }
             };
-            let mut head = Vec::new();
-            if (&mut file)
-                .take(INDEX_FRONTMATTER_SCAN_BYTES)
-                .read_to_end(&mut head)
-                .is_err()
-            {
-                continue;
-            }
-            // Lossy: the scan cap can land mid-character past 8 KiB, and
-            // frontmatter keys/values of interest here sit at the head.
-            let head = String::from_utf8_lossy(&head);
-            let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
-            let title = fm.get_str("title").unwrap_or(filename).to_string();
-            let description = fm.get_str("description").unwrap_or("").to_string();
-            let entry = (title, filename.to_string(), description);
-            match fm.get_str("space") {
+            let entry = (
+                Self::sanitize_index_field(&title),
+                state_entry.file.clone(),
+                Self::sanitize_index_field(&description),
+            );
+            match space.map(|s| Self::sanitize_index_field(&s)) {
                 Some(space) if !space.is_empty() => {
-                    by_space.entry(space.to_string()).or_default().push(entry);
+                    by_space.entry(space).or_default().push(entry);
                 }
                 _ => unfiled.push(entry),
             }
@@ -1197,6 +1300,7 @@ impl KnowledgeWriter {
         for (space, entries) in &by_space {
             out.push_str(&format!("## {space}\n\n"));
             for (title, filename, description) in entries {
+                let title = Self::escape_index_link_text(title);
                 out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
             }
             out.push('\n');
@@ -1204,6 +1308,7 @@ impl KnowledgeWriter {
         if !unfiled.is_empty() {
             out.push_str("## Unfiled\n\n");
             for (title, filename, description) in &unfiled {
+                let title = Self::escape_index_link_text(title);
                 out.push_str(&format!("* [{title}](/{filename}) - {description}\n"));
             }
             out.push('\n');
@@ -1665,9 +1770,12 @@ impl LockedRepairProjection<'_> {
         page: &Page,
     ) -> Result<String, WenlanError> {
         check_permit(permit, page)?;
-        self.write
-            .writer
-            .write_page_with_lock_held(self.capabilities, &self.write.guard, page)
+        self.write.writer.write_page_with_lock_held(
+            self.capabilities,
+            &self.write.guard,
+            page,
+            true,
+        )
     }
 
     /// The permitted form of [`Self::write_page_with_after_target_write`].
@@ -1691,6 +1799,7 @@ impl LockedRepairProjection<'_> {
             &self.write.guard,
             page,
             after_target_write,
+            true,
         )
     }
 
@@ -4320,8 +4429,8 @@ fn render_markdown(page: &Page) -> String {
         out.push_str(&format!("description: {}\n", yaml_quoted(summary)));
     }
     if let Some(ref space) = page.space {
-        out.push_str(&format!("tags: [{space}]\n"));
-        out.push_str(&format!("space: {}\n", space));
+        out.push_str(&format!("tags: [{}]\n", yaml_quoted(space)));
+        out.push_str(&format!("space: {}\n", yaml_quoted(space)));
     }
     out.push_str(&format!("origin_id: {}\n", page.id));
     out.push_str(&format!("origin_version: {}\n", page.version));
@@ -5211,7 +5320,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("---\n"));
         assert!(content.contains("title: \"Rust Ownership\""));
-        assert!(content.contains("space: rust"));
+        assert!(content.contains("space: \"rust\""));
         assert!(content.contains("origin_id: concept_test123"));
         assert!(content.contains("origin_version: 2"));
         // Wikilinks converted
@@ -5469,6 +5578,72 @@ mod tests {
         );
     }
 
+    /// Review finding 5: the 562 pages projected before the OKF frontmatter
+    /// existed have no `type` key and must gain one on the first reconcile
+    /// after upgrade, without a version bump -- as long as the body on disk
+    /// still matches what we'd render today (no offline edit sitting on it).
+    #[test]
+    fn reconcile_upgrades_legacy_frontmatter_to_okf_when_body_is_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        // Same body a current write would produce, but pre-OKF frontmatter:
+        // no `type` key, same `origin_version` the DB still has.
+        let current = std::fs::read_to_string(&path).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&current);
+        let legacy = format!(
+            "---\ntitle: \"{}\"\norigin_version: {}\n---\n\n{}",
+            page.title, page.version, body
+        );
+        std::fs::write(&path, &legacy).unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(
+            stats.rewritten, 1,
+            "legacy frontmatter with an unchanged body must be upgraded to OKF"
+        );
+        let (fm, _) =
+            crate::sources::obsidian::extract_frontmatter(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(fm.get_str("type"), Some("page"));
+    }
+
+    /// Review finding 5, the safety half: a legacy file with no `type` key
+    /// but a body that no longer matches `render_markdown` is an offline edit
+    /// sitting on top of pre-OKF frontmatter. Reconcile must leave it alone
+    /// so the watcher gets first crack at it, exactly like the current-format
+    /// offline-edit case above.
+    #[test]
+    fn reconcile_does_not_upgrade_legacy_frontmatter_over_an_offline_edit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        let current = std::fs::read_to_string(&path).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&current);
+        let edited_body = body.replace("Rust uses ownership", "Hand-written prose the user typed");
+        let legacy = format!(
+            "---\ntitle: \"{}\"\norigin_version: {}\n---\n\n{}",
+            page.title, page.version, edited_body
+        );
+        std::fs::write(&path, &legacy).unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(
+            stats.rewritten, 0,
+            "reconcile must not clobber an offline edit made under legacy frontmatter"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+    }
+
     /// Without a `state.json` entry we cannot tell which file on disk is a
     /// page's projection, and guessing forks a `<slug>-2.md` duplicate against
     /// the real one (the hazard `page_watcher` calls out for vaults synced
@@ -5540,7 +5715,11 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
-            .filter(|e| e.file_name().to_string_lossy() != INDEX_FILE)
+            .filter(|e| {
+                !e.file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(INDEX_FILE)
+            })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
         assert_eq!(
@@ -5624,8 +5803,8 @@ mod tests {
         page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
         let md = render_markdown(&page);
         // Read-only frontmatter property, OKF object-list shape.
-        assert!(md.contains("sources:\n  - {id: mem_1, resource: \"wenlan://memory/mem_1\"}"));
-        assert!(md.contains("  - {id: mem_2, resource: \"wenlan://memory/mem_2\"}"));
+        assert!(md.contains("sources:\n  - {id: \"mem_1\", resource: \"wenlan://memory/mem_1\"}"));
+        assert!(md.contains("  - {id: \"mem_2\", resource: \"wenlan://memory/mem_2\"}"));
         // Delimiter-wrapped Sources block in the body.
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_START));
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_END));
@@ -5835,6 +6014,31 @@ mod tests {
         assert!(body.contains("[Beta]("));
     }
 
+    /// Review finding 8: a title is free text -- a newline would split it
+    /// across index.md lines, and an unescaped `]` would close the markdown
+    /// link early. Both must be neutralized in the generated bullet.
+    #[test]
+    fn regenerate_index_sanitizes_a_title_with_a_newline_and_a_bracket() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page = test_concept();
+        page.title = "Weird]\nTitle".to_string();
+        writer.write_page_for_test(&page).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(
+            body.lines().filter(|l| l.starts_with("* [")).count(),
+            1,
+            "the title's embedded newline must not add a bullet line; got: {body}"
+        );
+        assert!(
+            body.contains("[Weird\\] Title]("),
+            "the title's `]` must be escaped and its newline collapsed to a space; got: {body}"
+        );
+    }
+
     #[test]
     fn remove_page_regenerates_index_dropping_the_removed_page() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -5873,6 +6077,54 @@ mod tests {
         );
     }
 
+    /// Review finding 4b: each per-page rewrite inside `reconcile` must skip
+    /// its own `index.md` regeneration (`regenerate_index: false`) so only the
+    /// single regeneration at the end of `reconcile` runs -- but the end
+    /// result still has to be correct for every page reconcile rewrote.
+    #[test]
+    fn reconcile_over_three_behind_pages_leaves_a_correct_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        page_a.space = Some("rust".to_string());
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        page_b.space = Some("rust".to_string());
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let mut page_c = test_concept();
+        page_c.id = "page_c".to_string();
+        page_c.title = "Gamma".to_string();
+        page_c.space = None;
+        writer.write_page_for_test(&page_c).unwrap();
+
+        // All three DB rows advance past what is on disk, so every one of
+        // them is behind and reconcile rewrites all three.
+        for page in [&mut page_a, &mut page_b, &mut page_c] {
+            page.version += 1;
+        }
+
+        let stats = writer
+            .reconcile_for_test(&[page_a.clone(), page_b.clone(), page_c.clone()])
+            .unwrap();
+        assert_eq!(stats.rewritten, 3);
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(fm.get_str("okf_version"), Some("0.2"));
+        assert!(body.contains("## rust"));
+        assert!(body.contains("[Alpha]("));
+        assert!(body.contains("[Beta]("));
+        assert!(body.contains("## Unfiled"));
+        assert!(body.contains("[Gamma]("));
+    }
+
     /// Acceptance 5 fallback (spec 2026-09-16-okf-projection.md): when a
     /// third-party OKF linter cannot be installed, an in-repo test must assert
     /// the MUST rules directly -- every non-index `.md` has parseable
@@ -5904,7 +6156,12 @@ mod tests {
         collect_md_files(dir.path(), &mut md_files);
         let non_index: Vec<_> = md_files
             .into_iter()
-            .filter(|p| p.file_name().and_then(|n| n.to_str()) != Some(INDEX_FILE))
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| !n.eq_ignore_ascii_case(INDEX_FILE))
+                    .unwrap_or(true)
+            })
             .collect();
         assert!(
             non_index.len() >= 3,

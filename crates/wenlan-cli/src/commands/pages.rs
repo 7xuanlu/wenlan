@@ -118,7 +118,11 @@ fn read_pages(dir: &Path) -> Vec<PageEntry> {
             continue;
         }
         // `index.md` is the reserved OKF bundle index, not a page.
-        if path.file_name().and_then(|n| n.to_str()) == Some("index.md") {
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.eq_ignore_ascii_case("index.md"))
+        {
             continue;
         }
         let content = std::fs::read_to_string(&path).unwrap_or_default();
