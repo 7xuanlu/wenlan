@@ -4415,6 +4415,22 @@ pub fn render_markdown_for(page: &Page) -> String {
     render_markdown(page)
 }
 
+/// The `state.json` entry `write_page` records for `page` at `file`, as JSON.
+/// Callers that compare a captured `state.json` against the expected
+/// post-write entry (the rename-repair recovery matcher) go through this so
+/// new `PageFileState` fields stay in sync with the writer.
+pub(crate) fn page_file_state_value(page: &Page, file: &str) -> serde_json::Value {
+    serde_json::to_value(PageFileState {
+        file: file.to_string(),
+        version: page.version,
+        last_written: page.last_modified.clone(),
+        title: Some(page.title.clone()),
+        description: page.summary.clone(),
+        space: page.space.clone(),
+    })
+    .expect("PageFileState serializes")
+}
+
 fn render_markdown(page: &Page) -> String {
     use crate::export::provenance::{
         related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
