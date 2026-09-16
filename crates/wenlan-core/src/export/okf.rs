@@ -171,20 +171,22 @@ pub(crate) fn title_owner_map(pages: &[Page]) -> TitleOwners {
 /// Byte ranges of inline code spans outside the fenced ranges, using
 /// CommonMark backtick runs: a run of N backticks opens a span that ends at
 /// the next run of exactly N backticks in the same paragraph (a span never
-/// crosses a blank line). A run with no matching closer is literal text and
-/// suppresses nothing after it.
+/// crosses a blank line or a fenced code block). A run with no matching
+/// closer is literal text and suppresses nothing after it.
 fn inline_code_ranges(content: &str, fenced: &[Range<usize>]) -> Vec<Range<usize>> {
-    // Byte offsets where a blank (whitespace-only) line starts; a run's
-    // paragraph is the number of such lines before it.
-    let mut blank_lines = Vec::new();
+    // Byte offsets where a paragraph ends: each blank (whitespace-only) line
+    // and each fenced block. A run's paragraph is the number of breaks
+    // before it.
+    let mut block_breaks: Vec<usize> = fenced.iter().map(|r| r.start).collect();
     let mut line_start = 0;
     for line in content.split_inclusive('\n') {
         if line.trim().is_empty() {
-            blank_lines.push(line_start);
+            block_breaks.push(line_start);
         }
         line_start += line.len();
     }
-    let paragraph = |offset: usize| blank_lines.partition_point(|&b| b < offset);
+    block_breaks.sort_unstable();
+    let paragraph = |offset: usize| block_breaks.partition_point(|&b| b < offset);
     let bytes = content.as_bytes();
     let mut runs: Vec<(usize, usize, usize)> = Vec::new();
     let mut i = 0;
@@ -1128,6 +1130,21 @@ mod tests {
     }
 
     #[test]
+    fn inline_code_span_does_not_cross_a_fenced_block() {
+        let pages = [test_page("concept_b", "Target Page", "body")];
+        let probe = test_page(
+            "concept_probe",
+            "Probe",
+            "a ` stray\n```\ncode\n```\nsee [[Target Page]] and ` stray",
+        );
+        let body = convert_all(&pages, &probe);
+        assert!(
+            body.contains("see [Target Page](/pages/target-page.md)"),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn unmatched_backtick_does_not_suppress_later_links() {
         let pages = [test_page("concept_b", "Target Page", "body")];
         let probe = test_page("concept_probe", "Probe", "a ` stray then [[Target Page]]");
@@ -1168,6 +1185,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("pages/alpha.md"), b"user bytes").unwrap();
+        let marker_before = std::fs::read(dir.path().join(MARKER_FILE)).unwrap();
         let pages = vec![test_page("concept_a", "Alpha", "x")];
         let err = export_okf(&pages, dir.path()).unwrap_err();
         assert!(
@@ -1180,6 +1198,13 @@ mod tests {
             std::fs::read(dir.path().join("pages/alpha.md")).unwrap(),
             b"user bytes"
         );
+        assert_eq!(
+            std::fs::read(dir.path().join(MARKER_FILE)).unwrap(),
+            marker_before,
+            "marker untouched"
+        );
+        assert!(!dir.path().join("index.md").exists(), "nothing written");
+        assert!(!dir.path().join("sources").exists(), "nothing written");
     }
 
     #[test]
@@ -1195,9 +1220,15 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        let marker_before = std::fs::read(dir.path().join(MARKER_FILE)).unwrap();
         let pages = vec![test_page("concept_a", "Alpha", "x")];
         let err = export_okf(&pages, dir.path()).unwrap_err();
         assert!(matches!(err, WenlanError::Conflict(_)), "{err}");
+        assert_eq!(
+            std::fs::read(dir.path().join(MARKER_FILE)).unwrap(),
+            marker_before,
+            "marker untouched"
+        );
         assert!(!dir.path().join("index.md").exists(), "nothing written");
         assert!(!dir.path().join("pages").exists(), "nothing written");
     }
