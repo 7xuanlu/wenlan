@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 //! Stdio compatibility for clients that probe modern discovery before legacy initialization.
 //!
 //! `rmcp` 1.5 expects `initialize` to be the first request. Some clients send
