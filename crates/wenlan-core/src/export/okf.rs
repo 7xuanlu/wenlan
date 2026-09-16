@@ -13,6 +13,7 @@ use crate::error::WenlanError;
 use crate::export::ExportStats;
 use crate::pages::Page;
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -46,10 +47,13 @@ fn marker_for(files: &HashSet<String>) -> ExportMarker {
     }
 }
 
-// Matches `obsidian::convert_links_to_wikilinks`' shape: `[Title](concept_id)`,
-// plus a capture around the id so the replacer need not re-parse the match.
-static CONCEPT_LINK_RE: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\[([^\]]+)\]\((concept_[a-zA-Z0-9\-]+)\)").unwrap());
+// Dedicated page-id links: `[Title](concept_<id>)` (the shape
+// `obsidian::convert_links_to_wikilinks` reads) and `[Title](page_<id>)`
+// (current page ids are minted as `page_<uuid>`), plus a capture around the
+// id so the replacer need not re-parse the match.
+static ID_LINK_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"\[([^\]]+)\]\(((?:concept|page)_[a-zA-Z0-9\-]+)\)").unwrap()
+});
 
 // Any other `[text](target)` markdown link (URLs, relative paths, ...).
 static MD_LINK_RE: LazyLock<regex::Regex> =
@@ -136,13 +140,22 @@ pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
     planned
 }
 
+/// `(space, folded title)` -> owning page id, or `None` when ambiguous.
+pub(crate) type TitleOwners = HashMap<(Option<String>, String), Option<String>>;
+
 /// Fold every exported page title through `MemoryDB::page_title_key` to its
-/// owning page id — `None` when two exported pages fold to the same key
-/// (the ambiguous-title contract: such targets stay unresolved).
-pub(crate) fn title_owner_map(pages: &[Page]) -> HashMap<String, Option<String>> {
-    let mut map: HashMap<String, Option<String>> = HashMap::new();
+/// owning page id, resolved per Space like
+/// `MemoryDB::folded_title_owners_scoped` (`None` = uncategorized): the key
+/// is `(space, folded title)`, and the value is `None` when two exported
+/// pages in the same Space fold to the same title (the ambiguous-title
+/// contract, scoped: such targets stay unresolved).
+pub(crate) fn title_owner_map(pages: &[Page]) -> TitleOwners {
+    let mut map: TitleOwners = HashMap::new();
     for page in pages {
-        let key = crate::db::MemoryDB::page_title_key(&page.title);
+        let key = (
+            page.space.clone(),
+            crate::db::MemoryDB::page_title_key(&page.title),
+        );
         match map.get_mut(&key) {
             None => {
                 map.insert(key, Some(page.id.clone()));
@@ -155,17 +168,74 @@ pub(crate) fn title_owner_map(pages: &[Page]) -> HashMap<String, Option<String>>
     map
 }
 
-/// Replace regex matches outside fenced code blocks, splicing `replace` over
-/// each accepted match. Ranges come from
-/// `sources::obsidian::code_block_ranges`, recomputed on the current text per
-/// pass (a previous pass shifts byte offsets).
+/// Byte ranges of inline code spans outside the fenced ranges, using
+/// CommonMark backtick runs: a run of N backticks opens a span that ends at
+/// the next run of exactly N backticks in the same paragraph (a span never
+/// crosses a blank line). A run with no matching closer is literal text and
+/// suppresses nothing after it.
+fn inline_code_ranges(content: &str, fenced: &[Range<usize>]) -> Vec<Range<usize>> {
+    // Byte offsets where a blank (whitespace-only) line starts; a run's
+    // paragraph is the number of such lines before it.
+    let mut blank_lines = Vec::new();
+    let mut line_start = 0;
+    for line in content.split_inclusive('\n') {
+        if line.trim().is_empty() {
+            blank_lines.push(line_start);
+        }
+        line_start += line.len();
+    }
+    let paragraph = |offset: usize| blank_lines.partition_point(|&b| b < offset);
+    let bytes = content.as_bytes();
+    let mut runs: Vec<(usize, usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'`' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i] == b'`' {
+            i += 1;
+        }
+        if !fenced.iter().any(|r| r.contains(&start)) {
+            runs.push((start, i - start, paragraph(start)));
+        }
+    }
+    let mut ranges = Vec::new();
+    let mut k = 0;
+    while k < runs.len() {
+        let (start, len, para) = runs[k];
+        match runs[k + 1..]
+            .iter()
+            .position(|&(_, l, p)| l == len && p == para)
+        {
+            Some(offset) => {
+                let (close_start, close_len, _) = runs[k + 1 + offset];
+                ranges.push(start..close_start + close_len);
+                k += 2 + offset;
+            }
+            // Unmatched: literal text, keep scanning after the run.
+            None => k += 1,
+        }
+    }
+    ranges
+}
+
+/// Replace regex matches outside code, splicing `replace` over each accepted
+/// match. Fenced code-block ranges come from
+/// `sources::obsidian::code_block_ranges`; inline code spans are scanned on
+/// top (see [`inline_code_ranges`]). Both are recomputed on the current text
+/// per pass (a previous pass shifts byte offsets).
 fn replace_outside_code(
     content: &str,
     re: &regex::Regex,
     mut replace: impl FnMut(&regex::Captures<'_>) -> String,
 ) -> String {
-    let ranges = crate::sources::obsidian::code_block_ranges(content);
-    let in_code = |offset: usize| ranges.iter().any(|r| r.contains(&offset));
+    let fenced = crate::sources::obsidian::code_block_ranges(content);
+    let inline = inline_code_ranges(content, &fenced);
+    let in_code = |offset: usize| {
+        fenced.iter().any(|r| r.contains(&offset)) || inline.iter().any(|r| r.contains(&offset))
+    };
     let mut out = String::with_capacity(content.len());
     let mut last = 0;
     for cap in re.captures_iter(content) {
@@ -181,35 +251,44 @@ fn replace_outside_code(
     out
 }
 
-/// Convert one page body to bundle links. `id_to_file` maps exported page
-/// ids to bundle files, `title_owner` resolves folded titles (see
-/// [`title_owner_map`]), and `source_ids` is this page's cited memory ids.
+/// Convert one page body to bundle links. `page_space` is the linking page's
+/// Space: `[[Target]]` resolves only against exported pages in the same Space
+/// (see [`title_owner_map`]). `id_to_file` maps exported page ids to bundle
+/// files, and `source_ids` is this page's cited memory ids.
 ///
-/// - `[Text](concept_<id>)`: exported page -> `[Text](/pages/<file>)`,
-///   unknown concept id -> plain `Text`. Non-concept `[t](target)` links are
-///   already standard markdown: kept when `target` is not an exported page
-///   id, rewritten when it is.
+/// - `[Text](concept_<id>)` / `[Text](page_<id>)`: exported page ->
+///   `[Text](/pages/<file>)`, unknown id -> plain `Text`. Other
+///   `[t](target)` links are already standard markdown: kept when `target`
+///   is not an exported page id, rewritten when it is.
 /// - `[[Target]]`, `[[Target|Display]]`, `[[Target#Heading]]`, `![[Target]]`:
 ///   resolved titles -> `[Display or Target](/pages/<file>)` with
 ///   `#<slugify(heading)>` when a heading is present; unresolved -> plain
 ///   `Display or Target`. Embeds become ordinary links.
 /// - `[[<id>]]` where `<id>` is one of this page's `source_memory_ids` ->
 ///   `[<id>](/sources/<stub>)`.
-/// - Anything inside fenced code blocks is untouched.
+/// - Every emitted `[label](...)` passes `label` through
+///   `escape_index_link_text` so a bracket in page content cannot break the
+///   link; plain-text fallbacks stay unescaped.
+/// - Anything inside fenced code blocks or inline code spans is untouched.
 pub(crate) fn convert_body(
     content: &str,
+    page_space: Option<&str>,
     source_ids: &[String],
     id_to_file: &HashMap<String, String>,
-    title_owner: &HashMap<String, Option<String>>,
+    title_owner: &TitleOwners,
 ) -> String {
+    use crate::export::knowledge::escape_index_link_text;
     let cited: HashSet<&str> = source_ids.iter().map(String::as_str).collect();
-    // Pass 1: concept links. The dedicated shape first (unknown concept ids
-    // collapse to plain text), then any remaining `[t](target)` whose target
-    // is an exported page id.
-    let pass = replace_outside_code(content, &CONCEPT_LINK_RE, |cap| {
+    // Pass 1: page-id links. The dedicated shape first (unknown ids collapse
+    // to plain text), then any remaining `[t](target)` whose target is an
+    // exported page id.
+    let pass = replace_outside_code(content, &ID_LINK_RE, |cap| {
         let (text, id) = (&cap[1], &cap[2]);
         match id_to_file.get(id) {
-            Some(file) => format!("[{text}](/pages/{file})"),
+            Some(file) => {
+                let label = escape_index_link_text(text);
+                format!("[{label}](/pages/{file})")
+            }
             None => text.to_string(),
         }
     });
@@ -221,7 +300,10 @@ pub(crate) fn convert_body(
             return cap[0].to_string();
         }
         match id_to_file.get(target) {
-            Some(file) => format!("[{text}](/pages/{file})"),
+            Some(file) => {
+                let label = escape_index_link_text(text);
+                format!("[{label}](/pages/{file})")
+            }
             None => cap[0].to_string(),
         }
     });
@@ -234,13 +316,17 @@ pub(crate) fn convert_body(
             heading.is_none() && display.is_none() && cap[1].is_empty() && cited.contains(target);
         if is_source_cite {
             let stub = crate::export::provenance::stub_filename(target);
-            return format!("[{target}](/sources/{stub})");
+            let label = escape_index_link_text(target);
+            return format!("[{label}](/sources/{stub})");
         }
-        let key = crate::db::MemoryDB::page_title_key(target);
+        let key = (
+            page_space.map(|space| space.to_owned()),
+            crate::db::MemoryDB::page_title_key(target),
+        );
         let owner = title_owner.get(&key).and_then(|o| o.as_ref());
         match owner.and_then(|id| id_to_file.get(id)) {
             Some(file) => {
-                let label = display.unwrap_or(target);
+                let label = escape_index_link_text(display.unwrap_or(target));
                 match heading {
                     Some(h) => {
                         let frag = crate::export::obsidian::slugify(h);
@@ -260,7 +346,7 @@ pub(crate) fn convert_body(
 pub(crate) fn render_page_file(
     page: &Page,
     id_to_file: &HashMap<String, String>,
-    title_owner: &HashMap<String, Option<String>>,
+    title_owner: &TitleOwners,
 ) -> String {
     let mut out = String::new();
     out.push_str("---\n");
@@ -268,6 +354,7 @@ pub(crate) fn render_page_file(
     out.push_str("---\n\n");
     out.push_str(&convert_body(
         &page.content,
+        page.space.as_deref(),
         &page.source_memory_ids,
         id_to_file,
         title_owner,
@@ -278,7 +365,8 @@ pub(crate) fn render_page_file(
         out.push_str("\n\n## Sources\n");
         for id in &page.source_memory_ids {
             let stub = crate::export::provenance::stub_filename(id);
-            out.push_str(&format!("- [{id}](/sources/{stub})\n"));
+            let label = crate::export::knowledge::escape_index_link_text(id);
+            out.push_str(&format!("- [{label}](/sources/{stub})\n"));
         }
     }
     out
@@ -339,19 +427,29 @@ fn read_old_marker(root: &Path) -> Result<Option<Vec<String>>, WenlanError> {
             root.display()
         )));
     }
+    if !marker.generated_by.starts_with("wenlan/") {
+        return Err(WenlanError::Conflict(format!(
+            "{} was not written by Wenlan (generated_by {:?}); refusing to touch {}",
+            MARKER_FILE,
+            marker.generated_by,
+            root.display()
+        )));
+    }
     Ok(Some(marker.files))
 }
 
 /// Write the OKF bundle for `pages` into `target`.
 ///
 /// The directory must not exist (it is created), be empty, or hold a
-/// previous Wenlan OKF export (root marker); anything else is a
-/// [`WenlanError::Conflict`]. The root, `pages/` and `sources/` must not be
-/// symlinks. Re-export deletes only marker-listed bundle files that are no
-/// longer written (validated names only); user files beside them (`.git/`,
-/// README, notes) are never touched. The marker is first rewritten with the
-/// union of old and planned files, then — after a successful write — with
-/// only the new set.
+/// previous Wenlan OKF export (root marker naming Wenlan as its writer);
+/// anything else is a [`WenlanError::Conflict`]. The root, `pages/` and
+/// `sources/` must not be symlinks. A planned path that already exists
+/// without being marker-listed is a Conflict — a foreign file is never
+/// overwritten. Re-export deletes only marker-listed bundle files that are
+/// no longer written (validated names only); user files beside them (`.git/`,
+/// README, notes) are never touched. `index.md` links only pages actually
+/// written. The marker is first rewritten with the union of old and planned
+/// files, then — after a successful write — with only the new set.
 pub fn export_okf(pages: &[Page], target: &Path) -> Result<ExportStats, WenlanError> {
     let mut stats = ExportStats::default();
     for dir in [target, &target.join(PAGES_DIR), &target.join(SOURCES_DIR)] {
@@ -404,6 +502,19 @@ pub fn export_okf(pages: &[Page], target: &Path) -> Result<ExportStats, WenlanEr
         ));
     }
 
+    // Never overwrite a file Wenlan did not write: every planned path must
+    // be absent or owned by the previous export. Sorted for a deterministic
+    // message. Runs before any write, so a refusal leaves the tree untouched.
+    let mut planned_sorted: Vec<&String> = planned.iter().collect();
+    planned_sorted.sort();
+    for entry in planned_sorted {
+        if !old_files.contains(entry) && std::fs::symlink_metadata(target.join(entry)).is_ok() {
+            return Err(WenlanError::Conflict(format!(
+                "refusing to overwrite {entry}: not written by a previous Wenlan OKF export"
+            )));
+        }
+    }
+
     std::fs::create_dir_all(target.join(PAGES_DIR))?;
     std::fs::create_dir_all(target.join(SOURCES_DIR))?;
     // Crash-safety: the union marker owns every file either generation may
@@ -431,6 +542,7 @@ pub fn export_okf(pages: &[Page], target: &Path) -> Result<ExportStats, WenlanEr
         }
     }
 
+    let mut written_ids: HashSet<&str> = HashSet::new();
     for (id, file) in &planned_pairs {
         let page = match by_id.get(id.as_str()) {
             Some(page) => page,
@@ -438,7 +550,10 @@ pub fn export_okf(pages: &[Page], target: &Path) -> Result<ExportStats, WenlanEr
         };
         let body = render_page_file(page, &id_to_file, &title_owner);
         match write_file_nofollow(&target.join(PAGES_DIR).join(file), body.as_bytes()) {
-            Ok(()) => stats.exported += 1,
+            Ok(()) => {
+                stats.exported += 1;
+                written_ids.insert(id.as_str());
+            }
             Err(e) => {
                 log::warn!("[okf] export failed for '{}': {}", page.title, e);
                 stats.failed += 1;
@@ -454,7 +569,15 @@ pub fn export_okf(pages: &[Page], target: &Path) -> Result<ExportStats, WenlanEr
             stats.failed += 1;
         }
     }
-    let index = render_bundle_index(pages, &id_to_file);
+    // The index lists only pages actually written: a failed page file must
+    // not be linked. The final marker still lists every planned file so a
+    // later run can clean up.
+    let written_pages: Vec<Page> = pages
+        .iter()
+        .filter(|page| written_ids.contains(page.id.as_str()))
+        .cloned()
+        .collect();
+    let index = render_bundle_index(&written_pages, &id_to_file);
     write_file_nofollow(&target.join(INDEX_FILE), index.as_bytes())?;
     write_file_nofollow(
         &target.join(MARKER_FILE),
@@ -502,7 +625,13 @@ mod tests {
         }
     }
 
-    fn link_context(pages: &[Page]) -> (HashMap<String, String>, HashMap<String, Option<String>>) {
+    fn test_page_in_space(id: &str, title: &str, content: &str, space: Option<&str>) -> Page {
+        let mut page = test_page(id, title, content);
+        page.space = space.map(|space| space.to_owned());
+        page
+    }
+
+    fn link_context(pages: &[Page]) -> (HashMap<String, String>, TitleOwners) {
         let id_to_file: HashMap<String, String> = plan_page_filenames(pages).into_iter().collect();
         let title_owner = title_owner_map(pages);
         (id_to_file, title_owner)
@@ -512,10 +641,20 @@ mod tests {
         let (id_to_file, title_owner) = link_context(pages);
         convert_body(
             &page.content,
+            page.space.as_deref(),
             &page.source_memory_ids,
             &id_to_file,
             &title_owner,
         )
+    }
+
+    fn convert_all(pages: &[Page], probe: &Page) -> String {
+        let all: Vec<Page> = pages
+            .iter()
+            .cloned()
+            .chain(std::iter::once(probe.clone()))
+            .collect();
+        convert(&all, probe)
     }
 
     #[test]
@@ -894,6 +1033,245 @@ mod tests {
                 !outside_code_contains(&content, "<!-- origin:"),
                 "{rel:?} leaks delimiters"
             );
+        }
+    }
+
+    #[test]
+    fn wikilinks_resolve_within_the_linking_page_space() {
+        let alpha_a = test_page_in_space("page_alpha_a", "Alpha", "A", Some("a"));
+        let alpha_b = test_page_in_space("page_alpha_b", "Alpha", "B", Some("b"));
+        let beta_a = test_page_in_space("page_beta_a", "Beta", "C", Some("a"));
+        let linker_a = test_page_in_space("page_linker_a", "Linker A", "see [[Alpha]]", Some("a"));
+        let linker_b = test_page_in_space(
+            "page_linker_b",
+            "Linker B",
+            "see [[Alpha]] and [[Beta]]",
+            Some("b"),
+        );
+        let pages = vec![alpha_a, alpha_b, beta_a, linker_a.clone(), linker_b.clone()];
+        // Globally "Alpha" is ambiguous, but per Space each linker sees one.
+        let body_a = convert(&pages, &linker_a);
+        assert!(body_a.contains("[Alpha](/pages/alpha.md)"), "{body_a}");
+        let body_b = convert(&pages, &linker_b);
+        assert!(body_b.contains("[Alpha](/pages/alpha-2.md)"), "{body_b}");
+        // Beta lives only in space `a`, so the space-`b` link stays plain.
+        assert!(body_b.contains("and Beta"), "{body_b}");
+        assert!(!body_b.contains("/pages/beta.md"), "{body_b}");
+    }
+
+    #[test]
+    fn page_id_links_resolve_and_unknown_collapse() {
+        let target_id = "page_12345678-1234-4000-8000-1234567890ab";
+        let pages = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page(target_id, "Known", "body"),
+        ];
+        let probe = test_page(
+            "concept_probe",
+            "Probe",
+            &format!("[Known]({target_id}) and [Gone](page_00000000-0000-4000-8000-00000000dead)"),
+        );
+        let body = convert_all(&pages, &probe);
+        assert!(body.contains("[Known](/pages/known.md)"), "{body}");
+        assert!(body.contains("and Gone"), "{body}");
+        assert!(!body.contains("page_00000000"), "{body}");
+    }
+
+    #[test]
+    fn inline_code_spans_are_untouched() {
+        let pages = [
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Target Page", "body"),
+        ];
+        let probe = test_page(
+            "concept_probe",
+            "Probe",
+            "use `[[Target Page]]` verbatim and see [[Target Page]]",
+        );
+        let body = convert_all(&pages, &probe);
+        assert!(body.contains("use `[[Target Page]]` verbatim"), "{body}");
+        assert!(
+            body.contains("see [Target Page](/pages/target-page.md)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn double_backtick_span_with_inner_backtick_is_untouched() {
+        let pages = [test_page("concept_b", "Target Page", "body")];
+        let probe = test_page(
+            "concept_probe",
+            "Probe",
+            "``a ` [[Target Page]]`` then [[Target Page]]",
+        );
+        let body = convert_all(&pages, &probe);
+        assert!(body.contains("``a ` [[Target Page]]``"), "{body}");
+        assert!(
+            body.contains("then [Target Page](/pages/target-page.md)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn inline_code_span_does_not_cross_a_blank_line() {
+        let pages = [test_page("concept_b", "Target Page", "body")];
+        let probe = test_page(
+            "concept_probe",
+            "Probe",
+            "a ` stray\n\nsee [[Target Page]]\n\nanother ` stray",
+        );
+        let body = convert_all(&pages, &probe);
+        assert!(
+            body.contains("see [Target Page](/pages/target-page.md)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn unmatched_backtick_does_not_suppress_later_links() {
+        let pages = [test_page("concept_b", "Target Page", "body")];
+        let probe = test_page("concept_probe", "Probe", "a ` stray then [[Target Page]]");
+        let body = convert_all(&pages, &probe);
+        assert!(
+            body.contains("then [Target Page](/pages/target-page.md)"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn emitted_link_labels_escape_brackets() {
+        let pages = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Target [Page", "body"),
+        ];
+        let probe = test_page("concept_probe", "Probe", "see [[Target [Page]]");
+        let body = convert_all(&pages, &probe);
+        assert!(
+            body.contains("[Target \\[Page](/pages/target-page.md)"),
+            "{body}"
+        );
+        assert!(!body.contains("[Target [Page]("), "{body}");
+    }
+
+    #[test]
+    fn refuses_to_overwrite_user_file_not_in_marker() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("pages")).unwrap();
+        std::fs::write(
+            dir.path().join(MARKER_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "okf_version": "0.2",
+                "generated_by": "wenlan/test",
+                "files": ["index.md"],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("pages/alpha.md"), b"user bytes").unwrap();
+        let pages = vec![test_page("concept_a", "Alpha", "x")];
+        let err = export_okf(&pages, dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "refusing to overwrite pages/alpha.md: not written by a previous Wenlan OKF export"
+            ),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("pages/alpha.md")).unwrap(),
+            b"user bytes"
+        );
+    }
+
+    #[test]
+    fn foreign_marker_writer_is_a_conflict() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join(MARKER_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "okf_version": "0.2",
+                "generated_by": "someone-else",
+                "files": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let pages = vec![test_page("concept_a", "Alpha", "x")];
+        let err = export_okf(&pages, dir.path()).unwrap_err();
+        assert!(matches!(err, WenlanError::Conflict(_)), "{err}");
+        assert!(!dir.path().join("index.md").exists(), "nothing written");
+        assert!(!dir.path().join("pages").exists(), "nothing written");
+    }
+
+    #[test]
+    fn index_lists_only_pages_actually_written() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join(MARKER_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "okf_version": "0.2",
+                "generated_by": "wenlan/test",
+                "files": ["index.md", "pages/alpha.md"],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // A directory where the bundle file should go makes that page's write fail.
+        std::fs::create_dir_all(dir.path().join("pages/alpha.md")).unwrap();
+        let pages = vec![
+            test_page("concept_alpha", "Alpha", "x"),
+            test_page("concept_beta", "Beta", "y"),
+        ];
+        let stats = export_okf(&pages, dir.path()).unwrap();
+        assert_eq!(stats.exported, 1);
+        assert_eq!(stats.failed, 1);
+        let index = std::fs::read_to_string(dir.path().join("index.md")).unwrap();
+        assert!(index.contains("/pages/beta.md"), "{index}");
+        assert!(!index.contains("Alpha"), "{index}");
+        assert!(!index.contains("alpha.md"), "{index}");
+        // The final marker still lists every planned file for later cleanup.
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join(MARKER_FILE)).unwrap()).unwrap();
+        let files: HashSet<String> = marker["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(files.contains("pages/alpha.md"), "{files:?}");
+        assert!(files.contains("pages/beta.md"), "{files:?}");
+    }
+
+    #[test]
+    fn reexport_is_byte_stable() {
+        let mut a = test_page("concept_a", "Alpha", "see [[Beta]]");
+        a.source_memory_ids = vec!["mem_1".to_string()];
+        let pages = vec![a, test_page("concept_b", "Beta", "plain")];
+        let dir = tempfile::TempDir::new().unwrap();
+        export_okf(&pages, dir.path()).unwrap();
+        let first = snapshot_dir(dir.path());
+        assert!(first.len() >= 5, "{first:?}");
+        export_okf(&pages, dir.path()).unwrap();
+        let second = snapshot_dir(dir.path());
+        assert_eq!(first, second);
+    }
+
+    fn snapshot_dir(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+        let mut out = Vec::new();
+        collect_all_files(root, &mut out);
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
+    fn collect_all_files(dir: &Path, out: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
+        entries.sort_by_key(|entry| entry.path());
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                collect_all_files(&path, out);
+            } else {
+                out.push((path.clone(), std::fs::read(&path).unwrap()));
+            }
         }
     }
 

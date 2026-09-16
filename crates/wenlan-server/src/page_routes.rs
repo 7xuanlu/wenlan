@@ -730,8 +730,18 @@ pub async fn handle_export_pages(
             }
         };
         let expanded = if let Some(rest) = raw.strip_prefix("~/") {
-            let home = std::env::var("HOME").unwrap_or_default();
-            format!("{home}/{rest}")
+            match dirs::home_dir() {
+                Some(home) if !home.as_os_str().is_empty() => {
+                    format!("{}/{rest}", home.display())
+                }
+                _ => {
+                    return Err(wenlan_core::WenlanError::Validation(
+                        "okf export cannot expand ~/ without a home directory; pass an absolute vault_path"
+                            .to_string(),
+                    )
+                    .into());
+                }
+            }
         } else {
             raw
         };
