@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 use wenlan_core::truth_contract::{CONTRACT_HEADER, INTENT_HEADER};
@@ -235,6 +235,13 @@ fn mutation<T: Serialize>(method: Method, uri: impl Into<String>, body: Option<&
     }
 }
 
+/// Every test here points `WENLAN_DATA_DIR` at its own vault, and the variable is
+/// process-wide, so the tests take this lock for their whole body.
+fn data_dir_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
+
 struct WritableKnowledgeConfig {
     previous: Option<std::ffi::OsString>,
     tmp: tempfile::TempDir,
@@ -271,6 +278,7 @@ impl Drop for WritableKnowledgeConfig {
 
 #[tokio::test]
 async fn page_routes_preserve_typed_contracts() {
+    let _guard = data_dir_lock().lock().await;
     let config = WritableKnowledgeConfig::new();
     assert_eq!(
         wenlan_core::config::load_config().knowledge_path_or_default(),
@@ -513,6 +521,7 @@ async fn page_routes_preserve_typed_contracts() {
 
 #[tokio::test]
 async fn export_okf_format_writes_bundle_and_enforces_safety() {
+    let _guard = data_dir_lock().lock().await;
     let _config = WritableKnowledgeConfig::new();
     let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
     common::create_page_fixture(
@@ -600,6 +609,7 @@ async fn export_okf_format_writes_bundle_and_enforces_safety() {
 
 #[tokio::test]
 async fn export_okf_reads_past_the_obsidian_window() {
+    let _guard = data_dir_lock().lock().await;
     let _config = WritableKnowledgeConfig::new();
     let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
     for i in 0..1001 {
@@ -639,6 +649,7 @@ async fn export_okf_reads_past_the_obsidian_window() {
 
 #[tokio::test]
 async fn export_okf_refuses_during_a_truth_cutover() {
+    let _guard = data_dir_lock().lock().await;
     let _config = WritableKnowledgeConfig::new();
     let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
     common::create_page_fixture(&db, "Fence Page", "body", None, &[], "authored").await;

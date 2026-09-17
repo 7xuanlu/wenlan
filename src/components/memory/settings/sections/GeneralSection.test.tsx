@@ -16,12 +16,14 @@ import {
   setTelemetryEnabled,
 } from "../../../../lib/tauri";
 
-vi.mock("../../../../lib/tauri", async () => ({
-  // The real parser: the row must show the daemon's sentence out of the exact
-  // string a rejected command carries, not a test double's idea of it.
-  daemonErrorMessage: (
-    await vi.importActual<typeof import("../../../../lib/tauri")>("../../../../lib/tauri")
-  ).daemonErrorMessage,
+vi.mock("../../../../lib/tauri", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../../../lib/tauri")>("../../../../lib/tauri");
+  return {
+  // The real parsers: the row must read the exact string a rejected command
+  // carries, not a test double's idea of it.
+  daemonErrorMessage: actual.daemonErrorMessage,
+  isOkfExportDaemonTooOld: actual.isOkfExportDaemonTooOld,
   exportPagesAsOkf: vi.fn(),
   getProfile: vi.fn(() =>
     Promise.resolve({
@@ -46,7 +48,8 @@ vi.mock("../../../../lib/tauri", async () => ({
   setTelemetryEnabled: vi.fn((enabled: boolean) =>
     Promise.resolve({ enabled, available: true, pending_operations: 0 }),
   ),
-}));
+  };
+});
 
 vi.mock("../../../../lib/theme", () => ({
   useTheme: () => ["system", vi.fn()] as const,
@@ -473,6 +476,23 @@ describe("GeneralSection OKF export", () => {
 
     expect(await screen.findByText(`Exported 2 pages to ${TARGET}.`)).toBeInTheDocument();
     expect(screen.queryByText(/^Export failed/)).not.toBeInTheDocument();
+  });
+
+  it("tells the user to restart a background service too old to write OKF", async () => {
+    pickFolder(TARGET);
+    vi.mocked(exportPagesAsOkf).mockReset();
+    vi.mocked(exportPagesAsOkf).mockRejectedValueOnce("okf-export:daemon-too-old");
+    renderGeneralSection();
+
+    await chooseFolder();
+
+    expect(
+      await screen.findByText(
+        "Export failed: the background service is too old to write an OKF bundle. Restart the service, then try again. Nothing was exported.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/okf-export:/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Exported /)).not.toBeInTheDocument();
   });
 
   it("warns when some pages could not be written", async () => {

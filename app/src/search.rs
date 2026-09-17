@@ -4497,13 +4497,136 @@ pub async fn export_pages_to_obsidian(
     client.post_json("/api/pages/export", &req).await
 }
 
+/// First release whose daemon honors `format: "okf"` on
+/// `POST /api/pages/export` (#760). The CLI keeps its own copy in
+/// `crates/wenlan-cli/src/client.rs`.
+const OKF_EXPORT_DAEMON_FLOOR: &str = "0.18.9";
+
+/// Typed rejection from `export_pages_as_okf` when the daemon predates the
+/// OKF format. The Settings export row maps it to localized copy.
+pub const OKF_EXPORT_ERROR_DAEMON_TOO_OLD: &str = "okf-export:daemon-too-old";
+
+fn daemon_version_supports_okf_export(version: &str) -> bool {
+    let Some(candidate) = parse_release_version(version) else {
+        return false;
+    };
+    let floor = parse_release_version(OKF_EXPORT_DAEMON_FLOOR)
+        .expect("OKF export daemon floor is a static valid release version");
+
+    candidate >= floor
+}
+
+/// Check the daemon version before exporting. An older daemon ignores
+/// `format`, writes an Obsidian export into the folder and reports success,
+/// so it gets no export request at all.
+async fn export_pages_okf_checked(
+    client: &crate::api::WenlanClient,
+    target_dir: String,
+) -> Result<ExportStats, String> {
+    let health = client.health().await?;
+    if !daemon_version_supports_okf_export(&health.version) {
+        log::warn!(
+            "[export] blocked OKF export: daemon_version={} required_floor={}",
+            health.version,
+            OKF_EXPORT_DAEMON_FLOOR,
+        );
+        return Err(OKF_EXPORT_ERROR_DAEMON_TOO_OLD.to_string());
+    }
+    client.export_pages_okf(target_dir).await
+}
+
 #[tauri::command]
 pub async fn export_pages_as_okf(
     state: tauri::State<'_, State>,
     target_dir: String,
 ) -> Result<ExportStats, String> {
     let client = state.read().await.client.clone();
-    client.export_pages_okf(target_dir).await
+    export_pages_okf_checked(&client, target_dir).await
+}
+
+#[cfg(test)]
+mod okf_export_floor_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[test]
+    fn the_floor_is_the_first_release_with_the_okf_format() {
+        assert!(daemon_version_supports_okf_export("0.18.9"));
+        assert!(daemon_version_supports_okf_export("0.19.0"));
+        assert!(!daemon_version_supports_okf_export("0.18.8"));
+        assert!(!daemon_version_supports_okf_export("0.18.9-rc.1"));
+        assert!(!daemon_version_supports_okf_export("not-a-version"));
+    }
+
+    /// A daemon reporting `version` on `/api/health` and fixed stats on any
+    /// other path, one request per connection, recording each request line.
+    async fn serve_daemon(
+        version: &'static str,
+    ) -> (
+        crate::api::WenlanClient,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = seen.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut bytes = vec![0_u8; 8192];
+                let size = stream.read(&mut bytes).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&bytes[..size]).to_string();
+                let line = request.lines().next().unwrap_or_default().to_string();
+                let body = if line.starts_with("GET /api/health ") {
+                    format!(r#"{{"status":"ok","db_initialized":true,"version":"{version}"}}"#)
+                } else {
+                    r#"{"exported":2,"skipped":0,"failed":0}"#.to_string()
+                };
+                recorded.lock().unwrap().push(line);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (
+            crate::api::WenlanClient::with_base_url(format!("http://{address}")),
+            seen,
+        )
+    }
+
+    #[tokio::test]
+    async fn an_older_daemon_gets_no_export_request() {
+        let (client, seen) = serve_daemon("0.18.8").await;
+
+        let error = export_pages_okf_checked(&client, "/Users/someone/okf".to_string())
+            .await
+            .expect_err("a 0.18.8 daemon would write an Obsidian export");
+
+        assert_eq!(error, OKF_EXPORT_ERROR_DAEMON_TOO_OLD);
+        assert_eq!(*seen.lock().unwrap(), vec!["GET /api/health HTTP/1.1"]);
+    }
+
+    #[tokio::test]
+    async fn a_daemon_at_the_floor_exports() {
+        let (client, seen) = serve_daemon("0.18.9").await;
+
+        let stats = export_pages_okf_checked(&client, "/Users/someone/okf".to_string())
+            .await
+            .expect("a 0.18.9 daemon writes the bundle");
+
+        assert_eq!(stats.exported, 2);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "GET /api/health HTTP/1.1",
+                "POST /api/pages/export HTTP/1.1"
+            ]
+        );
+    }
 }
 
 #[tauri::command]

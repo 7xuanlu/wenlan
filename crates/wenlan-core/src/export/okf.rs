@@ -111,6 +111,8 @@ fn write_file_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Plan stable bundle filenames: pages sorted by `(created_at, id)`, slug
 /// via `obsidian::slugify`, empty slug falling back to
 /// `sanitize_stub_id(page.id)`, collisions suffixed `-2`, `-3`, ...
+/// `index.md` is never a page's file: OKF reads an `index.md` in any folder
+/// as that folder's index, so a page titled "Index" is `index-page.md`.
 /// Returns `(page_id, file)` pairs in export order.
 pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
     let mut order: Vec<usize> = (0..pages.len()).collect();
@@ -128,6 +130,7 @@ pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
         if base.is_empty() {
             base = crate::export::provenance::sanitize_stub_id(&page.id);
         }
+        let base = crate::export::knowledge::page_stem_clear_of_index(base);
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         while used.contains(&candidate) {
@@ -812,6 +815,21 @@ mod tests {
     }
 
     #[test]
+    fn a_page_titled_index_and_one_titled_index_page_get_distinct_files() {
+        let pages = vec![
+            test_page("concept_a", "Index", "x"),
+            test_page("concept_b", "Index Page", "y"),
+            test_page("concept_c", "INDEX", "z"),
+        ];
+        let planned = plan_page_filenames(&pages);
+        let files: Vec<&str> = planned.iter().map(|(_, f)| f.as_str()).collect();
+        assert_eq!(
+            files,
+            vec!["index-page.md", "index-page-2.md", "index-page-3.md"]
+        );
+    }
+
+    #[test]
     fn empty_slug_falls_back_to_sanitized_id() {
         let pages = vec![test_page("concept_a!!", "!!!", "x")];
         let planned = plan_page_filenames(&pages);
@@ -1231,6 +1249,35 @@ mod tests {
         );
         assert!(!dir.path().join("index.md").exists(), "nothing written");
         assert!(!dir.path().join("pages").exists(), "nothing written");
+    }
+
+    #[test]
+    fn a_page_titled_index_is_exported_beside_the_index_not_as_one() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // A bundle from 0.18.9 wrote such a page at `pages/index.md`.
+        std::fs::create_dir_all(dir.path().join(PAGES_DIR)).unwrap();
+        std::fs::write(dir.path().join("pages/index.md"), "old").unwrap();
+        std::fs::write(
+            dir.path().join(MARKER_FILE),
+            serde_json::to_vec(&serde_json::json!({
+                "okf_version": "0.2",
+                "generated_by": "wenlan/test",
+                "files": ["index.md", "pages/index.md"],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let pages = vec![test_page("concept_index", "Index", "x")];
+        let stats = export_okf(&pages, dir.path()).unwrap();
+        assert_eq!(stats.exported, 1);
+        assert!(
+            !dir.path().join("pages/index.md").exists(),
+            "stale file removed"
+        );
+        let page = std::fs::read_to_string(dir.path().join("pages/index-page.md")).unwrap();
+        assert!(page.contains("title: \"Index\""), "{page}");
+        let index = std::fs::read_to_string(dir.path().join("index.md")).unwrap();
+        assert!(index.contains("[Index](/pages/index-page.md)"), "{index}");
     }
 
     #[test]

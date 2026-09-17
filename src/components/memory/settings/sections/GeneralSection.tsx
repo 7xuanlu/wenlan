@@ -15,6 +15,7 @@ import {
   setTelemetryEnabled,
   exportPagesAsOkf,
   daemonErrorMessage,
+  isOkfExportDaemonTooOld,
 } from "../../../../lib/tauri";
 import { type Theme, useTheme } from "../../../../lib/theme";
 import {
@@ -486,9 +487,11 @@ function ExportSettingsBlock() {
   };
 
   const result = exportMutation.isSuccess ? exportMutation.data : undefined;
-  const exportReason = exportMutation.isError
-    ? daemonErrorMessage(exportMutation.error) ?? errorMessage(exportMutation.error)
-    : null;
+  const exportReason = !exportMutation.isError
+    ? null
+    : isOkfExportDaemonTooOld(exportMutation.error)
+      ? t("settings.general.exportOkfDaemonTooOld")
+      : daemonErrorMessage(exportMutation.error) ?? errorMessage(exportMutation.error);
   const exportError = exportMutation.isError
     ? exportReason
       ? t("settings.general.exportOkfError", { reason: exportReason })
