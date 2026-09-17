@@ -3,6 +3,7 @@ pub mod client;
 pub mod lock_state;
 pub mod self_update_check;
 pub mod serve;
+pub mod stdio;
 pub mod token;
 pub mod tools;
 pub mod types;
