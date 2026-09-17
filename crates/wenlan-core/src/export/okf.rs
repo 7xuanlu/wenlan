@@ -905,6 +905,50 @@ mod tests {
         assert!(space_pos < unfiled_pos, "{index}");
     }
 
+    /// Same rule in the exported bundle: no summary, no ` - ` tail. The
+    /// renderer is shared with the projection index, so this pins the bundle
+    /// side of it against a future prefix-only change.
+    #[test]
+    fn bundle_index_line_for_a_page_without_a_summary_has_no_trailing_separator() {
+        let described = test_page("concept_a", "Described", "x");
+        let mut bare = test_page("concept_b", "Bare", "y");
+        bare.summary = None;
+        let pages = vec![described, bare];
+        let id_to_file: HashMap<String, String> = plan_page_filenames(&pages).into_iter().collect();
+        let index = render_bundle_index(&pages, &id_to_file);
+        assert!(
+            index.contains("* [Described](/pages/described.md) - Described summary\n"),
+            "{index}"
+        );
+        assert!(index.contains("* [Bare](/pages/bare.md)\n"), "{index}");
+        assert!(!index.contains("(/pages/bare.md) - "), "{index}");
+    }
+
+    /// `export_okf` never reports a skip of its own. The OKF export route
+    /// (`wenlan-server/src/page_routes.rs`, `handle_export_pages`) filters the
+    /// page list by `page_write_permit` BEFORE calling this, then overwrites
+    /// `stats.skipped` with its own declined count -- so a skip counted here
+    /// would be silently thrown away. Re-export, where stale files are removed,
+    /// is the case most likely to want one.
+    #[test]
+    fn export_reports_no_skips_of_its_own_so_the_route_owns_that_count() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let both = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Beta", "y"),
+        ];
+        let first = export_okf(&both, dir.path()).unwrap();
+        assert_eq!(first.exported, 2, "{first:?}");
+        assert_eq!(first.skipped, 0, "{first:?}");
+
+        // Second pass over the same directory with one page gone: the stale
+        // file is removed, and that is still not a "skip".
+        let second = export_okf(&both[..1], dir.path()).unwrap();
+        assert_eq!(second.exported, 1, "{second:?}");
+        assert_eq!(second.skipped, 0, "{second:?}");
+        assert_eq!(second.failed, 0, "{second:?}");
+    }
+
     #[test]
     fn refuses_foreign_nonempty_directory() {
         let dir = tempfile::TempDir::new().unwrap();

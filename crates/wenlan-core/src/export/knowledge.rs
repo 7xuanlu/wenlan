@@ -1409,6 +1409,19 @@ pub(crate) fn escape_index_link_text(s: &str) -> String {
     s.replace('[', "\\[").replace(']', "\\]")
 }
 
+/// One index line. The ` - ` separator is written only when the page has a
+/// description: a page with an empty summary otherwise rendered as
+/// `* [Title](/page.md) - `, a separator pointing at nothing, in every
+/// projection index and every exported bundle.
+fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
+    let title = escape_index_link_text(title);
+    if description.is_empty() {
+        format!("* [{title}]({link_prefix}{filename})\n")
+    } else {
+        format!("* [{title}]({link_prefix}{filename}) - {description}\n")
+    }
+}
+
 /// Pure OKF `index.md` renderer shared by the projection and the OKF export
 /// bundle. Entries must already be sanitized and title-sorted within their
 /// group; `link_prefix` is `"/"` for the projection (links at the vault
@@ -1422,20 +1435,14 @@ pub(crate) fn render_index_markdown(
     for (space, entries) in by_space {
         out.push_str(&format!("## {space}\n\n"));
         for (title, filename, description) in entries {
-            let title = escape_index_link_text(title);
-            out.push_str(&format!(
-                "* [{title}]({link_prefix}{filename}) - {description}\n"
-            ));
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
         }
         out.push('\n');
     }
     if !unfiled.is_empty() {
         out.push_str("## Unfiled\n\n");
         for (title, filename, description) in unfiled {
-            let title = escape_index_link_text(title);
-            out.push_str(&format!(
-                "* [{title}]({link_prefix}{filename}) - {description}\n"
-            ));
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
         }
         out.push('\n');
     }
@@ -6211,6 +6218,55 @@ mod tests {
             body.contains("[Weird\\] Title]("),
             "the title's `]` must be escaped and its newline collapsed to a space; got: {body}"
         );
+    }
+
+    /// A page with no summary must not render `* [Title](/file.md) - `: the
+    /// separator would point at nothing, in every projection index on disk.
+    #[test]
+    fn index_line_for_a_page_without_a_summary_has_no_trailing_separator() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut described = test_concept();
+        described.id = "page_described".to_string();
+        described.title = "Described".to_string();
+        described.summary = Some("A real summary".to_string());
+        writer.write_page_for_test(&described).unwrap();
+
+        let mut bare = test_concept();
+        bare.id = "page_bare".to_string();
+        bare.title = "Bare".to_string();
+        bare.summary = None;
+        writer.write_page_for_test(&bare).unwrap();
+
+        // A summary of only whitespace is the same case: `sanitize_index_field`
+        // collapses it to nothing before the line is built.
+        let mut blank = test_concept();
+        blank.id = "page_blank".to_string();
+        blank.title = "Blank".to_string();
+        blank.summary = Some("   \n  ".to_string());
+        writer.write_page_for_test(&blank).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let line = |title: &str| -> String {
+            content
+                .lines()
+                .find(|l| l.starts_with(&format!("* [{title}](")))
+                .unwrap_or_else(|| panic!("no index line for {title}; got: {content}"))
+                .to_string()
+        };
+        assert!(line("Described").ends_with(" - A real summary"));
+        assert!(
+            line("Bare").ends_with(".md)"),
+            "a page with no summary must end at the link; got: {}",
+            line("Bare")
+        );
+        assert!(
+            line("Blank").ends_with(".md)"),
+            "a whitespace-only summary must end at the link; got: {}",
+            line("Blank")
+        );
+        assert!(!content.contains(" - \n"), "{content}");
     }
 
     #[test]
