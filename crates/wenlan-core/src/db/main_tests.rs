@@ -32750,6 +32750,7 @@ async fn document_source_page_creation_rejects_an_old_content_hash() {
             "folder-notes",
             "/notes/create-race.md",
             Some("old-hash"),
+            None,
         )
         .await
         .unwrap());

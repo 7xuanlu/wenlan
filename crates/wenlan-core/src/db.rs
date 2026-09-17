@@ -56,6 +56,7 @@ mod maintenance_queue;
 mod maintenance_retro_scan;
 mod memory_point_reads;
 mod migrations_v004_v009;
+mod okf_concepts;
 mod onboarding_milestones;
 mod page_drafts;
 pub mod page_map;
@@ -89,6 +90,7 @@ pub use m5_page_size_snapshot::{M5MutationProbe, M5PageSizeSnapshotDb};
 pub(crate) use maintenance_duplicate_reads::{NearDuplicatePairRead, NearDuplicateSliceReader};
 pub(crate) use maintenance_retro_scan::AutomaticRetroPageScan;
 pub(crate) use memory_point_reads::PendingMemoryRevisionPayload;
+pub use okf_concepts::OkfConceptRecord;
 pub use presence_review::ReviewOutcome;
 pub use truth_exposure::{
     CutoverFence, CutoverLease, CutoverPhase, TruthMarkerAudit, TRUTH_CUTOVER_FENCE_KEY,
@@ -1413,7 +1415,9 @@ pub const EMBEDDING_DIM: usize = 768;
 /// endpoint's space whatever its shadow page's `status`, so an edge can be
 /// written against an ARCHIVED entity -- the precondition for an archived
 /// entity absorbing a recurring mention instead of a duplicate being created
-/// beside it (#708).
+/// beside it (#708). Migration 131 adds `okf_concepts` and
+/// `okf_concept_links`, the provenance and concept links of pages imported
+/// from an OKF bundle source.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1421,7 +1425,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 130;
+pub const SCHEMA_VERSION: u32 = 131;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10227,6 +10231,12 @@ impl MemoryDB {
             if version < 130 {
                 self.migrate_130_edges_space_fence_archived_entities(version)
                     .await?;
+            }
+
+            // Migration 131 (OKF import): `okf_concepts` and
+            // `okf_concept_links`. See okf_concepts::migrate_131_okf_concepts.
+            if version < 131 {
+                self.migrate_131_okf_concepts(version).await?;
             }
         }
 
@@ -50503,7 +50513,8 @@ impl MemoryDB {
     }
 
     /// Create a machine-owned document SOURCE Page only while the claimed
-    /// queue row still owns the content hash used to build it.
+    /// queue row still owns the content hash used to build it. `space` is the
+    /// Space a new page lands in (`None` is unfiled); only OKF sources set it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn insert_document_source_page_at_hash(
         &self,
@@ -50516,6 +50527,7 @@ impl MemoryDB {
         queue_source_id: &str,
         file_path: &str,
         expected_content_hash: Option<&str>,
+        space: Option<&str>,
     ) -> Result<bool, WenlanError> {
         self.insert_page_with_kind_inner(
             id,
@@ -50523,7 +50535,7 @@ impl MemoryDB {
             summary,
             content,
             None,
-            None,
+            space,
             source_memory_ids,
             now,
             "source",
@@ -52613,9 +52625,14 @@ impl MemoryDB {
             .get_page(page_id)
             .await?
             .and_then(|page| page.workspace.or(page.space));
-        let links =
+        let mut links =
             crate::synthesis::wikilinks::resolve_against_pages(self, &labels, scope.as_deref())
                 .await?;
+        // A page imported from an OKF bundle also carries its markdown links
+        // to other concepts, stored as concept ids and resolved here so every
+        // write path yields the same link set.
+        let okf_links = self.okf_links_for_page(page_id, scope.as_deref()).await?;
+        okf_concepts::merge_okf_links(&mut links, okf_links);
         self.replace_page_links(page_id, &links).await
     }
 
@@ -58059,6 +58076,39 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("dequeue_document: {}", e)))?;
         Ok(())
+    }
+
+    /// Count a source's queued documents that are not yet parsed and embedded
+    /// and can still get there: fresh (`last_completed_chunk = -1`) rows that
+    /// are pending, in progress, or paused below the retry cap. `done`,
+    /// `waiting_for_provider` (already prepared), rows past their first model
+    /// chunk, and exhausted paused rows are not counted. An OKF sync hands
+    /// over its next batch only when this is zero.
+    pub async fn count_unprepared_documents_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue
+                 WHERE source_id = ?1
+                   AND last_completed_chunk < 0
+                   AND (status IN ('pending', 'in_progress')
+                        OR (status = 'paused' AND attempt_count < ?2))",
+                libsql::params![source_id, Self::DOC_ENRICHMENT_MAX_ATTEMPTS],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents: {e}")))?;
+        let count = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents row: {e}")))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents col: {e}")))?
+            .unwrap_or(0);
+        Ok(count.max(0) as u64)
     }
 
     /// Fetch the current queue entry for a document, if present.

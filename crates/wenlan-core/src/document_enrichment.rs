@@ -43,7 +43,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::db::{DocEnrichmentQueueEntry, MemoryDB, MemoryDetail};
+use crate::db::{DocEnrichmentQueueEntry, MemoryDB, MemoryDetail, UNFILED_SPACE_ID};
 use crate::error::WenlanError;
 use crate::llm_provider::{LlmProvider, LlmRequest};
 use crate::post_write::{page_write, PageWrite};
@@ -51,6 +51,8 @@ use crate::prompts::PromptRegistry;
 use crate::sources::directory::{
     document_source_id, file_to_documents, provenance_path, FileOutcome,
 };
+use crate::sources::okf::{concept_file_to_documents, ConceptOutcome, OkfConcept};
+use crate::sources::{Source, SourceType};
 #[cfg(test)]
 use wenlan_types::requests::CreateConceptRequest;
 
@@ -114,6 +116,28 @@ impl DocumentEnrichmentOutcome {
     }
 }
 
+/// How a queued document from an OKF bundle source is read. Documents of every
+/// other source type have no profile and keep the folder parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OkfSourceProfile {
+    /// The registered bundle root; concept ids are relative to it.
+    pub bundle_root: PathBuf,
+    /// The Space a newly imported concept page lands in.
+    pub space: Option<String>,
+}
+
+/// The OKF profile of `source_id` among the registered sources, if it is an
+/// OKF source.
+pub fn okf_source_profile(sources: &[Source], source_id: &str) -> Option<OkfSourceProfile> {
+    sources
+        .iter()
+        .find(|source| source.id == source_id && source.source_type == SourceType::Okf)
+        .map(|source| OkfSourceProfile {
+            bundle_root: source.path.clone(),
+            space: source.space.clone(),
+        })
+}
+
 /// Enrich a single queued document end-to-end. See the module docs for the full
 /// contract. Never propagates an error: every failure mode maps to a returned
 /// [`DocumentEnrichmentOutcome`] plus a queue transition
@@ -125,13 +149,40 @@ pub async fn run_document_enrichment(
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
 ) -> DocumentEnrichmentOutcome {
-    run_document_enrichment_with_request_budget(db, entry, knowledge_path, llm, prompts, None).await
+    run_document_enrichment_with_profile(db, entry, knowledge_path, llm, prompts, None).await
+}
+
+/// [`run_document_enrichment`] with the source profile given instead of looked
+/// up, so a caller that already holds the registered sources does not read
+/// the config file.
+pub async fn run_document_enrichment_with_profile(
+    db: &MemoryDB,
+    entry: &DocEnrichmentQueueEntry,
+    knowledge_path: Option<&Path>,
+    llm: Option<&Arc<dyn LlmProvider>>,
+    prompts: &PromptRegistry,
+    profile: Option<&OkfSourceProfile>,
+) -> DocumentEnrichmentOutcome {
+    run_document_enrichment_with_request_budget(
+        db,
+        entry,
+        knowledge_path,
+        llm,
+        prompts,
+        None,
+        profile,
+    )
+    .await
 }
 
 /// Advance a queued document by at most one LLM request, then yield its durable
 /// checkpoint back to the ambient scheduler. Parsing and initial embedding are
 /// still one bounded-by-file-size preparation step; map-fold and entity
 /// extraction never share the same ambient turn.
+///
+/// The document's source profile is looked up here, from the registered
+/// sources, so both ambient lanes (import prep and the ordinary tick) read an
+/// OKF concept the same way.
 pub async fn run_document_enrichment_slice(
     db: &MemoryDB,
     entry: &DocEnrichmentQueueEntry,
@@ -139,8 +190,17 @@ pub async fn run_document_enrichment_slice(
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
 ) -> DocumentEnrichmentOutcome {
-    run_document_enrichment_with_request_budget(db, entry, knowledge_path, llm, prompts, Some(1))
-        .await
+    let profile = okf_source_profile(&crate::config::load_config().sources, &entry.source_id);
+    run_document_enrichment_with_request_budget(
+        db,
+        entry,
+        knowledge_path,
+        llm,
+        prompts,
+        Some(1),
+        profile.as_ref(),
+    )
+    .await
 }
 
 async fn run_document_enrichment_with_request_budget(
@@ -150,6 +210,7 @@ async fn run_document_enrichment_with_request_budget(
     llm: Option<&Arc<dyn LlmProvider>>,
     prompts: &PromptRegistry,
     mut requests_remaining: Option<usize>,
+    profile: Option<&OkfSourceProfile>,
 ) -> DocumentEnrichmentOutcome {
     let source_id = entry.source_id.clone();
     let file_path = entry.file_path.clone();
@@ -174,14 +235,24 @@ async fn run_document_enrichment_with_request_budget(
         let parse_source_id = source_id.clone();
         let parse_path = PathBuf::from(&file_path);
         let parse_knowledge = knowledge_path.map(|p| p.to_path_buf());
-        let parsed = tokio::task::spawn_blocking(move || {
-            file_to_documents(&parse_source_id, &parse_path, parse_knowledge.as_deref())
+        let parse_bundle_root = profile.map(|profile| profile.bundle_root.clone());
+        let parsed = tokio::task::spawn_blocking(move || match parse_bundle_root {
+            Some(bundle_root) => okf_file_outcome(concept_file_to_documents(
+                &parse_source_id,
+                &parse_path,
+                &bundle_root,
+                parse_knowledge.as_deref(),
+            )),
+            None => (
+                file_to_documents(&parse_source_id, &parse_path, parse_knowledge.as_deref()),
+                None,
+            ),
         })
         .await;
 
-        let docs = match parsed {
-            Ok(FileOutcome::Ingested(docs)) => docs,
-            Ok(FileOutcome::Skipped(reason)) | Ok(FileOutcome::Error(reason)) => {
+        let (docs, okf_concept) = match parsed {
+            Ok((FileOutcome::Ingested(docs), concept)) => (docs, concept),
+            Ok((FileOutcome::Skipped(reason), _)) | Ok((FileOutcome::Error(reason), _)) => {
                 // A file that yields nothing ingestable won't improve on retry.
                 // Still record sync_state so the next sync skips it instead of
                 // re-parsing it every tick.
@@ -198,7 +269,9 @@ async fn run_document_enrichment_with_request_budget(
             }
         };
 
-        if let Some(first) = docs.first() {
+        if let Some(concept) = &okf_concept {
+            title = concept.title.clone();
+        } else if let Some(first) = docs.first() {
             title = first.title.clone();
         }
         // One file = one document: merge the parsed docs' bodies under the
@@ -236,6 +309,41 @@ async fn run_document_enrichment_with_request_budget(
                 paused: false,
             };
         }
+        // An OKF concept's provenance and links are stored before any page
+        // write, so the write's own link refresh already sees them. Its Space
+        // follows the page when the page exists (a user's move sticks), else
+        // the source's Space.
+        let mut document_space: Option<String> = None;
+        if let (Some(concept), Some(profile)) = (&okf_concept, profile) {
+            let page_id = source_page_id(&source_id, &file_path);
+            if let Err(error) = db
+                .upsert_okf_concept(
+                    &page_id,
+                    &source_id,
+                    &concept.concept_id,
+                    &concept.frontmatter,
+                    &concept.links,
+                )
+                .await
+            {
+                log::warn!(
+                    "[doc-enrich] {file_path}: OKF provenance write failed: {error}; pausing"
+                );
+                pause(db, entry, "OKF provenance write failed").await;
+                return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+            }
+            document_space = match db.get_page(&page_id).await {
+                Ok(Some(page)) => Some(page.space.unwrap_or_else(|| UNFILED_SPACE_ID.to_string())),
+                Ok(None) => profile.space.clone(),
+                Err(error) => {
+                    log::warn!(
+                        "[doc-enrich] {file_path}: page Space read failed: {error}; pausing"
+                    );
+                    pause(db, entry, "page Space read failed").await;
+                    return DocumentEnrichmentOutcome::paused_no_page(doc_source_id);
+                }
+            };
+        }
         match db
             .prepared_document_generation(&doc_source_id, parsed_hash)
             .await
@@ -271,6 +379,7 @@ async fn run_document_enrichment_with_request_budget(
             metadata,
             source_agent: Some("folder".to_string()),
             content_hash,
+            space: document_space,
             ..Default::default()
         };
         if prepared_chunks.is_none() {
@@ -398,11 +507,26 @@ async fn run_document_enrichment_with_request_budget(
     }
 
     // ── (4) outputs: exactly one SOURCE page (always), summary + entities ──
+    let page_space = profile.and_then(|profile| profile.space.as_deref());
     if llm_failed || llm.is_none() {
         // Deterministic stub SOURCE page so the document is ALWAYS represented.
+        // An OKF concept's own description stands in for the missing summary.
         let body = stub_page_body(&title, &chunks);
-        if let Err(e) =
-            write_document_source_page(db, entry, &page_id, &title, None, &body, &chunk_ids).await
+        let description = match profile {
+            Some(_) => okf_description(db, &page_id).await,
+            None => None,
+        };
+        if let Err(e) = write_document_source_page(
+            db,
+            entry,
+            &page_id,
+            &title,
+            description.as_deref(),
+            &body,
+            &chunk_ids,
+            page_space,
+        )
+        .await
         {
             log::warn!("[doc-enrich] {file_path}: stub source page write failed: {e}");
         }
@@ -479,6 +603,7 @@ async fn run_document_enrichment_with_request_budget(
         Some(&summary_line),
         &digest,
         &chunk_ids,
+        page_space,
     )
     .await
     {
@@ -674,6 +799,44 @@ pub async fn pause_document_enrichment_after_panic(db: &MemoryDB, entry: &DocEnr
     pause(db, entry, "document enrichment panicked").await;
 }
 
+/// Map an OKF concept read onto the folder parse's outcome, keeping the
+/// concept for provenance. A deprecated concept yields nothing to ingest: the
+/// sync removes deprecated concepts, and a file that turned deprecated after
+/// it was queued fails the completion receipt's re-hash, so the next sync
+/// sees it as changed and removes it.
+fn okf_file_outcome(outcome: ConceptOutcome) -> (FileOutcome, Option<OkfConcept>) {
+    match outcome {
+        ConceptOutcome::Ingested { concept, documents } => {
+            (FileOutcome::Ingested(documents), Some(concept))
+        }
+        ConceptOutcome::Deprecated(concept) => (
+            FileOutcome::Skipped(format!("OKF concept {} is deprecated", concept.concept_id)),
+            None,
+        ),
+        ConceptOutcome::Skipped(reason) => (FileOutcome::Skipped(reason), None),
+        ConceptOutcome::Error(reason) => (FileOutcome::Error(reason), None),
+    }
+}
+
+/// The stored `description` of an imported concept, trimmed, if any.
+async fn okf_description(db: &MemoryDB, page_id: &str) -> Option<String> {
+    let record = match db.get_okf_concept(page_id).await {
+        Ok(record) => record?,
+        Err(error) => {
+            log::warn!("[doc-enrich] {page_id}: OKF provenance read failed: {error}");
+            return None;
+        }
+    };
+    record
+        .frontmatter
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|description| !description.is_empty())
+        .map(str::to_string)
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn write_document_source_page(
     db: &MemoryDB,
     entry: &DocEnrichmentQueueEntry,
@@ -682,6 +845,7 @@ async fn write_document_source_page(
     summary: Option<&str>,
     content: &str,
     chunk_ids: &[String],
+    space: Option<&str>,
 ) -> Result<(), WenlanError> {
     let expected_page_version = db.get_page(page_id).await?.map(|page| page.version);
     page_write(
@@ -696,11 +860,35 @@ async fn write_document_source_page(
             file_path: &entry.file_path,
             expected_content_hash: entry.content_hash.as_deref(),
             expected_page_version,
+            space,
             agent: "doc-enrich",
         },
     )
-    .await
-    .map(|_| ())
+    .await?;
+    refresh_okf_linkers(db, page_id).await;
+    Ok(())
+}
+
+/// Once an imported concept's page is written, pages of its bundle that
+/// link to it re-resolve, so a link written before its target arrived stops
+/// being unresolved. Best effort: the page write already succeeded, and a
+/// missed refresh only leaves that link unresolved until the linking page is
+/// written again.
+async fn refresh_okf_linkers(db: &MemoryDB, page_id: &str) {
+    let record = match db.get_okf_concept(page_id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return,
+        Err(error) => {
+            log::warn!("[doc-enrich] {page_id}: OKF provenance read failed: {error}");
+            return;
+        }
+    };
+    if let Err(error) = db
+        .refresh_okf_concept_linkers(&record.source_id, &[record.concept_id], &[])
+        .await
+    {
+        log::warn!("[doc-enrich] {page_id}: OKF linker refresh failed: {error}");
+    }
 }
 
 /// Write (idempotently) the single `creation_kind='source'` page for a document,
@@ -2008,6 +2196,7 @@ mod tests {
             None,
             "Stale folded body",
             &outcome.chunk_ids,
+            None,
         )
         .await
         .expect_err("the production PageWrite route must reject an old queue hash");
@@ -2085,6 +2274,7 @@ mod tests {
             None,
             "content v1",
             &[keep_sid.to_string(), drop_sid.to_string()],
+            None,
         )
         .await
         .unwrap();
@@ -2098,6 +2288,7 @@ mod tests {
             None,
             "content v2, grown",
             &[keep_sid.to_string(), new_sid.to_string()],
+            None,
         )
         .await
         .unwrap();
@@ -2554,6 +2745,215 @@ mod tests {
             .unwrap()
             .expect("claimable after reset");
         assert_eq!(resumed.last_completed_chunk, 4);
+    }
+
+    // ── OKF bundle sources ───────────────────────────────────────────────
+
+    /// Write a concept file with enough prose to survive the quality gate.
+    fn write_concept(dir: &Path, rel: &str, title: &str, body_extra: &str) -> PathBuf {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut body = format!(
+            "---\ntype: concept\ntitle: {title}\ndescription: What {title} means here.\n---\n\n# {title}\n\n"
+        );
+        for i in 0..40 {
+            body.push_str(&format!(
+                "Paragraph {i} of {title} describes one aspect of the idea in careful, concrete \
+                 detail so the markdown chunker splits this concept into several sections \
+                 rather than one chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        body.push_str(body_extra);
+        std::fs::write(&path, body).unwrap();
+        path
+    }
+
+    async fn enqueue_and_claim(db: &MemoryDB, path: &Path) -> DocEnrichmentQueueEntry {
+        let file_path = path.to_string_lossy().to_string();
+        let hash = file_hash(path);
+        db.enqueue_document("okf-wiki", &file_path, Some(&hash))
+            .await
+            .unwrap();
+        db.claim_next_pending().await.unwrap().expect("claim")
+    }
+
+    async fn chunk_spaces(db: &MemoryDB, doc_source_id: &str) -> Vec<Option<String>> {
+        db.get_memories_by_source_ids(&[doc_source_id.to_string()])
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|chunk| chunk.space)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn okf_concept_keeps_its_provenance_links_and_the_source_space() {
+        let (db, dir) = test_db().await;
+        db.create_space("Research", None, false).await.unwrap();
+        let bundle = dir.path().join("wiki");
+        let alpha = write_concept(
+            &bundle,
+            "concepts/alpha.md",
+            "Alpha",
+            "It builds on [Beta](beta.md).\n",
+        );
+        let profile = OkfSourceProfile {
+            bundle_root: bundle.clone(),
+            space: Some("Research".to_string()),
+        };
+        let entry = enqueue_and_claim(&db, &alpha).await;
+        let prompts = PromptRegistry::default();
+
+        let outcome =
+            run_document_enrichment_with_profile(&db, &entry, None, None, &prompts, Some(&profile))
+                .await;
+
+        // Provenance: the concept row carries the bundle-relative id and the
+        // frontmatter as parsed, and the page is the document's source page.
+        let record = db
+            .get_okf_concept(&outcome.page_id)
+            .await
+            .unwrap()
+            .expect("concept row");
+        assert_eq!(record.concept_id, "concepts/alpha");
+        assert_eq!(record.source_id, "okf-wiki");
+        assert_eq!(record.frontmatter["type"], "concept");
+        assert_eq!(
+            outcome.doc_source_id,
+            document_source_id("okf-wiki", &alpha, None),
+            "the key authority stays shared with folder sync"
+        );
+
+        // Space: page and chunks land in the source's Space.
+        let page = db
+            .get_page(&outcome.page_id)
+            .await
+            .unwrap()
+            .expect("source page");
+        assert_eq!(page.space.as_deref(), Some("Research"));
+        assert_eq!(page.creation_kind, "source");
+        assert_ne!(
+            page.review_status, "confirmed",
+            "bundle data never confirms a page by itself"
+        );
+        let spaces = chunk_spaces(&db, &outcome.doc_source_id).await;
+        assert!(!spaces.is_empty());
+        assert!(spaces
+            .iter()
+            .all(|space| space.as_deref() == Some("Research")));
+        let chunks = db
+            .get_memories_by_source_ids(std::slice::from_ref(&outcome.doc_source_id))
+            .await
+            .unwrap();
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.source_agent.as_deref() == Some("folder")));
+
+        // Links: the missing target is stored unresolved, and a later refresh
+        // that knows nothing of OKF keeps it.
+        let links = db
+            .get_page_outbound_links_scoped(&outcome.page_id, &ReadScope::Global)
+            .await
+            .unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].label, "concepts/beta");
+        assert!(links[0].target_page_id.is_none());
+        db.refresh_page_wikilinks(&outcome.page_id, &page.content)
+            .await
+            .unwrap();
+        let after = db
+            .get_page_outbound_links_scoped(&outcome.page_id, &ReadScope::Global)
+            .await
+            .unwrap();
+        assert_eq!(after.len(), 1, "OKF links survive a non-worker refresh");
+        assert_eq!(after[0].label, "concepts/beta");
+    }
+
+    #[tokio::test]
+    async fn a_moved_okf_page_keeps_its_space_and_its_chunks_follow() {
+        let (db, dir) = test_db().await;
+        db.create_space("Research", None, false).await.unwrap();
+        db.create_space("Archive", None, false).await.unwrap();
+        let bundle = dir.path().join("wiki");
+        let alpha = write_concept(&bundle, "alpha.md", "Alpha", "");
+        let profile = OkfSourceProfile {
+            bundle_root: bundle.clone(),
+            space: Some("Research".to_string()),
+        };
+        let prompts = PromptRegistry::default();
+        let entry = enqueue_and_claim(&db, &alpha).await;
+        let first =
+            run_document_enrichment_with_profile(&db, &entry, None, None, &prompts, Some(&profile))
+                .await;
+
+        db.set_page_workspace(&first.page_id, Some("Archive"))
+            .await
+            .unwrap();
+        let mut edited = std::fs::read_to_string(&alpha).unwrap();
+        edited.push_str("\nOne more sentence changes the file's bytes and its hash.\n");
+        std::fs::write(&alpha, &edited).unwrap();
+        let entry = enqueue_and_claim(&db, &alpha).await;
+        let second =
+            run_document_enrichment_with_profile(&db, &entry, None, None, &prompts, Some(&profile))
+                .await;
+
+        assert_eq!(second.page_id, first.page_id);
+        let page = db
+            .get_page(&second.page_id)
+            .await
+            .unwrap()
+            .expect("source page");
+        assert_eq!(
+            page.space.as_deref(),
+            Some("Archive"),
+            "a user's move wins over the source's Space"
+        );
+        let spaces = chunk_spaces(&db, &second.doc_source_id).await;
+        assert!(!spaces.is_empty());
+        assert!(
+            spaces
+                .iter()
+                .all(|space| space.as_deref() == Some("Archive")),
+            "chunks follow the page: {spaces:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_deprecated_concept_is_never_ingested() {
+        let (db, dir) = test_db().await;
+        let bundle = dir.path().join("wiki");
+        let path = write_concept(&bundle, "gone.md", "Gone", "");
+        let text = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("type: concept\n", "type: concept\nstatus: deprecated\n");
+        std::fs::write(&path, text).unwrap();
+        let profile = OkfSourceProfile {
+            bundle_root: bundle.clone(),
+            space: None,
+        };
+        let entry = enqueue_and_claim(&db, &path).await;
+        let prompts = PromptRegistry::default();
+
+        let outcome =
+            run_document_enrichment_with_profile(&db, &entry, None, None, &prompts, Some(&profile))
+                .await;
+
+        assert_eq!(
+            count_source_pages(&db).await,
+            0,
+            "no page for a deprecated concept"
+        );
+        assert!(db
+            .get_memories_by_source_id("memory", &outcome.doc_source_id)
+            .await
+            .unwrap()
+            .is_empty());
+        let queued = db
+            .get_queue_entry("okf-wiki", &path.to_string_lossy())
+            .await
+            .unwrap()
+            .expect("queue row");
+        assert_eq!(queued.status, "done", "it will not improve on retry");
     }
 
     /// Count active `creation_kind='source'` pages.
