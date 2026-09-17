@@ -354,6 +354,12 @@ impl KnowledgeWriter {
             }
         }
 
+        // A page leaving `index.md` for its own name (see `unique_filename_cap`).
+        let left_index_copy = state
+            .pages
+            .get(&page.id)
+            .map(|entry| entry.file.clone())
+            .filter(|old| is_index_file(old) && *old != filename);
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -366,6 +372,9 @@ impl KnowledgeWriter {
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
+        if let Some(old) = left_index_copy {
+            Self::remove_index_copy_left_by(&capabilities.root, &old, &page.id);
+        }
 
         if self.write_provenance && regenerate_index {
             if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
@@ -493,9 +502,9 @@ impl KnowledgeWriter {
         if let Some(existing) = state.pages.get(page_id) {
             // A page titled "Index" projected before `index.md` was reserved
             // moves to a free name on its next write, so the OKF index can
-            // take the name. The copy it leaves behind is replaced by that
-            // index (see `index_file_is_replaceable`), which only a writer that
-            // regenerates the index will do.
+            // take the name. `write_page` removes the copy it leaves behind
+            // (`remove_index_copy_left_by`). Only a writer that regenerates
+            // the index moves it.
             if !(self.write_provenance && is_index_file(&existing.file)) {
                 return Ok(existing.file.clone());
             }
@@ -1235,16 +1244,49 @@ impl KnowledgeWriter {
         Some((title, description, space))
     }
 
+    /// After a page moves off `index.md`, remove the copy it left there so the
+    /// OKF index can take the name. `state` recorded the page at that file, so
+    /// a regular file there whose `origin_id` is this page is Wenlan's own
+    /// projection. Anything else is kept: a note the user put there since, a
+    /// symlink, or a file this pass cannot read. Ownership comes from `state`,
+    /// not from the file alone, because a user's note made by copying a page
+    /// file carries that page's `origin_id` too.
+    fn remove_index_copy_left_by(root: &Dir, file: &str, page_id: &str) {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let Ok(mut handle) = root.open_with(file, &options) else {
+            return;
+        };
+        if !handle.metadata().is_ok_and(|meta| meta.is_file()) {
+            return;
+        }
+        let mut head = Vec::new();
+        if (&mut handle)
+            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+            .read_to_end(&mut head)
+            .is_err()
+        {
+            return;
+        }
+        drop(handle);
+        let head = String::from_utf8_lossy(&head);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+        if fm.get_str("origin_id").map(str::trim) != Some(page_id) {
+            return;
+        }
+        if let Err(e) = root.remove_file(file) {
+            log::warn!("[knowledge] could not remove {file} after page {page_id} moved: {e}");
+        }
+    }
+
     /// Whether the projection may write `index.md`: the name is free, or the
     /// file there is Wenlan's own index, recognized by frontmatter whose only
-    /// key is `okf_version`, or it is the copy a page titled "Index" left
-    /// behind when it moved to its own file (its `origin_id` names a page that
-    /// `state` now records under another name). Anything else is left alone:
-    /// a note the user made at `index.md` (Obsidian users often keep a home
-    /// note there), a page still projected there, a symlink, a directory, or a
-    /// file this pass cannot read. Edits to the body of Wenlan's own index are
-    /// still replaced; it is a generated file.
-    fn index_file_is_replaceable(root: &Dir, state: &KnowledgeState) -> bool {
+    /// key is `okf_version`. Anything else is left alone: a note the user made
+    /// at `index.md` (Obsidian users often keep a home note there, sometimes
+    /// by copying a page file), a page still projected there, a symlink, a
+    /// directory, or a file this pass cannot read. Edits to the body of
+    /// Wenlan's own index are still replaced; it is a generated file.
+    fn index_file_is_replaceable(root: &Dir) -> bool {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let mut file = match root.open_with(INDEX_FILE, &options) {
@@ -1261,12 +1303,7 @@ impl KnowledgeWriter {
         }
         let head = String::from_utf8_lossy(&head);
         let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
-        if fm.fields.len() == 1 && fm.has("okf_version") {
-            return true;
-        }
-        fm.get_str("origin_id")
-            .and_then(|page_id| state.pages.get(page_id.trim()))
-            .is_some_and(|entry| !is_index_file(&entry.file))
+        fm.fields.len() == 1 && fm.has("okf_version")
     }
 
     /// Regenerate the OKF `index.md` root document from the frontmatter of the
@@ -1322,7 +1359,7 @@ impl KnowledgeWriter {
         // reuses this renderer with `/pages/`.
         let bytes = render_index_for_entries(raw_entries, "/");
 
-        if !Self::index_file_is_replaceable(&capabilities.root, state) {
+        if !Self::index_file_is_replaceable(&capabilities.root) {
             // Warn once per process: this runs on every page write, and the
             // user's note staying put is the intended outcome, not a fault.
             if !USER_INDEX_SKIP_WARNED.swap(true, Ordering::Relaxed) {
@@ -6313,8 +6350,8 @@ mod tests {
     }
 
     /// A vault projected before the name was reserved holds a page titled
-    /// "Index" at `index.md`. Its next write moves it to a free name and the
-    /// OKF index replaces the copy left behind.
+    /// "Index" at `index.md`. Its next write moves it to a free name, removes
+    /// the copy left behind, and the OKF index takes the name.
     #[test]
     fn a_page_already_at_index_md_moves_on_its_next_write() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -6352,6 +6389,56 @@ mod tests {
         assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
         let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
         assert!(index.contains("[Index](/index-2.md)"), "{index}");
+    }
+
+    /// PR #763 closure review: a home note made by copying a page file keeps
+    /// that page's `origin_id`. It is still the user's note, not a copy Wenlan
+    /// left behind, and survives the next page write.
+    #[test]
+    fn a_home_note_copied_from_a_page_file_is_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(dir.path().join(INDEX_FILE)).unwrap();
+        let note = format!(
+            "{}\n\nMy home note.\n",
+            std::fs::read_to_string(&page_path).unwrap()
+        );
+        std::fs::write(dir.path().join(INDEX_FILE), &note).unwrap();
+
+        let mut other = test_concept();
+        other.id = "page_other".to_string();
+        other.title = "Other".to_string();
+        writer.write_page_for_test(&other).unwrap();
+        writer.write_page_for_test(&page).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            note
+        );
+    }
+
+    /// A page recorded at `index.md` moves on its next write, but a note the
+    /// user saved over that file in the meantime is not its copy and stays.
+    #[test]
+    fn a_note_saved_over_a_moving_pages_file_is_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(&moved_path).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = INDEX_FILE.to_string();
+        writer.save_state(&state).unwrap();
+        std::fs::write(dir.path().join(INDEX_FILE), "# Home\n").unwrap();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            "# Home\n"
+        );
     }
 
     /// Review finding 4b: each per-page rewrite inside `reconcile` must skip
