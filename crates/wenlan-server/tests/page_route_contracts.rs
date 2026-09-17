@@ -597,3 +597,84 @@ async fn export_okf_format_writes_bundle_and_enforces_safety() {
         error.error
     );
 }
+
+#[tokio::test]
+async fn export_okf_reads_past_the_obsidian_window() {
+    let _config = WritableKnowledgeConfig::new();
+    let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
+    for i in 0..1001 {
+        common::create_page_fixture(
+            &db,
+            &format!("Window Page {i:04}"),
+            "body",
+            None,
+            &[],
+            "authored",
+        )
+        .await;
+    }
+    // The OKF branch reads every active page in one query, not the
+    // Obsidian 1000-row window: all 1001 pages must be exported.
+    let bundle = tmp.path().join("okf-window-bundle");
+    let okf = ExportPagesRequest {
+        vault_path: Some(bundle.to_string_lossy().into_owned()),
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, stats): (StatusCode, ExportStats) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stats.exported, 1001, "{stats:?}");
+    assert_eq!(stats.failed, 0, "{stats:?}");
+    assert_eq!(stats.skipped, 0, "{stats:?}");
+    let md_count = std::fs::read_dir(bundle.join("pages"))
+        .unwrap()
+        .flatten()
+        .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("md"))
+        .count();
+    assert_eq!(md_count, 1001);
+}
+
+#[tokio::test]
+async fn export_okf_refuses_during_a_truth_cutover() {
+    let _config = WritableKnowledgeConfig::new();
+    let (router, tmp, db) = common::test_app_no_gate_with_page_root().await;
+    common::create_page_fixture(&db, "Fence Page", "body", None, &[], "authored").await;
+    let bundle = tmp.path().join("okf-fence-bundle");
+    let okf = ExportPagesRequest {
+        vault_path: Some(bundle.to_string_lossy().into_owned()),
+        format: Some(ExportFormat::Okf),
+    };
+    let (status, stats): (StatusCode, ExportStats) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stats.exported, 1, "{stats:?}");
+    let page_file = bundle.join("pages/fence-page.md");
+    let before = std::fs::read(&page_file).expect("first export wrote the page");
+
+    // Mid-ceremony every page is declined; exporting then would delete the
+    // bundle's page files as stale, so the route refuses and touches nothing.
+    let lease = db.begin_cutover().await.unwrap();
+    let (status, _): (StatusCode, serde_json::Value) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(std::fs::read(&page_file).unwrap(), before);
+
+    db.abort_cutover(lease).await.unwrap();
+    let (status, stats): (StatusCode, ExportStats) = request_typed(
+        &router,
+        mutation(Method::POST, "/api/pages/export", Some(&okf)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(stats.exported, 1, "{stats:?}");
+    assert_eq!(std::fs::read(&page_file).unwrap(), before);
+}

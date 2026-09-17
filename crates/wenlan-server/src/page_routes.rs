@@ -687,10 +687,34 @@ pub async fn handle_export_pages(
     // Export must stay stub-free: `kind='entity'` dual-write shadow pages carry
     // no content and are not meant to leave the daemon. The fenced
     // `list_pages_scoped` excludes them in SQL *before* LIMIT, so a burst of
-    // fresh stubs can never crowd real pages out of the 1000-row window (the
+    // fresh stubs can never crowd real pages out of a bounded window (the
     // browse surfaces read the `_browse` twin instead).
+    //
+    // Windows differ by format: the Obsidian export keeps the historical
+    // 1000-row window, while the OKF bundle reads every active page in one
+    // query. The OKF writer deletes marker-listed files it does not plan
+    // this run, so a windowed read would delete older pages' files on
+    // re-export; and OFFSET paging over `last_modified DESC` could skip a
+    // page modified mid-export, with the same destructive result.
+    const OBSIDIAN_EXPORT_WINDOW: i64 = 1000;
+    let is_okf = matches!(req.format, Some(ExportFormat::Okf));
+    let read_window = if is_okf {
+        i64::MAX
+    } else {
+        OBSIDIAN_EXPORT_WINDOW
+    };
+    // While a truth cutover is `preparing`, `page_write_permit` declines every
+    // page. The OKF writer would then plan nothing and delete every page file
+    // of a previous bundle as stale, so the OKF branch refuses instead. The
+    // fence is read before the page read and again after the permit loop, and
+    // any change of epoch in between also refuses.
+    let okf_fence_before = if is_okf {
+        Some(db.cutover_fence().await?)
+    } else {
+        None
+    };
     let pages = db
-        .list_pages_scoped("active", 1000, 0, &scope)
+        .list_pages_scoped("active", read_window, 0, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
     // A write, not a read: this puts page prose into a vault the caller names,
@@ -719,7 +743,17 @@ pub async fn handle_export_pages(
     // Pure-OKF bundle twin of the Obsidian export below: same pages, same
     // permit filter, different writer. The obsidian branch underneath is
     // untouched so absent/`obsidian` keeps today's behavior byte for byte.
-    if matches!(req.format, Some(ExportFormat::Okf)) {
+    if let Some(fence_before) = okf_fence_before {
+        let fence_after = db.cutover_fence().await?;
+        if fence_before.phase == wenlan_core::db::CutoverPhase::Preparing
+            || fence_after != fence_before
+        {
+            return Err(wenlan_core::WenlanError::Conflict(
+                "a truth cutover is in progress; retry the okf export after it finishes"
+                    .to_string(),
+            )
+            .into());
+        }
         let raw = match req.vault_path {
             Some(path) if !path.trim().is_empty() => path,
             _ => {
@@ -751,8 +785,12 @@ pub async fn handle_export_pages(
             ))
             .into());
         }
-        let stats =
+        let mut stats =
             wenlan_core::export::okf::export_okf(&exportable, std::path::Path::new(&expanded))?;
+        // `export_okf` never sets `skipped`: pages the automatic reader may
+        // not see are reported here, OKF-branch only. The Obsidian response
+        // below is unchanged.
+        stats.skipped = declined;
         return Ok(Json(stats));
     }
     let vault_path = req
