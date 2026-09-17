@@ -225,9 +225,9 @@ export interface RegisteredSource {
   last_sync_error_detail?: SyncErrorDetail | null;
   /** Space new documents land in; set only for okf sources. */
   space?: string | null;
-  /** Files handed to the document queue by the last sync. */
+  /** okf sources: queued files not yet prepared after the last sync. */
   queued_files?: number;
-  /** Files waiting for the current batch to drain. */
+  /** okf sources: files not yet handed to the queue after the last sync. */
   waiting_files?: number;
 }
 
@@ -237,6 +237,10 @@ export interface SyncStats {
   skipped: number;
   errors: number;
   error_detail?: SyncErrorDetail | null;
+  /** okf sources only: queued files not yet prepared after this sync. */
+  queued_files?: number;
+  /** okf sources only: files not yet handed to the queue after this sync. */
+  waiting_files?: number;
 }
 
 export async function listRegisteredSources(): Promise<RegisteredSource[]> {

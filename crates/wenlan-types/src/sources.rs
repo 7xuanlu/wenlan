@@ -269,11 +269,13 @@ pub enum SyncStatus {
     Active,
     Paused,
     Error(String),
-    /// The source root (directory or single file) is missing or unreadable.
-    /// Distinct from `Error` (a sync that ran but hit per-file failures) and
-    /// `Paused` (user-initiated): "root-gone != file-gone", so while a source
-    /// is `Unavailable` the sync deletes nothing. Auto-recovers -- the next
-    /// sync that finds the root live flips it back to `Active`.
+    /// The source root (directory or single file) is missing or unreadable,
+    /// or an `okf` source cannot import (its folder is a Wenlan export, or its
+    /// Space was deleted). Distinct from `Error` (a sync that ran but hit
+    /// per-file failures) and `Paused` (user-initiated): "root-gone !=
+    /// file-gone", so while a source is `Unavailable` the sync deletes
+    /// nothing. Auto-recovers -- the next sync that finds the root live and
+    /// importable flips it back to `Active`.
     Unavailable(String),
 }
 
@@ -313,10 +315,12 @@ pub struct Source {
     /// Obsidian first-tag rule). Only `okf` sources set it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<String>,
-    /// Files handed to the document queue by the last sync.
+    /// `okf` sources: files in the document queue that were not yet prepared
+    /// (parsed and embedded) when the last sync finished.
     #[serde(default)]
     pub queued_files: u64,
-    /// Files not yet handed to the queue because a batch is still draining.
+    /// `okf` sources: files not yet handed to the queue after the last sync,
+    /// because a batch was still being prepared or that sync's batch was full.
     #[serde(default)]
     pub waiting_files: u64,
 }

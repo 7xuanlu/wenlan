@@ -18,7 +18,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 
 pub const OKF_VERSION: &str = "0.2";
-const MARKER_FILE: &str = ".wenlan-okf-export.json";
+pub(crate) const MARKER_FILE: &str = ".wenlan-okf-export.json";
 const INDEX_FILE: &str = "index.md";
 const PAGES_DIR: &str = "pages";
 const SOURCES_DIR: &str = "sources";
@@ -176,7 +176,7 @@ pub(crate) fn title_owner_map(pages: &[Page]) -> TitleOwners {
 /// the next run of exactly N backticks in the same paragraph (a span never
 /// crosses a blank line or a fenced code block). A run with no matching
 /// closer is literal text and suppresses nothing after it.
-fn inline_code_ranges(content: &str, fenced: &[Range<usize>]) -> Vec<Range<usize>> {
+pub(crate) fn inline_code_ranges(content: &str, fenced: &[Range<usize>]) -> Vec<Range<usize>> {
     // Byte offsets where a paragraph ends: each blank (whitespace-only) line
     // and each fenced block. A run's paragraph is the number of breaks
     // before it.

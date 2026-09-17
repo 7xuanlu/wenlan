@@ -16,8 +16,13 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_core::sources::directory::{is_reserved_ingest_root, scan_directory};
 use wenlan_core::sources::obsidian::{has_any_markdown, note_to_documents, scan_vault};
-use wenlan_core::sources::Source;
+use wenlan_core::sources::{okf, Source};
 use wenlan_types::sources::{SourceType, SyncStatus};
+
+#[cfg(test)]
+#[path = "source_routes/okf_registration_tests.rs"]
+mod okf_registration_tests;
+mod okf_sync;
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
     router
@@ -52,6 +57,14 @@ pub struct SyncStatsResponse {
     /// deserialize cleanly and a `None` is omitted from the wire.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<String>,
+    /// OKF sources only: files handed to the document queue and not yet
+    /// prepared after this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_files: Option<u64>,
+    /// OKF sources only: files not yet handed to the queue because a batch
+    /// is still being prepared or this sync's batch was full.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_files: Option<u64>,
 }
 
 /// Detect Google Drive File Provider paths on macOS. Files at these paths are
@@ -71,10 +84,12 @@ pub async fn handle_list_sources() -> Json<Vec<Source>> {
 }
 
 /// POST /api/sources
+///
+/// An `okf` source also resolves its Space once, from the Space header or
+/// the default Space, and stores it: every concept of the bundle lands there.
 pub async fn handle_add_source(
-    // Registration is unchanged; the handler itself no longer touches
-    // `ServerState` now that the inert `watch_paths` list is gone.
-    State(_state): State<Arc<RwLock<ServerState>>>,
+    State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     Json(body): Json<AddSourceRequest>,
 ) -> Result<Json<Source>, ServerError> {
     let path = PathBuf::from(&body.path);
@@ -121,6 +136,30 @@ pub async fn handle_add_source(
             }
             SourceType::Directory
         }
+        "okf" => {
+            if !path.is_dir() {
+                return Err(ServerError::ValidationError(
+                    "Path is not a directory".to_string(),
+                ));
+            }
+            if okf::is_wenlan_export(&path) {
+                return Err(ServerError::ValidationError(format!(
+                    "Folder is a Wenlan OKF export, which Wenlan does not import back: {}",
+                    path.display()
+                )));
+            }
+            let probe = path.clone();
+            let has_signal = tokio::task::spawn_blocking(move || okf::has_okf_signal(&probe))
+                .await
+                .map_err(|e| ServerError::Internal(format!("OKF bundle check failed: {e}")))?;
+            if !has_signal {
+                return Err(ServerError::ValidationError(format!(
+                    "No OKF bundle found in: {} (expected an index.md with okf_version, or a markdown file with a type field)",
+                    path.display()
+                )));
+            }
+            SourceType::Okf
+        }
         other => {
             return Err(ServerError::ValidationError(format!(
                 "Unknown source type: {}",
@@ -134,13 +173,39 @@ pub async fn handle_add_source(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "dir".to_string());
     let slug = wenlan_core::export::obsidian::slugify(&dirname);
-    let id = format!("{}-{}", st.as_str(), slug);
+    let mut id = format!("{}-{}", st.as_str(), slug);
 
     if config.sources.iter().any(|s| s.path == path) {
         return Err(ServerError::ValidationError(format!(
             "Source already registered for path: {}",
             path.display()
         )));
+    }
+    if let Some(message) = okf_overlap_error(&path, &st, &config) {
+        return Err(ServerError::ValidationError(message));
+    }
+
+    let mut space = None;
+    if st == SourceType::Okf {
+        // Concept rows are keyed by source id, so two bundles with the same
+        // folder name must not share one.
+        let base = id.clone();
+        let mut suffix = 2;
+        while config.sources.iter().any(|s| s.id == id) {
+            id = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        let db = {
+            let s = state.read().await;
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        };
+        let resolved = db
+            .resolve_write_space(
+                &wenlan_types::WriteSpaceTarget::Inherit,
+                header_space.as_deref(),
+            )
+            .await?;
+        space = resolved.space_name;
     }
 
     let source = Source {
@@ -153,7 +218,7 @@ pub async fn handle_add_source(
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
-        space: None,
+        space,
         queued_files: 0,
         waiting_files: 0,
     };
@@ -164,15 +229,52 @@ pub async fn handle_add_source(
     Ok(Json(source))
 }
 
+/// Refuse an `okf` bundle that shares files with the pages folder or with
+/// another source, in either direction: the same file must never import
+/// twice or feed Wenlan's own pages back in. A plain folder overlapping a
+/// plain folder keeps today's behavior.
+fn okf_overlap_error(
+    path: &std::path::Path,
+    source_type: &SourceType,
+    config: &wenlan_core::config::Config,
+) -> Option<String> {
+    let canonical = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let overlaps = |a: &std::path::Path, b: &std::path::Path| a.starts_with(b) || b.starts_with(a);
+    let candidate = canonical(path);
+    if *source_type == SourceType::Okf
+        && overlaps(&candidate, &canonical(&config.knowledge_path_or_default()))
+    {
+        return Some(format!(
+            "OKF bundle overlaps the Wenlan pages folder: {}",
+            path.display()
+        ));
+    }
+    config
+        .sources
+        .iter()
+        .filter(|existing| {
+            (*source_type == SourceType::Okf || existing.source_type == SourceType::Okf)
+                && overlaps(&candidate, &canonical(&existing.path))
+        })
+        .map(|existing| {
+            format!(
+                "Path overlaps the registered source {} ({}); an OKF bundle cannot share files with another source",
+                existing.id,
+                existing.path.display()
+            )
+        })
+        .next()
+}
+
 /// DELETE /api/sources/{id}
 pub async fn handle_remove_source(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ServerError> {
     let mut config = wenlan_core::config::load_config();
-    if !config.sources.iter().any(|s| s.id == id) {
+    let Some(removed) = config.sources.iter().find(|s| s.id == id).cloned() else {
         return Err(ServerError::NotFound(format!("Source not found: {}", id)));
-    }
+    };
 
     config.sources.retain(|s| s.id != id);
     wenlan_core::config::save_config(&config)?;
@@ -185,6 +287,12 @@ pub async fn handle_remove_source(
     };
     if let Some(db) = db {
         let _ = db.delete_all_sync_state(&id).await;
+        if removed.source_type == SourceType::Okf {
+            // Queued concepts of a removed bundle would otherwise be read as
+            // plain folder files, since no OKF profile is left to find.
+            let _ = db.dequeue_by_source(&id).await;
+            let _ = db.delete_okf_concepts_for_source(&id).await;
+        }
     }
 
     Ok(StatusCode::NO_CONTENT)
@@ -242,6 +350,7 @@ async fn finalize_sync(
     errors: usize,
     file_errors: usize,
     gdrive_errors: usize,
+    batch_counts: Option<BatchCounts>,
 ) -> Result<SyncStatsResponse, ServerError> {
     // Categorize errors for user-facing display. If most of the per-file
     // errors came from Google Drive online-only files, surface that
@@ -283,6 +392,10 @@ async fn finalize_sync(
         if matches!(src.status, SyncStatus::Unavailable(_)) {
             src.status = SyncStatus::Active;
         }
+        if let Some(counts) = batch_counts {
+            src.queued_files = counts.queued_files;
+            src.waiting_files = counts.waiting_files;
+        }
     }
     let _ = wenlan_core::config::save_config(&config);
 
@@ -301,7 +414,17 @@ async fn finalize_sync(
         errors,
         error_detail,
         paused,
+        queued_files: batch_counts.map(|counts| counts.queued_files),
+        waiting_files: batch_counts.map(|counts| counts.waiting_files),
     })
+}
+
+/// An OKF sync's batch position, stored on the source and returned to the
+/// caller.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BatchCounts {
+    pub(crate) queued_files: u64,
+    pub(crate) waiting_files: u64,
 }
 
 /// A Directory sync's wire stats plus how many files it newly put on the
@@ -317,7 +440,9 @@ pub(crate) struct DirectorySyncOutcome {
 /// propagation + rename optimization, enqueueing changed files for background
 /// document enrichment. This is the ONE shared routine so the HTTP handler
 /// (`handle_sync_source`) and the background scheduler (§4) never re-implement
-/// the diff. The caller guarantees `source.source_type == SourceType::Directory`.
+/// the diff. The caller guarantees `source.source_type` is `Directory` or
+/// `Okf`; an OKF source runs the same diff with its bundle rules
+/// (`okf_sync`).
 ///
 /// Unlike the Obsidian branch, this path needs no `ServerState` (no quality
 /// gate): it depends only on the DB, the source, and the resolved
@@ -327,6 +452,9 @@ pub(crate) async fn sync_directory_source(
     source: &Source,
     config: &wenlan_core::config::Config,
 ) -> Result<DirectorySyncOutcome, ServerError> {
+    if source.source_type == SourceType::Okf {
+        return okf_sync::sync_okf_source(db, source, config).await;
+    }
     let id = source.id.clone();
 
     // Root-guard (§4/§5): a missing/unreadable root means "source
@@ -356,6 +484,8 @@ pub(crate) async fn sync_directory_source(
                 errors: 0,
                 error_detail: None,
                 paused: None,
+                queued_files: None,
+                waiting_files: None,
             },
             newly_queued: 0,
         });
@@ -596,6 +726,7 @@ pub(crate) async fn sync_directory_source(
         errors,
         file_errors,
         gdrive_errors,
+        None,
     )
     .await?;
     Ok(DirectorySyncOutcome {
@@ -628,7 +759,7 @@ pub async fn handle_sync_source(
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
 
-    if source.source_type == SourceType::Directory {
+    if matches!(source.source_type, SourceType::Directory | SourceType::Okf) {
         let outcome = sync_directory_source(db.clone(), &source, &config).await?;
         if outcome.newly_queued > 0 {
             // Give newly queued files the bounded import lane so they are
@@ -790,6 +921,7 @@ pub async fn handle_sync_source(
         errors,
         file_errors,
         gdrive_errors,
+        None,
     )
     .await
     .map(Json)
@@ -802,13 +934,13 @@ mod tests {
     use wenlan_core::events::NoopEmitter;
     use wenlan_core::sources::SyncStatus;
 
-    struct DataDirGuard {
+    pub(super) struct DataDirGuard {
         previous: Option<std::ffi::OsString>,
         _tmp: tempfile::TempDir,
     }
 
     impl DataDirGuard {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let tmp = tempfile::tempdir().unwrap();
             let previous = std::env::var_os("WENLAN_DATA_DIR");
             std::env::set_var("WENLAN_DATA_DIR", tmp.path());
@@ -828,7 +960,7 @@ mod tests {
         }
     }
 
-    fn mtime_ns(path: &std::path::Path) -> i64 {
+    pub(super) fn mtime_ns(path: &std::path::Path) -> i64 {
         std::fs::metadata(path)
             .unwrap()
             .modified()
@@ -865,6 +997,8 @@ mod tests {
             errors: 0,
             error_detail: None,
             paused: Some("analysis LLM failed".to_string()),
+            queued_files: None,
+            waiting_files: None,
         };
         let s = serde_json::to_string(&with).unwrap();
         assert!(
@@ -909,6 +1043,7 @@ mod tests {
 
         let Json(source) = handle_add_source(
             State(state.clone()),
+            crate::space_header::SpaceHeader(None),
             Json(AddSourceRequest {
                 source_type: "directory".to_string(),
                 path: file_path.to_string_lossy().to_string(),
@@ -939,6 +1074,7 @@ mod tests {
 
         let result = handle_add_source(
             State(state),
+            crate::space_header::SpaceHeader(None),
             Json(AddSourceRequest {
                 source_type: "directory".to_string(),
                 path: pages_path.to_string_lossy().to_string(),
@@ -1021,7 +1157,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn new_test_db() -> (Arc<wenlan_core::db::MemoryDB>, tempfile::TempDir) {
+    pub(super) async fn new_test_db() -> (Arc<wenlan_core::db::MemoryDB>, tempfile::TempDir) {
         let db_dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
             wenlan_core::db::MemoryDB::new(db_dir.path(), Arc::new(NoopEmitter))
@@ -1031,7 +1167,7 @@ mod tests {
         (db, db_dir)
     }
 
-    fn loaded_source_status(id: &str) -> SyncStatus {
+    pub(super) fn loaded_source_status(id: &str) -> SyncStatus {
         wenlan_core::config::load_config()
             .sources
             .into_iter()
