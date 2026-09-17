@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
 static PROJECTION_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -148,6 +148,9 @@ const INDEX_FILE: &str = "index.md";
 /// Bounded frontmatter read for building `index.md` from projected files —
 /// generous enough for title/description/space/tags, small next to a page body.
 const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
+/// Set after the first warning that a user's own `index.md` blocked the
+/// generated one, so a busy projection logs it once rather than per write.
+static USER_INDEX_SKIP_WARNED: AtomicBool = AtomicBool::new(false);
 
 pub struct KnowledgeWriter {
     path: PathBuf,
@@ -1216,6 +1219,32 @@ impl KnowledgeWriter {
         Some((title, description, space))
     }
 
+    /// Whether the projection may write `index.md`: the name is free, or the
+    /// file there is Wenlan's own index, recognized by frontmatter whose only
+    /// key is `okf_version`. Anything else is left alone: a note the user made
+    /// at `index.md` (Obsidian users often keep a home note there), a symlink,
+    /// a directory, or a file this pass cannot read. Edits to the body of
+    /// Wenlan's own index are still replaced; it is a generated file.
+    fn index_file_is_replaceable(root: &Dir) -> bool {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = match root.open_with(INDEX_FILE, &options) {
+            Ok(file) => file,
+            Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
+        };
+        let mut head = Vec::new();
+        if (&mut file)
+            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+            .read_to_end(&mut head)
+            .is_err()
+        {
+            return false;
+        }
+        let head = String::from_utf8_lossy(&head);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+        fm.fields.len() == 1 && fm.has("okf_version")
+    }
+
     /// Regenerate the OKF `index.md` root document from the frontmatter of the
     /// files currently projected (per `state`), grouped by `space` (`##
     /// Unfiled` for pages without one), each section's entries sorted by
@@ -1268,6 +1297,18 @@ impl KnowledgeWriter {
         // The projection links at the vault root (`/file`); the OKF bundle
         // reuses this renderer with `/pages/`.
         let bytes = render_index_for_entries(raw_entries, "/");
+
+        if !Self::index_file_is_replaceable(&capabilities.root) {
+            // Warn once per process: this runs on every page write, and the
+            // user's note staying put is the intended outcome, not a fault.
+            if !USER_INDEX_SKIP_WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "[knowledge] leaving {INDEX_FILE} alone: it was not written by Wenlan \
+                     (move or rename it to let Wenlan write the OKF index)"
+                );
+            }
+            return Ok(());
+        }
 
         let temp_filename = format!(
             ".index.{}.{}.tmp",
@@ -6140,6 +6181,86 @@ mod tests {
             dir.path().join(INDEX_FILE).exists(),
             "reconcile must regenerate index.md unconditionally, not only on rewrite"
         );
+    }
+
+    /// Integrated review F1: a pages folder opened in Obsidian often has a
+    /// home note named `index.md`. Page writes, reconcile and removal must
+    /// leave it byte for byte, including one with its own frontmatter.
+    #[test]
+    fn a_user_index_note_survives_write_reconcile_and_remove() {
+        for note in [
+            "# Home\n\nMy own start page.\n",
+            "---\ntitle: Home\nokf_version: \"0.2\"\n---\n\nMy own start page.\n",
+            "",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let index_path = dir.path().join(INDEX_FILE);
+            std::fs::write(&index_path, note).unwrap();
+            let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+            let page = test_concept();
+
+            let page_path = writer.write_page_for_test(&page).unwrap();
+            assert!(
+                Path::new(&page_path).exists(),
+                "the page is still projected"
+            );
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+
+            writer
+                .reconcile_for_test(std::slice::from_ref(&page))
+                .unwrap();
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+
+            writer.remove_page_for_test(&page.id).unwrap();
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+        }
+    }
+
+    /// The generated index stays generated: hand edits to its body are
+    /// replaced on the next write, because its frontmatter still marks it as
+    /// Wenlan's.
+    #[test]
+    fn wenlans_own_index_is_regenerated_after_a_body_edit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let index_path = dir.path().join(INDEX_FILE);
+        let mut edited = std::fs::read_to_string(&index_path).unwrap();
+        edited.push_str("\nhand edit\n");
+        std::fs::write(&index_path, &edited).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        assert!(content.contains("[Beta]("), "{content}");
+        assert!(!content.contains("hand edit"), "{content}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_index_is_neither_replaced_nor_followed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = outside.path().join("home.md");
+        std::fs::write(&target, "# Elsewhere\n").unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        std::os::unix::fs::symlink(&target, &index_path).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert!(std::fs::symlink_metadata(&index_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Elsewhere\n");
     }
 
     /// Review finding 4b: each per-page rewrite inside `reconcile` must skip

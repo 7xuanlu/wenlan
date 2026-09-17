@@ -2455,11 +2455,25 @@ export async function exportConceptToObsidian(
 }
 
 /**
+ * The typed rejection `export_pages_as_okf` returns, before sending anything,
+ * when the background service predates OKF export (app/src/search.rs
+ * `OKF_EXPORT_ERROR_DAEMON_TOO_OLD`). Such a service would write an Obsidian
+ * export into the folder and still report success.
+ */
+export const OKF_EXPORT_ERROR_DAEMON_TOO_OLD = "okf-export:daemon-too-old";
+
+export function isOkfExportDaemonTooOld(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : error;
+  return text === OKF_EXPORT_ERROR_DAEMON_TOO_OLD;
+}
+
+/**
  * Write every page, across all Spaces, as an OKF v0.2 bundle into `targetDir`
  * (an absolute folder path). The daemon decides whether the folder is safe to
  * write: a non-empty folder that is not an earlier Wenlan OKF export, or a
  * truth cutover in progress, rejects with a 409 whose sentence
- * {@link daemonErrorMessage} extracts.
+ * {@link daemonErrorMessage} extracts. A service too old to write OKF rejects
+ * with {@link OKF_EXPORT_ERROR_DAEMON_TOO_OLD} instead.
  */
 export async function exportPagesAsOkf(targetDir: string): Promise<ExportStats> {
   return invoke("export_pages_as_okf", { targetDir });

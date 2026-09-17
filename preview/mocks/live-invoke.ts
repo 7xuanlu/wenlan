@@ -7,6 +7,9 @@ import { daemonMeetsFloor } from "../../src/lib/daemonVersion";
 
 type Args = Record<string, unknown> | undefined;
 const PAGE_EDIT_DAEMON_FLOOR = "0.14.1";
+// app/src/search.rs `OKF_EXPORT_DAEMON_FLOOR` and its typed rejection.
+const OKF_EXPORT_DAEMON_FLOOR = "0.18.9";
+const OKF_EXPORT_ERROR_DAEMON_TOO_OLD = "okf-export:daemon-too-old";
 
 // The client fixtures below carry `Reading`s, not booleans (src/lib/tauri.ts).
 // Spelling them out inline five times per row buries the fixture, so they get
@@ -635,9 +638,15 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   },
   get_page_revisions: (a) => get(`/api/pages/${enc(a.pageId)}/revisions`),
   redistill_page: (a) => post(`/api/distill/${enc(a.pageId)}`, {}),
-  // Mirrors app/src/api.rs `export_pages_okf`: no Space header, so every Space.
-  export_pages_as_okf: (a) =>
-    post("/api/pages/export", { vault_path: a.targetDir, format: "okf" }),
+  // Mirrors app/src/search.rs `export_pages_okf_checked`: an older daemon
+  // gets no export request, and no Space header means every Space.
+  export_pages_as_okf: async (a) => {
+    const health = await get("/api/health");
+    if (!daemonMeetsFloor(String(health?.version ?? ""), OKF_EXPORT_DAEMON_FLOOR)) {
+      throw OKF_EXPORT_ERROR_DAEMON_TOO_OLD;
+    }
+    return post("/api/pages/export", { vault_path: a.targetDir, format: "okf" });
+  },
   update_page: async (a) => {
     const health = await get("/api/health");
     const reportedVersion = String(health?.version ?? "");

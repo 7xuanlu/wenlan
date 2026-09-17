@@ -873,6 +873,8 @@ const en = {
       exportOkfFailed_other: "{{count}} pages could not be written.",
       exportOkfError: "Export failed: {{reason}}",
       exportOkfErrorUnknown: "Export failed. Try again.",
+      exportOkfDaemonTooOld:
+        "the background service is too old to write an OKF bundle. Restart the service, then try again. Nothing was exported.",
     },
     profile: {
       label: "Profile",
@@ -2896,6 +2898,7 @@ const zhHans = {
       exportOkfFailed_other: "有 {{count}} 个页面无法写入。",
       exportOkfError: "导出失败：{{reason}}",
       exportOkfErrorUnknown: "导出失败，请重试。",
+      exportOkfDaemonTooOld: "后台服务版本过旧，无法写入 OKF 包。请重启服务后再试。没有导出任何内容。",
     },
     profile: {
       label: "个人资料",
@@ -4893,6 +4896,7 @@ const zhHant = {
       exportOkfFailed_other: "有 {{count}} 個頁面無法寫入。",
       exportOkfError: "匯出失敗：{{reason}}",
       exportOkfErrorUnknown: "匯出失敗，請重試。",
+      exportOkfDaemonTooOld: "背景服務版本過舊，無法寫入 OKF 套件。請重新啟動服務後再試一次。沒有匯出任何內容。",
     },
     profile: {
       label: "個人資料",
