@@ -148,6 +148,12 @@ const INDEX_FILE: &str = "index.md";
 /// Bounded frontmatter read for building `index.md` from projected files —
 /// generous enough for title/description/space/tags, small next to a page body.
 const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
+
+/// Whether a projected filename is the OKF root document. Case-insensitive,
+/// like the default macOS and Windows filesystems.
+fn is_index_file(name: &str) -> bool {
+    name.eq_ignore_ascii_case(INDEX_FILE)
+}
 /// Set after the first warning that a user's own `index.md` blocked the
 /// generated one, so a busy projection logs it once rather than per write.
 static USER_INDEX_SKIP_WARNED: AtomicBool = AtomicBool::new(false);
@@ -485,7 +491,14 @@ impl KnowledgeWriter {
         state: &KnowledgeState,
     ) -> Result<String, WenlanError> {
         if let Some(existing) = state.pages.get(page_id) {
-            return Ok(existing.file.clone());
+            // A page titled "Index" projected before `index.md` was reserved
+            // moves to a free name on its next write, so the OKF index can
+            // take the name. The copy it leaves behind is replaced by that
+            // index (see `index_file_is_replaceable`), which only a writer that
+            // regenerates the index will do.
+            if !(self.write_provenance && is_index_file(&existing.file)) {
+                return Ok(existing.file.clone());
+            }
         }
         let base = slugify(title);
         let mut candidate = format!("{base}.md");
@@ -497,13 +510,16 @@ impl KnowledgeWriter {
             .map(|(_, state)| state.file.as_str())
             .collect();
         loop {
+            // `index.md` is the OKF root document, never a page's file.
+            let reserved = is_index_file(&candidate);
             let collides_state = taken.contains(candidate.as_str());
-            let collides_disk = match root.symlink_metadata(&candidate) {
-                Ok(_) => true,
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                Err(error) => return Err(WenlanError::Io(error)),
-            };
-            if !collides_state && !collides_disk {
+            let collides_disk = !reserved
+                && match root.symlink_metadata(&candidate) {
+                    Ok(_) => true,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(error) => return Err(WenlanError::Io(error)),
+                };
+            if !reserved && !collides_state && !collides_disk {
                 return Ok(candidate);
             }
             candidate = format!("{base}-{n}.md");
@@ -1221,11 +1237,14 @@ impl KnowledgeWriter {
 
     /// Whether the projection may write `index.md`: the name is free, or the
     /// file there is Wenlan's own index, recognized by frontmatter whose only
-    /// key is `okf_version`. Anything else is left alone: a note the user made
-    /// at `index.md` (Obsidian users often keep a home note there), a symlink,
-    /// a directory, or a file this pass cannot read. Edits to the body of
-    /// Wenlan's own index are still replaced; it is a generated file.
-    fn index_file_is_replaceable(root: &Dir) -> bool {
+    /// key is `okf_version`, or it is the copy a page titled "Index" left
+    /// behind when it moved to its own file (its `origin_id` names a page that
+    /// `state` now records under another name). Anything else is left alone:
+    /// a note the user made at `index.md` (Obsidian users often keep a home
+    /// note there), a page still projected there, a symlink, a directory, or a
+    /// file this pass cannot read. Edits to the body of Wenlan's own index are
+    /// still replaced; it is a generated file.
+    fn index_file_is_replaceable(root: &Dir, state: &KnowledgeState) -> bool {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let mut file = match root.open_with(INDEX_FILE, &options) {
@@ -1242,7 +1261,12 @@ impl KnowledgeWriter {
         }
         let head = String::from_utf8_lossy(&head);
         let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
-        fm.fields.len() == 1 && fm.has("okf_version")
+        if fm.fields.len() == 1 && fm.has("okf_version") {
+            return true;
+        }
+        fm.get_str("origin_id")
+            .and_then(|page_id| state.pages.get(page_id.trim()))
+            .is_some_and(|entry| !is_index_file(&entry.file))
     }
 
     /// Regenerate the OKF `index.md` root document from the frontmatter of the
@@ -1298,13 +1322,13 @@ impl KnowledgeWriter {
         // reuses this renderer with `/pages/`.
         let bytes = render_index_for_entries(raw_entries, "/");
 
-        if !Self::index_file_is_replaceable(&capabilities.root) {
+        if !Self::index_file_is_replaceable(&capabilities.root, state) {
             // Warn once per process: this runs on every page write, and the
             // user's note staying put is the intended outcome, not a fault.
             if !USER_INDEX_SKIP_WARNED.swap(true, Ordering::Relaxed) {
                 log::warn!(
-                    "[knowledge] leaving {INDEX_FILE} alone: it was not written by Wenlan \
-                     (move or rename it to let Wenlan write the OKF index)"
+                    "[knowledge] leaving {INDEX_FILE} alone: it is not the index Wenlan \
+                     generates (move or rename it to let Wenlan write the OKF index)"
                 );
             }
             return Ok(());
@@ -6261,6 +6285,73 @@ mod tests {
             .file_type()
             .is_symlink());
         assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Elsewhere\n");
+    }
+
+    fn index_frontmatter_keys(dir: &Path) -> Vec<String> {
+        let content = std::fs::read_to_string(dir.join(INDEX_FILE)).unwrap();
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&content);
+        let mut keys: Vec<String> = fm.fields.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// PR #763 review: `slugify` lowercases, so a page titled "Index" in an
+    /// empty vault used to be projected at `index.md`, and the OKF index could
+    /// then never be written there.
+    #[test]
+    fn a_page_titled_index_never_takes_the_index_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Index](/index-2.md)"), "{index}");
+    }
+
+    /// A vault projected before the name was reserved holds a page titled
+    /// "Index" at `index.md`. Its next write moves it to a free name and the
+    /// OKF index replaces the copy left behind.
+    #[test]
+    fn a_page_already_at_index_md_moves_on_its_next_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        std::fs::rename(&moved_path, dir.path().join(INDEX_FILE)).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = INDEX_FILE.to_string();
+        writer.save_state(&state).unwrap();
+        let projected = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+
+        // Until it is written again, the page's only file stays put: reconcile
+        // finds it current and must not replace it with the index.
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+        assert_eq!(stats.rewritten, 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            projected
+        );
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert!(std::fs::read_to_string(&page_path)
+            .unwrap()
+            .contains(&format!("origin_id: {}", page.id)));
+        assert_eq!(
+            writer.page_filename(&page.id).as_deref(),
+            Some("index-2.md")
+        );
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Index](/index-2.md)"), "{index}");
     }
 
     /// Review finding 4b: each per-page rewrite inside `reconcile` must skip
