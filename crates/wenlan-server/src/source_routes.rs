@@ -153,6 +153,9 @@ pub async fn handle_add_source(
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     };
 
     config.sources.push(source.clone());
@@ -1007,6 +1010,9 @@ mod tests {
             memory_count: 0,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         };
         wenlan_core::config::save_config(&Config {
             sources: vec![source],
@@ -1339,6 +1345,9 @@ mod tests {
             memory_count: 0,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         };
         wenlan_core::config::save_config(&Config {
             sources: vec![source],
@@ -1422,6 +1431,9 @@ mod tests {
                 memory_count: 0,
                 last_sync_errors: 0,
                 last_sync_error_detail: None,
+                space: None,
+                queued_files: 0,
+                waiting_files: 0,
             }],
             knowledge_path: Some(knowledge_root.path().to_path_buf()),
             ..Config::default()
