@@ -188,6 +188,68 @@ fn update_config_request(
     }
 }
 
+/// An OKF bundle registers and syncs over the same typed routes, and its
+/// sync carries the batch position the directory sync leaves out.
+#[tokio::test]
+async fn okf_source_routes_register_sync_and_report_the_batch_position() {
+    let _config_root = DataDirGuard::new();
+    let pages = tempfile::tempdir().unwrap();
+    wenlan_core::config::save_config(&wenlan_core::config::Config {
+        knowledge_path: Some(pages.path().to_path_buf()),
+        ..wenlan_core::config::Config::default()
+    })
+    .unwrap();
+    let (router, _db_tmp, _db) = common::test_app_no_gate().await;
+
+    let bundle = tempfile::tempdir().unwrap();
+    std::fs::write(
+        bundle.path().join("index.md"),
+        "---\nokf_version: \"0.2\"\n---\n# Contract wiki\n",
+    )
+    .unwrap();
+    std::fs::write(
+        bundle.path().join("concept.md"),
+        "---\ntype: concept\ntitle: Contract concept\n---\n\n# Contract concept\n\n\
+         A concept file carries enough prose for the import to keep it. A second \
+         sentence adds detail about what it covers. A third one closes the idea.\n",
+    )
+    .unwrap();
+
+    let add_source = AddSourceRequest {
+        source_type: "okf".to_string(),
+        path: bundle.path().to_string_lossy().into_owned(),
+    };
+    let (status, source): (StatusCode, Source) = request_typed(
+        &router,
+        Method::POST,
+        "/api/sources",
+        json_body(&add_source),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source.source_type.as_str(), "okf");
+
+    let sync_uri = format!("/api/sources/{}/sync", source.id);
+    let (status, sync): (StatusCode, wenlan_server::source_routes::SyncStatsResponse) =
+        request_typed(&router, Method::POST, &sync_uri, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sync.files_found, 1, "index.md is reserved, not a concept");
+    assert_eq!(sync.errors, 0);
+    assert_eq!(sync.queued_files, Some(1));
+    assert_eq!(sync.waiting_files, Some(0));
+
+    let (status, sources): (StatusCode, Vec<Source>) =
+        request_typed(&router, Method::GET, "/api/sources", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(sources[0].queued_files, 1);
+    assert_eq!(sources[0].waiting_files, 0);
+
+    let delete_uri = format!("/api/sources/{}", source.id);
+    let (status, body) = request_bytes(&router, Method::DELETE, &delete_uri, None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(body.is_empty());
+}
+
 #[tokio::test]
 async fn moved_source_and_config_routes_preserve_typed_http_contracts() {
     let _config_root = DataDirGuard::new();

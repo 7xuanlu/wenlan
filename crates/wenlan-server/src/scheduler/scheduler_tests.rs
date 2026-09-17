@@ -1968,6 +1968,9 @@ fn directory_sync_tick_polls_recoverable_sources_but_not_paused() {
     assert!(!should_poll_directory_source(&source));
 
     source.status = wenlan_types::sources::SyncStatus::Active;
+    source.source_type = wenlan_types::sources::SourceType::Okf;
+    assert!(should_poll_directory_source(&source));
+
     source.source_type = wenlan_types::sources::SourceType::Obsidian;
     assert!(!should_poll_directory_source(&source));
 }

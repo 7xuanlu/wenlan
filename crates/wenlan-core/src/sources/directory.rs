@@ -15,7 +15,7 @@ use crate::sources::RawDocument;
 use crate::tuning::GateConfig;
 
 /// Maximum file size for text/markdown files (1 MB).
-const MAX_TEXT_SIZE: u64 = 1024 * 1024;
+pub(crate) const MAX_TEXT_SIZE: u64 = 1024 * 1024;
 
 /// Maximum file size for PDF files (10 MB).
 const MAX_PDF_SIZE: u64 = 10 * 1024 * 1024;
@@ -251,7 +251,7 @@ pub fn file_to_documents(
 /// Stamp folder provenance onto every doc, then admit each through the
 /// min-text heuristic + quality gate. Returns `Ingested` if any doc survives,
 /// otherwise `Skipped` with the collected rejection reasons.
-fn finalize_file_documents(
+pub(crate) fn finalize_file_documents(
     docs: Vec<RawDocument>,
     content_hash: &str,
     extension: &str,
@@ -382,7 +382,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn modified_unix_seconds(metadata: &fs::Metadata) -> i64 {
+pub(crate) fn modified_unix_seconds(metadata: &fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
@@ -439,7 +439,7 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
 /// BOM detection first (UTF-8/16/32), then valid-UTF-8 fast path, then a
 /// UTF-16 heuristic (null-byte density), finally a Windows-1252 (latin1) decode
 /// which is lossless for single-byte inputs.
-fn decode_text_bytes(bytes: &[u8]) -> String {
+pub(crate) fn decode_text_bytes(bytes: &[u8]) -> String {
     if let Some((encoding, bom_len)) = encoding_rs::Encoding::for_bom(bytes) {
         let (text, _, _) = encoding.decode(&bytes[bom_len..]);
         return text.into_owned();

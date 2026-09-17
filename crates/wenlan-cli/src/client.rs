@@ -49,6 +49,12 @@ pub struct SyncStats {
     pub error_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<String>,
+    /// OKF sources only: queued files not yet prepared after this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_files: Option<u64>,
+    /// OKF sources only: files not yet handed to the queue after this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_files: Option<u64>,
 }
 
 /// Local mirror of the daemon's `AmbientSweepReport`/`AmbientJobSweepResult`

@@ -1155,7 +1155,7 @@ carrying the authority of agreement.
 | `core/db.rs::new_with_embedding_recovery` | `pub` | no | **yes** | `server/main/startup.rs::prepare_startup_state` | `core/db.rs::retire_empty_overview`, `core/db.rs::run_migrations` |
 | `core/db.rs::new_with_shared_embedder_and_recovery` | `pub(crate)` | no | no | — | `core/db.rs::retire_empty_overview`, `core/db.rs::run_migrations` |
 | `core/db.rs::rebind_source_id` | `pub` | no | no | — | `core/db.rs::rebind_source_id_inner` |
-| `core/db.rs::rebind_source_id_with_source_page` | `pub` | no | **yes** | `server/source_routes.rs::sync_directory_source` | `core/db.rs::rebind_source_id_inner` |
+| `core/db.rs::rebind_source_id_with_source_page` | `pub` | no | **yes** | `server/source_routes.rs::sync_directory_source`, `server/source_routes/okf_sync.rs::sync_okf_source_in_batches` | `core/db.rs::rebind_source_id_inner` |
 | `core/db.rs::refresh_page_wikilinks` | `pub` | no | no | — | `core/db.rs::get_page`, `core/synthesis/wikilinks.rs::resolve_against_pages` |
 | `core/db.rs::replace_source_page` | `pub(crate)` | no | no | — | `core/db.rs::replace_source_page_inner` |
 | `core/db.rs::replace_source_page_at_document_hash` | `pub(crate)` | no | no | — | `core/db.rs::replace_source_page_inner` |
@@ -1174,12 +1174,14 @@ carrying the authority of agreement.
 | `core/db.rs::try_user_forced_page_content_at_source_revision` | `pub(crate)` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db.rs::update_page_content` | `pub` | no | no | — | `core/db.rs::try_update_page_content` |
 | `core/db/claim_derivation.rs::run_page_linked_truth_promotion_turn` | `pub` | no | **yes** | `server/main/runtime.rs::register_optional_runtime_workers` | `core/db/claim_derivation.rs::run_leased_page_linked_truth_promotion` |
+| `core/db/okf_concepts.rs::refresh_okf_concept_linkers` | `pub` | no | **yes** | `server/source_routes/okf_sync.rs::sync_okf_source_in_batches` | `core/db.rs::get_page` |
 | `core/db/presence_review.rs::review_page_with_presence` | `pub` | no | **yes** | `server/page_routes.rs::handle_review_page` | `core/db/presence_review.rs::review_in_txn` |
 | `core/db/repair_page_regenerate.rs::regenerate_page_projection_cas` | `pub(crate)` | no | no | — | `core/db.rs::get_page` |
 | `core/db/repair_page_rename.rs::recover_rename_page_title_apply_receipt` | `pub(crate)` | no | no | — | `core/db/repair_page_rename.rs::rename_page_projection_matches_post` |
 | `core/db/scoped_pages.rs::get_page_scoped_inner` | `private` | no | no | — | `core/db.rs::get_page`, `core/db.rs::get_page_browse` |
 | `core/db/scoped_pages.rs::list_pages_scoped_inner` | `private` | no | no | — | `core/db.rs::list_pages`, `core/db.rs::list_pages_browse` |
 | `core/db/truth_exposure.rs::page_visibility` | `pub` | no | no | — | `core/db/truth_exposure.rs::page_truth_states` |
+| `core/document_enrichment.rs::run_document_enrichment_with_request_budget` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/document_enrichment.rs::write_document_source_page` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/eval/answer_quality.rs::build_structured_context` | `private` | no | no | — | `core/db.rs::search_memory` |
 | `core/eval/answer_quality.rs::generate_e2e_answers_for_question` | `private` | no | no | — | `core/db.rs::search_memory` |
@@ -1306,7 +1308,9 @@ carrying the authority of agreement.
 | `core/db/scoped_pages.rs::get_page_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_get_page`, `server/page_routes.rs::handle_get_page_revisions` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
 | `core/db/scoped_pages.rs::list_pages_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
 | `core/db/scoped_pages.rs::list_pages_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_list_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
-| `core/document_enrichment.rs::run_document_enrichment_with_request_budget` | `private` | no | no | — | `core/document_enrichment.rs::write_document_source_page` |
+| `core/document_enrichment.rs::refresh_okf_linkers` | `private` | no | no | — | `core/db/okf_concepts.rs::refresh_okf_concept_linkers` |
+| `core/document_enrichment.rs::run_document_enrichment_slice` | `pub` | no | **yes** | `server/scheduler/ambient.rs::run_document_enrichment_slice_tick`, `server/scheduler/ambient.rs::run_import_document_prep_slice` | `core/document_enrichment.rs::run_document_enrichment_with_request_budget` |
+| `core/document_enrichment.rs::run_document_enrichment_with_profile` | `pub` | no | no | — | `core/document_enrichment.rs::run_document_enrichment_with_request_budget` |
 | `core/eval/answer_quality.rs::run_e2e_context_eval` | `pub` | no | no | — | `core/eval/answer_quality.rs::generate_e2e_answers_for_question` |
 | `core/eval/answer_quality.rs::run_e2e_context_eval_longmemeval` | `pub` | no | no | — | `core/eval/answer_quality.rs::generate_e2e_answers_for_question` |
 | `core/eval/answer_quality.rs::run_fullpipeline_lme` | `pub` | no | no | — | `core/eval/answer_quality.rs::build_structured_context` |
@@ -1387,6 +1391,7 @@ carrying the authority of agreement.
 | `server/scheduler.rs::spawn_scheduler` | `pub` | no | **yes** | `server/main.rs::run_daemon` | `server/scheduler.rs::fire_maintenance_stage_safe` |
 | `server/scheduler/ambient.rs::run_ambient_job` | `pub(super)` | no | no | `server/scheduler/ambient.rs::run_ambient_job_safe` | `core/db.rs::archive_idle_detected_entities`, `core/db.rs::run_entity_enrichment_slice_with_auto_link`, `core/post_ingest.rs::run_page_growth_slice` |
 | `server/source_routes.rs::sync_directory_source` | `pub(crate)` | no | no | `server/scheduler.rs::sync_directory_sources_in_scope`, `server/source_routes.rs::handle_sync_source` | `core/db.rs::rebind_source_id_with_source_page` |
+| `server/source_routes/okf_sync.rs::sync_okf_source_in_batches` | `pub(super)` | no | no | `server/source_routes/okf_sync.rs::sync_okf_source` | `core/db.rs::rebind_source_id_with_source_page`, `core/db/okf_concepts.rs::refresh_okf_concept_linkers` |
 
 <!-- m5-reader-sweep:end -->
 
