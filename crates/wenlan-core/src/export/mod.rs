@@ -3,6 +3,7 @@
 
 pub mod knowledge;
 pub mod obsidian;
+pub mod okf;
 pub mod provenance;
 
 // ExportStats moved to wenlan-types in Phase 5-D PR2 so the Tauri app can

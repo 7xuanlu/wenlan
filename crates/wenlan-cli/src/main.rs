@@ -180,6 +180,11 @@ enum Commands {
         #[command(subcommand)]
         cmd: commands::entities::EntitiesCmd,
     },
+    /// Export pages to an external bundle format.
+    Export {
+        #[command(subcommand)]
+        command: commands::export::ExportCommand,
+    },
     /// Force one bounded pass over every due ambient job now, instead of
     /// waiting for a quiet turn.
     Sweep,
@@ -213,6 +218,7 @@ async fn main() -> anyhow::Result<ExitCode> {
         _ => None,
     };
     let is_lint = matches!(&cli.command, Commands::Lint { .. });
+    let is_export = matches!(&cli.command, Commands::Export { .. });
     let mut effective_cli_space = cli.space.clone();
     let client = if is_outbox {
         if cli.space.is_some() || cli.all_spaces {
@@ -262,6 +268,21 @@ async fn main() -> anyhow::Result<ExitCode> {
         let strict_space = std::env::var("WENLAN_SPACE").ok();
         effective_cli_space =
             resolve_native_read_space(strict_space.as_deref(), cli.space.as_deref(), false)?;
+        client::WenlanClient::from_env_with_context(
+            agent_name.as_deref(),
+            effective_cli_space.as_deref(),
+        )?
+        .with_recovery(recovery_enabled)
+    } else if is_export {
+        // Export is a native read: no flag means every Space, `--space X`
+        // scopes the bundle to X, and a strict `WENLAN_SPACE` pin wins
+        // (the resolver refuses `--all-spaces` under a pin).
+        let strict_space = std::env::var("WENLAN_SPACE").ok();
+        effective_cli_space = resolve_native_read_space(
+            strict_space.as_deref(),
+            cli.space.as_deref(),
+            cli.all_spaces,
+        )?;
         client::WenlanClient::from_env_with_context(
             agent_name.as_deref(),
             effective_cli_space.as_deref(),
@@ -381,6 +402,9 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Commands::Entities { cmd } => {
             commands::entities::run(&client, format, cli.quiet, cmd).await?
+        }
+        Commands::Export { command } => {
+            commands::export::run(&client, format, cli.quiet, command).await?
         }
         Commands::Sweep => commands::sweep::run(&client, format, cli.quiet).await?,
     }
