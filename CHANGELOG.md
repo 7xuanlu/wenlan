@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.18.9](https://github.com/7xuanlu/wenlan/compare/v0.18.8...v0.18.9) (2026-09-17)
+
+
+### Features
+
+* **app:** export pages as an OKF bundle from Settings ([#762](https://github.com/7xuanlu/wenlan/issues/762)) ([ed00522](https://github.com/7xuanlu/wenlan/commit/ed00522a0a0df07804a91fdc18729ce5813628b4))
+* **export:** add wenlan export okf for a pure OKF v0.2 bundle ([#760](https://github.com/7xuanlu/wenlan/issues/760)) ([dad9971](https://github.com/7xuanlu/wenlan/commit/dad9971c76e50efc6fde16ccf6f73815e6afe25a))
+* **export:** project pages as an OKF v0.2 bundle ([#759](https://github.com/7xuanlu/wenlan/issues/759)) ([62c038c](https://github.com/7xuanlu/wenlan/commit/62c038cf4b6d84f88f55228666816a8a3aac49ec))
+
+
+### Bug Fixes
+
+* **app:** fail the boot gate closed when the background service is down, even while the window is hidden ([#756](https://github.com/7xuanlu/wenlan/issues/756)) ([413e18a](https://github.com/7xuanlu/wenlan/commit/413e18a2f81d2b9dfe2ba7d6653038bff775b91d))
+* **ingest:** gate quick capture at ten characters like the memory store route ([#754](https://github.com/7xuanlu/wenlan/issues/754)) ([dd73953](https://github.com/7xuanlu/wenlan/commit/dd73953ad484c6ac1a5d73ad69799232a66a7b91))
+* **mcp:** keep stdio open through Antigravity's discover probe and early roots notification ([#761](https://github.com/7xuanlu/wenlan/issues/761)) ([4fbd940](https://github.com/7xuanlu/wenlan/commit/4fbd940f5715c69c654c05f8b38175050bf781b8))
+* **onboard:** say configured, not connected, and write copy without em-dashes ([#755](https://github.com/7xuanlu/wenlan/issues/755)) ([7f1f0c2](https://github.com/7xuanlu/wenlan/commit/7f1f0c2c81c8099b1d788ee5681f81b8305c1ada))
+
 ## [0.18.8](https://github.com/7xuanlu/wenlan/compare/v0.18.7...v0.18.8) (2026-09-15)
 
 
