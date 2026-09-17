@@ -307,7 +307,8 @@ pub struct Source {
     #[serde(default)]
     pub last_sync_errors: u64,
     /// Categorized detail of last sync errors for UI display.
-    /// Known values: "google_drive_offline", "file_read_errors".
+    /// Known values: "google_drive_offline", "file_read_errors",
+    /// "document_enrichment_failed" (read fine, the worker gave up).
     #[serde(default)]
     pub last_sync_error_detail: Option<String>,
     /// Space every new document from this source lands in, fixed at

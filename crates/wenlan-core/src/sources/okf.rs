@@ -107,12 +107,29 @@ pub struct OkfConcept {
 }
 
 impl OkfConcept {
-    /// `status` equals "deprecated" (ASCII case-insensitive, trimmed).
+    /// `status` says "deprecated" (ASCII case-insensitive, trimmed).
+    ///
+    /// The scalar `status` is the normal shape. A bundle that writes
+    /// `status: [deprecated]` still means it, and `scalar_to_string` drops a
+    /// sequence, so the raw frontmatter is consulted as well. Skipping a
+    /// deprecated concept is a user ruling, so an odd spelling must not import
+    /// it by accident.
     pub fn is_deprecated(&self) -> bool {
-        self.status
+        fn says_deprecated(value: &serde_json::Value) -> bool {
+            match value {
+                serde_json::Value::String(s) => s.trim().eq_ignore_ascii_case("deprecated"),
+                serde_json::Value::Array(items) => items.iter().any(says_deprecated),
+                _ => false,
+            }
+        }
+        if self
+            .status
             .as_deref()
-            .map(|s| s.trim().eq_ignore_ascii_case("deprecated"))
-            .unwrap_or(false)
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("deprecated"))
+        {
+            return true;
+        }
+        self.frontmatter.get("status").is_some_and(says_deprecated)
     }
 }
 
@@ -278,6 +295,11 @@ fn extract_links(body: &str, frontmatter: &serde_yaml::Value, from_dir: &str) ->
     for cap in LINK_RE.captures_iter(body) {
         let whole = cap.get(0).expect("capture group 0 always matches");
         if skip.iter().any(|r| r.contains(&whole.start())) {
+            continue;
+        }
+        // `![alt](x.md)` is an embed, not a link between concepts. Without this
+        // an illustration would mint a real page link.
+        if whole.start() > 0 && body.as_bytes()[whole.start() - 1] == b'!' {
             continue;
         }
         let target = &cap[2];
@@ -1004,6 +1026,44 @@ mod tests {
         let abs = root.join("concepts/deprecated-note.md");
         let outcome = concept_file_to_documents("okf-test", &abs, &root, None);
         assert!(matches!(outcome, ConceptOutcome::Deprecated(_)));
+    }
+
+    #[test]
+    fn a_list_valued_status_still_deprecates_the_concept() {
+        // `scalar_to_string` drops a sequence, so `status` parses as None.
+        // Skipping a deprecated concept is a user ruling, so the odd spelling
+        // must not import it anyway.
+        let root = std::path::Path::new("/bundle");
+        let abs = root.join("concepts/listed.md");
+        let (concept, _) = parse_concept(
+            root,
+            &abs,
+            "---\ntype: concept\nstatus:\n  - deprecated\n---\n\n# Listed\n\nBody.\n",
+        )
+        .expect("parses");
+        assert_eq!(concept.status, None, "a sequence is not a scalar status");
+        assert!(
+            concept.is_deprecated(),
+            "a list-valued status still says deprecated"
+        );
+    }
+
+    #[test]
+    fn an_image_embed_is_not_a_concept_link() {
+        let root = std::path::Path::new("/bundle");
+        let abs = root.join("concepts/alpha.md");
+        let (concept, _) = parse_concept(
+            root,
+            &abs,
+            "---\ntype: concept\n---\n\n# Alpha\n\n\
+             An illustration ![diagram](arch.md) and a real link [Beta](beta.md).\n",
+        )
+        .expect("parses");
+        assert_eq!(
+            concept.links,
+            vec!["concepts/beta".to_string()],
+            "the embed is an illustration, not a link between concepts"
+        );
     }
 
     #[test]

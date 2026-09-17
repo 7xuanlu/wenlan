@@ -58111,6 +58111,38 @@ impl MemoryDB {
         Ok(count.max(0) as u64)
     }
 
+    /// Count a source's queued documents that will never be prepared: paused
+    /// rows at or past the retry cap.
+    ///
+    /// These rows do not hold the batch gate, so without this count a bundle
+    /// whose files all failed permanently would keep reporting `errors: 0` and
+    /// look healthy. The global queue status cannot answer it per source.
+    pub async fn count_exhausted_documents_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue
+                 WHERE source_id = ?1
+                   AND status = 'paused'
+                   AND attempt_count >= ?2",
+                libsql::params![source_id, Self::DOC_ENRICHMENT_MAX_ATTEMPTS],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents: {e}")))?;
+        let count = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents row: {e}")))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents col: {e}")))?
+            .unwrap_or(0);
+        Ok(count.max(0) as u64)
+    }
+
     /// Fetch the current queue entry for a document, if present.
     pub async fn get_queue_entry(
         &self,

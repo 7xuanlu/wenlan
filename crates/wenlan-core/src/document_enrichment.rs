@@ -594,7 +594,16 @@ async fn run_document_enrichment_with_request_budget(
         None => Vec::new(),
     };
 
-    let summary_line: String = digest.chars().take(280).collect();
+    // An OKF concept carries its own one-line description. Prefer it over a
+    // digest prefix here too, so a bundle imported with a provider and the
+    // same bundle imported without one do not summarize differently.
+    let summary_line: String = match profile {
+        Some(_) => match okf_description(db, &page_id).await {
+            Some(description) => description,
+            None => digest.chars().take(280).collect(),
+        },
+        None => digest.chars().take(280).collect(),
+    };
     if let Err(e) = write_document_source_page(
         db,
         entry,

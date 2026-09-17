@@ -286,6 +286,14 @@ async fn okf_sync_hands_over_the_next_batch_only_once_the_last_one_is_prepared()
     assert_eq!(second.newly_queued, 2);
     assert_eq!(second.stats.waiting_files, Some(1));
     assert!(queued(&db, &paths[2]).await && queued(&db, &paths[3]).await);
+    // The exhausted row read fine, so it is reported as a worker failure
+    // rather than disappearing into a clean `errors: 0`.
+    assert_eq!(first.stats.errors, 0);
+    assert_eq!(second.stats.errors, 1);
+    assert_eq!(
+        second.stats.error_detail.as_deref(),
+        Some("document_enrichment_failed")
+    );
 
     // Prepared rows park as waiting_for_provider, which opens the gate too.
     assert_eq!(drain(&db).await, 2);
@@ -533,4 +541,84 @@ async fn removing_an_okf_source_cancels_its_queue_and_drops_its_concepts() {
         .await
         .unwrap()
         .is_none());
+}
+
+/// The bundle's own frontmatter is kept for display, so page detail has to hand
+/// it back. Without this the provenance would be write-only and the spec's
+/// "a concept page returns its frontmatter" would be false. Driven through the
+/// real router, because a store that nothing reads proves nothing.
+#[tokio::test]
+async fn page_detail_returns_the_concept_frontmatter_and_omits_it_for_other_pages() {
+    use tower::ServiceExt;
+
+    let _guard = data_dir_lock().await;
+    let _config_root = DataDirGuard::new();
+    let (db, _tmp) = new_test_db().await;
+    let state = Arc::new(RwLock::new(ServerState {
+        db: Some(db.clone()),
+        ..Default::default()
+    }));
+
+    // `create_page_draft_with_id` only accepts the `page_<uuid-v4>` shape. The
+    // subject here is the route, not how an import mints its id.
+    let page_id = "page_3f2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d";
+    let plain_id = "page_9a8b7c6d-5e4f-4321-9876-0a1b2c3d4e5f";
+    let frontmatter = serde_json::json!({
+        "type": "concept",
+        "status": "stale",
+        "stale_after": "2026-12-01",
+        "generated": {"by": "openwiki", "at": "2026-09-01"},
+        "verified": [{"by": "a-human", "at": "2026-09-02"}],
+        "sources": [{"resource": "repo://acme/lib#L10-L20"}],
+    });
+    for id in [page_id, plain_id] {
+        db.create_page_draft_with_id(id, "Alpha", "Alpha body.", None, None)
+            .await
+            .unwrap();
+    }
+    db.upsert_okf_concept(page_id, SOURCE_ID, "concepts/alpha", &frontmatter, &[])
+        .await
+        .unwrap();
+
+    async fn detail(
+        state: &Arc<RwLock<ServerState>>,
+        id: &str,
+    ) -> (axum::http::StatusCode, serde_json::Value) {
+        let response = crate::router::build_router(state.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("GET")
+                    .uri(format!("/api/pages/{id}"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1_048_576)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    let (status, body) = detail(&state, page_id).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["okf"]["frontmatter"], frontmatter,
+        "the frontmatter comes back structurally equal to the file's: {body}"
+    );
+    assert_eq!(body["okf"]["concept_id"], "concepts/alpha");
+    assert_eq!(body["okf"]["source_id"], SOURCE_ID);
+    assert!(
+        body["okf"]["updated_at"].is_number(),
+        "the record carries when the concept last changed: {body}"
+    );
+    assert_eq!(body["page"]["id"], page_id, "the page itself still opens");
+
+    let (status, body) = detail(&state, plain_id).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["okf"].is_null(),
+        "a page that is not an imported concept keeps today's shape: {body}"
+    );
 }

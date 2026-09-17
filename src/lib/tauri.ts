@@ -209,7 +209,8 @@ export type SyncStatusStr =
  * treats these as opaque keys and matches known values for targeted
  * messaging, falling through to a generic message otherwise.
  *
- * Known values (as of this writing): "google_drive_offline", "file_read_errors".
+ * Known values (as of this writing): "google_drive_offline", "file_read_errors",
+ * "document_enrichment_failed" (the files read fine, the worker gave up on them).
  */
 export type SyncErrorDetail = string;
 

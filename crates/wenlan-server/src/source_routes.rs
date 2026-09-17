@@ -358,10 +358,16 @@ async fn finalize_sync(
     // offline in Finder". We compare per-file counts (not the mixed
     // files+chunks `errors` total) so a single upsert failure on a
     // multi-chunk file doesn't skew the threshold.
+    // A row the worker gave up on is an error too, but it was read fine, so it
+    // must not colour the Google Drive threshold or claim a read failure.
+    let exhausted = batch_counts.map_or(0, |counts| counts.exhausted_files) as usize;
+    let errors = errors + exhausted;
     let error_detail: Option<String> = if errors == 0 {
         None
     } else if file_errors > 0 && gdrive_errors * 2 >= file_errors {
         Some("google_drive_offline".to_string())
+    } else if file_errors == 0 && exhausted > 0 {
+        Some("document_enrichment_failed".to_string())
     } else {
         Some("file_read_errors".to_string())
     };
@@ -425,6 +431,11 @@ async fn finalize_sync(
 pub(crate) struct BatchCounts {
     pub(crate) queued_files: u64,
     pub(crate) waiting_files: u64,
+    /// Rows this source handed over that the worker has given up on. They are
+    /// counted as sync errors so a bundle that imported nothing does not report
+    /// `errors: 0`, and they set the error detail on their own because nothing
+    /// was wrong with reading the file.
+    pub(crate) exhausted_files: u64,
 }
 
 /// A Directory sync's wire stats plus how many files it newly put on the

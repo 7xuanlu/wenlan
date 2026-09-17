@@ -334,8 +334,13 @@ pub(super) async fn sync_okf_source_in_batches(
         }
         match db.enqueue_document(&id, &file_key, Some(&hash)).await {
             Ok(_) => {
-                ingested += 1;
+                // `ingested` feeds `memory_count`, so counting a row that was
+                // already queued at this same hash would inflate the source's
+                // total on every re-poll. With a 1,000-file batch a bundle is
+                // re-polled routinely while the worker drains, so only a row
+                // this sync actually hands over counts.
                 if !already_queued {
+                    ingested += 1;
                     newly_queued += 1;
                     room -= 1;
                 }
@@ -375,6 +380,11 @@ pub(super) async fn sync_okf_source_in_batches(
     }
 
     let queued = db.count_unprepared_documents_for_source(&id).await?;
+    // A file this sync handed over cleanly can still fail in the worker until
+    // its retries run out. Those rows leave the gate but never become a page,
+    // so counting only this run's read failures would report `errors: 0` for a
+    // bundle that imported nothing. `finalize_sync` folds them into `errors`.
+    let exhausted = db.count_exhausted_documents_for_source(&id).await?;
     let stats = finalize_sync(
         db,
         &id,
@@ -387,6 +397,7 @@ pub(super) async fn sync_okf_source_in_batches(
         Some(BatchCounts {
             queued_files: queued,
             waiting_files: waiting as u64,
+            exhausted_files: exhausted,
         }),
     )
     .await?;
