@@ -154,6 +154,16 @@ const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
 pub(crate) fn is_index_file(name: &str) -> bool {
     name.eq_ignore_ascii_case(INDEX_FILE)
 }
+
+/// The filename stem for a page slug. `index.md` is the OKF index, never a
+/// page's file, so a page titled "Index" gets `index-page` instead.
+pub(crate) fn page_stem_clear_of_index(slug: String) -> String {
+    if is_index_file(&format!("{slug}.md")) {
+        format!("{slug}-page")
+    } else {
+        slug
+    }
+}
 /// Set after the first warning that a user's own `index.md` blocked the
 /// generated one, so a busy projection logs it once rather than per write.
 static USER_INDEX_SKIP_WARNED: AtomicBool = AtomicBool::new(false);
@@ -509,7 +519,7 @@ impl KnowledgeWriter {
                 return Ok(existing.file.clone());
             }
         }
-        let base = slugify(title);
+        let base = page_stem_clear_of_index(slugify(title));
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         let taken: std::collections::HashSet<&str> = state
@@ -519,16 +529,13 @@ impl KnowledgeWriter {
             .map(|(_, state)| state.file.as_str())
             .collect();
         loop {
-            // `index.md` is the OKF root document, never a page's file.
-            let reserved = is_index_file(&candidate);
             let collides_state = taken.contains(candidate.as_str());
-            let collides_disk = !reserved
-                && match root.symlink_metadata(&candidate) {
-                    Ok(_) => true,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-                    Err(error) => return Err(WenlanError::Io(error)),
-                };
-            if !reserved && !collides_state && !collides_disk {
+            let collides_disk = match root.symlink_metadata(&candidate) {
+                Ok(_) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(WenlanError::Io(error)),
+            };
+            if !collides_state && !collides_disk {
                 return Ok(candidate);
             }
             candidate = format!("{base}-{n}.md");
@@ -6343,10 +6350,29 @@ mod tests {
         page.title = "Index".to_string();
 
         let page_path = writer.write_page_for_test(&page).unwrap();
-        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
         assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
         let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
-        assert!(index.contains("[Index](/index-2.md)"), "{index}");
+        assert!(index.contains("[Index](/index-page.md)"), "{index}");
+    }
+
+    /// A page already titled "Index Page" keeps `index-page.md`; the page
+    /// titled "Index" takes the next free name, never `index.md`.
+    #[test]
+    fn a_page_titled_index_gets_the_next_name_when_index_page_is_taken() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut named = test_concept();
+        named.id = "page_index_page".to_string();
+        named.title = "Index Page".to_string();
+        let named_path = writer.write_page_for_test(&named).unwrap();
+        assert!(named_path.ends_with("index-page.md"), "{named_path}");
+
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-page-2.md"), "{page_path}");
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
     }
 
     /// A vault projected before the name was reserved holds a page titled
@@ -6378,17 +6404,17 @@ mod tests {
         );
 
         let page_path = writer.write_page_for_test(&page).unwrap();
-        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
         assert!(std::fs::read_to_string(&page_path)
             .unwrap()
             .contains(&format!("origin_id: {}", page.id)));
         assert_eq!(
             writer.page_filename(&page.id).as_deref(),
-            Some("index-2.md")
+            Some("index-page.md")
         );
         assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
         let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
-        assert!(index.contains("[Index](/index-2.md)"), "{index}");
+        assert!(index.contains("[Index](/index-page.md)"), "{index}");
     }
 
     /// PR #763 closure review: a home note made by copying a page file keeps
@@ -6434,7 +6460,7 @@ mod tests {
         std::fs::write(dir.path().join(INDEX_FILE), "# Home\n").unwrap();
 
         let page_path = writer.write_page_for_test(&page).unwrap();
-        assert!(page_path.ends_with("index-2.md"), "{page_path}");
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
         assert_eq!(
             std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
             "# Home\n"
