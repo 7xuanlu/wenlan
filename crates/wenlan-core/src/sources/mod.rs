@@ -9,6 +9,7 @@
 //! computation, decay rates).
 pub mod directory;
 pub mod obsidian;
+pub mod okf;
 pub mod page_watcher;
 
 // Re-export canonical type definitions from wenlan-types. This keeps
@@ -254,6 +255,9 @@ mod tests {
             memory_count: 128,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         };
         let json = serde_json::to_string(&source).unwrap();
         let back: Source = serde_json::from_str(&json).unwrap();
@@ -263,9 +267,31 @@ mod tests {
     }
 
     #[test]
+    fn test_source_without_okf_fields_loads_with_defaults() {
+        // A config written before OKF import has no space or batch counts.
+        let json = r#"{"id":"directory-notes","source_type":"directory","path":"/Users/x/notes","status":"Active","last_sync":null,"file_count":3,"memory_count":9}"#;
+        let source: Source = serde_json::from_str(json).unwrap();
+        assert_eq!(source.space, None);
+        assert_eq!(source.queued_files, 0);
+        assert_eq!(source.waiting_files, 0);
+        let written = serde_json::to_string(&source).unwrap();
+        assert!(
+            !written.contains("\"space\""),
+            "unset space is not written: {written}"
+        );
+
+        let okf = r#"{"id":"okf-wiki","source_type":"okf","path":"/Users/x/wiki","status":"Active","last_sync":null,"space":"work","queued_files":1000,"waiting_files":200}"#;
+        let source: Source = serde_json::from_str(okf).unwrap();
+        assert_eq!(source.source_type, SourceType::Okf);
+        assert_eq!(source.space.as_deref(), Some("work"));
+        assert_eq!((source.queued_files, source.waiting_files), (1000, 200));
+    }
+
+    #[test]
     fn test_source_type_display() {
         assert_eq!(SourceType::Obsidian.as_str(), "obsidian");
         assert_eq!(SourceType::Directory.as_str(), "directory");
+        assert_eq!(SourceType::Okf.as_str(), "okf");
     }
 
     #[test]

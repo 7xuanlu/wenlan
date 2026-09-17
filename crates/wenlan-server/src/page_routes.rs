@@ -124,7 +124,21 @@ pub async fn handle_get_page(
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?
     {
-        Some(page) => Ok(Json(serde_json::json!({ "page": page }))),
+        Some(page) => {
+            // An imported OKF concept carries its bundle frontmatter beside the
+            // page, for display only. The key is omitted for every other page,
+            // so a reader that does not know about OKF sees today's shape.
+            let mut body = serde_json::json!({ "page": page });
+            if let Ok(Some(record)) = db.get_okf_concept(&id).await {
+                body["okf"] = serde_json::json!({
+                    "source_id": record.source_id,
+                    "concept_id": record.concept_id,
+                    "frontmatter": record.frontmatter,
+                    "updated_at": record.updated_at,
+                });
+            }
+            Ok(Json(body))
+        }
         // A hidden page 404s rather than 200-ing empty: for this caller it is
         // not there, and the existing not-found answer is the honest one.
         None => Err(ServerError::NotFound("page not found".to_string())),

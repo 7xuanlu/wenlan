@@ -74,6 +74,9 @@ impl Config {
                 memory_count: 0,
                 last_sync_errors: 0,
                 last_sync_error_detail: None,
+                space: None,
+                queued_files: 0,
+                waiting_files: 0,
             });
         }
         // Clear legacy field so it doesn't re-migrate on next load

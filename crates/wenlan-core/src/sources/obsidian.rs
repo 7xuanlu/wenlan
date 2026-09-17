@@ -73,26 +73,31 @@ impl NoteFrontmatter {
     }
 }
 
+/// Split content into its raw YAML frontmatter block and the body after it.
+/// Returns `None` when there is no frontmatter: content does not start with
+/// `---`, or there is no closing `\n---`. This is exactly the delimiter logic
+/// `extract_frontmatter` uses to find the YAML block; the two cannot drift
+/// because `extract_frontmatter` calls this function.
+pub(crate) fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
+    // Frontmatter must start at the very beginning of the file
+    let after_open = content.strip_prefix("---")?;
+
+    // Find the closing "\n---" delimiter
+    let pos = after_open.find("\n---")?;
+    let yaml_str = &after_open[..pos];
+    // "\n---" is exactly 4 ASCII bytes -- safe to index at find() boundary
+    let body_after = &after_open[pos + 4..];
+    let body = body_after.trim_start_matches('\n');
+    Some((yaml_str, body))
+}
+
 /// Parse YAML frontmatter delimited by `---`. Returns the parsed frontmatter
 /// and a reference to the body text after the closing `---`.
 pub fn extract_frontmatter(content: &str) -> (NoteFrontmatter, &str) {
-    // Frontmatter must start at the very beginning of the file
-    let after_open = match content.strip_prefix("---") {
-        Some(rest) => rest,
-        None => return (NoteFrontmatter::default(), content),
-    };
-
-    // Find the closing "\n---" delimiter
-    match after_open.find("\n---") {
-        Some(pos) => {
-            let yaml_str = &after_open[..pos];
-            // "\n---" is exactly 4 ASCII bytes -- safe to index at find() boundary
-            let body_after = &after_open[pos + 4..];
-            let body = body_after.trim_start_matches('\n');
-
+    match split_frontmatter(content) {
+        Some((yaml_str, body)) => {
             let fields: HashMap<String, serde_yaml::Value> =
                 serde_yaml::from_str(yaml_str).unwrap_or_default();
-
             (NoteFrontmatter { fields }, body)
         }
         None => (NoteFrontmatter::default(), content),
@@ -292,7 +297,7 @@ const SKIP_DIRS: &[&str] = &[".obsidian", ".trash", ".git", "templates"];
 /// Frontmatter key that marks a `.md` file as one of Wenlan's own projected
 /// pages (written by `export::knowledge::KnowledgeWriter::write_page`). Any
 /// file carrying it is skipped on ingest — see `note_to_documents`.
-const PROJECTED_PAGE_FRONTMATTER_KEY: &str = "origin_id";
+pub(crate) const PROJECTED_PAGE_FRONTMATTER_KEY: &str = "origin_id";
 
 /// Second, parser-independent look for the projection marker.
 ///
@@ -310,7 +315,7 @@ const PROJECTED_PAGE_FRONTMATTER_KEY: &str = "origin_id";
 /// discards an empty value, this one treats the key's mere presence as enough.
 /// A page whose `origin_id` got blanked is still our output, and the cost of
 /// being wrong here is one skipped note, not a poisoned graph.
-fn has_projection_marker_line(content: &str) -> bool {
+pub(crate) fn has_projection_marker_line(content: &str) -> bool {
     let mut lines = content.lines();
     if lines.next() != Some("---") {
         return false;

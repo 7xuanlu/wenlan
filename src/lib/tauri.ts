@@ -196,7 +196,7 @@ export async function listSources(): Promise<SourceStatus[]> {
 
 // ===== Registered Sources =====
 
-export type SourceTypeStr = "obsidian" | "directory";
+export type SourceTypeStr = "obsidian" | "directory" | "okf";
 export type SyncStatusStr =
   | "Active"
   | "Paused"
@@ -209,7 +209,8 @@ export type SyncStatusStr =
  * treats these as opaque keys and matches known values for targeted
  * messaging, falling through to a generic message otherwise.
  *
- * Known values (as of this writing): "google_drive_offline", "file_read_errors".
+ * Known values (as of this writing): "google_drive_offline", "file_read_errors",
+ * "document_enrichment_failed" (the files read fine, the worker gave up on them).
  */
 export type SyncErrorDetail = string;
 
@@ -223,6 +224,12 @@ export interface RegisteredSource {
   memory_count: number;
   last_sync_errors?: number;
   last_sync_error_detail?: SyncErrorDetail | null;
+  /** Space new documents land in; set only for okf sources. */
+  space?: string | null;
+  /** okf sources: queued files not yet prepared after the last sync. */
+  queued_files?: number;
+  /** okf sources: files not yet handed to the queue after the last sync. */
+  waiting_files?: number;
 }
 
 export interface SyncStats {
@@ -231,6 +238,10 @@ export interface SyncStats {
   skipped: number;
   errors: number;
   error_detail?: SyncErrorDetail | null;
+  /** okf sources only: queued files not yet prepared after this sync. */
+  queued_files?: number;
+  /** okf sources only: files not yet handed to the queue after this sync. */
+  waiting_files?: number;
 }
 
 export async function listRegisteredSources(): Promise<RegisteredSource[]> {

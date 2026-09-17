@@ -219,6 +219,15 @@ async fn main() -> anyhow::Result<ExitCode> {
     };
     let is_lint = matches!(&cli.command, Commands::Lint { .. });
     let is_export = matches!(&cli.command, Commands::Export { .. });
+    let is_okf_import = matches!(
+        &cli.command,
+        Commands::Sources {
+            command: commands::ingest::SourcesCommand::Add {
+                source_type: commands::ingest::SourceKind::Okf,
+                ..
+            }
+        }
+    );
     let mut effective_cli_space = cli.space.clone();
     let client = if is_outbox {
         if cli.space.is_some() || cli.all_spaces {
@@ -283,6 +292,20 @@ async fn main() -> anyhow::Result<ExitCode> {
             cli.space.as_deref(),
             cli.all_spaces,
         )?;
+        client::WenlanClient::from_env_with_context(
+            agent_name.as_deref(),
+            effective_cli_space.as_deref(),
+        )?
+        .with_recovery(recovery_enabled)
+    } else if is_okf_import {
+        // An OKF import writes into one Space: `--space X` or a strict
+        // `WENLAN_SPACE` pin picks it, otherwise the daemon's default Space.
+        if cli.all_spaces {
+            anyhow::bail!("--all-spaces is valid only for read commands");
+        }
+        let strict_space = std::env::var("WENLAN_SPACE").ok();
+        effective_cli_space =
+            resolve_native_read_space(strict_space.as_deref(), cli.space.as_deref(), false)?;
         client::WenlanClient::from_env_with_context(
             agent_name.as_deref(),
             effective_cli_space.as_deref(),

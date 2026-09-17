@@ -248,6 +248,9 @@ impl Default for RawDocument {
 pub enum SourceType {
     Obsidian,
     Directory,
+    /// An Open Knowledge Format (OKF) bundle, such as an OpenWiki wiki: one
+    /// source page per concept, provenance kept for display, one Space.
+    Okf,
 }
 
 impl SourceType {
@@ -255,6 +258,7 @@ impl SourceType {
         match self {
             Self::Obsidian => "obsidian",
             Self::Directory => "directory",
+            Self::Okf => "okf",
         }
     }
 }
@@ -265,11 +269,13 @@ pub enum SyncStatus {
     Active,
     Paused,
     Error(String),
-    /// The source root (directory or single file) is missing or unreadable.
-    /// Distinct from `Error` (a sync that ran but hit per-file failures) and
-    /// `Paused` (user-initiated): "root-gone != file-gone", so while a source
-    /// is `Unavailable` the sync deletes nothing. Auto-recovers -- the next
-    /// sync that finds the root live flips it back to `Active`.
+    /// The source root (directory or single file) is missing or unreadable,
+    /// or an `okf` source cannot import (its folder is a Wenlan export, or its
+    /// Space was deleted). Distinct from `Error` (a sync that ran but hit
+    /// per-file failures) and `Paused` (user-initiated): "root-gone !=
+    /// file-gone", so while a source is `Unavailable` the sync deletes
+    /// nothing. Auto-recovers -- the next sync that finds the root live and
+    /// importable flips it back to `Active`.
     Unavailable(String),
 }
 
@@ -301,9 +307,23 @@ pub struct Source {
     #[serde(default)]
     pub last_sync_errors: u64,
     /// Categorized detail of last sync errors for UI display.
-    /// Known values: "google_drive_offline", "file_read_errors".
+    /// Known values: "google_drive_offline", "file_read_errors",
+    /// "document_enrichment_failed" (read fine, the worker gave up).
     #[serde(default)]
     pub last_sync_error_detail: Option<String>,
+    /// Space every new document from this source lands in, fixed at
+    /// registration. `None` keeps today's behavior (unfiled, or the
+    /// Obsidian first-tag rule). Only `okf` sources set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    /// `okf` sources: files in the document queue that were not yet prepared
+    /// (parsed and embedded) when the last sync finished.
+    #[serde(default)]
+    pub queued_files: u64,
+    /// `okf` sources: files not yet handed to the queue after the last sync,
+    /// because a batch was still being prepared or that sync's batch was full.
+    #[serde(default)]
+    pub waiting_files: u64,
 }
 
 fn default_sync_status() -> SyncStatus {
