@@ -136,6 +136,11 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "list_all_tags",
     "list_indexed_files",
   ],
+  // Settings, General: the OKF bundle export. The fixture answers with an
+  // empty bundle; a real export needs the daemon to write a folder.
+  pageExport: [
+    "export_pages_as_okf",
+  ],
 } as const;
 
 export type ReviewCommandArea = keyof typeof REVIEW_COMMAND_CAPABILITIES;

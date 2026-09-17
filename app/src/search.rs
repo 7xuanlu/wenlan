@@ -4498,6 +4498,15 @@ pub async fn export_pages_to_obsidian(
 }
 
 #[tauri::command]
+pub async fn export_pages_as_okf(
+    state: tauri::State<'_, State>,
+    target_dir: String,
+) -> Result<ExportStats, String> {
+    let client = state.read().await.client.clone();
+    client.export_pages_okf(target_dir).await
+}
+
+#[tauri::command]
 pub async fn export_page_to_obsidian(
     state: tauri::State<'_, State>,
     page_id: String,

@@ -2454,6 +2454,17 @@ export async function exportConceptToObsidian(
   return exportPageToObsidian(conceptId, vaultPath);
 }
 
+/**
+ * Write every page, across all Spaces, as an OKF v0.2 bundle into `targetDir`
+ * (an absolute folder path). The daemon decides whether the folder is safe to
+ * write: a non-empty folder that is not an earlier Wenlan OKF export, or a
+ * truth cutover in progress, rejects with a 409 whose sentence
+ * {@link daemonErrorMessage} extracts.
+ */
+export async function exportPagesAsOkf(targetDir: string): Promise<ExportStats> {
+  return invoke("export_pages_as_okf", { targetDir });
+}
+
 // ===== Knowledge Directory =====
 
 export async function getKnowledgePath(): Promise<string> {
