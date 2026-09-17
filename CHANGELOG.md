@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.10](https://github.com/7xuanlu/wenlan/compare/v0.18.9...v0.18.10) (2026-09-17)
+
+
+### Bug Fixes
+
+* **export:** keep a user's index.md and refuse OKF export on an old daemon ([#763](https://github.com/7xuanlu/wenlan/issues/763)) ([84796c1](https://github.com/7xuanlu/wenlan/commit/84796c1b62be7820217b65887b38b0ea91843fd1))
+
 ## [0.18.9](https://github.com/7xuanlu/wenlan/compare/v0.18.8...v0.18.9) (2026-09-17)
 
 
