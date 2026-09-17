@@ -248,6 +248,9 @@ impl Default for RawDocument {
 pub enum SourceType {
     Obsidian,
     Directory,
+    /// An Open Knowledge Format (OKF) bundle, such as an OpenWiki wiki: one
+    /// source page per concept, provenance kept for display, one Space.
+    Okf,
 }
 
 impl SourceType {
@@ -255,6 +258,7 @@ impl SourceType {
         match self {
             Self::Obsidian => "obsidian",
             Self::Directory => "directory",
+            Self::Okf => "okf",
         }
     }
 }
@@ -304,6 +308,17 @@ pub struct Source {
     /// Known values: "google_drive_offline", "file_read_errors".
     #[serde(default)]
     pub last_sync_error_detail: Option<String>,
+    /// Space every new document from this source lands in, fixed at
+    /// registration. `None` keeps today's behavior (unfiled, or the
+    /// Obsidian first-tag rule). Only `okf` sources set it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    /// Files handed to the document queue by the last sync.
+    #[serde(default)]
+    pub queued_files: u64,
+    /// Files not yet handed to the queue because a batch is still draining.
+    #[serde(default)]
+    pub waiting_files: u64,
 }
 
 fn default_sync_status() -> SyncStatus {

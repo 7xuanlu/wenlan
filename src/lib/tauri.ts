@@ -196,7 +196,7 @@ export async function listSources(): Promise<SourceStatus[]> {
 
 // ===== Registered Sources =====
 
-export type SourceTypeStr = "obsidian" | "directory";
+export type SourceTypeStr = "obsidian" | "directory" | "okf";
 export type SyncStatusStr =
   | "Active"
   | "Paused"
@@ -223,6 +223,12 @@ export interface RegisteredSource {
   memory_count: number;
   last_sync_errors?: number;
   last_sync_error_detail?: SyncErrorDetail | null;
+  /** Space new documents land in; set only for okf sources. */
+  space?: string | null;
+  /** Files handed to the document queue by the last sync. */
+  queued_files?: number;
+  /** Files waiting for the current batch to drain. */
+  waiting_files?: number;
 }
 
 export interface SyncStats {
