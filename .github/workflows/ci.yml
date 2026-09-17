@@ -385,6 +385,10 @@ jobs:
               - 'crates/wenlan-server/src/repair_prepare_operation_routes.rs'
               - 'crates/wenlan-server/src/scheduler.rs'
               - 'crates/wenlan-server/src/scheduler/scheduler_tests.rs'
+              # The OKF overlap refusal is proved against a symlinked spelling
+              # too, and that case is `cfg(unix)`, so the file carries a
+              # platform route and must schedule both sides of the gate.
+              - 'crates/wenlan-server/src/source_routes/okf_registration_tests.rs'
               - 'crates/wenlan-server/src/telemetry.rs'
               - 'crates/wenlan-server/tests/ambient_live_daemon.rs'
               - 'crates/wenlan-server/tests/graceful_shutdown.rs'
@@ -416,6 +420,8 @@ jobs:
               - 'crates/wenlan-server/src/repair_runtime_routes.rs'
               - 'crates/wenlan-server/src/repair_operation_routes.rs'
               - 'crates/wenlan-server/src/repair_prepare_operation_routes.rs'
+              # `cfg(unix)` symlink case; Windows proves the other side.
+              - 'crates/wenlan-server/src/source_routes/okf_registration_tests.rs'
               - 'crates/wenlan-server/src/telemetry.rs'
               - 'crates/wenlan-server/tests/graceful_shutdown.rs'
               - 'crates/wenlan-mcp/npm/install.js'
