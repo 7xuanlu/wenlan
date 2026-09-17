@@ -7,14 +7,22 @@ import {
   __resetActivityNowLayoutForTests,
   getActivityNowLayout,
 } from "../../../../lib/activityNowLayout";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
+  exportPagesAsOkf,
   getTelemetryStatus,
   isRunAtLoginEnabled,
   setRunAtLogin,
   setTelemetryEnabled,
 } from "../../../../lib/tauri";
 
-vi.mock("../../../../lib/tauri", () => ({
+vi.mock("../../../../lib/tauri", async () => ({
+  // The real parser: the row must show the daemon's sentence out of the exact
+  // string a rejected command carries, not a test double's idea of it.
+  daemonErrorMessage: (
+    await vi.importActual<typeof import("../../../../lib/tauri")>("../../../../lib/tauri")
+  ).daemonErrorMessage,
+  exportPagesAsOkf: vi.fn(),
   getProfile: vi.fn(() =>
     Promise.resolve({
       id: "p1",
@@ -390,5 +398,93 @@ describe("GeneralSection optional usage stats consent", () => {
     expect(await screen.findByText("2 usage events waiting to send")).toBeInTheDocument();
     expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true");
     expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
+  });
+});
+
+describe("GeneralSection OKF export", () => {
+  const TARGET = "/Users/someone/okf-bundle";
+
+  function pickFolder(path: string | null) {
+    vi.mocked(open).mockReset();
+    vi.mocked(open).mockResolvedValue(path as never);
+  }
+
+  async function chooseFolder() {
+    fireEvent.click(await screen.findByRole("button", { name: "Choose folder" }));
+  }
+
+  it("exports every page into the picked folder and reports the counts", async () => {
+    pickFolder(TARGET);
+    vi.mocked(exportPagesAsOkf).mockReset();
+    vi.mocked(exportPagesAsOkf).mockResolvedValue({ exported: 3, skipped: 1, failed: 0 });
+    renderGeneralSection();
+
+    await chooseFolder();
+
+    expect(
+      await screen.findByText(`Exported 3 pages to ${TARGET}.`),
+    ).toBeInTheDocument();
+    expect(open).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: true, multiple: false }),
+    );
+    expect(exportPagesAsOkf).toHaveBeenCalledTimes(1);
+    expect(exportPagesAsOkf).toHaveBeenCalledWith(TARGET);
+    expect(
+      screen.getByText(
+        "1 page was not exported because it is not yet cleared for use outside Wenlan.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/could not be written/)).not.toBeInTheDocument();
+  });
+
+  it("exports nothing when the folder picker is cancelled", async () => {
+    pickFolder(null);
+    vi.mocked(exportPagesAsOkf).mockReset();
+    renderGeneralSection();
+
+    await chooseFolder();
+
+    await waitFor(() => expect(open).toHaveBeenCalledTimes(1));
+    expect(exportPagesAsOkf).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Exported /)).not.toBeInTheDocument();
+  });
+
+  it("shows the daemon's refusal for a folder that is not an earlier export, without the HTTP prefix", async () => {
+    pickFolder(TARGET);
+    vi.mocked(exportPagesAsOkf).mockReset();
+    vi.mocked(exportPagesAsOkf).mockRejectedValueOnce(
+      'HTTP POST /api/pages/export returned 409 Conflict: {"error":"directory is not empty and is not a Wenlan OKF export"}',
+    );
+    vi.mocked(exportPagesAsOkf).mockResolvedValueOnce({ exported: 2, skipped: 0, failed: 0 });
+    renderGeneralSection();
+
+    await chooseFolder();
+
+    expect(
+      await screen.findByText(
+        "Export failed: directory is not empty and is not a Wenlan OKF export",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP POST/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Exported /)).not.toBeInTheDocument();
+
+    // A retry into a folder the daemon accepts replaces the refusal.
+    await chooseFolder();
+
+    expect(await screen.findByText(`Exported 2 pages to ${TARGET}.`)).toBeInTheDocument();
+    expect(screen.queryByText(/^Export failed/)).not.toBeInTheDocument();
+  });
+
+  it("warns when some pages could not be written", async () => {
+    pickFolder(TARGET);
+    vi.mocked(exportPagesAsOkf).mockReset();
+    vi.mocked(exportPagesAsOkf).mockResolvedValue({ exported: 1, skipped: 0, failed: 2 });
+    renderGeneralSection();
+
+    await chooseFolder();
+
+    expect(await screen.findByText(`Exported 1 page to ${TARGET}.`)).toBeInTheDocument();
+    expect(screen.getByText("2 pages could not be written.")).toBeInTheDocument();
+    expect(screen.queryByText(/not yet cleared/)).not.toBeInTheDocument();
   });
 });

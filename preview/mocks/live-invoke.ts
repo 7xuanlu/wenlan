@@ -635,6 +635,9 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   },
   get_page_revisions: (a) => get(`/api/pages/${enc(a.pageId)}/revisions`),
   redistill_page: (a) => post(`/api/distill/${enc(a.pageId)}`, {}),
+  // Mirrors app/src/api.rs `export_pages_okf`: no Space header, so every Space.
+  export_pages_as_okf: (a) =>
+    post("/api/pages/export", { vault_path: a.targetDir, format: "okf" }),
   update_page: async (a) => {
     const health = await get("/api/health");
     const reportedVersion = String(health?.version ?? "");
