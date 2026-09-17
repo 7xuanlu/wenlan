@@ -13,6 +13,8 @@ import {
   setRunAtLogin,
   getTelemetryStatus,
   setTelemetryEnabled,
+  exportPagesAsOkf,
+  daemonErrorMessage,
 } from "../../../../lib/tauri";
 import { type Theme, useTheme } from "../../../../lib/theme";
 import {
@@ -449,6 +451,109 @@ export default function GeneralSection() {
           />
         </Card>
       </section>
+      <ExportSettingsBlock />
     </>
+  );
+}
+
+/**
+ * Export every page, across all Spaces, as an OKF v0.2 bundle.
+ *
+ * The daemon owns the bundle and the rules for which folders are safe to
+ * write, so this block only picks a folder and reports what came back. A
+ * refused folder (not empty and not an earlier Wenlan OKF export) arrives as a
+ * 409 whose `error` sentence is the useful part; the HTTP prefix is not.
+ */
+function ExportSettingsBlock() {
+  const { t } = useTranslation();
+  const exportMutation = useMutation({
+    mutationFn: async (targetDir: string) => ({
+      targetDir,
+      stats: await exportPagesAsOkf(targetDir),
+    }),
+  });
+
+  const handleChooseFolder = async () => {
+    const selected = await open({
+      title: t("settings.general.exportOkfDialogTitle"),
+      directory: true,
+      multiple: false,
+    });
+    // `null` is a cancelled picker: nothing to export, and no reason to clear
+    // the last result the row is showing.
+    if (typeof selected !== "string") return;
+    exportMutation.mutate(selected);
+  };
+
+  const result = exportMutation.isSuccess ? exportMutation.data : undefined;
+  const exportReason = exportMutation.isError
+    ? daemonErrorMessage(exportMutation.error) ?? errorMessage(exportMutation.error)
+    : null;
+  const exportError = exportMutation.isError
+    ? exportReason
+      ? t("settings.general.exportOkfError", { reason: exportReason })
+      : t("settings.general.exportOkfErrorUnknown")
+    : null;
+  const statusLines = exportMutation.isPending
+    ? [t("settings.general.exportOkfRunning")]
+    : result
+      ? [
+          t("settings.general.exportOkfDone", {
+            count: result.stats.exported,
+            path: result.targetDir,
+          }),
+          result.stats.skipped > 0
+            ? t("settings.general.exportOkfSkipped", { count: result.stats.skipped })
+            : null,
+        ].filter((line): line is string => line !== null)
+      : [];
+
+  return (
+    <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
+      <SectionHeader label={t("settings.general.exportSection")} />
+      <Card padding="rows">
+        <SettingRow
+          title={t("settings.general.exportOkfTitle")}
+          description={t("settings.general.exportOkfDescription")}
+          control={
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={exportMutation.isPending}
+              aria-busy={exportMutation.isPending}
+              onClick={handleChooseFolder}
+            >
+              {t("settings.general.exportOkfChoose")}
+            </Button>
+          }
+          statusLine={
+            // Always mounted so a screen reader hears the result arrive, not
+            // only the next time the row re-renders.
+            <div role="status" aria-live="polite">
+              {statusLines.map((line) => (
+                <p
+                  key={line}
+                  style={{
+                    fontFamily: "var(--mem-font-body)",
+                    fontSize: "var(--mem-text-description)",
+                    color: "var(--mem-text-secondary)",
+                    lineHeight: "1.5",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {line}
+                </p>
+              ))}
+            </div>
+          }
+          warning={
+            result && result.stats.failed > 0
+              ? t("settings.general.exportOkfFailed", { count: result.stats.failed })
+              : null
+          }
+          error={exportError}
+        />
+      </Card>
+    </section>
   );
 }

@@ -1712,6 +1712,7 @@ pub fn run() {
             search::list_recent_pages,
             search::export_pages_to_obsidian,
             search::export_page_to_obsidian,
+            search::export_pages_as_okf,
             search::get_knowledge_path,
             search::count_knowledge_files,
             // Decision log commands

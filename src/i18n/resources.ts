@@ -856,6 +856,23 @@ const en = {
       rerunSetupGo: "Re-run",
       rerunSetupConfirm:
         "Your data is preserved. This only replays the setup wizard.",
+      exportSection: "Export",
+      exportOkfTitle: "Export pages as an OKF bundle",
+      exportOkfDescription:
+        "Writes the pages from every Space into a folder you choose, as Markdown files with an index and their sources (OKF v0.2). Pick an empty folder, or the folder of an earlier export to update it.",
+      exportOkfChoose: "Choose folder",
+      exportOkfRunning: "Exporting…",
+      exportOkfDialogTitle: "Choose a folder for the OKF bundle",
+      exportOkfDone_one: "Exported {{count}} page to {{path}}.",
+      exportOkfDone_other: "Exported {{count}} pages to {{path}}.",
+      exportOkfSkipped_one:
+        "{{count}} page was not exported because it is not yet cleared for use outside Wenlan.",
+      exportOkfSkipped_other:
+        "{{count}} pages were not exported because they are not yet cleared for use outside Wenlan.",
+      exportOkfFailed_one: "{{count}} page could not be written.",
+      exportOkfFailed_other: "{{count}} pages could not be written.",
+      exportOkfError: "Export failed: {{reason}}",
+      exportOkfErrorUnknown: "Export failed. Try again.",
     },
     profile: {
       label: "Profile",
@@ -2864,6 +2881,21 @@ const zhHans = {
       rerunSetupGo: "重新运行",
       rerunSetupConfirm:
         "你的数据会保留，这只会重新播放设置向导。",
+      exportSection: "导出",
+      exportOkfTitle: "将页面导出为 OKF 包",
+      exportOkfDescription:
+        "将所有空间的页面写入你选择的文件夹，内容为带索引和来源的 Markdown 文件（OKF v0.2）。请选择空文件夹；选择之前导出过的文件夹则会更新它。",
+      exportOkfChoose: "选择文件夹",
+      exportOkfRunning: "正在导出…",
+      exportOkfDialogTitle: "选择存放 OKF 包的文件夹",
+      exportOkfDone_one: "已将 {{count}} 个页面导出到 {{path}}。",
+      exportOkfDone_other: "已将 {{count}} 个页面导出到 {{path}}。",
+      exportOkfSkipped_one: "有 {{count}} 个页面尚未获准在文澜之外使用，因此没有导出。",
+      exportOkfSkipped_other: "有 {{count}} 个页面尚未获准在文澜之外使用，因此没有导出。",
+      exportOkfFailed_one: "有 {{count}} 个页面无法写入。",
+      exportOkfFailed_other: "有 {{count}} 个页面无法写入。",
+      exportOkfError: "导出失败：{{reason}}",
+      exportOkfErrorUnknown: "导出失败，请重试。",
     },
     profile: {
       label: "个人资料",
@@ -4846,6 +4878,21 @@ const zhHant = {
       rerunSetupGo: "重新執行",
       rerunSetupConfirm:
         "你的資料會保留，這只會重新播放設定精靈。",
+      exportSection: "匯出",
+      exportOkfTitle: "將頁面匯出為 OKF 套件",
+      exportOkfDescription:
+        "將所有空間的頁面寫入你選擇的資料夾，內容為附索引與來源的 Markdown 檔案（OKF v0.2）。請選擇空資料夾；選擇先前匯出過的資料夾則會更新它。",
+      exportOkfChoose: "選擇資料夾",
+      exportOkfRunning: "正在匯出…",
+      exportOkfDialogTitle: "選擇存放 OKF 套件的資料夾",
+      exportOkfDone_one: "已將 {{count}} 個頁面匯出到 {{path}}。",
+      exportOkfDone_other: "已將 {{count}} 個頁面匯出到 {{path}}。",
+      exportOkfSkipped_one: "有 {{count}} 個頁面尚未獲准在文瀾之外使用，因此沒有匯出。",
+      exportOkfSkipped_other: "有 {{count}} 個頁面尚未獲准在文瀾之外使用，因此沒有匯出。",
+      exportOkfFailed_one: "有 {{count}} 個頁面無法寫入。",
+      exportOkfFailed_other: "有 {{count}} 個頁面無法寫入。",
+      exportOkfError: "匯出失敗：{{reason}}",
+      exportOkfErrorUnknown: "匯出失敗，請重試。",
     },
     profile: {
       label: "個人資料",
