@@ -1318,6 +1318,9 @@ pub async fn add_watch_path(
                 memory_count: 0,
                 last_sync_errors: 0,
                 last_sync_error_detail: None,
+                space: None,
+                queued_files: 0,
+                waiting_files: 0,
             });
             config::save_config(&cfg).map_err(|e| e.to_string())?;
         }
@@ -4811,6 +4814,9 @@ mod managed_blob_paths_tests {
             memory_count: 0,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         };
         // The managed dir itself is cleaned; an in-place folder source is not.
         assert_eq!(
@@ -5039,6 +5045,9 @@ mod sync_registered_source_tests {
                 memory_count: 0,
                 last_sync_errors: 0,
                 last_sync_error_detail: None,
+                space: None,
+                queued_files: 0,
+                waiting_files: 0,
             }],
             ..config::Config::default()
         })
@@ -5774,6 +5783,9 @@ mod registered_source_tests {
             memory_count: 0,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         }
     }
 

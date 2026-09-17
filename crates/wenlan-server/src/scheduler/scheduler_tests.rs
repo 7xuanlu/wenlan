@@ -1929,6 +1929,9 @@ fn register_directory_source(id: &str, path: &std::path::Path) {
             memory_count: 0,
             last_sync_errors: 0,
             last_sync_error_detail: None,
+            space: None,
+            queued_files: 0,
+            waiting_files: 0,
         }],
         ..wenlan_core::config::Config::default()
     })
@@ -1947,6 +1950,9 @@ fn directory_sync_tick_polls_recoverable_sources_but_not_paused() {
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     };
 
     assert!(should_poll_directory_source(&source));
@@ -2096,6 +2102,9 @@ fn directory_source(
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     }
 }
 
