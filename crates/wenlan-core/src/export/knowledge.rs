@@ -151,7 +151,7 @@ const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
 
 /// Whether a projected filename is the OKF root document. Case-insensitive,
 /// like the default macOS and Windows filesystems.
-fn is_index_file(name: &str) -> bool {
+pub(crate) fn is_index_file(name: &str) -> bool {
     name.eq_ignore_ascii_case(INDEX_FILE)
 }
 /// Set after the first warning that a user's own `index.md` blocked the
