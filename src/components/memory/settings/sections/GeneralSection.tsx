@@ -519,6 +519,7 @@ function ExportSettingsBlock() {
             <Button
               variant="secondary"
               size="sm"
+              className="whitespace-nowrap"
               loading={exportMutation.isPending}
               aria-busy={exportMutation.isPending}
               onClick={handleChooseFolder}
