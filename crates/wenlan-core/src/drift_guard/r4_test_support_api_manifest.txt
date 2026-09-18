@@ -922,6 +922,10 @@ crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::di
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::distill_one_cluster_resolves_external_file_source_kind|TestDbSession::execute|2
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::distill_one_cluster_resolves_external_file_source_kind|TestDbSession::execute|3
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::distill_one_cluster_resolves_external_file_source_kind|test_primary_session|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::force_redistill_on_authored_page_stages_card_and_keeps_protection|TestDbSession::execute|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::force_redistill_on_authored_page_stages_card_and_keeps_protection|test_primary_session|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::force_redistill_refuses_a_draft_before_generation|TestDbSession::execute|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::force_redistill_refuses_a_draft_before_generation|test_primary_session|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|TestDbRow::get|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|TestDbRow::get|2
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|TestDbRows::next|1
@@ -930,6 +934,12 @@ crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::ov
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|TestDbSession::query|2
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|test_primary_session|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::overlapping_cluster_attaches_to_source_less_seed_no_duplicate|test_primary_session|2
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::pending_revision_card_ids|TestDbRow::get|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::pending_revision_card_ids|TestDbRows::next|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::pending_revision_card_ids|TestDbSession::query|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::pending_revision_card_ids|test_primary_session|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::recreate_page_under_same_id|TestDbSession::execute|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::recreate_page_under_same_id|test_primary_session|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::refresh_page_citations_resolve_external_file_source_kind|TestDbSession::execute|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::refresh_page_citations_resolve_external_file_source_kind|TestDbSession::execute|2
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::refresh_page_citations_resolve_external_file_source_kind|test_primary_session|1
@@ -951,6 +961,8 @@ crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::re
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::refresh_page_rebuilds_the_summary_from_the_new_body|test_primary_session|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::resolve_distill_target_ignores_unregistered_memory_space|TestDbSession::execute|1
 crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::resolve_distill_target_ignores_unregistered_memory_space|test_primary_session|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::seed_protected_page|TestDbSession::execute|1
+crates/wenlan-core/src/synthesis/distill.rs|crate::synthesis::distill::tests::seed_protected_page|test_primary_session|1
 crates/wenlan-core/src/synthesis/distill_truth_test.rs|crate::synthesis::distill::distill_truth_test::refresh_page_skips_re_distill_for_a_page_the_automatic_reader_may_not_see|TestDbSession::execute|1
 crates/wenlan-core/src/synthesis/distill_truth_test.rs|crate::synthesis::distill::distill_truth_test::refresh_page_skips_re_distill_for_a_page_the_automatic_reader_may_not_see|TestDbSession::execute|2
 crates/wenlan-core/src/synthesis/distill_truth_test.rs|crate::synthesis::distill::distill_truth_test::refresh_page_skips_re_distill_for_a_page_the_automatic_reader_may_not_see|TestDbSession::execute|3

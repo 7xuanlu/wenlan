@@ -301,6 +301,15 @@ async fn finalize_sync(
     })
 }
 
+/// A Directory sync's wire stats plus how many files it newly put on the
+/// document queue. `stats.ingested` also counts a re-hashed file whose queue
+/// row already holds the same generation; `newly_queued` does not, so callers
+/// can tell new work from a repeat poll of files still waiting for prep.
+pub(crate) struct DirectorySyncOutcome {
+    pub(crate) stats: SyncStatsResponse,
+    pub(crate) newly_queued: usize,
+}
+
 /// Core Directory-source sync: root-guard + cheap mtime/hash diff + deletion
 /// propagation + rename optimization, enqueueing changed files for background
 /// document enrichment. This is the ONE shared routine so the HTTP handler
@@ -314,7 +323,7 @@ pub(crate) async fn sync_directory_source(
     db: Arc<wenlan_core::db::MemoryDB>,
     source: &Source,
     config: &wenlan_core::config::Config,
-) -> Result<SyncStatsResponse, ServerError> {
+) -> Result<DirectorySyncOutcome, ServerError> {
     let id = source.id.clone();
 
     // Root-guard (§4/§5): a missing/unreadable root means "source
@@ -336,13 +345,16 @@ pub(crate) async fn sync_directory_source(
     })?;
     let Some(files) = files else {
         mark_source_unavailable(&id, "source path is missing or unreadable");
-        return Ok(SyncStatsResponse {
-            files_found: 0,
-            ingested: 0,
-            skipped: 0,
-            errors: 0,
-            error_detail: None,
-            paused: None,
+        return Ok(DirectorySyncOutcome {
+            stats: SyncStatsResponse {
+                files_found: 0,
+                ingested: 0,
+                skipped: 0,
+                errors: 0,
+                error_detail: None,
+                paused: None,
+            },
+            newly_queued: 0,
         });
     };
 
@@ -387,6 +399,7 @@ pub(crate) async fn sync_directory_source(
     }
 
     let mut ingested: usize = 0;
+    let mut newly_queued: usize = 0;
     let mut skipped: usize = 0;
     let mut errors: usize = 0;
     let mut file_errors: usize = 0;
@@ -539,10 +552,21 @@ pub(crate) async fn sync_directory_source(
             }
         }
 
-        // Normal enqueue (no rename match).
+        // Normal enqueue (no rename match). `enqueue_document` is a no-op
+        // when the row already holds this hash, so only a missing row or a
+        // different hash is new work.
+        let already_queued = db
+            .get_queue_entry(&id, &file_key)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|entry| entry.content_hash.as_deref() == Some(hash.as_str()));
         match db.enqueue_document(&id, &file_key, Some(&hash)).await {
             Ok(_) => {
                 ingested += 1;
+                if !already_queued {
+                    newly_queued += 1;
+                }
             }
             Err(e) => {
                 tracing::error!("[sync] enqueue failed for {}: {}", file_path.display(), e);
@@ -560,7 +584,7 @@ pub(crate) async fn sync_directory_source(
         }
     }
 
-    finalize_sync(
+    let stats = finalize_sync(
         db,
         &id,
         files.len(),
@@ -570,7 +594,11 @@ pub(crate) async fn sync_directory_source(
         file_errors,
         gdrive_errors,
     )
-    .await
+    .await?;
+    Ok(DirectorySyncOutcome {
+        stats,
+        newly_queued,
+    })
 }
 
 /// POST /api/sources/{id}/sync — Trigger a sync for a source.
@@ -598,7 +626,13 @@ pub async fn handle_sync_source(
     };
 
     if source.source_type == SourceType::Directory {
-        return sync_directory_source(db, &source, &config).await.map(Json);
+        let outcome = sync_directory_source(db.clone(), &source, &config).await?;
+        if outcome.newly_queued > 0 {
+            // Give newly queued files the bounded import lane so they are
+            // prepared and searchable without waiting for the idle gate.
+            crate::import_routes::request_import_priority(&state, &db, None).await;
+        }
+        return Ok(Json(outcome.stats));
     }
 
     // Vault files are frequently cloud "online-only" placeholders (see the
@@ -1364,6 +1398,86 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "sync_state must not be written at enqueue time"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_sync_source_directory_arms_import_priority_only_when_files_queued() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let source_root = tempfile::tempdir().unwrap();
+        let knowledge_root = tempfile::tempdir().unwrap();
+        let source_id = "directory-notes".to_string();
+        wenlan_core::config::save_config(&Config {
+            sources: vec![Source {
+                id: source_id.clone(),
+                source_type: SourceType::Directory,
+                path: source_root.path().to_path_buf(),
+                status: SyncStatus::Active,
+                last_sync: None,
+                file_count: 0,
+                memory_count: 0,
+                last_sync_errors: 0,
+                last_sync_error_detail: None,
+            }],
+            knowledge_path: Some(knowledge_root.path().to_path_buf()),
+            ..Config::default()
+        })
+        .unwrap();
+        let (db, _db_dir) = new_test_db().await;
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..ServerState::default()
+        }));
+        async fn priority_deadline(db: &wenlan_core::db::MemoryDB) -> i64 {
+            db.get_app_metadata("import_priority_until_v1")
+                .await
+                .unwrap()
+                .and_then(|value| value.parse::<i64>().ok())
+                .unwrap_or(0)
+        }
+
+        let Json(empty) = handle_sync_source(State(state.clone()), Path(source_id.clone()))
+            .await
+            .expect("empty directory sync should succeed");
+        assert_eq!(empty.ingested, 0);
+        assert_eq!(
+            priority_deadline(&db).await,
+            0,
+            "a sync that queues nothing must not arm the import lane"
+        );
+
+        std::fs::write(
+            source_root.path().join("fresh.txt"),
+            "This fresh folder note has enough text to be queued for preparation.",
+        )
+        .unwrap();
+        let Json(queued) = handle_sync_source(State(state.clone()), Path(source_id.clone()))
+            .await
+            .expect("directory sync should succeed");
+        assert_eq!(queued.ingested, 1);
+        assert!(
+            priority_deadline(&db).await > chrono::Utc::now().timestamp(),
+            "a sync that queues a file must arm the import lane"
+        );
+
+        // Simulate the lane finishing, then sync the same still-pending file
+        // again. Re-hashing an already-queued file is not new work and must
+        // not restart the lane.
+        db.set_app_metadata("import_priority_until_v1", "0")
+            .await
+            .unwrap();
+        let Json(repeated) = handle_sync_source(State(state), Path(source_id))
+            .await
+            .expect("repeated directory sync should succeed");
+        assert_eq!(repeated.files_found, 1);
+        assert_eq!(
+            priority_deadline(&db).await,
+            0,
+            "a repeated sync of an already-queued file must not restart the import lane"
         );
     }
 

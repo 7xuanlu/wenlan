@@ -337,9 +337,9 @@ export function OnDeviceModelCard({
     setError(null);
     try {
       await downloadOnDeviceModel(current.id);
-      // Only Settings reaches this (the wizard defers the download and its
-      // Done step pins), so a model turned on here is chosen for any job
-      // without one.
+      // Only Settings reaches this (the wizard defers the download to its
+      // Setting up step, which fills pins when that download resolves), so a
+      // model turned on here is chosen for any job without one.
       await fillUnsetPinsAfterSave();
       queryClient.invalidateQueries({ queryKey: ["onDeviceModel"] });
       queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] });

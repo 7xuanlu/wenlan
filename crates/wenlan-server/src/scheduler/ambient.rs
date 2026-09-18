@@ -647,6 +647,136 @@ pub(super) async fn run_ambient_job(
     }
 }
 
+/// Server copy of the document queue's attempt cap
+/// (`MemoryDB::DOC_ENRICHMENT_MAX_ATTEMPTS`, crate-private in wenlan-core).
+/// `document_prep_outcome_distinguishes_retryable_and_exhausted_rows` pins it
+/// to the real claim query.
+const DOCUMENT_PREP_MAX_ATTEMPTS: i64 = 5;
+
+#[derive(Debug)]
+pub(super) struct DocumentPrepReport {
+    pub(super) outcome: DocumentPrepOutcome,
+    pub(super) panicked: bool,
+    pub(super) elapsed: Duration,
+}
+
+/// Classify a claimed document's queue row after one prep attempt.
+pub(super) fn document_prep_outcome(
+    entry: Option<&wenlan_core::db::DocEnrichmentQueueEntry>,
+) -> DocumentPrepOutcome {
+    match entry {
+        Some(entry) if entry.status == "paused" => {
+            if entry.attempt_count >= DOCUMENT_PREP_MAX_ATTEMPTS {
+                DocumentPrepOutcome::Exhausted
+            } else {
+                DocumentPrepOutcome::RetryableFailure {
+                    retry_at: entry.next_retry_at,
+                }
+            }
+        }
+        _ => DocumentPrepOutcome::Prepared,
+    }
+}
+
+/// Rate-limits the import-lane claim-failure warning. A failed claim spends no
+/// slice, so a persistent queue error would otherwise warn on every
+/// import-priority tick until the lane's deadline. The first failure of a
+/// consecutive run warns; the rest log at debug until a claim succeeds.
+#[derive(Debug, Default)]
+pub(super) struct DocumentPrepClaimLog {
+    failing: bool,
+}
+
+impl DocumentPrepClaimLog {
+    /// Record a failed claim. True only for the first failure of a run.
+    pub(super) fn note_failure(&mut self) -> bool {
+        !std::mem::replace(&mut self.failing, true)
+    }
+
+    /// Record a successful claim (a document or an empty queue).
+    pub(super) fn note_success(&mut self) {
+        self.failing = false;
+    }
+}
+
+/// Import-lane document prep: claim one fresh document and parse, embed and
+/// park it without any model, so a new folder becomes searchable without
+/// waiting for the idle gate. Model enrichment of the parked row stays on the
+/// ordinary ambient lap. A panic pauses the claimed generation and is reported
+/// rather than unwound, like `run_ambient_job_safe`.
+pub(super) async fn run_import_document_prep_slice(
+    db: &Arc<wenlan_core::db::MemoryDB>,
+    prompts: &wenlan_core::prompts::PromptRegistry,
+    knowledge_path: &std::path::Path,
+    claim_log: &mut DocumentPrepClaimLog,
+) -> DocumentPrepReport {
+    let started = Instant::now();
+    let claim = db.claim_next_pending_for_provider(false).await;
+    if claim.is_ok() {
+        claim_log.note_success();
+    }
+    let entry = match claim {
+        Ok(Some(entry)) => entry,
+        Ok(None) => {
+            persist_ambient_last_run(db, AmbientJob::Document).await;
+            return DocumentPrepReport {
+                outcome: DocumentPrepOutcome::Idle,
+                panicked: false,
+                elapsed: started.elapsed(),
+            };
+        }
+        Err(error) => {
+            if claim_log.note_failure() {
+                tracing::warn!(
+                    "[scheduler] import document prep claim failed: {error}; repeats log at \
+                     debug until a claim succeeds"
+                );
+            } else {
+                tracing::debug!("[scheduler] import document prep claim failed again: {error}");
+            }
+            return DocumentPrepReport {
+                outcome: DocumentPrepOutcome::ClaimFailed,
+                panicked: false,
+                elapsed: started.elapsed(),
+            };
+        }
+    };
+    let slice = std::panic::AssertUnwindSafe(
+        wenlan_core::document_enrichment::run_document_enrichment_slice(
+            db,
+            &entry,
+            Some(knowledge_path),
+            None,
+            prompts,
+        ),
+    );
+    let panicked = match futures::FutureExt::catch_unwind(slice).await {
+        Ok(_) => false,
+        Err(_) => {
+            tracing::error!(
+                "[scheduler] import document prep PANICKED for {}; scheduler continues",
+                entry.file_path
+            );
+            wenlan_core::document_enrichment::pause_document_enrichment_after_panic(db, &entry)
+                .await;
+            true
+        }
+    };
+    let outcome = match db.get_queue_entry(&entry.source_id, &entry.file_path).await {
+        Ok(row) => document_prep_outcome(row.as_ref()),
+        Err(error) => {
+            tracing::warn!("[scheduler] import document prep outcome read failed: {error}");
+            DocumentPrepOutcome::Prepared
+        }
+    };
+    persist_ambient_last_run(db, AmbientJob::Document).await;
+    DocumentPrepReport {
+        outcome,
+        panicked,
+        elapsed: started.elapsed(),
+    }
+}
+
 /// Claim at most one document and advance it by at most one LLM request.
 /// Paused rows retain their existing backoff through `claim_next_pending`.
 pub(super) async fn run_document_enrichment_slice_tick(

@@ -657,8 +657,9 @@ async fn handle_distill_inner(
         _ => None,
     };
 
-    // Force path: only clear user_edited after an LLM is available to run the
-    // rewrite. A skipped no-LLM response must not unlock user prose.
+    // Force path: rebuild the page even if the user edited it. Edit protection
+    // is released only by the write that lands the new body, so a skipped,
+    // failed, cancelled, or discarded rebuild leaves user prose locked.
     // Only valid when target resolves to a single page; all other targets
     // (entity, domain, none) return a hint payload.
     if req.force {
@@ -679,10 +680,7 @@ async fn handle_distill_inner(
                         "hint": "force rebuild needs an LLM in the daemon — install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup`",
                     })));
                 }
-                db.clear_user_edited(page_id)
-                    .await
-                    .map_err(ServerError::from)?;
-                let outcome = wenlan_core::refinery::deep_distill_single(
+                let outcome = wenlan_core::refinery::force_redistill_single(
                     &db,
                     prefer_llm,
                     &prompts,
@@ -1001,12 +999,10 @@ async fn handle_redistill_inner(
         .map(|provider| provider.is_available())
         .unwrap_or(false)
     {
-        // Clear user_edited and mark stale only when the rewrite can actually
-        // run. The skipped no-LLM path must leave user prose locked.
-        db.clear_user_edited(&page_id)
-            .await
-            .map_err(ServerError::from)?;
-        let outcome = wenlan_core::refinery::deep_distill_single(
+        // Edit protection is released only by the write that lands the new
+        // body. A skipped, failed, cancelled, or discarded rebuild leaves user
+        // prose locked.
+        let outcome = wenlan_core::refinery::force_redistill_single(
             &db,
             prefer_llm,
             &prompts,
@@ -2271,13 +2267,19 @@ mod redistill_contract_tests {
             .await
             .expect("get page")
             .expect("page exists");
+        // The seeded page cites a memory that does not exist, so synthesis has
+        // nothing to rebuild from and no body lands. Edit protection is only
+        // released by the write that lands a new body.
+        assert_eq!(payload["updated"], false);
         assert!(
-            !page.user_edited,
-            "completed external rebuild must clear user_edited"
+            page.user_edited,
+            "a rebuild that landed no body must keep user_edited"
         );
-        // NOTE: `updated` may be false with a `reason` (the citation gate can
-        // discard the mock body), so this test asserts only on `status` and
-        // the `user_edited` flip.
+        assert_ne!(
+            page.stale_reason.as_deref(),
+            Some("manual_force"),
+            "a rebuild that landed no body must not mark the page for a forced rewrite"
+        );
     }
 
     #[tokio::test]
@@ -2318,13 +2320,18 @@ mod redistill_contract_tests {
             .await
             .expect("get page")
             .expect("page exists");
+        // Same as the page route: nothing to rebuild from, so no body lands
+        // and edit protection stays.
+        assert_eq!(payload["updated"], false);
         assert!(
-            !page.user_edited,
-            "completed external force rebuild must clear user_edited"
+            page.user_edited,
+            "a force rebuild that landed no body must keep user_edited"
         );
-        // NOTE: `updated` may be false with a `reason` (the citation gate can
-        // discard the mock body), so this test asserts only on `status`,
-        // `force`, and the `user_edited` flip.
+        assert_ne!(
+            page.stale_reason.as_deref(),
+            Some("manual_force"),
+            "a force rebuild that landed no body must not mark the page for a forced rewrite"
+        );
     }
 
     #[tokio::test]
@@ -2365,6 +2372,533 @@ mod redistill_contract_tests {
             page.user_edited,
             "skipped unavailable-external re-distill must not unlock user-edited prose"
         );
+    }
+
+    // ── Edit protection through failure, discard, and cancellation ─────────
+    //
+    // A Re-distill may only release edit protection in the write that lands
+    // the new body. These tests seed a real source memory so the provider is
+    // actually called, then fail, discard, or abandon the rebuild.
+
+    const SOURCE_ID: &str = "mem_redistill_protection_source";
+    const SOURCE_TEXT: &str =
+        "Wenlan keeps a hand edited page protected until a forced rebuild lands a new body.";
+    const USER_PROSE: &str = "My own words about keeping hand edited pages protected.";
+    /// A rebuild body whose single claim verifies against `SOURCE_TEXT`, so it
+    /// passes the citation gate and reaches the page write.
+    const VERIFIED_REBUILD_BODY: &str =
+        "Wenlan keeps a hand edited page protected until a forced rebuild lands a new body [1]";
+    /// The marker an earlier discarded automatic refresh left on the page. A
+    /// rebuild that lands no body must not clear it before generation.
+    const PRIOR_BLOCKED_REASON: &str = "an earlier automatic refresh was discarded";
+
+    #[derive(Clone, Copy, Debug)]
+    enum RebuildRoute {
+        Page,
+        ForceTarget,
+    }
+
+    fn rebuild_request(route: RebuildRoute, page_id: &str) -> Request<Body> {
+        match route {
+            RebuildRoute::Page => Request::builder()
+                .method("POST")
+                .uri(format!("/api/distill/{page_id}"))
+                .body(Body::empty())
+                .unwrap(),
+            RebuildRoute::ForceTarget => Request::builder()
+                .method("POST")
+                .uri("/api/distill")
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"target":"{page_id}","force":true}}"#
+                )))
+                .unwrap(),
+        }
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct ProtectionSnapshot {
+        content: String,
+        version: i64,
+        user_edited: bool,
+        stale_reason: Option<String>,
+        refresh_blocked_reason: Option<String>,
+        pending_card: bool,
+    }
+
+    async fn protection_snapshot(
+        db: &wenlan_core::db::MemoryDB,
+        page_id: &str,
+        card_id: &str,
+    ) -> ProtectionSnapshot {
+        let page = db
+            .get_page(page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        let pending_card = db
+            .list_pending_revisions(100)
+            .await
+            .expect("list pending revisions")
+            .iter()
+            .any(|item| item.revision_source_id == card_id);
+        ProtectionSnapshot {
+            content: page.content,
+            version: page.version,
+            user_edited: page.user_edited,
+            stale_reason: page.stale_reason,
+            refresh_blocked_reason: page.refresh_blocked_reason,
+            pending_card,
+        }
+    }
+
+    /// A user-edited page (`creation_kind`, `distilled` when `None`) that
+    /// cites a real source memory, is already stale for an ordinary reason,
+    /// carries the blocked marker of an earlier discarded refresh, and has a
+    /// pending revision card awaiting review. Returns the snapshot every
+    /// non-landing rebuild must leave untouched.
+    async fn seeded_protected_page_with_source(
+        creation_kind: Option<&str>,
+    ) -> (
+        crate::router::AppRouter,
+        Arc<RwLock<ServerState>>,
+        Arc<wenlan_core::db::MemoryDB>,
+        String,
+        String,
+        ProtectionSnapshot,
+        tempfile::TempDir,
+    ) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
+            Arc::new(wenlan_core::events::NoopEmitter);
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), emitter)
+                .await
+                .expect("MemoryDB::new"),
+        );
+        db.upsert_documents(vec![wenlan_core::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: SOURCE_ID.to_string(),
+            title: "Protection source".to_string(),
+            content: SOURCE_TEXT.to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(true),
+            ..Default::default()
+        }])
+        .await
+        .expect("seed source memory");
+        let created = wenlan_core::post_write::create_page_with_floor(
+            &db,
+            CreateConceptRequest {
+                title: "Protected page".to_string(),
+                content: SOURCE_TEXT.to_string(),
+                summary: None,
+                entity_id: None,
+                space: (None).into(),
+                source_memory_ids: vec![SOURCE_ID.to_string()],
+                creation_kind: creation_kind.map(str::to_string),
+                workspace: None,
+            },
+            "test",
+            None,
+            1,
+        )
+        .await
+        .expect("create page");
+        let page_id = created.id;
+        db.update_page_content(&page_id, USER_PROSE, &[SOURCE_ID], "fs_edit")
+            .await
+            .expect("hand edit the page");
+        db.set_page_stale(&page_id, "source_updated")
+            .await
+            .expect("mark page stale");
+        let page = db
+            .get_page(&page_id)
+            .await
+            .expect("get page")
+            .expect("page exists");
+        assert_eq!(
+            page.creation_kind,
+            creation_kind.unwrap_or("distilled"),
+            "precondition: page kind"
+        );
+        assert!(page.user_edited, "precondition: page is user edited");
+        let source_revision = db
+            .get_page_source_revision(&page_id)
+            .await
+            .expect("source revision");
+        let card = wenlan_core::post_write::stage_page_revision_card(
+            &db,
+            &page,
+            "A proposed revision awaiting review.",
+            &[SOURCE_ID.to_string()],
+            source_revision,
+            "re_distill",
+            None,
+        )
+        .await
+        .expect("stage pending revision card");
+        let card_id = card.revision_card_id.expect("card id");
+        db.set_page_refresh_blocked_reason(&page_id, PRIOR_BLOCKED_REASON)
+            .await
+            .expect("record an earlier discarded refresh");
+
+        let before = protection_snapshot(&db, &page_id, &card_id).await;
+        assert!(before.pending_card, "precondition: card is pending");
+        assert_eq!(before.stale_reason.as_deref(), Some("source_updated"));
+        assert_eq!(
+            before.refresh_blocked_reason.as_deref(),
+            Some(PRIOR_BLOCKED_REASON)
+        );
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state.clone());
+        (app, state, db, page_id, card_id, before, tmp)
+    }
+
+    /// Provider whose request fails like an unreachable local server. It
+    /// records the page's protection state while generation is in flight so a
+    /// clear-then-restore implementation cannot pass.
+    struct FailingRebuildProvider {
+        db: Arc<wenlan_core::db::MemoryDB>,
+        page_id: String,
+        observed: std::sync::Mutex<Vec<(bool, Option<String>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FailingRebuildProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            let page = self
+                .db
+                .get_page(&self.page_id)
+                .await
+                .expect("get page mid-generation")
+                .expect("page exists mid-generation");
+            self.observed
+                .lock()
+                .unwrap()
+                .push((page.user_edited, page.stale_reason));
+            Err(LlmError::InferenceFailed(
+                "Request failed: connection refused".into(),
+            ))
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "failing-rebuild"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    /// Provider that signals it started, then never finishes.
+    struct HangingRebuildProvider {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for HangingRebuildProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            self.started.notify_one();
+            std::future::pending::<Result<String, LlmError>>().await
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "hanging-rebuild"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    async fn provider_failure_keeps_edit_protection(route: RebuildRoute) {
+        let (app, state, db, page_id, card_id, before, _tmp) =
+            seeded_protected_page_with_source(None).await;
+        let provider = Arc::new(FailingRebuildProvider {
+            db: db.clone(),
+            page_id: page_id.clone(),
+            observed: std::sync::Mutex::new(Vec::new()),
+        });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider.clone() as Arc<dyn LlmProvider>);
+        }
+
+        let response = app.oneshot(rebuild_request(route, &page_id)).await.unwrap();
+        assert_eq!(
+            response.status(),
+            500,
+            "{route:?}: a failed provider keeps the existing error status"
+        );
+
+        let observed = provider.observed.lock().unwrap().clone();
+        assert_eq!(
+            observed,
+            vec![(true, Some("source_updated".to_string()))],
+            "{route:?}: edit protection must hold while generation is in flight"
+        );
+        assert_eq!(
+            protection_snapshot(&db, &page_id, &card_id).await,
+            before,
+            "{route:?}: a failed rebuild must leave body, user_edited, stale_reason, the blocked marker, and the pending card untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_provider_failure_keeps_edit_protection() {
+        provider_failure_keeps_edit_protection(RebuildRoute::Page).await;
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_provider_failure_keeps_edit_protection() {
+        provider_failure_keeps_edit_protection(RebuildRoute::ForceTarget).await;
+    }
+
+    async fn discarded_output_keeps_edit_protection(route: RebuildRoute) {
+        let (app, state, db, page_id, card_id, before, _tmp) =
+            seeded_protected_page_with_source(None).await;
+        // "rebuilt body" carries no [N] citation, so the citation gate
+        // discards it after generation.
+        let mock: Arc<dyn LlmProvider> = Arc::new(RebuildMockProvider { available: true });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(mock);
+        }
+
+        let response = app.oneshot(rebuild_request(route, &page_id)).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "ok", "{route:?}: {payload}");
+        assert_eq!(payload["updated"], false, "{route:?}: {payload}");
+        let reason = payload["reason"]
+            .as_str()
+            .filter(|reason| reason.starts_with("citation verification failed ("))
+            .unwrap_or_else(|| panic!("{route:?}: the discard must be reported: {payload}"))
+            .to_string();
+
+        // The discard is not "untouched": it records why on the page, which
+        // replaces the earlier marker. Everything edit protection covers holds.
+        assert_ne!(
+            before.refresh_blocked_reason.as_deref(),
+            Some(reason.as_str())
+        );
+        assert_eq!(
+            protection_snapshot(&db, &page_id, &card_id).await,
+            ProtectionSnapshot {
+                refresh_blocked_reason: Some(reason),
+                ..before
+            },
+            "{route:?}: a discarded rebuild must set the blocked marker and leave body, version, user_edited, stale_reason, and the pending card untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_discarded_output_keeps_edit_protection() {
+        discarded_output_keeps_edit_protection(RebuildRoute::Page).await;
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_discarded_output_keeps_edit_protection() {
+        discarded_output_keeps_edit_protection(RebuildRoute::ForceTarget).await;
+    }
+
+    async fn cancelled_rebuild_keeps_edit_protection(route: RebuildRoute) {
+        let (app, state, db, page_id, card_id, before, _tmp) =
+            seeded_protected_page_with_source(None).await;
+        let started = Arc::new(tokio::sync::Notify::new());
+        let provider: Arc<dyn LlmProvider> = Arc::new(HangingRebuildProvider {
+            started: started.clone(),
+        });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider);
+        }
+
+        // Dropping the request future after generation starts is what a
+        // client disconnect or timeout does to the handler.
+        let request = tokio::spawn(app.oneshot(rebuild_request(route, &page_id)));
+        tokio::time::timeout(std::time::Duration::from_secs(30), started.notified())
+            .await
+            .expect("provider generation must start");
+        request.abort();
+        assert!(
+            request.await.is_err_and(|error| error.is_cancelled()),
+            "{route:?}: request future must be cancelled mid-generation"
+        );
+
+        assert_eq!(
+            protection_snapshot(&db, &page_id, &card_id).await,
+            before,
+            "{route:?}: a cancelled rebuild must leave body, user_edited, stale_reason, the blocked marker, and the pending card untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_cancelled_mid_generation_keeps_edit_protection() {
+        cancelled_rebuild_keeps_edit_protection(RebuildRoute::Page).await;
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_cancelled_mid_generation_keeps_edit_protection() {
+        cancelled_rebuild_keeps_edit_protection(RebuildRoute::ForceTarget).await;
+    }
+
+    /// Provider that returns a fixed body.
+    struct StubRebuildProvider {
+        body: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for StubRebuildProvider {
+        async fn generate(&self, _request: LlmRequest) -> Result<String, LlmError> {
+            Ok(self.body.to_string())
+        }
+
+        fn is_available(&self) -> bool {
+            true
+        }
+
+        fn name(&self) -> &str {
+            "stub-rebuild"
+        }
+
+        fn backend(&self) -> LlmBackend {
+            LlmBackend::Api
+        }
+
+        fn kind(&self) -> &'static str {
+            "mock"
+        }
+    }
+
+    async fn unavailable_output_keeps_edit_protection(route: RebuildRoute) {
+        let (app, state, db, page_id, card_id, before, _tmp) =
+            seeded_protected_page_with_source(None).await;
+        // Blank output is "no synthesis available", not a discard.
+        let provider: Arc<dyn LlmProvider> = Arc::new(StubRebuildProvider { body: "  \n  " });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider);
+        }
+
+        let response = app.oneshot(rebuild_request(route, &page_id)).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "ok", "{route:?}: {payload}");
+        assert_eq!(payload["updated"], false, "{route:?}: {payload}");
+        assert!(payload.get("reason").is_none(), "{route:?}: {payload}");
+
+        assert_eq!(
+            protection_snapshot(&db, &page_id, &card_id).await,
+            before,
+            "{route:?}: an unavailable rebuild must leave body, user_edited, stale_reason, the blocked marker, and the pending card untouched"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_unavailable_output_keeps_edit_protection() {
+        unavailable_output_keeps_edit_protection(RebuildRoute::Page).await;
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_unavailable_output_keeps_edit_protection() {
+        unavailable_output_keeps_edit_protection(RebuildRoute::ForceTarget).await;
+    }
+
+    /// Forcing Re-distill never overrides an authored page: its verified
+    /// rebuild is staged as a revision card, and the page keeps its body,
+    /// version, and `user_edited` flag.
+    async fn authored_page_stages_card_and_keeps_edit_protection(route: RebuildRoute) {
+        let (app, state, db, page_id, card_id, before, _tmp) =
+            seeded_protected_page_with_source(Some("authored")).await;
+        let provider: Arc<dyn LlmProvider> = Arc::new(StubRebuildProvider {
+            body: VERIFIED_REBUILD_BODY,
+        });
+        {
+            let mut guard = state.write().await;
+            guard.external_llm = Some(provider);
+        }
+
+        let response = app.oneshot(rebuild_request(route, &page_id)).await.unwrap();
+        assert_eq!(response.status(), 200);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["status"], "ok", "{route:?}: {payload}");
+        assert_eq!(payload["updated"], false, "{route:?}: {payload}");
+        assert!(
+            payload.get("reason").is_none(),
+            "{route:?}: the rebuild verified, so nothing was discarded: {payload}"
+        );
+
+        let after = protection_snapshot(&db, &page_id, &card_id).await;
+        assert_eq!(
+            after.content, before.content,
+            "{route:?}: body must not land"
+        );
+        assert_eq!(after.version, before.version, "{route:?}: no page write");
+        assert!(
+            after.user_edited,
+            "{route:?}: authored page keeps user_edited"
+        );
+        assert!(
+            after.pending_card,
+            "{route:?}: the earlier card stays pending"
+        );
+        let staged: Vec<_> = db
+            .list_pending_revisions(100)
+            .await
+            .expect("list pending revisions")
+            .into_iter()
+            .filter(|item| item.target_source_id == page_id && item.revision_source_id != card_id)
+            .collect();
+        assert_eq!(
+            staged.len(),
+            1,
+            "{route:?}: the forced rebuild must stage exactly one new card: {staged:?}"
+        );
+        assert_eq!(
+            staged[0].revision_content, VERIFIED_REBUILD_BODY,
+            "{route:?}: the card carries the rebuilt body"
+        );
+    }
+
+    #[tokio::test]
+    async fn page_redistill_on_authored_page_stages_card_and_keeps_edit_protection() {
+        authored_page_stages_card_and_keeps_edit_protection(RebuildRoute::Page).await;
+    }
+
+    #[tokio::test]
+    async fn force_target_redistill_on_authored_page_stages_card_and_keeps_edit_protection() {
+        authored_page_stages_card_and_keeps_edit_protection(RebuildRoute::ForceTarget).await;
     }
 }
 

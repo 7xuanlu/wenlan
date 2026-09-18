@@ -2,6 +2,78 @@
 
 use super::*;
 
+/// Re-embed memory rows that have no embedding, one bounded batch per
+/// background maintenance lease, until none are left, a batch fails, or
+/// shutdown is requested.
+///
+/// The lease is taken for each batch and released before the next, so an
+/// approved repair waits for at most one in-flight batch and holds every later
+/// batch off until it finishes. Once a batch holds its lease it runs to its
+/// commit: dropping it between `BEGIN` and `COMMIT` would leave the shared
+/// writer connection inside a transaction. A failed batch ends the run without
+/// retrying; rows still unembedded are counted again on the next start.
+async fn recover_null_memory_embeddings_in_background(
+    db: Arc<wenlan_core::db::MemoryDB>,
+    maintenance: wenlan_server::maintenance_coordinator::MaintenanceCoordinator,
+    shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    let pending = match db.count_null_memory_embeddings().await {
+        Ok(0) => return,
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!("[memory_db] null embedding check failed: {error}");
+            return;
+        }
+    };
+    tracing::warn!("[memory_db] recovering {pending} memories with no embedding in the background");
+    let mut cursor: Option<String> = None;
+    let mut recovered = 0usize;
+    let mut skipped = 0usize;
+    loop {
+        let guard = tokio::select! {
+            biased;
+            _ = lifecycle::wait_for_shutdown(shutdown.clone()) => break,
+            guard = maintenance.begin_background() => guard,
+        };
+        if lifecycle::shutdown_requested(&shutdown) {
+            break;
+        }
+        let batch = db
+            .recover_null_memory_embeddings_batch(
+                cursor.as_deref(),
+                wenlan_core::db::NULL_EMBEDDING_RECOVERY_BATCH,
+            )
+            .await;
+        drop(guard);
+        match batch {
+            Ok(batch) => {
+                recovered += batch.recovered;
+                skipped += batch.skipped;
+                let Some(next_cursor) = batch.next_cursor else {
+                    tracing::info!(
+                        "[memory_db] background embedding recovery complete: \
+                         {recovered} recovered, {skipped} skipped"
+                    );
+                    return;
+                };
+                cursor = Some(next_cursor);
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "[memory_db] background embedding recovery stopped after \
+                     {recovered} recovered, {skipped} skipped: {error}"
+                );
+                return;
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+    tracing::info!(
+        "[memory_db] background embedding recovery paused for shutdown after \
+         {recovered} recovered, {skipped} skipped"
+    );
+}
+
 pub(super) async fn register_optional_runtime_workers(
     shared: SharedState,
     repair_recovery_pending: bool,
@@ -201,6 +273,14 @@ pub(super) async fn register_optional_runtime_workers(
                 state.shutdown.clone(),
             )
         };
+        // Memory rows the database open left without an embedding
+        // (`MemoryEmbeddingRecovery::Deferred` in startup.rs) are recovered
+        // here, after the daemon serves, by one worker.
+        tokio::spawn(recover_null_memory_embeddings_in_background(
+            db_arc.clone(),
+            maintenance_for_ready.clone(),
+            shutdown_for_reconcile.subscribe(),
+        ));
         let maintenance_for_reconcile = maintenance_for_ready.clone();
         let maintenance_for_genesis = maintenance_for_ready.clone();
         let emitter_for_ready: Arc<dyn wenlan_core::events::EventEmitter> =

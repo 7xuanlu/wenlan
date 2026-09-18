@@ -1508,8 +1508,9 @@ fn the_runtime_backlog_continuation_is_fenced_out_of_repair_mode() {
         "startup.rs must not directly run data-sized backlog work"
     );
     assert!(
-        startup.contains("wenlan_core::db::MemoryDB::new("),
-        "the placement tooth must trace the normal constructor alias, not only direct calls"
+        startup.contains("wenlan_core::db::MemoryDB::new_with_embedding_recovery(")
+            && startup.contains("wenlan_core::db::MemoryEmbeddingRecovery::Deferred"),
+        "the placement tooth must trace the normal deferred constructor, not only direct calls"
     );
     assert!(
         claim_derivation.contains("pub(super) const MIGRATION_105_BACKLOG_SEED_LIMIT: i64 = 500;"),

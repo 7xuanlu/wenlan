@@ -26950,9 +26950,8 @@ async fn test_stale_concepts_lifecycle() {
 
 /// A stale page whose last automatic refresh was discarded
 /// (`refresh_blocked_reason` set) is skipped by the ambient sweep's
-/// `get_stale_page_after` until a mark-stale site (a real source change, or
-/// the explicit re-distill's `clear_user_edited`) re-arms it by clearing the
-/// marker.
+/// `get_stale_page_after` until a mark-stale site (a real source change)
+/// re-arms it by clearing the marker.
 #[tokio::test]
 async fn refresh_blocked_reason_pauses_stale_sweep_until_rearmed() {
     let (db, _dir) = test_db().await;
@@ -31241,41 +31240,6 @@ async fn list_pages_stale_filters_and_orders() {
 }
 
 #[tokio::test]
-async fn clear_user_edited_unlocks_page_and_sets_stale() {
-    let (db, _tmp) = test_db().await;
-    let now = chrono::Utc::now().to_rfc3339();
-    db.insert_page("page_x", "X", None, "body", None, None, &["mem_1"], &now)
-        .await
-        .unwrap();
-    // Promote user_edited via fs_edit.
-    db.try_update_page_content_with_changelog(
-        "page_x",
-        "user prose",
-        &["mem_1"],
-        "fs_edit",
-        false,
-        "user-edited",
-        None,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
-    let before = db.get_page("page_x").await.unwrap().unwrap();
-    assert!(before.user_edited, "precondition: page should be locked");
-
-    db.clear_user_edited("page_x").await.unwrap();
-
-    let after = db.get_page("page_x").await.unwrap().unwrap();
-    assert!(!after.user_edited, "clear_user_edited should unlock");
-    assert_eq!(
-        after.stale_reason.as_deref(),
-        Some("manual_force"),
-        "clear_user_edited should mark stale so refinery picks it up"
-    );
-}
-
-#[tokio::test]
 async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
     let (db, _tmp) = test_db().await;
     let page_id = "page_draft_isolation_floor";
@@ -31320,7 +31284,22 @@ async fn production_page_mutators_reject_drafts_without_changing_owned_state() {
             db.update_page_content(page_id, "mutated", &[], "manual_edit")
                 .await,
         ),
-        ("clear_user_edited", db.clear_user_edited(page_id).await),
+        (
+            "try_user_forced_page_content_at_source_revision",
+            db.try_user_forced_page_content_at_source_revision(
+                page_id,
+                "mutated",
+                &[],
+                "distill",
+                changelog,
+                Some(citations),
+                0,
+                "draft-incarnation",
+                None,
+            )
+            .await
+            .map(|_| ()),
+        ),
         (
             "replace_page_links",
             db.replace_page_links(page_id, &[link]).await,
@@ -31437,6 +31416,28 @@ async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
     assert_eq!(archived.status, "archived");
     assert_eq!(archived.content, "Archived body with [[Unresolved target]]");
 
+    // The user-forced rebuild write is not rejected as a draft on an archived
+    // page; it only lands on an active page, so it reports no write.
+    let archived_fence = db.try_get_page_fence(page_id).await.unwrap().unwrap();
+    assert!(!db
+        .try_user_forced_page_content_at_source_revision(
+            page_id,
+            "Forced rebuild body",
+            &[],
+            "distill",
+            "[]",
+            None,
+            archived_fence.source_revision,
+            &archived_fence.incarnation,
+            None,
+        )
+        .await
+        .unwrap());
+    assert_eq!(
+        db.get_page(page_id).await.unwrap().unwrap().content,
+        "Archived body with [[Unresolved target]]"
+    );
+
     {
         let conn = db.conn.lock().await;
         conn.execute(
@@ -31451,7 +31452,20 @@ async fn draft_isolation_preserves_archived_and_missing_mutator_behavior() {
     db.update_page_summary("missing_page", Some("ignored"))
         .await
         .unwrap();
-    db.clear_user_edited("missing_page").await.unwrap();
+    assert!(!db
+        .try_user_forced_page_content_at_source_revision(
+            "missing_page",
+            "ignored",
+            &[],
+            "distill",
+            "[]",
+            None,
+            0,
+            "missing-incarnation",
+            None,
+        )
+        .await
+        .unwrap());
     db.delete_page("missing_page").await.unwrap();
 }
 
@@ -54104,6 +54118,7 @@ async fn combine_version_and_source_revision_cas_rejected_for_non_growth_non_bac
             None,
             None,
             false,
+            false,
         )
         .await
         .expect_err(
@@ -55088,49 +55103,38 @@ async fn a_failed_orphan_sweep_commit_does_not_wedge_the_writer_connection() {
     .expect("a failed sweep commit must not wedge later writes");
 }
 
-/// A failed commit inside the NULL-embedding recovery loop must abort the
-/// migration, not be logged and walked past.
+/// A failed commit inside NULL-embedding recovery must end the run with that
+/// error, not be logged and walked past.
 ///
-/// That loop selects its batch with `WHERE embedding IS NULL` and bumps a
-/// progress counter after each batch. `commit_or_rollback` rolls a failed
-/// commit back, so the rows it just embedded go back to NULL and the very
-/// next iteration selects the same batch again. Swallowing the error means
-/// the loop never ends, `recovered` climbs past the declared total, and every
-/// migration behind this one is never reached -- a worse failure than the
-/// stuck transaction the rollback was added to prevent.
-///
-/// The recovery pass is unconditional on startup, so a memory row with no
-/// embedding plus a second `run_migrations` is the whole fixture. The staged
-/// fault is one-shot, so before the fix this test does not hang: the loop
-/// swallows the error, re-embeds the same row, commits, and `run_migrations`
-/// returns `Ok` -- which is exactly what the assertion below catches.
+/// `commit_or_rollback` rolls a failed commit back, so the rows the batch just
+/// embedded go back to NULL. Swallowing the error would count them as
+/// recovered while they stay unembedded. The staged fault is one-shot, so a
+/// swallowed error would let the run finish with `Ok` -- which is exactly what
+/// the assertion below catches.
 #[tokio::test]
-async fn a_failed_recovery_commit_aborts_the_migration_instead_of_looping() {
+async fn a_failed_recovery_commit_aborts_the_run_instead_of_looping() {
     let (db, _dir) = test_db().await;
-    {
-        let conn = db.conn.lock().await;
-        conn.execute(
-            "INSERT INTO memories
-                (id, content, source, source_id, title, chunk_index,
-                 last_modified, chunk_type, space)
-             VALUES ('mem_null_embedding', 'a memory whose embedding never landed',
-                     'memory', 'mem_null_embedding', 'Null Embedding',
-                     0, 1, 'text', ?1)",
-            libsql::params![UNFILED_SPACE_ID],
-        )
-        .await
-        .unwrap();
-    }
+    insert_null_embedding_memory(
+        &db,
+        "mem_null_embedding",
+        "a memory whose embedding never landed",
+    )
+    .await;
 
     let error = crate::db::with_failing_commit_at(
         "null_embed_recovery",
-        db.run_migrations(&crate::events::NoopEmitter),
+        db.recover_null_memory_embeddings(&crate::events::NoopEmitter),
     )
     .await
-    .expect_err("the staged commit failure must abort the migration");
+    .expect_err("the staged commit failure must abort the run");
     assert!(
         error.to_string().contains("null embed recovery commit"),
-        "the recovery loop must surface its own commit label, got: {error}"
+        "the recovery run must surface its own commit label, got: {error}"
+    );
+    assert_eq!(
+        db.count_null_memory_embeddings().await.unwrap(),
+        1,
+        "the rolled-back batch leaves its row unembedded"
     );
 
     // And the connection it ran on is still usable, same as the sweep.
@@ -55147,6 +55151,212 @@ async fn a_failed_recovery_commit_aborts_the_migration_instead_of_looping() {
     )
     .await
     .expect("a failed recovery commit must not wedge later writes");
+}
+
+async fn insert_null_embedding_memory(db: &MemoryDB, id: &str, content: &str) {
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "INSERT INTO memories
+            (id, content, source, source_id, title, chunk_index,
+             last_modified, chunk_type, space)
+         VALUES (?1, ?2, 'memory', ?1, 'Null Embedding', 0, 1, 'text', ?3)",
+        libsql::params![id, content, UNFILED_SPACE_ID],
+    )
+    .await
+    .unwrap();
+}
+
+async fn memory_has_embedding(db: &MemoryDB, id: &str) -> bool {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT embedding IS NOT NULL FROM memories WHERE id = ?1",
+            libsql::params![id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect("memory row exists");
+    row.get::<i64>(0).unwrap() == 1
+}
+
+async fn memory_embedding_text(db: &MemoryDB, id: &str) -> String {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT hex(embedding) FROM memories WHERE id = ?1",
+            libsql::params![id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect("memory row exists");
+    row.get::<String>(0).unwrap()
+}
+
+/// The daemon's open leaves unembedded memory rows for its background worker,
+/// so a large backlog cannot hold the health check shut; every ordinary open
+/// still recovers them before it returns.
+#[tokio::test]
+async fn the_daemon_open_defers_memory_embedding_recovery_and_ordinary_opens_do_not() {
+    let dir = tempdir().unwrap();
+    let emitter: Arc<dyn EventEmitter> = Arc::new(crate::events::NoopEmitter);
+    {
+        let db = MemoryDB::new_with_shared_embedder(dir.path(), emitter.clone(), shared_embedder())
+            .await
+            .unwrap();
+        insert_null_embedding_memory(&db, "mem_deferred", "a memory stored before its vector")
+            .await;
+    }
+    {
+        let db = MemoryDB::new_with_shared_embedder_and_recovery(
+            dir.path(),
+            emitter.clone(),
+            shared_embedder(),
+            MemoryEmbeddingRecovery::Deferred,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            db.count_null_memory_embeddings().await.unwrap(),
+            1,
+            "the deferred open must not embed the backlog"
+        );
+    }
+    let db = MemoryDB::new_with_shared_embedder(dir.path(), emitter, shared_embedder())
+        .await
+        .unwrap();
+    assert_eq!(db.count_null_memory_embeddings().await.unwrap(), 0);
+    assert!(memory_has_embedding(&db, "mem_deferred").await);
+}
+
+/// A batch writes only rows that still match what it embedded: a row embedded
+/// or edited while the model ran keeps its own state, counts as skipped, and
+/// is not selected again in the same run.
+#[tokio::test]
+async fn null_embedding_recovery_never_overwrites_a_row_that_changed_mid_batch() {
+    let (db, _dir) = test_db().await;
+    insert_null_embedding_memory(&db, "mem_a_seed", "the seed memory that is embedded first").await;
+    let seeded = db
+        .recover_null_memory_embeddings(&crate::events::NoopEmitter)
+        .await
+        .unwrap();
+    assert_eq!(
+        seeded,
+        NullEmbeddingRecoveryReport {
+            recovered: 1,
+            skipped: 0
+        }
+    );
+
+    insert_null_embedding_memory(&db, "mem_b_plain", "a memory nothing touches meanwhile").await;
+    insert_null_embedding_memory(&db, "mem_c_edited", "a memory edited while it is embedded").await;
+    insert_null_embedding_memory(
+        &db,
+        "mem_d_embedded",
+        "a memory embedded by a write meanwhile",
+    )
+    .await;
+    let seed_vector = memory_embedding_text(&db, "mem_a_seed").await;
+
+    let report = crate::db::with_null_embed_recovery_fault(
+        crate::db::NullEmbedRecoveryFault {
+            race_sql: &[
+                "UPDATE memories SET content = 'the edited text' WHERE id = 'mem_c_edited'",
+                "UPDATE memories SET embedding = \
+                 (SELECT embedding FROM memories WHERE id = 'mem_a_seed') \
+                 WHERE id = 'mem_d_embedded'",
+            ],
+            keep_vectors: None,
+        },
+        db.recover_null_memory_embeddings(&crate::events::NoopEmitter),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        report,
+        NullEmbeddingRecoveryReport {
+            recovered: 1,
+            skipped: 2
+        }
+    );
+    assert!(memory_has_embedding(&db, "mem_b_plain").await);
+    assert!(
+        !memory_has_embedding(&db, "mem_c_edited").await,
+        "a vector for the old text must not land on the edited row"
+    );
+    assert_eq!(
+        memory_embedding_text(&db, "mem_d_embedded").await,
+        seed_vector,
+        "an embedding written meanwhile must survive"
+    );
+
+    // The edited row is left for the next run, which embeds its new text.
+    let next = db
+        .recover_null_memory_embeddings(&crate::events::NoopEmitter)
+        .await
+        .unwrap();
+    assert_eq!(
+        next,
+        NullEmbeddingRecoveryReport {
+            recovered: 1,
+            skipped: 0
+        }
+    );
+    assert!(memory_has_embedding(&db, "mem_c_edited").await);
+}
+
+/// Fewer vectors than rows ends the batch with the rest skipped, and the
+/// cursor moves past them: the run ends instead of reselecting them forever.
+#[tokio::test]
+async fn null_embedding_recovery_ends_when_the_model_returns_too_few_vectors() {
+    let (db, _dir) = test_db().await;
+    for id in ["mem_short_1", "mem_short_2", "mem_short_3"] {
+        insert_null_embedding_memory(&db, id, "a memory in a batch the model cuts short").await;
+    }
+
+    let first = crate::db::with_null_embed_recovery_fault(
+        crate::db::NullEmbedRecoveryFault {
+            race_sql: &[],
+            keep_vectors: Some(1),
+        },
+        db.recover_null_memory_embeddings_batch(None, NULL_EMBEDDING_RECOVERY_BATCH),
+    )
+    .await
+    .unwrap();
+    assert_eq!(first.recovered, 1);
+    assert_eq!(first.skipped, 2);
+    assert_eq!(first.next_cursor.as_deref(), Some("mem_short_3"));
+
+    let after = db
+        .recover_null_memory_embeddings_batch(first.next_cursor.as_deref(), 1_000)
+        .await
+        .unwrap();
+    assert_eq!(
+        after,
+        NullEmbeddingBatch::default(),
+        "nothing is selected twice"
+    );
+    assert_eq!(db.count_null_memory_embeddings().await.unwrap(), 2);
+}
+
+/// A batch that cannot open its transaction writes nothing and reports why,
+/// rather than updating rows outside a transaction.
+#[tokio::test]
+async fn null_embedding_recovery_fails_when_its_transaction_cannot_begin() {
+    let (db, _dir) = test_db().await;
+    insert_null_embedding_memory(&db, "mem_no_begin", "a memory whose batch cannot begin").await;
+    db.conn.lock().await.execute("BEGIN", ()).await.unwrap();
+
+    let error = db
+        .recover_null_memory_embeddings_batch(None, NULL_EMBEDDING_RECOVERY_BATCH)
+        .await
+        .expect_err("a nested BEGIN must fail the batch");
+    assert!(
+        error.to_string().contains("null embed recovery begin"),
+        "got: {error}"
+    );
+    db.conn.lock().await.execute("ROLLBACK", ()).await.unwrap();
+    assert!(!memory_has_embedding(&db, "mem_no_begin").await);
 }
 
 /// A full batch of unresolvable orphans in front of the ordered backlog must

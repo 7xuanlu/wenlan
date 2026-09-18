@@ -9,6 +9,7 @@ vi.mock("../../../lib/tauri", () => ({
   getActiveImportBatches: vi.fn(),
   getResolvedRouting: vi.fn(),
   getImportBatchStatus: vi.fn(),
+  getMemoryStats: vi.fn(),
   listPages: vi.fn(),
   clipboardWrite: vi.fn(),
 }));
@@ -17,11 +18,13 @@ import {
   getActiveImportBatches,
   getImportBatchStatus,
   getResolvedRouting,
+  getMemoryStats,
   listPages,
 } from "../../../lib/tauri";
 
 const mockedBatches = vi.mocked(getActiveImportBatches);
 const mockedBatchStatus = vi.mocked(getImportBatchStatus);
+const mockedMemoryStats = vi.mocked(getMemoryStats);
 const mockedListPages = vi.mocked(listPages);
 
 function entry(
@@ -110,6 +113,12 @@ beforeEach(() => {
   vi.mocked(getResolvedRouting).mockResolvedValue({ everyday: { source: "on_device", model: "qwen3-4b", mode: "pinned", pin: "on_device" }, synthesis: { source: "on_device", model: "qwen3-4b", mode: "pinned", pin: "on_device" }, pool: { anthropic: { configured: false, everyday_model: null, synthesis_model: null }, external: null, on_device: { selected: "qwen3-4b", loaded: true } } });
   mockedBatches.mockResolvedValue({ batches: [] });
   mockedListPages.mockResolvedValue([]);
+  mockedMemoryStats.mockResolvedValue({
+    total: 0,
+    new_today: 0,
+    confirmed: 0,
+    domains: [],
+  });
 });
 
 afterEach(() => {
@@ -121,10 +130,12 @@ describe("FirstUseGuide navigation", () => {
     renderGuide();
     expect(mockedListPages).not.toHaveBeenCalled();
     expect(mockedBatches).not.toHaveBeenCalled();
+    expect(mockedMemoryStats).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Try an example" }));
     expect(screen.getByTestId("first-use-sample")).toBeInTheDocument();
     expect(mockedListPages).not.toHaveBeenCalled();
     expect(mockedBatches).not.toHaveBeenCalled();
+    expect(mockedMemoryStats).not.toHaveBeenCalled();
   });
 
   it("routes the own-data chooser to the real import, sources, and connect targets", () => {
@@ -367,6 +378,207 @@ describe("FirstUseGuide live view", () => {
   });
 });
 
+
+describe("FirstUseGuide live view saved memories", () => {
+  it("shows saved memories instead of the empty state when memories exist without batches or pages", async () => {
+    mockedMemoryStats.mockResolvedValue({
+      total: 12,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your memories are saved")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "12 memories are saved in your library. No knowledge pages have been written yet.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Knowledge pages show up here once Wenlan writes them."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nothing here yet")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Import memories" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses singular copy for one saved memory", async () => {
+    mockedMemoryStats.mockResolvedValue({
+      total: 1,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    renderGuide({ initialView: "live" });
+    expect(
+      await screen.findByText(
+        "1 memory is saved in your library. No knowledge pages have been written yet.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("points saved memories to intelligence setup when no model route exists", async () => {
+    vi.mocked(getResolvedRouting).mockResolvedValue({
+      everyday: { source: "basic", model: null, mode: "unconfigured", pin: null },
+      synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
+      pool: {
+        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
+        external: null,
+        on_device: null,
+      },
+    });
+    mockedMemoryStats.mockResolvedValue({
+      total: 4,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    const onOpenIntelligence = vi.fn();
+    renderGuide({ initialView: "live", onOpenIntelligence });
+    expect(await screen.findByText("Your memories are saved")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Your data is saved. Set up an available AI model to continue organizing it into pages.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Knowledge pages show up here once Wenlan writes them."),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Set up intelligence" }));
+    expect(onOpenIntelligence).toHaveBeenCalledOnce();
+  });
+
+  it("shows the loading state, not the empty card, while the memory count is pending", async () => {
+    vi.useFakeTimers();
+    mockedMemoryStats.mockImplementation(() => new Promise(() => {}));
+    renderGuide({ initialView: "live" });
+    // Let the page and batch queries settle first; the count query never
+    // does, so the view must still read as pending afterward.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(mockedListPages).toHaveBeenCalled();
+    expect(screen.getByText("Reading your library…")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing here yet")).not.toBeInTheDocument();
+  });
+
+  it("treats a memory-count failure as a failure, not an empty library, and recovers on retry", async () => {
+    mockedMemoryStats.mockRejectedValueOnce(new Error("down"));
+    renderGuide({ initialView: "live" });
+    expect(
+      await screen.findByText("Wenlan couldn't read this right now."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Nothing here yet")).not.toBeInTheDocument();
+    mockedMemoryStats.mockResolvedValue({
+      total: 3,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(
+      await screen.findByText(
+        "3 memories are saved in your library. No knowledge pages have been written yet.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("shows the saved state until a page appears, then switches to the pages list", async () => {
+    mockedMemoryStats.mockResolvedValue({
+      total: 7,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your memories are saved")).toBeInTheDocument();
+    mockedListPages.mockResolvedValue([makePage()]);
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Your knowledge pages")).toBeInTheDocument();
+    expect(screen.queryByText("Your memories are saved")).not.toBeInTheDocument();
+  });
+
+  it("does not read memory stats when the page list already decides the view", async () => {
+    mockedListPages.mockResolvedValue([makePage()]);
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your knowledge pages")).toBeInTheDocument();
+    expect(mockedMemoryStats).not.toHaveBeenCalled();
+  });
+
+  it("keeps the saved card hidden when pages exist even if memories are saved", async () => {
+    mockedMemoryStats.mockResolvedValue({
+      total: 5,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    mockedListPages.mockResolvedValue([makePage()]);
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your knowledge pages")).toBeInTheDocument();
+    expect(screen.queryByTestId("first-use-live-saved")).not.toBeInTheDocument();
+    expect(screen.queryByText("Your memories are saved")).not.toBeInTheDocument();
+  });
+
+  it("does not read memory stats when an active batch already decides the view", async () => {
+    mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Import progress")).toBeInTheDocument();
+    expect(mockedMemoryStats).not.toHaveBeenCalled();
+  });
+
+  it("keeps the neutral saved note when routing is unavailable instead of claiming organization", async () => {
+    // A null/failed routing response leaves `routing` null (the same null
+    // guard covers the still-pending case). The saved card must not invent
+    // an intelligence-setup claim from unknown state, and a routing failure
+    // alone must not fail the whole library view.
+    vi.mocked(getResolvedRouting).mockRejectedValue(new Error("down"));
+    mockedMemoryStats.mockResolvedValue({
+      total: 4,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your memories are saved")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Knowledge pages show up here once Wenlan writes them.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Your data is saved. Set up an available AI model to continue organizing it into pages.",
+      ),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Set up intelligence" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Wenlan couldn't read this right now."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the cached saved card when an import batch appears", async () => {
+    // The positive memory count stays cached after it loads; a newly visible
+    // batch must still win the view so stale data cannot overlay live work.
+    // (The pages-appearing transition is already covered by the saved-until-
+    // page-appears test above.)
+    mockedMemoryStats.mockResolvedValue({
+      total: 6,
+      new_today: 0,
+      confirmed: 0,
+      domains: [],
+    });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Your memories are saved")).toBeInTheDocument();
+    mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText("Import progress")).toBeInTheDocument();
+    expect(screen.queryByTestId("first-use-live-saved")).not.toBeInTheDocument();
+    expect(screen.queryByText("Your memories are saved")).not.toBeInTheDocument();
+  });
+});
 
 describe("live model availability", () => {
   it("shows a setup action instead of promising progress when imported data has no AI route", async () => {
