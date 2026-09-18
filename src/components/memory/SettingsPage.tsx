@@ -13,6 +13,7 @@ interface SettingsPageProps {
   section?: SettingsSection;
   onBack: () => void;
   onSetupAgent?: () => void;
+  currentSpace?: string;
   /** Required: SourcesSection's only affordance is the import button, so a
    *  caller that omits this would render a card whose entire purpose is a
    *  button that does nothing. Keep it required — that is a compile error,
@@ -25,6 +26,7 @@ export default function SettingsPage({
   onBack,
   onSetupAgent,
   onImport,
+  currentSpace,
 }: SettingsPageProps) {
   const { t } = useTranslation();
 
@@ -48,7 +50,7 @@ export default function SettingsPage({
 
       {section === "general" && <GeneralSection />}
       {section === "sources" && <SourcesSection onImport={onImport} />}
-      {section === "agents" && <AgentsSection onSetupAgent={onSetupAgent} />}
+      {section === "agents" && <AgentsSection onSetupAgent={onSetupAgent} currentSpace={currentSpace} />}
       {section === "intelligence" && <IntelligenceSection delay={0} />}
       {section === "diagnostics" && <DiagnosticsSection />}
 

@@ -11,6 +11,32 @@ beforeEach(() => {
   mockInvoke.mockResolvedValue(undefined as any);
 });
 
+describe('remote access consent bridge', () => {
+  it('loads only the native frontend-safe profile view', async () => {
+    mockInvoke.mockResolvedValue(null);
+    await expect(tauri.getRemoteAccessProfile()).resolves.toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith('get_remote_access_profile');
+  });
+
+  it('passes an explicit Space and expected revision without enabling access', async () => {
+    await tauri.configureRemoteAccess('review', 'revision-1');
+    expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
+      space: 'review', expectedRevision: 'revision-1',
+    });
+  });
+
+  it('requires the current consent revision for enable and omits credentials', async () => {
+    await tauri.toggleRemoteAccess(true, 'revision-2');
+    expect(mockInvoke).toHaveBeenCalledWith('toggle_remote_access', {
+      enabled: true, expectedRevision: 'revision-2',
+    });
+    await tauri.toggleRemoteAccess(false);
+    expect(mockInvoke).toHaveBeenLastCalledWith('toggle_remote_access', {
+      enabled: false, expectedRevision: null,
+    });
+  });
+});
+
 describe('search', () => {
   it('calls invoke with explicit args', async () => {
     mockInvoke.mockResolvedValue([]);

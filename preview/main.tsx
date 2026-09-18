@@ -16,6 +16,7 @@ import EntityDetail from "../src/components/memory/EntityDetail";
 import DistillReviewPanel from "../src/components/memory/DistillReviewPanel";
 import { SetupWizard, STEP_ORDER, type WizardStep } from "../src/components/SetupWizard";
 import SettingsPage from "../src/components/memory/SettingsPage";
+import { RemoteAccessPanel } from "../src/components/memory/RemoteAccessPanel";
 import SettingsSidebar, {
   SETTINGS_GROUPS,
   type SettingsSection,
@@ -72,7 +73,7 @@ const client = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
 });
 
-type Mode = "page" | "review" | "wizard" | "settings" | "atlas" | "entity";
+type Mode = "page" | "review" | "wizard" | "settings" | "atlas" | "entity" | "remote-access";
 
 // Quick-select entities for the "entity" tab: gk-wenlan is the highest-degree
 // hub, gk-lucian shows a person node with mixed in/out edges, gk-remote-office
@@ -88,6 +89,7 @@ const ENTITY_VARIANTS = [
 // every surface would only be reachable by clicking, so a screenshot pass
 // couldn't address one — which is the whole point of these modes existing.
 const params = new URLSearchParams(window.location.search);
+if (params.get("mode") === "remote-access") document.title = "Wenlan remote access preview";
 const param = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
   const value = params.get(key) as T | null;
   return value && allowed.includes(value) ? value : fallback;
@@ -107,7 +109,7 @@ const BAR_H = SHOW_BAR ? 41 : 0;
 
 function Harness() {
   const [mode, setMode] = useState<Mode>(
-    param("mode", ["page", "review", "wizard", "settings", "atlas", "entity"] as const, "review"),
+    param("mode", ["page", "review", "wizard", "settings", "atlas", "entity", "remote-access"] as const, "review"),
   );
   const [pageId, setPageId] = useState(params.get("page") ?? "page-cited");
   const [entityId, setEntityId] = useState(params.get("entity") ?? "gk-wenlan");
@@ -286,6 +288,10 @@ function Harness() {
               onImport={() => console.log("[preview] onImport")}
             />
           </div>
+        </div>
+      ) : mode === "remote-access" ? (
+        <div style={{ maxWidth: 672, margin: "0 auto", padding: "24px 16px" }}>
+          <RemoteAccessPanel currentSpace="Review workspace" />
         </div>
       ) : mode === "atlas" ? (
         // Full-bleed like graph/wizard. sigma lands in its own lazy chunk

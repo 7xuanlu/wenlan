@@ -1,0 +1,116 @@
+{
+  "$schema": "https://developers.openai.com/apps-sdk/schemas/chatgpt-app-submission.v1.json",
+  "schema_version": 1,
+  "app_info": {
+    "display_name": "Wenlan",
+    "subtitle": "Use your source-backed wiki",
+    "description": "Wenlan brings your living, source-backed wiki into the conversation, so the next task can build on decisions you have already made.\n\nIn Wenlan, documents, notes, and past work become connected knowledge pages. Configured background processing keeps eligible pages current as sources change, while revisions to pages you have edited wait for your review.\n\nUse this plugin to catch up from an existing project Brief, find a decision or lesson even when you do not remember its exact wording, and inspect the sources behind a wiki page. Continue the work with its evidence in reach, instead of reconstructing the context from old chats.\n\nRequires Wenlan installed and running on your own computer. For this remote connection, enable Web access in Wenlan and approve the connection to the knowledge you choose to share. Your device must be online while you query it; you can disconnect at any time. This plugin retrieves knowledge; it does not create, edit, or delete it. Your library is stored locally, but requested results pass through Wenlan's relay to your AI client. Searches are recorded in your local activity history.",
+    "category": "PRODUCTIVITY"
+  },
+  "tools": {
+    "brief": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves an existing project Brief and optional related knowledge without creating or updating the Brief.",
+        "open_world_justification": "Retrieves information from the connected knowledge library without publishing or changing third-party systems.",
+        "destructive_justification": "Does not delete, overwrite, revoke access, or perform irreversible actions."
+      }
+    },
+    "recall": {
+      "annotations": {
+        "readOnlyHint": false,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Searches saved knowledge and records the query and accessed memory identifiers in the connected library's activity history.",
+        "open_world_justification": "Searches the connected knowledge library and records private activity without publishing or changing third-party systems.",
+        "destructive_justification": "Does not delete or overwrite stored knowledge or revoke access."
+      }
+    },
+    "get_page_sources": {
+      "annotations": {
+        "readOnlyHint": true,
+        "openWorldHint": false,
+        "destructiveHint": false
+      },
+      "justifications": {
+        "read_only_justification": "Retrieves a page's supporting source records without modifying the page or its sources.",
+        "open_world_justification": "Retrieves sources from the connected knowledge library without publishing or changing third-party systems.",
+        "destructive_justification": "Does not delete, overwrite, refresh, or revoke access to pages or sources."
+      }
+    }
+  },
+  "test_cases": [
+    {
+      "description": "Read a project Brief. Required fixture: an authorized atlas-review Space with Active 'Use signed requests' and Backlog 'Document offline fallback'.",
+      "user_prompt": "Use Wenlan to read the Brief for Space atlas-review.",
+      "file_attachment_urls": null,
+      "tools_triggered": "brief",
+      "expected_output": "Returns state ready, Space atlas-review, the Brief summary and the two fixture items. Summarize only returned content; do not create or modify the Brief.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Read topic-related context. Required fixture: atlas-review contains the signed-request decision and another unauthorized Space contains a distinct sentinel record.",
+      "user_prompt": "Use Wenlan to read the atlas-review Brief and show related context about the signed-request decision.",
+      "file_attachment_urls": null,
+      "tools_triggered": "brief",
+      "expected_output": "Returns the Brief plus related_context for the requested topic. Present related context separately and never return the other Space sentinel.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Search a saved decision with a bounded result count. Required fixture: atlas-review contains mem_atlas-auth titled Atlas authentication decision, describing signed requests.",
+      "user_prompt": "Use Wenlan to find the Atlas authentication decision in atlas-review. Return at most three memory results and disable reranking.",
+      "file_attachment_urls": null,
+      "tools_triggered": "recall",
+      "expected_output": "Returns results and supplemental_pages arrays, with at most three memory hits and the fixture decision. Cite returned source IDs. Hits contain title, content, archive and pending-review status without ingestion metadata. Query/access logging is expected.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Inspect page provenance. Required fixture: authorized page page_atlas-auth links to synthetic source mem_atlas-auth.",
+      "user_prompt": "Use Wenlan to show the supporting sources for page page_atlas-auth.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_page_sources",
+      "expected_output": "Returns page_id and sources containing mem_atlas-auth with projected title, content and status. Sources whose memory is unavailable are omitted, including their identifiers; do not invent missing evidence or infer why it is unavailable. No unrelated page content or local paths.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Handle unavailable page evidence within the authorized Space. Required fixture: page_atlas-unavailable belongs to atlas-review, but none of its linked source memories is available to this connection.",
+      "user_prompt": "Use Wenlan to show the supporting sources for page page_atlas-unavailable. If no sources are returned, say that no supporting evidence is available from this connection.",
+      "file_attachment_urls": null,
+      "tools_triggered": "get_page_sources",
+      "expected_output": "Returns page_id page_atlas-unavailable and an empty sources array. Do not disclose unavailable source identifiers, fabricate evidence, infer that sources were deleted, or switch Spaces. The current atlas-review authorization is unchanged.",
+      "expected_output_url": null
+    }
+  ],
+  "negative_test_cases": [
+    {
+      "description": "General knowledge unrelated to the connected library.",
+      "user_prompt": "What is the capital of France?",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "Answer normally without invoking Wenlan or searching private knowledge.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Knowledge writing is outside the query-only connector.",
+      "user_prompt": "Save a memory that Atlas uses signed requests.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "Do not invoke a query tool to simulate saving; explain that saving is unsupported by this connector and do not claim the memory was saved.",
+      "expected_output_url": null
+    },
+    {
+      "description": "Local installation and daemon setup are outside the public query-only connector.",
+      "user_prompt": "Install Wenlan locally, start its daemon, and configure the connection.",
+      "file_attachment_urls": null,
+      "tools_triggered": null,
+      "expected_output": "Do not invoke Wenlan query tools or claim software was installed; explain that this connector does not perform local setup.",
+      "expected_output_url": null
+    }
+  ]
+}

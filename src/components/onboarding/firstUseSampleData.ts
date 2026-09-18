@@ -55,7 +55,9 @@ export interface SampleCommands {
   /** Recall works on the user's OWN imported data — never on this sample,
    *  which lives only in the walkthrough and no AI can retrieve. */
   recall: string;
-  handoff: string;
+  /** Null where the client connector cannot write (ChatGPT web is
+   *  read-only): the UI must omit the handoff row rather than fake a write. */
+  handoff: string | null;
   brief: string;
 }
 
@@ -177,7 +179,7 @@ const enData: SampleDataset = {
   commands: {
     chatgpt: {
       recall: "@wenlan recall the decisions and next steps from my imported notes, and list the sources.",
-      handoff: "@wenlan note today's decisions and progress so I can pick this up later.",
+      handoff: null,
       brief: "@wenlan this is a new conversation — catch me up on earlier work and open todos.",
     },
     codex: {
@@ -290,7 +292,7 @@ const hansData: SampleDataset = {
   commands: {
     chatgpt: {
       recall: "@wenlan 找出我导入的资料中已做出的决定与待办，并列出来源。",
-      handoff: "@wenlan 记下这次工作的决定与进度，方便之后接续。",
+      handoff: null,
       brief: "@wenlan 这是新的对话，请带我接上之前的工作与待办。",
     },
     codex: {
@@ -403,7 +405,7 @@ const hantData: SampleDataset = {
   commands: {
     chatgpt: {
       recall: "@wenlan 找出我匯入的資料中已做出的決定與待辦，並列出來源。",
-      handoff: "@wenlan 記下這次工作的決定與進度，方便之後接續。",
+      handoff: null,
       brief: "@wenlan 這是新的對話，請帶我接上之前的工作與待辦。",
     },
     codex: {

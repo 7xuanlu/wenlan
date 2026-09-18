@@ -67,8 +67,7 @@
     "externalBin": [
       "binaries/wenlan",
       "binaries/wenlan-server",
-      "binaries/wenlan-mcp",
-      "binaries/cloudflared"
+      "binaries/wenlan-mcp"
     ],
     "windows": {
       "nsis": {

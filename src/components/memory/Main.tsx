@@ -125,6 +125,9 @@ export default function Main({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const contextSpace = viewHistory.slice().reverse().find(
+    (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
+  );
   const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
   // The Activity button's summary. Owned here, beside the toolbar that renders
   // it, so the toggle keeps a stable identity for the outside-click listener.
@@ -855,6 +858,7 @@ export default function Main({
             />
           ) : view.kind === "settings" ? (
             <SettingsPage
+              currentSpace={contextSpace?.spaceName}
               section={view.section ?? "general"}
               onBack={navigateBack}
               onSetupAgent={() => navigateTo({ kind: "connect-agent" })}
@@ -970,7 +974,9 @@ export default function Main({
               batchId={view.batchId}
               onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
               onSources={() => navigateTo({ kind: "settings", section: "sources" })}
-              onConnect={() => navigateTo({ kind: "connect-agent" })}
+              onConnect={(client) => navigateTo(client === "codex" || client === "claude"
+                ? { kind: "connect-agent" }
+                : { kind: "settings", section: "agents" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
                 setViewHistory((previous) => [...previous, {

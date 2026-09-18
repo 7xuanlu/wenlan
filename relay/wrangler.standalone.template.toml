@@ -1,0 +1,33 @@
+# Packaging template only. Do not deploy before approved provisioning and review.
+# Replace the synthetic origin and namespace placeholder with verified resources.
+name = "wenlan-relay"
+main = "src/worker.ts"
+compatibility_date = "2026-09-08"
+compatibility_flags = ["enable_request_signal"]
+workers_dev = true
+
+[vars]
+PUBLIC_ORIGIN = "https://wenlan-relay.example"
+# After approved deployment, set DOMAIN_VERIFICATION_TOKEN to the exact public
+# token from this plugin's portal challenge. Omitted means endpoint returns 404.
+# Do not substitute an OAuth, management or local backend credential.
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "APPROVAL_REQUIRED"
+
+[[durable_objects.bindings]]
+name = "AUTHORITY"
+class_name = "RelayAuthority"
+
+[[migrations]]
+tag = "wenlan-authority-v1"
+new_sqlite_classes = ["RelayAuthority"]
+
+[[rules]]
+type = "Data"
+globs = ["**/*.png"]
+fallthrough = false
+
+[observability]
+enabled = false
