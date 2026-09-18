@@ -111,8 +111,9 @@ fn write_file_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Plan stable bundle filenames: pages sorted by `(created_at, id)`, slug
 /// via `obsidian::slugify`, empty slug falling back to
 /// `sanitize_stub_id(page.id)`, collisions suffixed `-2`, `-3`, ...
-/// `index.md` is never a page's file: OKF reads an `index.md` in any folder
-/// as that folder's index, so a page titled "Index" is `index-page.md`.
+/// `index.md` and `log.md` are never a page's file: OKF reserves both at
+/// every level of the hierarchy (spec 3.1), so a page titled "Index" is
+/// `index-page.md` and one titled "Log" is `log-page.md`.
 /// Returns `(page_id, file)` pairs in export order.
 pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
     let mut order: Vec<usize> = (0..pages.len()).collect();
@@ -130,7 +131,7 @@ pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
         if base.is_empty() {
             base = crate::export::provenance::sanitize_stub_id(&page.id);
         }
-        let base = crate::export::knowledge::page_stem_clear_of_index(base);
+        let base = crate::export::knowledge::page_stem_clear_of_reserved(base);
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         while used.contains(&candidate) {
@@ -814,6 +815,21 @@ mod tests {
         );
     }
 
+    /// The bundle side of the reserved-name rule: `log.md` is a directory's
+    /// update history in OKF (spec 3.1), never a concept document.
+    #[test]
+    fn a_page_titled_log_gets_log_page_in_the_bundle() {
+        let pages = vec![
+            test_page("concept_log", "Log", "x"),
+            test_page("concept_log_page", "Log Page", "y"),
+        ];
+        let planned: Vec<String> = plan_page_filenames(&pages)
+            .into_iter()
+            .map(|(_, file)| file)
+            .collect();
+        assert_eq!(planned, vec!["log-page.md", "log-page-2.md"], "{planned:?}");
+    }
+
     #[test]
     fn a_page_titled_index_and_one_titled_index_page_get_distinct_files() {
         let pages = vec![
@@ -903,6 +919,50 @@ mod tests {
         let unfiled_pos = index.find("## Unfiled").expect("Unfiled section");
         let space_pos = index.find("## b-space").expect("space section");
         assert!(space_pos < unfiled_pos, "{index}");
+    }
+
+    /// Same rule in the exported bundle: no summary, no ` - ` tail. The
+    /// renderer is shared with the projection index, so this pins the bundle
+    /// side of it against a future prefix-only change.
+    #[test]
+    fn bundle_index_line_for_a_page_without_a_summary_has_no_trailing_separator() {
+        let described = test_page("concept_a", "Described", "x");
+        let mut bare = test_page("concept_b", "Bare", "y");
+        bare.summary = None;
+        let pages = vec![described, bare];
+        let id_to_file: HashMap<String, String> = plan_page_filenames(&pages).into_iter().collect();
+        let index = render_bundle_index(&pages, &id_to_file);
+        assert!(
+            index.contains("* [Described](/pages/described.md) - Described summary\n"),
+            "{index}"
+        );
+        assert!(index.contains("* [Bare](/pages/bare.md)\n"), "{index}");
+        assert!(!index.contains("(/pages/bare.md) - "), "{index}");
+    }
+
+    /// `export_okf` never reports a skip of its own. The OKF export route
+    /// (`wenlan-server/src/page_routes.rs`, `handle_export_pages`) filters the
+    /// page list by `page_write_permit` BEFORE calling this, then overwrites
+    /// `stats.skipped` with its own declined count -- so a skip counted here
+    /// would be silently thrown away. Re-export, where stale files are removed,
+    /// is the case most likely to want one.
+    #[test]
+    fn export_reports_no_skips_of_its_own_so_the_route_owns_that_count() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let both = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Beta", "y"),
+        ];
+        let first = export_okf(&both, dir.path()).unwrap();
+        assert_eq!(first.exported, 2, "{first:?}");
+        assert_eq!(first.skipped, 0, "{first:?}");
+
+        // Second pass over the same directory with one page gone: the stale
+        // file is removed, and that is still not a "skip".
+        let second = export_okf(&both[..1], dir.path()).unwrap();
+        assert_eq!(second.exported, 1, "{second:?}");
+        assert_eq!(second.skipped, 0, "{second:?}");
+        assert_eq!(second.failed, 0, "{second:?}");
     }
 
     #[test]

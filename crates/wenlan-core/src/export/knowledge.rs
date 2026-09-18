@@ -145,6 +145,11 @@ const ARCHIVE_DIR: &str = "archive";
 /// it alone, and `lint::pages::traversal::scope_for` excludes it from
 /// `EntryScope::PageMarkdown`.
 const INDEX_FILE: &str = "index.md";
+/// The other filename OKF reserves at every level of the hierarchy (spec 3.1:
+/// a directory's update history). Wenlan does not write one, but the spec says
+/// a concept document may not take the name, so a page titled "Log" gets
+/// `log-page.md` the same way a page titled "Index" gets `index-page.md`.
+const LOG_FILE: &str = "log.md";
 /// Bounded frontmatter read for building `index.md` from projected files —
 /// generous enough for title/description/space/tags, small next to a page body.
 const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
@@ -155,10 +160,17 @@ pub(crate) fn is_index_file(name: &str) -> bool {
     name.eq_ignore_ascii_case(INDEX_FILE)
 }
 
-/// The filename stem for a page slug. `index.md` is the OKF index, never a
-/// page's file, so a page titled "Index" gets `index-page` instead.
-pub(crate) fn page_stem_clear_of_index(slug: String) -> String {
-    if is_index_file(&format!("{slug}.md")) {
+/// Whether a projected filename is one OKF reserves (spec 3.1). Neither may
+/// be a concept document. Case-insensitive, like `is_index_file`.
+pub(crate) fn is_reserved_okf_filename(name: &str) -> bool {
+    is_index_file(name) || name.eq_ignore_ascii_case(LOG_FILE)
+}
+
+/// The filename stem for a page slug. `index.md` and `log.md` are reserved by
+/// OKF and are never a page's file, so a page titled "Index" gets `index-page`
+/// and one titled "Log" gets `log-page`.
+pub(crate) fn page_stem_clear_of_reserved(slug: String) -> String {
+    if is_reserved_okf_filename(&format!("{slug}.md")) {
         format!("{slug}-page")
     } else {
         slug
@@ -364,12 +376,12 @@ impl KnowledgeWriter {
             }
         }
 
-        // A page leaving `index.md` for its own name (see `unique_filename_cap`).
-        let left_index_copy = state
+        // A page leaving a reserved name for its own (see `unique_filename_cap`).
+        let left_reserved_copy = state
             .pages
             .get(&page.id)
             .map(|entry| entry.file.clone())
-            .filter(|old| is_index_file(old) && *old != filename);
+            .filter(|old| is_reserved_okf_filename(old) && *old != filename);
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -382,8 +394,8 @@ impl KnowledgeWriter {
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
-        if let Some(old) = left_index_copy {
-            Self::remove_index_copy_left_by(&capabilities.root, &old, &page.id);
+        if let Some(old) = left_reserved_copy {
+            Self::remove_reserved_name_copy_left_by(&capabilities.root, &old, &page.id);
         }
 
         if self.write_provenance && regenerate_index {
@@ -510,16 +522,17 @@ impl KnowledgeWriter {
         state: &KnowledgeState,
     ) -> Result<String, WenlanError> {
         if let Some(existing) = state.pages.get(page_id) {
-            // A page titled "Index" projected before `index.md` was reserved
+            // A page projected at a reserved name before it was reserved
             // moves to a free name on its next write, so the OKF index can
-            // take the name. `write_page` removes the copy it leaves behind
-            // (`remove_index_copy_left_by`). Only a writer that regenerates
-            // the index moves it.
-            if !(self.write_provenance && is_index_file(&existing.file)) {
+            // take `index.md` back and no concept document sits at `log.md`.
+            // `write_page` removes the copy it leaves behind
+            // (`remove_reserved_name_copy_left_by`). Only a writer that
+            // regenerates the index moves it.
+            if !(self.write_provenance && is_reserved_okf_filename(&existing.file)) {
                 return Ok(existing.file.clone());
             }
         }
-        let base = page_stem_clear_of_index(slugify(title));
+        let base = page_stem_clear_of_reserved(slugify(title));
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         let taken: std::collections::HashSet<&str> = state
@@ -1251,14 +1264,26 @@ impl KnowledgeWriter {
         Some((title, description, space))
     }
 
-    /// After a page moves off `index.md`, remove the copy it left there so the
-    /// OKF index can take the name. `state` recorded the page at that file, so
+    /// After a page moves off a reserved name (`index.md`, `log.md`), clear
+    /// the copy it left there, so the OKF index can take `index.md` back and
+    /// no concept document is left at either. `state` recorded the page at
+    /// that file, so
     /// a regular file there whose `origin_id` is this page is Wenlan's own
     /// projection. Anything else is kept: a note the user put there since, a
     /// symlink, or a file this pass cannot read. Ownership comes from `state`,
     /// not from the file alone, because a user's note made by copying a page
     /// file carries that page's `origin_id` too.
-    fn remove_index_copy_left_by(root: &Dir, file: &str, page_id: &str) {
+    ///
+    /// The copy is archived rather than unlinked. `origin_id` says Wenlan
+    /// wrote the file; it does not say the bytes are still Wenlan's, because
+    /// an edit made in place in the vault leaves the frontmatter alone. The
+    /// database can rebuild the page at its new name, so nothing is lost by
+    /// moving the old file aside, and [`Self::archive_projected_file`] already
+    /// makes the argument for why that asymmetry decides it. This fires once
+    /// per page, the first time it leaves a reserved name, so `archive/` gains
+    /// one file for a migration that happens to at most the page named "Index"
+    /// and the page named "Log".
+    fn remove_reserved_name_copy_left_by(root: &Dir, file: &str, page_id: &str) {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let Ok(mut handle) = root.open_with(file, &options) else {
@@ -1281,8 +1306,8 @@ impl KnowledgeWriter {
         if fm.get_str("origin_id").map(str::trim) != Some(page_id) {
             return;
         }
-        if let Err(e) = root.remove_file(file) {
-            log::warn!("[knowledge] could not remove {file} after page {page_id} moved: {e}");
+        if let Err(e) = Self::archive_projected_file(root, file) {
+            log::warn!("[knowledge] could not archive {file} after page {page_id} moved: {e}");
         }
     }
 
@@ -1409,6 +1434,19 @@ pub(crate) fn escape_index_link_text(s: &str) -> String {
     s.replace('[', "\\[").replace(']', "\\]")
 }
 
+/// One index line. The ` - ` separator is written only when the page has a
+/// description: a page with an empty summary otherwise rendered as
+/// `* [Title](/page.md) - `, a separator pointing at nothing, in every
+/// projection index and every exported bundle.
+fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
+    let title = escape_index_link_text(title);
+    if description.is_empty() {
+        format!("* [{title}]({link_prefix}{filename})\n")
+    } else {
+        format!("* [{title}]({link_prefix}{filename}) - {description}\n")
+    }
+}
+
 /// Pure OKF `index.md` renderer shared by the projection and the OKF export
 /// bundle. Entries must already be sanitized and title-sorted within their
 /// group; `link_prefix` is `"/"` for the projection (links at the vault
@@ -1422,20 +1460,14 @@ pub(crate) fn render_index_markdown(
     for (space, entries) in by_space {
         out.push_str(&format!("## {space}\n\n"));
         for (title, filename, description) in entries {
-            let title = escape_index_link_text(title);
-            out.push_str(&format!(
-                "* [{title}]({link_prefix}{filename}) - {description}\n"
-            ));
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
         }
         out.push('\n');
     }
     if !unfiled.is_empty() {
         out.push_str("## Unfiled\n\n");
         for (title, filename, description) in unfiled {
-            let title = escape_index_link_text(title);
-            out.push_str(&format!(
-                "* [{title}]({link_prefix}{filename}) - {description}\n"
-            ));
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
         }
         out.push('\n');
     }
@@ -4600,10 +4632,15 @@ pub(crate) fn page_frontmatter(page: &Page, include_related: bool) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    // `generated.at` is the content's LAST meaningful change, not its birth:
+    // OKF spec 5.2 says consumers read it "to tell a recent edit from a stale
+    // fact". Stamping `created_at` reported a page distilled in April as
+    // April-fresh however many times it had been rewritten since, which is the
+    // one question the field exists to answer.
     out.push_str(&format!(
         "generated: {{by: {}, at: {}}}\n",
         yaml_quoted(&format!("wenlan/{}", crate::version())),
-        yaml_quoted(&page.created_at)
+        yaml_quoted(&page.last_modified)
     ));
     let status = if page.stale_reason.is_some() {
         "draft"
@@ -6077,15 +6114,24 @@ mod tests {
         assert!(!md.contains("tags:"));
     }
 
+    /// `generated.at` answers "how recently did this content change" (OKF 5.2),
+    /// so it carries `last_modified`, never `created_at`. A page distilled once
+    /// and rewritten many times must not read as fresh from the day it was born.
     #[test]
-    fn render_markdown_generated_stamps_version_and_created_at() {
-        let page = test_concept();
+    fn render_markdown_generated_stamps_version_and_last_modified() {
+        let mut page = test_concept();
+        page.created_at = "2026-04-01T00:00:00+00:00".to_string();
+        page.last_modified = "2026-09-17T12:00:00+00:00".to_string();
         let md = render_markdown(&page);
-        assert!(md.contains(&format!(
-            "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
-            crate::version(),
-            page.created_at
-        )));
+        assert!(
+            md.contains(&format!(
+                "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
+                crate::version(),
+                page.last_modified
+            )),
+            "{md}"
+        );
+        assert!(!md.contains("at: \"2026-04-01T00:00:00+00:00\""), "{md}");
     }
 
     #[test]
@@ -6211,6 +6257,55 @@ mod tests {
             body.contains("[Weird\\] Title]("),
             "the title's `]` must be escaped and its newline collapsed to a space; got: {body}"
         );
+    }
+
+    /// A page with no summary must not render `* [Title](/file.md) - `: the
+    /// separator would point at nothing, in every projection index on disk.
+    #[test]
+    fn index_line_for_a_page_without_a_summary_has_no_trailing_separator() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut described = test_concept();
+        described.id = "page_described".to_string();
+        described.title = "Described".to_string();
+        described.summary = Some("A real summary".to_string());
+        writer.write_page_for_test(&described).unwrap();
+
+        let mut bare = test_concept();
+        bare.id = "page_bare".to_string();
+        bare.title = "Bare".to_string();
+        bare.summary = None;
+        writer.write_page_for_test(&bare).unwrap();
+
+        // A summary of only whitespace is the same case: `sanitize_index_field`
+        // collapses it to nothing before the line is built.
+        let mut blank = test_concept();
+        blank.id = "page_blank".to_string();
+        blank.title = "Blank".to_string();
+        blank.summary = Some("   \n  ".to_string());
+        writer.write_page_for_test(&blank).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let line = |title: &str| -> String {
+            content
+                .lines()
+                .find(|l| l.starts_with(&format!("* [{title}](")))
+                .unwrap_or_else(|| panic!("no index line for {title}; got: {content}"))
+                .to_string()
+        };
+        assert!(line("Described").ends_with(" - A real summary"));
+        assert!(
+            line("Bare").ends_with(".md)"),
+            "a page with no summary must end at the link; got: {}",
+            line("Bare")
+        );
+        assert!(
+            line("Blank").ends_with(".md)"),
+            "a whitespace-only summary must end at the link; got: {}",
+            line("Blank")
+        );
+        assert!(!content.contains(" - \n"), "{content}");
     }
 
     #[test]
@@ -6354,6 +6449,99 @@ mod tests {
         assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
         let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
         assert!(index.contains("[Index](/index-page.md)"), "{index}");
+    }
+
+    /// OKF reserves `log.md` at every level of the hierarchy for a directory's
+    /// update history (spec 3.1), so a page titled "Log" may not take it, for
+    /// the same reason a page titled "Index" may not take `index.md`.
+    #[test]
+    fn a_page_titled_log_never_takes_the_log_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("log-page.md"), "{page_path}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "log.md is reserved and must stay free"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// A vault projected before `log.md` was reserved holds a page titled
+    /// "Log" there. Its next write moves it to a free name and removes the
+    /// copy left behind, the same migration a page at `index.md` gets.
+    #[test]
+    fn a_page_already_at_log_md_moves_on_its_next_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // Put the projection back where an older build would have left it.
+        std::fs::rename(&moved_path, dir.path().join("log.md")).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(std::fs::read_to_string(&rewritten)
+            .unwrap()
+            .contains(&format!("origin_id: {}", page.id)));
+        assert_eq!(
+            writer.page_filename(&page.id).as_deref(),
+            Some("log-page.md")
+        );
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the copy left at the reserved name must be cleared"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// The copy left at a reserved name is archived, not unlinked. Editing a
+    /// page in the vault leaves its frontmatter alone, so `origin_id` cannot
+    /// tell Wenlan's own bytes from bytes the person typed over them, and the
+    /// database can rebuild the page while it cannot rebuild the typing.
+    #[test]
+    fn an_edit_left_at_a_reserved_name_is_archived_not_destroyed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // An older build left the page at the reserved name, and the person
+        // then added a line to it in place, keeping the frontmatter.
+        let edited = format!(
+            "{}\n\nA line I typed myself.\n",
+            std::fs::read_to_string(&moved_path).unwrap()
+        );
+        std::fs::remove_file(&moved_path).unwrap();
+        std::fs::write(dir.path().join("log.md"), &edited).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the reserved name must be free again"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive").join("log.md")).unwrap(),
+            edited,
+            "the typing must survive in archive/"
+        );
     }
 
     /// A page already titled "Index Page" keeps `index-page.md`; the page
