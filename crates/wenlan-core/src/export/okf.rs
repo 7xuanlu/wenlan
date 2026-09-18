@@ -111,8 +111,9 @@ fn write_file_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Plan stable bundle filenames: pages sorted by `(created_at, id)`, slug
 /// via `obsidian::slugify`, empty slug falling back to
 /// `sanitize_stub_id(page.id)`, collisions suffixed `-2`, `-3`, ...
-/// `index.md` is never a page's file: OKF reads an `index.md` in any folder
-/// as that folder's index, so a page titled "Index" is `index-page.md`.
+/// `index.md` and `log.md` are never a page's file: OKF reserves both at
+/// every level of the hierarchy (spec 3.1), so a page titled "Index" is
+/// `index-page.md` and one titled "Log" is `log-page.md`.
 /// Returns `(page_id, file)` pairs in export order.
 pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
     let mut order: Vec<usize> = (0..pages.len()).collect();
@@ -130,7 +131,7 @@ pub(crate) fn plan_page_filenames(pages: &[Page]) -> Vec<(String, String)> {
         if base.is_empty() {
             base = crate::export::provenance::sanitize_stub_id(&page.id);
         }
-        let base = crate::export::knowledge::page_stem_clear_of_index(base);
+        let base = crate::export::knowledge::page_stem_clear_of_reserved(base);
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         while used.contains(&candidate) {
@@ -812,6 +813,21 @@ mod tests {
             files,
             vec!["same-name-2.md", "same-name-3.md", "same-name.md"]
         );
+    }
+
+    /// The bundle side of the reserved-name rule: `log.md` is a directory's
+    /// update history in OKF (spec 3.1), never a concept document.
+    #[test]
+    fn a_page_titled_log_gets_log_page_in_the_bundle() {
+        let pages = vec![
+            test_page("concept_log", "Log", "x"),
+            test_page("concept_log_page", "Log Page", "y"),
+        ];
+        let planned: Vec<String> = plan_page_filenames(&pages)
+            .into_iter()
+            .map(|(_, file)| file)
+            .collect();
+        assert_eq!(planned, vec!["log-page.md", "log-page-2.md"], "{planned:?}");
     }
 
     #[test]

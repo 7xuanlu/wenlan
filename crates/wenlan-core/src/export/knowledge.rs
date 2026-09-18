@@ -145,6 +145,11 @@ const ARCHIVE_DIR: &str = "archive";
 /// it alone, and `lint::pages::traversal::scope_for` excludes it from
 /// `EntryScope::PageMarkdown`.
 const INDEX_FILE: &str = "index.md";
+/// The other filename OKF reserves at every level of the hierarchy (spec 3.1:
+/// a directory's update history). Wenlan does not write one, but the spec says
+/// a concept document may not take the name, so a page titled "Log" gets
+/// `log-page.md` the same way a page titled "Index" gets `index-page.md`.
+const LOG_FILE: &str = "log.md";
 /// Bounded frontmatter read for building `index.md` from projected files —
 /// generous enough for title/description/space/tags, small next to a page body.
 const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
@@ -155,10 +160,17 @@ pub(crate) fn is_index_file(name: &str) -> bool {
     name.eq_ignore_ascii_case(INDEX_FILE)
 }
 
-/// The filename stem for a page slug. `index.md` is the OKF index, never a
-/// page's file, so a page titled "Index" gets `index-page` instead.
-pub(crate) fn page_stem_clear_of_index(slug: String) -> String {
-    if is_index_file(&format!("{slug}.md")) {
+/// Whether a projected filename is one OKF reserves (spec 3.1). Neither may
+/// be a concept document. Case-insensitive, like `is_index_file`.
+pub(crate) fn is_reserved_okf_filename(name: &str) -> bool {
+    is_index_file(name) || name.eq_ignore_ascii_case(LOG_FILE)
+}
+
+/// The filename stem for a page slug. `index.md` and `log.md` are reserved by
+/// OKF and are never a page's file, so a page titled "Index" gets `index-page`
+/// and one titled "Log" gets `log-page`.
+pub(crate) fn page_stem_clear_of_reserved(slug: String) -> String {
+    if is_reserved_okf_filename(&format!("{slug}.md")) {
         format!("{slug}-page")
     } else {
         slug
@@ -364,12 +376,12 @@ impl KnowledgeWriter {
             }
         }
 
-        // A page leaving `index.md` for its own name (see `unique_filename_cap`).
-        let left_index_copy = state
+        // A page leaving a reserved name for its own (see `unique_filename_cap`).
+        let left_reserved_copy = state
             .pages
             .get(&page.id)
             .map(|entry| entry.file.clone())
-            .filter(|old| is_index_file(old) && *old != filename);
+            .filter(|old| is_reserved_okf_filename(old) && *old != filename);
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -382,8 +394,8 @@ impl KnowledgeWriter {
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
-        if let Some(old) = left_index_copy {
-            Self::remove_index_copy_left_by(&capabilities.root, &old, &page.id);
+        if let Some(old) = left_reserved_copy {
+            Self::remove_reserved_name_copy_left_by(&capabilities.root, &old, &page.id);
         }
 
         if self.write_provenance && regenerate_index {
@@ -510,16 +522,17 @@ impl KnowledgeWriter {
         state: &KnowledgeState,
     ) -> Result<String, WenlanError> {
         if let Some(existing) = state.pages.get(page_id) {
-            // A page titled "Index" projected before `index.md` was reserved
+            // A page projected at a reserved name before it was reserved
             // moves to a free name on its next write, so the OKF index can
-            // take the name. `write_page` removes the copy it leaves behind
-            // (`remove_index_copy_left_by`). Only a writer that regenerates
-            // the index moves it.
-            if !(self.write_provenance && is_index_file(&existing.file)) {
+            // take `index.md` back and no concept document sits at `log.md`.
+            // `write_page` removes the copy it leaves behind
+            // (`remove_reserved_name_copy_left_by`). Only a writer that
+            // regenerates the index moves it.
+            if !(self.write_provenance && is_reserved_okf_filename(&existing.file)) {
                 return Ok(existing.file.clone());
             }
         }
-        let base = page_stem_clear_of_index(slugify(title));
+        let base = page_stem_clear_of_reserved(slugify(title));
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         let taken: std::collections::HashSet<&str> = state
@@ -1251,14 +1264,16 @@ impl KnowledgeWriter {
         Some((title, description, space))
     }
 
-    /// After a page moves off `index.md`, remove the copy it left there so the
-    /// OKF index can take the name. `state` recorded the page at that file, so
+    /// After a page moves off a reserved name (`index.md`, `log.md`), remove
+    /// the copy it left there, so the OKF index can take `index.md` back and
+    /// no concept document is left at either. `state` recorded the page at
+    /// that file, so
     /// a regular file there whose `origin_id` is this page is Wenlan's own
     /// projection. Anything else is kept: a note the user put there since, a
     /// symlink, or a file this pass cannot read. Ownership comes from `state`,
     /// not from the file alone, because a user's note made by copying a page
     /// file carries that page's `origin_id` too.
-    fn remove_index_copy_left_by(root: &Dir, file: &str, page_id: &str) {
+    fn remove_reserved_name_copy_left_by(root: &Dir, file: &str, page_id: &str) {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let Ok(mut handle) = root.open_with(file, &options) else {
@@ -6410,6 +6425,52 @@ mod tests {
         assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
         let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
         assert!(index.contains("[Index](/index-page.md)"), "{index}");
+    }
+
+    /// OKF reserves `log.md` at every level of the hierarchy for a directory's
+    /// update history (spec 3.1), so a page titled "Log" may not take it, for
+    /// the same reason a page titled "Index" may not take `index.md`.
+    #[test]
+    fn a_page_titled_log_never_takes_the_log_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("log-page.md"), "{page_path}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "log.md is reserved and must stay free"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// A vault projected before `log.md` was reserved holds a page titled
+    /// "Log" there. Its next write moves it to a free name and removes the
+    /// copy left behind, the same migration a page at `index.md` gets.
+    #[test]
+    fn a_page_already_at_log_md_moves_on_its_next_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // Put the projection back where an older build would have left it.
+        std::fs::rename(&moved_path, dir.path().join("log.md")).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the copy left at the reserved name must be removed"
+        );
     }
 
     /// A page already titled "Index Page" keeps `index-page.md`; the page
