@@ -16,8 +16,7 @@
       "identifier": "shell:allow-spawn",
       "allow": [
         { "name": "binaries/wenlan-server", "sidecar": true, "args": true },
-        { "name": "binaries/wenlan-mcp", "sidecar": true, "args": true },
-        { "name": "binaries/cloudflared", "sidecar": true, "args": true }
+        { "name": "binaries/wenlan-mcp", "sidecar": true, "args": true }
       ]
     },
     "shell:allow-kill",

@@ -18,7 +18,7 @@ part of packaging behavior, not generic local helpers.
 | Negative controls | `negative-controls/` | each reverts one half of a shipped remedy and FAILS if the defending suite stays green; see its README |
 | Surface smokes | `smoke-cli.sh`, `smoke-mcp.sh` | isolated port + data dir + pages dir; asserted teardown; exact ledger multiset |
 | Version lockstep | `release-version-sync.test.ts` | app, Cargo, Tauri versions must match |
-| Sidecar tests | `prepare-sidecars.test.ts` | locks path and cloudflared behavior |
+| Sidecar tests | `prepare-sidecars.test.ts` | locks target paths and the three Wenlan sidecars |
 | API route inventory | `refactor/api-route-diff.mjs` | route coverage signal, not a product requirement |
 
 ## CONVENTIONS
@@ -29,8 +29,8 @@ part of packaging behavior, not generic local helpers.
   `HISTORY.md` for the retired pinned-download mode.
 - `prepare-tauri-build-sidecars.sh` is the Tauri hook; keep it aligned with
   `app/tauri.conf.json` `beforeBuildCommand`.
-- `cloudflared` is required for a full Tauri bundle:
-  `binaries/cloudflared-$TRIPLE`.
+- Stage only the three Wenlan executables declared by Tauri `externalBin`.
+  Native reverse transport must not reintroduce a `cloudflared` dependency.
 - Update scripts, tests, and workflows together when release or sidecar behavior
   changes. The workflow comments are part of the operational contract.
 

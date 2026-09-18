@@ -1,280 +1,192 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { i18n } from "../../i18n";
-import type { RemoteAccessStatus } from "../../lib/tauri";
+import { RemoteAccessPanel } from "./RemoteAccessPanel";
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
-
-const mocks = vi.hoisted(() => ({
-  toggleRemoteAccess: vi.fn(),
-  getRemoteAccessStatus: vi.fn(),
-  getWireState: vi.fn(),
-  installClientPlugin: vi.fn(),
-  testRemoteMcpConnection: vi.fn(),
-  clipboardWrite: vi.fn(),
-}));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
+const mocks = vi.hoisted(() => Object.fromEntries([
+  "toggleRemoteAccess", "getRemoteAccessStatus", "getRemoteAccessProfile",
+  "configureRemoteAccess", "listSpaces", "inspectRemotePairing", "approveRemotePairing",
+  "listRemoteGrants", "revokeRemoteGrant", "testRemoteMcpConnection", "clipboardWrite",
+].map((key) => [key, vi.fn()])));
 vi.mock("../../lib/tauri", () => mocks);
 
-import { RemoteAccessPanel } from "./RemoteAccessPanel";
-import { NO, YES, unreadable } from "../../test/readings";
-import type { Reading } from "../../lib/reading";
-
-/** A WireState whose claude_code client has, lacks, or could not be read for
- *  the connector. Pass `null` for an empty client list (also reads as
- *  not-installed). The parameter is a `Reading`, not a boolean, because the
- *  third case is the one this row gets wrong. */
-function wireState(hasPlugin: Reading | null) {
-  return {
-    daemon: { base_url: "", reachable: true, version: null, error: null },
-    mcp_binary: { command: "", args: [], candidates: [] },
-    clients:
-      hasPlugin === null
-        ? []
-        : [
-            {
-              client_type: "claude_code",
-              name: "Claude Code",
-              detected: YES,
-              config_path: "~/.claude.json",
-              has_raw_entry: NO,
-              has_raw_duplicate: NO,
-              has_plugin: hasPlugin,
-              route: "plugin",
-            },
-          ],
-  };
+const profile = { revision: "r1", space: "review", enabled: true, disconnect_pending: false, credential_expires_at: Date.now() + 60_000 };
+const pairing = { pairingId: "a".repeat(64), clientId: "synthetic-client", resource: "https://relay.wenlan.app/mcp", scopes: ["wenlan:query"], expiresAt: Date.now() + 60_000 };
+const connected = { status: "connected", tunnel_url: null, relay_url: pairing.resource };
+function panel(currentSpace?: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  return render(<QueryClientProvider client={client}><RemoteAccessPanel currentSpace={currentSpace} /></QueryClientProvider>);
 }
-
-function renderPanel() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
-  }
-  return render(<RemoteAccessPanel />, { wrapper: Wrapper });
+async function connectedPanel() {
+  mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+  mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+  panel();
+  await screen.findByText("Device connected");
 }
+beforeEach(() => {
+  vi.resetAllMocks();
+  mocks.getRemoteAccessStatus.mockResolvedValue({ status: "off" });
+  mocks.getRemoteAccessProfile.mockResolvedValue(null);
+  mocks.listSpaces.mockResolvedValue([{ id: "s1", name: "review" }]);
+  mocks.configureRemoteAccess.mockResolvedValue({ ...profile, enabled: false, revision: "configured" });
+  mocks.toggleRemoteAccess.mockResolvedValue({ status: "starting" });
+  mocks.inspectRemotePairing.mockResolvedValue(pairing);
+  mocks.approveRemotePairing.mockResolvedValue(undefined);
+  mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
+  mocks.revokeRemoteGrant.mockResolvedValue({ revoked: true, cleanupPending: false });
+  mocks.testRemoteMcpConnection.mockResolvedValue({ ok: true, latency_ms: 42, error: null });
+  mocks.clipboardWrite.mockResolvedValue(undefined);
+});
+afterEach(async () => { await i18n.changeLanguage("en"); });
 
-const CONNECTED = {
-  status: "connected",
-  tunnel_url: "https://example.trycloudflare.com",
-  relay_url: null,
-} satisfies RemoteAccessStatus;
-
-describe("RemoteAccessPanel", () => {
-  beforeEach(() => {
-    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "off" });
-    mocks.toggleRemoteAccess.mockResolvedValue({ status: "starting" });
-    mocks.testRemoteMcpConnection.mockResolvedValue({ ok: true, latency_ms: 42, error: null });
-    mocks.clipboardWrite.mockResolvedValue(undefined);
-    mocks.installClientPlugin.mockResolvedValue(undefined);
-    mocks.getWireState.mockResolvedValue(wireState(null));
-  });
-
-  afterEach(async () => {
-    vi.clearAllMocks();
-    vi.useRealTimers();
-    await i18n.changeLanguage("en");
-  });
-
-  // "off" is a setting the user chose, not something the app probed — no chip.
-  it("renders the Web access title and no status chip when off", async () => {
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("Web access")).toBeInTheDocument();
-    });
-    expect(screen.getByText("Experimental")).toBeInTheDocument();
-    expect(screen.queryByText("Off")).not.toBeInTheDocument();
-    // No disclosure to expand any more — Test/Reconnect only exist when up.
-    expect(screen.queryByRole("button", { name: "View relay URL" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Reconnect" })).not.toBeInTheDocument();
-  });
-
-  it("states the no-auth URL boundary, exactly once", async () => {
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("Web access")).toBeInTheDocument();
-    });
-    expect(screen.getByText(/no authentication/i)).toBeInTheDocument();
-    expect(screen.getByText(/anyone with the URL can access Wenlan/i)).toBeInTheDocument();
-    expect(screen.getByText(/turn Remote Access off when unused/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/no authentication for Claude\.ai and ChatGPT/)).toHaveLength(1);
-  });
-
-  it("clicking the toggle calls toggleRemoteAccess(true)", async () => {
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("Web access")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { pressed: false }));
-    await waitFor(() => {
-      expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(true);
-    });
-  });
-
-  it("renders 'Connecting…' when starting", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "starting" });
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText(/Connecting/i)).toBeInTheDocument();
-    });
-  });
-
-  // Test connection + Reconnect live inline in the status row now, not behind
-  // a disclosure — they appear as soon as the relay is connected.
-  it("Test connection reports latency inline when connected", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue(CONNECTED);
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("Connected")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Test connection/i }));
-    await waitFor(() => {
-      expect(mocks.testRemoteMcpConnection).toHaveBeenCalled();
-    });
-    await waitFor(() => {
-      expect(screen.getByText(/Connected \(42 ms\)/i)).toBeInTheDocument();
-    });
-  });
-
-  it("Test connection failure surfaces the error inline", async () => {
-    mocks.testRemoteMcpConnection.mockResolvedValue({ ok: false, latency_ms: null, error: "timeout after 5s" });
-    mocks.getRemoteAccessStatus.mockResolvedValue(CONNECTED);
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("Connected")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Test connection/i }));
-    await waitFor(() => {
-      expect(screen.getByText(/timeout after 5s/i)).toBeInTheDocument();
-    });
-  });
-
-  it("error state surfaces the verbatim daemon error and offers Retry + Reconnect", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue({
-      status: "error",
-      error: "connection refused: dial tcp 127.0.0.1:7878",
-    });
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("connection refused: dial tcp 127.0.0.1:7878")).toBeInTheDocument();
-    });
-    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
-  });
-
-  // ── Claude.ai row ─────────────────────────────────────────────────────
-  // has_plugin true → Ready, nothing to do: no Set up button, no steps.
-  it("Claude.ai row: connector installed shows Ready and offers no setup", async () => {
-    mocks.getWireState.mockResolvedValue(wireState(YES));
-    renderPanel();
-    expect(await screen.findByText("Ready")).toBeInTheDocument();
-    expect(
-      screen.getByText(/chats on claude\.ai reach your memory while web access is on/i),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Set up manually")).not.toBeInTheDocument();
-  });
-
-  // has_plugin false → the one-click Set up installs the connector.
-  it("Claude.ai row: no connector shows a Set up button that installs the Claude plugin", async () => {
-    mocks.getWireState.mockResolvedValue(wireState(NO));
-    renderPanel();
-    const setUp = await screen.findByRole("button", { name: "Set up" });
-    // Manual fallback is available alongside the one-click path.
-    expect(screen.getByText("Set up manually")).toBeInTheDocument();
-    fireEvent.click(setUp);
-    await waitFor(() => {
-      expect(mocks.installClientPlugin).toHaveBeenCalledWith("claude_code");
-    });
-  });
-
-  // Wire query failed → we can't tell if the connector exists, so only the
-  // manual steps show (a one-click install could double-register).
-  it("Claude.ai row: an unreadable wire state offers manual steps only, no install button", async () => {
-    mocks.getWireState.mockRejectedValue(new Error("daemon down"));
-    renderPanel();
-    expect(await screen.findByText("Set up manually")).toBeInTheDocument();
-    expect(screen.getByText("Step 1 — Add Wenlan to claude.ai")).toBeInTheDocument();
-    // The install button shows during the pending window, then the rejection
-    // resolves it away — wait for the settled (error) state before asserting.
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
-    });
-  });
-
-  // Round 5, defect 4. The SAME unknown, arriving on a SUCCESSFUL query: the
-  // wire came back, and `has_plugin` inside it says the plugin state could not
-  // be read. `?? false` sent that down the "no connector" path, which is the
-  // one that offers the one-click install this row's own comment says must
-  // never run against unknown state.
-  it("Claude.ai row: a plugin state that could not be read offers manual steps only", async () => {
-    mocks.getWireState.mockResolvedValue(wireState(unreadable("Access is denied. (os error 5)")));
-    renderPanel();
-
-    expect(await screen.findByText("Set up manually")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
-    });
-    // Nor the opposite mistake: an unread plugin is not a ready connector.
+describe("RemoteAccessPanel consent and connection", () => {
+  it("requires explicit scope consent, without creating a single-Space selector", async () => {
+    panel();
+    const consent = await screen.findByRole("checkbox", { name: /Allow remote queries only in review/ });
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Web access" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Web access" })).toHaveAttribute("aria-pressed", "false");
+    expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
+    fireEvent.click(consent);
+    fireEvent.click(screen.getByRole("button", { name: "Web access" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(true, "configured"));
+    expect(mocks.configureRemoteAccess).toHaveBeenCalledWith("review", undefined);
+    expect(screen.queryByText(/no authentication/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Ready")).not.toBeInTheDocument();
   });
-
-  // ── ChatGPT row ───────────────────────────────────────────────────────
-  it("ChatGPT row: prompts to turn on web access when off, with no steps or URL", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "off" });
-    renderPanel();
-    expect(await screen.findByText("Turn on web access to connect ChatGPT.")).toBeInTheDocument();
-    expect(screen.queryByText(/In ChatGPT, open Settings/)).not.toBeInTheDocument();
+  it("preselects the current existing Space, but clears consent after a scope change", async () => {
+    mocks.listSpaces.mockResolvedValue([{ id: "a", name: "review" }, { id: "b", name: "private" }]);
+    panel("review");
+    const select = await screen.findByRole("combobox");
+    await waitFor(() => expect(select).toHaveValue("review"));
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.change(select, { target: { value: "private" } });
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Web access" })).toBeDisabled();
+  });
+  it("does not guess a scope in an ambiguous multi-Space library", async () => {
+    mocks.listSpaces.mockResolvedValue([{ id: "a", name: "review" }, { id: "b", name: "private" }]);
+    panel();
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue(""));
+    expect(screen.getByRole("checkbox")).toBeDisabled();
+  });
+  it("unknown native settings do not appear as permission to enable", async () => {
+    mocks.getRemoteAccessProfile.mockRejectedValue(new Error("Storage unavailable"));
+    panel();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Storage unavailable");
+    expect(screen.getByRole("button", { name: "Web access" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Stop access" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
+  });
+  it("Space lookup failure does not disable stopping an existing connection", async () => {
+    mocks.listSpaces.mockRejectedValue(new Error("Daemon offline"));
+    await connectedPanel();
+    await screen.findByRole("button", { name: "Stop access" });
+    const toggle = screen.getByRole("button", { name: "Web access" });
+    expect(toggle).not.toBeDisabled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
+  });
+  it("copies only the fixed OAuth endpoint, never a direct tunnel fallback", async () => {
+    await connectedPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Copy URL" }));
+    await waitFor(() => expect(mocks.clipboardWrite).toHaveBeenCalledWith(pairing.resource));
+    expect(screen.queryByText(/private.trycloudflare/)).not.toBeInTheDocument();
+  });
+  it("reconnect never starts if disconnect fails", async () => {
+    await connectedPanel();
+    mocks.toggleRemoteAccess.mockRejectedValue(new Error("Revocation unavailable"));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Revocation unavailable");
+    expect(mocks.toggleRemoteAccess.mock.calls).toEqual([[false]]);
+  });
+  it("surfaces startup disconnect failure and allows stopping despite saved enabled intent", async () => {
+    const warning = "Local transport stop requested; remote access settings are not confirmed (Remote access credentials could not be stored safely); server revoke failed: Remote connection unavailable; retry later; disconnect must be retried before app restart";
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "error", error: warning });
+    panel();
+    expect(await screen.findByRole("alert")).toHaveTextContent(warning);
+    expect(screen.queryByText("Device connected")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop access" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess.mock.calls).toEqual([[false]]));
+  });
+  it("allows shutdown retry when remote revoke succeeded but local processes remain unconfirmed", async () => {
+    const warning = "Local remote-access processes have not been confirmed stopped. New connections are blocked; retry Stop access.";
+    mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, enabled: false });
+    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "error", error: warning });
+    panel();
+    expect(await screen.findByRole("alert")).toHaveTextContent(warning);
+    expect(screen.queryByText("Device connected")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Stop access" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess.mock.calls).toEqual([[false]]));
+  });
+  it("does not expose a tunnel when the native relay URL is missing", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    mocks.getRemoteAccessStatus.mockResolvedValue({ ...connected, relay_url: null });
+    panel();
+    await screen.findByText("Device connected");
     expect(screen.queryByRole("button", { name: "Copy URL" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/private.trycloudflare/)).not.toBeInTheDocument();
   });
-
-  // The relay URL's one and only home is the ChatGPT row (getAllByText length
-  // 1 catches both a missing URL and a duplicated one).
-  it("ChatGPT row: connected shows the steps + URL, and the URL appears exactly once", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue({
-      status: "connected",
-      tunnel_url: "https://example.trycloudflare.com",
-      relay_url: "https://relay.example/abc",
-    } satisfies RemoteAccessStatus);
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getAllByText("https://relay.example/abc")).toHaveLength(1);
-    });
-    expect(screen.getByText(/In ChatGPT, open Settings/)).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: "Copy URL" })).toHaveLength(1);
+  it("pending revoke blocks enabling and provides an explicit retry", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, enabled: false, disconnect_pending: true });
+    panel();
+    const retry = await screen.findByRole("button", { name: "Retry disconnect" });
+    expect(screen.getByRole("button", { name: "Web access" })).toBeDisabled();
+    fireEvent.click(retry);
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
   });
-
-  it("ChatGPT row: Copy URL writes the /mcp-suffixed tunnel URL when there is no relay", async () => {
-    mocks.getRemoteAccessStatus.mockResolvedValue(CONNECTED);
-    renderPanel();
-    const copyBtn = await screen.findByRole("button", { name: "Copy URL" });
-    fireEvent.click(copyBtn);
-    await waitFor(() => {
-      expect(mocks.clipboardWrite).toHaveBeenCalledWith("https://example.trycloudflare.com/mcp");
-    });
-    expect(screen.getByText("Copied")).toBeInTheDocument();
+  it("checks the actual native backend and does not claim client OAuth success", async () => {
+    await connectedPanel();
+    fireEvent.click(screen.getByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Backend and relay verified (42 ms)")).toBeInTheDocument();
   });
+});
 
-  // ── i18n + hygiene ────────────────────────────────────────────────────
-  it("off state renders the translated title in zh-Hans, no English fallback, no chip", async () => {
-    await i18n.changeLanguage("zh-Hans");
-    renderPanel();
-    await waitFor(() => {
-      expect(screen.getByText("网页访问")).toBeInTheDocument();
-    });
-    expect(screen.queryByText("Web access")).not.toBeInTheDocument();
-    expect(screen.queryByText("关闭")).not.toBeInTheDocument();
+describe("pairing and grants", () => {
+  it("inspection is not approval and approval preserves exact inspected intent", async () => {
+    await connectedPanel();
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: pairing.pairingId } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    expect(await screen.findByText(pairing.clientId)).toBeInTheDocument();
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Approve connection" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledWith("r1", pairing));
+    expect(await screen.findByText("Approved. Complete the connection in your AI client.")).toBeInTheDocument();
   });
-
-  it("has no raw #ef4444 or color: white left in the source", async () => {
-    const fs = await import("node:fs/promises");
-    const path = await import("node:path");
-    const filePath = path.join(process.cwd(), "src/components/memory/RemoteAccessPanel.tsx");
-    const source = await fs.readFile(filePath, "utf-8");
-    expect(source).not.toMatch(/#ef4444/i);
-    expect(source).not.toMatch(/color:\s*["']white["']/i);
+  it("changing the pairing code discards the inspected approval", async () => {
+    await connectedPanel();
+    const input = screen.getByRole("textbox", { name: "Pairing code" });
+    fireEvent.change(input, { target: { value: pairing.pairingId } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    await screen.findByRole("button", { name: "Approve connection" });
+    fireEvent.change(input, { target: { value: "b".repeat(64) } });
+    expect(screen.queryByRole("button", { name: "Approve connection" })).not.toBeInTheDocument();
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+  });
+  it("rejects expired inspection locally instead of sending approval", async () => {
+    mocks.inspectRemotePairing.mockResolvedValue({ ...pairing, expiresAt: 1 });
+    await connectedPanel();
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: pairing.pairingId } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve connection" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("expired or changed");
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+  });
+  it("shows authoritative revocation separately from token cleanup", async () => {
+    mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false }], cursor: null });
+    mocks.revokeRemoteGrant.mockResolvedValue({ revoked: true, cleanupPending: true });
+    await connectedPanel();
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke access" }));
+    await waitFor(() => expect(mocks.revokeRemoteGrant).toHaveBeenCalledWith("r1", "g1"));
+    expect(await screen.findByText("Access revoked. Stored token cleanup is pending.")).toBeInTheDocument();
+  });
+  it.each([["zh-Hant", "僅允許遠端查詢 review"], ["zh-Hans", "仅允许远程查询 review"]])("renders %s consent without English fallback", async (locale, consent) => {
+    await i18n.changeLanguage(locale);
+    panel();
+    expect(await screen.findByText("共享 Space")).toBeInTheDocument();
+    expect(await screen.findByText(new RegExp(consent))).toBeInTheDocument();
   });
 });

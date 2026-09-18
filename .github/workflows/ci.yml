@@ -41,6 +41,7 @@ jobs:
       plugin-rust-contract: ${{ steps.filter.outputs.plugin-rust-contract }}
       plugin-version-contract: ${{ steps.filter.outputs.plugin-version-contract }}
       npm:     ${{ steps.filter.outputs.npm }}
+      relay:   ${{ steps.filter.outputs.relay }}
       release-contract: ${{ steps.filter.outputs.release-contract }}
       app:     ${{ steps.filter.outputs.app }}
       macos:   ${{ steps.filter.outputs.macos }}
@@ -317,6 +318,12 @@ jobs:
               - 'scripts/release-workflow-contract.test.py'
             npm:
               - 'crates/*/npm/**'
+            relay:
+              - 'relay/**'
+              - 'app/icons/128x128.png'
+              - 'chatgpt-app-submission.json'
+              - '.github/workflows/ci.yml'
+              - 'scripts/ci_test_plan.test.py'
             macos:
               # macOS owns launchd/host-activity behavior and native code.
               # Shared CLI/server/MCP code stays on the Ubuntu canonical lane;
@@ -2318,7 +2325,7 @@ jobs:
   # with no matching diff must be skipped.
   conclusion:
     name: conclusion
-    needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, runtime-image, app-check]
+    needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, relay-check, runtime-image, app-check]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -2369,6 +2376,7 @@ jobs:
           expect_job plugin '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.plugin == 'true' }}' '${{ needs.plugin.result }}'
           expect_job plugin-rust-contract '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.plugin-rust-contract == 'true' }}' '${{ needs.plugin-rust-contract.result }}'
           expect_job npm '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.npm == 'true' }}' '${{ needs.npm.result }}'
+          expect_job relay-check '${{ needs.detect-changes.outputs.relay == 'true' || github.event_name == 'workflow_dispatch' }}' '${{ needs.relay-check.result }}'
           expect_job runtime-image '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.runtime-image == 'true' }}' '${{ needs.runtime-image.result }}'
           expect_job app-check '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true' }}' '${{ needs.app-check.result }}'
 
@@ -2420,6 +2428,32 @@ jobs:
           npm pack --dry-run
           node -c run.js
 
+  # Relay tests are local Worker simulations, never deployment or client login.
+  # Release proof does not replace this new lane's own execution evidence.
+  relay-check:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relay == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      WENLAN_NO_AUTOSTART: '1'
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: relay/package-lock.json
+      - name: Install pinned relay toolchain
+        run: npm ci --prefix relay
+      - name: Verify installed dependency graph
+        run: npm ls --prefix relay --all
+      - name: Audit relay dependencies
+        run: npm audit --prefix relay --audit-level=high
+      - name: Test relay contracts and local Worker runtime
+        run: npm test --prefix relay
+
   # Desktop app (Tauri + React). Ported from the app's pre-merge ci.yml `check`
   # job. Runs only when app/frontend paths change (detect-changes.app). macos-14
   # because Tauri needs the macOS toolchain and the app targets darwin-arm64.
@@ -2449,7 +2483,7 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
       # Tauri's build script resolves externalBin sidecars (wenlan, wenlan-server,
-      # wenlan-mcp, cloudflared) at compile time. PR CI doesn't ship the daemon;
+      # wenlan-mcp) at compile time. PR CI doesn't ship the daemon;
       # empty placeholders satisfy the resolver. Real DMG builds (the app-bundle
       # job in release.yml) supply true binaries.
       - name: Create sidecar placeholders for Tauri build script
@@ -2458,7 +2492,6 @@ jobs:
           touch app/binaries/wenlan-aarch64-apple-darwin
           touch app/binaries/wenlan-server-aarch64-apple-darwin
           touch app/binaries/wenlan-mcp-aarch64-apple-darwin
-          touch app/binaries/cloudflared-aarch64-apple-darwin
       - name: Rust format (app)
         run: cargo fmt --check -p wenlan-app
       - name: Clippy (app)
@@ -2606,14 +2639,6 @@ jobs:
         run: |
           cargo build --release --target x86_64-pc-windows-msvc \
             -p wenlan -p wenlan-server -p wenlan-mcp
-      - name: Download cloudflared sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/cloudflared.exe" \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
-          chmod 755 "$RUNNER_TEMP/cloudflared.exe"
-          echo "CLOUDFLARED_BIN=$RUNNER_TEMP/cloudflared.exe" >> "$GITHUB_ENV"
       # tauri.conf.json carries an updater pubkey, so `tauri build` refuses to
       # bundle without the matching private key. This job publishes nothing and
       # no one installs its output, so it mints a throwaway keypair per run
@@ -2631,7 +2656,6 @@ jobs:
       - name: Build Windows desktop app bundle
         shell: bash
         env:
-          CLOUDFLARED_BIN: ${{ env.CLOUDFLARED_BIN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-pc-windows-msvc

@@ -59,6 +59,18 @@ describe("translation resources", () => {
     ]);
   });
 
+  it("distinguishes local storage from connected tools and network traffic", () => {
+    expect(resources.en.translation.settings.footer).toContain(
+      "unless you configure a feature that sends them",
+    );
+    expect(resources["zh-Hans"].translation.settings.footer).toContain(
+      "除非你配置了会发送数据的功能",
+    );
+    expect(resources["zh-Hant"].translation.settings.footer).toContain(
+      "除非你設定了會傳送資料的功能",
+    );
+  });
+
   it("describes one editing view without exposing Markdown as a peer mode", () => {
     for (const locale of supportedAppLocales) {
       const editor = resources[locale].translation.pageDetail.editor;
