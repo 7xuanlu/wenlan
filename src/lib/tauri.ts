@@ -2671,28 +2671,78 @@ export async function listAgentActivity(
 export type RemoteAccessStatus =
   | { status: "off" }
   | { status: "starting" }
-  | { status: "connected"; tunnel_url: string; relay_url: string | null }
+  | { status: "connected"; tunnel_url: string | null; relay_url: string | null }
   | { status: "error"; error: string };
 
 export async function toggleRemoteAccess(
   enabled: boolean,
+  expectedRevision?: string,
 ): Promise<RemoteAccessStatus> {
-  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled });
+  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled, expectedRevision: expectedRevision ?? null });
+}
+
+export interface RemoteAccessProfile {
+  revision: string;
+  space: string;
+  enabled: boolean;
+  disconnect_pending: boolean;
+  credential_expires_at: number | null;
+}
+
+export async function getRemoteAccessProfile(): Promise<RemoteAccessProfile | null> {
+  return invoke<RemoteAccessProfile | null>("get_remote_access_profile");
+}
+
+export async function configureRemoteAccess(space: string, expectedRevision?: string): Promise<RemoteAccessProfile> {
+  return invoke<RemoteAccessProfile>("configure_remote_access", { space, expectedRevision: expectedRevision ?? null });
 }
 
 export async function getRemoteAccessStatus(): Promise<RemoteAccessStatus> {
   return invoke<RemoteAccessStatus>("get_remote_access_status");
 }
 
-/** Result of a one-shot probe against the Remote MCP tunnel's `/health`. */
+export interface RemotePairing {
+  pairingId: string;
+  clientId: string;
+  resource: string;
+  scopes: string[];
+  expiresAt: number;
+}
+
+export interface RemoteGrant {
+  id: string;
+  clientId: string;
+  space: string;
+  createdAt: number;
+  expiresAt: number;
+  status: 'active' | 'inactive';
+  cleanupPending: boolean;
+}
+
+export interface RemoteGrantPage { items: RemoteGrant[]; cursor: string | null }
+export interface RemoteGrantRevocation { revoked: boolean; cleanupPending: boolean }
+
+export async function inspectRemotePairing(expectedRevision: string, pairingId: string): Promise<RemotePairing> {
+  return invoke("inspect_remote_pairing", { expectedRevision, pairingId });
+}
+export async function approveRemotePairing(expectedRevision: string, inspected: RemotePairing): Promise<void> {
+  return invoke("approve_remote_pairing", { expectedRevision, inspected });
+}
+export async function listRemoteGrants(expectedRevision: string, cursor: string | null = null): Promise<RemoteGrantPage> {
+  return invoke("list_remote_grants", { expectedRevision, cursor });
+}
+export async function revokeRemoteGrant(expectedRevision: string, grantId: string): Promise<RemoteGrantRevocation> {
+  return invoke("revoke_remote_grant", { expectedRevision, grantId });
+}
+
+/** Native protected-backend and authenticated relay control-plane probe. */
 export interface RemoteConnectionTest {
   ok: boolean;
   latency_ms: number | null;
   error: string | null;
 }
 
-/** One-shot health probe for the Remote MCP tunnel. Used by the
- *  "Test connection" button in `RemoteAccessPanel`. */
+/** Does not prove a ChatGPT/Codex OAuth conversation or tool execution. */
 export async function testRemoteMcpConnection(): Promise<RemoteConnectionTest> {
   return invoke<RemoteConnectionTest>("test_remote_mcp_connection");
 }

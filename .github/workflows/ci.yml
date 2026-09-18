@@ -2446,7 +2446,7 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
       # Tauri's build script resolves externalBin sidecars (wenlan, wenlan-server,
-      # wenlan-mcp, cloudflared) at compile time. PR CI doesn't ship the daemon;
+      # wenlan-mcp) at compile time. PR CI doesn't ship the daemon;
       # empty placeholders satisfy the resolver. Real DMG builds (the app-bundle
       # job in release.yml) supply true binaries.
       - name: Create sidecar placeholders for Tauri build script
@@ -2455,7 +2455,6 @@ jobs:
           touch app/binaries/wenlan-aarch64-apple-darwin
           touch app/binaries/wenlan-server-aarch64-apple-darwin
           touch app/binaries/wenlan-mcp-aarch64-apple-darwin
-          touch app/binaries/cloudflared-aarch64-apple-darwin
       - name: Rust format (app)
         run: cargo fmt --check -p wenlan-app
       - name: Clippy (app)
@@ -2593,14 +2592,6 @@ jobs:
         run: |
           cargo build --release --target x86_64-pc-windows-msvc \
             -p wenlan -p wenlan-server -p wenlan-mcp
-      - name: Download cloudflared sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/cloudflared.exe" \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
-          chmod 755 "$RUNNER_TEMP/cloudflared.exe"
-          echo "CLOUDFLARED_BIN=$RUNNER_TEMP/cloudflared.exe" >> "$GITHUB_ENV"
       # tauri.conf.json carries an updater pubkey, so `tauri build` refuses to
       # bundle without the matching private key. This job publishes nothing and
       # no one installs its output, so it mints a throwaway keypair per run
@@ -2618,7 +2609,6 @@ jobs:
       - name: Build Windows desktop app bundle
         shell: bash
         env:
-          CLOUDFLARED_BIN: ${{ env.CLOUDFLARED_BIN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ env.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-pc-windows-msvc

@@ -27,6 +27,18 @@ describe("translation resources", () => {
     expect(resources.en.translation.settings.language.label).toBe("Language");
   });
 
+  it("distinguishes local storage from connected tools and network traffic", () => {
+    expect(resources.en.translation.settings.footer).toContain(
+      "Connected AI tools and network features can send requests or content",
+    );
+    expect(resources["zh-Hans"].translation.settings.footer).toContain(
+      "已连接的 AI 工具与网络功能可能向外部发送请求或内容",
+    );
+    expect(resources["zh-Hant"].translation.settings.footer).toContain(
+      "已連接的 AI 工具與網路功能可能向外部傳送請求或內容",
+    );
+  });
+
   it("describes one editing view without exposing Markdown as a peer mode", () => {
     for (const locale of supportedAppLocales) {
       const editor = resources[locale].translation.pageDetail.editor;

@@ -1,0 +1,27 @@
+# Allowlist for the reviewer-probe build context.
+# Deny-by-default: only the manifests and source inputs cargo needs to
+# resolve the workspace and compile wenlan-server, wenlan-mcp, and the
+# seed_reviewer_library example. Excludes .git/.wrangler/node_modules/
+# data/eval/contracts/testdata/tests and all credentials.
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!crates/wenlan-server/Cargo.toml
+!crates/wenlan-server/build.rs
+!crates/wenlan-server/src/**
+!crates/wenlan-mcp/Cargo.toml
+!crates/wenlan-mcp/src/**
+!crates/wenlan-mcp/examples/**
+!crates/wenlan-core/Cargo.toml
+!crates/wenlan-core/build.rs
+!crates/wenlan-core/src/**
+!crates/wenlan-types/Cargo.toml
+!crates/wenlan-types/src/**
+!crates/wenlan-cli/Cargo.toml
+!crates/wenlan-cli/src/**
+!app/Cargo.toml
+!app/build.rs
+!app/src/**
+!docker/reviewer-probe/Dockerfile
+!docker/reviewer-probe/entrypoint.sh

@@ -1476,6 +1476,10 @@ pub async fn quit_origin(app_handle: &AppHandle) -> Result<()> {
     };
     log::info!("{FULL_QUIT_BREADCRUMB}");
 
+    if let Err(error) = crate::remote_access::shutdown_for_exit(app_handle).await {
+        log::error!("[quit] remote access cleanup did not finish: {error}");
+    }
+
     if data_dir_env_overridden() {
         log::info!("[lifecycle] skipping quit teardown: isolated run (data-dir env override)");
         // The isolated run has no launchd job: the daemon is our sidecar.

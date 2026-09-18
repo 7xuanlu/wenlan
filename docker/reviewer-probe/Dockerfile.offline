@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1.7
+# Local-only extension of the already verified image. No registry publication.
+ARG PROBE_IMAGE=wenlan-reviewer-probe:0913
+FROM ${PROBE_IMAGE} AS models
+USER root
+RUN mkdir -p /opt/wenlan-models /opt/model-notices /runtime/model-build \
+ && chown -R 10001:10001 /opt/wenlan-models /opt/model-notices /runtime/model-build
+USER 10001
+ENV WENLAN_TEST_FASTEMBED_CACHE=/opt/wenlan-models HF_HOME=/opt/wenlan-models
+# Execute the real seed only to populate an empty, image-owned model cache.
+# The synthetic database is confined to this discarded build stage.
+RUN /usr/local/bin/seed_reviewer_library /runtime/model-build/seed \
+ && test "$(cat /opt/wenlan-models/models--Qdrant--bge-base-en-v1.5-onnx-Q/refs/main)" = 738cad1c108e2f23649db9e44b2eab988626493b
+RUN curl --fail --location --max-time 60 \
+      https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q/raw/738cad1c108e2f23649db9e44b2eab988626493b/README.md \
+      -o /opt/model-notices/Qdrant-model-card.md \
+ && curl --fail --location --max-time 60 \
+      https://huggingface.co/BAAI/bge-base-en-v1.5/raw/a5beb1e3e68b9ab74eb54cfd186867f64f240e1a/README.md \
+      -o /opt/model-notices/BAAI-model-card.md \
+ && curl --fail --location --max-time 60 \
+      https://www.apache.org/licenses/LICENSE-2.0.txt \
+      -o /opt/model-notices/Apache-2.0.txt \
+ && curl --fail --location --max-time 60 \
+      https://raw.githubusercontent.com/FlagOpen/FlagEmbedding/fd1a2bdf69488ffebe0327999d4400d8c8058a0b/LICENSE \
+      -o /opt/model-notices/FlagEmbedding-MIT.txt \
+ && cd /opt \
+ && find wenlan-models model-notices -type f -exec sha256sum {} + > /tmp/model-sha256.txt
+
+FROM ${PROBE_IMAGE} AS offline
+COPY --from=models --chown=10001:10001 /opt/wenlan-models/ /opt/wenlan-models/
+COPY --from=models --chown=10001:10001 /opt/model-notices/ /opt/model-notices/
+COPY --from=models /tmp/model-sha256.txt /opt/model-sha256.txt
+ENV WENLAN_TEST_FASTEMBED_CACHE=/opt/wenlan-models HF_HOME=/opt/wenlan-models
+# Base entrypoint, user, auth checks and synthetic-root isolation stay intact.
+RUN test ! -e /runtime/synthetic && test ! -e /runtime/model-build

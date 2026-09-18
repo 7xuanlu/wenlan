@@ -1,0 +1,8 @@
+{
+  "name": "wenlan-relay",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "0.10.3"
+  }
+}

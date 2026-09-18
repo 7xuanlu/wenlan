@@ -7962,7 +7962,11 @@ checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite",
 ]
 
@@ -8297,6 +8301,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.18",
  "utf-8",
@@ -9053,6 +9059,7 @@ dependencies = [
  "chrono",
  "cocoa",
  "dirs 6.0.0",
+ "futures-util",
  "getrandom 0.2.17",
  "hmac",
  "log",
@@ -9085,6 +9092,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-tungstenite",
  "toml 0.8.2",
  "toml_edit 0.22.27",
  "tracing",

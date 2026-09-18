@@ -120,6 +120,9 @@ export default function Main({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const contextSpace = viewHistory.slice().reverse().find(
+    (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
+  );
   const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
   const [aboutOpen, setAboutOpen] = useState(false);
   const [pageSavePending, setPageSavePending] = useState(false);
@@ -842,6 +845,7 @@ export default function Main({
             />
           ) : view.kind === "settings" ? (
             <SettingsPage
+              currentSpace={contextSpace?.spaceName}
               section={view.section ?? "general"}
               onBack={navigateBack}
               onSetupAgent={() => navigateTo({ kind: "connect-agent" })}

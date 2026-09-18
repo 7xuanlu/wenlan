@@ -18,6 +18,13 @@ vi.mock("../../../../lib/tauri", () => ({
   writeMcpConfig: vi.fn().mockResolvedValue([]),
   installClientPlugin: vi.fn().mockResolvedValue(undefined),
   clipboardWrite: vi.fn().mockResolvedValue(undefined),
+  getRemoteAccessProfile: vi.fn().mockResolvedValue(null),
+  configureRemoteAccess: vi.fn(),
+  listSpaces: vi.fn().mockResolvedValue([{ id: "review", name: "review" }]),
+  inspectRemotePairing: vi.fn(),
+  approveRemotePairing: vi.fn(),
+  listRemoteGrants: vi.fn().mockResolvedValue({ items: [], cursor: null }),
+  revokeRemoteGrant: vi.fn(),
   getRemoteAccessStatus: vi.fn().mockResolvedValue({
     status: "connected",
     tunnel_url: "https://x.trycloudflare.com",
@@ -41,14 +48,15 @@ function renderAgentsSection() {
   );
 }
 
-describe("AgentsSection composed — no-auth warning single-source proof", () => {
-  it("the no-auth warning renders exactly once across the whole composed Settings → Agents screen", async () => {
+describe("AgentsSection composed - remote consent boundary", () => {
+  it("renders one truthful relay disclosure and no legacy no-auth claim", async () => {
     renderAgentsSection();
 
     // Remote Access section has loaded (status: connected) — the warning is
     // unconditional once RemoteAccessPanel has rendered.
-    await screen.findByText("Claude.ai");
+    await screen.findByText(/Authorized requests and results pass through wenlan-relay/);
 
-    expect(screen.getAllByText(/no authentication for Claude\.ai and ChatGPT/)).toHaveLength(1);
+    expect(screen.getAllByText(/Authorized requests and results pass through wenlan-relay/)).toHaveLength(1);
+    expect(screen.queryByText(/no authentication for Claude\.ai and ChatGPT/)).not.toBeInTheDocument();
   });
 });
