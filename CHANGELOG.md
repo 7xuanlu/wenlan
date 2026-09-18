@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.11](https://github.com/7xuanlu/wenlan/compare/v0.18.10...v0.18.11) (2026-09-18)
+
+
+### Features
+
+* **sources:** import OKF bundles as a source type that keeps provenance and links ([#766](https://github.com/7xuanlu/wenlan/issues/766)) ([25c8d01](https://github.com/7xuanlu/wenlan/commit/25c8d017f108728745722b2c37a70b186ea7b3b7))
+
+
+### Bug Fixes
+
+* **export:** fix three OKF conformance defects and stop a reserved-name migration deleting edits ([#768](https://github.com/7xuanlu/wenlan/issues/768)) ([4797161](https://github.com/7xuanlu/wenlan/commit/47971618cf9559aab57cfd5b79a9c9636cbfa64d))
+* **hooks:** stop hooks from acting on changes the caller did not make ([#765](https://github.com/7xuanlu/wenlan/issues/765)) ([f92097f](https://github.com/7xuanlu/wenlan/commit/f92097fb26cc1166fe32a871e4433abbeb637589))
+
 ## [0.18.10](https://github.com/7xuanlu/wenlan/compare/v0.18.9...v0.18.10) (2026-09-17)
 
 
