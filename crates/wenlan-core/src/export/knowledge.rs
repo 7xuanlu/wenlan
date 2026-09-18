@@ -4622,10 +4622,15 @@ pub(crate) fn page_frontmatter(page: &Page, include_related: bool) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    // `generated.at` is the content's LAST meaningful change, not its birth:
+    // OKF spec 5.2 says consumers read it "to tell a recent edit from a stale
+    // fact". Stamping `created_at` reported a page distilled in April as
+    // April-fresh however many times it had been rewritten since, which is the
+    // one question the field exists to answer.
     out.push_str(&format!(
         "generated: {{by: {}, at: {}}}\n",
         yaml_quoted(&format!("wenlan/{}", crate::version())),
-        yaml_quoted(&page.created_at)
+        yaml_quoted(&page.last_modified)
     ));
     let status = if page.stale_reason.is_some() {
         "draft"
@@ -6099,15 +6104,24 @@ mod tests {
         assert!(!md.contains("tags:"));
     }
 
+    /// `generated.at` answers "how recently did this content change" (OKF 5.2),
+    /// so it carries `last_modified`, never `created_at`. A page distilled once
+    /// and rewritten many times must not read as fresh from the day it was born.
     #[test]
-    fn render_markdown_generated_stamps_version_and_created_at() {
-        let page = test_concept();
+    fn render_markdown_generated_stamps_version_and_last_modified() {
+        let mut page = test_concept();
+        page.created_at = "2026-04-01T00:00:00+00:00".to_string();
+        page.last_modified = "2026-09-17T12:00:00+00:00".to_string();
         let md = render_markdown(&page);
-        assert!(md.contains(&format!(
-            "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
-            crate::version(),
-            page.created_at
-        )));
+        assert!(
+            md.contains(&format!(
+                "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
+                crate::version(),
+                page.last_modified
+            )),
+            "{md}"
+        );
+        assert!(!md.contains("at: \"2026-04-01T00:00:00+00:00\""), "{md}");
     }
 
     #[test]
