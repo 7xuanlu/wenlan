@@ -1264,7 +1264,7 @@ impl KnowledgeWriter {
         Some((title, description, space))
     }
 
-    /// After a page moves off a reserved name (`index.md`, `log.md`), remove
+    /// After a page moves off a reserved name (`index.md`, `log.md`), clear
     /// the copy it left there, so the OKF index can take `index.md` back and
     /// no concept document is left at either. `state` recorded the page at
     /// that file, so
@@ -1273,6 +1273,16 @@ impl KnowledgeWriter {
     /// symlink, or a file this pass cannot read. Ownership comes from `state`,
     /// not from the file alone, because a user's note made by copying a page
     /// file carries that page's `origin_id` too.
+    ///
+    /// The copy is archived rather than unlinked. `origin_id` says Wenlan
+    /// wrote the file; it does not say the bytes are still Wenlan's, because
+    /// an edit made in place in the vault leaves the frontmatter alone. The
+    /// database can rebuild the page at its new name, so nothing is lost by
+    /// moving the old file aside, and [`Self::archive_projected_file`] already
+    /// makes the argument for why that asymmetry decides it. This fires once
+    /// per page, the first time it leaves a reserved name, so `archive/` gains
+    /// one file for a migration that happens to at most the page named "Index"
+    /// and the page named "Log".
     fn remove_reserved_name_copy_left_by(root: &Dir, file: &str, page_id: &str) {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
@@ -1296,8 +1306,8 @@ impl KnowledgeWriter {
         if fm.get_str("origin_id").map(str::trim) != Some(page_id) {
             return;
         }
-        if let Err(e) = root.remove_file(file) {
-            log::warn!("[knowledge] could not remove {file} after page {page_id} moved: {e}");
+        if let Err(e) = Self::archive_projected_file(root, file) {
+            log::warn!("[knowledge] could not archive {file} after page {page_id} moved: {e}");
         }
     }
 
@@ -6481,9 +6491,56 @@ mod tests {
         page.version += 1;
         let rewritten = writer.write_page_for_test(&page).unwrap();
         assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(std::fs::read_to_string(&rewritten)
+            .unwrap()
+            .contains(&format!("origin_id: {}", page.id)));
+        assert_eq!(
+            writer.page_filename(&page.id).as_deref(),
+            Some("log-page.md")
+        );
         assert!(
             !dir.path().join("log.md").exists(),
-            "the copy left at the reserved name must be removed"
+            "the copy left at the reserved name must be cleared"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// The copy left at a reserved name is archived, not unlinked. Editing a
+    /// page in the vault leaves its frontmatter alone, so `origin_id` cannot
+    /// tell Wenlan's own bytes from bytes the person typed over them, and the
+    /// database can rebuild the page while it cannot rebuild the typing.
+    #[test]
+    fn an_edit_left_at_a_reserved_name_is_archived_not_destroyed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // An older build left the page at the reserved name, and the person
+        // then added a line to it in place, keeping the frontmatter.
+        let edited = format!(
+            "{}\n\nA line I typed myself.\n",
+            std::fs::read_to_string(&moved_path).unwrap()
+        );
+        std::fs::remove_file(&moved_path).unwrap();
+        std::fs::write(dir.path().join("log.md"), &edited).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the reserved name must be free again"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive").join("log.md")).unwrap(),
+            edited,
+            "the typing must survive in archive/"
         );
     }
 
