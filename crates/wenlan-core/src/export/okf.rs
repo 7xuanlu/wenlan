@@ -1422,6 +1422,9 @@ mod tests {
     /// and write a regular file over it, which protected the link's target and
     /// destroyed the link. Both are somebody's file.
     #[test]
+    // Both cases turn on a symlink standing at a planned path, which only
+    // Unix can create here; Windows proves the other side of the gate.
+    #[cfg(unix)]
     fn a_symlink_at_a_planned_path_is_left_alone() {
         let dir = tempfile::TempDir::new().unwrap();
         let pages = vec![test_page("concept_a", "Alpha", "x")];
@@ -1476,6 +1479,9 @@ mod tests {
     /// Muse: a planned write that failed used to lose its digest, so the next
     /// run could not tell an edit at that path from the bytes it left there.
     #[test]
+    // Both cases turn on a symlink standing at a planned path, which only
+    // Unix can create here; Windows proves the other side of the gate.
+    #[cfg(unix)]
     fn a_failed_write_keeps_its_digest_so_the_next_run_can_still_tell() {
         let dir = tempfile::TempDir::new().unwrap();
         let pages = vec![test_page("concept_a", "Alpha", "x")];
