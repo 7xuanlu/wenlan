@@ -1431,10 +1431,47 @@ pub(crate) fn escape_index_link_text(s: &str) -> String {
 /// Deliberately a shape test, not a re-render: the index on disk describes the
 /// state BEFORE the write that triggered this pass, so it is expected to
 /// differ from what the pass is about to write. Only its shape is invariant.
+/// Whether `body` is nothing but lines the index renderer emits.
+///
+/// The prefixes alone are not enough. `* [` is also how Markdown checklists
+/// start, so `* [ ] buy milk` in somebody's home note passed a `starts_with`
+/// test and their list was replaced by the generated index. An entry line has
+/// to be shaped like one: `* [title](/file.md)`, optionally ` - description`.
+///
+/// Headings-only is rejected too. Every generated index that has a heading has
+/// at least one entry under it, so a file of bare headings is somebody's
+/// outline, not ours.
 fn index_body_is_generated(body: &str) -> bool {
-    body.lines()
-        .filter(|line| !line.trim().is_empty())
-        .all(|line| line.starts_with("## ") || line.starts_with("* ["))
+    let mut entries = 0usize;
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        if line.starts_with("## ") {
+            continue;
+        }
+        if !index_line_is_entry(line) {
+            return false;
+        }
+        entries += 1;
+    }
+    // An index with no pages in it has an empty body and stays ours.
+    entries > 0 || body.trim().is_empty()
+}
+
+/// One rendered entry line: `* [title](/file.md)`, optionally ` - description`.
+/// Anything this cannot parse is treated as not ours, which is the safe
+/// direction: the file is left alone.
+fn index_line_is_entry(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("* [") else {
+        return false;
+    };
+    let Some(link) = rest.find("](") else {
+        return false;
+    };
+    let after = &rest[link + 2..];
+    let Some(close) = after.find(')') else {
+        return false;
+    };
+    let tail = &after[close + 1..];
+    tail.is_empty() || tail.starts_with(" - ")
 }
 
 fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
@@ -6410,15 +6447,49 @@ mod tests {
         );
     }
 
-    /// An OKF root index somebody hand-wrote to the spec is not Wenlan's.
-    /// `okf_version` alone is the STANDARD shape, not a Wenlan signature, so
-    /// the frontmatter check claimed and overwrote a conforming index from
-    /// another producer.
+    /// An OKF root index somebody hand-wrote is not Wenlan's. `okf_version`
+    /// alone is the STANDARD shape, not a Wenlan signature, so the frontmatter
+    /// check claimed and overwrote an index from another producer.
+    ///
+    /// The body here is prose. An index whose body is genuinely
+    /// indistinguishable from the renderer's output IS still replaced; that is
+    /// the residual recorded at `index_file_is_replaceable`.
     #[test]
-    fn a_hand_written_conforming_okf_index_is_left_alone() {
+    fn a_hand_written_okf_index_with_prose_is_left_alone() {
         let dir = tempfile::TempDir::new().unwrap();
         let index_path = dir.path().join(INDEX_FILE);
         let theirs = "---\nokf_version: \"0.2\"\n---\n\nMy own root index, written by hand.\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Muse: `* [` is also how a Markdown checklist starts, so a to-do list
+    /// under `okf_version`-only frontmatter passed the first version of the
+    /// body-shape test and was replaced.
+    #[test]
+    fn a_checklist_is_not_mistaken_for_index_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n* [ ] buy milk\n* [x] file taxes\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Every generated index that has a heading has an entry under it, so a
+    /// file of bare headings is somebody's outline.
+    #[test]
+    fn a_headings_only_outline_is_not_mistaken_for_an_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n## Projects\n\n## Someday\n";
         std::fs::write(&index_path, theirs).unwrap();
 
         let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());

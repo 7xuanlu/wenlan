@@ -1489,6 +1489,10 @@ mod tests {
         let stats = export_okf(&both[..1], dir.path()).unwrap();
         assert_eq!(stats.exported, 1, "the export still finishes");
         assert_eq!(
+            stats.failed, 1,
+            "and reports the entry it could not sweep rather than swallowing it"
+        );
+        assert_eq!(
             std::fs::read_to_string(dir.path().join("pages/beta.md/inside.md")).unwrap(),
             "mine",
             "and leaves what it does not understand alone"

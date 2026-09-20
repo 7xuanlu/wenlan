@@ -413,6 +413,9 @@ pub fn project_stubs_for_page(
     if source_memory_ids.is_empty() {
         return Ok(());
     }
+    // `create_dir_all` first: the old body created a missing projection root on
+    // the way to `_sources/`, and opening a directory does not.
+    std::fs::create_dir_all(knowledge_path)?;
     let root = Dir::open_ambient_dir(knowledge_path, cap_std::ambient_authority())?;
     project_stubs_for_page_in(&root, page_id, source_memory_ids)
 }
@@ -467,7 +470,8 @@ enum StubTarget {
     /// Present, with bytes that are not the ones this pass would write.
     /// Somebody typed in it: archived before it is replaced.
     Edited,
-    /// Present, but not a plain file. Left exactly as it is.
+    /// Present, but not something this pass may claim: not a plain file, or a
+    /// plain file it could not read whole. Left exactly as it is.
     Foreign,
 }
 
@@ -486,8 +490,11 @@ fn stub_target(dir: &Dir, name: &str, planned: &[u8]) -> StubTarget {
     options.read(true).follow(FollowSymlinks::No);
     let Ok(mut file) = dir.open_with(Path::new(name), &options) else {
         // Present but unreadable: a file this pass cannot read is a file it
-        // cannot claim.
-        return StubTarget::Edited;
+        // cannot claim, so it is not archived either. Archiving renames, which
+        // needs no read permission, so classifying this as `Edited` would let
+        // the pass take over a name whose bytes it never saw. The orphan GC
+        // keeps such a file; so does this.
+        return StubTarget::Foreign;
     };
     let mut content = Vec::new();
     let readable = (&mut file)
@@ -497,7 +504,7 @@ fn stub_target(dir: &Dir, name: &str, planned: &[u8]) -> StubTarget {
         && content.len() as u64 <= STUB_CLASSIFY_SCAN_BYTES;
     drop(file);
     if !readable {
-        return StubTarget::Edited;
+        return StubTarget::Foreign;
     }
     if content == planned {
         StubTarget::Writable
@@ -1014,6 +1021,34 @@ mod tests {
         assert!(
             !dir.path().join("archive").exists(),
             "no archive entry for a stub nobody edited"
+        );
+    }
+
+    /// Muse: archiving renames, which needs no read permission, so treating an
+    /// unreadable file as "edited" would let the pass take over a name whose
+    /// bytes it never saw. The orphan GC keeps such a file; so does this.
+    #[cfg(unix)]
+    #[test]
+    fn a_cited_stub_this_pass_cannot_read_is_left_alone_not_archived() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let theirs = sources.join("mem_locked.md");
+        std::fs::write(&theirs, "a note only this user has\n").unwrap();
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_a", &["mem_locked".to_string()]).unwrap();
+
+        assert!(
+            !dir.path().join("archive/mem_locked.md").exists(),
+            "a file this pass never read must not be claimed by renaming it away"
+        );
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            "a note only this user has\n",
+            "and its bytes are untouched"
         );
     }
 
