@@ -485,12 +485,22 @@ mod tests {
             "---\nokf_version: \"0.2\"\n---\n\n* [One](/one.md) - x\n",
         )
         .unwrap();
+        // the reserved OKF bundle log is not a page either
+        std::fs::write(
+            tmp.path().join("log.md"),
+            "---\nokf_version: \"0.2\"\n---\n\n- changed something\n",
+        )
+        .unwrap();
         // a .wenlan/state.json sibling must be ignored (non-recursive, non-md)
         std::fs::create_dir_all(tmp.path().join(".wenlan")).unwrap();
         std::fs::write(tmp.path().join(".wenlan/state.json"), "{}").unwrap();
 
         let pages = read_pages(tmp.path());
-        assert_eq!(pages.len(), 2, "only the two page .md files, not index.md");
+        assert_eq!(
+            pages.len(),
+            2,
+            "only the two page .md files, not index.md or log.md"
+        );
         let mut titles: Vec<&str> = pages.iter().map(|p| p.title.as_str()).collect();
         titles.sort();
         assert_eq!(titles, ["One", "Two"]);

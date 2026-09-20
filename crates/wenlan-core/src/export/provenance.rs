@@ -244,7 +244,13 @@ fn stub_body(id: &str) -> String {
 /// marker only means "Wenlan wrote this" where [`stub_body`] puts it, which is
 /// the frontmatter block at the top of the file.
 fn frontmatter_origin_stub(content: &str) -> Option<String> {
-    let rest = content.strip_prefix("---\n")?;
+    // An editor that normalizes line endings or adds a byte-order mark must
+    // not make a stub Wenlan wrote unrecognizable: a stub that reads as "not
+    // ours" is never reaped and never archived, so it leaks forever.
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
     let end = rest.find("\n---")?;
     for line in rest[..end].lines() {
         // A nested key is indented; ours is at the top level of the block.
@@ -265,18 +271,25 @@ fn frontmatter_origin_stub(content: &str) -> Option<String> {
 enum StubDisposition {
     /// No `origin_stub` frontmatter key: not Wenlan's file at all. Left alone.
     NotOurs,
-    /// Byte-identical to what [`stub_body`] writes today. Regenerable from the
-    /// database, so removing it loses nothing.
+    /// Byte-identical to what [`stub_body`] writes today AND sitting at the
+    /// filename that stub would have. Regenerable from the database, so
+    /// removing it loses nothing.
     Pristine,
     /// Carries the marker but the bytes have changed. Wenlan wrote the file;
     /// somebody has since typed into it. Archived, never unlinked.
     Edited,
 }
 
-fn classify_stub(content: &str) -> StubDisposition {
+/// `filename` guards the one case bytes alone cannot: `cp _sources/mem_1.md
+/// _sources/my-copy.md` leaves a file whose bytes are a pristine stub at a
+/// name Wenlan would never write. That copy is the user's, so it is archived
+/// rather than unlinked.
+fn classify_stub(content: &str, filename: &str) -> StubDisposition {
     match frontmatter_origin_stub(content) {
         None => StubDisposition::NotOurs,
-        Some(id) if stub_body(&id) == content => StubDisposition::Pristine,
+        Some(id) if stub_body(&id) == content && stub_filename(&id) == filename => {
+            StubDisposition::Pristine
+        }
         Some(_) => StubDisposition::Edited,
     }
 }
@@ -343,7 +356,7 @@ pub(crate) fn gc_orphan_stubs_in(root: &Dir, manifest: &StubManifest) -> std::io
         if !readable {
             continue;
         }
-        match classify_stub(&content) {
+        match classify_stub(&content, name_text) {
             StubDisposition::NotOurs => {}
             StubDisposition::Pristine => {
                 let _ = dir.remove_file(Path::new(&name));
@@ -746,6 +759,77 @@ mod tests {
         assert!(
             sources.join("mem_decoy.md").exists(),
             "user file named mem_* (no marker) must survive — marker-based, not name-based"
+        );
+    }
+
+    /// Muse: a person's copy of a stub has pristine bytes at a name Wenlan
+    /// would never write. Bytes alone said "regenerable, delete it"; the
+    /// filename says whose file it is.
+    #[test]
+    fn gc_archives_a_users_copy_of_a_stub_instead_of_deleting_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let body = stub_body("mem_1");
+        std::fs::write(sources.join(stub_filename("mem_1")), &body).unwrap();
+        std::fs::write(sources.join("my-copy.md"), &body).unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        assert!(
+            !sources.join(stub_filename("mem_1")).exists(),
+            "the stub at its own name is still reaped"
+        );
+        assert!(
+            !sources.join("my-copy.md").exists(),
+            "the copy is moved, not left in place"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive/my-copy.md")).unwrap(),
+            body,
+            "the user's copy is preserved under archive/"
+        );
+    }
+
+    /// Muse: an editor that normalizes to CRLF or adds a byte-order mark used
+    /// to make a stub read as "not ours", so it was never reaped and leaked.
+    #[test]
+    fn gc_still_recognizes_a_stub_with_crlf_endings_or_a_bom() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(
+            sources.join(stub_filename("mem_crlf")),
+            stub_body("mem_crlf").replace('\n', "\r\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            sources.join(stub_filename("mem_bom")),
+            format!("\u{feff}{}", stub_body("mem_bom")),
+        )
+        .unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        // Neither is byte-identical to what stub_body writes, so both are
+        // treated as edited: recognized as ours, and preserved rather than
+        // deleted.
+        assert!(
+            !sources.join(stub_filename("mem_crlf")).exists()
+                && !sources.join(stub_filename("mem_bom")).exists(),
+            "a normalized stub is recognized instead of leaking forever"
+        );
+        assert!(
+            dir.path()
+                .join("archive")
+                .join(stub_filename("mem_crlf"))
+                .exists()
+                && dir
+                    .path()
+                    .join("archive")
+                    .join(stub_filename("mem_bom"))
+                    .exists(),
+            "and bytes Wenlan cannot reproduce exactly are kept"
         );
     }
 

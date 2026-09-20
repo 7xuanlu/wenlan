@@ -76,30 +76,36 @@ fn marker_for(files: &HashSet<String>, digests: BTreeMap<String, String>) -> Exp
 /// What a re-export may do with one marker-listed path.
 #[derive(Debug, PartialEq, Eq)]
 enum BundleFileState {
-    /// Nothing there, or still byte-identical to what the last export wrote.
-    /// Ours to replace or remove.
+    /// Nothing there, still byte-identical to what the last export wrote,
+    /// or -- with no digest on record -- byte-identical to what this run is
+    /// about to write anyway. Ours to replace or remove.
     Ours,
     /// Present, and the bytes have changed since. Somebody's edit: preserved,
     /// never overwritten in place and never unlinked.
     Changed,
-    /// Present, but the last export recorded no digest for it -- a bundle
-    /// written by a Wenlan older than 0.18.11, or a path this run is about to
-    /// rewrite after an interrupted one. Treated as ours, which is the
-    /// behavior that shipped before digests existed. One export closes the
-    /// gap for that bundle.
-    Unverifiable,
     /// Present, but not a plain file: a directory or a symlink standing where
-    /// a bundle file was recorded. Nothing to preserve -- moving it aside
-    /// would clear the obstruction and let the write land, which is the
-    /// opposite of leaving a thing Wenlan does not understand alone. The
-    /// ordinary write reports it as a failed page.
+    /// a bundle file was recorded. Left exactly as it is. Moving it aside
+    /// would clear the obstruction and let the write land, and unlinking a
+    /// symlink destroys a link somebody made on purpose. The ordinary write
+    /// refuses the path and reports it as a failed page.
     Foreign,
 }
 
+/// Decide what a re-export may do with one marker-listed path.
+///
+/// `planned` is what this run is about to write at that path, when it plans to
+/// write there at all. It settles the case the digests cannot: a bundle from a
+/// Wenlan older than 0.18.11 recorded no digests, so the only evidence left is
+/// whether the bytes on disk are already the bytes we would write. Identical
+/// means nobody touched it and the rewrite is a no-op. Anything else is
+/// treated as an edit and preserved, because with no digest there is no way to
+/// tell an edit from an untouched file, and preserving costs a stray copy
+/// while overwriting costs somebody's writing.
 fn bundle_file_state(
     target: &Path,
     entry: &str,
     digests: &BTreeMap<String, String>,
+    planned: Option<&[u8]>,
 ) -> BundleFileState {
     let path = target.join(entry);
     let Ok(metadata) = std::fs::symlink_metadata(&path) else {
@@ -108,13 +114,15 @@ fn bundle_file_state(
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return BundleFileState::Foreign;
     }
-    let Some(recorded) = digests.get(entry) else {
-        return BundleFileState::Unverifiable;
+    // A file this pass cannot read is a file it cannot claim.
+    let Ok(bytes) = std::fs::read(&path) else {
+        return BundleFileState::Changed;
     };
-    match std::fs::read(&path) {
-        Ok(bytes) if &digest_of(&bytes) == recorded => BundleFileState::Ours,
-        // A file this pass cannot read is a file it cannot claim.
-        _ => BundleFileState::Changed,
+    match digests.get(entry) {
+        Some(recorded) if &digest_of(&bytes) == recorded => BundleFileState::Ours,
+        Some(_) => BundleFileState::Changed,
+        None if planned == Some(bytes.as_slice()) => BundleFileState::Ours,
+        None => BundleFileState::Changed,
     }
 }
 
@@ -208,12 +216,29 @@ fn is_symlink(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Write `bytes` to `path` without following a pre-existing symlink: a
-/// `pages/x.md` that is a symlink is unlinked first so the write cannot
-/// clobber whatever the link points at.
+/// Write `bytes` to `path`, refusing anything that is not already a plain
+/// file.
+///
+/// This used to unlink a symlink standing in the way, so the write could not
+/// clobber whatever the link pointed at. That protected the target and
+/// destroyed the link, which is somebody's file too: a person who points
+/// `pages/alpha.md` at a note they keep elsewhere gets it silently removed on
+/// the next export. Refusing protects both. The caller reports the page as
+/// failed, exactly as it does for a directory in the way.
 fn write_file_nofollow(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    if is_symlink(path) {
-        std::fs::remove_file(path)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
+        Ok(_) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!(
+                    "{} is not a plain file; refusing to replace it",
+                    path.display()
+                ),
+            ))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
     std::fs::write(path, bytes)
 }
@@ -737,6 +762,29 @@ pub fn export_okf_with_concept_paths(
     std::fs::create_dir_all(target.join(PAGES_DIR))?;
     std::fs::create_dir_all(target.join(SOURCES_DIR))?;
 
+    // Render every planned file before touching the tree, so the preservation
+    // pass below can compare what is on disk against what this run would put
+    // there. The index is rendered as if every page succeeds; a page that
+    // later fails to write only makes the comparison miss, which preserves.
+    let mut planned_bytes: HashMap<String, Vec<u8>> = HashMap::new();
+    for (id, file) in &planned_pairs {
+        if let Some(page) = by_id.get(id.as_str()) {
+            let body = render_page_file(page, &id_to_file, &title_owner, concept_paths);
+            planned_bytes.insert(format!("{PAGES_DIR}/{file}"), body.into_bytes());
+        }
+    }
+    for id in &stub_ids {
+        let name = crate::export::provenance::stub_filename(id);
+        planned_bytes.insert(
+            format!("{SOURCES_DIR}/{name}"),
+            render_source_stub(id).into_bytes(),
+        );
+    }
+    planned_bytes.insert(
+        INDEX_FILE.to_string(),
+        render_bundle_index(pages, &id_to_file).into_bytes(),
+    );
+
     // Preservation pass, before anything is written or removed. Being listed
     // in the last marker says Wenlan WROTE a file; it never says the bytes are
     // still Wenlan's. A listed file whose digest no longer matches has been
@@ -750,22 +798,22 @@ pub fn export_okf_with_concept_paths(
         if !marker_entry_is_safe(entry) {
             continue;
         }
-        if bundle_file_state(target, entry, &old_digests) == BundleFileState::Changed {
+        let planned_here = planned_bytes.get(entry.as_str()).map(Vec::as_slice);
+        if bundle_file_state(target, entry, &old_digests, planned_here) == BundleFileState::Changed
+        {
             preserve_edited_bundle_file(target, entry)?;
         }
     }
 
     // Crash-safety: the union marker owns every file either generation may
-    // have left behind, so a failed run stays re-collectable. It carries only
-    // the digests of files this run is NOT about to rewrite. A path whose
-    // bytes are mid-replacement when the process dies would otherwise read as
-    // edited on the next run and be preserved for no reason.
+    // have left behind, so a failed run stays re-collectable. It carries every
+    // digest the last export recorded, including for paths this run is about
+    // to rewrite. If the process dies mid-replacement the next run reads those
+    // bytes as an edit and preserves them: a stray copy of a half-written file
+    // in `.wenlan-archive/`, which is the cost of never guessing that
+    // unrecognized bytes were ours.
     let union: HashSet<String> = old_files.union(&planned).cloned().collect();
-    let carried_digests: BTreeMap<String, String> = old_digests
-        .iter()
-        .filter(|(entry, _)| !planned.contains(entry.as_str()))
-        .map(|(entry, digest)| (entry.clone(), digest.clone()))
-        .collect();
+    let carried_digests: BTreeMap<String, String> = old_digests.clone();
     write_file_nofollow(
         &target.join(MARKER_FILE),
         serde_json::to_vec_pretty(&marker_for(&union, carried_digests.clone()))
@@ -782,10 +830,22 @@ pub fn export_okf_with_concept_paths(
             continue;
         }
         let path = target.join(entry);
-        match std::fs::remove_file(&path) {
-            Ok(()) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(WenlanError::Io(e)),
+        // Only a plain file is ours to remove. A directory or a symlink
+        // standing where a bundle file was is somebody else's, and its
+        // presence must not abort an export that has already written the
+        // union marker: every retry would fail at the same entry.
+        match std::fs::symlink_metadata(&path) {
+            Ok(m) if m.is_file() && !m.file_type().is_symlink() => {}
+            Ok(_) => {
+                log::warn!("[okf] leaving {entry} alone: not a plain file");
+                continue;
+            }
+            Err(_) => continue,
+        }
+        if let Err(e) = std::fs::remove_file(&path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("[okf] could not remove stale {entry}: {e}");
+            }
         }
     }
 
@@ -797,12 +857,13 @@ pub fn export_okf_with_concept_paths(
             Some(page) => page,
             None => continue,
         };
-        let body = render_page_file(page, &id_to_file, &title_owner, concept_paths);
-        match write_file_nofollow(&target.join(PAGES_DIR).join(file), body.as_bytes()) {
+        let entry = format!("{PAGES_DIR}/{file}");
+        let body = planned_bytes.get(&entry).expect("page rendered above");
+        match write_file_nofollow(&target.join(PAGES_DIR).join(file), body) {
             Ok(()) => {
                 stats.exported += 1;
                 written_ids.insert(id.as_str());
-                new_digests.insert(format!("{PAGES_DIR}/{file}"), digest_of(body.as_bytes()));
+                new_digests.insert(entry, digest_of(body));
             }
             Err(e) => {
                 log::warn!("[okf] export failed for '{}': {}", page.title, e);
@@ -812,13 +873,13 @@ pub fn export_okf_with_concept_paths(
     }
     for id in &stub_ids {
         let name = crate::export::provenance::stub_filename(id);
-        let path = target.join(SOURCES_DIR).join(&name);
-        let stub = render_source_stub(id);
-        if let Err(e) = write_file_nofollow(path.as_path(), stub.as_bytes()) {
+        let entry = format!("{SOURCES_DIR}/{name}");
+        let stub = planned_bytes.get(&entry).expect("stub rendered above");
+        if let Err(e) = write_file_nofollow(&target.join(SOURCES_DIR).join(&name), stub) {
             log::warn!("[okf] source stub failed for '{id}': {e}");
             stats.failed += 1;
         } else {
-            new_digests.insert(format!("{SOURCES_DIR}/{name}"), digest_of(stub.as_bytes()));
+            new_digests.insert(entry, digest_of(stub));
         }
     }
     // The index lists only pages actually written: a failed page file must
@@ -834,9 +895,12 @@ pub fn export_okf_with_concept_paths(
     new_digests.insert(INDEX_FILE.to_string(), digest_of(index.as_bytes()));
     // A planned file that failed to write keeps whatever digest the previous
     // export recorded for it, so the next run can still tell an edit from the
-    // bytes we left there.
+    // bytes we left there. Digests for files this run removed are dropped:
+    // the final marker only describes the bundle it just produced.
     for (entry, digest) in carried_digests {
-        new_digests.entry(entry).or_insert(digest);
+        if planned.contains(&entry) {
+            new_digests.entry(entry).or_insert(digest);
+        }
     }
     write_file_nofollow(
         &target.join(MARKER_FILE),
@@ -1297,46 +1361,139 @@ mod tests {
         );
     }
 
-    /// A bundle written before digests existed cannot be checked, so its first
-    /// re-export behaves as it did before -- and records digests, so every run
-    /// after that can.
+    /// A bundle written before digests existed records no digest to compare
+    /// against, so the only evidence left is whether the bytes on disk are
+    /// already the bytes this run would write. An edit is not, so it is
+    /// preserved like any other; an untouched file is, so nothing is archived
+    /// for it. Either way the run records digests, and every run after that
+    /// can check properly.
     #[test]
-    fn a_marker_without_digests_exports_once_more_then_gains_them() {
+    fn a_pre_digest_bundle_still_preserves_an_edit_and_gains_digests() {
         let dir = tempfile::TempDir::new().unwrap();
         let pages = vec![test_page("concept_a", "Alpha", "x")];
         export_okf(&pages, dir.path()).unwrap();
         // Rewrite the marker the way 0.18.10 wrote it: files, no digests.
-        let mut marker: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(dir.path().join(MARKER_FILE)).unwrap()).unwrap();
-        marker.as_object_mut().unwrap().remove("digests");
-        std::fs::write(
-            dir.path().join(MARKER_FILE),
-            serde_json::to_vec_pretty(&marker).unwrap(),
-        )
-        .unwrap();
-        std::fs::write(dir.path().join("pages/alpha.md"), "edited before upgrade").unwrap();
+        let strip_digests = |dir: &Path| {
+            let mut marker: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(dir.join(MARKER_FILE)).unwrap()).unwrap();
+            marker.as_object_mut().unwrap().remove("digests");
+            std::fs::write(
+                dir.join(MARKER_FILE),
+                serde_json::to_vec_pretty(&marker).unwrap(),
+            )
+            .unwrap();
+        };
+        strip_digests(dir.path());
 
+        // An untouched pre-digest bundle costs nothing to upgrade.
         export_okf(&pages, dir.path()).unwrap();
         assert!(
             !dir.path().join(".wenlan-archive").exists(),
-            "an unverifiable file keeps the pre-digest behavior"
+            "bytes we would write anyway are ours, digest or no digest"
         );
-
         let marker: serde_json::Value =
             serde_json::from_slice(&std::fs::read(dir.path().join(MARKER_FILE)).unwrap()).unwrap();
-        let digest = marker["digests"]["pages/alpha.md"].as_str().unwrap();
         assert_eq!(
-            digest,
+            marker["digests"]["pages/alpha.md"].as_str().unwrap(),
             digest_of(&std::fs::read(dir.path().join("pages/alpha.md")).unwrap()),
             "the digest recorded matches the bytes on disk"
         );
 
-        // With a digest on record, the next edit IS preserved.
-        std::fs::write(dir.path().join("pages/alpha.md"), "edited after upgrade").unwrap();
+        // An edit made against a pre-digest bundle survives the upgrade run.
+        strip_digests(dir.path());
+        std::fs::write(dir.path().join("pages/alpha.md"), "edited before upgrade").unwrap();
         export_okf(&pages, dir.path()).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.path().join(".wenlan-archive/pages/alpha.md")).unwrap(),
+            "edited before upgrade",
+            "Muse: the one-time upgrade overwrite is gone"
+        );
+
+        // With a digest on record, the next edit IS preserved too.
+        std::fs::write(dir.path().join("pages/alpha.md"), "edited after upgrade").unwrap();
+        export_okf(&pages, dir.path()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".wenlan-archive/pages/alpha-2.md")).unwrap(),
             "edited after upgrade"
+        );
+    }
+
+    /// Muse: the export used to unlink a symlink standing at a planned path
+    /// and write a regular file over it, which protected the link's target and
+    /// destroyed the link. Both are somebody's file.
+    #[test]
+    fn a_symlink_at_a_planned_path_is_left_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pages = vec![test_page("concept_a", "Alpha", "x")];
+        export_okf(&pages, dir.path()).unwrap();
+
+        let elsewhere = dir.path().join("precious.md");
+        std::fs::write(&elsewhere, "the user's real note").unwrap();
+        let link = dir.path().join("pages/alpha.md");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+
+        let stats = export_okf(&pages, dir.path()).unwrap();
+        assert_eq!((stats.exported, stats.failed), (0, 1), "reported, not done");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link itself survives"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&elsewhere).unwrap(),
+            "the user's real note"
+        );
+    }
+
+    /// Muse: a stale entry replaced by a directory used to abort the whole
+    /// export with the union marker already written, so every retry failed at
+    /// the same entry.
+    #[test]
+    fn a_stale_entry_that_is_not_a_plain_file_does_not_abort_the_export() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let both = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Beta", "y"),
+        ];
+        export_okf(&both, dir.path()).unwrap();
+
+        std::fs::remove_file(dir.path().join("pages/beta.md")).unwrap();
+        std::fs::create_dir(dir.path().join("pages/beta.md")).unwrap();
+        std::fs::write(dir.path().join("pages/beta.md/inside.md"), "mine").unwrap();
+
+        let stats = export_okf(&both[..1], dir.path()).unwrap();
+        assert_eq!(stats.exported, 1, "the export still finishes");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("pages/beta.md/inside.md")).unwrap(),
+            "mine",
+            "and leaves what it does not understand alone"
+        );
+    }
+
+    /// Muse: a planned write that failed used to lose its digest, so the next
+    /// run could not tell an edit at that path from the bytes it left there.
+    #[test]
+    fn a_failed_write_keeps_its_digest_so_the_next_run_can_still_tell() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pages = vec![test_page("concept_a", "Alpha", "x")];
+        export_okf(&pages, dir.path()).unwrap();
+        let first = std::fs::read(dir.path().join("pages/alpha.md")).unwrap();
+
+        // Make the planned write fail without disturbing the recorded bytes.
+        let link = dir.path().join("pages/alpha.md");
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("precious.md"), &link).unwrap();
+        export_okf(&pages, dir.path()).unwrap();
+
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join(MARKER_FILE)).unwrap()).unwrap();
+        assert_eq!(
+            marker["digests"]["pages/alpha.md"].as_str().unwrap(),
+            digest_of(&first),
+            "the failed path keeps the digest of the bytes actually on disk"
         );
     }
 
@@ -1369,7 +1526,7 @@ mod tests {
     #[test]
     fn an_unresolvable_absolute_concept_link_degrades_to_text() {
         let alpha = test_page("concept_a", "Alpha", "See [Gamma](/concepts/gamma.md).");
-        let body = convert(&[alpha.clone()], &alpha);
+        let body = convert(std::slice::from_ref(&alpha), &alpha);
         assert_eq!(body.trim(), "See Gamma.", "{body}");
     }
 
@@ -1383,7 +1540,7 @@ mod tests {
             "[Home](/index.md) [P](/pages/beta.md) [S](/sources/mem_1.md) \
              [Pic](/assets/diagram.png)",
         );
-        let body = convert(&[alpha.clone()], &alpha);
+        let body = convert(std::slice::from_ref(&alpha), &alpha);
         for link in [
             "[Home](/index.md)",
             "[P](/pages/beta.md)",
