@@ -343,6 +343,10 @@ jobs:
               # platform route and must schedule both sides of the gate.
               - 'crates/wenlan-core/src/export/okf.rs'
               - 'crates/wenlan-core/src/export/projection_invariant_test.rs'
+              # Same reason as okf.rs above: the refusal to follow or
+              # replace a symlinked source stub is proved against a real
+              # symlink, which is `cfg(unix)`.
+              - 'crates/wenlan-core/src/export/provenance.rs'
               - 'crates/wenlan-core/src/lint/**'
               - 'crates/wenlan-core/src/llm_provider.rs'
               - 'crates/wenlan-core/src/presence.rs'
@@ -438,6 +442,10 @@ jobs:
               # platform route and must schedule both sides of the gate.
               - 'crates/wenlan-core/src/export/okf.rs'
               - 'crates/wenlan-core/src/export/projection_invariant_test.rs'
+              # Same reason as okf.rs above: the refusal to follow or
+              # replace a symlinked source stub is proved against a real
+              # symlink, which is `cfg(unix)`.
+              - 'crates/wenlan-core/src/export/provenance.rs'
               - 'crates/wenlan-core/src/presence.rs'
               - 'crates/wenlan-core/src/presence_test.rs'
               - 'crates/wenlan-core/src/repair.rs'

@@ -825,6 +825,12 @@ pub fn export_okf_with_concept_paths(
     // ours (an edited one was preserved above and is already gone).
     let mut stale: Vec<&String> = old_files.difference(&planned).collect();
     stale.sort();
+    // Entries this pass meant to remove and could not. Continuing past an
+    // obstruction is right; FORGETTING it is not. Without this the entry drops
+    // out of the final marker, so the next run has no record that the file
+    // exists, never retries it, and the bundle keeps an obsolete concept for
+    // good -- even after the obstruction is cleared.
+    let mut unswept: Vec<String> = Vec::new();
     for entry in stale {
         if !marker_entry_is_safe(entry) {
             continue;
@@ -838,13 +844,18 @@ pub fn export_okf_with_concept_paths(
             Ok(m) if m.is_file() && !m.file_type().is_symlink() => {}
             Ok(_) => {
                 log::warn!("[okf] leaving {entry} alone: not a plain file");
+                unswept.push(entry.clone());
+                stats.failed += 1;
                 continue;
             }
+            // Already gone: nothing to remember.
             Err(_) => continue,
         }
         if let Err(e) = std::fs::remove_file(&path) {
             if e.kind() != std::io::ErrorKind::NotFound {
                 log::warn!("[okf] could not remove stale {entry}: {e}");
+                unswept.push(entry.clone());
+                stats.failed += 1;
             }
         }
     }
@@ -897,14 +908,22 @@ pub fn export_okf_with_concept_paths(
     // export recorded for it, so the next run can still tell an edit from the
     // bytes we left there. Digests for files this run removed are dropped:
     // the final marker only describes the bundle it just produced.
+    // ... plus the ones it tried to remove and could not. Those keep their
+    // recorded digest so the next run can still tell an edit from its own
+    // bytes when it retries the removal.
+    let still_listed: HashSet<String> = planned
+        .iter()
+        .cloned()
+        .chain(unswept.iter().cloned())
+        .collect();
     for (entry, digest) in carried_digests {
-        if planned.contains(&entry) {
+        if still_listed.contains(&entry) {
             new_digests.entry(entry).or_insert(digest);
         }
     }
     write_file_nofollow(
         &target.join(MARKER_FILE),
-        serde_json::to_vec_pretty(&marker_for(&planned, new_digests))
+        serde_json::to_vec_pretty(&marker_for(&still_listed, new_digests))
             .expect("export marker serializes")
             .as_slice(),
     )?;
@@ -1473,6 +1492,54 @@ mod tests {
             std::fs::read_to_string(dir.path().join("pages/beta.md/inside.md")).unwrap(),
             "mine",
             "and leaves what it does not understand alone"
+        );
+    }
+
+    /// A stale entry the sweep could not remove stays in the marker. It used
+    /// to be dropped, which meant the next run had no record that the file
+    /// existed, never retried it, and the bundle kept an obsolete concept for
+    /// good -- even after whatever blocked the removal was cleared.
+    #[test]
+    fn an_obstructed_stale_entry_stays_in_the_marker_so_a_later_run_retries_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let both = vec![
+            test_page("concept_a", "Alpha", "x"),
+            test_page("concept_b", "Beta", "y"),
+        ];
+        export_okf(&both, dir.path()).unwrap();
+        let beta = std::fs::read(dir.path().join("pages/beta.md")).unwrap();
+
+        // Something that is not ours takes the name the stale page occupies.
+        std::fs::remove_file(dir.path().join("pages/beta.md")).unwrap();
+        std::fs::create_dir(dir.path().join("pages/beta.md")).unwrap();
+        std::fs::write(dir.path().join("pages/beta.md/inside.md"), "mine").unwrap();
+
+        let stats = export_okf(&both[..1], dir.path()).unwrap();
+        assert_eq!(stats.failed, 1, "the entry it could not sweep is reported");
+
+        let marker: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join(MARKER_FILE)).unwrap()).unwrap();
+        let files: Vec<&str> = marker["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(files.contains(&"pages/beta.md"), "{files:?}");
+        assert_eq!(
+            marker["digests"]["pages/beta.md"].as_str().unwrap(),
+            digest_of(&beta),
+            "and keeps its digest, so the retry can still tell our bytes from an edit"
+        );
+
+        // The obstruction clears and Wenlan's own file is back at that name.
+        std::fs::remove_dir_all(dir.path().join("pages/beta.md")).unwrap();
+        std::fs::write(dir.path().join("pages/beta.md"), &beta).unwrap();
+
+        export_okf(&both[..1], dir.path()).unwrap();
+        assert!(
+            !dir.path().join("pages/beta.md").exists(),
+            "the next run finishes the removal it could not do before"
         );
     }
 
