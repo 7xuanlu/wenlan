@@ -117,11 +117,13 @@ fn read_pages(dir: &Path) -> Vec<PageEntry> {
         if path.extension().and_then(|x| x.to_str()) != Some("md") {
             continue;
         }
-        // `index.md` is the reserved OKF bundle index, not a page.
+        // OKF reserves `index.md` (the bundle index) and `log.md` (a
+        // directory's update history) at every level of the hierarchy, spec
+        // 3.1. Neither is a page, so neither belongs in this listing.
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case("index.md"))
+            .is_some_and(|n| n.eq_ignore_ascii_case("index.md") || n.eq_ignore_ascii_case("log.md"))
         {
             continue;
         }

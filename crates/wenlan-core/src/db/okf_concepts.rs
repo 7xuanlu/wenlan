@@ -359,6 +359,36 @@ impl MemoryDB {
         Ok(out.into_iter().collect())
     }
 
+    /// Every imported concept as `(page id, source id, concept id)`.
+    ///
+    /// The OKF export uses this to resolve a link an imported concept body
+    /// still carries in its ORIGINAL bundle's terms -- `/concepts/b.md` --
+    /// to wherever the export puts that concept's page now. Without it the
+    /// exported bundle keeps a link to a path it does not contain.
+    pub async fn okf_concept_paths(&self) -> Result<Vec<(String, String, String)>, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT page_id, source_id, concept_id FROM okf_concepts
+                 ORDER BY source_id, concept_id",
+                (),
+            )
+            .await
+            .map_err(db_err("okf concept paths"))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().await.map_err(db_err("okf concept path row"))? {
+            out.push((
+                row.get::<String>(0)
+                    .map_err(db_err("okf concept path col"))?,
+                row.get::<String>(1)
+                    .map_err(db_err("okf concept path col"))?,
+                row.get::<String>(2)
+                    .map_err(db_err("okf concept path col"))?,
+            ));
+        }
+        Ok(out)
+    }
+
     /// Re-resolve the links of every concept page of `source_id` that links
     /// to one of `concept_ids`, plus `also_page_ids`, from their stored
     /// content. Call after a concept arrives, is removed, or moves, so a

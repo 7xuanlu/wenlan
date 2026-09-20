@@ -133,13 +133,6 @@ struct LegacyKnowledgeStateV1 {
     concepts: HashMap<String, PageFileState>,
 }
 
-/// Where a page's markdown goes when the truth gate stops projecting it.
-///
-/// Plain and visible, in the projection root. Not a dotfile: a person looking
-/// for a page that disappeared should be able to find it without being told
-/// where to look.
-const ARCHIVE_DIR: &str = "archive";
-
 /// Reserved OKF v0.2 root document (spec 2026-09-16-okf-projection.md change
 /// 4). Not a page: no `origin_id`, so `sources::page_watcher` already leaves
 /// it alone, and `lint::pages::traversal::scope_for` excludes it from
@@ -220,6 +213,18 @@ impl KnowledgeWriter {
             tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             reap_orphan_stubs: true,
             write_provenance: true,
+        }
+    }
+
+    /// A writer shaped like the reconcile repair path: no stub projection, no
+    /// index regeneration of its own.
+    #[cfg(test)]
+    fn new_for_test_repair(path: PathBuf) -> Self {
+        Self {
+            path,
+            tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            reap_orphan_stubs: false,
+            write_provenance: false,
         }
     }
 
@@ -394,11 +399,15 @@ impl KnowledgeWriter {
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
+        let relocated_off_reserved = left_reserved_copy.is_some();
         if let Some(old) = left_reserved_copy {
             Self::remove_reserved_name_copy_left_by(&capabilities.root, &old, &page.id);
         }
 
-        if self.write_provenance && regenerate_index {
+        // A relocation forces the index even for a writer that normally skips
+        // it: the entry that just moved is the one link in `index.md` that is
+        // now wrong, and the repair path has no later pass that would fix it.
+        if relocated_off_reserved || (self.write_provenance && regenerate_index) {
             if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
                 log::warn!("[knowledge] index.md regeneration failed: {e}");
             }
@@ -526,9 +535,16 @@ impl KnowledgeWriter {
             // moves to a free name on its next write, so the OKF index can
             // take `index.md` back and no concept document sits at `log.md`.
             // `write_page` removes the copy it leaves behind
-            // (`remove_reserved_name_copy_left_by`). Only a writer that
-            // regenerates the index moves it.
-            if !(self.write_provenance && is_reserved_okf_filename(&existing.file)) {
+            // (`remove_reserved_name_copy_left_by`).
+            //
+            // EVERY writer does this, the repair writer included. Leaving a
+            // concept document at a reserved name is the defect; which writer
+            // happens to reach the page next is an accident, and a repair that
+            // rewrites `log.md` in place would keep the violation alive
+            // indefinitely. `write_page` regenerates the index whenever a
+            // relocation happened, so a writer that otherwise skips the index
+            // does not leave it pointing at the old name.
+            if !is_reserved_okf_filename(&existing.file) {
                 return Ok(existing.file.clone());
             }
         }
@@ -1086,65 +1102,11 @@ impl KnowledgeWriter {
     /// directory or special file where a page was expected is a conflict rather
     /// than something to move. Already-absent is success -- the invariant cares
     /// that the file is gone from the projection root, not that this pass is the
-    /// one that moved it.
+    /// one that moved it. A file being moved OFF a reserved OKF name does not
+    /// carry that name into `archive/`, which is a level of the hierarchy too;
+    /// [`crate::export::archive::archive_file_from`] owns that rule.
     fn archive_projected_file(root: &Dir, filename: &str) -> Result<(), WenlanError> {
-        match root.symlink_metadata(filename) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(WenlanError::Conflict(
-                    "page_projection_target_invalid".to_string(),
-                ))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(WenlanError::Io(error)),
-        }
-        let archive = Self::open_archive_dir(root)?;
-        // `rename` replaces its destination without a word, and the destination
-        // here is an older archived copy of the same page -- the one thing under
-        // this root that the database cannot reproduce. Suffix until free.
-        let stem = filename.strip_suffix(".md").unwrap_or(filename);
-        let mut target = filename.to_string();
-        let mut attempt = 1;
-        while archive.symlink_metadata(&target).is_ok() {
-            attempt += 1;
-            if attempt > 100 {
-                return Err(WenlanError::Conflict(
-                    "page_archive_target_exhausted".to_string(),
-                ));
-            }
-            target = format!("{stem}-{attempt}.md");
-        }
-        root.rename(filename, &archive, &target)?;
-        Ok(())
-    }
-
-    /// The archive directory inside the projection root, created on demand.
-    ///
-    /// A non-directory, or a symlink, sitting on the name is a conflict rather
-    /// than something to write through: the whole point of the move is that the
-    /// bytes end up somewhere known.
-    fn open_archive_dir(root: &Dir) -> Result<Dir, WenlanError> {
-        match root.symlink_metadata(ARCHIVE_DIR) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(WenlanError::Conflict(
-                    "page_archive_target_invalid".to_string(),
-                ))
-            }
-            // `AlreadyExists` here means something created `archive/` between
-            // the probe above and this call -- the user's sync client, or a
-            // second pass. That is the state we wanted, not a failure; letting
-            // it propagate would strand a page whose file is still readable.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match root.create_dir(ARCHIVE_DIR) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(WenlanError::Io(e)),
-                }
-            }
-            Err(error) => return Err(WenlanError::Io(error)),
-        }
-        Ok(root.open_dir_nofollow(ARCHIVE_DIR)?)
+        crate::export::archive::archive_file_from(root, root, filename)
     }
 
     fn validate_guard(
@@ -6538,9 +6500,52 @@ mod tests {
             "the reserved name must be free again"
         );
         assert_eq!(
-            std::fs::read_to_string(dir.path().join("archive").join("log.md")).unwrap(),
+            std::fs::read_to_string(dir.path().join("archive").join("log-page.md")).unwrap(),
             edited,
             "the typing must survive in archive/"
+        );
+        assert!(
+            !dir.path().join("archive").join("log.md").exists(),
+            "and must not take the reserved name into archive/, which OKF \
+             reserves at every level too (spec 3.1)"
+        );
+    }
+
+    /// Astra finding 5. The relocation used to be gated on the writer that
+    /// also regenerates the index, so a repair rewrote a legacy page straight
+    /// back onto `log.md` and the conformance defect never cleared. The
+    /// relocation now fires for every writer, and forces the index with it so
+    /// no writer leaves a link pointing at the name it just vacated.
+    #[test]
+    fn the_repair_writer_also_moves_a_page_off_a_reserved_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let seed = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let path = seed.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(
+            dir.path().join("log.md"),
+            format!("---\ntype: page\norigin_id: {}\n---\n\nlegacy\n", page.id),
+        )
+        .unwrap();
+        let mut state = seed.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        seed.save_state(&state).unwrap();
+
+        let repair = KnowledgeWriter::new_for_test_repair(dir.path().to_path_buf());
+        page.version += 1;
+        let rewritten = repair.write_page_for_test(&page).unwrap();
+
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the reserved name must be free again after a repair too"
+        );
+        let index = std::fs::read_to_string(dir.path().join("index.md")).unwrap();
+        assert!(
+            index.contains("/log-page.md") && !index.contains("(/log.md)"),
+            "the relocation forces the index even for a writer that skips it: {index}"
         );
     }
 
