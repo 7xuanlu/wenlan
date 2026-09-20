@@ -378,16 +378,26 @@ fn entry_kind(metadata: &Metadata) -> EntryKind {
     }
 }
 
+/// Whether `path` names a file OKF reserves. Spec 3.1 reserves `index.md` and
+/// `log.md` at EVERY level of the hierarchy, not only at the bundle root, so
+/// this matches on the basename. Case-insensitive, like the default macOS and
+/// Windows filesystems.
+fn is_reserved_okf_path(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.eq_ignore_ascii_case("index.md") || name.eq_ignore_ascii_case("log.md")
+}
+
 fn scope_for(path: &str, kind: EntryKind) -> EntryScope {
     let first = path.split('/').next().unwrap_or_default();
     if first == ".wenlan" {
         EntryScope::StateControl
     } else if first == "_sources" {
         EntryScope::SourceInventory
-    } else if kind == EntryKind::File && path.eq_ignore_ascii_case("index.md") {
-        // The reserved OKF root index (spec 2026-09-16-okf-projection.md change
-        // 4): it carries no `origin_id`, is not a page, and must not be scanned
-        // as one.
+    } else if kind == EntryKind::File && is_reserved_okf_path(path) {
+        // The names OKF reserves at every level of the hierarchy (spec 3.1):
+        // `index.md`, the bundle index Wenlan generates, and `log.md`, a
+        // directory's update history. Neither is a concept document, neither
+        // carries an `origin_id`, and neither may be scanned as a page.
         EntryScope::Other
     } else if kind == EntryKind::File && path.to_ascii_lowercase().ends_with(".md") {
         EntryScope::PageMarkdown

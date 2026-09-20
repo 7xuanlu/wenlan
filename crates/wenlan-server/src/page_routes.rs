@@ -799,8 +799,20 @@ pub async fn handle_export_pages(
             ))
             .into());
         }
-        let mut stats =
-            wenlan_core::export::okf::export_okf(&exportable, std::path::Path::new(&expanded))?;
+        // An imported concept's body still links in its ORIGINAL bundle's
+        // terms (`/concepts/b.md`). The exporter resolves those to wherever
+        // the bundle puts that concept's page now; without this map the link
+        // would be written out pointing at a path the bundle does not carry.
+        let concept_paths = wenlan_core::export::okf::concept_path_map(
+            &db.okf_concept_paths()
+                .await
+                .map_err(|e| ServerError::Internal(e.to_string()))?,
+        );
+        let mut stats = wenlan_core::export::okf::export_okf_with_concept_paths(
+            &exportable,
+            std::path::Path::new(&expanded),
+            &concept_paths,
+        )?;
         // `export_okf` never sets `skipped`: pages the automatic reader may
         // not see are reported here, OKF-branch only. The Obsidian response
         // below is unchanged.

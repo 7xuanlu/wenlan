@@ -36,17 +36,45 @@ static URI_SCHEME_RE: LazyLock<Regex> =
 // Reserved files and concept ids
 // ---------------------------------------------------------------------------
 
-/// Reserved OKF file names that are never treated as concepts, matched by
-/// file name only (any depth), ASCII case-insensitive.
-const RESERVED_NAMES: &[&str] = &["index.md", "log.md", "INSTRUCTIONS.md"];
+/// The file names OKF reserves, spec 3.1: a directory's index and its update
+/// history. Matched by file name only (any depth), ASCII case-insensitive.
+/// Neither may be a concept document, so neither is ever imported as one.
+const RESERVED_NAMES: &[&str] = &["index.md", "log.md"];
 
-/// True when `path`'s file name is one of `index.md`, `log.md`,
-/// `INSTRUCTIONS.md` (ASCII case-insensitive), at any depth in the bundle.
+/// The producer convention for a folder's agent instructions. NOT reserved by
+/// the spec, so it is skipped on evidence rather than on its name: see
+/// [`is_untyped_instructions_file`].
+const INSTRUCTIONS_NAME: &str = "INSTRUCTIONS.md";
+
+/// True when `path`'s file name is `index.md` or `log.md` (ASCII
+/// case-insensitive), at any depth in the bundle.
 pub fn is_reserved(path: &Path) -> bool {
     match path.file_name().and_then(|n| n.to_str()) {
         Some(name) => RESERVED_NAMES.iter().any(|r| name.eq_ignore_ascii_case(r)),
         None => false,
     }
+}
+
+/// True when `path` is an `INSTRUCTIONS.md` that carries no `type`.
+///
+/// OKF reserves `index.md` and `log.md`, and nothing else. `INSTRUCTIONS.md`
+/// is a producer convention: Google's own `okf` package writes one to tell an
+/// agent how to edit the folder, and that file has no `type`, so skipping it
+/// is right. Skipping it by NAME is not: a bundle whose author wrote a real,
+/// typed concept at `INSTRUCTIONS.md` had it silently dropped at import, and
+/// knowledge that never enters ingestion is knowledge the user cannot find
+/// again. A `type` is the evidence that the file is a concept.
+fn is_untyped_instructions_file(path: &Path) -> bool {
+    if !path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(INSTRUCTIONS_NAME))
+    {
+        return false;
+    }
+    frontmatter_of(path)
+        .and_then(|frontmatter| frontmatter.get("type").and_then(scalar_to_string))
+        .is_none_or(|okf_type| okf_type.trim().is_empty())
 }
 
 /// Strip a case-insensitive `.md` suffix, keeping the rest exactly as spelled.
@@ -579,13 +607,14 @@ pub fn is_wenlan_export(dir: &Path) -> bool {
 /// The bundle's concept files as `(concept id, absolute path)`, sorted by
 /// concept id. Starts from `directory::scan_directory` (no hidden files,
 /// symlinks or oversized files) and keeps `.md` files that are not reserved
-/// names and do not sit under a subfolder holding a Wenlan export marker.
+/// names, are not an untyped `INSTRUCTIONS.md`, and do not sit under a
+/// subfolder holding a Wenlan export marker.
 pub fn scan_concepts(bundle_root: &Path) -> Vec<(String, std::path::PathBuf)> {
     let mut exported: HashMap<std::path::PathBuf, bool> = HashMap::new();
     let mut concepts: Vec<(String, std::path::PathBuf)> =
         crate::sources::directory::scan_directory(bundle_root)
             .into_iter()
-            .filter(|path| !is_reserved(path))
+            .filter(|path| !is_reserved(path) && !is_untyped_instructions_file(path))
             .filter(|path| !under_wenlan_export(bundle_root, path, &mut exported))
             .filter_map(|path| concept_id(bundle_root, &path).map(|id| (id, path)))
             .collect();
@@ -694,6 +723,26 @@ mod tests {
         );
     }
 
+    /// `INSTRUCTIONS.md` is a producer convention, not an OKF reservation. An
+    /// untyped one is the producer's own note to an agent and is skipped; a
+    /// typed one is a concept its author wrote, and dropping it by name lost
+    /// real knowledge at import.
+    #[test]
+    fn scan_concepts_keeps_a_typed_instructions_file_and_drops_an_untyped_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        write_file(root, "INSTRUCTIONS.md", "# How to edit this folder\n");
+        write_file(
+            root,
+            "workflows/INSTRUCTIONS.md",
+            "---\ntype: workflow\ntitle: \"Onboarding instructions\"\n---\n# Steps\n",
+        );
+
+        let found: Vec<String> = scan_concepts(root).into_iter().map(|(id, _)| id).collect();
+
+        assert_eq!(found, vec!["workflows/INSTRUCTIONS".to_string()]);
+    }
+
     #[test]
     fn a_bundle_that_is_itself_a_wenlan_export_is_recognized_but_still_scans() {
         let dir = tempfile::tempdir().unwrap();
@@ -791,20 +840,22 @@ mod tests {
     // -----------------------------------------------------------------
 
     #[test]
-    fn is_reserved_matches_all_three_names_at_root_and_nested() {
+    fn is_reserved_matches_the_two_spec_names_at_root_and_nested() {
         assert!(is_reserved(Path::new("index.md")));
         assert!(is_reserved(Path::new("log.md")));
-        assert!(is_reserved(Path::new("INSTRUCTIONS.md")));
+        // `INSTRUCTIONS.md` is a producer convention, not a spec reservation:
+        // it is skipped by `is_untyped_instructions_file`, on evidence.
+        assert!(!is_reserved(Path::new("INSTRUCTIONS.md")));
         assert!(is_reserved(Path::new("concepts/index.md")));
         assert!(is_reserved(Path::new("a/b/c/log.md")));
-        assert!(is_reserved(Path::new("workflows/INSTRUCTIONS.md")));
+        assert!(!is_reserved(Path::new("workflows/INSTRUCTIONS.md")));
     }
 
     #[test]
     fn is_reserved_is_case_insensitive() {
         assert!(is_reserved(Path::new("INDEX.MD")));
         assert!(is_reserved(Path::new("Log.Md")));
-        assert!(is_reserved(Path::new("instructions.md")));
+        assert!(!is_reserved(Path::new("instructions.md")));
     }
 
     #[test]

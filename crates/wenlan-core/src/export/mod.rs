@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Page export to an external vault, plus the shared `ExportResult`/`ExportStats` shapes.
 
+pub(crate) mod archive;
 pub mod knowledge;
 pub mod obsidian;
 pub mod okf;

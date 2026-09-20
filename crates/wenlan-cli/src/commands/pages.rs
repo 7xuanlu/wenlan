@@ -117,11 +117,13 @@ fn read_pages(dir: &Path) -> Vec<PageEntry> {
         if path.extension().and_then(|x| x.to_str()) != Some("md") {
             continue;
         }
-        // `index.md` is the reserved OKF bundle index, not a page.
+        // OKF reserves `index.md` (the bundle index) and `log.md` (a
+        // directory's update history) at every level of the hierarchy, spec
+        // 3.1. Neither is a page, so neither belongs in this listing.
         if path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case("index.md"))
+            .is_some_and(|n| n.eq_ignore_ascii_case("index.md") || n.eq_ignore_ascii_case("log.md"))
         {
             continue;
         }
@@ -483,12 +485,22 @@ mod tests {
             "---\nokf_version: \"0.2\"\n---\n\n* [One](/one.md) - x\n",
         )
         .unwrap();
+        // the reserved OKF bundle log is not a page either
+        std::fs::write(
+            tmp.path().join("log.md"),
+            "---\nokf_version: \"0.2\"\n---\n\n- changed something\n",
+        )
+        .unwrap();
         // a .wenlan/state.json sibling must be ignored (non-recursive, non-md)
         std::fs::create_dir_all(tmp.path().join(".wenlan")).unwrap();
         std::fs::write(tmp.path().join(".wenlan/state.json"), "{}").unwrap();
 
         let pages = read_pages(tmp.path());
-        assert_eq!(pages.len(), 2, "only the two page .md files, not index.md");
+        assert_eq!(
+            pages.len(),
+            2,
+            "only the two page .md files, not index.md or log.md"
+        );
         let mut titles: Vec<&str> = pages.iter().map(|p| p.title.as_str()).collect();
         titles.sort();
         assert_eq!(titles, ["One", "Two"]);
