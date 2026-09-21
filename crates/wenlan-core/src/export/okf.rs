@@ -849,7 +849,16 @@ pub fn export_okf_with_concept_paths(
                 continue;
             }
             // Already gone: nothing to remember.
-            Err(_) => continue,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            // Any other stat failure says nothing about whether the file is
+            // still there, and forgetting it is the bug this block exists to
+            // fix, so it stays listed for the next run.
+            Err(e) => {
+                log::warn!("[okf] could not inspect stale {entry}: {e}");
+                unswept.push(entry.clone());
+                stats.failed += 1;
+                continue;
+            }
         }
         if let Err(e) = std::fs::remove_file(&path) {
             if e.kind() != std::io::ErrorKind::NotFound {

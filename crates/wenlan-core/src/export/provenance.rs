@@ -480,8 +480,14 @@ enum StubTarget {
 /// whether or not somebody edited the body, which is the whole lesson of this
 /// arc. The bytes are the only evidence.
 fn stub_target(dir: &Dir, name: &str, planned: &[u8]) -> StubTarget {
-    let Ok(metadata) = dir.symlink_metadata(Path::new(name)) else {
-        return StubTarget::Writable;
+    let metadata = match dir.symlink_metadata(Path::new(name)) {
+        Ok(metadata) => metadata,
+        // Only "nothing there" makes the name ours. Any other stat failure
+        // (a directory this process cannot search, an I/O error) says nothing
+        // about what is at the name, and the write below truncates whatever
+        // is, so it is not attempted.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StubTarget::Writable,
+        Err(_) => return StubTarget::Foreign,
     };
     if !metadata.is_file() || metadata.file_type().is_symlink() {
         return StubTarget::Foreign;

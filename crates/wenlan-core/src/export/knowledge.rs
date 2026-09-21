@@ -1418,12 +1418,8 @@ pub(crate) fn escape_index_link_text(s: &str) -> String {
     s.replace('[', "\\[").replace(']', "\\]")
 }
 
-/// One index line. The ` - ` separator is written only when the page has a
-/// description: a page with an empty summary otherwise rendered as
-/// `* [Title](/page.md) - `, a separator pointing at nothing, in every
-/// projection index and every exported bundle.
-/// Whether every non-blank line of an `index.md` body is one
-/// [`render_index_markdown`] could have emitted: a `## <space>` heading or a
+/// Whether every non-blank line of an `index.md` body is one the index
+/// renderer could have emitted: a `## <space>` heading or a
 /// `* [title](/file)` entry line. Prose, a different heading level, a
 /// checklist, a table, a wikilink -- anything a person would add -- fails, and
 /// the caller then leaves the file alone.
@@ -1431,7 +1427,6 @@ pub(crate) fn escape_index_link_text(s: &str) -> String {
 /// Deliberately a shape test, not a re-render: the index on disk describes the
 /// state BEFORE the write that triggered this pass, so it is expected to
 /// differ from what the pass is about to write. Only its shape is invariant.
-/// Whether `body` is nothing but lines the index renderer emits.
 ///
 /// The prefixes alone are not enough. `* [` is also how Markdown checklists
 /// start, so `* [ ] buy milk` in somebody's home note passed a `starts_with`
@@ -1474,6 +1469,10 @@ fn index_line_is_entry(line: &str) -> bool {
     tail.is_empty() || tail.starts_with(" - ")
 }
 
+/// One index line. The ` - ` separator is written only when the page has a
+/// description: a page with an empty summary otherwise rendered as
+/// `* [Title](/page.md) - `, a separator pointing at nothing, in every
+/// projection index and every exported bundle.
 fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
     let title = escape_index_link_text(title);
     if description.is_empty() {
