@@ -74,7 +74,10 @@ async fn run_okf(
         }
     }
     if stats.failed > 0 {
-        anyhow::bail!("okf export reported {} failed page(s)", stats.failed);
+        anyhow::bail!(
+            "okf export reported {} path(s) it could not write or sweep; see the daemon log",
+            stats.failed
+        );
     }
     Ok(())
 }

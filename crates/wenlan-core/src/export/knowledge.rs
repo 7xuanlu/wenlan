@@ -146,6 +146,11 @@ const LOG_FILE: &str = "log.md";
 /// Bounded frontmatter read for building `index.md` from projected files —
 /// generous enough for title/description/space/tags, small next to a page body.
 const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
+/// Bounded WHOLE-file read for deciding whether `index.md` is ours to replace.
+/// The generated index is one line per page, so this covers a corpus far
+/// larger than any real vault; past it the file is left alone rather than
+/// claimed on the strength of a prefix.
+const INDEX_OWNERSHIP_SCAN_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Whether a projected filename is the OKF root document. Case-insensitive,
 /// like the default macOS and Windows filesystems.
@@ -1274,12 +1279,24 @@ impl KnowledgeWriter {
     }
 
     /// Whether the projection may write `index.md`: the name is free, or the
-    /// file there is Wenlan's own index, recognized by frontmatter whose only
-    /// key is `okf_version`. Anything else is left alone: a note the user made
-    /// at `index.md` (Obsidian users often keep a home note there, sometimes
-    /// by copying a page file), a page still projected there, a symlink, a
-    /// directory, or a file this pass cannot read. Edits to the body of
-    /// Wenlan's own index are still replaced; it is a generated file.
+    /// file there is one this projection could have produced -- frontmatter
+    /// whose only key is `okf_version`, AND a body of nothing but the headings
+    /// and entry lines the renderer emits. Anything else is left alone: a note
+    /// the user made at `index.md` (Obsidian users often keep a home note
+    /// there), a page still projected there, a symlink, a directory, or a file
+    /// this pass cannot read.
+    ///
+    /// The frontmatter test alone was not enough, and this is the same mistake
+    /// the rest of the arc exists to remove: `okf_version` on its own is the
+    /// STANDARD OKF root-index shape, not a Wenlan signature, so a person who
+    /// hand-wrote a conforming root index had it overwritten. Prose typed into
+    /// Wenlan's own generated index was overwritten for the same reason. The
+    /// body is the only evidence available without a recorded digest.
+    ///
+    /// Residual, and deliberate: an edit that still looks machine-generated
+    /// (a reordered or deleted entry line) is still replaced. Closing that
+    /// needs a digest of the last written index in `state.json`, which is a
+    /// schema change and a second state save on every page write.
     fn index_file_is_replaceable(root: &Dir) -> bool {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
@@ -1288,16 +1305,21 @@ impl KnowledgeWriter {
             Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
         };
         let mut head = Vec::new();
-        if (&mut file)
-            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+        // One byte past the limit, so a file too big to read whole is told
+        // apart from one that exactly fills the budget. An index this pass
+        // cannot read whole is an index it cannot claim.
+        let readable = (&mut file)
+            .take(INDEX_OWNERSHIP_SCAN_BYTES + 1)
             .read_to_end(&mut head)
-            .is_err()
-        {
+            .is_ok()
+            && head.len() as u64 <= INDEX_OWNERSHIP_SCAN_BYTES;
+        drop(file);
+        if !readable {
             return false;
         }
         let head = String::from_utf8_lossy(&head);
-        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
-        fm.fields.len() == 1 && fm.has("okf_version")
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&head);
+        fm.fields.len() == 1 && fm.has("okf_version") && index_body_is_generated(body)
     }
 
     /// Regenerate the OKF `index.md` root document from the frontmatter of the
@@ -1394,6 +1416,57 @@ pub(crate) fn sanitize_index_field(s: &str) -> String {
 /// containing a bracket can't break the `[title](...)` link syntax.
 pub(crate) fn escape_index_link_text(s: &str) -> String {
     s.replace('[', "\\[").replace(']', "\\]")
+}
+
+/// Whether every non-blank line of an `index.md` body is one the index
+/// renderer could have emitted: a `## <space>` heading or a
+/// `* [title](/file)` entry line. Prose, a different heading level, a
+/// checklist, a table, a wikilink -- anything a person would add -- fails, and
+/// the caller then leaves the file alone.
+///
+/// Deliberately a shape test, not a re-render: the index on disk describes the
+/// state BEFORE the write that triggered this pass, so it is expected to
+/// differ from what the pass is about to write. Only its shape is invariant.
+///
+/// The prefixes alone are not enough. `* [` is also how Markdown checklists
+/// start, so `* [ ] buy milk` in somebody's home note passed a `starts_with`
+/// test and their list was replaced by the generated index. An entry line has
+/// to be shaped like one: `* [title](/file.md)`, optionally ` - description`.
+///
+/// Headings-only is rejected too. Every generated index that has a heading has
+/// at least one entry under it, so a file of bare headings is somebody's
+/// outline, not ours.
+fn index_body_is_generated(body: &str) -> bool {
+    let mut entries = 0usize;
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        if line.starts_with("## ") {
+            continue;
+        }
+        if !index_line_is_entry(line) {
+            return false;
+        }
+        entries += 1;
+    }
+    // An index with no pages in it has an empty body and stays ours.
+    entries > 0 || body.trim().is_empty()
+}
+
+/// One rendered entry line: `* [title](/file.md)`, optionally ` - description`.
+/// Anything this cannot parse is treated as not ours, which is the safe
+/// direction: the file is left alone.
+fn index_line_is_entry(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("* [") else {
+        return false;
+    };
+    let Some(link) = rest.find("](") else {
+        return false;
+    };
+    let after = &rest[link + 2..];
+    let Some(close) = after.find(')') else {
+        return false;
+    };
+    let tail = &after[close + 1..];
+    tail.is_empty() || tail.starts_with(" - ")
 }
 
 /// One index line. The ` - ` separator is written only when the page has a
@@ -6341,11 +6414,14 @@ mod tests {
         }
     }
 
-    /// The generated index stays generated: hand edits to its body are
-    /// replaced on the next write, because its frontmatter still marks it as
-    /// Wenlan's.
+    /// Prose typed into Wenlan's own generated index survives the next page
+    /// write. This test used to assert the opposite, which is the defect: the
+    /// frontmatter check said "only `okf_version`, so it is ours", and the
+    /// sentence a person typed underneath was overwritten. The index going
+    /// stale is the intended trade -- it is recoverable (move the note aside),
+    /// and the warning says how.
     #[test]
-    fn wenlans_own_index_is_regenerated_after_a_body_edit() {
+    fn a_hand_edit_to_wenlans_own_index_is_not_overwritten() {
         let dir = tempfile::TempDir::new().unwrap();
         let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
         let mut page_a = test_concept();
@@ -6355,7 +6431,7 @@ mod tests {
 
         let index_path = dir.path().join(INDEX_FILE);
         let mut edited = std::fs::read_to_string(&index_path).unwrap();
-        edited.push_str("\nhand edit\n");
+        edited.push_str("\nWhere I keep my reading queue.\n");
         std::fs::write(&index_path, &edited).unwrap();
 
         let mut page_b = test_concept();
@@ -6363,9 +6439,83 @@ mod tests {
         page_b.title = "Beta".to_string();
         writer.write_page_for_test(&page_b).unwrap();
 
-        let content = std::fs::read_to_string(&index_path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&index_path).unwrap(),
+            edited,
+            "the index is left exactly as the user left it"
+        );
+    }
+
+    /// An OKF root index somebody hand-wrote is not Wenlan's. `okf_version`
+    /// alone is the STANDARD shape, not a Wenlan signature, so the frontmatter
+    /// check claimed and overwrote an index from another producer.
+    ///
+    /// The body here is prose. An index whose body is genuinely
+    /// indistinguishable from the renderer's output IS still replaced; that is
+    /// the residual recorded at `index_file_is_replaceable`.
+    #[test]
+    fn a_hand_written_okf_index_with_prose_is_left_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\nMy own root index, written by hand.\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Muse: `* [` is also how a Markdown checklist starts, so a to-do list
+    /// under `okf_version`-only frontmatter passed the first version of the
+    /// body-shape test and was replaced.
+    #[test]
+    fn a_checklist_is_not_mistaken_for_index_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n* [ ] buy milk\n* [x] file taxes\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Every generated index that has a heading has an entry under it, so a
+    /// file of bare headings is somebody's outline.
+    #[test]
+    fn a_headings_only_outline_is_not_mistaken_for_an_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n## Projects\n\n## Someday\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// The flip side: an index this projection actually generated is still
+    /// replaceable, so the index keeps updating in the ordinary case.
+    #[test]
+    fn an_untouched_generated_index_is_still_regenerated() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(content.contains("[Alpha]("), "{content}");
         assert!(content.contains("[Beta]("), "{content}");
-        assert!(!content.contains("hand edit"), "{content}");
     }
 
     #[cfg(unix)]

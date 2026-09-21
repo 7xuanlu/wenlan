@@ -402,23 +402,22 @@ pub fn stub_filename(id: &str) -> String {
 }
 
 /// Project a read-only stub note for each cited memory id under
-/// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call.
+/// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call,
+/// except where somebody has typed in it (see [`project_stubs_for_page_in`],
+/// which this delegates to so there is one implementation to keep honest).
 pub fn project_stubs_for_page(
     knowledge_path: &Path,
-    _page_id: &str,
+    page_id: &str,
     source_memory_ids: &[String],
 ) -> std::io::Result<()> {
     if source_memory_ids.is_empty() {
         return Ok(());
     }
-    let dir = knowledge_path.join(SOURCES_STUB_DIR);
-    std::fs::create_dir_all(&dir)?;
-    for id in source_memory_ids {
-        let path = dir.join(stub_filename(id));
-        let body = stub_body(id);
-        std::fs::write(&path, body)?;
-    }
-    Ok(())
+    // `create_dir_all` first: the old body created a missing projection root on
+    // the way to `_sources/`, and opening a directory does not.
+    std::fs::create_dir_all(knowledge_path)?;
+    let root = Dir::open_ambient_dir(knowledge_path, cap_std::ambient_authority())?;
+    project_stubs_for_page_in(&root, page_id, source_memory_ids)
 }
 
 pub(crate) fn project_stubs_for_page_in(
@@ -433,9 +432,91 @@ pub(crate) fn project_stubs_for_page_in(
         .expect("create=true always returns the sources directory");
     for id in source_memory_ids {
         let body = stub_body(id);
-        write_regular_nofollow(&dir, &stub_filename(id), body.as_bytes())?;
+        let name = stub_filename(id);
+        // A stub is a generated, read-only projection of a memory, but the
+        // file sits in somebody's vault and they can type into it. This used
+        // to truncate it on every write of every page that cites the memory,
+        // so an edit survived only until the next refresh. The GC below
+        // protects a stub that has gone ORPHAN; nothing protected one that is
+        // still cited, which is the common case.
+        match stub_target(&dir, &name, body.as_bytes()) {
+            StubTarget::Writable => {}
+            StubTarget::Edited => {
+                if let Err(e) = crate::export::archive::archive_file_from(root, &dir, &name) {
+                    // Same call as the orphan GC makes. If the bytes cannot be
+                    // moved aside they are not overwritten either: skip the
+                    // stub and leave the projection one file behind rather
+                    // than destroy an edit.
+                    log::warn!("[provenance] could not archive edited stub {name}: {e}");
+                    continue;
+                }
+            }
+            StubTarget::Foreign => {
+                log::warn!("[provenance] leaving {name} alone: not a plain file");
+                continue;
+            }
+        }
+        write_regular_nofollow(&dir, &name, body.as_bytes())?;
     }
     Ok(())
+}
+
+/// What the stub projection may do with whatever is already at `name`.
+#[derive(Debug, PartialEq, Eq)]
+enum StubTarget {
+    /// Nothing there, or the bytes are already the ones this pass would write.
+    /// Ours to write.
+    Writable,
+    /// Present, with bytes that are not the ones this pass would write.
+    /// Somebody typed in it: archived before it is replaced.
+    Edited,
+    /// Present, but not something this pass may claim: not a plain file, or a
+    /// plain file it could not read whole. Left exactly as it is.
+    Foreign,
+}
+
+/// Classify the stub file at `name` by comparing it with the bytes this pass
+/// would write. No marker can answer this: a stub's frontmatter is identical
+/// whether or not somebody edited the body, which is the whole lesson of this
+/// arc. The bytes are the only evidence.
+fn stub_target(dir: &Dir, name: &str, planned: &[u8]) -> StubTarget {
+    let metadata = match dir.symlink_metadata(Path::new(name)) {
+        Ok(metadata) => metadata,
+        // Only "nothing there" makes the name ours. Any other stat failure
+        // (a directory this process cannot search, an I/O error) says nothing
+        // about what is at the name, and the write below truncates whatever
+        // is, so it is not attempted.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StubTarget::Writable,
+        Err(_) => return StubTarget::Foreign,
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return StubTarget::Foreign;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let Ok(mut file) = dir.open_with(Path::new(name), &options) else {
+        // Present but unreadable: a file this pass cannot read is a file it
+        // cannot claim, so it is not archived either. Archiving renames, which
+        // needs no read permission, so classifying this as `Edited` would let
+        // the pass take over a name whose bytes it never saw. The orphan GC
+        // keeps such a file; so does this.
+        return StubTarget::Foreign;
+    };
+    let mut content = Vec::new();
+    let readable = (&mut file)
+        .take(STUB_CLASSIFY_SCAN_BYTES + 1)
+        .read_to_end(&mut content)
+        .is_ok()
+        && content.len() as u64 <= STUB_CLASSIFY_SCAN_BYTES;
+    drop(file);
+    if !readable {
+        return StubTarget::Foreign;
+    }
+    if content == planned {
+        StubTarget::Writable
+    } else {
+        StubTarget::Edited
+    }
 }
 
 fn open_or_create_sources_dir(root: &Dir, create: bool) -> std::io::Result<Option<Dir>> {
@@ -901,6 +982,108 @@ mod tests {
             std::fs::read_to_string(dir.path().join("archive/mem_edited.md")).unwrap(),
             edited,
             "the edit is preserved byte for byte in the projection root's archive/"
+        );
+    }
+
+    /// A stub that is STILL CITED and has been typed in is archived before it
+    /// is replaced, the same treatment the orphan GC already gave. The bug
+    /// this covers: the projection truncated it on every write of every page
+    /// citing that memory, so an edit survived only until the next refresh.
+    #[test]
+    fn an_edited_cited_stub_is_archived_before_it_is_rewritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        let ids = ["mem_note".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &ids).unwrap();
+        let pristine = std::fs::read_to_string(sources.join("mem_note.md")).unwrap();
+        let edited = format!("{pristine}\nWhy this memory matters to me.\n");
+        std::fs::write(sources.join("mem_note.md"), &edited).unwrap();
+
+        // Any later page citing the same memory re-projects the stub.
+        project_stubs_for_page(dir.path(), "page_b", &ids).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive/mem_note.md")).unwrap(),
+            edited,
+            "the edit is preserved byte for byte before the stub is regenerated"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sources.join("mem_note.md")).unwrap(),
+            pristine,
+            "the stub itself is still refreshed to the generated bytes"
+        );
+    }
+
+    /// The archive is for edits, not for traffic: re-projecting an untouched
+    /// stub must not fill `archive/` with copies of bytes nobody changed.
+    #[test]
+    fn an_untouched_cited_stub_is_rewritten_without_archiving() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ids = ["mem_quiet".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &ids).unwrap();
+        project_stubs_for_page(dir.path(), "page_b", &ids).unwrap();
+        project_stubs_for_page(dir.path(), "page_c", &ids).unwrap();
+
+        assert!(
+            !dir.path().join("archive").exists(),
+            "no archive entry for a stub nobody edited"
+        );
+    }
+
+    /// Muse: archiving renames, which needs no read permission, so treating an
+    /// unreadable file as "edited" would let the pass take over a name whose
+    /// bytes it never saw. The orphan GC keeps such a file; so does this.
+    #[cfg(unix)]
+    #[test]
+    fn a_cited_stub_this_pass_cannot_read_is_left_alone_not_archived() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let theirs = sources.join("mem_locked.md");
+        std::fs::write(&theirs, "a note only this user has\n").unwrap();
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_a", &["mem_locked".to_string()]).unwrap();
+
+        assert!(
+            !dir.path().join("archive/mem_locked.md").exists(),
+            "a file this pass never read must not be claimed by renaming it away"
+        );
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            "a note only this user has\n",
+            "and its bytes are untouched"
+        );
+    }
+
+    /// A symlink at a stub's name is left exactly as it is: not followed (it
+    /// could point anywhere in the user's vault) and not replaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cited_stub_is_neither_followed_nor_replaced() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = outside.path().join("elsewhere.md");
+        std::fs::write(&target, "# Not a stub\n").unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::os::unix::fs::symlink(&target, sources.join("mem_link.md")).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_a", &["mem_link".to_string()]).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "# Not a stub\n",
+            "the symlink was not followed"
+        );
+        assert!(
+            std::fs::symlink_metadata(sources.join("mem_link.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the symlink itself is still there"
         );
     }
 
