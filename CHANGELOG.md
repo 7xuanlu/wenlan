@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.18.11](https://github.com/7xuanlu/wenlan/compare/v0.18.10...v0.18.11) (2026-09-21)
+
+
+### Features
+
+* **sources:** import OKF bundles as a source type that keeps provenance and links ([#766](https://github.com/7xuanlu/wenlan/issues/766)) ([25c8d01](https://github.com/7xuanlu/wenlan/commit/25c8d017f108728745722b2c37a70b186ea7b3b7))
+
+
+### Bug Fixes
+
+* **export:** fix three OKF conformance defects and stop a reserved-name migration deleting edits ([#768](https://github.com/7xuanlu/wenlan/issues/768)) ([4797161](https://github.com/7xuanlu/wenlan/commit/47971618cf9559aab57cfd5b79a9c9636cbfa64d))
+* **export:** stop three more ways a vault edit could be overwritten, and keep an obstructed sweep on the books ([#770](https://github.com/7xuanlu/wenlan/issues/770)) ([bd8bc6c](https://github.com/7xuanlu/wenlan/commit/bd8bc6c8dda9ffb7cde1b49add0b8f5eaa20793e))
+* **hooks:** stop hooks from acting on changes the caller did not make ([#765](https://github.com/7xuanlu/wenlan/issues/765)) ([f92097f](https://github.com/7xuanlu/wenlan/commit/f92097fb26cc1166fe32a871e4433abbeb637589))
+* **okf:** stop six paths from destroying edits a person made in the vault ([#769](https://github.com/7xuanlu/wenlan/issues/769)) ([9ccb342](https://github.com/7xuanlu/wenlan/commit/9ccb3427f69555721f6f7202837bfd71e2eb38ef))
+
 ## [0.18.10](https://github.com/7xuanlu/wenlan/compare/v0.18.9...v0.18.10) (2026-09-17)
 
 
