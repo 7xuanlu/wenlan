@@ -153,6 +153,10 @@ async fn cancelling_shutdown_does_not_detach_the_owned_task() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "The tungstenite handshake callback requires its unboxed ErrorResponse type"
+)]
 async fn actual_socket_forwards_a_credited_loopback_response_and_shuts_down() {
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = backend.local_addr().unwrap().port();
@@ -289,6 +293,10 @@ async fn handshake_rejection_is_generic_and_never_retried() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::result_large_err,
+    reason = "The tungstenite handshake callback requires its unboxed ErrorResponse type"
+)]
 async fn dropping_socket_owner_cancels_a_pending_local_http_request() {
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = backend.local_addr().unwrap().port();

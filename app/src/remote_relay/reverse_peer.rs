@@ -244,10 +244,12 @@ impl Driver {
                 tag,
                 request_id,
                 client,
-                method,
-                url,
-                headers,
-                body,
+                LocalRequest {
+                    method,
+                    url,
+                    headers,
+                    body,
+                },
                 command_receiver,
                 task_sender,
             )
@@ -461,30 +463,24 @@ impl Driver {
     }
 }
 
-async fn run_request_task(
-    tag: u64,
-    id: String,
-    client: Client,
+struct LocalRequest {
     method: Method,
     url: String,
     headers: HeaderMap,
     body: Vec<u8>,
+}
+
+async fn run_request_task(
+    tag: u64,
+    id: String,
+    client: Client,
+    request: LocalRequest,
     mut commands: mpsc::Receiver<TaskCommand>,
     events: EventSender,
 ) {
     let result = timeout(
         HTTP_REQUEST_TIMEOUT,
-        execute_request(
-            tag,
-            &id,
-            client,
-            method,
-            url,
-            headers,
-            body,
-            &mut commands,
-            &events,
-        ),
+        execute_request(tag, &id, client, request, &mut commands, &events),
     )
     .await;
     if !matches!(result, Ok(Ok(()))) {
@@ -500,13 +496,16 @@ async fn execute_request(
     tag: u64,
     id: &str,
     client: Client,
-    method: Method,
-    url: String,
-    headers: HeaderMap,
-    body: Vec<u8>,
+    request: LocalRequest,
     commands: &mut mpsc::Receiver<TaskCommand>,
     events: &EventSender,
 ) -> Result<(), ()> {
+    let LocalRequest {
+        method,
+        url,
+        headers,
+        body,
+    } = request;
     let mut request = client.request(method, url);
     for (name, value) in headers {
         request = request.header(name, value);

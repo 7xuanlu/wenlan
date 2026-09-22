@@ -129,7 +129,7 @@ impl Store {
             Err(_) => return Err(StoreError::Storage),
             Ok(_) => {}
         }
-        self.with_lock(|path| read_profile(path))
+        self.with_lock(read_profile)
     }
 
     /// Select an explicit scope without enabling exposure. A connected or

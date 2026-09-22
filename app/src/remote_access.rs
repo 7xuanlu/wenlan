@@ -1624,7 +1624,7 @@ mod tests {
         }));
         app.manage(app_state.clone());
 
-        shutdown_for_exit(&app.handle()).await.unwrap();
+        shutdown_for_exit(app.handle()).await.unwrap();
 
         let after = store.load().unwrap().unwrap();
         assert_eq!(serde_json::to_vec(&after).unwrap(), expected_profile);

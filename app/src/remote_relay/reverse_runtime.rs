@@ -279,6 +279,10 @@ mod tests {
         stream.write_all(response.as_bytes()).await.unwrap();
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "The tungstenite handshake callback requires its unboxed ErrorResponse type"
+    )]
     async fn websocket(listener: &TcpListener) -> WebSocketStream<TcpStream> {
         let (stream, _) = listener.accept().await.unwrap();
         accept_hdr_async(stream, |request: &Request, mut response: Response| {

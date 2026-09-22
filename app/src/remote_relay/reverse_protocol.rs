@@ -18,8 +18,8 @@ pub const MAX_ID_BYTES: usize = 64;
 pub const MAX_HEADER_VALUE_BYTES: usize = 2048;
 pub const MAX_SAFE_SEQUENCE: u64 = 9_007_199_254_740_991;
 
-const MAX_REQUEST_BODY_BASE64_BYTES: usize = (MAX_REQUEST_BODY_BYTES + 2) / 3 * 4;
-const MAX_CHUNK_BODY_BASE64_BYTES: usize = (MAX_CHUNK_BODY_BYTES + 2) / 3 * 4;
+const MAX_REQUEST_BODY_BASE64_BYTES: usize = MAX_REQUEST_BODY_BYTES.div_ceil(3) * 4;
+const MAX_CHUNK_BODY_BASE64_BYTES: usize = MAX_CHUNK_BODY_BYTES.div_ceil(3) * 4;
 const INVALID_MESSAGE: &str = "Invalid reverse frame";
 
 /// Header names and values as they appear on the wire.
@@ -530,7 +530,7 @@ fn valid_authorization(value: &str) -> bool {
 
 fn valid_base64_shape(value: &str) -> bool {
     let bytes = value.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return false;
     }
 
