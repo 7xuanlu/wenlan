@@ -1412,9 +1412,14 @@ export default function PageDetail({
             </h1>
             <div className="page-detail-dateline">
               <span className="page-detail-dateline-item">
-                {t("pageDetail.dateline.lastDistilled", {
-                  time: relativeTimeFromISO(page.last_compiled, t),
-                })}
+                {page.creation_kind === "source" ||
+                page.creation_kind === "imported"
+                  ? t("pageDetail.dateline.lastUpdated", {
+                      time: relativeTimeFromISO(page.last_modified, t),
+                    })
+                  : t("pageDetail.dateline.lastDistilled", {
+                      time: relativeTimeFromISO(page.last_compiled, t),
+                    })}
               </span>
               <span className="page-detail-dateline-item">
                 {t("pageDetail.dateline.sourceMemories", { count: sourceCount })}

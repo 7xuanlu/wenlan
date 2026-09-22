@@ -50,8 +50,18 @@ describe("sample dataset integrity", () => {
     expect(chatgpt.brief).toBeTruthy();
     for (const commands of [codex, claude]) {
       expect(commands.recall).toBeTruthy();
-      expect(commands.handoff).toBeTruthy();
       expect(commands.brief).toBeTruthy();
+    }
+  });
+
+  it.each(LOCALES)("keeps the %s ChatGPT connector read-only with no handoff", (locale) => {
+    const data = getSampleData(locale);
+    // The ChatGPT web connector cannot write: an explicit null keeps the UI
+    // from rendering (or faking) a save command.
+    expect(data.commands.chatgpt.handoff).toBeNull();
+    // Local clients keep full recall/handoff/brief support.
+    for (const commands of [data.commands.codex, data.commands.claude]) {
+      expect(commands.handoff).toBeTruthy();
     }
   });
 });

@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import { FirstUseSample } from "../FirstUseSample";
+import { i18n } from "../../../i18n";
 
 vi.mock("../../../lib/tauri", () => ({
   clipboardWrite: vi.fn(),
@@ -62,13 +63,15 @@ function stubMatchMedia(initial: boolean) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await i18n.changeLanguage("en");
   vi.clearAllMocks();
   mockedClipboardWrite.mockResolvedValue(undefined);
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.useRealTimers();
+  await i18n.changeLanguage("en");
 });
 
 describe("FirstUseSample demo isolation", () => {
@@ -330,19 +333,20 @@ describe("FirstUseSample AI-use panel", () => {
     );
     renderSample();
     openAiPanel();
-    // ChatGPT offers no handoff command to copy, so run this against Codex.
+    // Handoff only exists on writing-capable local clients (ChatGPT offers
+    // none), so run this against Codex.
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     const panel = screen.getByRole("tabpanel");
     fireEvent.click(
       within(panel).getByRole("button", { name: "Copy command" }),
     );
-    const copyButtons = screen.getAllByRole("button", { name: "Copy command" });
-    fireEvent.click(copyButtons[1]);
+    fireEvent.click(screen.getByRole("button", { name: "Copy command: Leave progress behind" }));
     await act(async () => {
       resolvers[1]!();
     });
-    const handoffRow = screen.getByText(/Leave progress behind/).closest("li")!;
+    const handoffRow = screen.getByRole("button", { name: "Copy command: Leave progress behind" }).closest("li")!;
     expect(within(handoffRow).getByTestId("copy-ok")).toBeInTheDocument();
+    expect(within(handoffRow).getByRole("status")).toHaveTextContent("Leave progress behind: Copied");
     await act(async () => {
       resolvers[0]!();
     });
@@ -380,7 +384,105 @@ describe("FirstUseSample AI-use panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
     fireEvent.click(screen.getByRole("button", { name: "Bring my data" }));
     expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onConnect).toHaveBeenCalledWith("chatgpt");
     expect(onBringData).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes the selected client to onConnect", () => {
+    const onConnect = vi.fn();
+    renderSample({ onConnect });
+    openAiPanel();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onConnect).toHaveBeenCalledWith("claude");
+  });
+
+  it("explains read-only ChatGPT without a handoff command but keeps writes for local clients", () => {
+    renderSample();
+    openAiPanel();
+    // Default client is ChatGPT: explain the limitation, never offer a save action.
+    expect(
+      screen.getByText(/ChatGPT can read your memories here but cannot write them back/),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy command: Leave progress behind" })).not.toBeInTheDocument();
+    expect(screen.queryByText("/handoff")).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/@wenlan recall the decisions/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.getByText(/Leave progress behind/)).toBeInTheDocument();
+    expect(screen.getByText("/handoff")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(screen.getByText(/Leave progress behind/)).toBeInTheDocument();
+  });
+
+  it("shows the ChatGPT read-only note only for ChatGPT", () => {
+    renderSample();
+    openAiPanel();
+    expect(
+      screen.getByText(/read-only web access to the selected project/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(
+      screen.queryByText(/read-only web access to the selected project/),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
+    expect(
+      screen.queryByText(/read-only web access to the selected project/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("announces which secondary command was copied and reports its failure", async () => {
+    renderSample();
+    openAiPanel();
+    const copy = screen.getByRole("button", { name: "Copy command: Brief a new conversation" });
+    fireEvent.click(copy);
+    expect(await within(copy.closest("li")!).findByText("Brief a new conversation: Copied")).toHaveAttribute("role", "status");
+    mockedClipboardWrite.mockRejectedValueOnce(new Error("denied"));
+    fireEvent.click(copy);
+    expect(await within(copy.closest("li")!).findByRole("alert")).toHaveTextContent("Copy failed");
+    expect(within(copy.closest("li")!).getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  it("ships a translated ChatGPT disclosure in all three locales", async () => {
+    const { enFirstUse, hansFirstUse, hantFirstUse } = await import(
+      "../firstUseCopy"
+    );
+    for (const copy of [enFirstUse, hansFirstUse, hantFirstUse]) {
+      expect(copy.sample.chatgptNote).toBeTruthy();
+    }
+    expect(enFirstUse.sample.chatgptNote).toMatch(/read-only/);
+    expect(enFirstUse.sample.chatgptNote).toMatch(/running and connected on your computer/);
+    expect(enFirstUse.sample.chatgptNote).toMatch(/relay/);
+    expect(hansFirstUse.sample.chatgptNote).toMatch(/只读/);
+    expect(hansFirstUse.sample.chatgptNote).toMatch(/运行和联网/);
+    expect(hansFirstUse.sample.chatgptNote).toMatch(/转发服务/);
+    expect(hantFirstUse.sample.chatgptNote).toMatch(/唯讀/);
+    expect(hantFirstUse.sample.chatgptNote).toMatch(/運作與連線/);
+    expect(hantFirstUse.sample.chatgptNote).toMatch(/轉送服務/);
+    // No locale promises that data stays on the machine.
+    for (const copy of [enFirstUse, hansFirstUse, hantFirstUse]) {
+      expect(copy.sample.chatgptNote).not.toMatch(/never leaves|no data leaves/i);
+      expect(copy.sample.chatgptNote).not.toMatch(/不[会會]离开|不會離開/);
+    }
+  });
+
+  it.each(["en", "zh-Hant", "zh-Hans"])("renders capability-aware setup in %s", async (locale) => {
+    await i18n.changeLanguage(locale);
+    const onConnect = vi.fn();
+    renderSample({ onConnect });
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.skipToResult") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.useWithAi") }));
+    expect(screen.getByText(i18n.t("firstUse.sample.chatgptNote"))).toBeVisible();
+    expect(screen.getByText(i18n.t("firstUse.sample.connectHint"))).toBeVisible();
+    expect(screen.queryByText("/handoff")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.connectCta") }));
+    expect(onConnect).toHaveBeenCalledWith("chatgpt");
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
+    expect(screen.queryByText(i18n.t("firstUse.sample.chatgptNote"))).not.toBeInTheDocument();
+    expect(screen.getByText("/handoff")).toBeVisible();
+    expect(mockedInvoke).not.toHaveBeenCalled();
   });
 });
 

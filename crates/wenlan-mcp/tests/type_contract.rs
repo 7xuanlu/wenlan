@@ -35,6 +35,63 @@ fn make_server(client: WenlanClient) -> WenlanMcpServer {
     WenlanMcpServer::new(client, TransportMode::Stdio, "test-agent".into(), None)
 }
 
+fn make_server_with_transport(client: WenlanClient, transport: TransportMode) -> WenlanMcpServer {
+    WenlanMcpServer::new(client, transport, "test-agent".into(), None)
+}
+
+#[tokio::test]
+async fn get_page_sources_rejects_url_path_control_before_daemon_access() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+        .mount(&mock)
+        .await;
+
+    for transport in [TransportMode::Stdio, TransportMode::Http] {
+        let server = make_server_with_transport(client.clone(), transport);
+        for page_id in [
+            "../memory/recent?",
+            "../../health#",
+            "%2e%2e/memory/recent?",
+            "page_a%2fsources",
+            "page_a?limit=100",
+            "page_a#fragment",
+            "page_a\\..\\config",
+            ".",
+            "..",
+            "",
+            "page_a\n",
+        ] {
+            let result = server.get_page_sources_impl(page_id).await.unwrap();
+            assert_eq!(result.is_error, Some(true), "must reject {page_id:?}");
+        }
+    }
+    assert!(mock.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn get_page_sources_preserves_valid_opaque_ids() {
+    let (mock, client) = setup().await;
+    for page_id in [
+        "page_a",
+        "concept_abc-123",
+        "e90d2902-3686-4c59-94f8-92e0715fd993",
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/api/pages/{page_id}/sources")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let result = make_server(client.clone())
+            .get_page_sources_impl(page_id)
+            .await
+            .unwrap();
+        assert_ne!(result.is_error, Some(true));
+        assert_eq!(text_of(&result), "0 sources\n[]");
+    }
+}
+
 fn text_of(result: &CallToolResult) -> String {
     for content in &result.content {
         match &content.raw {
@@ -1095,8 +1152,40 @@ async fn list_pending_imports_happy_path() {
         .await
         .unwrap();
     let text = text_of(&result);
-    assert!(text.starts_with("1 pending import(s)"), "got: {text}");
-    assert!(text.contains("imp_1"), "got: {text}");
+    let expected = serde_json::to_string_pretty(&vec![sample_pending_import("imp_1")]).unwrap();
+    assert_eq!(text, format!("1 pending import(s)\n{expected}"));
+}
+
+#[tokio::test]
+async fn list_pending_imports_http_returns_progress_without_local_path() {
+    let (mock, client) = setup().await;
+    Mock::given(method("GET"))
+        .and(path("/api/import/state"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(vec![sample_pending_import("imp_1")]),
+        )
+        .mount(&mock)
+        .await;
+
+    let result = make_server_with_transport(client, TransportMode::Http)
+        .list_pending_imports_impl(ListPendingImportsParams {})
+        .await
+        .unwrap();
+    let text = text_of(&result);
+    let (_, body) = text.split_once('\n').expect("count and JSON body");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!([{
+            "id": "imp_1",
+            "vendor": "claude",
+            "stage": "ingest",
+            "processed_conversations": 5,
+            "total_conversations": 20,
+        }])
+    );
+    assert!(!text.contains("source_path"), "got: {text}");
+    assert!(!text.contains("/tmp/import.zip"), "got: {text}");
 }
 
 #[tokio::test]

@@ -31,7 +31,7 @@ import "./firstUseGuide.css";
 export interface FirstUseSampleProps {
   onBackToGuide: () => void;
   onBringData: () => void;
-  onConnect: () => void;
+  onConnect: (client: SampleClient) => void;
 }
 
 type SamplePhase = 0 | 1 | 2 | 3;
@@ -419,7 +419,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
             <p>{t("firstUse.sample.useBody")}</p>
             <p className="fus-note">{t("firstUse.sample.connectHint")}</p>
             <div className="fus-cta-row">
-              <button type="button" className="fug-button-primary" onClick={onConnect}>
+              <button type="button" className="fug-button-primary" onClick={() => onConnect(client)}>
                 {t("firstUse.sample.connectCta")}
               </button>
             </div>
@@ -437,6 +437,9 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                 </button>
               ))}
             </div>
+            {client === "chatgpt" ? (
+              <p className="fus-note">{t("firstUse.sample.chatgptNote")}</p>
+            ) : null}
             <div className="fus-command" role="tabpanel">
               <p className="fus-command-label">{t("firstUse.sample.recallLabel")}</p>
               <div className="fus-command-row">
@@ -476,7 +479,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                       type="button"
                       className="fus-icon-button"
                       onClick={() => copyCommand("handoff", handoffCommand)}
-                      aria-label={t("firstUse.sample.copyCommand")}
+                      aria-label={`${t("firstUse.sample.copyCommand")}: ${t("firstUse.sample.handoffLabel")}`}
                     >
                       {copiedKey === "handoff" ? (
                         <Check aria-hidden="true" weight="bold" data-testid="copy-ok" />
@@ -484,6 +487,9 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                         <Copy aria-hidden="true" weight="regular" />
                       )}
                     </button>
+                    <span role="status" className="sr-only">
+                      {copiedKey === "handoff" ? `${t("firstUse.sample.handoffLabel")}: ${t("firstUse.sample.copied")}` : ""}
+                    </span>
                     {copyFailedKey === "handoff" ? (
                       <p role="alert" className="fus-copy-error">
                         {t("firstUse.sample.copyFailed")}
@@ -509,7 +515,7 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                   type="button"
                   className="fus-icon-button"
                   onClick={() => copyCommand("brief", commands.brief)}
-                  aria-label={t("firstUse.sample.copyCommand")}
+                  aria-label={`${t("firstUse.sample.copyCommand")}: ${t("firstUse.sample.briefLabel")}`}
                 >
                   {copiedKey === "brief" ? (
                     <Check aria-hidden="true" weight="bold" data-testid="copy-ok" />
@@ -517,6 +523,9 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
                     <Copy aria-hidden="true" weight="regular" />
                   )}
                 </button>
+                <span role="status" className="sr-only">
+                  {copiedKey === "brief" ? `${t("firstUse.sample.briefLabel")}: ${t("firstUse.sample.copied")}` : ""}
+                </span>
                 {copyFailedKey === "brief" ? (
                   <p role="alert" className="fus-copy-error">
                     {t("firstUse.sample.copyFailed")}

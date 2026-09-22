@@ -513,18 +513,6 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Download cloudflared sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p app/binaries
-          curl -fsSL -o /tmp/cloudflared.tgz \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz
-          tar -xzf /tmp/cloudflared.tgz -C /tmp
-          chmod 755 /tmp/cloudflared
-          xattr -cr /tmp/cloudflared
-          echo "CLOUDFLARED_BIN=/tmp/cloudflared" >> "$GITHUB_ENV"
-
       - name: Load Apple signing and notarization secrets
         if: env.APPLE_SIGNING_CONFIGURED == 'true'
         shell: bash
@@ -599,7 +587,6 @@ jobs:
         shell: bash
         env:
           CXXFLAGS: "-std=c++17"
-          CLOUDFLARED_BIN: ${{ env.CLOUDFLARED_BIN }}
           # Ad-hoc sign ("-") when no Apple Developer cert is configured.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -1131,19 +1118,9 @@ jobs:
       # prepare-sidecars.sh, which compiles the daemon, CLI, and MCP for
       # TAURI_ENV_TARGET_TRIPLE itself. Adding one here would also trip the
       # contract test's rule that a tag release never recompiles on its own.
-      - name: Download cloudflared sidecar
-        shell: bash
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/cloudflared.exe" \
-            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe
-          chmod 755 "$RUNNER_TEMP/cloudflared.exe"
-          echo "CLOUDFLARED_BIN=$RUNNER_TEMP/cloudflared.exe" >> "$GITHUB_ENV"
-
       - name: Build Windows desktop app bundle
         shell: bash
         env:
-          CLOUDFLARED_BIN: ${{ env.CLOUDFLARED_BIN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-pc-windows-msvc

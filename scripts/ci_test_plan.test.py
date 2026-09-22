@@ -501,6 +501,31 @@ class PlatformPlanTests(unittest.TestCase):
                 f"{prefix!r} is not matched by the ci.yml app filter: {patterns!r}",
             )
 
+    def test_relay_ci_is_required_and_uses_its_own_toolchain(self) -> None:
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+        self.assertTrue("relay:   ${{ steps.filter.outputs.relay }}" in workflow,
+                        "relay path-filter output is missing")
+        relay_filter = workflow.split("            relay:\n", 1)[1].split("            macos:\n", 1)[0]
+        for path in ("relay/**", "app/icons/128x128.png", "chatgpt-app-submission.json",
+                     ".github/workflows/ci.yml", "scripts/ci_test_plan.test.py"):
+            self.assertIn(f"- '{path}'", relay_filter)
+        job = workflow.split("\n  relay-check:\n", 1)[1].split("\n  # Desktop app", 1)[0]
+        predicate = "needs.detect-changes.outputs.relay == 'true' || github.event_name == 'workflow_dispatch'"
+        self.assertIn(f"    if: {predicate}\n", job)
+        self.assertIn("    timeout-minutes: 15\n", job)
+        self.assertIn("    needs: detect-changes\n", job)
+        self.assertIn("      WENLAN_NO_AUTOSTART: '1'\n", job)
+        self.assertIn("node-version: \"24\"", job)
+        self.assertIn("run: npm ci --prefix relay", job)
+        self.assertIn("run: npm ls --prefix relay --all", job)
+        self.assertIn("run: npm audit --prefix relay --audit-level=high", job)
+        self.assertIn("run: npm test --prefix relay", job)
+        self.assertNotIn("continue-on-error", job)
+        self.assertNotIn("secrets.", job)
+        conclusion = workflow.split("\n  conclusion:\n", 1)[1].split("\n  plugin:\n", 1)[0]
+        self.assertIn("relay-check", conclusion.split("    steps:", 1)[0])
+        self.assertIn(f"expect_job relay-check '${{{{ {predicate} }}}}' '${{{{ needs.relay-check.result }}}}'", conclusion)
+
     def test_infrastructure_does_not_widen_mixed_server_change(self) -> None:
         product = "crates/wenlan-server/src/bind_addr_tests.rs"
         focused = self.platform_plan_for(product)

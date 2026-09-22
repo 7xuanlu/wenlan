@@ -779,6 +779,114 @@ describe("PageDetail", () => {
     },
   );
 
+  it.each([
+    ["source", "Last updated 5m ago"],
+    ["imported", "Last updated 5m ago"],
+  ] as const)(
+    "shows a neutral updated dateline from last_modified for %s pages",
+    async (creationKind, dateline) => {
+      const { getPage } = await import("../../lib/tauri");
+      (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        id: "concept_abc",
+        title: "Source Page",
+        summary: null,
+        content: "Imported raw Markdown source.",
+        entity_id: null,
+        domain: null,
+        source_memory_ids: [],
+        version: 1,
+        status: "active",
+        creation_kind: creationKind,
+        created_at: "2026-07-17T11:00:00+00:00",
+        // last_compiled is deliberately older: source/imported pages must
+        // read last_modified so the dateline never claims a distillation.
+        last_compiled: "2026-07-17T10:00:00+00:00",
+        last_modified: "2026-07-17T11:55:00+00:00",
+      });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(
+        new Date("2026-07-17T12:00:00+00:00").getTime(),
+      );
+
+      try {
+        renderWithQuery(<PageDetail {...defaultProps} />);
+
+        expect(await screen.findByText(dateline)).toBeInTheDocument();
+        expect(screen.queryByText(/Last distilled/)).toBeNull();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    ["en", "Last updated 5m ago"],
+    ["zh-Hans", "上次更新：5 分钟前"],
+    ["zh-Hant", "上次更新：5 分鐘前"],
+  ] as const)(
+    "localizes the source-page updated dateline in %s",
+    async (locale, dateline) => {
+      const { getPage } = await import("../../lib/tauri");
+      (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        id: "concept_abc",
+        title: "Source Page",
+        summary: null,
+        content: "Imported raw Markdown source.",
+        entity_id: null,
+        domain: null,
+        source_memory_ids: [],
+        version: 1,
+        status: "active",
+        creation_kind: "source",
+        created_at: "2026-07-17T11:00:00+00:00",
+        last_compiled: "2026-07-17T10:00:00+00:00",
+        last_modified: "2026-07-17T11:55:00+00:00",
+      });
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(
+        new Date("2026-07-17T12:00:00+00:00").getTime(),
+      );
+      await i18n.changeLanguage(locale);
+
+      try {
+        renderWithQuery(<PageDetail {...defaultProps} />);
+
+        expect(await screen.findByText(dateline)).toBeInTheDocument();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
+
+  it("keeps Last distilled for distilled pages", async () => {
+    const { getPage } = await import("../../lib/tauri");
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: "concept_abc",
+      title: "Distilled Page",
+      summary: null,
+      content: "Distilled page content.",
+      entity_id: null,
+      domain: null,
+      source_memory_ids: [],
+      version: 1,
+      status: "active",
+      creation_kind: "distilled",
+      created_at: "2026-07-17T11:00:00+00:00",
+      last_compiled: "2026-07-17T11:55:00+00:00",
+      last_modified: "2026-07-17T11:59:00+00:00",
+    });
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(
+      new Date("2026-07-17T12:00:00+00:00").getTime(),
+    );
+
+    try {
+      renderWithQuery(<PageDetail {...defaultProps} />);
+
+      expect(await screen.findByText("Last distilled 5m ago")).toBeInTheDocument();
+      expect(screen.queryByText(/Last updated/)).toBeNull();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("re-distills the current page and keeps skipped daemon hints visible", async () => {
     const { redistillPage } = await import("../../lib/tauri");
     const hint = "page re-distill needs an LLM in the daemon";
