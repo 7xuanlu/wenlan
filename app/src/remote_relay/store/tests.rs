@@ -276,6 +276,103 @@ fn unix_storage_is_private_and_symlinks_are_not_followed() {
     assert_eq!(linked.load().unwrap_err(), StoreError::Storage);
 }
 
+#[test]
+fn failed_operation_releases_the_lock_for_the_next_call() {
+    let (_dir, store) = fixture();
+    let profile = store.configure(None, "review").unwrap();
+    // A returned error (Stale) must not leave the lock held: the next call
+    // on the production Store path succeeds without Busy.
+    assert_eq!(
+        store.configure(None, "review").unwrap_err(),
+        StoreError::Stale
+    );
+    assert_eq!(
+        store.configure(None, "other").unwrap_err(),
+        StoreError::Stale
+    );
+    let loaded = store.load().unwrap().unwrap();
+    assert_eq!(loaded.revision(), profile.revision());
+    store.enable(profile.revision()).unwrap();
+}
+
+#[test]
+fn lock_guard_releases_on_panic_unwind() {
+    let (_dir, store) = fixture();
+    prepare_directory(&store.directory).unwrap();
+    let lock_path = store.directory.join("connection.lock");
+    // The guard lives inside the unwinding closure, so its Drop (and the
+    // explicit unlock) runs during panic unwind. The duplicated handle is
+    // stashed outside to prove the lock is free while it stays open.
+    let saved: std::cell::RefCell<Option<File>> = std::cell::RefCell::new(None);
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .unwrap();
+        lock.try_lock().unwrap();
+        let guard = LockGuard::hold(lock);
+        saved.borrow_mut().replace(guard.file.try_clone().unwrap());
+        panic!("simulated operation panic");
+    }));
+    assert!(outcome.is_err());
+    let inherited = saved.borrow_mut().take().unwrap();
+    // The explicit unlock in Drop releases the lock even though the
+    // duplicated `inherited` description is still open.
+    let contender = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    contender.try_lock().unwrap();
+    contender.unlock().unwrap();
+    drop(inherited);
+}
+
+#[cfg(unix)]
+#[test]
+fn lock_guard_releases_despite_duplicated_description_but_holds_while_alive() {
+    let (_dir, store) = fixture();
+    prepare_directory(&store.directory).unwrap();
+    let lock_path = store.directory.join("connection.lock");
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .unwrap();
+    lock.try_lock().unwrap();
+    let guard = LockGuard::hold(lock);
+    // try_clone duplicates the open file description, modelling a
+    // fork/spawn-inherited handle without raw fork in the test runner.
+    let inherited = guard.file.try_clone().unwrap();
+    // While the guard is alive the lock is contended: no second owner.
+    let contender = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    assert!(matches!(
+        contender.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+    drop(guard);
+    // After the guard's explicit unlock, the lock is free even though the
+    // duplicated `inherited` handle is still open. Close-only release would
+    // still report Busy here.
+    let contender = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    contender.try_lock().unwrap();
+    contender.unlock().unwrap();
+    drop(inherited);
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_dpapi_round_trip_stores_no_plaintext_and_has_no_plaintext_fallback() {

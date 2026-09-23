@@ -261,7 +261,27 @@ impl Store {
             std::fs::TryLockError::WouldBlock => StoreError::Busy,
             std::fs::TryLockError::Error(_) => StoreError::Storage,
         })?;
+        // Arm only after acquisition; a failed contender must never unlock.
+        let _guard = LockGuard::hold(lock);
         operation(&self.directory.join(FILE_NAME))
+    }
+}
+
+/// Closing alone can retain the lock through a fork-inherited descriptor.
+/// Explicitly release our successful acquisition, including during unwind.
+struct LockGuard {
+    file: File,
+}
+
+impl LockGuard {
+    fn hold(file: File) -> Self {
+        Self { file }
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
     }
 }
 
