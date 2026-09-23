@@ -625,6 +625,7 @@ jobs:
               # wenlan-core/server are dev-dependencies only; the Linux
               # quarantine lane owns their MCP test integration.
               - 'crates/wenlan-mcp/src/**'
+              - 'crates/wenlan-mcp/examples/**'
               - 'crates/wenlan-mcp/Cargo.toml'
               - 'crates/wenlan-mcp/build.rs'
               - 'crates/wenlan-types/src/**'
@@ -1547,6 +1548,26 @@ jobs:
       - name: Compile platform-owned MCP runtime
         if: env.TEST_OWNS_PLATFORM == 'true' || needs.detect-changes.outputs.workspace-platform != 'true'
         run: cargo check -p wenlan-mcp --lib --bins
+      # Example compilation pulls wenlan-core/server dev-dependencies, so it
+      # needs the same native prerequisites. The workspace-platform steps
+      # above skip exactly when TEST_OWNS_PLATFORM is true or
+      # workspace-platform is false; cover only that complement here.
+      - name: Set up Windows prerequisites (MCP examples compile)
+        if: matrix.os == 'windows-2022' && (needs.detect-changes.outputs.workspace-platform != 'true' || env.TEST_OWNS_PLATFORM == 'true')
+        shell: pwsh
+        run: |
+          vcpkg install sqlite3:x64-windows-static-md
+          "LIB=$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib;$env:LIB" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+          & scripts/setup-vulkan-sdk-windows.test.ps1
+          & scripts/setup-vulkan-sdk-windows.ps1
+          & scripts/setup-msvc-ninja-windows.test.ps1
+          & scripts/setup-msvc-ninja-windows.ps1
+      # Unix-sensitive cfg branches also live in the MCP examples (e.g. the
+      # reviewer-library seeder). Compile them whenever this job runs; never
+      # execute the seeder here.
+      - name: Compile MCP examples (compile-only)
+        run: cargo check -p wenlan-mcp --examples
       # Dependency-graph changes can alter native target linkage. Link every
       # shipped binary in the dev profile here; release-profile proof remains
       # reserved for release-sensitive paths in release-preflight.

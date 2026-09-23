@@ -906,7 +906,7 @@ scheme, not a password-storage design for user-selected passwords.
 
 For a fresh dedicated synthetic device, the operator can instead prepare the
 binding offline from the unmodified successful `POST /devices` response using
-`scripts/prepare-sample-account.mjs`. No direct DO access or special HTTP endpoint
+`relay/scripts/prepare-sample-account.mjs`. No direct DO access or special HTTP endpoint
 is needed. This path pins generation zero and the management-credential hash;
 the normal login still checks both against the live authority. Preparation is
 not remote authentication, data classification, account activation or deployment.
@@ -948,7 +948,7 @@ The POSIX file-permission check intentionally fails closed on Windows; run this
 operator utility on the approved macOS/Linux host. This is not a restriction
 on Windows end-user pairing. Windows ACL-based preparation is unimplemented.
 
-For an approved synthetic reviewer host, `scripts/renew-sample-route.mjs`
+For an approved synthetic reviewer host, `relay/scripts/renew-sample-route.mjs`
 performs one authenticated route renewal. Supply the original connector JSON
 (`tunnelOrigin`, `backendToken`, `space`), original enrollment response and
 prepared account binding as owned mode600 regular files. The explicit relay
