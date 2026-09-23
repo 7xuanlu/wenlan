@@ -12,6 +12,7 @@ import { StrictMode, Suspense, lazy, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PageDetail from "../src/components/memory/PageDetail";
+import QuickCapture from "../src/components/QuickCapture";
 import EntityDetail from "../src/components/memory/EntityDetail";
 import DistillReviewPanel from "../src/components/memory/DistillReviewPanel";
 import { SetupWizard, STEP_ORDER, type WizardStep } from "../src/components/SetupWizard";
@@ -74,7 +75,7 @@ const client = new QueryClient({
   defaultOptions: { queries: { retry: false, staleTime: 0, gcTime: 0 } },
 });
 
-type Mode = "page" | "review" | "wizard" | "settings" | "atlas" | "entity" | "remote-access";
+type Mode = "page" | "review" | "wizard" | "settings" | "atlas" | "entity" | "remote-access" | "quick-capture";
 
 // Quick-select entities for the "entity" tab: gk-wenlan is the highest-degree
 // hub, gk-lucian shows a person node with mixed in/out edges, gk-remote-office
@@ -91,6 +92,7 @@ const ENTITY_VARIANTS = [
 // couldn't address one — which is the whole point of these modes existing.
 const params = new URLSearchParams(window.location.search);
 if (params.get("mode") === "remote-access") document.title = "Wenlan remote access preview";
+if (params.get("mode") === "quick-capture") document.title = "Wenlan Quick Capture preview";
 const param = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
   const value = params.get(key) as T | null;
   return value && allowed.includes(value) ? value : fallback;
@@ -110,7 +112,7 @@ const BAR_H = SHOW_BAR ? 41 : 0;
 
 function Harness() {
   const [mode, setMode] = useState<Mode>(
-    param("mode", ["page", "review", "wizard", "settings", "atlas", "entity", "remote-access"] as const, "review"),
+    param("mode", ["page", "review", "wizard", "settings", "atlas", "entity", "remote-access", "quick-capture"] as const, "review"),
   );
   const [pageId, setPageId] = useState(params.get("page") ?? "page-cited");
   const [entityId, setEntityId] = useState(params.get("entity") ?? "gk-wenlan");
@@ -290,6 +292,8 @@ function Harness() {
             />
           </div>
         </div>
+      ) : mode === "quick-capture" ? (
+        <QuickCapture isOpen standalone onClose={() => {}} />
       ) : mode === "remote-access" ? (
         <div style={{ maxWidth: 672, margin: "0 auto", padding: "24px 16px" }}>
           <RemoteAccessPanel currentSpace="Review workspace" />
