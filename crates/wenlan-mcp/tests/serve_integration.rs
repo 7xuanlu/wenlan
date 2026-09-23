@@ -455,8 +455,8 @@ async fn connector_info_is_authenticated_and_query_only() {
             .unwrap();
         assert_eq!(
             rejected_init.status(),
-            if profile == "query-only" { 400 } else { 422 },
-            "only the query-only binary path applies the pre-allocation guard"
+            400,
+            "every HTTP tool profile applies the pre-allocation initialization guard"
         );
         assert!(rejected_init.headers().get("mcp-session-id").is_none());
         let mut valid_init = invalid_init.clone();

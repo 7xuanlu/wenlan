@@ -4421,6 +4421,27 @@ fn macos_nextest_archive_contract_rejects_routing_and_execution_mutations() {
         std::fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("read ci.yml");
     let planner = std::fs::read_to_string(root.join("scripts/ci_test_plan.py"))
         .expect("read CI test planner");
+    // The same input can appear in several filters; mutate the owning filter,
+    // not the first textual occurrence elsewhere in the workflow.
+    let mut routing: serde_yaml::Value = serde_yaml::from_str(&workflow).unwrap();
+    let step = routing["jobs"]["detect-changes"]["steps"]
+        .as_sequence_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|step| step["id"].as_str() == Some("filter"))
+        .expect("detect-change filter step");
+    let mut filters: serde_yaml::Value =
+        serde_yaml::from_str(step["with"]["filters"].as_str().unwrap()).unwrap();
+    let paths = filters["macos-archive-contract"].as_sequence_mut().unwrap();
+    let previous_len = paths.len();
+    paths.retain(|path| path.as_str() != Some("scripts/ci_test_plan.test.py"));
+    assert_eq!(
+        paths.len() + 1,
+        previous_len,
+        "mutation must remove one owned input"
+    );
+    step["with"]["filters"] = serde_yaml::Value::String(serde_yaml::to_string(&filters).unwrap());
+    let routing_mutation = serde_yaml::to_string(&routing).unwrap();
     let mutations = [
         workflow.replace("slice:3/3", "slice:2/3"),
         workflow.replacen(
@@ -4443,11 +4464,7 @@ fn macos_nextest_archive_contract_rejects_routing_and_execution_mutations() {
             "needs.detect-changes.outputs.macos-archive-contract == 'true' ||",
             1,
         ),
-        workflow.replacen(
-            "              - 'scripts/ci_test_plan.test.py'\n",
-            "",
-            1,
-        ),
+        routing_mutation,
         workflow.replacen(
             "${{ (needs.detect-changes.outputs.workspace-platform == 'true' || needs.detect-changes.outputs.macos-archive-contract == 'true') && needs.detect-changes.outputs.test-plan || needs.detect-changes.outputs.platform-test-plan }}",
             "${{ needs.detect-changes.outputs.platform-test-plan }}",
@@ -4460,6 +4477,10 @@ fn macos_nextest_archive_contract_rejects_routing_and_execution_mutations() {
         ),
     ];
     for mutation in mutations {
+        assert_ne!(
+            mutation, workflow,
+            "workflow mutation must change its target"
+        );
         assert!(
             !macos_archive_contract_violations(&mutation, &planner).is_empty(),
             "macOS archive mutation unexpectedly passed"

@@ -935,6 +935,42 @@ describe("native source repair boundary", () => {
   });
 });
 
+describe("liveInvoke remote pairing/grants boundary (live daemon path)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it.each([
+    "configure_remote_access",
+    "inspect_remote_pairing",
+    "approve_remote_pairing",
+    "revoke_remote_grant",
+  ])("rejects %s explicitly without reaching a daemon or reporting success", async (command) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke(command, {})).rejects.toThrow(
+      "Remote access pairing and grants require the native Wenlan app.",
+    );
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports no relay profile (null), matching the off status", async () => {
+    const fetch = vi.fn(() => Promise.reject(new Error("profile read must stay local")));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("get_remote_access_profile")).resolves.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty grant page without contacting a relay", async () => {
+    const fetch = vi.fn(() => Promise.reject(new Error("grant read must stay local")));
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      liveInvoke("list_remote_grants", { expectedRevision: "r1", cursor: null }),
+    ).resolves.toEqual({ items: [], cursor: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 // DEBT: 78 commands with no harness stub as of 2026-07-13, predating this fix
 // and out of scope for it — spaces CRUD, entity/observation CRUD, snapshots,
 // agent management, obsidian export/import, avatar, remote-access token

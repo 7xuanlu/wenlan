@@ -1,17 +1,23 @@
 use super::*;
 
 #[tokio::test]
-async fn query_initialization_guard_rejects_before_sdk_session_allocation() {
+async fn initialization_guard_rejects_before_sdk_session_allocation() {
+    for profile in [ToolProfile::Standard, ToolProfile::QueryOnly] {
+        initialization_guard_case(profile).await;
+    }
+}
+
+async fn initialization_guard_case(profile: ToolProfile) {
     let manager = Arc::new(LocalSessionManager::default());
     let service = StreamableHttpService::new(
-        || {
+        move || {
             Ok(WenlanMcpServer::new(
                 WenlanClient::new("http://127.0.0.1:1".into()),
                 TransportMode::Http,
                 "synthetic-initialization-test".into(),
                 None,
             )
-            .with_tool_profile(ToolProfile::QueryOnly))
+            .with_tool_profile(profile))
         },
         manager.clone(),
         StreamableHttpServerConfig::default(),

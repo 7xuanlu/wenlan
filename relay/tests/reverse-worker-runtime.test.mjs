@@ -201,7 +201,8 @@ test('device connection capacity is isolated beyond the former global 64-slot li
   }
 });
 
-test('actual Worker reverse enrollment, OAuth routing, reconnect and revocation use no tunnel', { timeout: 75_000 }, async t => {
+// Includes the bounded 45-second frame flood plus the sequential lifecycle cases.
+test('actual Worker reverse enrollment, OAuth routing, reconnect and revocation use no tunnel', { timeout: 120_000 }, async t => {
   const bundled = await build({ entryPoints: [fileURLToPath(new URL('../src/worker.ts', import.meta.url))],
     bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022',
     external: ['cloudflare:workers'], loader: { '.png': 'binary' } });
@@ -389,14 +390,16 @@ test('actual Worker reverse enrollment, OAuth routing, reconnect and revocation 
       flooded.closed.then(() => { closed = true; });
       try {
         await deadline((async () => {
-          // Cover at most one fixed-minute rollover within the same four seconds.
+          // This is a frame-count bound, not the four-second cancellation SLA.
+          // Shared Linux runners need time to deliver 16k+ WebSocket events.
+          // Stay below one minute so 32,769 frames cover at most one rollover.
           while (!closed && sent < 32_769) {
             const end = Math.min(sent + 128, 32_769);
             for (; sent < end; sent++) flooded.socket.send(late);
             await delay(0);
           }
           await flooded.closed;
-        })(), 'frame budget close');
+        })(), 'frame budget close', 45_000);
       } finally {
         closed = true;
         try { flooded.socket.close(); } catch { /* Already closed. */ }

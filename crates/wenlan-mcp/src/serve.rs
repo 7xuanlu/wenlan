@@ -134,8 +134,10 @@ pub async fn run_serve_with_profile(
                 }
             }),
         );
-        router = router.layer(middleware::from_fn(validate_initialization));
     }
+    // Pre-allocation initialization guard for every HTTP tool profile.
+    // Auth remains outermost (applied later); health/GET/existing-session bypass inside.
+    router = router.layer(middleware::from_fn(validate_initialization));
     router = router.layer(cors);
 
     if let Some(ref expected_token) = token {
@@ -186,7 +188,9 @@ pub async fn run_serve_with_profile(
 
 // rmcp 1.5 can allocate a session before rejecting a non-initialize message,
 // without spawning the service task that normally removes that session.
-// Reuse its typed parser before allocation on the public query-only surface.
+// The pinned factory always returns Ok and this SDK lacks the later header
+// mismatch path, so reuse its typed parser before allocation on every HTTP
+// tool profile (GHSA-9pj6-vhgr-3mwh mitigation without an SDK migration).
 async fn validate_initialization(req: Request, next: Next) -> axum::response::Response {
     let is_mcp = req.uri().path() == "/mcp" || req.uri().path().starts_with("/mcp/");
     let has_session = req
