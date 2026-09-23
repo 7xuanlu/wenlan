@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 
 import * as windowChrome from "./windowChrome";
 import {
-  CSS_WINDOW_SHADOW_INSET,
   MACOS_TRAFFIC_LIGHT_INSET,
   NATIVE_TITLE_BAR_INSET,
-  cssWindowShadowInset,
   dragStripHeight,
   hostPlatform,
-  needsCssWindowShadow,
   topBarLeftInset,
 } from "./windowChrome";
 
@@ -80,10 +77,6 @@ describe("window chrome", () => {
     expect(dragStripHeight(MACOS_WKWEBVIEW)).toBe(32);
     expect(dragStripHeight(WINDOWS_WEBVIEW2)).toBe(0);
     expect(dragStripHeight(LINUX_WEBKITGTK)).toBe(0);
-
-    expect(needsCssWindowShadow(MACOS_WKWEBVIEW)).toBe(true);
-    expect(needsCssWindowShadow(WINDOWS_WEBVIEW2)).toBe(false);
-    expect(needsCssWindowShadow(LINUX_WEBKITGTK)).toBe(false);
   });
 
   // How the components actually call these: no argument, so the values come
@@ -92,21 +85,17 @@ describe("window chrome", () => {
     withNavigator({ userAgent: MACOS_WKWEBVIEW }, () => {
       expect(topBarLeftInset()).toBe(82);
       expect(dragStripHeight()).toBe(32);
-      expect(needsCssWindowShadow()).toBe(true);
     });
 
     withNavigator({ userAgent: WINDOWS_WEBVIEW2 }, () => {
       expect(topBarLeftInset()).toBe(20);
       expect(dragStripHeight()).toBe(0);
-      expect(needsCssWindowShadow()).toBe(false);
     });
   });
 
   // ---------------------------------------------------------------------
-  // The three unknown-platform DECISIONS. Each is pinned to a literal, so an
-  // edit that flips one fails here rather than shipping. They deliberately do
-  // not all take the same side; the last assertion in this block is what makes
-  // "three separate decisions" rather than "one shared boolean" testable.
+  // The two unknown-platform DECISIONS. Each is pinned to a literal, so an
+  // edit that flips one fails here rather than shipping.
   // ---------------------------------------------------------------------
 
   it("DECISION: an unmeasured platform gets the macOS top-bar inset, not the native one", () => {
@@ -142,37 +131,18 @@ describe("window chrome", () => {
     expect(dragStripHeight(UNRECOGNISED_UA)).toBe(dragStripHeight(MACOS_WKWEBVIEW));
   });
 
-  it("DECISION: an unmeasured platform paints no CSS window shadow", () => {
-    // The one question whose asymmetry runs the other way: both mistakes are
-    // cosmetic, so the tie goes to the one that cannot render as an artifact. A
-    // missing shadow looks plain; a shadow the compositor cannot blend is the
-    // flat grey band that was actually reported.
-    expect(needsCssWindowShadow(UNRECOGNISED_UA)).toBe(false);
-    expect(needsCssWindowShadow("")).toBe(false);
-    withNavigator(undefined, () => {
-      expect(needsCssWindowShadow()).toBe(false);
-    });
-
-    expect(cssWindowShadowInset(UNRECOGNISED_UA)).toBe(0);
-    expect(cssWindowShadowInset(MACOS_WKWEBVIEW)).toBe(CSS_WINDOW_SHADOW_INSET);
-    expect(cssWindowShadowInset(MACOS_WKWEBVIEW)).toBe(12);
-  });
-
-  it("makes the three decisions separately -- they do not all take the macOS side", () => {
-    // If a future edit reunifies these behind one boolean, whichever side that
-    // boolean picks, this fails: geometry sides with macOS and the shadow does
-    // not, so no single answer satisfies all three.
-    expect(topBarLeftInset(UNRECOGNISED_UA)).toBe(topBarLeftInset(MACOS_WKWEBVIEW));
-    expect(dragStripHeight(UNRECOGNISED_UA)).toBe(dragStripHeight(MACOS_WKWEBVIEW));
-    expect(needsCssWindowShadow(UNRECOGNISED_UA)).not.toBe(needsCssWindowShadow(MACOS_WKWEBVIEW));
-  });
-
-  // `isMacOS` was the shared boolean all three questions used to route through,
-  // and it collapsed `unknown` to `false` for every one of them without saying
-  // so. Removing it is the fix; this keeps it removed, because a re-added
-  // helper with that name is what a future caller would reach for.
+  // `isMacOS` was the shared boolean the geometry questions used to route
+  // through, and it collapsed `unknown` to `false` for every one of them
+  // without saying so. Removing it is the fix; this keeps it removed, because
+  // a re-added helper with that name is what a future caller would reach for.
+  // The QuickCapture-only shadow helpers (`needsCssWindowShadow`,
+  // `cssWindowShadowInset`, `CSS_WINDOW_SHADOW_INSET`) were removed with the
+  // shadow itself: the standalone window draws none on any platform.
   it("exports no boolean isMacOS for a caller to collapse unknown through", () => {
     expect(Object.keys(windowChrome)).not.toContain("isMacOS");
+    expect(Object.keys(windowChrome)).not.toContain("needsCssWindowShadow");
+    expect(Object.keys(windowChrome)).not.toContain("cssWindowShadowInset");
+    expect(Object.keys(windowChrome)).not.toContain("CSS_WINDOW_SHADOW_INSET");
     expect(Object.keys(windowChrome)).toContain("hostPlatform");
   });
 });
