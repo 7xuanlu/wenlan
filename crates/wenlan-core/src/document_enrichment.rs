@@ -2965,6 +2965,365 @@ mod tests {
         assert_eq!(queued.status, "done", "it will not improve on retry");
     }
 
+    /// Enrich one uniquely-named Markdown file through the real folder route
+    /// and return the outcome (document id, SOURCE page id, chunk ids).
+    async fn enrich_named_doc(db: &MemoryDB, dir: &Path, name: &str) -> DocumentEnrichmentOutcome {
+        let path = dir.join(name);
+        let mut body = String::new();
+        body.push_str("# Canonical Parsed Heading\n\n");
+        body.push_str("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..80 {
+            body.push_str(&format!(
+                "Paragraph {i} describes an aspect of the document ingestion pipeline in careful, \
+                 concrete detail so that the markdown chunker splits this note into multiple \
+                 sections rather than a single chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        std::fs::write(&path, &body).unwrap();
+        let file_path = path.to_string_lossy().to_string();
+        let content_hash = file_hash(&path);
+        db.enqueue_document("folder-notes", &file_path, Some(&content_hash))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim");
+        let responses = analysis_responses();
+        let llm = mock(&responses);
+        let outcome =
+            run_document_enrichment(db, &entry, None, Some(&llm), &PromptRegistry::default()).await;
+        assert!(outcome.completed, "map-fold ran to completion");
+        assert!(!outcome.page_id.is_empty(), "SOURCE page written");
+        outcome
+    }
+
+    async fn edge_spaces(db: &MemoryDB, page_id: &str) -> Vec<String> {
+        let conn = db.test_primary_session().await;
+        let mut rows = conn
+            .query(
+                "SELECT DISTINCT space FROM edges
+                 WHERE src_id = ?1 AND src_kind = 'page' AND edge_type = 'cites'
+                   AND valid_until IS NULL",
+                libsql::params![page_id],
+            )
+            .await
+            .unwrap();
+        let mut spaces = Vec::new();
+        while let Some(row) = rows.next().await.unwrap() {
+            spaces.push(row.get::<String>(0).unwrap());
+        }
+        spaces.sort();
+        spaces
+    }
+
+    #[tokio::test]
+    async fn folder_space_move_carries_source_page_and_scoped_reads_follow() {
+        let (db, dir) = test_db().await;
+        let outcome = enrich_named_doc(&db, dir.path(), "move.md").await;
+        let doc = outcome.doc_source_id.clone();
+        let page_id = outcome.page_id.clone();
+        let before = db.get_page(&page_id).await.unwrap().expect("source page");
+        assert_eq!(before.creation_kind, "source");
+        let n = outcome.chunk_ids.len();
+        assert!(n >= 3, "doc should chunk into >= 3 chunks, got {n}");
+
+        db.update_memory_space(&doc, "work").await.unwrap();
+
+        let work = ReadScope::Space("work".to_string());
+        let memory = db
+            .get_memory_detail_scoped(&doc, &work)
+            .await
+            .unwrap()
+            .expect("memory reads in the new scope");
+        assert_eq!(memory.space.as_deref(), Some("work"));
+        assert!(
+            db.get_memory_detail_scoped(&doc, &ReadScope::Uncategorized)
+                .await
+                .unwrap()
+                .is_none(),
+            "old scope must no longer read the memory"
+        );
+
+        let moved = db
+            .get_page_scoped(&page_id, &work)
+            .await
+            .unwrap()
+            .expect("page reads in the new scope");
+        assert_eq!(moved.space.as_deref(), Some("work"));
+        assert_eq!(moved.content, before.content, "content preserved");
+        assert_eq!(
+            format!("{:?}", moved.citations),
+            format!("{:?}", before.citations),
+            "citations preserved"
+        );
+        assert_eq!(
+            moved.source_memory_ids, before.source_memory_ids,
+            "provenance preserved"
+        );
+        assert_eq!(moved.version, before.version + 1);
+        assert!(
+            db.get_page_scoped(&page_id, &ReadScope::Uncategorized)
+                .await
+                .unwrap()
+                .is_none(),
+            "old scope must no longer read the page"
+        );
+
+        let sources = db.get_page_sources_scoped(&page_id, &work).await.unwrap();
+        assert_eq!(sources.len(), n, "new scope reads every chunk source");
+        assert!(
+            db.get_page_sources_scoped(&page_id, &ReadScope::Uncategorized)
+                .await
+                .is_err(),
+            "old scope must not read the page sources"
+        );
+        assert_eq!(edge_spaces(&db, &page_id).await, vec!["work".to_string()]);
+
+        // Named-to-named: work -> personal.
+        db.update_memory_space(&doc, "personal").await.unwrap();
+        let personal = ReadScope::Space("personal".to_string());
+        assert!(
+            db.get_page_scoped(&page_id, &personal)
+                .await
+                .unwrap()
+                .is_some(),
+            "page follows a named-to-named move"
+        );
+        assert!(
+            db.get_page_scoped(&page_id, &work).await.unwrap().is_none(),
+            "prior named scope denied after named-to-named move"
+        );
+
+        // Explicit clear returns the page to unfiled.
+        db.update_memory_space_opt(&doc, None).await.unwrap();
+        let unfiled_page = db
+            .get_page_scoped(&page_id, &ReadScope::Uncategorized)
+            .await
+            .unwrap()
+            .expect("explicit clear returns the page to unfiled");
+        assert_eq!(unfiled_page.space, None);
+        assert!(
+            db.get_memory_detail_scoped(&doc, &ReadScope::Uncategorized)
+                .await
+                .unwrap()
+                .is_some(),
+            "explicit clear returns the memory to unfiled"
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_space_move_skips_edited_multisource_and_okf_pages() {
+        let (db, dir) = test_db().await;
+        let multi = enrich_named_doc(&db, dir.path(), "multi.md").await;
+        let edited = enrich_named_doc(&db, dir.path(), "edited.md").await;
+        let okf = enrich_named_doc(&db, dir.path(), "okf.md").await;
+        let control = enrich_named_doc(&db, dir.path(), "control.md").await;
+
+        // Multi-source: page cites a foreign chunk alongside its own.
+        let page = db.get_page(&multi.page_id).await.unwrap().unwrap();
+        let mut refs = page.source_memory_ids.clone();
+        refs.push(edited.chunk_ids[0].clone());
+        let refs_json = serde_json::to_string(&refs).unwrap();
+        // Edited: human-owned pages never move.
+        // OKF: concept-backed pages never move.
+        let conn = db.test_primary_session().await;
+        conn.execute(
+            "UPDATE pages SET source_memory_ids = ?1 WHERE id = ?2",
+            libsql::params![refs_json.as_str(), multi.page_id.as_str()],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "UPDATE pages SET user_edited = 1 WHERE id = ?1",
+            libsql::params![edited.page_id.as_str()],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO okf_concepts
+                 (page_id, source_id, concept_id, concept_key, frontmatter_json, updated_at)
+             VALUES (?1, 'folder-notes', 'concept-1', 'key-1', '{}', 1)",
+            libsql::params![okf.page_id.as_str()],
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        for doc in [
+            &multi.doc_source_id,
+            &edited.doc_source_id,
+            &okf.doc_source_id,
+            &control.doc_source_id,
+        ] {
+            db.update_memory_space(doc, "work").await.unwrap();
+        }
+
+        let work = ReadScope::Space("work".to_string());
+        for (label, page_id) in [
+            ("multi-source", &multi.page_id),
+            ("edited", &edited.page_id),
+            ("okf", &okf.page_id),
+        ] {
+            assert!(
+                db.get_page_scoped(page_id, &work).await.unwrap().is_none(),
+                "{label} page must stay out of the new scope"
+            );
+            assert!(
+                db.get_page_scoped(page_id, &ReadScope::Uncategorized)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "{label} page must stay unfiled"
+            );
+        }
+        assert!(
+            db.get_page_scoped(&control.page_id, &work)
+                .await
+                .unwrap()
+                .is_some(),
+            "eligible control page must move"
+        );
+    }
+
+    #[tokio::test]
+    async fn folder_space_move_skips_ambiguous_chunk_reference() {
+        let (db, dir) = test_db().await;
+        let outcome = enrich_named_doc(&db, dir.path(), "ambiguous.md").await;
+        db.upsert_documents(vec![crate::sources::RawDocument {
+            source: "memory".to_string(),
+            source_id: outcome.chunk_ids[0].clone(),
+            title: "Unrelated document".to_string(),
+            content: "A different document uses the first document's chunk id as its source id."
+                .to_string(),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+
+        db.update_memory_space(&outcome.doc_source_id, "work")
+            .await
+            .unwrap();
+        assert!(db
+            .get_page_scoped(&outcome.page_id, &ReadScope::Space("work".to_string()))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(db
+            .get_page_scoped(&outcome.page_id, &ReadScope::Uncategorized)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn folder_space_move_rolls_back_when_page_write_fails() {
+        let (db, dir) = test_db().await;
+        let outcome = enrich_named_doc(&db, dir.path(), "rollback.md").await;
+        let before_space = db.get_memory_space(&outcome.doc_source_id).await.unwrap();
+        let before_page = db.get_page(&outcome.page_id).await.unwrap().unwrap();
+
+        let conn = db.test_primary_session().await;
+        conn.execute(
+            &format!(
+                "CREATE TRIGGER fail_source_page_move BEFORE UPDATE OF space ON pages \
+                 WHEN NEW.id = '{}' \
+                 BEGIN SELECT RAISE(ABORT, 'forced page move failure'); END",
+                outcome.page_id
+            ),
+            (),
+        )
+        .await
+        .unwrap();
+        drop(conn);
+
+        let result = db.update_memory_space(&outcome.doc_source_id, "work").await;
+        assert!(result.is_err(), "page failure must fail the memory move");
+
+        assert_eq!(
+            db.get_memory_space(&outcome.doc_source_id).await.unwrap(),
+            before_space,
+            "memory move must roll back with the page move"
+        );
+        let after_page = db.get_page(&outcome.page_id).await.unwrap().unwrap();
+        assert_eq!(
+            after_page.space, before_page.space,
+            "page scope must roll back with the memory move"
+        );
+
+        let conn = db.test_primary_session().await;
+        conn.execute("DROP TRIGGER fail_source_page_move", ())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn folder_reimport_preserves_reassigned_page_space() {
+        let (db, dir) = test_db().await;
+        let path = dir.path().join("reimport.md");
+        let mut body = String::new();
+        body.push_str("# Canonical Parsed Heading\n\n");
+        body.push_str("Wenlanborg is the code name for the folder ingestion subsystem.\n\n");
+        for i in 0..80 {
+            body.push_str(&format!(
+                "Paragraph {i} describes an aspect of the document ingestion pipeline in careful, \
+                 concrete detail so that the markdown chunker splits this note into multiple \
+                 sections rather than a single chunk. It keeps going for a while.\n\n"
+            ));
+        }
+        std::fs::write(&path, &body).unwrap();
+        let file_path = path.to_string_lossy().to_string();
+        db.enqueue_document("folder-notes", &file_path, Some(&file_hash(&path)))
+            .await
+            .unwrap();
+        let entry = db.claim_next_pending().await.unwrap().expect("claim v1");
+        let v1_responses = analysis_responses();
+        let first = run_document_enrichment(
+            &db,
+            &entry,
+            None,
+            Some(&mock(&v1_responses)),
+            &PromptRegistry::default(),
+        )
+        .await;
+        assert!(first.completed);
+
+        db.update_memory_space(&first.doc_source_id, "work")
+            .await
+            .unwrap();
+
+        std::fs::write(
+            &path,
+            "The third semantic generation replaces the folder document body. ".repeat(80),
+        )
+        .unwrap();
+        let replacement_hash = file_hash(&path);
+        db.enqueue_document("folder-notes", &file_path, Some(&replacement_hash))
+            .await
+            .unwrap();
+        let replacement_entry = db.claim_next_pending().await.unwrap().expect("claim v2");
+        let v2_responses: Vec<String> = (0..128)
+            .map(|i| format!("REIMPORT_ANALYSIS_{i:03}"))
+            .collect();
+        let llm_v2 = mock(&v2_responses);
+        run_document_enrichment(
+            &db,
+            &replacement_entry,
+            None,
+            Some(&llm_v2),
+            &PromptRegistry::default(),
+        )
+        .await;
+
+        let page = db.get_page(&first.page_id).await.unwrap().expect("page");
+        assert_eq!(
+            page.space.as_deref(),
+            Some("work"),
+            "reimport must preserve the reassigned page space"
+        );
+        assert!(
+            page.content.contains("REIMPORT_ANALYSIS_000"),
+            "reimport must still refresh the page body"
+        );
+    }
+
     /// Count active `creation_kind='source'` pages.
     async fn count_source_pages(db: &MemoryDB) -> i64 {
         let conn = db.test_primary_session().await;

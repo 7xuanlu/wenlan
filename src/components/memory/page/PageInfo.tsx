@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import type {
+  MemoryItem,
   PageChangelogEntry,
   PageCitation,
   PageLinkInbound,
   PageSourceWithMemory,
 } from "../../../lib/tauri";
 import type { CitationState } from "../../../lib/pageCitations";
-import { prettyAgent, relativeMs, sourceKindLabel } from "./format";
+import { prettyAgent, relativeMs } from "./format";
 
 interface PageInfoProps {
   sourceCount: number;
@@ -45,9 +47,9 @@ const groupHeading = {
   color: "var(--mem-text-tertiary)",
 } as const;
 
-function plural(n: number, word: string): string {
-  return `${n} ${word}${n === 1 ? "" : "s"}`;
-}
+// Known memory_type values get a localized label; anything else is data and
+// passes through untouched.
+const KNOWN_SOURCE_KINDS = new Set(["memory", "chat", "file", "obsidian", "web"]);
 
 /** Cited rows first (by first occurrence), then uncited by recency. */
 function sortSourceRows(
@@ -80,6 +82,10 @@ export default function PageInfo({
   onMemoryClick,
   onPageClick,
 }: PageInfoProps) {
+  const { t, i18n } = useTranslation();
+  // English keeps the legacy abbreviated relatives ("1d ago"); Chinese gets
+  // a real locale so "1d ago" does not leak into the zh UI.
+  const relativeLocale = i18n.language?.startsWith("zh") ? i18n.language : undefined;
   const rows = sortSourceRows(
     (sources ?? []).filter((s) => s.memory !== null),
     citations,
@@ -98,18 +104,35 @@ export default function PageInfo({
   const unverifiedCount = (citations ?? []).filter(
     (c) => c.status === "unverified",
   ).length;
+  const sourceKindLabels: Record<string, string> = {
+    memory: t("pageInfo.sourceKind.memory"),
+    chat: t("pageInfo.sourceKind.chat"),
+    file: t("pageInfo.sourceKind.file"),
+    obsidian: t("pageInfo.sourceKind.obsidian"),
+    web: t("pageInfo.sourceKind.web"),
+  };
+  const sourceKindLabel = (mem: MemoryItem): string => {
+    const key = mem.memory_type?.toLowerCase() ?? "";
+    if (!key) return sourceKindLabels.memory;
+    return KNOWN_SOURCE_KINDS.has(key) ? sourceKindLabels[key] : mem.memory_type!;
+  };
+  const agentLabel = (name: string | null | undefined): string =>
+    name ? prettyAgent(name) : t("pageInfo.unknownAgent");
   const diagnosability =
     citationState === "cited"
-      ? `Citations: ${(citations ?? []).length} (${unverifiedCount} unverified)`
+      ? t("pageInfo.citationsLine", {
+          total: (citations ?? []).length,
+          unverified: unverifiedCount,
+        })
       : citationState === "stripped-empty"
-        ? "Citations cleared by edit — re-distill to restore"
+        ? t("pageInfo.citationsStrippedEmpty")
         : citationState === "stripped-mismatch"
-          ? "Citation data mismatched — re-distill to repair"
+          ? t("pageInfo.citationsStrippedMismatch")
           : null;
 
   return (
     <details
-      aria-label="Page info"
+      aria-label={t("pageInfo.label")}
       className="rounded-lg"
       style={{ border: "1px solid var(--mem-border)" }}
     >
@@ -124,17 +147,18 @@ export default function PageInfo({
           color: "var(--mem-text-tertiary)",
         }}
       >
-        <span>Page info</span>
+        <span>{t("pageInfo.label")}</span>
         <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-          {plural(inbound.length, "backlink")} · {plural(revisions.length, "revision")}{" "}
-          · {plural(sourceCount, "source")}
+          {t("pageInfo.backlinks", { count: inbound.length })} ·{" "}
+          {t("pageInfo.revisions", { count: revisions.length })} ·{" "}
+          {t("pageInfo.sources", { count: sourceCount })}
         </span>
       </summary>
       <div className="flex flex-col gap-4 px-4 pb-4">
         {inbound.length > 0 && (
           <div>
             <h4 className="mb-1" style={groupHeading}>
-              Backlinks
+              {t("pageInfo.backlinks")}
             </h4>
             <div className="flex flex-wrap gap-1.5">
               {inbound.map((link, idx) => (
@@ -160,7 +184,7 @@ export default function PageInfo({
         {revisions.length > 0 && (
           <div>
             <h4 className="mb-1" style={groupHeading}>
-              Revisions
+              {t("pageInfo.revisions")}
             </h4>
             <div className="flex flex-col gap-1.5">
               {visibleRevisions.map((entry) => {
@@ -201,7 +225,7 @@ export default function PageInfo({
                           color: "var(--mem-text-tertiary)",
                         }}
                       >
-                        {relativeMs(entry.at * 1000)}
+                        {relativeMs(entry.at * 1000, relativeLocale)}
                       </span>
                       {incomingCount > 0 && (
                         <span
@@ -211,8 +235,7 @@ export default function PageInfo({
                             color: "var(--mem-text-tertiary)",
                           }}
                         >
-                          {incomingCount} incoming{" "}
-                          {incomingCount === 1 ? "memory" : "memories"}
+                          {t("pageInfo.incoming", { count: incomingCount })}
                         </span>
                       )}
                       {entry.citations_summary && (
@@ -251,7 +274,7 @@ export default function PageInfo({
                   style={showAllStyle}
                   onClick={() => setShowAllRevisions(true)}
                 >
-                  Show all {revisions.length} revisions
+                  {t("pageInfo.showAllRevisions", { count: revisions.length })}
                 </button>
               )}
             </div>
@@ -260,7 +283,7 @@ export default function PageInfo({
         {rows.length > 0 && (
           <div>
             <h4 className="mb-1" style={groupHeading}>
-              Sources
+              {t("pageInfo.sources")}
             </h4>
             <ul>
               {visibleRows.map((row, idx) => {
@@ -317,7 +340,7 @@ export default function PageInfo({
                             color: "var(--mem-text-tertiary)",
                           }}
                         >
-                          {relativeMs(mem.last_modified * 1000)}
+                          {relativeMs(mem.last_modified * 1000, relativeLocale)}
                         </span>
                       )}
                       <span
@@ -327,7 +350,7 @@ export default function PageInfo({
                           color: "var(--mem-text-secondary)",
                         }}
                       >
-                        {prettyAgent(mem.source_agent)}
+                        {agentLabel(mem.source_agent)}
                       </span>
                       <span
                         style={{
@@ -357,7 +380,7 @@ export default function PageInfo({
                             color: "var(--mem-accent-amber)",
                           }}
                         >
-                          unverified
+                          {t("citation.unverified")}
                         </span>
                       )}
                     </div>
@@ -371,7 +394,7 @@ export default function PageInfo({
                 style={showAllStyle}
                 onClick={() => setShowAllSources(true)}
               >
-                Show all {rows.length} sources
+                {t("pageInfo.showAllSources", { count: rows.length })}
               </button>
             )}
           </div>

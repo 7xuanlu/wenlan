@@ -32,6 +32,8 @@ pub mod plugin_install;
 mod presence;
 mod quick_capture;
 pub mod remote_access;
+mod remote_access_platform;
+pub mod remote_relay;
 mod repair;
 mod search;
 pub mod sources;
@@ -550,6 +552,9 @@ fn force_full_quit(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         if let Err(e) = crate::lifecycle::quit_origin(&app).await {
             log::error!("[app] forced quit failed: {e}");
+            if let Err(error) = crate::remote_access::shutdown_for_exit(&app).await {
+                log::error!("[app] forced remote access cleanup did not finish: {error}");
+            }
             crate::lifecycle::exit_after_quit(&app, 1);
         }
     });
@@ -688,6 +693,7 @@ pub fn run() {
     };
 
     tracing_subscriber::registry()
+        .with(remote_relay::reverse_socket::transport_log_filter())
         .with(
             tracing_subscriber::fmt::layer()
                 .with_target(true)
@@ -1305,9 +1311,9 @@ pub fn run() {
             }
 
             // SIGTERM (`kill`, logout, a supervisor) ends the process without any
-            // Tauri exit event, which orphaned the sidecar. Stop the sidecar we
-            // spawned and exit; nothing else: LaunchAgents and a launchd-owned
-            // daemon are not ours to remove on a signal.
+            // Tauri exit event, so stop the app-owned remote transport and sidecar
+            // explicitly. LaunchAgents and a launchd-owned daemon are not ours to
+            // remove on a signal.
             #[cfg(unix)]
             {
                 let handle = app.handle().clone();
@@ -1329,14 +1335,23 @@ pub fn run() {
                                 std::process::exit(1);
                             });
                             // Three-way, not fire-and-forget: a SIGTERM'd app
-                            // that leaves its daemon behind is the shape the
-                            // next launch meets as a held port, and the only
-                            // place that fact can still be written down is
+                            // that leaves its daemon or remote MCP behind is the
+                            // shape the next launch meets as a held port, and the
+                            // only place that fact can still be written down is
                             // this log line.
                             use crate::daemon_start::SidecarStopOutcome;
                             match tokio::time::timeout(
                                 SIGTERM_STOP_LIMIT,
-                                crate::daemon_start::stop_sidecar(),
+                                async {
+                                    if let Err(error) =
+                                        crate::remote_access::shutdown_for_exit(&handle).await
+                                    {
+                                        log::error!(
+                                            "[app] remote access cleanup did not finish: {error}"
+                                        );
+                                    }
+                                    crate::daemon_start::stop_sidecar().await
+                                },
                             )
                             .await
                             {
@@ -1362,6 +1377,10 @@ pub fn run() {
                     }
                 });
             }
+
+            let remote_prepare = tauri::async_runtime::spawn(
+                crate::remote_access::prepare_startup(handle.clone()),
+            );
 
             // Wait for daemon health, then initialize local state + file watcher
             if !daemon_startup_preflight_ok {
@@ -1430,16 +1449,13 @@ pub fn run() {
                     }
                 }
 
-                let daemon_config = match client.get_config().await {
-                    Ok(config) => Some(config),
-                    Err(e) => {
-                        log::warn!(
-                            "[init] Daemon config unavailable after health check, falling back to app-local bootstrap config: {}",
-                            e
-                        );
-                        None
-                    }
-                };
+                // Resume only the startup snapshot after daemon health. Pending
+                // disconnect cleanup already runs independently of this task.
+                if let Ok(Some(ticket)) = remote_prepare.await {
+                    tauri::async_runtime::spawn(
+                        crate::remote_access::resume_startup(remote_handle, ticket),
+                    );
+                }
 
                 // Initialize local state (activities, config, file sources)
                 let paths = {
@@ -1480,16 +1496,6 @@ pub fn run() {
                     log::error!("Startup sync failed: {}", e);
                 }
 
-                let remote_access_enabled = daemon_config
-                    .as_ref()
-                    .map(|config| config.remote_access_enabled)
-                    .unwrap_or_else(|| config::load_config().remote_access_enabled);
-                if remote_access_enabled {
-                    tauri::async_runtime::spawn(async move {
-                        log::info!("[remote-access] Auto-starting tunnel (config enabled)");
-                        crate::remote_access::toggle_on(remote_handle, false).await;
-                    });
-                }
                 });
             }
 
@@ -1645,6 +1651,12 @@ pub fn run() {
             search::wire_state,
             // Remote access commands
             search::toggle_remote_access,
+            search::get_remote_access_profile,
+            search::configure_remote_access,
+            search::inspect_remote_pairing,
+            search::approve_remote_pairing,
+            search::list_remote_grants,
+            search::revoke_remote_grant,
             search::get_remote_access_status,
             search::test_remote_mcp_connection,
             // Memory nurture commands
@@ -1756,7 +1768,11 @@ pub fn run() {
             } if !lifecycle::is_quitting() => {
                 match request_full_quit(app) {
                     Ok(()) => api.prevent_exit(),
-                    Err(e) => log::error!("[app] failed to request guarded quit: {e}"),
+                    Err(e) => {
+                        log::error!("[app] failed to request guarded quit: {e}");
+                        api.prevent_exit();
+                        force_full_quit(app.clone());
+                    }
                 }
             }
             tauri::RunEvent::WindowEvent {

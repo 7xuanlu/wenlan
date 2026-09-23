@@ -150,19 +150,30 @@ describe("runtime product identity", () => {
     expect(lib).not.toContain('"quit" => {\n                            let h = handle_for_menu.clone();\n                            tauri::async_runtime::spawn');
   });
 
+  it("keeps native exit cleanup when frontend quit delivery fails", () => {
+    const lib = readFileSync(resolve(root, "app/src/lib.rs"), "utf8");
+    const branch = lib.slice(
+      lib.indexOf("tauri::RunEvent::ExitRequested"),
+      lib.indexOf("tauri::RunEvent::WindowEvent", lib.indexOf("tauri::RunEvent::ExitRequested")),
+    );
+    const errorBranch = branch.slice(branch.indexOf("Err(e) =>"));
+    expect(errorBranch).toContain("api.prevent_exit();");
+    expect(errorBranch).toContain("force_full_quit(app.clone());");
+    expect(errorBranch.indexOf("api.prevent_exit();")).toBeLessThan(
+      errorBranch.indexOf("force_full_quit(app.clone());"),
+    );
+  });
+
   it("prepares sidecar binaries before Tauri validates external bins", () => {
     const tauri = JSON.parse(
       readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"),
     );
 
-    expect(tauri.bundle.externalBin).toEqual(
-      expect.arrayContaining([
-        "binaries/wenlan",
-        "binaries/wenlan-server",
-        "binaries/wenlan-mcp",
-        "binaries/cloudflared",
-      ]),
-    );
+    expect(tauri.bundle.externalBin).toEqual([
+      "binaries/wenlan",
+      "binaries/wenlan-server",
+      "binaries/wenlan-mcp",
+    ]);
     expect(tauri.build.beforeDevCommand).toContain("prepare:sidecars");
     expect(tauri.build.beforeBuildCommand).toContain("prepare:sidecars:tauri-build");
   });

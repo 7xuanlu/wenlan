@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-use regex::Regex;
+use crate::remote_relay::{
+    reverse_runtime::{self, ActiveReverse},
+    runtime as relay_runtime,
+    runtime::RenewalError,
+    store::Profile,
+    RelayError, RELAY_ORIGIN,
+};
 use serde::{Deserialize, Serialize};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 use tokio::time::{sleep, timeout, Duration};
@@ -26,171 +31,6 @@ fn port_range_start() -> u16 {
     PORT_RANGE_START
 }
 
-/// Relay URL for stable MCP endpoint.
-// Intentionally still the legacy Origin relay. Do not rename this constant
-// until a Wenlan relay endpoint exists and existing relay IDs have a migration
-// strategy.
-const RELAY_URL: &str = "https://origin-relay.originmemory.workers.dev";
-
-/// Timeouts for the relay registration POST. Same reasoning as
-/// `app/src/api.rs`'s `build_http_client`: reqwest's default client has no
-/// timeouts at all, and a black-holing relay host (captive-portal wifi, a
-/// Worker outage, a corporate proxy) would otherwise leave Remote Access on
-/// "Starting" until the user toggles it off. The total is short because
-/// registration is optional — the tunnel URL works without it.
-const RELAY_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const RELAY_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// Random bytes behind a relay ID. The ID is the whole of the protection on a
-/// public MCP endpoint: it is the path segment of the URL handed to Claude.ai
-/// and ChatGPT, and it is also what `register_with_relay` posts as `secret`.
-/// Anyone who can produce it can read and write the user's memory, so it has
-/// to be unguessable on its own. 16 bytes is 128 bits.
-const RELAY_ID_BYTES: usize = 16;
-
-/// The shape a relay ID has today: `u` then `RELAY_ID_BYTES` of lowercase hex.
-fn relay_id_is_current(id: &str) -> bool {
-    id.len() == 1 + RELAY_ID_BYTES * 2
-        && id.starts_with('u')
-        && id[1..]
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
-/// A relay ID from a CSPRNG.
-fn new_relay_id() -> Result<String, String> {
-    let mut buf = [0_u8; RELAY_ID_BYTES];
-    getrandom::getrandom(&mut buf)
-        .map_err(|e| format!("CSPRNG unavailable for the relay ID: {e}"))?;
-    let mut id = String::with_capacity(1 + RELAY_ID_BYTES * 2);
-    id.push('u');
-    for byte in buf {
-        id.push_str(&format!("{byte:02x}"));
-    }
-    Ok(id)
-}
-
-/// Get or create a persistent relay user ID.
-/// Stored in ~/.config/wenlan-mcp/relay_id
-///
-/// An ID that is not the current shape is replaced rather than reused. Before
-/// this, the ID was `u` plus 11 hex characters of a `DefaultHasher` over the
-/// wall clock and the process ID — a hash with fixed keys over two guessable
-/// inputs, truncated to 44 bits. Keeping such an ID would leave the endpoint
-/// it protects as reachable as it was. The cost is that Remote Access hands
-/// out a new URL once on those installs, so a saved connector has to be
-/// re-added; the feature is off by default and marked experimental.
-fn get_or_create_relay_id() -> Result<String, String> {
-    let path = relay_id_path();
-
-    match std::fs::read_to_string(&path) {
-        Ok(id) => {
-            let id = id.trim().to_string();
-            if relay_id_is_current(&id) {
-                if let Some(parent) = path.parent() {
-                    restrict_private_dir(parent, "relay_id")?;
-                }
-                restrict_private_file(&path, "relay_id")?;
-                return Ok(id);
-            }
-            if !id.is_empty() {
-                log::warn!(
-                    "[remote-access] replacing a relay ID that predates the CSPRNG; \
-                     Remote Access will hand out a new URL"
-                );
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => {
-            return Err(format!(
-                "Failed to read relay ID at {}: {}",
-                path.display(),
-                e
-            ));
-        }
-    }
-
-    let id = new_relay_id()?;
-    write_private_file(&path, id.as_bytes(), "relay_id")?;
-    Ok(id)
-}
-
-/// The stable MCP endpoint the relay serves for one relay ID.
-fn relay_mcp_url_for(relay_id: &str) -> String {
-    format!("{RELAY_URL}/{relay_id}/mcp")
-}
-
-/// What `register_with_relay` writes to the log when the relay accepts a
-/// registration.
-///
-/// It deliberately names no URL and no identifier. The ID in that URL's path is
-/// the same value the request posts as `secret`, so the URL is a credential:
-/// anyone holding it can read and write the whole memory store until Remote
-/// Access is turned off. The desktop log is a single file that is never rotated
-/// or trimmed (`tracing_appender::rolling::never` in `lib.rs`), and users attach
-/// it to bug reports, so a URL written here leaves the machine with the report.
-/// Someone who needs the real URL reads it from Settings, where the app shows
-/// it, or from `~/.config/wenlan-mcp/relay_id`.
-fn relay_registration_log_line() -> &'static str {
-    "[remote-access] Registered with relay"
-}
-
-/// Register the current tunnel URL with the relay for a stable MCP endpoint.
-async fn register_with_relay(tunnel_url: &str) -> Option<String> {
-    let relay_id = match get_or_create_relay_id() {
-        Ok(id) => id,
-        Err(e) => {
-            log::warn!("[remote-access] Relay ID unavailable: {}", e);
-            return None;
-        }
-    };
-    let body = serde_json::json!({
-        "user_id": &relay_id,
-        "tunnel_url": tunnel_url,
-        "secret": &relay_id, // simple shared secret
-    });
-
-    let client = match reqwest::Client::builder()
-        .connect_timeout(RELAY_CONNECT_TIMEOUT)
-        .timeout(RELAY_REQUEST_TIMEOUT)
-        .build()
-    {
-        Ok(client) => client,
-        Err(e) => {
-            log::warn!("[remote-access] Relay HTTP client build failed: {}", e);
-            return None;
-        }
-    };
-
-    match client
-        .post(format!("{}/register", RELAY_URL))
-        .json(&body)
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            let relay_mcp_url = relay_mcp_url_for(&relay_id);
-            log::warn!("{}", relay_registration_log_line());
-            Some(relay_mcp_url)
-        }
-        Ok(resp) => {
-            log::warn!(
-                "[remote-access] Relay registration failed: {}",
-                resp.status()
-            );
-            None
-        }
-        Err(e) => {
-            log::warn!("[remote-access] Relay registration error: {}", e);
-            None
-        }
-    }
-}
-
-/// Regex to extract cloudflared tunnel URL from stderr output.
-static TUNNEL_URL_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"https://[a-z0-9-]+\.trycloudflare\.com").unwrap());
-
 #[derive(Debug, Clone, Deserialize, Eq, PartialEq, Serialize)]
 struct CloudflaredOwner {
     pid: u32,
@@ -209,14 +49,15 @@ fn cloudflared_owner_authorizes_signal(
         && live_identity == Some(owner.identity.as_str())
 }
 
-/// Status of the remote access tunnel.
+/// Status of the authenticated remote connection.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum RemoteAccessStatus {
     Off,
     Starting,
     Connected {
-        tunnel_url: String,
+        /// Legacy wire field; reverse transport has no public tunnel URL.
+        tunnel_url: Option<String>,
         /// Stable relay URL (if relay registration succeeded).
         relay_url: Option<String>,
     },
@@ -233,11 +74,14 @@ fn try_begin_start(
     status: &mut RemoteAccessStatus,
     generation: &mut u64,
     expected_generation: Option<u64>,
+    shutdown_pending: bool,
 ) -> Option<u64> {
-    if matches!(
-        status,
-        RemoteAccessStatus::Starting | RemoteAccessStatus::Connected { .. }
-    ) {
+    if shutdown_pending
+        || matches!(
+            status,
+            RemoteAccessStatus::Starting | RemoteAccessStatus::Connected { .. }
+        )
+    {
         return None;
     }
     if let Some(expected) = expected_generation {
@@ -262,8 +106,8 @@ async fn remote_generation_is_current(
     expected_generation: u64,
 ) -> bool {
     let state = app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-    let app_state = state.read().await;
-    let ra = app_state.remote_access.lock().await;
+    let app_state = { state.read().await.remote_access.clone() };
+    let ra = app_state.lock().await;
     generation_is_current(ra.generation, expected_generation)
 }
 
@@ -273,17 +117,16 @@ async fn wait_for_generation_change(app_handle: &tauri::AppHandle, expected_gene
     }
 }
 
-/// Runtime state for remote access — holds process handles and port.
+/// Runtime state owns the local MCP process and outbound relay connection.
 pub struct RemoteAccessState {
     pub status: RemoteAccessStatus,
     pub mcp_child: Option<tauri_plugin_shell::process::CommandChild>,
-    pub tunnel_child: Option<tauri_plugin_shell::process::CommandChild>,
+    reverse: Option<ActiveReverse>,
     pub port: Option<u16>,
+    pending_stops: Vec<crate::remote_relay::shutdown::PendingProcess>,
+    orphan_cleanup_failed: bool,
     /// Invalidates stale start/reconnect tasks when the user turns access off.
     pub generation: u64,
-    /// When Cloudflare returned 429 for our most recent tunnel creation.
-    /// Used by `tunnel_health_loop` to enforce a cooldown before burning another quick tunnel.
-    pub last_rate_limit_at: Option<std::time::Instant>,
 }
 
 impl Default for RemoteAccessState {
@@ -291,69 +134,326 @@ impl Default for RemoteAccessState {
         Self {
             status: RemoteAccessStatus::Off,
             mcp_child: None,
-            tunnel_child: None,
+            reverse: None,
             port: None,
+            pending_stops: Vec::new(),
+            orphan_cleanup_failed: false,
             generation: 0,
-            last_rate_limit_at: None,
         }
     }
 }
 
-/// Cooldown after a Cloudflare 429 before we'll try creating another quick tunnel.
-const RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(15 * 60);
+async fn remote_access_mutex<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> std::sync::Arc<tokio::sync::Mutex<RemoteAccessState>> {
+    let state = app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
+    // Do not hold the AppState RwLock while waiting for the controller mutex.
+    let remote = state.read().await.remote_access.clone();
+    remote
+}
+
+fn spawn_and_store_child<T, P>(
+    validation: Result<(), String>,
+    slot: &mut Option<T>,
+    port_slot: &mut Option<u16>,
+    port: u16,
+    spawn: impl FnOnce() -> Result<(P, T), String>,
+    post_spawn: impl FnOnce(&T) -> Result<(), String>,
+) -> Result<P, String> {
+    validation?;
+    if slot.is_some() {
+        return Err("Remote access child slot is already occupied.".into());
+    }
+    // The slot check and spawn call are synchronous. There is no child to
+    // drop if validation rejects the request or spawning fails.
+    let (payload, child) = spawn()?;
+    *slot = Some(child);
+    *port_slot = Some(port);
+    // Deliberately do not roll back on failure: the caller must coordinate
+    // cleanup through the controller state and bounded stop path.
+    post_spawn(slot.as_ref().expect("stored child"))?;
+    Ok(payload)
+}
+
+fn validate_mcp_spawn(ra: &RemoteAccessState, generation: u64) -> Result<(), String> {
+    if !generation_is_current(ra.generation, generation) {
+        return Err("Remote access start cancelled.".into());
+    }
+    if !matches!(
+        ra.status,
+        RemoteAccessStatus::Starting | RemoteAccessStatus::Connected { .. }
+    ) {
+        return Err("Remote access is not active.".into());
+    }
+    if !ra.pending_stops.is_empty() || ra.orphan_cleanup_failed {
+        return Err(SHUTDOWN_UNCONFIRMED.into());
+    }
+    if ra.mcp_child.is_some() {
+        return Err(format!("{} is already running.", MCP_SIDECAR_NAME));
+    }
+    Ok(())
+}
+
+pub(crate) struct StartupResume {
+    generation: u64,
+    revision: String,
+}
+
+/// Cleanup does not require a healthy daemon, local indexing or a file watcher.
+/// A deferred resume ticket cannot override a later user action or profile edit.
+pub(crate) async fn prepare_startup(app_handle: tauri::AppHandle) -> Option<StartupResume> {
+    use crate::remote_relay::startup::{action, StartupAction};
+    let generation = {
+        let state =
+            app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
+        let remote = { state.read().await.remote_access.clone() };
+        let ra = remote.lock().await;
+        if !matches!(ra.status, RemoteAccessStatus::Off) {
+            return None;
+        }
+        ra.generation
+    };
+    let profile = match relay_runtime::storage(|store| store.load()).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            if let Some(off_generation) = transition_off(&app_handle, Some(generation)).await {
+                let _ = publish_disconnect_result(&app_handle, off_generation, Err(format!(
+                    "Remote access settings could not be read ({error}); access was not resumed. Retry disconnect before restarting the App."
+                ))).await;
+            }
+            log::error!(
+                "[remote-access] Startup profile unavailable; access not resumed: {}",
+                error
+            );
+            return None;
+        }
+    };
+    match action(profile.as_ref(), crate::remote_relay::now_ms()) {
+        StartupAction::Resume => Some(StartupResume {
+            generation,
+            revision: profile?.revision().to_string(),
+        }),
+        StartupAction::Disconnect => {
+            if let Some(profile) = profile {
+                disconnect_startup(&app_handle, generation, profile).await;
+            }
+            None
+        }
+        StartupAction::StayOff => {
+            transition_off(&app_handle, Some(generation)).await;
+            None
+        }
+    }
+}
+
+async fn disconnect_startup(app_handle: &tauri::AppHandle, generation: u64, profile: Profile) {
+    let plan = relay_runtime::prepare_disconnect(Some(profile.revision().to_string())).await;
+    let Some(off_generation) = transition_off(app_handle, Some(generation)).await else {
+        return;
+    };
+    let result = match plan {
+        Ok(plan) => relay_runtime::finish_prepared_disconnect(plan).await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = &result {
+        log::warn!(
+            "[remote-access] Startup disconnect remains pending: {}",
+            error
+        );
+    }
+    let _ = publish_disconnect_result(app_handle, off_generation, result).await;
+}
+
+async fn publish_disconnect_result(
+    app_handle: &tauri::AppHandle,
+    off_generation: u64,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    // Notify after durable cleanup, not just after transport shutdown, so an
+    // already open settings panel refreshes its pending-disconnect profile.
+    let state = app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
+    let remote = { state.read().await.remote_access.clone() };
+    let mut ra = remote.lock().await;
+    if let Some(status) = apply_disconnect_result(&mut ra, off_generation, result) {
+        let _ = app_handle.emit("remote-access-status", &status);
+        return match status {
+            RemoteAccessStatus::Error { error } => Err(error),
+            _ => Ok(()),
+        };
+    }
+    Err(
+        "Remote access changed while disconnect was finishing; check the current connection state."
+            .into(),
+    )
+}
+
+const SHUTDOWN_UNCONFIRMED: &str = "Local remote-access processes have not been confirmed stopped. New connections are blocked; retry Stop access.";
+const EXIT_CLEANUP_LIMIT: Duration = Duration::from_secs(8);
+
+/// Stop only the transport and local processes owned by this app before it
+/// exits. Unlike [`toggle_off`], this deliberately does not change the saved
+/// profile or revoke its device, so a later launch may reconnect.
+pub(crate) async fn shutdown_for_exit<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    timeout(EXIT_CLEANUP_LIMIT, async {
+        transition_off(app_handle, None)
+            .await
+            .ok_or_else(|| "Remote access exit cleanup became stale".to_string())?;
+        ensure_shutdown_confirmed(app_handle).await
+    })
+    .await
+    .map_err(|_| {
+        format!("Remote access exit cleanup did not finish within {EXIT_CLEANUP_LIMIT:?}")
+    })?
+}
+
+pub(crate) async fn ensure_shutdown_confirmed<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+) -> Result<(), String> {
+    let state = app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
+    let remote = { state.read().await.remote_access.clone() };
+    let ra = remote.lock().await;
+    disconnect_result_for(&ra, Ok(()))
+}
+
+fn disconnect_result_for(
+    state: &RemoteAccessState,
+    result: Result<(), String>,
+) -> Result<(), String> {
+    if state.pending_stops.is_empty() && !state.orphan_cleanup_failed {
+        result
+    } else {
+        Err(match result {
+            Ok(()) => SHUTDOWN_UNCONFIRMED.to_string(),
+            Err(error) => format!("{SHUTDOWN_UNCONFIRMED} {error}"),
+        })
+    }
+}
+
+fn apply_disconnect_result(
+    state: &mut RemoteAccessState,
+    off_generation: u64,
+    result: Result<(), String>,
+) -> Option<RemoteAccessStatus> {
+    if !generation_is_current(state.generation, off_generation) {
+        return None;
+    }
+    let status = match disconnect_result_for(state, result) {
+        Ok(()) => RemoteAccessStatus::Off,
+        Err(error) => RemoteAccessStatus::Error { error },
+    };
+    state.status = status.clone();
+    Some(status)
+}
+
+pub(crate) async fn resume_startup(app_handle: tauri::AppHandle, ticket: StartupResume) {
+    use crate::remote_relay::startup::{action, StartupAction};
+    if !remote_generation_is_current(&app_handle, ticket.generation).await {
+        return;
+    }
+    let profile = match relay_runtime::storage(|store| store.load()).await {
+        Ok(Some(profile)) if profile.revision() == ticket.revision => profile,
+        _ => {
+            transition_off(&app_handle, Some(ticket.generation)).await;
+            return;
+        }
+    };
+    match action(Some(&profile), crate::remote_relay::now_ms()) {
+        StartupAction::Resume => toggle_on_with_retries(app_handle, 0, ticket.generation).await,
+        StartupAction::Disconnect => {
+            disconnect_startup(&app_handle, ticket.generation, profile).await
+        }
+        StartupAction::StayOff => {}
+    }
+}
 
 /// Kill any orphaned wenlan-mcp processes on the remote access port range.
 /// These accumulate when the Wenlan app restarts without cleanly shutting down
 /// its child processes (the in-memory handles are lost on restart).
-pub fn cleanup_orphaned_mcp() {
+pub fn cleanup_orphaned_mcp() -> Result<(), String> {
+    use crate::remote_relay::orphan::{cleanup, Observation};
     let my_pid = std::process::id();
     let range_start = port_range_start();
+    let mut unconfirmed = false;
     for port in range_start..=range_start + (PORT_RANGE_LEN - 1) {
-        // Use lsof to find the PID holding this port
-        let output = std::process::Command::new("lsof")
-            .args(["-i", &format!(":{}", port), "-t", "-sTCP:LISTEN"])
-            .output();
-        if let Ok(out) = output {
-            let text = String::from_utf8_lossy(&out.stdout);
-            for line in text.lines() {
-                if let Ok(pid) = line.trim().parse::<u32>() {
-                    // Don't kill ourselves
-                    if pid == my_pid {
-                        continue;
-                    }
-                    let Some(process_identity) = wenlan_mcp_process_identity(pid, port) else {
-                        log::warn!(
-                            "[remote-access] refusing to kill non-wenlan-mcp listener {} on port {}",
-                            pid,
-                            port
-                        );
-                        continue;
-                    };
-                    log::warn!(
-                        "[remote-access] Killing orphaned process {} on port {}",
-                        pid,
-                        port
-                    );
-                    // SIGTERM first, SIGKILL fallback — wenlan-mcp may ignore SIGTERM
-                    let _ = std::process::Command::new("kill")
-                        .arg(pid.to_string())
-                        .output();
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    // Force kill only if the PID still identifies the exact
-                    // remote-access child we inspected before SIGTERM.
-                    if wenlan_mcp_process_identity(pid, port).as_deref()
-                        == Some(process_identity.as_str())
+        let Ok(listeners) = crate::remote_access_platform::listener_pids_for_port(port) else {
+            unconfirmed = true;
+            continue;
+        };
+        for pid in listeners {
+            if pid == my_pid {
+                continue;
+            }
+            match measured_process_identity(pid) {
+                Observation::Gone => {}
+                Observation::Unknown => unconfirmed = true,
+                Observation::Identity(identity) => {
+                    if !identity_command(&identity)
+                        .is_some_and(|command| is_expected_remote_mcp_command(command, port))
                     {
-                        let _ = std::process::Command::new("kill")
-                            .args(["-9", &pid.to_string()])
-                            .output();
+                        continue;
                     }
+                    let outcome = cleanup(
+                        true,
+                        &identity,
+                        || measured_process_identity(pid),
+                        |force| signal_owned_process(pid, force, &identity),
+                        cleanup_pause,
+                    );
+                    unconfirmed |= !outcome.confirmed();
                 }
             }
         }
     }
-    // Brief pause to let ports release
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    if unconfirmed {
+        Err(SHUTDOWN_UNCONFIRMED.into())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+fn parse_listener_pids(
+    success: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Option<Vec<u32>> {
+    crate::remote_access_platform::parse_lsof_listener_pids(success, code, stdout, stderr).ok()
+}
+
+fn cleanup_pause() {
+    std::thread::sleep(Duration::from_millis(100));
+}
+
+fn cleanup_remote_orphans() -> Result<(), String> {
+    let mcp = cleanup_orphaned_mcp();
+    let tunnel = cleanup_owned_cloudflared(None);
+    mcp.and(tunnel)
+}
+
+#[cfg(unix)]
+fn signal_owned_process(pid: u32, force: bool, _identity: &str) -> bool {
+    std::process::Command::new("/bin/kill")
+        .args([if force { "-KILL" } else { "-TERM" }, &pid.to_string()])
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[cfg(windows)]
+fn signal_owned_process(pid: u32, _force: bool, identity: &str) -> bool {
+    crate::remote_access_platform::signal_process(pid, identity)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn signal_owned_process(_pid: u32, _force: bool, _identity: &str) -> bool {
+    false
+}
+
+fn identity_command(identity: &str) -> Option<&str> {
+    identity.split_once('\n').map(|(_, command)| command)
 }
 
 fn cloudflared_owner_path() -> PathBuf {
@@ -394,6 +494,7 @@ impl CloudflaredOwnerLock<'_> {
             })
     }
 
+    #[cfg(test)]
     fn write(&self, owner: &CloudflaredOwner) -> Result<(), String> {
         use std::io::Write;
 
@@ -497,78 +598,94 @@ fn read_cloudflared_owner_at(path: &Path) -> Result<Option<CloudflaredOwner>, St
     with_cloudflared_owner_lock(path, |receipt| receipt.read())
 }
 
+#[cfg(test)]
 fn write_cloudflared_owner_at(path: &Path, owner: &CloudflaredOwner) -> Result<(), String> {
     with_cloudflared_owner_lock(path, |receipt| receipt.write(owner))
 }
 
-fn record_cloudflared_owner(pid: u32, port: u16) -> Result<CloudflaredOwner, String> {
-    let identity = cloudflared_process_identity(pid, port).ok_or_else(|| {
-        format!("Spawned cloudflared PID {pid} does not match the expected tunnel for port {port}")
-    })?;
-    let owner = CloudflaredOwner {
-        pid,
-        port,
-        identity,
-    };
-    write_cloudflared_owner_at(&cloudflared_owner_path(), &owner)?;
-    Ok(owner)
+fn cleanup_owned_cloudflared(expected: Option<&CloudflaredOwner>) -> Result<(), String> {
+    cleanup_owned_cloudflared_at(
+        &cloudflared_owner_path(),
+        expected,
+        port_range_start(),
+        measured_process_identity,
+        signal_owned_process,
+        cleanup_pause,
+    )
 }
 
-fn cleanup_owned_cloudflared(expected: Option<&CloudflaredOwner>) {
-    let path = cloudflared_owner_path();
-    if let Err(error) = with_cloudflared_owner_lock(&path, |receipt| {
+fn cleanup_owned_cloudflared_at(
+    path: &Path,
+    expected: Option<&CloudflaredOwner>,
+    range_start: u16,
+    mut probe: impl FnMut(u32) -> crate::remote_relay::orphan::Observation,
+    mut signal: impl FnMut(u32, bool, &str) -> bool,
+    pause: impl FnMut(),
+) -> Result<(), String> {
+    use crate::remote_relay::orphan::{cleanup, CleanupOutcome};
+    with_cloudflared_owner_lock(path, |receipt| {
         let owner = match receipt.read()? {
             Some(owner) => owner,
             None => return Ok(()),
         };
-        let range_start = port_range_start();
-        let live_identity = cloudflared_process_identity(owner.pid, owner.port);
-        if !cloudflared_owner_authorizes_signal(
+        let authorized = cloudflared_owner_authorizes_signal(
             &owner,
             expected,
             range_start,
-            live_identity.as_deref(),
-        ) {
-            log::warn!(
-                "[remote-access] refusing to signal cloudflared PID {} because its ownership receipt, selected range, or live identity does not match",
-                owner.pid
-            );
-            if expected.is_none_or(|expected| expected == &owner) {
-                receipt.remove_if_matches(&owner)?;
-            }
-            return Ok(());
-        }
-        log::warn!(
-            "[remote-access] Killing owned cloudflared process {} for port {}",
-            owner.pid,
-            owner.port
+            Some(&owner.identity),
         );
-        let _ = std::process::Command::new("kill")
-            .arg(owner.pid.to_string())
-            .output();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        if cloudflared_process_identity(owner.pid, owner.port).as_deref()
-            == Some(owner.identity.as_str())
+        if authorized
+            && (owner.pid == 0
+                || owner.pid == std::process::id()
+                || !identity_command(&owner.identity)
+                    .is_some_and(|command| is_expected_remote_tunnel_command(command, owner.port)))
         {
-            let _ = std::process::Command::new("kill")
-                .args(["-9", &owner.pid.to_string()])
-                .output();
+            return Err(SHUTDOWN_UNCONFIRMED.into());
         }
-        receipt.remove_if_matches(&owner)
-    }) {
-        log::warn!("[remote-access] {error}; refusing cloudflared cleanup");
+        let outcome = cleanup(
+            authorized,
+            &owner.identity,
+            || probe(owner.pid),
+            |force| signal(owner.pid, force, &owner.identity),
+            pause,
+        );
+        if outcome.confirmed() {
+            receipt.remove_if_matches(&owner)
+        } else if outcome == CleanupOutcome::NotOwned {
+            Ok(())
+        } else {
+            Err(SHUTDOWN_UNCONFIRMED.into())
+        }
+    })
+    .map_err(|_| SHUTDOWN_UNCONFIRMED.to_string())
+}
+
+fn process_command_args(command: &str) -> Option<Vec<String>> {
+    match command.strip_prefix("argv:") {
+        Some(json) => serde_json::from_str(json).ok(),
+        None => Some(command.split_whitespace().map(str::to_owned).collect()),
+    }
+}
+
+fn process_executable_name<'a>(command: &str, executable: &'a str) -> &'a str {
+    if command.starts_with("argv:") {
+        executable.rsplit(['/', '\\']).next().unwrap_or_default()
+    } else {
+        Path::new(executable)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
     }
 }
 
 fn is_expected_remote_mcp_command(command: &str, port: u16) -> bool {
-    let args: Vec<_> = command.split_whitespace().collect();
+    let Some(args) = process_command_args(command) else {
+        return false;
+    };
     let Some(executable) = args.first() else {
         return false;
     };
-    let file_name = Path::new(executable)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
+    let file_name = process_executable_name(command, executable);
     let expected_executable = matches!(
         file_name,
         "wenlan-mcp"
@@ -583,59 +700,98 @@ fn is_expected_remote_mcp_command(command: &str, port: u16) -> bool {
             .any(|pair| pair[0] == flag && pair[1] == value)
     };
     expected_executable
-        && args.contains(&"serve")
+        && args.iter().any(|arg| arg == "serve")
         && has_pair("--port", &port.to_string())
         && has_pair("--agent-name", "remote-mcp")
 }
 
-fn wenlan_mcp_process_identity(pid: u32, port: u16) -> Option<String> {
-    let pid = pid.to_string();
-    let command_output = std::process::Command::new("ps")
-        .args(["-ww", "-p", &pid, "-o", "command="])
-        .output()
-        .ok()?;
-    let command = String::from_utf8(command_output.stdout).ok()?;
-    if !is_expected_remote_mcp_command(command.trim(), port) {
-        return None;
+#[cfg(windows)]
+fn measured_process_identity(pid: u32) -> crate::remote_relay::orphan::Observation {
+    use crate::remote_relay::orphan::Observation;
+    match crate::remote_access_platform::process_identity(pid) {
+        Ok(Some((started, args))) => match serde_json::to_string(&args) {
+            Ok(args) => Observation::Identity(format!("{started}\nargv:{args}")),
+            Err(_) => Observation::Unknown,
+        },
+        Ok(None) => Observation::Gone,
+        Err(()) => Observation::Unknown,
     }
-    let started_output = std::process::Command::new("ps")
-        .args(["-p", &pid, "-o", "lstart="])
-        .output()
-        .ok()?;
-    let started = String::from_utf8(started_output.stdout).ok()?;
-    Some(format!("{}\n{}", started.trim(), command.trim()))
 }
 
-/// The exact argument vector `start_remote_access` hands to the cloudflared
-/// sidecar.
-///
-/// This lives in one place, rather than inline at the spawn site, so the
-/// regression test can drive the argv the app really spawns. When the two were
-/// written out independently, deleting `--no-autoupdate` from production left
-/// the test green -- the fix could be removed without anything failing.
-///
-/// Order matters as much as membership. cloudflared accepts `--no-autoupdate`
-/// before `tunnel` as well, but `is_expected_remote_tunnel_command` requires
-/// `tunnel` at index 1, so that placement would break the app's own recognition
-/// of the process it started and leave the tunnel running after a quit.
-fn remote_tunnel_args(port: u16) -> [String; 4] {
-    [
-        "tunnel".to_string(),
-        "--no-autoupdate".to_string(),
-        "--url".to_string(),
-        format!("http://localhost:{port}"),
-    ]
+#[cfg(not(windows))]
+fn measured_process_identity(pid: u32) -> crate::remote_relay::orphan::Observation {
+    use crate::remote_relay::orphan::Observation;
+    let started = match read_process_field(pid, "lstart=") {
+        Ok(Some(started)) => started,
+        Ok(None) => return Observation::Gone,
+        Err(()) => return Observation::Unknown,
+    };
+    let command = match read_process_field(pid, "command=") {
+        Ok(Some(command)) => command,
+        _ => return Observation::Unknown,
+    };
+    match read_process_field(pid, "lstart=") {
+        Ok(Some(current)) if current == started => {
+            Observation::Identity(format!("{started}\n{command}"))
+        }
+        _ => Observation::Unknown,
+    }
+}
+
+#[cfg(unix)]
+fn read_process_field(pid: u32, field: &str) -> Result<Option<String>, ()> {
+    if pid == 0 {
+        return Err(());
+    }
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-ww", "-p", &pid.to_string(), "-o", field])
+        .output()
+        .map_err(|_| ())?;
+    parse_process_field(
+        output.status.success(),
+        output.status.code(),
+        &output.stdout,
+        &output.stderr,
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn read_process_field(_pid: u32, _field: &str) -> Result<Option<String>, ()> {
+    Err(())
+}
+
+#[cfg(any(unix, test))]
+fn parse_process_field(
+    success: bool,
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<String>, ()> {
+    if !success {
+        return if code == Some(1) && stdout.is_empty() && stderr.is_empty() {
+            Ok(None)
+        } else {
+            Err(())
+        };
+    }
+    if !stderr.is_empty() {
+        return Err(());
+    }
+    let text = std::str::from_utf8(stdout).map_err(|_| ())?.trim();
+    if text.is_empty() || text.lines().count() != 1 || text.chars().any(char::is_control) {
+        return Err(());
+    }
+    Ok(Some(text.to_string()))
 }
 
 fn is_expected_remote_tunnel_command(command: &str, port: u16) -> bool {
-    let args: Vec<_> = command.split_whitespace().collect();
+    let Some(args) = process_command_args(command) else {
+        return false;
+    };
     let Some(executable) = args.first() else {
         return false;
     };
-    let file_name = Path::new(executable)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or_default();
+    let file_name = process_executable_name(command, executable);
     let expected_executable = matches!(
         file_name,
         "cloudflared"
@@ -648,47 +804,16 @@ fn is_expected_remote_tunnel_command(command: &str, port: u16) -> bool {
     );
     let expected_url = format!("http://localhost:{port}");
     expected_executable
-        && args.get(1) == Some(&"tunnel")
+        && args.get(1).map(String::as_str) == Some("tunnel")
         && args
             .windows(2)
             .any(|pair| pair[0] == "--url" && pair[1] == expected_url)
 }
 
-fn cloudflared_process_identity(pid: u32, port: u16) -> Option<String> {
-    let pid = pid.to_string();
-    let command_output = std::process::Command::new("ps")
-        .args(["-ww", "-p", &pid, "-o", "command="])
-        .output()
-        .ok()?;
-    let command = String::from_utf8(command_output.stdout).ok()?;
-    if !is_expected_remote_tunnel_command(command.trim(), port) {
-        return None;
-    }
-    let started_output = std::process::Command::new("ps")
-        .args(["-p", &pid, "-o", "lstart="])
-        .output()
-        .ok()?;
-    let started = String::from_utf8(started_output.stdout).ok()?;
-    Some(format!("{}\n{}", started.trim(), command.trim()))
-}
-
-fn terminate_owned_cloudflared(
-    child: tauri_plugin_shell::process::CommandChild,
-    owner: &CloudflaredOwner,
-) {
-    let _ = child.kill();
-    cleanup_owned_cloudflared(Some(owner));
-}
-
 fn listener_pid_for_port(port: u16) -> Option<u32> {
-    let output = std::process::Command::new("lsof")
-        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN", "-t"])
-        .output()
-        .ok()?;
-    String::from_utf8(output.stdout)
-        .ok()?
-        .lines()
-        .find_map(|line| line.trim().parse::<u32>().ok())
+    let pids = crate::remote_access_platform::listener_pids_for_port(port).ok()?;
+    let first = *pids.first()?;
+    pids.iter().all(|pid| *pid == first).then_some(first)
 }
 
 /// Find an available port in the selected four-port range.
@@ -696,11 +821,6 @@ pub fn find_available_port() -> Option<u16> {
     let range_start = port_range_start();
     (range_start..=range_start + (PORT_RANGE_LEN - 1))
         .find(|&port| TcpListener::bind(("127.0.0.1", port)).is_ok())
-}
-
-/// Parse the tunnel URL from cloudflared's stderr output.
-pub fn parse_tunnel_url(stderr: &str) -> Option<String> {
-    TUNNEL_URL_RE.find(stderr).map(|m| m.as_str().to_string())
 }
 
 fn create_private_dir(path: &Path, file_name: &str) -> Result<(), String> {
@@ -772,58 +892,7 @@ fn prepare_private_parent(path: &Path, file_name: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn write_private_file(path: &Path, contents: &[u8], file_name: &str) -> Result<(), String> {
-    prepare_private_parent(path, file_name)?;
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| {
-                format!(
-                    "Failed to open current {} file at {}: {}",
-                    file_name,
-                    path.display(),
-                    e
-                )
-            })?;
-        file.write_all(contents).map_err(|e| {
-            format!(
-                "Failed to write current {} file at {}: {}",
-                file_name,
-                path.display(),
-                e
-            )
-        })?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, contents).map_err(|e| {
-            format!(
-                "Failed to write current {} file at {}: {}",
-                file_name,
-                path.display(),
-                e
-            )
-        })?;
-    }
-    restrict_private_file(path, file_name)
-}
-
-fn relay_id_path_for_dirs(current_dir: &Path) -> PathBuf {
-    current_dir.join("relay_id")
-}
-
-fn relay_id_path() -> PathBuf {
-    relay_id_path_for_dirs(&crate::identity_paths::mcp_config_dir())
-}
-
-/// Start the remote access tunnel (wenlan-mcp serve + cloudflared).
+/// Start remote access through local wenlan-mcp and native reverse transport.
 /// Async — emits `remote-access-status` events as state changes.
 /// Called from Tauri command handler — the command returns `Starting`
 /// immediately and this runs in a background task.
@@ -857,207 +926,79 @@ async fn toggle_on_inner(
     expected_generation: Option<u64>,
 ) {
     use tauri::Emitter;
-
-    // Guard: don't start if already starting or connected
     let operation_generation = {
-        let state =
-            app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-        let app_state = state.read().await;
-        let mut ra = app_state.remote_access.lock().await;
+        let remote = remote_access_mutex(&app_handle).await;
+        let mut ra = remote.lock().await;
+        let shutdown_pending = !ra.pending_stops.is_empty() || ra.orphan_cleanup_failed;
+        if shutdown_pending {
+            let status = RemoteAccessStatus::Error {
+                error: SHUTDOWN_UNCONFIRMED.into(),
+            };
+            ra.status = status.clone();
+            let _ = app_handle.emit("remote-access-status", &status);
+            return;
+        }
         let RemoteAccessState {
             status, generation, ..
         } = &mut *ra;
-        let Some(operation_generation) = try_begin_start(status, generation, expected_generation)
+        let Some(generation) =
+            try_begin_start(status, generation, expected_generation, shutdown_pending)
         else {
-            log::warn!("[remote-access] Already active, skipping duplicate toggle_on");
             return;
         };
         let _ = app_handle.emit("remote-access-status", &RemoteAccessStatus::Starting);
-        operation_generation
+        generation
     };
-
-    let result = start_tunnel(&app_handle, operation_generation).await;
-
+    let result = async {
+        let profile = relay_runtime::enabled_profile()
+            .await
+            .map_err(RenewalError::Profile)?;
+        start_reverse(&app_handle, operation_generation, profile).await
+    }
+    .await;
     match result {
-        Ok((tunnel_url, mcp_child, tunnel_child, tunnel_owner, port, mcp_rx, tunnel_rx)) => {
-            {
-                let state = app_handle
-                    .state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-                let app_state = state.read().await;
-                let ra = app_state.remote_access.lock().await;
-                if !generation_is_current(ra.generation, operation_generation)
-                    || !matches!(ra.status, RemoteAccessStatus::Starting)
-                {
-                    let _ = mcp_child.kill();
-                    terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-                    return;
-                }
-            }
-
-            // Register with relay for a stable URL
-            let relay_url = tokio::select! {
-                relay_url = register_with_relay(&tunnel_url) => relay_url,
-                _ = wait_for_generation_change(&app_handle, operation_generation) => {
-                    let _ = mcp_child.kill();
-                    terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-                    return;
-                }
-            };
-
-            let status = RemoteAccessStatus::Connected {
-                tunnel_url: tunnel_url.clone(),
-                relay_url: relay_url.clone(),
-            };
-            // Store process handles in state
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let mut ra = app_state.remote_access.lock().await;
-            if !generation_is_current(ra.generation, operation_generation)
-                || !matches!(ra.status, RemoteAccessStatus::Starting)
-            {
+        Ok((port, mcp_rx, active)) => {
+            let remote = remote_access_mutex(&app_handle).await;
+            let mut ra = remote.lock().await;
+            if !can_adopt_reverse(&ra, operation_generation, port, None) {
                 drop(ra);
-                drop(app_state);
-                let _ = mcp_child.kill();
-                terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
+                let _ = active.connection.shutdown().await;
                 return;
             }
+            ra.reverse = Some(active);
+            let status = RemoteAccessStatus::Connected {
+                tunnel_url: None,
+                relay_url: Some(format!("{RELAY_ORIGIN}/mcp")),
+            };
             ra.status = status.clone();
-            ra.mcp_child = Some(mcp_child);
-            ra.tunnel_child = Some(tunnel_child);
-            ra.port = Some(port);
-            // We just successfully created a tunnel → we're not currently
-            // rate-limited, so clear any stale 429 stamp from an earlier attempt.
-            ra.last_rate_limit_at = None;
             let _ = app_handle.emit("remote-access-status", &status);
             drop(ra);
-            drop(app_state);
-
-            // Spawn background monitor for crash recovery
-            let handle_for_monitor = app_handle.clone();
-            tauri::async_runtime::spawn(async move {
-                monitor_processes(
-                    handle_for_monitor,
-                    mcp_rx,
-                    tunnel_rx,
-                    retry_count,
-                    operation_generation,
-                )
-                .await;
-            });
-
-            // Spawn periodic tunnel health check (detects broken tunnels after sleep)
-            let handle_for_health = app_handle.clone();
-            let health_tunnel_url = tunnel_url.clone();
-            let health_retry_count = retry_count;
-            tauri::async_runtime::spawn(async move {
-                tunnel_health_loop(
-                    handle_for_health,
-                    health_tunnel_url,
-                    health_retry_count,
-                    operation_generation,
-                )
-                .await;
-            });
+            tauri::async_runtime::spawn(monitor_reverse(
+                app_handle,
+                mcp_rx,
+                retry_count,
+                operation_generation,
+            ));
         }
-        Err(e) => {
-            log::error!("[remote-access] toggle_on failed: {}", e);
-            let status = RemoteAccessStatus::Error { error: e.clone() };
-
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let mut ra = app_state.remote_access.lock().await;
-            if !generation_is_current(ra.generation, operation_generation)
-                || !matches!(ra.status, RemoteAccessStatus::Starting)
-            {
-                return;
-            }
-            ra.status = status.clone();
-            // Stamp rate-limit time so `tunnel_health_loop` enforces cooldown before
-            // burning another quick tunnel. Only when the error is an actual 429.
-            if e.contains("429") || e.contains("rate limit") {
-                ra.last_rate_limit_at = Some(std::time::Instant::now());
-                log::warn!(
-                    "[remote-access] Cloudflare 429 recorded — reconnect cooldown active for {} min",
-                    RATE_LIMIT_COOLDOWN.as_secs() / 60
-                );
-            }
-            let _ = app_handle.emit("remote-access-status", &status);
-            drop(ra);
-            drop(app_state);
+        Err(error) => {
+            recover_remote(app_handle, operation_generation, retry_count, error).await;
         }
     }
 }
 
-/// Read cloudflared event stream until we find a tunnel URL.
-/// Returns Ok(url) on success, Err(message) on known errors (e.g. rate limit).
-async fn parse_tunnel_url_from_events(
-    rx: &mut tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
-) -> Result<String, Option<String>> {
-    let mut accumulated = String::new();
-    while let Some(event) = rx.recv().await {
-        match event {
-            tauri_plugin_shell::process::CommandEvent::Stderr(line) => {
-                let text = String::from_utf8_lossy(&line);
-                accumulated.push_str(&text);
-                // Detect rate limit before waiting for URL
-                if accumulated.contains("429") || accumulated.contains("Too Many Requests") {
-                    return Err(Some(
-                        "Cloudflare rate limit (429) — too many quick tunnels. Will auto-retry."
-                            .to_string(),
-                    ));
-                }
-                if accumulated.contains("failed to unmarshal") {
-                    return Err(Some(
-                        "Cloudflare tunnel creation failed. Will auto-retry.".to_string(),
-                    ));
-                }
-                if let Some(url) = parse_tunnel_url(&accumulated) {
-                    return Ok(url);
-                }
-            }
-            tauri_plugin_shell::process::CommandEvent::Stdout(line) => {
-                let text = String::from_utf8_lossy(&line);
-                accumulated.push_str(&text);
-                if let Some(url) = parse_tunnel_url(&accumulated) {
-                    return Ok(url);
-                }
-            }
-            _ => {}
-        }
-    }
-    // Channel closed before a URL appeared. Surface what cloudflared printed so
-    // future silent-exit cases aren't opaque. (Used to drop `accumulated` on the floor.)
-    let trimmed = accumulated.trim();
-    if trimmed.is_empty() {
-        log::error!(
-            "[remote-access] cloudflared exited with no stderr/stdout output — check the sidecar binary is valid and executable"
-        );
-    } else {
-        log::error!(
-            "[remote-access] cloudflared exited without producing a URL. Captured output:\n{}",
-            trimmed
-        );
-    }
-    Err(None)
-}
+const MAX_RECONNECT_RETRIES: u32 = 3;
 
-/// Maximum MCP-only restart attempts before falling back to full restart.
-const MAX_MCP_RETRIES: u32 = 3;
-/// Maximum full restart attempts (creates new tunnel — costs Cloudflare quota).
-const MAX_TUNNEL_RETRIES: u32 = 3;
-
-/// Spawn wenlan-mcp serve on a given port (without cloudflared).
+/// Spawn the protected local wenlan-mcp listener on a given port.
 /// Reusable for both initial start and MCP-only restarts.
 async fn spawn_mcp(
     app_handle: &tauri::AppHandle,
     port: u16,
     generation: u64,
+    profile: &Profile,
 ) -> Result<
     (
         tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
-        tauri_plugin_shell::process::CommandChild,
+        u32,
     ),
     String,
 > {
@@ -1067,38 +1008,43 @@ async fn spawn_mcp(
         port
     );
     let origin_url = crate::api::WenlanClient::new().base_url().to_string();
-    let port_string = port.to_string();
-    let (mcp_rx, mcp_child) = app_handle
-        .shell()
-        .sidecar(MCP_SIDECAR_NAME)
-        .map_err(|e| format!("{} sidecar not found: {}", MCP_SIDECAR_NAME, e))?
-        .args([
-            "--origin-url".to_string(),
-            origin_url,
-            "serve".to_string(),
-            "--port".to_string(),
-            port_string,
-            "--no-auth".to_string(),
-            "--agent-name".to_string(),
-            "remote-mcp".to_string(),
-            "--allowed-origins".to_string(),
-            "https://claude.ai,https://chatgpt.com".to_string(),
-        ])
-        .spawn()
-        .map_err(|e| format!("Failed to spawn {} serve: {}", MCP_SIDECAR_NAME, e))?;
-
-    let child_pid = mcp_child.pid();
-    let health_url = format!("http://127.0.0.1:{port}/health");
+    let (mcp_rx, child_pid) = {
+        let remote = remote_access_mutex(app_handle).await;
+        let mut ra = remote.lock().await;
+        let validation = validate_mcp_spawn(&ra, generation);
+        let RemoteAccessState {
+            mcp_child: mcp_slot,
+            port: port_slot,
+            ..
+        } = &mut *ra;
+        spawn_and_store_child(
+            validation,
+            mcp_slot,
+            port_slot,
+            port,
+            || {
+                let (mcp_rx, mcp_child) = app_handle
+                    .shell()
+                    .sidecar(MCP_SIDECAR_NAME)
+                    .map_err(|e| format!("{} sidecar not found: {}", MCP_SIDECAR_NAME, e))?
+                    .args(relay_runtime::mcp_args(&origin_url, port))
+                    .env(relay_runtime::TOKEN_ENV, profile.backend_token())
+                    .env("WENLAN_SPACE", profile.space())
+                    .env("WENLAN_NO_AUTOSTART", "1")
+                    .spawn()
+                    .map_err(|e| format!("Failed to spawn {} serve: {}", MCP_SIDECAR_NAME, e))?;
+                let child_pid = mcp_child.pid();
+                Ok(((mcp_rx, child_pid), mcp_child))
+            },
+            |_| Ok(()),
+        )?
+    };
     let readiness = timeout(Duration::from_secs(5), async {
         loop {
             if !remote_generation_is_current(app_handle, generation).await {
                 return Err("Remote access start cancelled.".to_string());
             }
-            if reqwest::get(&health_url)
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false)
-            {
+            if relay_runtime::verify_backend(port, profile).await.is_ok() {
                 match listener_pid_for_port(port) {
                     Some(listener_pid) if listener_pid == child_pid => return Ok(()),
                     Some(listener_pid) => {
@@ -1121,215 +1067,207 @@ async fn spawn_mcp(
         ))
     });
 
-    if let Err(error) = readiness {
-        let _ = mcp_child.kill();
-        return Err(error);
-    }
-
-    Ok((mcp_rx, mcp_child))
+    readiness.map(|()| (mcp_rx, child_pid))
 }
 
-/// Which sidecar process exited.
-enum ExitedProcess {
-    Mcp(String),
-    Tunnel(String),
-}
-
-/// Monitor sidecar processes for unexpected exits.
-/// - If wenlan-mcp exits: respawn only wenlan-mcp (tunnel stays alive, no Cloudflare cost).
-/// - If cloudflared exits: full restart needed (new tunnel URL required).
-pub async fn monitor_processes(
-    app_handle: tauri::AppHandle,
-    mut mcp_rx: tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
-    mut tunnel_rx: tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
-    tunnel_retry_count: u32,
+fn can_adopt_reverse(
+    state: &RemoteAccessState,
     generation: u64,
+    port: u16,
+    expected_connection: Option<&str>,
+) -> bool {
+    generation_is_current(state.generation, generation)
+        && state.port == Some(port)
+        && state.mcp_child.is_some()
+        && state.pending_stops.is_empty()
+        && !state.orphan_cleanup_failed
+        && match expected_connection {
+            None => matches!(state.status, RemoteAccessStatus::Starting) && state.reverse.is_none(),
+            Some(id) => {
+                matches!(state.status, RemoteAccessStatus::Connected { .. })
+                    && state
+                        .reverse
+                        .as_ref()
+                        .is_some_and(|active| active.connection.connection_id() == id)
+            }
+        }
+}
+
+fn recovery_delay(error: &RenewalError, attempts: u32) -> Option<Duration> {
+    if attempts >= MAX_RECONNECT_RETRIES {
+        return None;
+    }
+    let backoff = Duration::from_secs(30u64 << attempts.min(2));
+    match error {
+        RenewalError::Relay(RelayError::Unavailable) => Some(backoff),
+        RenewalError::Relay(RelayError::RateLimited {
+            retry_after_seconds,
+        }) => Some(backoff.max(Duration::from_secs(
+            retry_after_seconds.unwrap_or(900).min(3600),
+        ))),
+        _ => None,
+    }
+}
+
+async fn recover_remote(
+    app: tauri::AppHandle,
+    generation: u64,
+    attempts: u32,
+    error: RenewalError,
 ) {
     use tauri::Emitter;
-
-    let mut mcp_retries = 0u32;
-
-    loop {
-        let exited = tokio::select! {
-            event = wait_for_exit(&mut mcp_rx) => ExitedProcess::Mcp(event),
-            event = wait_for_exit(&mut tunnel_rx) => ExitedProcess::Tunnel(event),
+    let delay = recovery_delay(&error, attempts);
+    let Some(next_generation) = transition_off(&app, Some(generation)).await else {
+        return;
+    };
+    {
+        let remote = remote_access_mutex(&app).await;
+        let mut ra = remote.lock().await;
+        if !generation_is_current(ra.generation, next_generation) {
+            return;
+        }
+        let cleanup = disconnect_result_for(&ra, Ok(()));
+        let status = RemoteAccessStatus::Error {
+            error: cleanup
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| error.to_string()),
         };
+        ra.status = status.clone();
+        let _ = app.emit("remote-access-status", &status);
+        if cleanup.is_err() {
+            return;
+        }
+    }
+    if let Some(delay) = delay {
+        tokio::select! {
+            _ = sleep(delay) => {
+                toggle_on_with_retries(app.clone(), attempts + 1, next_generation).await;
+            }
+            _ = wait_for_generation_change(&app, next_generation) => {}
+        }
+    }
+}
 
-        {
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let ra = app_state.remote_access.lock().await;
+/// One owner monitors local process, reverse transport and authenticated status.
+/// Reconnection reuses the saved device; authorization failures never re-enroll.
+async fn monitor_reverse(
+    app: tauri::AppHandle,
+    mut mcp_rx: tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
+    mut attempts: u32,
+    generation: u64,
+) {
+    let mut renewal = crate::remote_relay::renewal::RenewalSchedule::new(
+        std::time::SystemTime::now(),
+        std::time::Instant::now(),
+    );
+    let stable_since = std::time::Instant::now();
+    let mut health_tick = 0u8;
+    let mut failures = 0u8;
+    let failure = loop {
+        tokio::select! {
+            _ = wait_for_exit(&mut mcp_rx) => break RenewalError::Relay(RelayError::Unavailable),
+            _ = wait_for_generation_change(&app, generation) => return,
+            _ = sleep(Duration::from_secs(5)) => {}
+        }
+        let (profile, id, port, finished) = {
+            let remote = remote_access_mutex(&app).await;
+            let ra = remote.lock().await;
             if !generation_is_current(ra.generation, generation)
                 || !matches!(ra.status, RemoteAccessStatus::Connected { .. })
             {
                 return;
             }
+            let (Some(active), Some(port)) = (ra.reverse.as_ref(), ra.port) else {
+                break RenewalError::Relay(RelayError::Unavailable);
+            };
+            (
+                active.profile.clone(),
+                active.connection.connection_id().to_owned(),
+                port,
+                active.connection.is_finished(),
+            )
+        };
+        if stable_since.elapsed() >= Duration::from_secs(300) {
+            attempts = 0;
         }
-
-        match exited {
-            ExitedProcess::Mcp(reason) => {
-                log::warn!(
-                    "[remote-access] {} exited: {} — attempting MCP-only restart",
-                    MCP_SIDECAR_NAME,
-                    reason
-                );
-
-                // Get port from state, kill old mcp handle
-                let port = {
-                    let state = app_handle
-                        .state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-                    let app_state = state.read().await;
-                    let mut ra = app_state.remote_access.lock().await;
-                    if !generation_is_current(ra.generation, generation)
-                        || !matches!(ra.status, RemoteAccessStatus::Connected { .. })
-                    {
-                        return;
-                    }
-                    if let Some(child) = ra.mcp_child.take() {
-                        let _ = child.kill();
-                    }
-                    ra.port
-                };
-
-                let Some(port) = port else {
-                    // Port cleared by toggle_off (e.g. tunnel_health_loop reconnect) — exit quietly
-                    log::info!(
-                        "[remote-access] No port in state — another reconnect is handling recovery"
-                    );
-                    return;
-                };
-
-                if mcp_retries >= MAX_MCP_RETRIES {
-                    log::warn!("[remote-access] {} MCP-only retries exhausted — falling back to full restart", MAX_MCP_RETRIES);
-                    break; // Fall through to full restart below
-                }
-
-                let delay = 5u64 * (mcp_retries as u64 + 1); // 5s, 10s, 15s
-                log::warn!(
-                    "[remote-access] MCP-only restart in {}s (attempt {}/{})",
-                    delay,
-                    mcp_retries + 1,
-                    MAX_MCP_RETRIES
-                );
-                sleep(Duration::from_secs(delay)).await;
-
-                {
-                    let state = app_handle
-                        .state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-                    let app_state = state.read().await;
-                    let ra = app_state.remote_access.lock().await;
-                    if !generation_is_current(ra.generation, generation)
-                        || !matches!(ra.status, RemoteAccessStatus::Connected { .. })
-                    {
-                        return;
-                    }
-                }
-
-                match spawn_mcp(&app_handle, port, generation).await {
-                    Ok((new_rx, new_child)) => {
-                        // Store new child in state
-                        let state = app_handle
-                            .state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-                        let app_state = state.read().await;
-                        let mut ra = app_state.remote_access.lock().await;
-                        if !generation_is_current(ra.generation, generation)
-                            || !matches!(ra.status, RemoteAccessStatus::Connected { .. })
-                        {
+        if finished {
+            break RenewalError::Relay(RelayError::Unavailable);
+        }
+        health_tick += 1;
+        if health_tick < 6 {
+            continue;
+        }
+        health_tick = 0;
+        if renewal.due(std::time::SystemTime::now(), std::time::Instant::now()) {
+            // Opening a verified same-device replacement renews its route lease.
+            // This cannot enroll because the active profile has a device.
+            let refreshed = reverse_runtime::connect(profile.clone(), port).await;
+            match refreshed {
+                Ok(active) => {
+                    let previous = {
+                        let remote = remote_access_mutex(&app).await;
+                        let mut ra = remote.lock().await;
+                        if !can_adopt_reverse(&ra, generation, port, Some(&id)) {
                             drop(ra);
-                            drop(app_state);
-                            let _ = new_child.kill();
+                            let _ = active.connection.shutdown().await;
                             return;
                         }
-                        ra.mcp_child = Some(new_child);
-                        drop(ra);
-                        drop(app_state);
-
-                        mcp_rx = new_rx;
-                        mcp_retries = 0; // Reset on success — only count consecutive failures
-                        log::warn!("[remote-access] MCP-only restart succeeded — resuming monitor");
-                        continue; // Loop back to watch both processes
+                        ra.reverse.replace(active)
+                    };
+                    if let Some(previous) = previous {
+                        let _ = previous.connection.shutdown().await;
                     }
-                    Err(e) => {
-                        log::error!("[remote-access] MCP-only restart failed: {} — falling back to full restart", e);
-                        mcp_retries += 1;
-                        continue; // Try again if retries remain
-                    }
+                    renewal.succeeded(std::time::SystemTime::now(), std::time::Instant::now());
+                    failures = 0;
+                    continue;
+                }
+                Err(
+                    error @ RenewalError::Relay(
+                        RelayError::Unavailable | RelayError::RateLimited { .. },
+                    ),
+                ) => {
+                    let retry_after = match error {
+                        RenewalError::Relay(RelayError::RateLimited {
+                            retry_after_seconds,
+                        }) => retry_after_seconds.map(Duration::from_secs),
+                        _ => None,
+                    };
+                    renewal.failed(
+                        std::time::SystemTime::now(),
+                        std::time::Instant::now(),
+                        retry_after,
+                    );
+                }
+                Err(error) => break error,
+            }
+        }
+        let health = async {
+            reverse_runtime::check(&profile, &id).await?;
+            relay_runtime::verify_backend(port, &profile)
+                .await
+                .map_err(RenewalError::Relay)
+        }
+        .await;
+        match health {
+            Ok(()) => failures = 0,
+            Err(
+                error @ RenewalError::Relay(
+                    RelayError::Unavailable | RelayError::RateLimited { .. },
+                ),
+            ) => {
+                failures += 1;
+                if failures >= 3 {
+                    break error;
                 }
             }
-            ExitedProcess::Tunnel(reason) => {
-                log::warn!(
-                    "[remote-access] cloudflared exited: {} — full restart needed",
-                    reason
-                );
-                break; // Fall through to full restart below
-            }
+            Err(error) => break error,
         }
-    }
-
-    // Full restart path — kills both processes, creates new tunnel
-    let Some(restart_generation) = transition_off(&app_handle, Some(generation)).await else {
-        return;
     };
-
-    if tunnel_retry_count >= MAX_TUNNEL_RETRIES {
-        log::error!(
-            "[remote-access] {} full retries exhausted — giving up",
-            MAX_TUNNEL_RETRIES
-        );
-        let status = RemoteAccessStatus::Error {
-            error: format!(
-                "{} full retries failed — please toggle manually.",
-                MAX_TUNNEL_RETRIES
-            ),
-        };
-        let state =
-            app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-        let app_state = state.read().await;
-        let mut ra = app_state.remote_access.lock().await;
-        if !generation_is_current(ra.generation, restart_generation) {
-            return;
-        }
-        ra.status = status.clone();
-        let _ = app_handle.emit("remote-access-status", &status);
-        drop(ra);
-        drop(app_state);
-        return;
-    }
-
-    // Exponential backoff: 30s, 60s, 120s — gentle on Cloudflare quick tunnel limits
-    let delay_secs = 30u64 << tunnel_retry_count;
-    let attempt = tunnel_retry_count + 1;
-
-    let status = RemoteAccessStatus::Error {
-        error: format!(
-            "Full restart in {}s (attempt {}/{})...",
-            delay_secs, attempt, MAX_TUNNEL_RETRIES
-        ),
-    };
-    {
-        let state =
-            app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-        let app_state = state.read().await;
-        let mut ra = app_state.remote_access.lock().await;
-        if !generation_is_current(ra.generation, restart_generation) {
-            return;
-        }
-        ra.status = status.clone();
-        let _ = app_handle.emit("remote-access-status", &status);
-    }
-
-    sleep(Duration::from_secs(delay_secs)).await;
-
-    log::warn!(
-        "[remote-access] Full restart attempt {}/{}",
-        attempt,
-        MAX_TUNNEL_RETRIES
-    );
-    toggle_on_with_retries(app_handle, attempt, restart_generation).await;
+    recover_remote(app, generation, attempts, failure).await;
 }
 
-/// Wait for a process exit or error event on the command event receiver.
 async fn wait_for_exit(
     rx: &mut tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
 ) -> String {
@@ -1341,419 +1279,901 @@ async fn wait_for_exit(
                     payload.code, payload.signal
                 );
             }
-            tauri_plugin_shell::process::CommandEvent::Error(err) => {
-                return format!("error: {}", err);
-            }
-            _ => {} // Ignore stdout/stderr during monitoring
+            tauri_plugin_shell::process::CommandEvent::Error(_) => return "process error".into(),
+            _ => {}
         }
     }
-    "channel closed".to_string()
+    "channel closed".into()
 }
 
-/// Periodic tunnel health check + auto-reconnect.
-/// Runs every 30s; detects broken tunnels after Mac sleep, ISP outages, etc.
-///
-/// `reconnect_count` carries across reconnect attempts — shared budget with
-/// `monitor_processes` crash recovery, capped by `MAX_TUNNEL_RETRIES`. Each
-/// reconnect increments the counter to apply exponential backoff (30/60/120s).
-///
-/// Safeguards against the 429-storm this used to cause:
-/// 1. **Never-healthy tunnels don't trigger reconnect.** A brand-new tunnel that
-///    has never returned a successful /health is almost certainly a propagation
-///    or routing problem — recreating it burns Cloudflare quota without fixing
-///    anything. Wait it out instead.
-/// 2. **Exponential backoff between reconnects.** No more "reconnect every 90s".
-/// 3. **Respects `last_rate_limit_at` cooldown.** If a prior attempt hit 429,
-///    reconnects are deferred for `RATE_LIMIT_COOLDOWN`.
-/// 4. **Retry cap.** After `MAX_TUNNEL_RETRIES` health-driven reconnects, the
-///    loop gives up and transitions to `Status::Error`. User must re-enable.
-async fn tunnel_health_loop(
-    app_handle: tauri::AppHandle,
-    tunnel_url: String,
-    reconnect_count: u32,
+async fn start_reverse(
+    app: &tauri::AppHandle,
     generation: u64,
-) {
-    use tauri::Emitter;
-
-    let health_url = format!("{}/health", tunnel_url);
-    let mut consecutive_failures = 0u32;
-    let mut ever_succeeded = false;
-
-    loop {
-        sleep(Duration::from_secs(30)).await;
-
-        // Check if we're still in Connected state
-        {
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let ra = app_state.remote_access.lock().await;
-            if !generation_is_current(ra.generation, generation)
-                || !matches!(ra.status, RemoteAccessStatus::Connected { .. })
-            {
-                // No longer connected — stop health checking
-                return;
-            }
-        }
-
-        // Ping the tunnel URL. Log the actual error on failure so we can tell DNS
-        // vs TLS vs 5xx vs timeout apart without speculation.
-        let check = timeout(Duration::from_secs(5), reqwest::get(&health_url)).await;
-        let ok = match check {
-            Ok(Ok(resp)) if resp.status().is_success() => true,
-            Ok(Ok(resp)) => {
-                log::warn!(
-                    "[remote-access] Tunnel /health returned non-2xx: {}",
-                    resp.status()
-                );
-                false
-            }
-            Ok(Err(e)) => {
-                // `reqwest::Error`'s Display includes the chain via its error chain,
-                // but not always the root cause. Use the debug form too so we see
-                // whether this is dns/tls/connect/body.
-                log::warn!(
-                    "[remote-access] Tunnel /health request error: {} ({:?})",
-                    e,
-                    e
-                );
-                false
-            }
-            Err(_) => {
-                log::warn!("[remote-access] Tunnel /health request timed out after 5s");
-                false
-            }
-        };
-
-        if ok {
-            if !ever_succeeded {
-                log::info!(
-                    "[remote-access] Tunnel /health first-success — reconnect tripwire armed"
-                );
-            }
-            consecutive_failures = 0;
-            ever_succeeded = true;
-            continue;
-        }
-
-        consecutive_failures += 1;
-        log::warn!(
-            "[remote-access] Tunnel health check failed ({}/3)",
-            consecutive_failures
-        );
-
-        // Fix 3: Don't burn a fresh tunnel on a never-healthy one. If /health has
-        // never returned success, this is a propagation or routing problem and
-        // recreating the tunnel won't help — it's the same routing. Keep polling
-        // and wait for it to come alive (or user intervention).
-        if !ever_succeeded {
-            if consecutive_failures == 3 {
-                log::warn!(
-                    "[remote-access] Tunnel has never been reachable after 3 checks. Not triggering reconnect (would just burn Cloudflare quota). Continuing to poll — tunnel may still come up."
-                );
-            }
-            // Reset the counter so we don't spam the warning but keep polling.
-            if consecutive_failures >= 3 {
-                consecutive_failures = 0;
-            }
-            continue;
-        }
-
-        if consecutive_failures < 3 {
-            continue;
-        }
-
-        // --- Reconnect decision ---
-
-        // Fix 1a: retry cap.
-        if reconnect_count >= MAX_TUNNEL_RETRIES {
-            log::error!(
-                "[remote-access] Max health-driven reconnects reached ({}). Giving up — re-enable manually.",
-                MAX_TUNNEL_RETRIES
-            );
-            // toggle_off emits `Off` internally. We emit `Error` AFTER it so the
-            // frontend's last event is the error message, not Off.
-            let Some(off_generation) = transition_off(&app_handle, Some(generation)).await else {
-                return;
-            };
-            let error = format!(
-                "Tunnel kept dropping after {} reconnect attempts. Re-enable to try again.",
-                MAX_TUNNEL_RETRIES
-            );
-            let status = RemoteAccessStatus::Error { error };
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let mut ra = app_state.remote_access.lock().await;
-            if !generation_is_current(ra.generation, off_generation) {
-                return;
-            }
-            ra.status = status.clone();
-            let _ = app_handle.emit("remote-access-status", &status);
-            drop(ra);
-            drop(app_state);
-            return;
-        }
-
-        // Fix 1b: respect 429 cooldown.
-        let in_cooldown = {
-            let state =
-                app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-            let app_state = state.read().await;
-            let ra = app_state.remote_access.lock().await;
-            ra.last_rate_limit_at
-                .map(|t| t.elapsed() < RATE_LIMIT_COOLDOWN)
-                .unwrap_or(false)
-        };
-        if in_cooldown {
-            log::warn!(
-                "[remote-access] In 429 cooldown — skipping reconnect, will re-check in 30s"
-            );
-            // Reset the counter so we don't hammer the cooldown check at max log rate.
-            consecutive_failures = 0;
-            continue;
-        }
-
-        // Fix 1c: exponential backoff matching monitor_processes (30/60/120s).
-        let delay_secs = 30u64 << reconnect_count.min(2);
-        let next_count = reconnect_count + 1;
-        log::warn!(
-            "[remote-access] Tunnel unreachable — reconnecting in {}s (attempt {}/{})",
-            delay_secs,
-            next_count,
-            MAX_TUNNEL_RETRIES
-        );
-        let Some(restart_generation) = transition_off(&app_handle, Some(generation)).await else {
-            return;
-        };
-        sleep(Duration::from_secs(delay_secs)).await;
-        toggle_on_with_retries(app_handle, next_count, restart_generation).await;
-        return; // New toggle_on spawns its own health loop with next_count.
-    }
-}
-
-async fn start_tunnel(
-    app_handle: &tauri::AppHandle,
-    generation: u64,
+    profile: Profile,
 ) -> Result<
     (
-        String,                                                                 // tunnel_url
-        tauri_plugin_shell::process::CommandChild,                              // mcp_child
-        tauri_plugin_shell::process::CommandChild,                              // tunnel_child
-        CloudflaredOwner, // tunnel owner receipt
-        u16,              // port
-        tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>, // mcp_rx
-        tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>, // tunnel_rx
+        u16,
+        tokio::sync::mpsc::Receiver<tauri_plugin_shell::process::CommandEvent>,
+        ActiveReverse,
     ),
-    String,
+    RenewalError,
 > {
-    // 0. Clean up any orphaned MCP processes from previous app sessions.
-    // On a blocking thread: the sweep spawns `lsof`/`ps`/`kill` per port and
-    // sleeps synchronously, which would park a tokio worker for ~half a second
-    // and stall every other Tauri command scheduled onto it.
-    let _ = tokio::task::spawn_blocking(|| {
-        cleanup_orphaned_mcp();
-        cleanup_owned_cloudflared(None);
-    })
-    .await;
-    if !remote_generation_is_current(app_handle, generation).await {
-        return Err("Remote access start cancelled.".to_string());
-    }
-
-    // 1. Find available port
-    let range_start = port_range_start();
-    let port = find_available_port().ok_or_else(|| {
-        format!(
-            "All remote access ports ({}-{}) are in use.",
-            range_start,
-            range_start + (PORT_RANGE_LEN - 1)
-        )
-    })?;
-
-    // No bearer token here on purpose: the relay endpoint below is reached by
-    // the Claude.ai and ChatGPT connectors, which have no way to attach an
-    // `Authorization` header to their requests, so `spawn_mcp` runs the
-    // sidecar with `--no-auth`. What actually guards this endpoint is the
-    // unguessable relay ID (see `new_relay_id`), the explicit in-app warning
-    // (`remoteAccess.noAuthWarning`), and Remote Access being off by default.
-    if !remote_generation_is_current(app_handle, generation).await {
-        return Err("Remote access start cancelled.".to_string());
-    }
-
-    // 2. Spawn wenlan-mcp serve (with health check)
-    let (mcp_rx, mcp_child) = spawn_mcp(app_handle, port, generation).await?;
-
-    // 3. Spawn cloudflared tunnel
-    let tunnel_command = match app_handle.shell().sidecar("cloudflared") {
-        Ok(command) => command,
-        Err(error) => {
-            let _ = mcp_child.kill();
-            return Err(format!("cloudflared sidecar not found: {error}"));
-        }
-    };
-    // `--no-autoupdate` because cloudflared's default is to check for a new
-    // version every 24 hours and then overwrite its own binary and restart.
-    // Inside an installed Wenlan that binary is a bundled sidecar covered by
-    // the app's code signature, so a self-update would silently replace a
-    // signed file with an unsigned one -- Gatekeeper and Authenticode both
-    // stop trusting it, and on Windows that is exactly what the installer
-    // signature is meant to vouch for. It would also add an undisclosed
-    // periodic request to a Cloudflare update host. Wenlan ships cloudflared
-    // on its own release cadence; upgrading it is a Wenlan release, not
-    // something the sidecar decides for itself.
-    let (mut tunnel_rx, tunnel_child) = match tunnel_command.args(remote_tunnel_args(port)).spawn()
-    {
-        Ok(child) => child,
-        Err(error) => {
-            let _ = mcp_child.kill();
-            return Err(format!("Failed to spawn cloudflared: {error}"));
-        }
-    };
-    let tunnel_owner = match record_cloudflared_owner(tunnel_child.pid(), port) {
-        Ok(owner) => owner,
-        Err(error) => {
-            let _ = mcp_child.kill();
-            let _ = tunnel_child.kill();
-            return Err(error);
-        }
-    };
-    if !remote_generation_is_current(app_handle, generation).await {
-        let _ = mcp_child.kill();
-        terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-        return Err("Remote access start cancelled.".to_string());
-    }
-
-    // 4. Parse tunnel URL from cloudflared output (it logs to stderr)
-    let tunnel_result = tokio::select! {
-        result = timeout(
-            Duration::from_secs(20),
-            parse_tunnel_url_from_events(&mut tunnel_rx),
-        ) => result,
-        _ = wait_for_generation_change(app_handle, generation) => {
-            let _ = mcp_child.kill();
-            terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-            return Err("Remote access start cancelled.".to_string());
-        }
-    };
-    let tunnel_url = match tunnel_result {
-        Ok(Ok(url)) => url,
-        Ok(Err(Some(msg))) => {
-            // Known error (rate limit, etc.) — kill mcp and propagate
-            let _ = mcp_child.kill();
-            terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-            return Err(msg);
-        }
-        Ok(Err(None)) => {
-            let _ = mcp_child.kill();
-            terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-            return Err("cloudflared exited without producing a tunnel URL.".to_string());
-        }
-        Err(_) => {
-            let _ = mcp_child.kill();
-            terminate_owned_cloudflared(tunnel_child, &tunnel_owner);
-            return Err("Failed to get tunnel URL from cloudflared (timeout).".to_string());
-        }
-    };
-
-    // 5. Best-effort tunnel verification — don't kill on failure.
-    // Quick tunnels can take 10-20s to become fully reachable after URL is printed.
-    let verify_url = format!("{}/health", tunnel_url);
-    let verify_ok = timeout(Duration::from_secs(10), async {
-        sleep(Duration::from_secs(1)).await;
-        for _ in 0..4 {
-            if reqwest::get(&verify_url)
-                .await
-                .map(|r| r.status().is_success())
-                .unwrap_or(false)
-            {
-                return true;
-            }
-            sleep(Duration::from_secs(2)).await;
-        }
-        false
+    let remote = remote_access_mutex(app).await;
+    preflight_cleanup(&remote, generation, async {
+        tokio::task::spawn_blocking(cleanup_remote_orphans)
+            .await
+            .map_err(|_| SHUTDOWN_UNCONFIRMED.to_string())?
     })
     .await
-    .unwrap_or(false);
-
-    if !verify_ok {
-        log::warn!(
-            "[remote-access] Tunnel verification didn't complete in time — tunnel may still work"
-        );
+    .map_err(RenewalError::Profile)?;
+    if !remote_generation_is_current(app, generation).await {
+        return Err(RenewalError::Profile(
+            "Remote access start cancelled.".into(),
+        ));
     }
-
-    Ok((
-        tunnel_url,
-        mcp_child,
-        tunnel_child,
-        tunnel_owner,
-        port,
-        mcp_rx,
-        tunnel_rx,
-    ))
+    let port = find_available_port()
+        .ok_or_else(|| RenewalError::Profile("All remote access ports are in use.".into()))?;
+    let (mcp_rx, _) = spawn_mcp(app, port, generation, &profile)
+        .await
+        .map_err(RenewalError::Profile)?;
+    // Once enrollment begins, retain its future through durable credential
+    // storage. User cancellation still stops the owned local process promptly.
+    let connection = reverse_runtime::connect(profile, port);
+    tokio::pin!(connection);
+    let active = tokio::select! {
+        result = &mut connection => result?,
+        _ = wait_for_generation_change(app, generation) => {
+            let _ = transition_off(app, Some(generation)).await;
+            if let Ok(active) = connection.await {
+                let _ = active.connection.shutdown().await;
+            }
+            return Err(RenewalError::Profile("Remote access start cancelled.".into()));
+        }
+    };
+    Ok((port, mcp_rx, active))
 }
 
-async fn transition_off(
-    app_handle: &tauri::AppHandle,
+async fn preflight_cleanup(
+    state: &tokio::sync::Mutex<RemoteAccessState>,
+    generation: u64,
+    cleanup: impl std::future::Future<Output = Result<(), String>>,
+) -> Result<(), String> {
+    let mut ra = state.lock().await;
+    validate_mcp_spawn(&ra, generation)?;
+    if !matches!(ra.status, RemoteAccessStatus::Starting) || ra.reverse.is_some() {
+        return Err("Remote access start is no longer active.".into());
+    }
+    // A preceding scan must finish before stop or a new generation can spawn.
+    // Only the dedicated controller mutex is held, never AppState's RwLock.
+    let result = cleanup.await;
+    ra.orphan_cleanup_failed = result.is_err();
+    result
+}
+
+async fn transition_off<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
     expected_generation: Option<u64>,
 ) -> Option<u64> {
     use tauri::Emitter;
 
     let state = app_handle.state::<std::sync::Arc<tokio::sync::RwLock<crate::state::AppState>>>();
-    let app_state = state.read().await;
-    let mut ra = app_state.remote_access.lock().await;
+    let app_state = { state.read().await.remote_access.clone() };
+    stop_with_cleanup(
+        &app_state,
+        expected_generation,
+        |status| {
+            let _ = app_handle.emit("remote-access-status", status);
+        },
+        async {
+            tokio::task::spawn_blocking(cleanup_remote_orphans)
+                .await
+                .map_err(|_| SHUTDOWN_UNCONFIRMED.to_string())?
+        },
+    )
+    .await
+}
+
+async fn request_stops_into_state(
+    ra: &mut RemoteAccessState,
+    children: Vec<tauri_plugin_shell::process::CommandChild>,
+) {
+    if !children.is_empty() {
+        use crate::remote_relay::shutdown::{request_stops, PendingProcess};
+        let fallback: Vec<_> = children
+            .iter()
+            .map(|child| PendingProcess::unmeasured(child.pid()))
+            .collect();
+        let stopped = match timeout(
+            Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || request_stops(children, Vec::new())),
+        )
+        .await
+        {
+            Ok(Ok(stopped)) => stopped,
+            _ => fallback,
+        };
+        ra.pending_stops.extend(stopped);
+    }
+}
+
+async fn stop_with_cleanup(
+    state: &tokio::sync::Mutex<RemoteAccessState>,
+    expected_generation: Option<u64>,
+    emit_status: impl FnOnce(&RemoteAccessStatus),
+    cleanup: impl std::future::Future<Output = Result<(), String>>,
+) -> Option<u64> {
+    let mut ra = state.lock().await;
     if expected_generation.is_some_and(|expected| !generation_is_current(ra.generation, expected)) {
         return None;
     }
 
-    let tunnel_child = ra.tunnel_child.take();
-    let mcp_child = ra.mcp_child.take();
+    let reverse = ra.reverse.take();
+    let children: Vec<_> = [ra.mcp_child.take()].into_iter().flatten().collect();
     let generation = {
         let RemoteAccessState {
             status, generation, ..
         } = &mut *ra;
         mark_off(status, generation)
     };
-    ra.port = None;
-
-    if let Some(child) = tunnel_child {
-        let _ = child.kill();
+    if let Some(reverse) = reverse {
+        // shutdown always waits for terminal ownership, including an already
+        // failed connection; its result is not a server revocation receipt.
+        let _ = reverse.connection.shutdown().await;
     }
-    if let Some(child) = mcp_child {
-        let _ = child.kill();
+    request_stops_into_state(&mut ra, children).await;
+    // Retain the dedicated controller mutex until old-process cleanup finishes,
+    // or a new start can reuse a port and be killed by the preceding stop.
+    // No AppState RwLock guard is held; blocking process work runs in its pool.
+    ra.orphan_cleanup_failed = cleanup.await.is_err();
+    ra.pending_stops =
+        crate::remote_relay::shutdown::confirm_exits(std::mem::take(&mut ra.pending_stops)).await;
+    if ra.pending_stops.is_empty() && !ra.orphan_cleanup_failed {
+        ra.port = None;
+        ra.status = RemoteAccessStatus::Off;
+    } else {
+        ra.status = RemoteAccessStatus::Error {
+            error: SHUTDOWN_UNCONFIRMED.into(),
+        };
     }
-
-    let _ = app_handle.emit("remote-access-status", &RemoteAccessStatus::Off);
-    drop(ra);
-    drop(app_state);
-
-    // Sweep for any orphaned processes the handles didn't cover. Deliberately
-    // after the guards are dropped and on a blocking thread — it spawns
-    // `lsof`/`ps`/`kill` and sleeps synchronously, so running it above would
-    // park a tokio worker for ~half a second while still holding the AppState
-    // read guard and the remote-access mutex.
-    let _ = tokio::task::spawn_blocking(|| {
-        cleanup_orphaned_mcp();
-        cleanup_owned_cloudflared(None);
-    })
-    .await;
-
+    emit_status(&ra.status);
     Some(generation)
 }
 
-/// Stop the remote access tunnel — kill both processes and invalidate stale tasks.
-pub async fn toggle_off(app_handle: &tauri::AppHandle) {
-    let _ = transition_off(app_handle, None).await;
+/// Invalidate stale tasks, stop the reverse socket, and confirm local process exit.
+pub async fn toggle_off(app_handle: &tauri::AppHandle) -> Result<(), String> {
+    let plan = relay_runtime::prepare_disconnect(None).await;
+    let off_generation = transition_off(app_handle, None).await;
+    let result = match plan {
+        Ok(plan) => relay_runtime::finish_prepared_disconnect(plan).await,
+        Err(error) => Err(error),
+    };
+    if let Some(off_generation) = off_generation {
+        return publish_disconnect_result(app_handle, off_generation, result).await;
+    }
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reverse_recovery_is_bounded_and_does_not_retry_authorization_failures() {
+        let unavailable = RenewalError::Relay(RelayError::Unavailable);
+        assert_eq!(
+            recovery_delay(&unavailable, 0),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            recovery_delay(&unavailable, 1),
+            Some(Duration::from_secs(60))
+        );
+        assert_eq!(
+            recovery_delay(&unavailable, 2),
+            Some(Duration::from_secs(120))
+        );
+        assert_eq!(recovery_delay(&unavailable, 3), None);
+        assert_eq!(
+            recovery_delay(&RenewalError::Relay(RelayError::Unauthorized), 0),
+            None
+        );
+        assert_eq!(
+            recovery_delay(&RenewalError::Profile("stale".into()), 0),
+            None
+        );
+        assert_eq!(
+            recovery_delay(
+                &RenewalError::Relay(RelayError::RateLimited {
+                    retry_after_seconds: Some(600),
+                }),
+                0
+            ),
+            Some(Duration::from_secs(600))
+        );
+        assert_eq!(
+            recovery_delay(
+                &RenewalError::Relay(RelayError::RateLimited {
+                    retry_after_seconds: None,
+                }),
+                0
+            ),
+            Some(Duration::from_secs(900))
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn reverse_adoption_requires_current_generation_and_owned_mcp() {
+        let app = shell_test_app();
+        let mut state = RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 7,
+            port: Some(PORT_RANGE_START),
+            ..Default::default()
+        };
+        assert!(!can_adopt_reverse(&state, 7, PORT_RANGE_START, None));
+        let (_rx, child) = app.shell().command("/bin/sleep").arg("5").spawn().unwrap();
+        state.mcp_child = Some(child);
+        let current = can_adopt_reverse(&state, 7, PORT_RANGE_START, None);
+        let stale = can_adopt_reverse(&state, 6, PORT_RANGE_START, None);
+        let wrong_port = can_adopt_reverse(&state, 7, PORT_RANGE_START + 1, None);
+        let no_previous = can_adopt_reverse(&state, 7, PORT_RANGE_START, Some("old"));
+        state.orphan_cleanup_failed = true;
+        let unconfirmed = can_adopt_reverse(&state, 7, PORT_RANGE_START, None);
+        state.orphan_cleanup_failed = false;
+        let state = tokio::sync::Mutex::new(state);
+        stop_with_cleanup(&state, Some(7), |_| {}, async { Ok(()) }).await;
+        assert!(current);
+        assert!(!stale && !wrong_port && !no_previous && !unconfirmed);
+        assert!(state.lock().await.pending_stops.is_empty());
+    }
     use std::ffi::OsString;
 
     #[cfg(unix)]
-    fn file_mode(path: &Path) -> u32 {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    fn shell_test_app() -> tauri::App<tauri::test::MockRuntime> {
+        tauri::test::mock_builder()
+            .plugin(tauri_plugin_shell::init())
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build a windowless shell test runtime")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn real_command_child_survives_post_spawn_error_until_coordinated_stop() {
+        let app = shell_test_app();
+        let mut state = RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 7,
+            ..Default::default()
+        };
+        let validation = validate_mcp_spawn(&state, 7);
+        let mut observed_pid = None;
+        let spawned = spawn_and_store_child(
+            validation,
+            &mut state.mcp_child,
+            &mut state.port,
+            PORT_RANGE_START,
+            || {
+                app.shell()
+                    .command("/bin/sleep")
+                    .arg("5")
+                    .spawn()
+                    .map_err(|_| "owned fixture spawn failed".to_string())
+            },
+            |child| {
+                observed_pid = Some(child.pid());
+                Err("injected receipt failure".into())
+            },
+        );
+        let stored_pid = state.mcp_child.as_ref().map(|child| child.pid());
+        let before = stored_pid.map(measured_process_identity);
+        let state = tokio::sync::Mutex::new(state);
+        // Stop before asserting, even when the probe or injected path failed.
+        let generation = stop_with_cleanup(&state, Some(7), |_| {}, async { Ok(()) }).await;
+        assert_eq!(spawned.unwrap_err(), "injected receipt failure");
+        assert_eq!(stored_pid, observed_pid);
+        assert!(matches!(
+            before,
+            Some(crate::remote_relay::orphan::Observation::Identity(_))
+        ));
+        assert_eq!(generation, Some(8));
+        let stopped = state.lock().await;
+        assert!(stopped.mcp_child.is_none());
+        assert!(stopped.pending_stops.is_empty());
+        assert!(matches!(stopped.status, RemoteAccessStatus::Off));
+        assert_eq!(
+            measured_process_identity(stored_pid.unwrap()),
+            crate::remote_relay::orphan::Observation::Gone
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn exit_shutdown_stops_transport_without_disabling_saved_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = HomeGuard::set(tmp.path());
+        let store = crate::remote_relay::store::Store::current();
+        let configured = store.configure(None, "exit-test").unwrap();
+        let enabled = store.enable(configured.revision()).unwrap();
+        let enabled = store
+            .attach_device(
+                enabled.revision(),
+                crate::remote_relay::DeviceCredential {
+                    id: "d".repeat(64),
+                    management_token: "m".repeat(64),
+                    expires_at: crate::remote_relay::now_ms() + 60 * 60 * 1000,
+                },
+            )
+            .unwrap();
+        let expected_profile = serde_json::to_vec(&enabled).unwrap();
+
+        let app = shell_test_app();
+        let (_events, child) = app.shell().command("/bin/sleep").arg("5").spawn().unwrap();
+        let child_pid = child.pid();
+        let app_state = std::sync::Arc::new(tokio::sync::RwLock::new(crate::state::AppState {
+            remote_access: std::sync::Arc::new(tokio::sync::Mutex::new(RemoteAccessState {
+                status: RemoteAccessStatus::Connected {
+                    tunnel_url: None,
+                    relay_url: Some(format!("{RELAY_ORIGIN}/mcp")),
+                },
+                mcp_child: Some(child),
+                ..Default::default()
+            })),
+            ..crate::state::AppState::new()
+        }));
+        app.manage(app_state.clone());
+
+        shutdown_for_exit(app.handle()).await.unwrap();
+
+        let after = store.load().unwrap().unwrap();
+        assert_eq!(serde_json::to_vec(&after).unwrap(), expected_profile);
+        assert_eq!(
+            measured_process_identity(child_pid),
+            crate::remote_relay::orphan::Observation::Gone
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_stop_cannot_terminate_a_real_new_generation_child() {
+        let app = shell_test_app();
+        let mut current = RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 8,
+            ..Default::default()
+        };
+        let validation = validate_mcp_spawn(&current, 8);
+        let (mut events, pid) = spawn_and_store_child(
+            validation,
+            &mut current.mcp_child,
+            &mut current.port,
+            PORT_RANGE_START,
+            || {
+                let (events, child) = app
+                    .shell()
+                    .command("/bin/sleep")
+                    .arg("5")
+                    .spawn()
+                    .map_err(|_| "owned fixture spawn failed".to_string())?;
+                Ok(((events, child.pid()), child))
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+        let state = tokio::sync::Mutex::new(current);
+        let mut stale_cleanup_ran = false;
+        let stale = stop_with_cleanup(&state, Some(7), |_| {}, async {
+            stale_cleanup_ran = true;
+            Ok(())
+        })
+        .await;
+        let retained_pid = state
+            .lock()
+            .await
+            .mcp_child
+            .as_ref()
+            .map(|child| child.pid());
+        let after_stale = measured_process_identity(pid);
+        let stopped = stop_with_cleanup(&state, Some(8), |_| {}, async { Ok(()) }).await;
+        let exit = timeout(Duration::from_secs(2), wait_for_exit(&mut events)).await;
+        assert_eq!(stale, None);
+        assert!(!stale_cleanup_ran);
+        assert_eq!(retained_pid, Some(pid));
+        assert!(matches!(
+            after_stale,
+            crate::remote_relay::orphan::Observation::Identity(_)
+        ));
+        assert_eq!(stopped, Some(9));
+        assert!(state.lock().await.pending_stops.is_empty());
+        assert!(exit.unwrap().starts_with("terminated ("));
+        assert_eq!(
+            measured_process_identity(pid),
+            crate::remote_relay::orphan::Observation::Gone
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_scan_serializes_stop_and_rejects_stale_cleanup() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 7,
+            ..Default::default()
+        }));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let scanning = state.clone();
+        let scan = tokio::spawn(async move {
+            preflight_cleanup(&scanning, 7, async {
+                entered_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                Ok(())
+            })
+            .await
+        });
+        entered_rx.await.unwrap();
+        assert!(state.try_lock().is_err());
+        let stopping = state.clone();
+        let stop = tokio::spawn(async move {
+            stop_with_cleanup(&stopping, Some(7), |_| {}, async { Ok(()) }).await
+        });
+        release_tx.send(()).unwrap();
+        scan.await.unwrap().unwrap();
+        assert_eq!(stop.await.unwrap(), Some(8));
+        assert!(matches!(state.lock().await.status, RemoteAccessStatus::Off));
+        let mut invoked = false;
+        assert!(preflight_cleanup(&state, 7, async {
+            invoked = true;
+            Ok(())
+        })
+        .await
+        .is_err());
+        assert!(!invoked);
+    }
+
+    #[tokio::test]
+    async fn preflight_failure_is_retained_until_coordinated_cleanup() {
+        let state = tokio::sync::Mutex::new(RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 3,
+            ..Default::default()
+        });
+        assert!(
+            preflight_cleanup(&state, 3, async { Err("scan failed".into()) })
+                .await
+                .is_err()
+        );
+        {
+            let current = state.lock().await;
+            assert!(current.orphan_cleanup_failed);
+            assert!(validate_mcp_spawn(&current, 3).is_err());
+        }
+        assert_eq!(
+            stop_with_cleanup(&state, Some(3), |_| {}, async { Ok(()) }).await,
+            Some(4)
+        );
+        assert!(!state.lock().await.orphan_cleanup_failed);
+    }
+
+    #[test]
+    fn pending_shutdown_prevents_the_actual_spawn_helper_from_running() {
+        let state = RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 1,
+            pending_stops: vec![crate::remote_relay::shutdown::PendingProcess::unmeasured(
+                42,
+            )],
+            ..Default::default()
+        };
+        let mut slot: Option<()> = None;
+        let mut port = None;
+        let result: Result<(), String> = spawn_and_store_child(
+            validate_mcp_spawn(&state, 1),
+            &mut slot,
+            &mut port,
+            PORT_RANGE_START,
+            || panic!("pending stop must prevent spawning"),
+            |_| panic!("post-spawn must not run"),
+        );
+        assert_eq!(result.unwrap_err(), SHUTDOWN_UNCONFIRMED);
+        assert!(slot.is_none());
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn failed_spawn_leaves_slots_unchanged() {
+        let mut slot: Option<()> = None;
+        let mut port = Some(PORT_RANGE_START);
+        let result: Result<(), String> = spawn_and_store_child(
+            Ok(()),
+            &mut slot,
+            &mut port,
+            PORT_RANGE_START + 1,
+            || Err("spawn failed".into()),
+            |_| panic!("post-spawn must not run"),
+        );
+        assert!(result.is_err());
+        assert!(slot.is_none());
+        assert_eq!(port, Some(PORT_RANGE_START));
+    }
+
+    #[test]
+    fn invalid_spawn_validation_does_not_invoke_spawn() {
+        let mut slot = None;
+        let mut port = None;
+        let mut spawned = false;
+        let result = spawn_and_store_child(
+            Err("stale generation".into()),
+            &mut slot,
+            &mut port,
+            PORT_RANGE_START,
+            || {
+                spawned = true;
+                Ok(((), "fake child"))
+            },
+            |_| Ok(()),
+        );
+        assert!(result.is_err());
+        assert!(!spawned);
+        assert!(slot.is_none());
+        assert!(port.is_none());
+    }
+
+    #[test]
+    fn occupied_spawn_slot_does_not_invoke_spawn() {
+        let mut slot = Some("existing child");
+        let mut port = Some(PORT_RANGE_START);
+        let mut spawned = false;
+        let result = spawn_and_store_child(
+            Ok(()),
+            &mut slot,
+            &mut port,
+            PORT_RANGE_START + 1,
+            || {
+                spawned = true;
+                Ok(((), "new child"))
+            },
+            |_| Ok(()),
+        );
+        assert!(result.is_err());
+        assert!(!spawned);
+        assert_eq!(slot, Some("existing child"));
+        assert_eq!(port, Some(PORT_RANGE_START));
+    }
+
+    #[test]
+    fn post_spawn_failure_keeps_synchronously_stored_child() {
+        let mut slot = None;
+        let mut port = None;
+        let result = spawn_and_store_child(
+            Ok(()),
+            &mut slot,
+            &mut port,
+            PORT_RANGE_START,
+            || Ok((123_u32, "fake child")),
+            |child| {
+                assert_eq!(*child, "fake child");
+                Err("ownership receipt failed".into())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(slot, Some("fake child"));
+        assert_eq!(port, Some(PORT_RANGE_START));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn measured_identity_confirms_an_owned_child_that_has_exited() {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("0.01")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert_eq!(
+            measured_process_identity(pid),
+            crate::remote_relay::orphan::Observation::Gone
+        );
+    }
+
+    #[test]
+    fn malformed_owned_receipt_is_preserved_without_probing_or_signaling() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.json");
+        let owner = CloudflaredOwner {
+            pid: 424242,
+            port: PORT_RANGE_START,
+            identity: "invalid".into(),
+        };
+        write_cloudflared_owner_at(&path, &owner).unwrap();
+        assert!(cleanup_owned_cloudflared_at(
+            &path,
+            None,
+            PORT_RANGE_START,
+            |_| panic!("invalid probe"),
+            |_, _, _| panic!("invalid signal"),
+            || panic!("invalid wait")
+        )
+        .is_err());
+        assert_eq!(read_cloudflared_owner_at(&path).unwrap(), Some(owner));
+    }
+
+    #[test]
+    fn process_and_listener_parsers_do_not_turn_tool_errors_into_absence() {
+        assert_eq!(parse_process_field(false, Some(1), b"", b""), Ok(None));
+        for (success, code, out, err) in [
+            (false, Some(2), &b""[..], &b""[..]),
+            (false, Some(1), &b""[..], &b"denied"[..]),
+            (false, Some(1), &b"plausible process"[..], &b""[..]),
+            (true, Some(0), &b""[..], &b""[..]),
+            (true, Some(0), &b"one\ntwo"[..], &b""[..]),
+            (true, Some(0), &[255][..], &b""[..]),
+        ] {
+            assert!(parse_process_field(success, code, out, err).is_err());
+        }
+        assert_eq!(
+            parse_process_field(true, Some(0), b" cloudflared tunnel \n", b""),
+            Ok(Some("cloudflared tunnel".into()))
+        );
+        assert_eq!(parse_listener_pids(false, Some(1), b"", b""), Some(vec![]));
+        assert_eq!(
+            parse_listener_pids(true, Some(0), b"42\n43\n", b""),
+            Some(vec![42, 43])
+        );
+        assert!(parse_listener_pids(true, Some(0), b"42\nbad\n", b"").is_none());
+        assert!(parse_listener_pids(false, Some(1), b"", b"denied").is_none());
+        assert!(parse_listener_pids(true, Some(0), b"0\n", b"").is_none());
+    }
+
+    #[test]
+    fn orphan_receipt_survives_unknown_and_failed_signals() {
+        use crate::remote_relay::orphan::Observation;
+        for unknown in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("owner.json");
+            let owner = CloudflaredOwner { pid: 424242, port: PORT_RANGE_START,
+                identity: format!("started\ncloudflared tunnel --no-autoupdate --url http://localhost:{PORT_RANGE_START}") };
+            write_cloudflared_owner_at(&path, &owner).unwrap();
+            let mut signals = vec![];
+            let result = cleanup_owned_cloudflared_at(
+                &path,
+                None,
+                PORT_RANGE_START,
+                |_| {
+                    if unknown {
+                        Observation::Unknown
+                    } else {
+                        Observation::Identity(owner.identity.clone())
+                    }
+                },
+                |pid, force, identity| {
+                    assert_eq!(pid, owner.pid);
+                    assert_eq!(identity, owner.identity);
+                    signals.push(force);
+                    false
+                },
+                || {},
+            );
+            assert!(result.is_err());
+            assert_eq!(read_cloudflared_owner_at(&path).unwrap(), Some(owner));
+            assert_eq!(signals, if unknown { vec![] } else { vec![false, true] });
+        }
+    }
+
+    #[test]
+    fn orphan_receipt_removal_requires_confirmed_exit_or_replacement() {
+        use crate::remote_relay::orphan::Observation;
+        for replacement in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("owner.json");
+            let owner = CloudflaredOwner { pid: 424242, port: PORT_RANGE_START,
+                identity: format!("started\ncloudflared tunnel --no-autoupdate --url http://localhost:{PORT_RANGE_START}") };
+            write_cloudflared_owner_at(&path, &owner).unwrap();
+            cleanup_owned_cloudflared_at(
+                &path,
+                Some(&owner),
+                PORT_RANGE_START,
+                |_| {
+                    if replacement {
+                        Observation::Identity("different start\nother process".into())
+                    } else {
+                        Observation::Gone
+                    }
+                },
+                |_, _, _| panic!("must not signal exited/replaced process"),
+                || panic!("must not wait"),
+            )
+            .unwrap();
+            assert_eq!(read_cloudflared_owner_at(&path).unwrap(), None);
+        }
+    }
+
+    #[test]
+    fn stale_cleanup_never_probes_or_removes_a_replacement_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("owner.json");
+        let current = CloudflaredOwner { pid: 424242, port: PORT_RANGE_START,
+            identity: format!("started\ncloudflared tunnel --no-autoupdate --url http://localhost:{PORT_RANGE_START}") };
+        let old = CloudflaredOwner {
+            pid: 424241,
+            ..current.clone()
+        };
+        write_cloudflared_owner_at(&path, &current).unwrap();
+        cleanup_owned_cloudflared_at(
+            &path,
+            Some(&old),
+            PORT_RANGE_START,
+            |_| panic!("stale probe"),
+            |_, _, _| panic!("stale signal"),
+            || panic!("stale wait"),
+        )
+        .unwrap();
+        assert_eq!(read_cloudflared_owner_at(&path).unwrap(), Some(current));
+    }
+
+    #[tokio::test]
+    async fn orphan_failure_blocks_reconnect_until_a_measured_retry_succeeds() {
+        let state = tokio::sync::Mutex::new(RemoteAccessState::default());
+        stop_with_cleanup(
+            &state,
+            Some(0),
+            |status| assert!(matches!(status, RemoteAccessStatus::Error { .. })),
+            async { Err("probe unavailable".into()) },
+        )
+        .await
+        .unwrap();
+        {
+            let mut current = state.lock().await;
+            assert!(current.orphan_cleanup_failed);
+            assert!(disconnect_result_for(&current, Ok(())).is_err());
+            assert!(matches!(
+                apply_disconnect_result(&mut current, 1, Ok(())),
+                Some(RemoteAccessStatus::Error { .. })
+            ));
+        }
+        stop_with_cleanup(
+            &state,
+            Some(1),
+            |status| assert!(matches!(status, RemoteAccessStatus::Off)),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        assert!(!state.lock().await.orphan_cleanup_failed);
+    }
+
+    #[test]
+    fn unconfirmed_shutdown_blocks_explicit_and_automatic_starts() {
+        for expected in [None, Some(5)] {
+            let mut status = RemoteAccessStatus::Error {
+                error: SHUTDOWN_UNCONFIRMED.into(),
+            };
+            let mut generation = 5;
+            assert!(try_begin_start(&mut status, &mut generation, expected, true).is_none());
+            assert_eq!(generation, 5);
+            assert!(matches!(status, RemoteAccessStatus::Error { .. }));
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_shutdown_is_retained_and_remote_success_cannot_hide_it() {
+        let state = tokio::sync::Mutex::new(RemoteAccessState {
+            pending_stops: vec![crate::remote_relay::shutdown::PendingProcess::unmeasured(
+                std::process::id(),
+            )],
+            port: Some(17899),
+            ..Default::default()
+        });
+        let mut emitted = None;
+        let generation = stop_with_cleanup(
+            &state,
+            Some(0),
+            |status| emitted = Some(status.clone()),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(emitted, Some(RemoteAccessStatus::Error { error }) if error == SHUTDOWN_UNCONFIRMED)
+        );
+        let mut current = state.lock().await;
+        assert_eq!(current.port, Some(17899));
+        assert_eq!(current.pending_stops.len(), 1);
+        assert!(
+            matches!(apply_disconnect_result(&mut current, generation, Ok(())),
+            Some(RemoteAccessStatus::Error { error }) if error == SHUTDOWN_UNCONFIRMED)
+        );
+        let combined = disconnect_result_for(&current, Err("Server revocation unconfirmed".into()))
+            .unwrap_err();
+        assert!(combined.contains(SHUTDOWN_UNCONFIRMED));
+        assert!(combined.contains("Server revocation unconfirmed"));
+    }
+
+    #[test]
+    fn unconfirmed_disconnect_is_visible_but_cannot_overwrite_a_later_start() {
+        let mut state = RemoteAccessState::default();
+        let warning = "Saved settings are unconfirmed; retry before restarting the App";
+        assert!(matches!(
+            apply_disconnect_result(&mut state, 0, Err(warning.into())),
+            Some(RemoteAccessStatus::Error { error }) if error == warning
+        ));
+        assert!(matches!(state.status, RemoteAccessStatus::Error { .. }));
+        state.generation = 1;
+        state.status = RemoteAccessStatus::Starting;
+        assert!(apply_disconnect_result(&mut state, 0, Ok(())).is_none());
+        assert!(apply_disconnect_result(&mut state, 0, Err(warning.into())).is_none());
+        assert!(matches!(state.status, RemoteAccessStatus::Starting));
+    }
+
+    #[test]
+    fn confirmed_disconnect_clears_the_previous_warning() {
+        let mut state = RemoteAccessState {
+            status: RemoteAccessStatus::Error {
+                error: "pending".into(),
+            },
+            ..Default::default()
+        };
+        assert!(matches!(
+            apply_disconnect_result(&mut state, 0, Ok(())),
+            Some(RemoteAccessStatus::Off)
+        ));
+        assert!(matches!(state.status, RemoteAccessStatus::Off));
+    }
+
+    #[tokio::test]
+    async fn stop_cleanup_finishes_before_a_new_start_can_reuse_its_ports() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(RemoteAccessState::default()));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let stopping_state = state.clone();
+        let stopping = tokio::spawn(async move {
+            stop_with_cleanup(&stopping_state, Some(0), |_| {}, async {
+                entered_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                Ok(())
+            })
+            .await
+        });
+        entered_rx.await.unwrap();
+        assert!(state.try_lock().is_err());
+        let starting_state = state.clone();
+        let mut starting = tokio::spawn(async move {
+            let mut state = starting_state.lock().await;
+            let RemoteAccessState {
+                status, generation, ..
+            } = &mut *state;
+            try_begin_start(status, generation, None, false)
+        });
+        assert!(timeout(Duration::from_millis(50), &mut starting)
+            .await
+            .is_err());
+        release_tx.send(()).unwrap();
+        assert_eq!(stopping.await.unwrap(), Some(1));
+        assert_eq!(starting.await.unwrap(), Some(2));
+        assert!(matches!(
+            state.lock().await.status,
+            RemoteAccessStatus::Starting
+        ));
+    }
+
+    #[tokio::test]
+    async fn stale_stop_cannot_emit_or_run_cleanup_against_a_new_generation() {
+        let state = tokio::sync::Mutex::new(RemoteAccessState {
+            status: RemoteAccessStatus::Starting,
+            generation: 2,
+            ..RemoteAccessState::default()
+        });
+        assert_eq!(
+            stop_with_cleanup(&state, Some(1), |_| panic!("stale event"), async {
+                panic!("stale cleanup");
+            })
+            .await,
+            None
+        );
+        assert!(matches!(
+            state.lock().await.status,
+            RemoteAccessStatus::Starting
+        ));
     }
 
     /// Points every root these tests write at a tempdir.
@@ -1821,9 +2241,11 @@ mod tests {
         let mut status = RemoteAccessStatus::Off;
         let mut generation = 0;
 
-        let start_generation = try_begin_start(&mut status, &mut generation, None).unwrap();
+        let start_generation = try_begin_start(&mut status, &mut generation, None, false).unwrap();
         assert!(matches!(status, RemoteAccessStatus::Starting));
-        assert!(try_begin_start(&mut status, &mut generation, Some(start_generation)).is_none());
+        assert!(
+            try_begin_start(&mut status, &mut generation, Some(start_generation), false).is_none()
+        );
     }
 
     #[test]
@@ -1831,13 +2253,13 @@ mod tests {
         let mut status = RemoteAccessStatus::Off;
         let mut generation = 0;
 
-        let in_flight = try_begin_start(&mut status, &mut generation, None).unwrap();
+        let in_flight = try_begin_start(&mut status, &mut generation, None, false).unwrap();
         let recovery = mark_off(&mut status, &mut generation);
         assert_ne!(in_flight, recovery);
 
         let explicit_off = mark_off(&mut status, &mut generation);
         assert_ne!(recovery, explicit_off);
-        assert!(try_begin_start(&mut status, &mut generation, Some(recovery)).is_none());
+        assert!(try_begin_start(&mut status, &mut generation, Some(recovery), false).is_none());
         assert!(!generation_is_current(generation, in_flight));
     }
 
@@ -1861,12 +2283,13 @@ mod tests {
         assert!(json.contains("\"starting\""));
 
         let status = RemoteAccessStatus::Connected {
-            tunnel_url: "https://test.trycloudflare.com".to_string(),
-            relay_url: None,
+            tunnel_url: None,
+            relay_url: Some(format!("{RELAY_ORIGIN}/mcp")),
         };
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("\"connected\""));
-        assert!(json.contains("https://test.trycloudflare.com"));
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["status"], "connected");
+        assert!(json["tunnel_url"].is_null());
+        assert_eq!(json["relay_url"], format!("{RELAY_ORIGIN}/mcp"));
 
         let status = RemoteAccessStatus::Error {
             error: "something broke".to_string(),
@@ -1908,6 +2331,46 @@ mod tests {
     }
 
     #[test]
+    fn orphan_identity_preserves_windows_paths_with_spaces() {
+        let mcp = format!(
+            "argv:{}",
+            serde_json::json!([
+                "C:\\Users\\Test User\\Wenlan\\wenlan-mcp.exe",
+                "serve",
+                "--port",
+                "22000",
+                "--agent-name",
+                "remote-mcp"
+            ])
+        );
+        assert!(is_expected_remote_mcp_command(&mcp, 22000));
+        assert!(!is_expected_remote_mcp_command(&mcp, 22001));
+        let tunnel = format!(
+            "argv:{}",
+            serde_json::json!([
+                "C:\\Program Files\\Wenlan\\cloudflared.exe",
+                "tunnel",
+                "--no-autoupdate",
+                "--url",
+                "http://localhost:22000"
+            ])
+        );
+        assert!(is_expected_remote_tunnel_command(&tunnel, 22000));
+        assert!(!is_expected_remote_tunnel_command(&tunnel, 22001));
+        assert!(!is_expected_remote_mcp_command("argv:{broken", 22000));
+        assert!(!is_expected_remote_tunnel_command("argv:[]", 22000));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn orphan_identity_does_not_treat_unix_backslash_as_path_separator() {
+        assert!(!is_expected_remote_mcp_command(
+            "/tmp/not-wenlan\\wenlan-mcp serve --port 22000 --agent-name remote-mcp",
+            22000
+        ));
+    }
+
+    #[test]
     fn orphan_cleanup_requires_the_exact_remote_mcp_process_identity() {
         assert!(is_expected_remote_mcp_command(
             "/tmp/wenlan-mcp-aarch64-apple-darwin --origin-url http://127.0.0.1:17777 serve --port 22000 --no-auth --agent-name remote-mcp",
@@ -1935,22 +2398,6 @@ mod tests {
         ));
         assert!(is_expected_remote_tunnel_command(
             "/tmp/cloudflared tunnel --url http://localhost:22000",
-            22000,
-        ));
-        // The argv `start_remote_access` actually spawns, taken from the same
-        // builder the spawn site calls rather than written out again here. A
-        // hand-written copy stays green when the production flag is deleted,
-        // which is the whole failure this test exists to catch.
-        let args = remote_tunnel_args(22000);
-        assert_eq!(args[0], "tunnel");
-        assert_eq!(args[1], "--no-autoupdate");
-        assert_eq!(args[2], "--url");
-        assert_eq!(args[3], "http://localhost:22000");
-        // And orphan cleanup still recognizes that argv. If it stops matching,
-        // the app no longer knows the tunnel it started and leaves it running
-        // after a quit, holding an unauthenticated public URL open.
-        assert!(is_expected_remote_tunnel_command(
-            &format!("/tmp/cloudflared-aarch64-apple-darwin {}", args.join(" ")),
             22000,
         ));
         assert!(!is_expected_remote_tunnel_command(
@@ -2113,168 +2560,5 @@ mod tests {
 
         assert_ne!(port, held_port, "must skip the port already held");
         assert!((held_port..=held_port + 3).contains(&port));
-    }
-
-    #[test]
-    fn test_parse_tunnel_url_from_cloudflared_stderr() {
-        let stderr = r#"2026-03-27T10:00:00Z INF +--------------------------------------------------------------------------------------------+
-2026-03-27T10:00:00Z INF |  Your quick Tunnel has been created! Visit it at (it may take some time to be reachable):  |
-2026-03-27T10:00:00Z INF |  https://calm-river-abc123.trycloudflare.com                                               |
-2026-03-27T10:00:00Z INF +--------------------------------------------------------------------------------------------+"#;
-        let url = parse_tunnel_url(stderr);
-        assert_eq!(
-            url,
-            Some("https://calm-river-abc123.trycloudflare.com".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_tunnel_url_no_match() {
-        let stderr = "some random log output without a URL";
-        let url = parse_tunnel_url(stderr);
-        assert!(url.is_none());
-    }
-
-    #[test]
-    fn test_parse_tunnel_url_real_cloudflared_format() {
-        let stderr = "2026-03-27 INF Registered tunnel connection\nhttps://my-tunnel-xyz.trycloudflare.com\n2026-03-27 INF Connection established";
-        let url = parse_tunnel_url(stderr);
-        assert_eq!(
-            url,
-            Some("https://my-tunnel-xyz.trycloudflare.com".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_tunnel_url_multiple_urls_returns_first() {
-        let stderr =
-            "https://first-tunnel.trycloudflare.com\nhttps://second-tunnel.trycloudflare.com";
-        let url = parse_tunnel_url(stderr);
-        assert_eq!(
-            url,
-            Some("https://first-tunnel.trycloudflare.com".to_string())
-        );
-    }
-
-    #[test]
-    fn relay_id_path_does_not_import_legacy_relay_id() {
-        let tmp = tempfile::tempdir().unwrap();
-        let current = tmp.path().join("wenlan-mcp");
-        let legacy = tmp.path().join("origin-mcp");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("relay_id"), "stale-relay-id").unwrap();
-
-        let path = relay_id_path_for_dirs(&current);
-
-        assert_eq!(path, current.join("relay_id"));
-        assert!(!current.join("relay_id").exists());
-    }
-
-    #[test]
-    #[cfg(unix)]
-    #[serial_test::serial]
-    fn relay_id_generation_writes_private_secret_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _home = HomeGuard::set(tmp.path());
-
-        let id = get_or_create_relay_id().unwrap();
-        let path = relay_id_path();
-
-        assert!(!id.is_empty());
-        assert_eq!(file_mode(&path), 0o600);
-        assert_eq!(file_mode(path.parent().unwrap()), 0o700);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn a_fresh_relay_id_has_128_bits_behind_it() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _home = HomeGuard::set(tmp.path());
-
-        let id = get_or_create_relay_id().unwrap();
-
-        assert!(relay_id_is_current(&id), "unexpected shape: {id}");
-        assert_eq!(id.len(), 33, "u + 32 hex characters: {id}");
-    }
-
-    #[test]
-    fn the_registration_log_line_names_no_secret() {
-        // The relay ID is the whole protection on a public endpoint, and it is
-        // also the path segment of the URL. Until this test existed the success
-        // path logged that URL in full, at warning level, into a file that never
-        // rotates -- so every user who attached `wenlan.log` to a bug report
-        // handed over read and write access to their memory.
-        let id = new_relay_id().unwrap();
-        let url = relay_mcp_url_for(&id);
-        assert!(url.contains(&id), "the URL really does carry the secret");
-
-        let line = relay_registration_log_line();
-        assert!(!line.contains(&id), "log line leaks the relay ID: {line}");
-        assert!(!line.contains(&url), "log line leaks the relay URL: {line}");
-        assert!(
-            !line.contains(RELAY_URL),
-            "log line names the relay endpoint: {line}"
-        );
-    }
-
-    #[test]
-    fn two_relay_ids_do_not_collide() {
-        // A weak generator shows up here as a repeat. The old one hashed the
-        // wall clock and the process ID, so two IDs made in the same
-        // millisecond by the same process were the same string.
-        let mut seen = std::collections::HashSet::new();
-        for _ in 0..256 {
-            assert!(seen.insert(new_relay_id().unwrap()), "repeated relay ID");
-        }
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn a_relay_id_from_before_the_csprng_is_replaced() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _home = HomeGuard::set(tmp.path());
-        let path = relay_id_path();
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // Exactly what the previous generator wrote: `u` plus 11 hex characters.
-        std::fs::write(&path, "u1a2b3c4d5e6").unwrap();
-
-        let id = get_or_create_relay_id().unwrap();
-
-        assert_ne!(id, "u1a2b3c4d5e6");
-        assert!(relay_id_is_current(&id), "unexpected shape: {id}");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), id);
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn a_current_relay_id_survives_a_restart() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _home = HomeGuard::set(tmp.path());
-
-        let first = get_or_create_relay_id().unwrap();
-        let second = get_or_create_relay_id().unwrap();
-
-        assert_eq!(first, second, "the URL must not change on every launch");
-    }
-
-    #[test]
-    fn relay_id_shape_rejects_the_old_and_the_malformed() {
-        assert!(!relay_id_is_current(""));
-        assert!(!relay_id_is_current("u1a2b3c4d5e6"));
-        assert!(!relay_id_is_current(&"u".repeat(33)));
-        assert!(!relay_id_is_current(&format!("u{}", "A".repeat(32))));
-        assert!(!relay_id_is_current(&format!("x{}", "0".repeat(32))));
-        assert!(relay_id_is_current(&format!("u{}", "0f".repeat(16))));
-    }
-
-    #[test]
-    #[serial_test::serial]
-    fn relay_id_generation_errors_when_relay_id_path_is_directory() {
-        let tmp = tempfile::tempdir().unwrap();
-        let _home = HomeGuard::set(tmp.path());
-        let path = relay_id_path();
-        std::fs::create_dir_all(&path).unwrap();
-
-        assert!(get_or_create_relay_id().is_err());
     }
 }

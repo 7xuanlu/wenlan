@@ -41,6 +41,8 @@ function resolvedRouting(): unknown {
 export function baseResponse(command: string, args: unknown, context: BaseResponseContext): unknown {
   switch (command) {
     case "should_show_wizard": case "get_clipboard_enabled": return false;
+    case "get_remote_access_profile": return null;
+    case "get_remote_access_status": return { status: "off" };
     case "set_traffic_lights_visible": case "set_setup_completed": return null;
     case "list_agent_activity": return context.activityRows;
     case "list_agents": return [{ id: "agent-claude-code", name: "claude-code", display_name: "Claude Code", agent_type: "claude-code", description: null, enabled: true, trust_level: "full", last_seen_at: 1_783_728_000, memory_count: context.memoryCount, created_at: 1_783_728_000, updated_at: 1_783_728_000 }];

@@ -1,451 +1,257 @@
-import { useEffect, useId, useRef, useState } from "react";
+// SPDX-License-Identifier: AGPL-3.0-only
+import { useEffect, useId, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
+import { Copy, ArrowClockwise, Check } from "@phosphor-icons/react";
 import {
-  clipboardWrite,
-  getRemoteAccessStatus,
-  getWireState,
-  installClientPlugin,
-  testRemoteMcpConnection,
-  toggleRemoteAccess,
-  type RemoteAccessStatus,
-  type RemoteConnectionTest,
+  approveRemotePairing, clipboardWrite, configureRemoteAccess, getRemoteAccessProfile,
+  getRemoteAccessStatus, inspectRemotePairing, listRemoteGrants, listSpaces,
+  revokeRemoteGrant, testRemoteMcpConnection, toggleRemoteAccess,
+  type RemoteAccessStatus, type RemotePairing, type RemoteGrantPage,
 } from "../../lib/tauri";
-import { readingFailed, readingIsYes } from "../../lib/reading";
-import { Button, Card, StatusChip, Tag, Toggle, WarningTriangleIcon } from "./settings/primitives";
+import { Button, StatusChip, Tag, Toggle } from "./settings/primitives";
 
-const REMOTE_QUERY_KEY = ["remote-access-status"] as const;
+const STATUS = ["remote-access-status"] as const;
+const PROFILE = ["remote-access-profile"] as const;
+const GRANTS = ["remote-access-grants"] as const;
+const fieldClass = "w-full min-w-0 rounded border px-3 py-2 bg-[var(--mem-bg)] border-[var(--mem-border)] text-[var(--mem-text)]";
+const secondary = "text-[var(--mem-text-secondary)] text-sm";
+const errorClass = "text-sm text-[var(--mem-status-danger-text)] break-words";
 
-/** Web access — the one state-aware surface for reaching memory from
- *  claude.ai and ChatGPT. Turning the toggle on IS the setup: the relay needs
- *  nothing configured. Below the toggle, one row per web platform reflects
- *  where each stands — Claude.ai is Ready once its connector is installed
- *  (a one-click Set up otherwise); ChatGPT gets its paste-in URL once web
- *  access is on. The always-visible no-auth warning is the one load-bearing
- *  boundary. Reads `RemoteAccessStatus` via React Query and invalidates on
- *  `remote-access-status` events. */
-export function RemoteAccessPanel() {
+export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const warningId = `${useId()}-remote-access-warning`;
-
-  const { data: status = { status: "off" } as RemoteAccessStatus } = useQuery({
-    queryKey: REMOTE_QUERY_KEY,
-    queryFn: getRemoteAccessStatus,
-    staleTime: 30_000,
-    refetchInterval: false,
-  });
-
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<RemoteAccessStatus>("remote-access-status", (event) => {
-      queryClient.setQueryData(REMOTE_QUERY_KEY, event.payload);
-    }).then((fn) => {
-      unlisten = fn;
-    });
-    return () => {
-      unlisten?.();
-    };
-  }, [queryClient]);
-
-  const toggleMut = useMutation({
-    mutationFn: (enabled: boolean) => toggleRemoteAccess(enabled),
-    onSuccess: (next) => {
-      queryClient.setQueryData(REMOTE_QUERY_KEY, next);
-    },
-  });
-
-  const [testResult, setTestResult] = useState<
-    | { kind: "idle" }
-    | { kind: "running" }
-    | { kind: "ok"; latency_ms: number | null }
-    | { kind: "err"; error: string }
-  >({ kind: "idle" });
-
-  const testOkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (testOkTimerRef.current) clearTimeout(testOkTimerRef.current);
-    };
-  }, []);
-
-  const testMut = useMutation({
-    mutationFn: testRemoteMcpConnection,
-    onMutate: () => {
-      setTestResult({ kind: "running" });
-    },
-    onSuccess: (result: RemoteConnectionTest) => {
-      if (result.ok) {
-        setTestResult({ kind: "ok", latency_ms: result.latency_ms });
-        if (testOkTimerRef.current) clearTimeout(testOkTimerRef.current);
-        testOkTimerRef.current = setTimeout(() => setTestResult({ kind: "idle" }), 2000);
-      } else {
-        setTestResult({ kind: "err", error: result.error ?? "Unknown error" });
-      }
-    },
-    onError: (err) => {
-      setTestResult({ kind: "err", error: String(err) });
-    },
-  });
-
-  const isOn = status.status === "connected" || status.status === "starting";
-
-  const handleReconnect = () => {
-    toggleMut.mutate(false);
-    setTimeout(() => toggleMut.mutate(true), 500);
-  };
-
-  return (
-    <Card padding="none">
-      {/* Toggle row — turning it on IS the setup; the relay needs nothing
-          configured. */}
-      <div className="px-5 py-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <div
-              style={{
-                fontFamily: "var(--mem-font-body)",
-                fontSize: "var(--mem-text-lg)",
-                fontWeight: 600,
-                color: "var(--mem-text)",
-              }}
-            >
-              {t("remoteAccess.title")}
-            </div>
-            <Tag tone="accent">{t("remoteAccess.experimentalBadge")}</Tag>
-          </div>
-          <div className="mt-0.5">
-            <Toggle
-              enabled={isOn}
-              onToggle={() => toggleMut.mutate(!isOn)}
-              aria-label={t("remoteAccess.title")}
-              aria-describedby={warningId}
-            />
-          </div>
-        </div>
-
-        <p
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "var(--mem-text-sm)",
-            color: "var(--mem-text-secondary)",
-            lineHeight: "1.5",
-            marginTop: "6px",
-          }}
-        >
-          {t("remoteAccess.description")}
-        </p>
-
-        {/* No-auth warning — the single, louder surviving rendering (was 3
-            across this panel + WebPlatformCards ×2, now exactly one). Always
-            visible, never behind a disclosure, wired to the toggle via
-            aria-describedby so a screen reader hears the boundary at the
-            moment of toggling. */}
-        <div className="flex items-start gap-2 mt-2">
-          <WarningTriangleIcon className="w-3.5 h-3.5 text-[var(--mem-status-warning-text)] shrink-0 mt-px" />
-          <p
-            id={warningId}
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "var(--mem-text-sm)",
-              color: "var(--mem-status-warning-text)",
-              lineHeight: "1.5",
-            }}
-          >
-            {t("remoteAccess.noAuthWarning")}
-          </p>
-        </div>
-      </div>
-
-      {/* Status row — chip, plus Test connection + Reconnect once connected.
-          The relay URL is not here: its one home is the ChatGPT row below. */}
-      <div className="px-5 pb-4">
-        <StatusRow
-          status={status}
-          testResult={testResult}
-          onTest={() => testMut.mutate()}
-          onReconnect={handleReconnect}
-          reconnecting={toggleMut.isPending}
-        />
-      </div>
-
-      {/* Error / disabled reconnect */}
-      {status.status === "error" && (
-        <div className="px-5 pb-4 space-y-2">
-          <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="secondary" size="sm" onClick={() => toggleMut.mutate(true)}>
-              {t("remoteAccess.retry")}
-            </Button>
-            <Button variant="secondary" size="sm" onClick={handleReconnect}>
-              {t("remoteAccess.reconnect")}
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Claude.ai — Ready once the connector is installed, one-click Set up
-          otherwise. Independent of the toggle (it's the connector, not the
-          relay). */}
-      <div className="border-t px-5 py-4" style={{ borderColor: "var(--mem-border)" }}>
-        <ClaudeRow />
-      </div>
-
-      {/* ChatGPT — the one home for the paste-in relay URL, shown once web
-          access is on. */}
-      <div className="border-t px-5 py-4" style={{ borderColor: "var(--mem-border)" }}>
-        <ChatgptRow status={status} />
-      </div>
-    </Card>
-  );
-}
-
-type TestResult =
-  | { kind: "idle" }
-  | { kind: "running" }
-  | { kind: "ok"; latency_ms: number | null }
-  | { kind: "err"; error: string };
-
-function StatusRow({
-  status,
-  testResult,
-  onTest,
-  onReconnect,
-  reconnecting,
-}: {
-  status: RemoteAccessStatus;
-  testResult: TestResult;
-  onTest: () => void;
-  onReconnect: () => void;
-  reconnecting: boolean;
-}) {
-  const { t } = useTranslation();
-  // "off" is a setting the user chose, not something the app probed — the
-  // chip-never-lies invariant means a chip's color may only come from an
-  // observation, so off gets no chip at all (the Toggle already says it).
-  if (status.status === "off") return null;
-  if (status.status === "starting") {
-    return <StatusChip state={{ kind: "probing" }} label={t("remoteAccess.statusConnecting")} />;
-  }
-  if (status.status === "error") {
-    // The verbatim daemon error carries the chip; there is no honest constant
-    // word to put beside it, so it stands alone as the label.
-    return <StatusChip state={{ kind: "down" }} label={status.error} />;
-  }
-  // connected
-  return (
-    <div className="flex items-center gap-3 flex-wrap">
-      <StatusChip state={{ kind: "up" }} label={t("remoteAccess.statusConnected")} />
-      <Button
-        variant="secondary"
-        size="sm"
-        loading={testResult.kind === "running"}
-        onClick={onTest}
-      >
-        {testResult.kind === "running"
-          ? t("remoteAccess.testing")
-          : t("remoteAccess.testConnection")}
-      </Button>
-      <Button variant="secondary" size="sm" loading={reconnecting} onClick={onReconnect}>
-        {t("remoteAccess.reconnect")}
-      </Button>
-      {testResult.kind === "ok" && (
-        <span
-          className="inline-flex items-center gap-1"
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "var(--mem-text-sm)",
-            color: "var(--mem-accent-sage)",
-          }}
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-          </svg>
-          {t("remoteAccess.statusConnectedLatency", { ms: testResult.latency_ms ?? "?" })}
-        </span>
-      )}
-      {testResult.kind === "err" && (
-        <span
-          className="inline-flex items-center gap-1"
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "var(--mem-text-sm)",
-            color: "var(--mem-status-danger-text)",
-          }}
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-          {testResult.error}
-        </span>
-      )}
-    </div>
-  );
-}
-
-const rowHeading = (text: string) => (
-  <h3 style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-lg)", fontWeight: 600, color: "var(--mem-text)", margin: 0 }}>
-    {text}
-  </h3>
-);
-
-/** Claude.ai row: reads the real, resolved wiring. `has_plugin` true means the
- *  connector is installed and memory flows through the relay while web access
- *  is on — nothing to do. Otherwise a one-click Set up (idempotent plugin
- *  install) plus a manual fallback. When the wire query fails we can't tell
- *  whether the plugin exists, so we offer only the manual steps — never a
- *  one-click install against unknown state (it could double-register). */
-function ClaudeRow() {
-  const { t } = useTranslation();
-  const queryClient = useQueryClient();
-  const [installing, setInstalling] = useState(false);
-  const [error, setError] = useState("");
-
-  const { data: wire, isError } = useQuery({ queryKey: ["wireState"], queryFn: getWireState });
-  const claudeCode = wire?.clients.find((c) => c.client_type === "claude_code");
-  const hasPlugin = claudeCode ? readingIsYes(claudeCode.has_plugin) : false;
-  // The comment above says "never a one-click install against unknown state",
-  // and `isError` used to be the only unknown this could see. A `has_plugin`
-  // the app could not READ is the same unknown arriving on a successful
-  // query — it used to fall through `?? false` to "no connector", which is
-  // exactly the state that offers the install that double-registers.
-  const pluginUnknown = isError || (claudeCode ? readingFailed(claudeCode.has_plugin) : false);
-
-  const install = async () => {
-    setInstalling(true);
-    setError("");
-    try {
-      await installClientPlugin("claude_code");
-      queryClient.invalidateQueries({ queryKey: ["wireState"] });
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      setInstalling(false);
-    }
-  };
-
-  if (hasPlugin) {
-    return (
-      <div className="flex flex-col" style={{ gap: "8px" }}>
-        <div className="flex items-center justify-between gap-2">
-          {rowHeading(t("connectMatrix.claudeTitle"))}
-          <StatusChip state={{ kind: "up" }} label={t("connectMatrix.claudeReady")} />
-        </div>
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", lineHeight: 1.5, margin: 0 }}>
-          {t("connectMatrix.claudeReadyBody")}
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col" style={{ gap: "10px" }}>
-      <div className="flex items-center justify-between gap-2">
-        {rowHeading(t("connectMatrix.claudeTitle"))}
-        <Tag tone="neutral">{t("intelligence.notConfigured")}</Tag>
-      </div>
-      {!pluginUnknown && (
-        <div className="flex flex-col gap-1.5">
-          <div>
-            <Button variant="secondary" size="sm" onClick={install} disabled={installing}>
-              {installing ? t("connectMatrix.settingUp") : t("connectMatrix.setUp")}
-            </Button>
-          </div>
-          {error && (
-            <p role="alert" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-status-danger-text)", margin: 0 }}>
-              {error}
-            </p>
-          )}
-        </div>
-      )}
-      <details className="group">
-        <summary
-          className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-[var(--mem-radius-sm)] py-0.5 [&::-webkit-details-marker]:hidden focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2"
-          style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}
-        >
-          <svg
-            aria-hidden="true"
-            className="h-3 w-3 shrink-0 transition-transform duration-[var(--mem-dur-fast)] group-open:rotate-90"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-          </svg>
-          {t("connectMatrix.setUpManually")}
-        </summary>
-        <div className="flex flex-col gap-2 pt-2">
-          <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", fontWeight: 600, color: "var(--mem-text)", margin: 0 }}>
-            {t("connectMatrix.claudePluginStepTitle")}
-          </p>
-          <ol style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", lineHeight: 1.7, paddingLeft: "18px", listStyle: "decimal", margin: 0 }}>
-            <li>{t("connectMatrix.claudePluginStep1")}</li>
-            <li>{t("connectMatrix.claudePluginStep2")}</li>
-            <li>{t("connectMatrix.claudePluginStep3")}</li>
-          </ol>
-          <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", lineHeight: 1.5, margin: 0 }}>
-            {t("connectMatrix.claudePluginNote")}
-          </p>
-        </div>
-      </details>
-    </div>
-  );
-}
-
-/** ChatGPT row: the single home for the paste-in relay URL. Only meaningful
- *  once web access is connected; otherwise a one-line prompt to turn it on. */
-function ChatgptRow({ status }: { status: RemoteAccessStatus }) {
-  const { t } = useTranslation();
+  const id = useId();
+  const cache = useQueryClient();
+  const statusQuery = useQuery({ queryKey: STATUS, queryFn: getRemoteAccessStatus });
+  const profileQuery = useQuery({ queryKey: PROFILE, queryFn: getRemoteAccessProfile });
+  const spacesQuery = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
+  const status = statusQuery.data;
+  const profile = profileQuery.data;
+  const spaces = spacesQuery.data ?? [];
+  const [selected, setSelected] = useState<string | null>(null);
+  const [consented, setConsented] = useState(false);
+  const [pairingId, setPairingId] = useState("");
+  const [inspection, setInspection] = useState<{ request: RemotePairing; revision: string } | null>(null);
+  const [approved, setApproved] = useState(false);
   const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [probe, setProbe] = useState<string | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [grantNotice, setGrantNotice] = useState<string | null>(null);
+  const implicitSpace = currentSpace && spaces.some((space) => space.name === currentSpace)
+    ? currentSpace : spaces.length === 1 ? spaces[0].name : "";
+  const space = selected ?? profile?.space ?? implicitSpace;
+  const connected = status?.status === "connected";
+  const publicMcp = status?.status === "connected" ? status.relay_url : null;
+  const isOn = Boolean(profile?.enabled || status?.status === "starting" || connected);
+  const pending = Boolean(profile?.disconnect_pending);
+  const ready = profileQuery.isSuccess && statusQuery.isSuccess && spacesQuery.isSuccess;
+  const scopeExists = spaces.some((item) => item.name === space);
+  const grantQuery = useQuery({
+    queryKey: [...GRANTS, profile?.revision, cursor],
+    queryFn: () => listRemoteGrants(profile!.revision, cursor),
+    enabled: connected && Boolean(profile?.enabled && profile.credential_expires_at),
+    retry: false,
+  });
+
+  useEffect(() => { setConsented(false); }, [space]);
+
   useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    listen<RemoteAccessStatus>("remote-access-status", ({ payload }) => {
+      cache.setQueryData(STATUS, payload);
+      void cache.invalidateQueries({ queryKey: PROFILE });
+    }).then((stop) => {
+      if (disposed) stop(); else unlisten = stop;
+    }).catch(() => { void cache.invalidateQueries({ queryKey: STATUS }); });
+    return () => { disposed = true; unlisten?.(); };
+  }, [cache]);
 
-  if (status.status !== "connected") {
-    return (
-      <div className="flex flex-col" style={{ gap: "8px" }}>
-        {rowHeading(t("connectMatrix.chatgptTitle"))}
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)", margin: 0 }}>
-          {t("connectMatrix.chatgptNeedsWebAccess")}
-        </p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    setInspection(null);
+    setApproved(false);
+    setCursor(null);
+    setProbe(null);
+    setGrantNotice(null);
+  }, [profile?.revision]);
 
-  const url = status.relay_url ?? `${status.tunnel_url}/mcp`;
-  const copy = () => {
-    clipboardWrite(url);
-    setCopied(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopied(false), 2000);
+  const action = useMutation({
+    mutationFn: (operation: () => Promise<void>) => operation(),
+    onSettled: async () => {
+      await cache.invalidateQueries({ queryKey: PROFILE });
+      await cache.invalidateQueries({ queryKey: STATUS });
+      await cache.invalidateQueries({ queryKey: GRANTS });
+    },
+  });
+
+  const enable = async () => {
+    if (!ready || !consented || !scopeExists || pending) throw new Error(t("remoteAccess.scopeRequired"));
+    const saved = await configureRemoteAccess(space, profile?.revision);
+    const next = await toggleRemoteAccess(true, saved.revision);
+    cache.setQueryData(STATUS, next);
+    setConsented(false);
   };
+  const stop = async () => {
+    cache.setQueryData(STATUS, await toggleRemoteAccess(false));
+    setInspection(null);
+  };
+  const reconnect = async () => {
+    const previousSpace = profile?.space;
+    await stop();
+    const fresh = await getRemoteAccessProfile();
+    if (!fresh || fresh.space !== previousSpace || fresh.disconnect_pending) throw new Error(t("remoteAccess.scopeRequired"));
+    cache.setQueryData(STATUS, await toggleRemoteAccess(true, fresh.revision));
+  };
+  const inspect = async () => {
+    setApproved(false);
+    setInspection(null);
+    if (!profile) throw new Error(t("remoteAccess.scopeRequired"));
+    const revision = profile.revision;
+    const request = await inspectRemotePairing(revision, pairingId.trim());
+    setInspection({ revision, request });
+  };
+  const approve = async () => {
+    if (!inspection || inspection.revision !== profile?.revision || inspection.request.expiresAt <= Date.now()) {
+      throw new Error(t("remoteAccess.pairingExpired"));
+    }
+    await approveRemotePairing(inspection.revision, inspection.request);
+    setInspection(null);
+    setPairingId("");
+    setApproved(true);
+  };
+  const queryError = profileQuery.error ?? statusQuery.error ?? spacesQuery.error;
+  const busy = action.isPending;
 
   return (
-    <div className="flex flex-col" style={{ gap: "10px" }}>
-      {rowHeading(t("connectMatrix.chatgptTitle"))}
-      <ol style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", lineHeight: 1.7, paddingLeft: "18px", listStyle: "decimal", margin: 0 }}>
-        <li>{t("connectMatrix.chatgptStep1")}</li>
-        <li>{t("connectMatrix.chatgptStep2")}</li>
-        <li>{t("connectMatrix.chatgptStep3")}</li>
-      </ol>
-      <div className="flex items-center gap-2">
-        <code
-          className="flex-1 truncate rounded-md px-2 py-1.5"
-          style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-xs)", backgroundColor: "var(--mem-bg)", border: "1px solid var(--mem-border)", color: "var(--mem-text)" }}
-        >
-          {url}
-        </code>
-        <Button type="button" variant="secondary" size="sm" onClick={copy} className="shrink-0">
-          {copied ? t("connectMatrix.copied") : t("connectMatrix.copyUrl")}
-        </Button>
+    <div className="min-w-0 space-y-4" style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text)" }}>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-base font-semibold">{t("remoteAccess.title")}</h3>
+          <Tag tone="accent">{t("remoteAccess.experimentalBadge")}</Tag>
+        </div>
+        <fieldset disabled={busy || (!isOn && (!ready || pending || !consented || !scopeExists))}>
+          <Toggle enabled={isOn} valueUnknown={!profileQuery.isSuccess || !statusQuery.isSuccess}
+            onToggle={() => action.mutate(isOn ? stop : enable)}
+            aria-label={t("remoteAccess.title")} aria-describedby={id + "-consent"} />
+        </fieldset>
       </div>
-      <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", lineHeight: 1.6, margin: 0 }}>
-        {t("remoteAccess.tunnelChangesNote")}
-      </p>
+      <p id={id + "-consent"} className={secondary}>{t("remoteAccess.consentDisclosure")}</p>
+      <fieldset disabled={busy || isOn || pending || !ready} className="min-w-0 space-y-2">
+        <label htmlFor={id + "-space"} className="block text-sm font-medium">{t("remoteAccess.dataScope")}</label>
+        {spaces.length === 1 && scopeExists
+          ? <p className="text-sm break-words">{space}</p>
+          : <select id={id + "-space"} className={fieldClass} value={space}
+              onChange={(event) => { setSelected(event.target.value); setConsented(false); }}>
+              <option value="">{t("remoteAccess.chooseSpace")}</option>
+              {spaces.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+            </select>}
+        {!isOn && !pending && <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" checked={consented} disabled={!scopeExists}
+            onChange={(event) => setConsented(event.target.checked)} className="mt-1 shrink-0" />
+          <span>{scopeExists
+            ? t("remoteAccess.scopeConsent", { space })
+            : t("remoteAccess.scopeConsentPending")}</span>
+        </label>}
+      </fieldset>
+      {queryError && <p role="alert" className={errorClass}>{String(queryError)}</p>}
+      {action.error && <p role="alert" className={errorClass}>{String(action.error)}</p>}
+      {status?.status === "starting" && <StatusChip state={{ kind: "probing" }} label={t("remoteAccess.statusConnecting")} />}
+      {status?.status === "error" && <p role="alert" className={errorClass}>{status.error}</p>}
+      {(queryError || (status?.status === "error" && !pending)) &&
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(stop)}>{t("remoteAccess.stopAccess")}</Button>}
+      {pending && <div className="space-y-2">
+        <p role="status" className={secondary}>{t("remoteAccess.disconnectPending")}</p>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(stop)}>{t("remoteAccess.retryDisconnect")}</Button>
+      </div>}
+      {isOn && <div className="flex flex-wrap items-center gap-3">
+        {connected && <StatusChip state={{ kind: "up" }} label={t("remoteAccess.transportConnected")} />}
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(reconnect)}>
+          <ArrowClockwise size={14} aria-hidden="true" />{t("remoteAccess.reconnect")}
+        </Button>
+        {connected && <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(async () => {
+          setProbe(null);
+          const result = await testRemoteMcpConnection();
+          if (!result.ok) throw new Error(result.error ?? t("remoteAccess.connectionFailed"));
+          setProbe(t("remoteAccess.backendVerified", { ms: result.latency_ms ?? "?" }));
+        })}>{t("remoteAccess.testConnection")}</Button>}
+        {probe && <span role="status" className={secondary}>{probe}</span>}
+      </div>}
+      {connected && profile?.enabled && <>
+        {publicMcp && <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
+          <h4 className="text-sm font-semibold">{t("remoteAccess.endpoint")}</h4>
+          <div className="flex items-start gap-2 min-w-0">
+            <code className="flex-1 min-w-0 break-all text-xs py-2">{publicMcp}</code>
+            <button type="button" className="p-2 shrink-0 rounded border border-[var(--mem-border)]"
+              title={t("connectMatrix.copyUrl")} aria-label={t("connectMatrix.copyUrl")}
+              disabled={busy} onClick={() => action.mutate(async () => { await clipboardWrite(publicMcp); setCopied(true); })}>
+              {copied ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+          </div>
+        </div>}
+        <div className="border-t border-[var(--mem-border)] pt-4 space-y-3">
+          <h4 className="text-sm font-semibold">{t("remoteAccess.pairingTitle")}</h4>
+          <label htmlFor={id + "-pairing"} className="block text-sm">{t("remoteAccess.pairingCode")}</label>
+          <div className="flex flex-wrap gap-2">
+            <input id={id + "-pairing"} className={fieldClass + " flex-1 basis-48"} value={pairingId}
+              maxLength={64} autoComplete="off" spellCheck={false} disabled={busy}
+              onChange={(event) => { setPairingId(event.target.value); setInspection(null); setApproved(false); }} />
+            <Button variant="secondary" size="sm" disabled={busy || !/^[a-zA-Z0-9_-]{64}$/.test(pairingId.trim())}
+              onClick={() => action.mutate(inspect)}>{t("remoteAccess.inspectPairing")}</Button>
+          </div>
+          {inspection && inspection.revision === profile.revision && <div className="space-y-2">
+            <dl className="text-sm space-y-1">
+              <dt className={secondary}>{t("remoteAccess.clientId")}</dt>
+              <dd className="break-all font-mono text-xs">{inspection.request.clientId}</dd>
+              <dt className={secondary}>{t("remoteAccess.dataScope")}</dt><dd className="break-words">{profile.space}</dd>
+              <dt className={secondary}>{t("remoteAccess.expires")}</dt><dd>{new Date(inspection.request.expiresAt).toLocaleString()}</dd>
+            </dl>
+            <p className={secondary}>{t("remoteAccess.approvalDisclosure", { space: profile.space })}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" disabled={busy} onClick={() => action.mutate(approve)}>{t("remoteAccess.approvePairing")}</Button>
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => { setInspection(null); setPairingId(""); }}>{t("common.close")}</Button>
+            </div>
+          </div>}
+          {approved && <p role="status" className={secondary}>{t("remoteAccess.pairingApproved")}</p>}
+        </div>
+        <div className="border-t border-[var(--mem-border)] pt-4 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-sm font-semibold">{t("remoteAccess.authorizedClients")}</h4>
+            <button type="button" className="p-2 rounded" disabled={busy || grantQuery.isFetching}
+              aria-label={t("remoteAccess.refreshGrants")} title={t("remoteAccess.refreshGrants")}
+              onClick={() => { void grantQuery.refetch(); }}><ArrowClockwise size={16} /></button>
+          </div>
+          {grantQuery.isPending && <p className={secondary}>{t("remoteAccess.loadingGrants")}</p>}
+          {grantQuery.error && <p role="alert" className={errorClass}>{String(grantQuery.error)}</p>}
+          {grantQuery.data?.items.length === 0 && <p className={secondary}>{t("remoteAccess.noGrants")}</p>}
+          <ul className="divide-y divide-[var(--mem-border)]">
+            {grantQuery.data?.items.map((grant) => <li key={grant.id} className="py-3 flex flex-wrap items-start gap-3">
+              <div className="flex-1 min-w-0 basis-40 space-y-1">
+                <p className="font-mono text-xs break-all">{grant.clientId}</p>
+                <p className={secondary + " break-words"}>{grant.space}</p>
+                <p className={secondary}>{t(grant.status === "active" ? "remoteAccess.grantActive" : "remoteAccess.grantRevoked")}</p>
+                {grant.cleanupPending && <p className={secondary}>{t("remoteAccess.cleanupPending")}</p>}
+              </div>
+              {(grant.status === "active" || grant.cleanupPending) && <Button variant="secondary" size="sm" disabled={busy}
+                onClick={() => action.mutate(async () => {
+                  const result = await revokeRemoteGrant(profile.revision, grant.id);
+                  cache.setQueryData<RemoteGrantPage>([...GRANTS, profile.revision, cursor], (page) => page && ({
+                    ...page,
+                    items: page.items.map((item) => item.id === grant.id
+                      ? { ...item, status: "inactive", cleanupPending: result.cleanupPending } : item),
+                  }));
+                  setApproved(false);
+                  setGrantNotice(t(result.cleanupPending ? "remoteAccess.cleanupPending" : "remoteAccess.grantRevoked"));
+                })}>{t(grant.status === "active" ? "remoteAccess.revokeGrant" : "remoteAccess.retry")}</Button>}
+            </li>)}
+          </ul>
+          {grantNotice && <p role="status" className={secondary}>{grantNotice}</p>}
+          <div className="flex gap-2">
+            {cursor && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setCursor(null)}>{t("remoteAccess.firstPage")}</Button>}
+            {grantQuery.data?.cursor && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setCursor(grantQuery.data!.cursor)}>{t("remoteAccess.nextPage")}</Button>}
+          </div>
+        </div>
+      </>}
     </div>
   );
 }

@@ -1,0 +1,1 @@
+Atlas authentication decision: use signed requests to authenticate relay traffic.

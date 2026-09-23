@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use wenlan_mcp::client::{discover_origin_url, WenlanClient};
 use wenlan_mcp::stdio::stdio;
-use wenlan_mcp::tools::{TransportMode, WenlanMcpServer};
+use wenlan_mcp::tools::{ToolProfile, TransportMode, WenlanMcpServer};
 use wenlan_mcp::{serve, token};
 
 #[derive(Parser)]
@@ -37,6 +37,10 @@ enum Commands {
 
 #[derive(Parser)]
 struct ServeArgs {
+    /// Tool exposure profile
+    #[arg(long, value_enum, default_value_t = ToolProfile::Standard)]
+    tool_profile: ToolProfile,
+
     /// Port to listen on
     #[arg(long, default_value = "8080")]
     port: u16,
@@ -52,6 +56,10 @@ struct ServeArgs {
     /// Path to file containing the bearer token
     #[arg(long)]
     token_file: Option<PathBuf>,
+
+    /// Read a bearer token from this environment variable, not process arguments
+    #[arg(long, conflicts_with_all = ["token", "token_file", "no_auth"])]
+    token_env: Option<String>,
 
     /// Disable authentication (only allowed on loopback)
     #[arg(long)]
@@ -172,11 +180,26 @@ async fn run_serve(
     origin_url: Option<String>,
     agent_name: String,
 ) -> anyhow::Result<()> {
+    if args.tool_profile == ToolProfile::QueryOnly && args.no_auth {
+        anyhow::bail!("{}", serve::QUERY_ONLY_AUTH_ERROR);
+    }
     let resolved_token = resolve_token(&args)?;
+
+    if args.tool_profile == ToolProfile::QueryOnly {
+        if resolved_token
+            .as_deref()
+            .is_none_or(|token| token.trim().is_empty())
+        {
+            anyhow::bail!("{}", serve::QUERY_ONLY_AUTH_ERROR);
+        }
+        if wenlan_mcp::lock_state::locked_space().is_none() {
+            anyhow::bail!("{}", serve::QUERY_ONLY_SPACE_ERROR);
+        }
+    }
 
     if resolved_token.is_none() && !args.no_auth {
         anyhow::bail!(
-            "Authentication required. Use --token, --token-file, or --no-auth.\n\
+            "Authentication required. Use --token, --token-file, --token-env, or --no-auth.\n\
              Generate a token with: wenlan-mcp token generate"
         );
     }
@@ -227,16 +250,44 @@ async fn run_serve(
         allowed_origins,
     };
 
-    serve::run_serve(config).await
+    serve::run_serve_with_profile(config, args.tool_profile).await
 }
 
 fn resolve_token(args: &ServeArgs) -> anyhow::Result<Option<String>> {
+    resolve_token_with_env(args, |name| std::env::var(name).ok())
+}
+
+fn resolve_token_with_env(
+    args: &ServeArgs,
+    read_env: impl FnOnce(&str) -> Option<String>,
+) -> anyhow::Result<Option<String>> {
     if let Some(ref t) = args.token {
         return Ok(Some(t.clone()));
     }
     if let Some(ref path) = args.token_file {
         let t = token::read_token(path)?;
         return Ok(Some(t));
+    }
+    if let Some(ref name) = args.token_env {
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            anyhow::bail!("Invalid bearer token environment variable name");
+        }
+        let value = read_env(name)
+            .filter(|value| {
+                (32..=128).contains(&value.len())
+                    && value
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("Bearer token environment variable is missing or invalid")
+            })?;
+        return Ok(Some(value));
     }
     if args.no_auth {
         return Ok(None);
@@ -318,5 +369,183 @@ mod tests {
         };
 
         assert_eq!(effective_agent_name(cli.agent_name, Some(&args)), "chatgpt");
+    }
+
+    #[test]
+    fn serve_tool_profile_defaults_to_standard() {
+        let cli = Cli::try_parse_from(["wenlan-mcp", "serve", "--no-auth"])
+            .expect("parse serve default tool profile");
+
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve command");
+        };
+
+        assert_eq!(args.tool_profile, ToolProfile::Standard);
+    }
+
+    #[test]
+    fn serve_accepts_query_only_tool_profile() {
+        let cli = Cli::try_parse_from([
+            "wenlan-mcp",
+            "serve",
+            "--tool-profile",
+            "query-only",
+            "--token",
+            "secret",
+        ])
+        .expect("parse query-only tool profile");
+
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve command");
+        };
+
+        assert_eq!(args.tool_profile, ToolProfile::QueryOnly);
+    }
+
+    #[test]
+    fn serve_rejects_invalid_tool_profile() {
+        let result = Cli::try_parse_from(["wenlan-mcp", "serve", "--tool-profile", "invalid"]);
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn query_only_rejects_no_auth_before_startup() {
+        let args = ServeArgs {
+            tool_profile: ToolProfile::QueryOnly,
+            port: 0,
+            host: "127.0.0.1".into(),
+            token: None,
+            token_file: None,
+            token_env: None,
+            no_auth: true,
+            user_id: None,
+            allowed_origins: "*".into(),
+        };
+
+        let error = run_serve(args, Some("http://127.0.0.1:19999".into()), "test".into())
+            .await
+            .expect_err("query-only --no-auth must be rejected");
+        assert_eq!(error.to_string(), serve::QUERY_ONLY_AUTH_ERROR);
+    }
+
+    #[tokio::test]
+    async fn query_only_rejects_missing_space_pin_before_startup() {
+        let args = ServeArgs {
+            tool_profile: ToolProfile::QueryOnly,
+            port: 0,
+            host: "127.0.0.1".into(),
+            token: Some("secret".into()),
+            token_file: None,
+            token_env: None,
+            no_auth: false,
+            user_id: None,
+            allowed_origins: "*".into(),
+        };
+
+        let error = run_serve(args, Some("http://127.0.0.1:19999".into()), "test".into())
+            .await
+            .expect_err("query-only without a strict Space pin must be rejected");
+        assert_eq!(error.to_string(), serve::QUERY_ONLY_SPACE_ERROR);
+    }
+
+    #[test]
+    fn explicit_environment_token_is_resolved_without_an_argv_secret() {
+        let cli = Cli::try_parse_from([
+            "wenlan-mcp",
+            "serve",
+            "--tool-profile",
+            "query-only",
+            "--token-env",
+            "WENLAN_REMOTE_MCP_TOKEN",
+        ])
+        .unwrap();
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve");
+        };
+        let expected = "s".repeat(64);
+        let resolved = resolve_token_with_env(&args, |name| {
+            assert_eq!(name, "WENLAN_REMOTE_MCP_TOKEN");
+            Some(expected.clone())
+        })
+        .unwrap();
+        assert_eq!(resolved.as_deref(), Some(expected.as_str()));
+        assert!(args.token.is_none());
+        assert!(args.token_file.is_none());
+        assert!(!args.no_auth);
+    }
+
+    #[test]
+    fn environment_token_conflicts_with_other_auth_sources_and_no_auth() {
+        for extra in [
+            vec!["--no-auth"],
+            vec!["--token", "other"],
+            vec!["--token-file", "/tmp/other"],
+        ] {
+            let mut argv = vec![
+                "wenlan-mcp",
+                "serve",
+                "--token-env",
+                "WENLAN_REMOTE_MCP_TOKEN",
+            ];
+            argv.extend(extra);
+            assert!(Cli::try_parse_from(argv).is_err());
+        }
+    }
+
+    #[test]
+    fn missing_or_invalid_environment_token_never_falls_back_or_leaks_its_value() {
+        let cli = Cli::try_parse_from([
+            "wenlan-mcp",
+            "serve",
+            "--token-env",
+            "WENLAN_REMOTE_MCP_TOKEN",
+        ])
+        .unwrap();
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve");
+        };
+        for value in [
+            None,
+            Some(String::new()),
+            Some("short".into()),
+            Some("PRIVATE_VALUE\n".repeat(5)),
+            Some("x".repeat(129)),
+        ] {
+            let error = resolve_token_with_env(&args, |_| value).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Bearer token environment variable is missing or invalid"
+            );
+            assert!(!error.to_string().contains("PRIVATE_VALUE"));
+        }
+    }
+
+    #[test]
+    fn invalid_environment_name_is_rejected_before_lookup() {
+        let cli =
+            Cli::try_parse_from(["wenlan-mcp", "serve", "--token-env", "INVALID=NAME"]).unwrap();
+        let Some(Commands::Serve(args)) = cli.command else {
+            panic!("expected serve");
+        };
+        assert!(
+            resolve_token_with_env(&args, |_| panic!("must not look up an invalid name")).is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_explicit_token_and_no_auth_do_not_read_environment() {
+        for extra in [vec!["--no-auth"], vec!["--token", "existing-token"]] {
+            let mut argv = vec!["wenlan-mcp", "serve"];
+            argv.extend(extra);
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Some(Commands::Serve(args)) = cli.command else {
+                panic!("expected serve");
+            };
+            let result =
+                resolve_token_with_env(&args, |_| panic!("no implicit environment fallback"))
+                    .unwrap();
+            assert_eq!(result, args.token);
+        }
     }
 }

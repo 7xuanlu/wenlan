@@ -131,13 +131,14 @@ vi.mock("./PageDetail", () => ({
 }));
 vi.mock("./DistillReviewPanel", () => ({ default: () => <div /> }));
 vi.mock("./SettingsPage", () => ({
-  default: (props: { onSetupAgent?: () => void }) => (
-    <div data-testid="settings-page">
+  default: (props: { onSetupAgent?: () => void; section?: string; onBack?: () => void }) => (
+    <div data-testid="settings-page" data-section={props.section}>
       <button type="button" onClick={props.onSetupAgent}>Connect agent</button>
+      <button type="button" onClick={props.onBack}>Settings back</button>
     </div>
   ),
 }));
-vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
+vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div data-testid="client-setup-wizard" /> }));
 vi.mock("./Sidebar", () => ({
   default: (props: {
     activeNavigation?: string | null;
@@ -316,6 +317,7 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
     onImport: () => void;
     onBack: () => void;
     onOpenPage: (id: string) => void;
+    onConnect: (client?: "chatgpt" | "codex" | "claude") => void;
   }) => (
     <section
       data-testid="first-use-guide"
@@ -325,6 +327,10 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
       <button type="button" onClick={props.onImport}>Bring memories</button>
       <button type="button" onClick={props.onBack}>Leave first use</button>
       <button type="button" onClick={() => props.onOpenPage("library-page")}>Open knowledge result</button>
+      <button type="button" onClick={() => props.onConnect("chatgpt")}>Connect ChatGPT sample</button>
+      <button type="button" onClick={() => props.onConnect("codex")}>Connect Codex sample</button>
+      <button type="button" onClick={() => props.onConnect("claude")}>Connect Claude sample</button>
+      <button type="button" onClick={() => props.onConnect()}>Connect unspecified tool</button>
     </section>
   ),
 }));
@@ -427,6 +433,29 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Leave first use" }));
     expect(screen.getByTestId("home-page")).toBeVisible();
   });
+
+  it.each(["ChatGPT sample", "unspecified tool"])("routes %s to web-capable agent settings and back", async (client) => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
+    expect(screen.getByTestId("settings-page")).toHaveAttribute("data-section", "agents");
+    expect(screen.queryByTestId("client-setup-wizard")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Settings back" }));
+    expect(screen.getByTestId("first-use-guide")).toBeVisible();
+  });
+
+  it.each(["Codex sample", "Claude sample"])(
+    "keeps %s on local client setup",
+    async (client) => {
+      const user = userEvent.setup();
+      renderMain();
+      await user.click(screen.getByRole("button", { name: "Start first use" }));
+      await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
+      expect(screen.getByTestId("client-setup-wizard")).toBeVisible();
+      expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
+    },
+  );
 
   it("cancelling an onboarding import returns without claiming knowledge was formed", async () => {
     const user = userEvent.setup();

@@ -11,6 +11,83 @@ beforeEach(() => {
   mockInvoke.mockResolvedValue(undefined as any);
 });
 
+describe('remote access consent bridge', () => {
+  it('loads only the native frontend-safe profile view', async () => {
+    mockInvoke.mockResolvedValue(null);
+    await expect(tauri.getRemoteAccessProfile()).resolves.toBeNull();
+    expect(mockInvoke).toHaveBeenCalledWith('get_remote_access_profile');
+  });
+
+  it('passes an explicit Space and expected revision without enabling access', async () => {
+    await tauri.configureRemoteAccess('review', 'revision-1');
+    expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
+      space: 'review', expectedRevision: 'revision-1',
+    });
+  });
+
+  it('requires the current consent revision for enable and omits credentials', async () => {
+    await tauri.toggleRemoteAccess(true, 'revision-2');
+    expect(mockInvoke).toHaveBeenCalledWith('toggle_remote_access', {
+      enabled: true, expectedRevision: 'revision-2',
+    });
+    await tauri.toggleRemoteAccess(false);
+    expect(mockInvoke).toHaveBeenLastCalledWith('toggle_remote_access', {
+      enabled: false, expectedRevision: null,
+    });
+  });
+
+  it('passes null revision when configuring a first profile', async () => {
+    await tauri.configureRemoteAccess('review');
+    expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
+      space: 'review', expectedRevision: null,
+    });
+  });
+
+  it('inspects pairing with the current revision and exact pairing ID', async () => {
+    await tauri.inspectRemotePairing('revision-3', 'pairing-1');
+    expect(mockInvoke).toHaveBeenCalledWith('inspect_remote_pairing', {
+      expectedRevision: 'revision-3', pairingId: 'pairing-1',
+    });
+  });
+
+  it('approves the inspected pairing without dropping consent fields', async () => {
+    const inspected: tauri.RemotePairing = {
+      pairingId: 'pairing-1', clientId: 'client-1',
+      resource: 'https://relay.wenlan.app/mcp', scopes: ['wenlan:query'],
+      expiresAt: 1900000000,
+    };
+    await tauri.approveRemotePairing('revision-3', inspected);
+    expect(mockInvoke).toHaveBeenCalledWith('approve_remote_pairing', {
+      expectedRevision: 'revision-3', inspected,
+    });
+  });
+
+  it('preserves the revision and optional cursor when listing grants', async () => {
+    await tauri.listRemoteGrants('revision-3');
+    expect(mockInvoke).toHaveBeenLastCalledWith('list_remote_grants', {
+      expectedRevision: 'revision-3', cursor: null,
+    });
+    await tauri.listRemoteGrants('revision-3', 'next-page');
+    expect(mockInvoke).toHaveBeenLastCalledWith('list_remote_grants', {
+      expectedRevision: 'revision-3', cursor: 'next-page',
+    });
+  });
+
+  it('revokes the exact grant under the current revision', async () => {
+    await tauri.revokeRemoteGrant('revision-3', 'grant-1');
+    expect(mockInvoke).toHaveBeenCalledWith('revoke_remote_grant', {
+      expectedRevision: 'revision-3', grantId: 'grant-1',
+    });
+  });
+
+  it('queries status and connection health without forwarding arguments', async () => {
+    await tauri.getRemoteAccessStatus();
+    expect(mockInvoke).toHaveBeenLastCalledWith('get_remote_access_status');
+    await tauri.testRemoteMcpConnection();
+    expect(mockInvoke).toHaveBeenLastCalledWith('test_remote_mcp_connection');
+  });
+});
+
 describe('search', () => {
   it('calls invoke with explicit args', async () => {
     mockInvoke.mockResolvedValue([]);

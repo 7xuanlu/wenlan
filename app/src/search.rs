@@ -435,17 +435,16 @@ pub async fn get_activity(
 
 #[tauri::command]
 pub async fn toggle_remote_access(
-    state: tauri::State<'_, State>,
     app_handle: tauri::AppHandle,
     enabled: bool,
+    expected_revision: Option<String>,
 ) -> Result<crate::remote_access::RemoteAccessStatus, String> {
-    let client = {
-        let s = state.read().await;
-        s.client.clone()
-    };
-
     if enabled {
-        client.set_remote_access_enabled(true).await?;
+        crate::remote_access::ensure_shutdown_confirmed(&app_handle).await?;
+        let revision = expected_revision.ok_or_else(|| {
+            "Choose and confirm the remote data scope before enabling access".to_string()
+        })?;
+        crate::remote_relay::runtime::storage(move |store| store.enable(&revision)).await?;
 
         let handle = app_handle.clone();
         tauri::async_runtime::spawn(async move {
@@ -454,20 +453,100 @@ pub async fn toggle_remote_access(
 
         Ok(crate::remote_access::RemoteAccessStatus::Starting)
     } else {
-        client.set_remote_access_enabled(false).await?;
-
-        crate::remote_access::toggle_off(&app_handle).await;
+        crate::remote_access::toggle_off(&app_handle).await?;
         Ok(crate::remote_access::RemoteAccessStatus::Off)
     }
+}
+
+#[tauri::command]
+pub async fn get_remote_access_profile(
+) -> Result<Option<crate::remote_relay::store::ProfileView>, String> {
+    crate::remote_relay::runtime::storage(|store| Ok(store.load()?.map(|profile| profile.view())))
+        .await
+}
+
+#[tauri::command]
+pub async fn configure_remote_access(
+    state: tauri::State<'_, State>,
+    expected_revision: Option<String>,
+    space: String,
+) -> Result<crate::remote_relay::store::ProfileView, String> {
+    let client = daemon_client(&state).await;
+    let spaces: Vec<Space> = client.get_json("/api/spaces").await?;
+    if !spaces.iter().any(|existing| existing.name == space) {
+        return Err("The selected Space no longer exists".into());
+    }
+    crate::remote_relay::runtime::storage(move |store| {
+        store
+            .configure(expected_revision.as_deref(), &space)
+            .map(|profile| profile.view())
+    })
+    .await
 }
 
 #[tauri::command]
 pub async fn get_remote_access_status(
     state: tauri::State<'_, State>,
 ) -> Result<crate::remote_access::RemoteAccessStatus, String> {
-    let app_state = state.read().await;
-    let ra = app_state.remote_access.lock().await;
+    let remote_access = { state.read().await.remote_access.clone() };
+    let ra = remote_access.lock().await;
     Ok(ra.status.clone())
+}
+
+#[tauri::command]
+pub async fn inspect_remote_pairing(
+    expected_revision: String,
+    pairing_id: String,
+) -> Result<crate::remote_relay::PairingView, String> {
+    let profile = crate::remote_relay::runtime::consent_profile(expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| "Remote device not registered".to_string())?;
+    crate::remote_relay::RelayClient::new()
+        .map_err(|e| e.to_string())?
+        .inspect_pairing(device, &pairing_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn approve_remote_pairing(
+    expected_revision: String,
+    inspected: crate::remote_relay::PairingView,
+) -> Result<(), String> {
+    crate::remote_relay::runtime::approve_inspected(expected_revision, inspected).await
+}
+
+#[tauri::command]
+pub async fn list_remote_grants(
+    expected_revision: String,
+    cursor: Option<String>,
+) -> Result<crate::remote_relay::GrantPage, String> {
+    let profile = crate::remote_relay::runtime::consent_profile(expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| "Remote device not registered".to_string())?;
+    crate::remote_relay::RelayClient::new()
+        .map_err(|e| e.to_string())?
+        .grants(device, cursor.as_deref())
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn revoke_remote_grant(
+    expected_revision: String,
+    grant_id: String,
+) -> Result<crate::remote_relay::GrantRevocation, String> {
+    let profile = crate::remote_relay::runtime::consent_profile(expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| "Remote device not registered".to_string())?;
+    crate::remote_relay::RelayClient::new()
+        .map_err(|e| e.to_string())?
+        .revoke_grant(device, &grant_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -481,88 +560,43 @@ pub struct RemoteConnectionTest {
 pub async fn test_remote_mcp_connection(
     state: tauri::State<'_, State>,
 ) -> Result<RemoteConnectionTest, String> {
-    // Snapshot out of the lock, then drop the guard.
-    //
-    // Prefer `relay_url` over `tunnel_url`. The relay domain
-    // (origin-relay.originmemory.workers.dev) always resolves via system DNS,
-    // while fresh `*.trycloudflare.com` tunnel subdomains can hit ISP DNS
-    // cache NXDOMAIN for several minutes — a known Cloudflare quick-tunnel
-    // issue. The relay URL also reflects what the user actually hands to
-    // Claude.ai / ChatGPT, so probing it is semantically correct.
-    let (probe_url, is_relay): (Option<String>, bool) = {
-        let app_state = state.read().await;
-        let ra = app_state.remote_access.lock().await;
-        match &ra.status {
-            crate::remote_access::RemoteAccessStatus::Connected {
-                tunnel_url,
-                relay_url,
-                ..
-            } => match relay_url {
-                Some(url) => (Some(url.clone()), true),
-                None => (Some(tunnel_url.clone()), false),
-            },
-            _ => (None, false),
-        }
-    };
-    let Some(url) = probe_url else {
-        return Ok(RemoteConnectionTest {
-            ok: false,
-            latency_ms: None,
-            error: Some("Remote Access not connected".to_string()),
-        });
-    };
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            return Ok(RemoteConnectionTest {
-                ok: false,
-                latency_ms: None,
-                error: Some(format!("http client: {}", e)),
-            });
+    let remote_access = { state.read().await.remote_access.clone() };
+    let port = {
+        let ra = remote_access.lock().await;
+        if matches!(
+            ra.status,
+            crate::remote_access::RemoteAccessStatus::Connected { .. }
+        ) {
+            ra.port
+        } else {
+            None
         }
     };
     let start = std::time::Instant::now();
-    // Raw tunnel URL: probe `/health` (wenlan-mcp serves it; expect 2xx).
-    // Relay URL: probe the URL directly — any HTTP response (even 4xx from
-    // method-not-allowed on GET /mcp) proves DNS + TLS + worker reachable;
-    // only 5xx / connection errors indicate a real problem.
-    let probe = if is_relay {
-        url.clone()
-    } else {
-        format!("{}/health", url.trim_end_matches('/'))
-    };
-    match client.get(&probe).send().await {
-        Ok(resp) => {
-            let status = resp.status();
-            let latency = Some(start.elapsed().as_millis() as u64);
-            let reachable = if is_relay {
-                !status.is_server_error()
-            } else {
-                status.is_success()
-            };
-            if reachable {
-                Ok(RemoteConnectionTest {
-                    ok: true,
-                    latency_ms: latency,
-                    error: None,
-                })
-            } else {
-                Ok(RemoteConnectionTest {
-                    ok: false,
-                    latency_ms: latency,
-                    error: Some(format!("HTTP {}", status)),
-                })
-            }
-        }
-        Err(e) => Ok(RemoteConnectionTest {
-            ok: false,
-            latency_ms: None,
-            error: Some(e.to_string()),
-        }),
+    // This checks native backend + authenticated control-plane availability,
+    // not a ChatGPT/Codex OAuth conversation. A public 401 alone is not success.
+    let result = async {
+        let port = port.ok_or_else(|| "Remote Access not connected".to_string())?;
+        let profile = crate::remote_relay::runtime::enabled_profile().await?;
+        crate::remote_relay::runtime::verify_backend(port, &profile)
+            .await
+            .map_err(|e| e.to_string())?;
+        let device = profile
+            .device()
+            .ok_or_else(|| "Remote device not registered".to_string())?;
+        crate::remote_relay::RelayClient::new()
+            .map_err(|e| e.to_string())?
+            .grants(device, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
     }
+    .await;
+    Ok(RemoteConnectionTest {
+        ok: result.is_ok(),
+        latency_ms: Some(start.elapsed().as_millis() as u64),
+        error: result.err(),
+    })
 }
 
 // ── File / open commands ──────────────────────────────────────────────
@@ -1927,13 +1961,12 @@ pub async fn delete_bulk(
 
 // ── Quick capture / ingest ────────────────────────────────────────────
 
-#[tauri::command]
-pub async fn quick_capture(
-    state: tauri::State<'_, State>,
+// Native captures belong in the memory inventory. The manual_ ID prefix
+// identifies the producer without changing the record's source class.
+fn build_quick_capture_ingest_request(
     req: QuickCaptureRequest,
-) -> Result<usize, String> {
-    let source_id = format!("manual_{}", chrono::Utc::now().timestamp());
-
+    source_id: String,
+) -> requests::IngestMemoryRequest {
     let title = req.title.unwrap_or_else(|| {
         let first_line = req.content.lines().next().unwrap_or("Untitled");
         if first_line.chars().count() > 60 {
@@ -1957,19 +1990,86 @@ pub async fn quick_capture(
         metadata.insert("domain".to_string(), d.clone());
     }
 
-    let client = daemon_client(&state).await;
-    let ingest_req = requests::IngestMemoryRequest {
-        source: "manual".to_string(),
-        source_id: source_id.clone(),
+    requests::IngestMemoryRequest {
+        source: "memory".to_string(),
+        source_id,
         title,
         content: req.content,
         url: None,
         tags: req.tags,
         metadata: Some(metadata),
-    };
+    }
+}
+
+#[tauri::command]
+pub async fn quick_capture(
+    state: tauri::State<'_, State>,
+    req: QuickCaptureRequest,
+) -> Result<usize, String> {
+    let source_id = format!("manual_{}", chrono::Utc::now().timestamp());
+    let client = daemon_client(&state).await;
+    let ingest_req = build_quick_capture_ingest_request(req, source_id);
     let resp: responses::IngestResponse =
         client.post_json("/api/ingest/memory", &ingest_req).await?;
     Ok(resp.chunks_created)
+}
+
+#[cfg(test)]
+mod quick_capture_tests {
+    use super::*;
+
+    #[test]
+    fn quick_capture_builds_memory_classified_ingest_request() {
+        let req = QuickCaptureRequest {
+            title: Some("Atlas R61 launch decision".to_string()),
+            content: "Atlas R61 launch decision body with enough length.".to_string(),
+            tags: Some(vec!["launch".to_string(), "atlas".to_string()]),
+            memory_type: Some("decision".to_string()),
+            domain: Some("work".to_string()),
+        };
+        let source_id = "manual_1789970419".to_string();
+        let built = build_quick_capture_ingest_request(req, source_id.clone());
+
+        assert_eq!(built.source, "memory");
+        assert_eq!(built.source_id, source_id);
+        assert!(built.source_id.starts_with("manual_"));
+        assert_eq!(built.title, "Atlas R61 launch decision");
+        assert_eq!(
+            built.content,
+            "Atlas R61 launch decision body with enough length."
+        );
+        assert_eq!(
+            built.tags,
+            Some(vec!["launch".to_string(), "atlas".to_string()])
+        );
+        let metadata = built.metadata.expect("metadata is always set");
+        assert_eq!(
+            metadata.get("tags").map(String::as_str),
+            Some("launch,atlas")
+        );
+        assert_eq!(
+            metadata.get("memory_type").map(String::as_str),
+            Some("decision")
+        );
+        assert_eq!(metadata.get("domain").map(String::as_str), Some("work"));
+        assert_eq!(built.url, None);
+    }
+
+    #[test]
+    fn quick_capture_derives_title_from_first_line() {
+        let req = QuickCaptureRequest {
+            title: None,
+            content: "First line title\nSecond line body here.".to_string(),
+            tags: None,
+            memory_type: None,
+            domain: None,
+        };
+        let built = build_quick_capture_ingest_request(req, "manual_1".to_string());
+        assert_eq!(built.source, "memory");
+        assert_eq!(built.source_id, "manual_1");
+        assert_eq!(built.title, "First line title");
+        assert_eq!(built.content, "First line title\nSecond line body here.");
+    }
 }
 
 // A Tauri command takes its arguments flat and by name, so the three

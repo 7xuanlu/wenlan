@@ -72,6 +72,135 @@ These are off until you turn them on. Aside from the remote images described abo
 - **On-device model download.** If you run `wenlan models install` or start the download from Settings, a Qwen model is fetched from `https://huggingface.co`. This is separate from the search model above and does not happen on its own. Once installed, enrichment runs on your machine and the text being enriched does not leave it.
 - **Better search ranking.** If you turn on the reranker, its weights are downloaded from `https://huggingface.co` the next time the daemon starts, between roughly 146 MB and 1.1 GB depending on which one you choose. It is off unless you set it.
 
+### Connected AI clients and the query-only MCP profile
+
+When you connect an AI client to Wenlan, that client receives the results of
+the tools it calls. A client operated by a cloud provider may send those
+results to that provider as part of your conversation. Keeping the database
+local does not keep retrieved content out of the connected AI client. The
+client provider's own terms and data controls govern its handling of that copy.
+
+The opt-in `wenlan-mcp serve --tool-profile query-only` profile exposes only
+`brief`, `recall`, and `get_page_sources`. It receives the query or topic,
+Space selection, search filters, or page identifier needed for the lookup.
+It returns matching knowledge, a project Brief, or supporting source content.
+Source identifiers support citations and follow-up retrieval; archive and
+pending-review flags provide context for interpreting results.
+
+This profile removes raw ingestion text and unnecessary ranking, hashing,
+agent-attribution, timing and access metadata from successful tool responses.
+It does not redact personal information embedded in titles, knowledge content
+or Brief text. Choose carefully what library you connect and what you ask the
+client to retrieve. The profile is not a sensitive-content classifier.
+
+Query-only limits knowledge operations, not all side effects: `recall` records
+the query and accessed memory identifiers in the local activity history
+described above. That history does not expire by age. The profile does not
+expose tools to save, edit or delete knowledge, so local deletion controls
+remain separate from the query connector. Disconnecting a client does not
+delete content that the client or its provider has already received.
+
+The profile requires a non-empty bearer token, but this is not OAuth,
+per-user identity, or multi-user/Space authorization. It does not modify the
+experimental desktop Remote Access flow described above. This source-level
+profile is not a claim that a public ChatGPT or Codex service is deployed or
+approved. A hosted offering needs its actual operator, recipients, retention,
+authorization and revocation controls documented before public release; do not
+assume this local profile supplies those controls.
+
+### Pre-release standalone `wenlan-relay` connector
+
+**Status.** This is a pre-release technical disclosure, not legal or security
+approval. The standalone relay source is now in this repository and its
+candidate public origin is `https://relay.wenlan.app`.
+It is separate from the legacy released Remote Access flow, which uses
+`https://origin-relay.originmemory.workers.dev/register` and remains described
+above. No automatic migration of legacy records is claimed.
+
+The local database stays on your machine. The standalone relay is not designed
+to replicate your knowledge library: its durable records are a control plane for
+authentication, devices, routes, grants and sessions. When you use it, the
+query request travels through the Cloudflare Worker to the connected local
+connector and the result returns through Cloudflare to the connected AI client.
+That client, and its provider where applicable, can receive the query and
+returned knowledge as part of the conversation.
+
+The public MCP endpoint is `https://relay.wenlan.app/mcp`. OAuth grants access
+only to the existing Space approved during pairing; new Spaces are not
+automatically included. Normal desktop pairing does not require a separate
+Wenlan email/password account. The exposed tools are `brief`, `recall`, and
+`get_page_sources`; the local query activity described above still applies.
+
+Cloudflare operates the relay and its storage, and Wenlan's operator administers
+the service. Requests and results are readable while the relay processes them:
+HTTPS is not end-to-end encryption that excludes either operator. The service
+is not designed to persist tool request/result bodies in KV or Durable Object
+records, but that is not a guarantee that infrastructure providers retain no
+diagnostics. Management credentials are hashed in relay state; backend
+credentials remain usable so the relay can authenticate to the connector.
+Not all credentials are stored as one-way hashes.
+
+The relay's control-plane records include:
+
+- Device and route state: generated device/subject identifiers, a hash of the
+  management credential, enabled/revision/expiry state, the Space, tunnel
+  origin or opaque reverse-connection identifier, and backend connector
+  credential needed to route the request. Pending reverse enrollment retains
+  the proposed Space and backend credential without enabling an OAuth route.
+- Pairing and authorization state: a hash of the browser secret, pairing and
+  authorization identifiers, client ID, resource, query scope, status, expiry,
+  device/route generation and explicit Space approval. The stored validated
+  OAuth request includes its redirect/resource/client fields and S256 PKCE
+  challenge and method.
+- OAuth client and grant state: provider-managed client registration metadata,
+  token records, and grant receipts containing client/device/route/Space
+  bindings, authorization IDs, status, timestamps, expiry and cleanup state.
+- Session and abuse-control state: opaque public-to-backend MCP session
+  mappings, backend session IDs, binding hashes, status and expiry, plus a
+  hash of the connecting IP with request rate-window counters and expiry.
+
+Technical expiry denies access; it is not a physical deletion time. Pairing and
+authorization requests and pending reverse enrollments expire after 5 minutes,
+route and session mappings after
+24 hours, management credentials after 30 days, access tokens after 15 minutes,
+refresh tokens after 30 days, client registrations after 90 days from
+registration, and consent/grant records after 30 days. Device revocation
+disables the device and route. Grant revocation records denial before asking
+the OAuth provider to delete its token records; failed cleanup remains pending
+and is retried by bounded background maintenance: scans are paged, at most one
+provider cleanup batch runs per alarm, alarms recur every 60 seconds while work
+remains, and failed retries back off up to one hour. The source establishes no
+physical-deletion SLA. Revoking relay access does not delete a query or result
+already received by the connected AI client or its provider.
+
+An optional reviewer account uses a separate synthetic library and the same
+OAuth authorization path. Its operator configuration contains a username,
+password hash, device and Space binding, and expiry. Login expires no later
+than thirty days or the device credential, whichever comes first. Expiry
+disables new logins; the operator must separately remove expired configuration
+and dispose of the synthetic library. This does not create a general user
+account or transfer ownership of a device.
+
+To stop access, disable Remote Access or revoke the relevant client grant.
+Changing the connected Space requires fresh consent. If the app reports a
+pending disconnect, remote revocation has not been confirmed and must be
+retried. After a confirmed disconnect, the old device-management credential is
+removed from the local profile and the local MCP bearer is replaced; settings,
+knowledge and activity records remain until separately deleted. Previously
+shared copies and backups require their own deletion controls. Do not connect
+a Space containing credentials or other restricted information: the connector
+does not classify or redact sensitive text embedded in knowledge.
+
+Abuse-control counters use fixed calendar windows: per-IP-hash counters expire
+at the end of the current minute or hour, depending on the endpoint; aggregate
+daily enrollment and client-registration counters expire at the end of the UTC
+day. The application stores a hash rather than the raw connecting IP in these
+counters. Expired rows are removed in batches of at most 256 by background
+maintenance, which schedules its next alarm after 60 seconds, or when storage
+capacity requires cleanup. An outage or maintenance backlog can delay physical
+deletion beyond expiry. Cloudflare receives the network connection itself;
+hashing the application's counter key does not hide your IP from Cloudflare.
+
 ## Telemetry
 
 Optional usage statistics are **off by default**, including when you upgrade an
@@ -120,6 +249,11 @@ One caveat about the dependency list, since it is public and you may read it. A 
 
 The local activity history described under "What data Wenlan stores" stays in
 the database on your machine, regardless of this optional statistics setting.
+The desktop app also keeps the diagnostic log described above. The standalone
+relay separately keeps the
+authorization, routing, session and abuse-control records described above.
+Its candidate deployment configuration disables Workers observability logs;
+this setting is not a promise that Cloudflare retains no service-level data.
 
 Opening a window starts the update check listed in the table above about three seconds later. On a first run it also triggers the search model download in that table, and if you left Remote Access on, it reopens that tunnel. Beyond those, see "Images in your notes reach their host" above, because the note you open can reach the network on its own.
 
@@ -128,7 +262,9 @@ Opening a window starts the update check listed in the table above about three s
 Wenlan reaches these services, so their own terms decide what they do with the request.
 The project can see Cloudflare relay traffic figures and, when optional usage
 statistics are enabled, the aggregate counters and hosting diagnostics described
-above. Wenlan's relay runs on Cloudflare Workers, so the project holds a
+above. The standalone relay operator can also access the persisted control-plane
+records described above, but it does not store a replicated knowledge library
+by design. Wenlan's relay runs on Cloudflare Workers, so the project holds a
 Cloudflare account and is bound by Cloudflare's own terms as a customer.
 
 | Service | Why Wenlan reaches it | Their policy |
@@ -138,7 +274,7 @@ Cloudflare account and is bound by Cloudflare's own terms as a customer.
 | GitHub | The two version checks, downloading a release, and installing the Claude Code or Codex plugin from Settings, which clones this repository's plugin marketplace | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
 | Hugging Face | Downloading the search model, and any optional model you install | [Hugging Face Privacy Policy](https://huggingface.co/privacy) |
 | npm, which GitHub operates | Only when no `wenlan-mcp` binary is installed, in which case your AI client runs `npx` to fetch it | [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement) |
-| Cloudflare | Only if you turn on Remote Access, which runs `cloudflared` to open the tunnel | [Cloudflare Privacy Policy](https://www.cloudflare.com/privacypolicy/) |
+| Cloudflare | The legacy Remote Access tunnel, or the pre-release standalone connector at `https://relay.wenlan.app` | [Cloudflare Privacy Policy](https://www.cloudflare.com/privacypolicy/) |
 | The host of a remote image in one of your notes | Displaying a note whose Markdown points at a remote image | Whoever runs that host. Wenlan cannot know who that is |
 
 ### The cloud AI providers Wenlan offers
@@ -160,7 +296,7 @@ None of these is contacted unless you save a key and choose that provider for en
 
 Wenlan also offers presets for Ollama and LM Studio. Wenlan sends those requests to an address on your own machine, so nothing you capture leaves it by that route; what those two programs do on their own is up to them, not something this project can promise. There is also a custom option where you type the address yourself. For a custom address, the policy is whatever the operator of that address publishes.
 
-Wenlan's own relay, at `origin-relay.originmemory.workers.dev`, is run by this project rather than a third party. It is meant to hold the tunnel address you register and the random identifier described above, and nothing more. Its source is not part of this repository, so that is a statement of intent you cannot check against the code here. It runs on Cloudflare Workers, so Cloudflare sees the requests as the platform underneath it.
+Wenlan's legacy relay, at `origin-relay.originmemory.workers.dev`, is run by this project rather than a third party. It is meant to hold the tunnel address you register and the random identifier described above, and nothing more. Its source is not part of this repository, so that is a statement of intent you cannot check against the code here. It runs on Cloudflare Workers, so Cloudflare sees the requests as the platform underneath it. The pre-release standalone `wenlan-relay` connector is described above and is a separate source-backed service.
 
 ## Data deletion
 
@@ -169,7 +305,7 @@ Wenlan's own relay, at `origin-relay.originmemory.workers.dev`, is run by this p
 
   - `~/.config/wenlan-mcp/` holds the Remote Access identifier, which doubles as that feature's shared secret, and the MCP bearer token if you generated one. Neither is removed with the folders above.
   - If you pointed the knowledge or page path at a folder of your own, your pages are in that folder, not under `~/.wenlan/`.
-  - Registering a Remote Access tunnel leaves a record on the relay. Turning Remote Access off stops the tunnel on your machine; the app sends no request to remove the registration. Open an issue if you want it deleted.
+  - Registering a legacy Remote Access tunnel leaves a record on the legacy relay. Turning legacy Remote Access off stops the tunnel on your machine; the app sends no request to remove that legacy registration. Open an issue if you want it deleted. The standalone `wenlan-relay` connector has separate device and grant revocation and asynchronous cleanup described under "Pre-release standalone `wenlan-relay` connector"; technical expiry is not a physical-deletion SLA.
   - The log file listed under "Where data is stored" is in none of those folders and is not removed with them.
   - Wenlan writes an entry for itself into the configuration of each AI client you connect -- Claude Desktop, Claude Code, Cursor, Gemini, Codex. Those entries stay after uninstall, and the client will keep trying to launch Wenlan. Remove them by hand. The command-line tool also leaves a timestamped backup of each file it edited, beside the original.
   - An install upgraded from Origin may also have `~/.config/origin-mcp/`, holding that version's identifier and token.
@@ -180,4 +316,8 @@ Wenlan's own relay, at `origin-relay.originmemory.workers.dev`, is run by this p
 
 Questions or concerns: open an issue at https://github.com/7xuanlu/wenlan/issues.
 
-Last updated: 2026-08-29.
+GitHub issues are public. Do not post memory content, access tokens, Remote
+Access identifiers or unredacted logs there. Ask for a private contact method
+before sharing information needed for an individual data request.
+
+Last updated: 2026-09-09.

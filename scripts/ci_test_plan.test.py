@@ -501,6 +501,31 @@ class PlatformPlanTests(unittest.TestCase):
                 f"{prefix!r} is not matched by the ci.yml app filter: {patterns!r}",
             )
 
+    def test_relay_ci_is_required_and_uses_its_own_toolchain(self) -> None:
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml").read_text()
+        self.assertTrue("relay:   ${{ steps.filter.outputs.relay }}" in workflow,
+                        "relay path-filter output is missing")
+        relay_filter = workflow.split("            relay:\n", 1)[1].split("            macos:\n", 1)[0]
+        for path in ("relay/**", "app/icons/128x128.png", "chatgpt-app-submission.json",
+                     ".github/workflows/ci.yml", "scripts/ci_test_plan.test.py"):
+            self.assertIn(f"- '{path}'", relay_filter)
+        job = workflow.split("\n  relay-check:\n", 1)[1].split("\n  # Desktop app", 1)[0]
+        predicate = "needs.detect-changes.outputs.relay == 'true' || github.event_name == 'workflow_dispatch'"
+        self.assertIn(f"    if: {predicate}\n", job)
+        self.assertIn("    timeout-minutes: 15\n", job)
+        self.assertIn("    needs: detect-changes\n", job)
+        self.assertIn("      WENLAN_NO_AUTOSTART: '1'\n", job)
+        self.assertIn("node-version: \"24\"", job)
+        self.assertIn("run: npm ci --prefix relay", job)
+        self.assertIn("run: npm ls --prefix relay --all", job)
+        self.assertIn("run: npm audit --prefix relay --audit-level=high", job)
+        self.assertIn("run: npm test --prefix relay", job)
+        self.assertNotIn("continue-on-error", job)
+        self.assertNotIn("secrets.", job)
+        conclusion = workflow.split("\n  conclusion:\n", 1)[1].split("\n  plugin:\n", 1)[0]
+        self.assertIn("relay-check", conclusion.split("    steps:", 1)[0])
+        self.assertIn(f"expect_job relay-check '${{{{ {predicate} }}}}' '${{{{ needs.relay-check.result }}}}'", conclusion)
+
     def test_infrastructure_does_not_widen_mixed_server_change(self) -> None:
         product = "crates/wenlan-server/src/bind_addr_tests.rs"
         focused = self.platform_plan_for(product)
@@ -657,6 +682,73 @@ class PlatformPlanTests(unittest.TestCase):
 
                 self.assertEqual(plan["mode"], "full")
                 self.assertTrue(all(required_suite_outputs(plan).values()))
+
+    def test_mcp_platform_filter_routes_and_compiles_examples(self) -> None:
+        """Unix-sensitive MCP examples must reach the mcp-platform job.
+
+        The reviewer-library seeder carries unix cfg branches, but the
+        mcp-platform filter once covered only `src`. Keep the filter and the
+        macOS/Windows compile-only examples step connected by an executable
+        invariant, without executing the seeder.
+        """
+        workflow_path = Path(__file__).resolve().parents[1] / ".github/workflows/ci.yml"
+        workflow = workflow_path.read_text(encoding="utf-8")
+        mcp_marker = "            mcp-platform:\n"
+        mcp_start = workflow.find(mcp_marker)
+        self.assertGreaterEqual(mcp_start, 0, "ci.yml mcp-platform filter is missing")
+        mcp_body_start = mcp_start + len(mcp_marker)
+        next_filter = re.search(
+            r"^ {12}[A-Za-z0-9_-]+:\s*$",
+            workflow[mcp_body_start:],
+            re.MULTILINE,
+        )
+        self.assertIsNotNone(next_filter, "ci.yml mcp-platform filter has no following boundary")
+        mcp_block = workflow[mcp_body_start : mcp_body_start + next_filter.start()]
+        patterns = re.findall(r"^\s+- '([^']+)'\s*$", mcp_block, re.MULTILINE)
+        self.assertIn("crates/wenlan-mcp/examples/**", patterns)
+
+        for path in (
+            "crates/wenlan-mcp/examples/seed_reviewer_library.rs",
+            "crates/wenlan-mcp/examples/support/fixture.rs",
+        ):
+            self.assertTrue(
+                any(fnmatchcase(path, pattern) for pattern in patterns),
+                f"{path!r} is not routed to the mcp-platform job: {patterns!r}",
+            )
+
+        job = workflow.split("\n  mcp-platform:\n", 1)[1].split(
+            "\n  canonical-acceptance:\n", 1
+        )[0]
+        self.assertIn("    timeout-minutes: 20\n", job)
+        self.assertIn("run: cargo check -p wenlan-mcp --lib --bins", job)
+        self.assertIn("run: cargo check -p wenlan-mcp --examples", job)
+        self.assertNotIn("--all-targets", job)
+        self.assertNotIn("cargo run", job)
+
+        # Example compilation pulls wenlan-core/server dev-dependencies. The
+        # existing workspace-platform prerequisite steps skip exactly when
+        # TEST_OWNS_PLATFORM is true or workspace-platform is false, so one
+        # complementary Windows step must cover that gap before compilation.
+        prereq_name = "Set up Windows prerequisites (MCP examples compile)"
+        prereq_index = job.index(f"- name: {prereq_name}\n")
+        examples_index = job.index("- name: Compile MCP examples (compile-only)\n")
+        self.assertLess(prereq_index, examples_index)
+        prereq_body = job[prereq_index:examples_index]
+        self.assertIn(
+            "if: matrix.os == 'windows-2022' && "
+            "(needs.detect-changes.outputs.workspace-platform != 'true' || "
+            "env.TEST_OWNS_PLATFORM == 'true')",
+            prereq_body,
+        )
+        self.assertIn("shell: pwsh", prereq_body)
+        for marker in (
+            "vcpkg install sqlite3:x64-windows-static-md",
+            "scripts/setup-vulkan-sdk-windows.test.ps1",
+            "scripts/setup-vulkan-sdk-windows.ps1",
+            "scripts/setup-msvc-ninja-windows.test.ps1",
+            "scripts/setup-msvc-ninja-windows.ps1",
+        ):
+            self.assertIn(marker, prereq_body)
 
 
 class NarrowOwnerTests(unittest.TestCase):

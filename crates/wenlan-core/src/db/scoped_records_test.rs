@@ -161,3 +161,113 @@ async fn malformed_page_activity_owner_fails_both_scoped_feeds_safely() {
     assert!(retrievals.is_err(), "retrieval feed must fail safely");
     assert!(activities.is_err(), "activity feed must fail safely");
 }
+
+#[tokio::test]
+async fn memory_item_readers_fold_unfiled_sentinel_to_none() {
+    let (db, _temp) = test_db().await;
+    let mut unfiled = activity_memory("unfiled-owner", "work");
+    unfiled.source_id = "unfiled-memory".to_string();
+    unfiled.space = None;
+    db.upsert_documents(vec![unfiled, activity_memory("work-memory", "work")])
+        .await
+        .unwrap();
+
+    let listed = db
+        .list_memories_scoped(&ReadScope::Global, None, None, None, 10)
+        .await
+        .unwrap();
+    let unfiled_listed = listed
+        .iter()
+        .find(|item| item.source_id == "unfiled-memory")
+        .expect("unfiled memory listed");
+    assert_eq!(unfiled_listed.space, None);
+    let work_listed = listed
+        .iter()
+        .find(|item| item.source_id == "work-memory")
+        .expect("named-space memory listed");
+    assert_eq!(work_listed.space.as_deref(), Some("work"));
+
+    let unfiled_detail = db
+        .get_memory_detail("unfiled-memory")
+        .await
+        .unwrap()
+        .expect("unfiled memory detail");
+    assert_eq!(unfiled_detail.space, None);
+    let work_detail = db
+        .get_memory_detail("work-memory")
+        .await
+        .unwrap()
+        .expect("named-space memory detail");
+    assert_eq!(work_detail.space.as_deref(), Some("work"));
+}
+
+#[tokio::test]
+async fn indexed_file_readers_fold_unfiled_sentinel_to_none() {
+    let (db, _temp) = test_db().await;
+    let mut unfiled = activity_memory("unfiled-owner", "work");
+    unfiled.source_id = "unfiled-file".to_string();
+    unfiled.space = None;
+    db.upsert_documents(vec![unfiled, activity_memory("work-file", "work")])
+        .await
+        .unwrap();
+
+    for listed in [
+        db.list_indexed_files_scoped(&ReadScope::Global)
+            .await
+            .unwrap(),
+        db.list_filtered_confirmed_scoped(None, None, &ReadScope::Global, None, 10)
+            .await
+            .unwrap(),
+    ] {
+        let unfiled_listed = listed
+            .iter()
+            .find(|item| item.source_id == "unfiled-file")
+            .expect("unfiled file listed");
+        assert_eq!(unfiled_listed.space, None);
+        let work_listed = listed
+            .iter()
+            .find(|item| item.source_id == "work-file")
+            .expect("named-space file listed");
+        assert_eq!(work_listed.space.as_deref(), Some("work"));
+    }
+}
+
+#[tokio::test]
+async fn filtered_file_scopes_partition_unfiled_and_named_spaces() {
+    let (db, _temp) = test_db().await;
+    let mut unfiled = activity_memory("unfiled-owner", "work");
+    unfiled.source_id = "unfiled-scoped".to_string();
+    unfiled.space = None;
+    db.upsert_documents(vec![
+        unfiled,
+        activity_memory("work-scoped", "work"),
+        activity_memory("personal-scoped", "personal"),
+    ])
+    .await
+    .unwrap();
+
+    let work_scope = ReadScope::Space("work".to_string());
+    for work in [
+        db.list_filtered_confirmed_scoped(None, None, &work_scope, None, 10)
+            .await
+            .unwrap(),
+        db.list_indexed_files_scoped(&work_scope).await.unwrap(),
+    ] {
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].source_id, "work-scoped");
+        assert_eq!(work[0].space.as_deref(), Some("work"));
+    }
+
+    for uncategorized in [
+        db.list_filtered_confirmed_scoped(None, None, &ReadScope::Uncategorized, None, 10)
+            .await
+            .unwrap(),
+        db.list_indexed_files_scoped(&ReadScope::Uncategorized)
+            .await
+            .unwrap(),
+    ] {
+        assert_eq!(uncategorized.len(), 1);
+        assert_eq!(uncategorized[0].source_id, "unfiled-scoped");
+        assert_eq!(uncategorized[0].space, None);
+    }
+}

@@ -14,7 +14,7 @@ HTTP calls, and eval fixtures used by the app crate.
 | Change daemon route usage | `src/api.rs` | keep typed request/response wrappers here |
 | Startup, tray, window behavior | `src/lib.rs` | high fan-out; verify app lifecycle |
 | Run-at-login or plist repair | `src/lifecycle.rs` | macOS persistence and legacy Origin paths |
-| Remote MCP/tunnel behavior | `src/remote_access.rs` | cloudflared, `wenlan-mcp`, relay registration |
+| Remote MCP behavior | `src/remote_access.rs`, `src/remote_relay/` | local `wenlan-mcp`, native reverse transport, relay registration |
 | Sources integration | `src/sources/` | source traits, sync, uploads, wire types |
 | Eval fixture edits | `eval/fixtures/` | data-only TOML scenarios |
 
@@ -30,8 +30,10 @@ HTTP calls, and eval fixtures used by the app crate.
 - Prefer module-local Rust unit tests near the behavior under `#[cfg(test)]`.
   Use `app/tests/*.rs` only for cross-module or daemon-backed integration.
 - `app/tests/sources_integration.rs` is ignored because it needs a live daemon.
-- `tauri.conf.json` declares `wenlan`, `wenlan-server`, `wenlan-mcp`, and
-  `cloudflared` as `externalBin`; packaging can fail before app code runs.
+- `tauri.conf.json` declares `wenlan`, `wenlan-server`, and `wenlan-mcp` as
+  `externalBin`; packaging can fail before app code runs. Native reverse
+  transport does not require a tunnel sidecar. Retain legacy process-ownership
+  cleanup without restoring that packaging dependency.
 - `eval/fixtures/gen/` is generated-data territory.
 
 ## ANTI-PATTERNS
