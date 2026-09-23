@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.12](https://github.com/7xuanlu/wenlan/compare/v0.18.11...v0.18.12) (2026-09-23)
+
+
+### Features
+
+* **relay:** integrate authenticated local-first desktop access ([#777](https://github.com/7xuanlu/wenlan/issues/777)) ([92db83c](https://github.com/7xuanlu/wenlan/commit/92db83c053890d0a5aa74e51b1e91278a842d160))
+
 ## [0.18.11](https://github.com/7xuanlu/wenlan/compare/v0.18.10...v0.18.11) (2026-09-21)
 
 
