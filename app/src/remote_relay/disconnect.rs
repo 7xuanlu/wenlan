@@ -254,6 +254,8 @@ mod tests {
             .open(directory.path().join("relay/connection.lock"))
             .unwrap();
         lock.lock().unwrap();
+        #[cfg(unix)]
+        let inherited = lock.try_clone().unwrap();
 
         let plan = prepare_with_disable(&store, None, |_, _| {
             panic!("disable must not run without a loaded snapshot")
@@ -276,6 +278,7 @@ mod tests {
                 .await
                 .is_err()
         );
+        lock.unlock().unwrap();
         drop(lock);
 
         let restored = store.load().unwrap().unwrap();
@@ -288,6 +291,8 @@ mod tests {
         let retry = prepare_with_disable(&store, None, |_, _| Err(StoreError::Storage));
         assert!(retry.profile.as_ref().and_then(Profile::device).is_some());
         assert_eq!(retry.persistence_error, Some(StoreError::Storage));
+        #[cfg(unix)]
+        drop(inherited);
     }
 
     #[test]

@@ -170,15 +170,20 @@ fn lock_contention_is_bounded_and_does_not_modify_the_profile() {
         .open(store.directory.join("connection.lock"))
         .unwrap();
     lock.lock().unwrap();
+    #[cfg(unix)]
+    let inherited = lock.try_clone().unwrap();
     assert_eq!(
         store.enable(original.revision()).unwrap_err(),
         StoreError::Busy
     );
+    lock.unlock().unwrap();
     drop(lock);
     assert_eq!(
         store.load().unwrap().unwrap().revision(),
         original.revision()
     );
+    #[cfg(unix)]
+    drop(inherited);
 }
 
 #[test]
