@@ -134,7 +134,7 @@ fn pages_skill_replaces_read() {
     for doc in [
         "plugin/skills/help/SKILL.md",
         "plugin/skills/README.md",
-        "plugin/.claude-plugin/README.md",
+        "plugin/README.md",
     ] {
         let text = read_text(doc);
         assert!(

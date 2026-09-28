@@ -978,7 +978,7 @@ fn print_space_resolution(cwd: &std::path::Path) {
 
     let plugin_resolver = std::env::var("CLAUDE_PLUGIN_ROOT")
         .ok()
-        .map(|p| format!("{}/bin/resolve-space.sh", p));
+        .map(|p| format!("{}/scripts/resolve-space.sh", p));
     if let Some(p) = plugin_resolver {
         if std::path::Path::new(&p).exists() {
             let _ = writeln!(out, "Plugin resolver:       {}", p);
