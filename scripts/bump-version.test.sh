@@ -10,7 +10,7 @@ trap "rm -rf $TMPDIR_TEST" EXIT
 mkdir -p "$TMPDIR_TEST/crates/wenlan-mcp/npm"
 mkdir -p "$TMPDIR_TEST/crates/wenlan-cli/npm"
 mkdir -p "$TMPDIR_TEST/plugin/.claude-plugin"
-mkdir -p "$TMPDIR_TEST/plugin/bin"
+mkdir -p "$TMPDIR_TEST/plugin/scripts"
 mkdir -p "$TMPDIR_TEST/plugin/skills/setup"
 mkdir -p "$TMPDIR_TEST/plugin-codex/.codex-plugin"
 mkdir -p "$TMPDIR_TEST/plugin-codex/bin"
@@ -44,6 +44,11 @@ EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/.codex-plugin/plugin.json" <<EOF
 {"name": "wenlan", "version": "0.4.1+codex"}
+EOF
+
+cat > "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" <<EOF
+# wenlan-mcp-pin: kept in lockstep by scripts/bump-version.sh
+exec npx -y wenlan-mcp@0.4.1 "\$@"
 EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" <<EOF
@@ -147,6 +152,8 @@ APP_PKG_VER=$(jq -r .version "$TMPDIR_TEST/package.json")
 [[ "$APP_PKG_VER" == "0.5.0" ]] || { echo "FAIL: package.json not bumped (got $APP_PKG_VER)"; exit 1; }
 grep -q '# x-release-please-version' "$TMPDIR_TEST/app/Cargo.toml" || { echo "FAIL: app/Cargo.toml lost its x-release-please-version marker"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" || { echo "FAIL: setup skill installer not bumped"; exit 1; }
+grep -q 'exec npx -y wenlan-mcp@0.5.0 "\$@"' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" || { echo "FAIL: Claude runner exact pin not bumped"; exit 1; }
+grep -q 'wenlan-mcp@0\.4\.1' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" && { echo "FAIL: Claude runner still carries the old pin"; exit 1; }
 grep -q 'wenlan-mcp@\^\${ver}' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" || { echo "FAIL: Codex runner must keep deriving its pin from plugin.json"; exit 1; }
 grep -Eq 'wenlan-mcp@\^[0-9]' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" && { echo "FAIL: bump-version.sh must not hardcode a Codex runner pin"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" || { echo "FAIL: Codex setup skill installer not bumped"; exit 1; }
@@ -169,5 +176,13 @@ done
 grep -q '^version = "1.0.86"' "$TMPDIR_TEST/Cargo.lock" || { echo "FAIL: external dep anyhow version was altered"; exit 1; }
 # Top-level lockfile-format version must be left alone.
 grep -q '^version = 3$' "$TMPDIR_TEST/Cargo.lock" || { echo "FAIL: lockfile-format 'version = 3' was altered"; exit 1; }
+
+# Negative: a Claude runner with no exact pin must make bump-version.sh fail
+# loudly instead of silently shipping a release with an unpinned launcher.
+printf 'exec npx -y wenlan-mcp@latest "$@"\n' > "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+if (cd "$TMPDIR_TEST" && bash "$OLDPWD/scripts/bump-version.sh" >/dev/null 2>&1); then
+  echo "FAIL: bump-version.sh must fail when the Claude runner has no exact wenlan-mcp pin"; exit 1
+fi
+echo "PASS: bump-version.sh refuses a Claude runner without an exact pin"
 
 echo "PASS: bump-version.sh syncs all manifests"

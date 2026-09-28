@@ -56,9 +56,19 @@ jq ".version = \"${NEW_VERSION}+codex\"" "$CODEX_PLUGIN_MANIFEST" > "${CODEX_PLU
 mv "${CODEX_PLUGIN_MANIFEST}.tmp" "$CODEX_PLUGIN_MANIFEST"
 echo "  Updated $CODEX_PLUGIN_MANIFEST"
 
-# 4. The plugin MCP runner scripts (plugin/bin, plugin-codex/bin) derive their
-# `npx -y wenlan-mcp@^X.Y.Z` fallback pin from the sibling plugin.json at run
-# time, so they carry no version string and are not touched by the release PR.
+# 4. Claude plugin MCP runner: the Claude directory rejects `npx` launchers with
+# a range or @latest, so plugin/scripts/wenlan-mcp-runner.sh carries a literal
+# `npx -y wenlan-mcp@X.Y.Z` pin that is rewritten here and checked by
+# validate-versions.sh. The Codex runner (plugin-codex/bin) still derives
+# `wenlan-mcp@^X.Y.Z` from its sibling plugin.json at run time and is untouched.
+CLAUDE_RUNNER="plugin/scripts/wenlan-mcp-runner.sh"
+if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( )|\\1${NEW_VERSION}\\3|" "$CLAUDE_RUNNER"
+else
+    sed -i -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( )|\\1${NEW_VERSION}\\3|" "$CLAUDE_RUNNER"
+fi
+grep -q "npx -y wenlan-mcp@${NEW_VERSION} " "$CLAUDE_RUNNER" || { echo "ERROR: $CLAUDE_RUNNER has no exact wenlan-mcp pin to rewrite" >&2; exit 1; }
+echo "  Updated $CLAUDE_RUNNER (exact wenlan-mcp pin)"
 
 # 5. /setup skill install.sh URL pinned to current tag (not `main`), so the
 # install one-liner is reproducible at the release boundary.

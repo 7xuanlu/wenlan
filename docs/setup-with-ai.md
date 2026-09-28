@@ -45,14 +45,14 @@ wenlan status
 
 ## Claude Code
 
-Install the Wenlan plugin from its public marketplace:
+Install the Wenlan plugin from the Claude directory (claude.ai, Cowork, or Claude Code) or from its public marketplace:
 
 ```bash
 claude plugin marketplace add 7xuanlu/wenlan
 claude plugin install wenlan@7xuanlu-wenlan
 ```
 
-Start a new Claude Code session if requested, then run `/setup`. The setup skill installs or repairs the local runtime and verifies the MCP round trip. Detailed workflows: [Claude Code plugin](../plugin/.claude-plugin/README.md).
+Start a new Claude Code session if requested, then run `/setup`. The setup skill installs or repairs the local runtime and verifies the MCP round trip. Detailed workflows: [Claude Code plugin](../plugin/README.md).
 
 ## Codex
 

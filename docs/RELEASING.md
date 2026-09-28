@@ -100,7 +100,7 @@ Release workflow changes have static mutation-tested contracts in `scripts/relea
 
 `wenlan-mcp` lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license.
 
-Nothing is notified when the prerelease flag clears: the Claude Code plugin ships from this repo's own `.claude-plugin/marketplace.json`, which sources `plugin/` by `git-subdir` with no `ref` pin, so it tracks the default branch and has no release-time pin to sync.
+Nothing is notified when the prerelease flag clears: both Claude channels track the default branch. The Claude Code marketplace (`.claude-plugin/marketplace.json`) sources `plugin/` by `git-subdir` with no `ref` pin, and the claude.ai directory listing is bound to the `plugin` path on `main`, so each channel picks up a release on its next sync. The version-bearing files inside `plugin/` (the `plugin.json` version, the exact `npx -y wenlan-mcp@<version>` pin in `plugin/scripts/wenlan-mcp-runner.sh`, and the install tag in the setup skill) are rewritten by `scripts/bump-version.sh` on the Release PR and checked by `scripts/validate-versions.sh`; they are the only release-time sync the plugin needs.
 
 ## Required secrets
 
