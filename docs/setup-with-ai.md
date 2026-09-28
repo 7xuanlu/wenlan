@@ -45,7 +45,7 @@ wenlan status
 
 ## Claude Code
 
-Install the Wenlan plugin from its public marketplace:
+Install the Wenlan plugin from the Claude directory (claude.ai, Cowork, or Claude Code) or from its public marketplace:
 
 ```bash
 claude plugin marketplace add 7xuanlu/wenlan

@@ -4,6 +4,9 @@
     "name": "Qi-Xuan Lu",
     "url": "https://github.com/7xuanlu"
   },
+  "metadata": {
+    "description": "Wenlan: a local-first memory layer for Claude Code. Source-cited wiki pages your agents build and refresh between sessions."
+  },
   "plugins": [
     {
       "name": "wenlan",
