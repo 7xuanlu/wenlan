@@ -10,6 +10,7 @@ mkdir -p \
     "$TMPDIR_TEST/crates/wenlan-cli/npm" \
     "$TMPDIR_TEST/plugin/.claude-plugin" \
     "$TMPDIR_TEST/plugin/scripts" \
+    "$TMPDIR_TEST/plugin/skills/setup" \
     "$TMPDIR_TEST/plugin-codex/.codex-plugin" \
     "$TMPDIR_TEST/plugin-codex/bin" \
     "$TMPDIR_TEST/plugin-codex/skills/setup" \
@@ -66,6 +67,9 @@ EOF
 cat > "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" <<EOF
 plugin_json="\${here}/../.codex-plugin/plugin.json"
 exec npx -y "wenlan-mcp@^\${ver}" --agent-name "\${agent_name}" "\$@"
+EOF
+cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
+curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash
 EOF
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
 curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash
@@ -177,14 +181,26 @@ if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-ver
 fi
 echo "PASS test 8: Claude runner pin drift detected"
 
-# Test 8b: an unpinned Claude launcher (@latest / ^) is rejected even with no drift
-perl -0pi -e 's/wenlan-mcp\@0\.4\.9/wenlan-mcp\@latest/' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+perl -0pi -e 's/wenlan-mcp\@0\.4\.9/wenlan-mcp\@0.5.0/' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+
+# Test 8b: an unpinned Claude launcher (@latest / ^) is rejected even when the
+# exact pin is present and correct, so the check is independent of pin drift.
+echo 'exec npx -y wenlan-mcp@latest "$@"' >> "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
 if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
     echo "FAIL test 8b: should have rejected an unpinned Claude runner launcher"
     exit 1
 fi
 echo "PASS test 8b: unpinned Claude runner launcher rejected"
-perl -0pi -e 's/wenlan-mcp\@latest/wenlan-mcp\@0.5.0/' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+perl -0pi -e 's/\nexec npx -y wenlan-mcp\@latest "\$\@"\n//' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+
+# Test 8d: Claude setup install tag drift is caught like the Codex one
+perl -0pi -e 's|/v0\.5\.0/install\.sh|/v0.4.9/install.sh|g' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 8d: should have detected Claude setup install tag drift"
+    exit 1
+fi
+echo "PASS test 8d: Claude setup install tag drift detected"
+perl -0pi -e 's|/v0\.4\.9/install\.sh|/v0.5.0/install.sh|g' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
 (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh" >/dev/null)
 echo "PASS test 8c: restored fixture validates again"
 

@@ -177,4 +177,12 @@ grep -q '^version = "1.0.86"' "$TMPDIR_TEST/Cargo.lock" || { echo "FAIL: externa
 # Top-level lockfile-format version must be left alone.
 grep -q '^version = 3$' "$TMPDIR_TEST/Cargo.lock" || { echo "FAIL: lockfile-format 'version = 3' was altered"; exit 1; }
 
+# Negative: a Claude runner with no exact pin must make bump-version.sh fail
+# loudly instead of silently shipping a release with an unpinned launcher.
+printf 'exec npx -y wenlan-mcp@latest "$@"\n' > "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+if (cd "$TMPDIR_TEST" && bash "$OLDPWD/scripts/bump-version.sh" >/dev/null 2>&1); then
+  echo "FAIL: bump-version.sh must fail when the Claude runner has no exact wenlan-mcp pin"; exit 1
+fi
+echo "PASS: bump-version.sh refuses a Claude runner without an exact pin"
+
 echo "PASS: bump-version.sh syncs all manifests"

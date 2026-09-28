@@ -63,9 +63,9 @@ echo "  Updated $CODEX_PLUGIN_MANIFEST"
 # `wenlan-mcp@^X.Y.Z` from its sibling plugin.json at run time and is untouched.
 CLAUDE_RUNNER="plugin/scripts/wenlan-mcp-runner.sh"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+([^0-9])|\\1${NEW_VERSION}\\2|" "$CLAUDE_RUNNER"
+    sed -i '' -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( )|\\1${NEW_VERSION}\\3|" "$CLAUDE_RUNNER"
 else
-    sed -i -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+([^0-9])|\\1${NEW_VERSION}\\2|" "$CLAUDE_RUNNER"
+    sed -i -E "s|(npx -y wenlan-mcp@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( )|\\1${NEW_VERSION}\\3|" "$CLAUDE_RUNNER"
 fi
 grep -q "npx -y wenlan-mcp@${NEW_VERSION} " "$CLAUDE_RUNNER" || { echo "ERROR: $CLAUDE_RUNNER has no exact wenlan-mcp pin to rewrite" >&2; exit 1; }
 echo "  Updated $CLAUDE_RUNNER (exact wenlan-mcp pin)"

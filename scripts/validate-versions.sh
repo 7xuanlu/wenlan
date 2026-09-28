@@ -35,12 +35,13 @@ CODEX_PLUGIN_VER_RAW=$(jq -r .version plugin-codex/.codex-plugin/plugin.json)
 CODEX_PLUGIN_VER="${CODEX_PLUGIN_VER_RAW%%+*}"
 # The Claude runner carries a literal exact pin (the Claude directory rejects
 # ranges and @latest); bump-version.sh rewrites it and it must equal the tag.
-CLAUDE_RUNNER_PINS=$(grep -Eo 'wenlan-mcp@[0-9]+\.[0-9]+\.[0-9]+' plugin/scripts/wenlan-mcp-runner.sh | sed -E 's/.*@//' | sort -u || true)
+CLAUDE_RUNNER_PINS=$(grep -Eo 'wenlan-mcp@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?' plugin/scripts/wenlan-mcp-runner.sh | sed -E 's/.*@//' | sort -u || true)
 CLAUDE_RUNNER_UNPINNED=$(grep -Ec 'wenlan-mcp@(latest|\^|~)' plugin/scripts/wenlan-mcp-runner.sh || true)
 # The Codex runner derives its `npx wenlan-mcp@^X.Y.Z` fallback from the sibling
 # plugin.json at run time, so it must carry no hardcoded pin that could drift.
 CODEX_RUNNER_HARDCODED_PINS=$(grep -Eo 'wenlan-mcp@\^[0-9]+\.[0-9]+\.[0-9]+' plugin-codex/bin/wenlan-mcp-runner.sh | sed -E 's/.*@\^//' | sort -u || true)
 CODEX_RUNNER_DERIVES_PIN=$(grep -c '\.codex-plugin/plugin\.json' plugin-codex/bin/wenlan-mcp-runner.sh || true)
+CLAUDE_SETUP_TAGS=$(grep -Eo '/v[0-9]+\.[0-9]+\.[0-9]+/install\.sh' plugin/skills/setup/SKILL.md | sed -E 's|/v([^/]+)/install\.sh|\1|' | sort -u || true)
 CODEX_SETUP_TAGS=$(grep -Eo '/v[0-9]+\.[0-9]+\.[0-9]+/install\.sh' plugin-codex/skills/setup/SKILL.md | sed -E 's|/v([^/]+)/install\.sh|\1|' | sort -u || true)
 
 echo "Tag:         $TAG_VER"
@@ -59,6 +60,8 @@ echo "Plugin:      $PLUGIN_VER"
 echo "Codex plugin: $CODEX_PLUGIN_VER_RAW"
 echo "Claude runner pin: ${CLAUDE_RUNNER_PINS:-none}"
 echo "Codex runner hardcoded pins: ${CODEX_RUNNER_HARDCODED_PINS:-none}"
+echo "Claude setup tags:"
+printf '%s\n' "$CLAUDE_SETUP_TAGS" | sed 's/^/  /'
 echo "Codex setup tags:"
 printf '%s\n' "$CODEX_SETUP_TAGS" | sed 's/^/  /'
 
@@ -74,6 +77,18 @@ fi
 
 if [[ "$CLAUDE_RUNNER_UNPINNED" != "0" ]]; then
     echo "ERROR: Claude runner uses an unpinned wenlan-mcp launcher (@latest, ^ or ~); the Claude directory rejects it"
+    exit 1
+fi
+
+for pin in $CLAUDE_SETUP_TAGS; do
+    if [[ "$pin" != "$TAG_VER" ]]; then
+        echo "ERROR: Claude plugin setup install tag drift — ${pin} is not ${TAG_VER}"
+        exit 1
+    fi
+done
+
+if [[ -z "$CLAUDE_SETUP_TAGS" ]]; then
+    echo "ERROR: Claude plugin setup install tag missing"
     exit 1
 fi
 
