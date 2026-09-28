@@ -33,6 +33,10 @@ WENLAN_NPM_VER=$(jq -r .version crates/wenlan-cli/npm/package.json)
 PLUGIN_VER=$(jq -r .version plugin/.claude-plugin/plugin.json)
 CODEX_PLUGIN_VER_RAW=$(jq -r .version plugin-codex/.codex-plugin/plugin.json)
 CODEX_PLUGIN_VER="${CODEX_PLUGIN_VER_RAW%%+*}"
+# The Claude runner carries a literal exact pin (the Claude directory rejects
+# ranges and @latest); bump-version.sh rewrites it and it must equal the tag.
+CLAUDE_RUNNER_PINS=$(grep -Eo 'wenlan-mcp@[0-9]+\.[0-9]+\.[0-9]+' plugin/scripts/wenlan-mcp-runner.sh | sed -E 's/.*@//' | sort -u || true)
+CLAUDE_RUNNER_UNPINNED=$(grep -Ec 'wenlan-mcp@(latest|\^|~)' plugin/scripts/wenlan-mcp-runner.sh || true)
 # The Codex runner derives its `npx wenlan-mcp@^X.Y.Z` fallback from the sibling
 # plugin.json at run time, so it must carry no hardcoded pin that could drift.
 CODEX_RUNNER_HARDCODED_PINS=$(grep -Eo 'wenlan-mcp@\^[0-9]+\.[0-9]+\.[0-9]+' plugin-codex/bin/wenlan-mcp-runner.sh | sed -E 's/.*@\^//' | sort -u || true)
@@ -53,12 +57,23 @@ echo "wenlan-mcp npm: $MCP_NPM_VER"
 echo "wenlan npm: $WENLAN_NPM_VER"
 echo "Plugin:      $PLUGIN_VER"
 echo "Codex plugin: $CODEX_PLUGIN_VER_RAW"
+echo "Claude runner pin: ${CLAUDE_RUNNER_PINS:-none}"
 echo "Codex runner hardcoded pins: ${CODEX_RUNNER_HARDCODED_PINS:-none}"
 echo "Codex setup tags:"
 printf '%s\n' "$CODEX_SETUP_TAGS" | sed 's/^/  /'
 
 if [[ "$VTXT_VER" != "$TAG_VER" || "$WS_VER" != "$TAG_VER" || "$WENLAN_TYPES_DEP_VER" != "$TAG_VER" || "$WENLAN_CORE_DEP_VER" != "$TAG_VER" || "$MCP_NPM_VER" != "$TAG_VER" || "$WENLAN_NPM_VER" != "$TAG_VER" || "$PLUGIN_VER" != "$TAG_VER" || "$CODEX_PLUGIN_VER" != "$TAG_VER" || "$APP_CARGO_VER" != "$TAG_VER" || "$APP_TAURI_VER" != "$TAG_VER" || "$APP_PKG_VER" != "$TAG_VER" ]]; then
     echo "ERROR: version drift — bump-version.sh likely failed in release-please.yml"
+    exit 1
+fi
+
+if [[ "$CLAUDE_RUNNER_PINS" != "$TAG_VER" ]]; then
+    echo "ERROR: Claude runner pin drift — plugin/scripts/wenlan-mcp-runner.sh pins '${CLAUDE_RUNNER_PINS:-none}', tag is ${TAG_VER}"
+    exit 1
+fi
+
+if [[ "$CLAUDE_RUNNER_UNPINNED" != "0" ]]; then
+    echo "ERROR: Claude runner uses an unpinned wenlan-mcp launcher (@latest, ^ or ~); the Claude directory rejects it"
     exit 1
 fi
 

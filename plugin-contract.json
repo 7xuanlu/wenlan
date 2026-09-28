@@ -6,12 +6,12 @@
       "plugin_root": "plugin",
       "manifest_path": "plugin/.claude-plugin/plugin.json",
       "manifest_name": "wenlan",
-      "manifest_category": "productivity",
+      "manifest_display_name": "Wenlan",
       "mcp_config_path": "plugin/.mcp.json",
       "mcp_server_name": "wenlan",
-      "mcp_command": "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh",
+      "mcp_command": "${CLAUDE_PLUGIN_ROOT}/scripts/wenlan-mcp-runner.sh",
       "skill_mcp_tool_prefix": "mcp__plugin_wenlan_wenlan__",
-      "runner_path": "plugin/bin/wenlan-mcp-runner.sh",
+      "runner_path": "plugin/scripts/wenlan-mcp-runner.sh",
       "agent_name": {
         "mode": "wenlan_mcp_stdio_default",
         "value": "claude-code"

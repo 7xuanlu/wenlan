@@ -1,0 +1,104 @@
+# Wenlan
+
+A living knowledge base your agents build as they work. What they learn becomes source-cited wiki pages that refresh between sessions, so each new thread starts from your latest work.
+
+Wenlan is local-first. Memories, pages, and session notes live on your machine under `~/.wenlan`, served by a small local daemon. Nothing in this plugin is stored by Anthropic or by the plugin itself.
+
+## What the plugin contains
+
+- **Skills**: `/wenlan:setup`, `/brief`, `/capture`, `/recall`, `/lint`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help`. Each skill talks to the local daemon over HTTP on `127.0.0.1:7878`.
+- **One local MCP server** (`wenlan`), started by `scripts/wenlan-mcp-runner.sh`. It exposes memory tools (capture, recall, brief, distill, and friends) to Claude Code and Cowork. Claude chat on the web ignores local MCP servers.
+- **One `SessionStart` hook** (`hooks/check-daemon.sh`). It probes the local daemon and prints a single reminder line if the daemon is not running. It never blocks a session and never installs anything.
+
+## Setup
+
+Install from the Claude directory, or from the Claude Code marketplace:
+
+```text
+/plugin marketplace add 7xuanlu/wenlan
+/plugin install wenlan@7xuanlu-wenlan
+```
+
+Then restart Claude Code and run `/wenlan:setup`. The skill installs the local runtime if it is missing, configures local memory, verifies the MCP round trip, and prints "Wenlan ready". After that, `/capture <something to remember>` or `/brief` is the daily loop.
+
+The first run downloads an embedding model of roughly 210 MB, so allow a few minutes.
+
+## What it runs and where data goes
+
+Everything the plugin does is listed here so you can decide whether to install it.
+
+| Component | What it runs | Network destination |
+|---|---|---|
+| Skills and MCP server | Read and write memories, pages, and session notes | `127.0.0.1:7878` (the local Wenlan daemon on your machine) |
+| `/wenlan:setup` | Runs the Wenlan install script when the runtime is missing | Fetches `install.sh` from `raw.githubusercontent.com/7xuanlu/wenlan`, which downloads release binaries from `github.com/7xuanlu/wenlan/releases` |
+| MCP runner fallback | If no local `wenlan-mcp` binary exists, runs `npx -y wenlan-mcp@<pinned version>` | `registry.npmjs.org` (npm package `wenlan-mcp`) |
+| `SessionStart` hook | One health probe of the local daemon | `127.0.0.1:7878` only |
+
+No memory content, prompts, or file contents leave your machine through this plugin. Model-backed enrichment (classification, entity extraction, page synthesis, reranking) is opt-in and configured in the daemon, not in the plugin.
+
+The MCP runner picks a binary in this order: a local override file next to the script, the `WENLAN_MCP_DEV_BIN` environment variable, the installed `~/.wenlan/bin/wenlan-mcp`, then the pinned npm package. The runner reads `$HOME` to find the installed binary, which is why a reviewer may hold the local MCP command for a manual look.
+
+## Where your data lives
+
+```text
+~/.wenlan/pages/               wiki pages distilled from memories (Markdown)
+~/.wenlan/sessions/            session logs by date (Markdown)
+~/.wenlan/sessions/_status/    current per-project goals and last-handoff timestamp
+~/.wenlan/db/                  the libSQL store
+~/.wenlan/bin/                 installed binaries
+```
+
+Browse with any editor, or symlink `~/.wenlan/pages/` into an Obsidian vault for the graph view. No desktop app is required.
+
+## Local memory and agent-side model phases
+
+By default `/wenlan:setup` configures local memory: no model download beyond the embedder, no API key, no prompts. The daemon stores, embeds, dedupes, and serves hybrid search. Where the daemon would normally call a model, the skill asks Claude itself to do the equivalent step and posts the result back over HTTP:
+
+| Phase | Model-equipped daemon | Local memory plus skill |
+|---|---|---|
+| Pick `memory_type` | daemon classifier | `/capture` picks one of 6 types from content |
+| Extract entities and relations | daemon `extract.rs` | `/capture` posts to `/api/memory/entities` and `/api/memory/relations` |
+| Synthesize a page | daemon distill cycles | `/distill` reads the cluster, writes the page, posts to `/api/pages` |
+| Expand a query or rerank hits | daemon expansion and rerank | `/recall` rewrites the query before search and reorders hits after |
+
+The daemon stays the single writer and storage owner. Claude does the thinking.
+
+## Daily commands
+
+```text
+/wenlan:setup   set up and verify Wenlan works (run once, or to diagnose)
+/help           one-screen reference
+/brief          load identity and topic context (start of session)
+/capture        save one durable memory in flow
+/recall         search local memory
+/lint           diagnose or repair memory quality and hygiene
+/distill        synthesize pages from clusters (scoped to the active Space)
+/pages          browse and open distilled pages
+/curate         audit pending captures or revisions
+/forget         delete a memory by ID
+/handoff        end-of-session debrief
+```
+
+Skill instructions live in [`skills/`](skills/). Plugin metadata is in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json), the MCP declaration in [`.mcp.json`](.mcp.json), and the marketplace entry in [`../.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json) at the repository root.
+
+## Developing the plugin
+
+To point the MCP server at a locally built binary, create the gitignored override file:
+
+```text
+cargo build -p wenlan-mcp --release
+ln -s $(pwd)/target/release/wenlan-mcp plugin/scripts/wenlan-mcp.local
+```
+
+Reload the plugin (`/reload-plugins`) and the runner uses the local binary on the next MCP spawn. `scripts/dev-sync.sh` does the same for a debug build. The npm pin in the runner is rewritten by `scripts/bump-version.sh` on every release and checked by `scripts/validate-versions.sh`.
+
+## Links
+
+- [wenlan.app](https://wenlan.app): project home
+- [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory): Claude Code memory concept article
+- [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow): the brief, capture, recall, handoff loop
+- [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started): install and verify
+
+## License
+
+Apache-2.0.

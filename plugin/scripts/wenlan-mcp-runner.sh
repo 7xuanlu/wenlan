@@ -2,7 +2,7 @@
 # Dispatch the wenlan MCP server.
 #
 # Resolution order (most specific first):
-#   1. Sibling file `bin/wenlan-mcp.local` next to this script — typically a
+#   1. Sibling file `scripts/wenlan-mcp.local` next to this script — typically a
 #      symlink to a locally-built wenlan-mcp binary. Filesystem-based so it
 #      survives plugin reloads that don't re-read settings.json env.
 #   2. WENLAN_MCP_DEV_BIN env var (primary) or ORIGIN_MCP_DEV_BIN (fallback) —
@@ -14,10 +14,10 @@
 #      failures when ~/.npm/_cacache contains root-owned files left over
 #      from older npm versions (npx exits before responding to initialize,
 #      MCP host then waits 30s and times out).
-#   4. npx -y wenlan-mcp@^<plugin.json version> — fallback for users who
-#      installed the plugin without running install.sh. The version is derived
-#      from the sibling plugin.json (the single source of truth kept on the
-#      release train) rather than a hardcoded pin that silently drifts.
+#   4. npx -y wenlan-mcp@<exact version> — fallback for users who installed
+#      the plugin without running install.sh. The Claude directory rejects
+#      ranges and @latest, so this is a literal pin that the release train
+#      rewrites (scripts/bump-version.sh) and checks (scripts/validate-versions.sh).
 
 # Don't enable `set -u` here: if Claude Code (or any MCP host) invokes the
 # script through a shell that doesn't populate BASH_SOURCE, `set -u` halts
@@ -39,13 +39,5 @@ if [ -x "${installed_bin}" ]; then
   exec "${installed_bin}" "$@"
 fi
 
-# Derive the npm version from the sibling plugin.json (single source of truth on
-# the release train) so the fallback can't drift from a hardcoded pin; @latest if
-# it can't be read.
-# ponytail: sed-parse the one "version" key — no python/jq dep in the MCP host shell.
-plugin_json="${here}/../.claude-plugin/plugin.json"
-ver="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${plugin_json}" 2>/dev/null | head -1)"
-if [ -n "${ver}" ]; then
-  exec npx -y "wenlan-mcp@^${ver}" "$@"
-fi
-exec npx -y wenlan-mcp@latest "$@"
+# wenlan-mcp-pin: kept in lockstep by scripts/bump-version.sh
+exec npx -y wenlan-mcp@0.18.12 "$@"

@@ -365,6 +365,16 @@ def validate_manifest(root: Path, surface: str, config: dict[str, Any]) -> None:
             manifest.get("category"),
             config["manifest_category"],
         )
+    if "manifest_display_name" in config:
+        require_equal(
+            f"{rel(root, manifest_path)} displayName",
+            manifest.get("displayName"),
+            config["manifest_display_name"],
+        )
+    if surface == "claude" and "category" in manifest:
+        # `category` belongs to marketplace.json; in plugin.json the Claude CLI
+        # validator warns and the directory portal requires a clean validate.
+        fail(f"{rel(root, manifest_path)} must not declare category (marketplace.json owns it)")
     if surface == "codex":
         require_equal(
             f"{rel(root, manifest_path)} skills",
@@ -430,10 +440,10 @@ def validate_runner(root: Path, surface: str, config: dict[str, Any]) -> None:
 
 
 def validate_resolver_parity(root: Path) -> None:
-    claude_resolver = read_text(root, root / "plugin" / "bin" / "resolve-space.sh")
+    claude_resolver = read_text(root, root / "plugin" / "scripts" / "resolve-space.sh")
     codex_resolver = read_text(root, root / "plugin-codex" / "bin" / "resolve-space.sh")
     if claude_resolver != codex_resolver:
-        fail("plugin-codex/bin/resolve-space.sh must match plugin/bin/resolve-space.sh")
+        fail("plugin-codex/bin/resolve-space.sh must match plugin/scripts/resolve-space.sh")
 
 
 def validate_codex_readme(root: Path) -> None:
@@ -671,7 +681,7 @@ def validate_skill_surface(
                 if needle not in normalized_text:
                     fail(f"{rel(root, skill_path)} must contain guardrail {needle!r}")
             resolver = (
-                "$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh"
+                "$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh"
                 if surface == "claude"
                 else "plugin-codex/bin/resolve-space.sh"
             )

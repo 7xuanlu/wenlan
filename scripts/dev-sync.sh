@@ -20,7 +20,7 @@ set -euo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root"
 local_links=(
-  "$root/plugin/bin/wenlan-mcp.local"
+  "$root/plugin/scripts/wenlan-mcp.local"
   "$root/plugin-codex/bin/wenlan-mcp.local"
 )
 
@@ -59,7 +59,7 @@ echo "==> building wenlan-server + wenlan-mcp + wenlan"
 cargo build -p wenlan-server -p wenlan-mcp -p wenlan
 
 # Point the plugin's local MCP override at the fresh debug binary. The runner
-# (plugin/bin/wenlan-mcp-runner.sh) checks this symlink FIRST, before
+# (plugin/scripts/wenlan-mcp-runner.sh) checks this symlink FIRST, before
 # ~/.wenlan/bin and npx. It is gitignored (.gitignore) and survives plugin
 # reloads — run `--off` when you're done to stop using the dev binary.
 for local_link in "${local_links[@]}"; do
