@@ -22,6 +22,18 @@ if (new URLSearchParams(window.location.search).get("remoteScenario") === "shutd
   status = { status: "error", error: "Local remote-access processes have not been confirmed stopped. New connections are blocked; retry Stop access." };
 }
 
+// Explicit fixture only: starts enabled/connected with empty grants, then a
+// synthetic grant appears after ~8s with no pairing UI interaction needed. The
+// grant arrives without any status event, so only grant polling can reveal it.
+if (new URLSearchParams(window.location.search).get("remoteScenario") === "delayed-grant") {
+  profile = { revision: String(++revision), space: spaces[0].name, enabled: true, disconnect_pending: false, credential_expires_at: Date.now() + 86400_000 };
+  status = { status: "connected", tunnel_url: null, relay_url: request.resource };
+  window.setTimeout(() => {
+    if (!profile?.enabled) return;
+    grants.push({ id: "g-delayed", clientId: request.clientId, space: spaces[0].name, createdAt: Date.now(), expiresAt: Date.now() + 86400_000, status: "active", cleanupPending: false });
+  }, 8000);
+}
+
 export async function invokeRemoteFixture(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "list_spaces": return spaces;
