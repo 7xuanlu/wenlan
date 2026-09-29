@@ -47,11 +47,19 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const pending = Boolean(profile?.disconnect_pending);
   const ready = profileQuery.isSuccess && statusQuery.isSuccess && spacesQuery.isSuccess;
   const scopeExists = spaces.some((item) => item.name === space);
+  const grantsEnabled = connected && Boolean(profile?.enabled && profile.credential_expires_at);
   const grantQuery = useQuery({
     queryKey: [...GRANTS, profile?.revision, cursor],
     queryFn: () => listRemoteGrants(profile!.revision, cursor),
-    enabled: connected && Boolean(profile?.enabled && profile.credential_expires_at),
+    enabled: grantsEnabled,
     retry: false,
+    // Poll for grants created by the external OAuth exchange after pairing
+    // approval. Pause the interval after a query error until a manual
+    // refresh or focus refetch succeeds; focus refetch stays enabled.
+    refetchInterval: (query) =>
+      query.state.status === "error" || !grantsEnabled ? false : 5000,
+    refetchOnWindowFocus: true,
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => { setConsented(false); }, [space]);
@@ -62,6 +70,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     listen<RemoteAccessStatus>("remote-access-status", ({ payload }) => {
       cache.setQueryData(STATUS, payload);
       void cache.invalidateQueries({ queryKey: PROFILE });
+      void cache.invalidateQueries({ queryKey: GRANTS });
     }).then((stop) => {
       if (disposed) stop(); else unlisten = stop;
     }).catch(() => { void cache.invalidateQueries({ queryKey: STATUS }); });
@@ -118,6 +127,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     await approveRemotePairing(inspection.revision, inspection.request);
     setInspection(null);
     setPairingId("");
+    setCursor(null);
     setApproved(true);
   };
   const queryError = profileQuery.error ?? statusQuery.error ?? spacesQuery.error;
