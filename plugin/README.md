@@ -99,6 +99,7 @@ Reload the plugin (`/reload-plugins`) and the runner uses the local binary on th
 - [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory): Claude Code memory concept article
 - [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow): the brief, capture, recall, handoff loop
 - [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started): install and verify
+- [Privacy](https://github.com/7xuanlu/wenlan/blob/main/docs/PRIVACY.md): privacy policy, covering what Wenlan stores locally and what can leave your machine
 
 ## License
 
