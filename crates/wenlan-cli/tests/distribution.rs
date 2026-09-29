@@ -66,14 +66,16 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
         "plugin.json must not carry `category`"
     );
     // The Claude directory refuses to install a plugin whose folder has a
-    // top-level `bin/` directory, and only plugin.json may live in
-    // `.claude-plugin/`.
+    // top-level `bin/` directory. In `.claude-plugin/` it accepts plugin.json
+    // and the listing icon it asks for (`icon.svg`, square, >= 128px); a
+    // README or anything else there fails validation.
     assert!(!repo_root().join("plugin").join("bin").exists());
-    let manifest_dir_entries = fs::read_dir(repo_root().join("plugin/.claude-plugin"))
+    let mut manifest_dir_entries = fs::read_dir(repo_root().join("plugin/.claude-plugin"))
         .expect("read plugin/.claude-plugin")
         .map(|entry| entry.expect("dir entry").file_name())
         .collect::<Vec<_>>();
-    assert_eq!(manifest_dir_entries, ["plugin.json"]);
+    manifest_dir_entries.sort();
+    assert_eq!(manifest_dir_entries, ["icon.svg", "plugin.json"]);
 
     let keywords = plugin["keywords"].as_array().expect("keywords array");
     for keyword in ["claude-code", "memory", "mcp", "local-first"] {
