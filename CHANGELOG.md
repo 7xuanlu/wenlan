@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.18.13](https://github.com/7xuanlu/wenlan/compare/v0.18.12...v0.18.13) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** refresh authorized connections after OAuth approval ([#785](https://github.com/7xuanlu/wenlan/issues/785)) ([073b294](https://github.com/7xuanlu/wenlan/commit/073b2945d4a3feace72e19842935d1a540ad9ff3))
+* **plugin:** clear the directory portal blocker and add a plugin icon ([#783](https://github.com/7xuanlu/wenlan/issues/783)) ([3dd07ed](https://github.com/7xuanlu/wenlan/commit/3dd07ed7a37ca5d97e1903c5216adac12b90bd0c))
+* **plugin:** make the Claude plugin pass directory portal validation ([#781](https://github.com/7xuanlu/wenlan/issues/781)) ([5a7b097](https://github.com/7xuanlu/wenlan/commit/5a7b097ba09b268526445cfaae97ff77e62e5a2e))
+* **release:** validate the Claude runner version pin ([#786](https://github.com/7xuanlu/wenlan/issues/786)) ([1ff2b03](https://github.com/7xuanlu/wenlan/commit/1ff2b03c5febb56dddb56a1ae5e4bbd155b4e0b0))
+
 ## [0.18.12](https://github.com/7xuanlu/wenlan/compare/v0.18.11...v0.18.12) (2026-09-23)
 
 
