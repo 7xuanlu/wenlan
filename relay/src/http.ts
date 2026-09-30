@@ -123,7 +123,8 @@ function pairingPage(view: { pairingId: string; clientId: string; status: string
 <section class="pairing-step"${approved ? ' hidden' : ''}><h2>Approve in Wenlan</h2>
 <p>Open <strong>Settings &gt; Connections</strong> in the Wenlan app. Paste this code into <strong>Authorize a connection</strong>, review the request, then approve.</p>
 <label for="pairing-code">Pairing code</label><div class="code-row"><textarea id="pairing-code" readonly rows="2" spellcheck="false">${htmlEscape(view.pairingId)}</textarea>
-<button id="copy-code" type="button">Copy code</button></div></section>
+<button id="copy-code" type="button">Copy code</button></div>
+<p class="local-hint">App on this computer, like Codex or Claude Code? Cancel here and use <strong>Add a tool</strong> in Settings &gt; Connections instead. It connects directly, with no sign-in to expire.</p></section>
 <dl id="approved-space"${approved ? '' : ' hidden'}><dt>Authorized Space</dt><dd>${htmlEscape(view.space ?? '')}</dd></dl>
 <section class="permissions"><h2>This connection can</h2><ul><li>Read Briefs, search knowledge, and inspect sources in the Space you approve.</li>
 <li>Record searches and access activity locally. Other Spaces stay private.</li></ul>

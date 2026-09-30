@@ -195,6 +195,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
               {copied ? <Check size={16} /> : <Copy size={16} />}
             </button>
           </div>
+          <p className={secondary}>{t("remoteAccess.localAppsHint")}</p>
         </div>}
         <div className="border-t border-[var(--mem-border)] pt-4 space-y-3">
           <h4 className="text-sm font-semibold">{t("remoteAccess.pairingTitle")}</h4>
