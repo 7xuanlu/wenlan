@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.14](https://github.com/7xuanlu/wenlan/compare/v0.18.13...v0.18.14) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** preserve device authorization when reconnecting transport ([#788](https://github.com/7xuanlu/wenlan/issues/788)) ([908777f](https://github.com/7xuanlu/wenlan/commit/908777ffed76aa04fb5e0a6c7adcbc48ee2ae227))
+
 ## [0.18.13](https://github.com/7xuanlu/wenlan/compare/v0.18.12...v0.18.13) (2026-09-30)
 
 
