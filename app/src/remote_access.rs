@@ -199,6 +199,78 @@ pub(crate) struct StartupResume {
     revision: String,
 }
 
+fn validate_reconnect_profile(
+    profile: Option<Profile>,
+    expected_revision: &str,
+) -> Result<Profile, String> {
+    let profile = profile.ok_or_else(|| "Remote access is not configured.".to_string())?;
+    if profile.revision() != expected_revision {
+        return Err("Remote access settings changed; refresh before reconnecting.".into());
+    }
+    if profile.view().disconnect_pending || !profile.enabled() {
+        return Err("Remote access is disabled or disconnect is pending.".into());
+    }
+    Ok(profile)
+}
+
+/// A reconnect ticket binds transport cleanup and restart to the same saved intent.
+/// It never enables, rotates, or revokes the persisted profile.
+pub(crate) async fn prepare_reconnect(
+    app_handle: &tauri::AppHandle,
+    expected_revision: String,
+    client: crate::api::WenlanClient,
+) -> Result<StartupResume, String> {
+    let remote = remote_access_mutex(app_handle).await;
+    let generation = remote.lock().await.generation;
+    let profile = validate_reconnect_profile(
+        relay_runtime::storage(|store| store.load()).await?,
+        &expected_revision,
+    )?;
+    let spaces: Vec<wenlan_types::Space> = client.get_json("/api/spaces").await?;
+    if !spaces.iter().any(|space| space.name == profile.space()) {
+        return Err("The selected Space no longer exists".into());
+    }
+    // Space lookup may race with Stop or a profile edit. Reject before touching
+    // transport, and retain the generation guard through cleanup and restart.
+    validate_reconnect_profile(
+        relay_runtime::storage(|store| store.load()).await?,
+        &expected_revision,
+    )?;
+    let generation = transition_off(app_handle, Some(generation))
+        .await
+        .ok_or_else(|| "Remote access reconnect cancelled.".to_string())?;
+    confirm_reconnect_cleanup(&remote, generation).await?;
+    validate_reconnect_profile(
+        relay_runtime::storage(|store| store.load()).await?,
+        &expected_revision,
+    )?;
+    Ok(StartupResume {
+        generation,
+        revision: expected_revision,
+    })
+}
+
+async fn confirm_reconnect_cleanup(
+    remote: &tokio::sync::Mutex<RemoteAccessState>,
+    generation: u64,
+) -> Result<(), String> {
+    let ra = remote.lock().await;
+    if !generation_is_current(ra.generation, generation) {
+        return Err("Remote access reconnect cancelled.".into());
+    }
+    disconnect_result_for(&ra, Ok(()))
+}
+
+pub(crate) async fn resume_reconnect(app_handle: tauri::AppHandle, ticket: StartupResume) {
+    toggle_on_inner(
+        app_handle,
+        0,
+        Some(ticket.generation),
+        Some(ticket.revision),
+    )
+    .await;
+}
+
 /// Cleanup does not require a healthy daemon, local indexing or a file watcher.
 /// A deferred resume ticket cannot override a later user action or profile edit.
 pub(crate) async fn prepare_startup(app_handle: tauri::AppHandle) -> Option<StartupResume> {
@@ -904,6 +976,7 @@ pub fn toggle_on(
         app_handle,
         if is_retry { 1 } else { 0 },
         None,
+        None,
     ))
 }
 
@@ -917,6 +990,7 @@ fn toggle_on_with_retries(
         app_handle,
         retry_count,
         Some(expected_generation),
+        None,
     ))
 }
 
@@ -924,11 +998,17 @@ async fn toggle_on_inner(
     app_handle: tauri::AppHandle,
     retry_count: u32,
     expected_generation: Option<u64>,
+    expected_revision: Option<String>,
 ) {
     use tauri::Emitter;
     let operation_generation = {
         let remote = remote_access_mutex(&app_handle).await;
         let mut ra = remote.lock().await;
+        if expected_generation
+            .is_some_and(|expected| !generation_is_current(ra.generation, expected))
+        {
+            return;
+        }
         let shutdown_pending = !ra.pending_stops.is_empty() || ra.orphan_cleanup_failed;
         if shutdown_pending {
             let status = RemoteAccessStatus::Error {
@@ -953,6 +1033,11 @@ async fn toggle_on_inner(
         let profile = relay_runtime::enabled_profile()
             .await
             .map_err(RenewalError::Profile)?;
+        let profile = match expected_revision {
+            Some(revision) => validate_reconnect_profile(Some(profile), &revision)
+                .map_err(RenewalError::Profile)?,
+            None => profile,
+        };
         start_reverse(&app_handle, operation_generation, profile).await
     }
     .await;
@@ -1456,6 +1541,164 @@ pub async fn toggle_off(app_handle: &tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reconnect_profile(enabled: bool, device: bool) -> Profile {
+        serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "revision": "r".repeat(64),
+            "relay_origin": RELAY_ORIGIN,
+            "space": "reconnect-test",
+            "backend_token": "b".repeat(64),
+            "enabled": enabled,
+            "device": device.then(|| crate::remote_relay::DeviceCredential {
+                id: "d".repeat(64),
+                management_token: "m".repeat(64),
+                expires_at: 1,
+            }),
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn reconnect_rejects_stale_disabled_and_pending_profiles_without_mutation() {
+        let profile = reconnect_profile(true, true);
+        let before = serde_json::to_vec(&profile).unwrap();
+        assert!(validate_reconnect_profile(Some(profile.clone()), "stale").is_err());
+        let accepted =
+            validate_reconnect_profile(Some(profile.clone()), profile.revision()).unwrap();
+        assert_eq!(serde_json::to_vec(&accepted).unwrap(), before);
+        // Expired credentials are preserved for the existing reverse runtime
+        // to reject; reconnect must not clear them and silently re-enroll.
+        assert_eq!(accepted.device().unwrap().expires_at, 1);
+        for device in [false, true] {
+            let disabled = reconnect_profile(false, device);
+            assert!(
+                validate_reconnect_profile(Some(disabled.clone()), disabled.revision()).is_err()
+            );
+        }
+        assert!(validate_reconnect_profile(None, profile.revision()).is_err());
+    }
+
+    #[tokio::test]
+    async fn reconnect_failed_cleanup_and_stale_generation_block_restart() {
+        let state = tokio::sync::Mutex::new(RemoteAccessState::default());
+        let generation = stop_with_cleanup(&state, Some(0), |_| {}, async {
+            Err("unconfirmed cleanup".into())
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            confirm_reconnect_cleanup(&state, generation)
+                .await
+                .unwrap_err(),
+            SHUTDOWN_UNCONFIRMED
+        );
+        let mut ra = state.lock().await;
+        let pending = ra.orphan_cleanup_failed;
+        let RemoteAccessState {
+            status,
+            generation: current,
+            ..
+        } = &mut *ra;
+        assert!(try_begin_start(status, current, Some(generation), pending).is_none());
+        drop(ra);
+        stop_with_cleanup(&state, None, |_| {}, async { Ok(()) }).await;
+        assert!(confirm_reconnect_cleanup(&state, generation).await.is_err());
+        assert!(
+            stop_with_cleanup(&state, Some(generation), |_| panic!("stale event"), async {
+                panic!("stale cleanup")
+            })
+            .await
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn reconnect_concurrent_stop_cancels_restart_after_serialized_cleanup() {
+        let state = std::sync::Arc::new(tokio::sync::Mutex::new(RemoteAccessState::default()));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let reconnect_state = state.clone();
+        let reconnect = tokio::spawn(async move {
+            stop_with_cleanup(&reconnect_state, Some(0), |_| {}, async {
+                entered_tx.send(()).unwrap();
+                release_rx.await.unwrap();
+                Ok(())
+            })
+            .await
+            .unwrap()
+        });
+        entered_rx.await.unwrap();
+        let stop_state = state.clone();
+        let stop = tokio::spawn(async move {
+            stop_with_cleanup(&stop_state, None, |_| {}, async { Ok(()) })
+                .await
+                .unwrap()
+        });
+        release_tx.send(()).unwrap();
+        let reconnect_generation = reconnect.await.unwrap();
+        assert_eq!(stop.await.unwrap(), reconnect_generation + 1);
+        assert!(confirm_reconnect_cleanup(&state, reconnect_generation)
+            .await
+            .is_err());
+        let mut ra = state.lock().await;
+        let RemoteAccessState {
+            status, generation, ..
+        } = &mut *ra;
+        assert!(try_begin_start(status, generation, Some(reconnect_generation), false).is_none());
+        assert!(matches!(ra.status, RemoteAccessStatus::Off));
+        assert!(!can_adopt_reverse(
+            &ra,
+            reconnect_generation,
+            PORT_RANGE_START,
+            None
+        ));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn reconnect_transport_preserves_persisted_device_and_profile_revision() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = HomeGuard::set(tmp.path());
+        let store = crate::remote_relay::store::Store::current();
+        let configured = store.configure(None, "reconnect-test").unwrap();
+        let enabled = store.enable(configured.revision()).unwrap();
+        let profile = store
+            .attach_device(
+                enabled.revision(),
+                crate::remote_relay::DeviceCredential {
+                    id: "d".repeat(64),
+                    management_token: "m".repeat(64),
+                    expires_at: crate::remote_relay::now_ms() + 60_000,
+                },
+            )
+            .unwrap();
+        let before = serde_json::to_vec(&profile).unwrap();
+        validate_reconnect_profile(store.load().unwrap(), profile.revision()).unwrap();
+        let state = tokio::sync::Mutex::new(RemoteAccessState::default());
+        let generation = stop_with_cleanup(&state, Some(0), |_| {}, async { Ok(()) })
+            .await
+            .unwrap();
+        confirm_reconnect_cleanup(&state, generation).await.unwrap();
+        validate_reconnect_profile(store.load().unwrap(), profile.revision()).unwrap();
+        let mut ra = state.lock().await;
+        let RemoteAccessState {
+            status,
+            generation: current,
+            ..
+        } = &mut *ra;
+        assert_eq!(
+            try_begin_start(status, current, Some(generation), false),
+            Some(generation)
+        );
+        assert_eq!(
+            serde_json::to_vec(&store.load().unwrap().unwrap()).unwrap(),
+            before
+        );
+        let disabled = store.disable(profile.revision()).unwrap();
+        assert!(disabled.view().disconnect_pending);
+        assert!(validate_reconnect_profile(Some(disabled), profile.revision()).is_err());
+    }
 
     #[test]
     fn reverse_recovery_is_bounded_and_does_not_retry_authorization_failures() {

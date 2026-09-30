@@ -1651,6 +1651,7 @@ pub fn run() {
             search::wire_state,
             // Remote access commands
             search::toggle_remote_access,
+            search::reconnect_remote_access,
             search::get_remote_access_profile,
             search::configure_remote_access,
             search::inspect_remote_pairing,

@@ -7,7 +7,7 @@ import { Copy, ArrowClockwise, Check } from "@phosphor-icons/react";
 import {
   approveRemotePairing, clipboardWrite, configureRemoteAccess, getRemoteAccessProfile,
   getRemoteAccessStatus, inspectRemotePairing, listRemoteGrants, listSpaces,
-  revokeRemoteGrant, testRemoteMcpConnection, toggleRemoteAccess,
+  reconnectRemoteAccess, revokeRemoteGrant, testRemoteMcpConnection, toggleRemoteAccess,
   type RemoteAccessStatus, type RemotePairing, type RemoteGrantPage,
 } from "../../lib/tauri";
 import { Button, StatusChip, Tag, Toggle } from "./settings/primitives";
@@ -106,11 +106,8 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     setInspection(null);
   };
   const reconnect = async () => {
-    const previousSpace = profile?.space;
-    await stop();
-    const fresh = await getRemoteAccessProfile();
-    if (!fresh || fresh.space !== previousSpace || fresh.disconnect_pending) throw new Error(t("remoteAccess.scopeRequired"));
-    cache.setQueryData(STATUS, await toggleRemoteAccess(true, fresh.revision));
+    if (!ready || !profile?.enabled || pending || !scopeExists) throw new Error(t("remoteAccess.scopeRequired"));
+    cache.setQueryData(STATUS, await reconnectRemoteAccess(profile.revision));
   };
   const inspect = async () => {
     setApproved(false);
@@ -176,7 +173,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
       </div>}
       {isOn && <div className="flex flex-wrap items-center gap-3">
         {connected && <StatusChip state={{ kind: "up" }} label={t("remoteAccess.transportConnected")} />}
-        <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(reconnect)}>
+        <Button variant="secondary" size="sm" disabled={busy || !ready || !profile?.enabled || pending || !scopeExists} onClick={() => action.mutate(reconnect)}>
           <ArrowClockwise size={14} aria-hidden="true" />{t("remoteAccess.reconnect")}
         </Button>
         {connected && <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(async () => {

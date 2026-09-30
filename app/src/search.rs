@@ -459,6 +459,19 @@ pub async fn toggle_remote_access(
 }
 
 #[tauri::command]
+pub async fn reconnect_remote_access(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, State>,
+    expected_revision: String,
+) -> Result<crate::remote_access::RemoteAccessStatus, String> {
+    let client = daemon_client(&state).await;
+    let ticket =
+        crate::remote_access::prepare_reconnect(&app_handle, expected_revision, client).await?;
+    tauri::async_runtime::spawn(crate::remote_access::resume_reconnect(app_handle, ticket));
+    Ok(crate::remote_access::RemoteAccessStatus::Starting)
+}
+
+#[tauri::command]
 pub async fn get_remote_access_profile(
 ) -> Result<Option<crate::remote_relay::store::ProfileView>, String> {
     crate::remote_relay::runtime::storage(|store| Ok(store.load()?.map(|profile| profile.view())))
