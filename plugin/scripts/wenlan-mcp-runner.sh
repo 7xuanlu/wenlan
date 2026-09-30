@@ -40,4 +40,4 @@ if [ -x "${installed_bin}" ]; then
 fi
 
 # wenlan-mcp-pin: kept in lockstep by scripts/bump-version.sh
-exec npx -y wenlan-mcp@0.18.12 "$@"
+exec npx -y wenlan-mcp@0.18.13 "$@"
