@@ -67,6 +67,8 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "get_avatar_data_url",
   "get_capture_stats",
   "get_remote_access_profile",
+  // Reconnecting owns native transport and credentials, not fixture state.
+  "reconnect_remote_access",
   "inspect_remote_pairing",
   "list_remote_grants",
   "revoke_remote_grant",

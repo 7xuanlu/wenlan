@@ -405,6 +405,7 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
 
   // --- remote pairing/grants (native-only; see nativeRemoteAccessRequired) ---
   configure_remote_access: nativeRemoteAccessRequired,
+  reconnect_remote_access: nativeRemoteAccessRequired,
   inspect_remote_pairing: nativeRemoteAccessRequired,
   approve_remote_pairing: nativeRemoteAccessRequired,
   revoke_remote_grant: nativeRemoteAccessRequired,
