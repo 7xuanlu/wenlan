@@ -39,6 +39,14 @@ export async function invokeRemoteFixture(command: string, args?: Record<string,
     case "list_spaces": return spaces;
     case "get_remote_access_status": return { ...status };
     case "get_remote_access_profile": return profile && { ...profile };
+    case "reconnect_remote_access": {
+      if (!profile?.enabled || profile.disconnect_pending || args?.expectedRevision !== profile.revision) throw new Error("Stale fixture revision");
+      const profileSpace = profile.space;
+      if (!spaces.some((space) => space.name === profileSpace)) throw new Error("Unknown Space");
+      status = { status: "connected", tunnel_url: null, relay_url: request.resource };
+      await emit("remote-access-status", { ...status });
+      return { ...status };
+    }
     case "configure_remote_access": {
       if (profile?.enabled || (args?.expectedRevision ?? null) !== (profile?.revision ?? null)) throw new Error("Stale fixture revision");
       if (!spaces.some((space) => space.name === args?.space)) throw new Error("Unknown Space");

@@ -3100,6 +3100,10 @@ export async function toggleRemoteAccess(
   return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled, expectedRevision: expectedRevision ?? null });
 }
 
+export async function reconnectRemoteAccess(expectedRevision: string): Promise<RemoteAccessStatus> {
+  return invoke<RemoteAccessStatus>("reconnect_remote_access", { expectedRevision });
+}
+
 export interface RemoteAccessProfile {
   revision: string;
   space: string;

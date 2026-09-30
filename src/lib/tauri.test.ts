@@ -12,6 +12,11 @@ beforeEach(() => {
 });
 
 describe('remote access consent bridge', () => {
+  it('reconnects only transport with the expected revision and no enable flag', async () => {
+    mockInvoke.mockResolvedValue({ status: 'starting' });
+    await expect(tauri.reconnectRemoteAccess('revision-1')).resolves.toEqual({ status: 'starting' });
+    expect(mockInvoke.mock.calls).toEqual([['reconnect_remote_access', { expectedRevision: 'revision-1' }]]);
+  });
   it('loads only the native frontend-safe profile view', async () => {
     mockInvoke.mockResolvedValue(null);
     await expect(tauri.getRemoteAccessProfile()).resolves.toBeNull();

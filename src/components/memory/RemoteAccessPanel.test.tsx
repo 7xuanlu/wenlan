@@ -6,7 +6,7 @@ import { RemoteAccessPanel } from "./RemoteAccessPanel";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 const mocks = vi.hoisted(() => Object.fromEntries([
-  "toggleRemoteAccess", "getRemoteAccessStatus", "getRemoteAccessProfile",
+  "toggleRemoteAccess", "reconnectRemoteAccess", "getRemoteAccessStatus", "getRemoteAccessProfile",
   "configureRemoteAccess", "listSpaces", "inspectRemotePairing", "approveRemotePairing",
   "listRemoteGrants", "revokeRemoteGrant", "testRemoteMcpConnection", "clipboardWrite",
 ].map((key) => [key, vi.fn()])));
@@ -32,6 +32,7 @@ beforeEach(() => {
   mocks.listSpaces.mockResolvedValue([{ id: "s1", name: "review" }]);
   mocks.configureRemoteAccess.mockResolvedValue({ ...profile, enabled: false, revision: "configured" });
   mocks.toggleRemoteAccess.mockResolvedValue({ status: "starting" });
+  mocks.reconnectRemoteAccess.mockResolvedValue({ status: "starting" });
   mocks.inspectRemotePairing.mockResolvedValue(pairing);
   mocks.approveRemotePairing.mockResolvedValue(undefined);
   mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
@@ -96,12 +97,31 @@ describe("RemoteAccessPanel consent and connection", () => {
     await waitFor(() => expect(mocks.clipboardWrite).toHaveBeenCalledWith(pairing.resource));
     expect(screen.queryByText(/private.trycloudflare/)).not.toBeInTheDocument();
   });
-  it("reconnect never starts if disconnect fails", async () => {
+  it("reconnect restarts transport at the saved revision without disabling or reconfiguring", async () => {
     await connectedPanel();
-    mocks.toggleRemoteAccess.mockRejectedValue(new Error("Revocation unavailable"));
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Revocation unavailable");
-    expect(mocks.toggleRemoteAccess.mock.calls).toEqual([[false]]);
+    await waitFor(() => expect(mocks.reconnectRemoteAccess).toHaveBeenCalledWith("r1"));
+    expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
+    expect(mocks.configureRemoteAccess).not.toHaveBeenCalled();
+    expect(mocks.revokeRemoteGrant).not.toHaveBeenCalled();
+  });
+  it("reconnect failure never falls back to disabling or enabling access", async () => {
+    await connectedPanel();
+    mocks.reconnectRemoteAccess.mockRejectedValue(new Error("Transport cleanup unconfirmed"));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Transport cleanup unconfirmed");
+    expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
+  });
+  it("pending disconnect blocks reconnect while preserving explicit Stop", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, enabled: false, disconnect_pending: true });
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    panel();
+    await screen.findByRole("button", { name: "Retry disconnect" });
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(mocks.reconnectRemoteAccess).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry disconnect" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
   });
   it("surfaces startup disconnect failure and allows stopping despite saved enabled intent", async () => {
     const warning = "Local transport stop requested; remote access settings are not confirmed (Remote access credentials could not be stored safely); server revoke failed: Remote connection unavailable; retry later; disconnect must be retried before app restart";
