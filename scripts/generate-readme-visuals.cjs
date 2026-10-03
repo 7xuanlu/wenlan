@@ -30,11 +30,24 @@ const BANNER = {
   latin: 'Arial, "Helvetica Neue", sans-serif',
 };
 
-const REQUIRED_BANNER_COPY = [
-  "WENLAN",
-  "Your source-backed knowledge base,",
-  "built to compound.",
-];
+const BANNER_COPY = {
+  en: {
+    title: ["A living personal wiki.", "AI organizes. You stay in control."],
+    font: BANNER.latin,
+  },
+  "zh-Hant": {
+    title: ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
+    font: 'Arial, "PingFang TC", sans-serif',
+  },
+  "zh-Hans": {
+    title: ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
+    font: 'Arial, "PingFang SC", sans-serif',
+  },
+  "es-ES": {
+    title: ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+    font: BANNER.latin,
+  },
+};
 
 function esc(value) {
   return String(value)
@@ -66,27 +79,29 @@ function logoMarkup({ x, y, size, prefix }) {
   </g>`;
 }
 
-function makeBanner(viewport) {
+function makeSimpleBanner(viewport, locale) {
   const { width, height } = BANNER_VIEWPORTS[viewport];
   const mobile = viewport === "mobile";
+  const copy = BANNER_COPY[locale];
   const prefix = `banner-${viewport}`;
+  const text = (x, y, value, size, color = BANNER.white, weight = 400, anchor = "start", letterSpacing = null) =>
+    `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}"${anchor === "start" ? "" : ` text-anchor="${anchor}"`}${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
   const content = mobile
     ? `${logoMarkup({ x: 294, y: 30, size: 132, prefix })}
-  <text x="360" y="190" fill="${BANNER.cyan}" font-family="${esc(BANNER.latin)}" font-size="28" font-weight="700" text-anchor="middle" letter-spacing="4">WENLAN</text>
-  <text x="360" y="232" fill="${BANNER.white}" font-family="${esc(BANNER.latin)}" font-size="34" font-weight="700" text-anchor="middle">Your source-backed knowledge base,</text>
-  <text x="360" y="270" fill="${BANNER.white}" font-family="${esc(BANNER.latin)}" font-size="34" font-weight="700" text-anchor="middle">built to compound.</text>`
+  ${text(360, 190, "WENLAN", 28, BANNER.cyan, 700, "middle", 4)}
+  ${text(360, 232, copy.title[0], 34, BANNER.white, 700, "middle")}
+  ${text(360, 270, copy.title[1], 34, BANNER.white, 700, "middle")}`
     : `${logoMarkup({ x: 144, y: 104, size: 232, prefix })}
-  <text x="440" y="174" fill="${BANNER.cyan}" font-family="${esc(BANNER.latin)}" font-size="34" font-weight="700" letter-spacing="4">WENLAN</text>
-  <text x="440" y="235" fill="${BANNER.white}" font-family="${esc(BANNER.latin)}" font-size="42" font-weight="700">Your source-backed knowledge base,</text>
-  <text x="440" y="283" fill="${BANNER.white}" font-family="${esc(BANNER.latin)}" font-size="42" font-weight="700">built to compound.</text>`;
-
+  ${text(440, 174, "WENLAN", 34, BANNER.cyan, 700, "start", 4)}
+  ${text(440, 235, copy.title[0], 42, BANNER.white, 700, "start")}
+  ${text(440, 283, copy.title[1], 42, BANNER.white, 700, "start")}`;
   const frame = mobile
     ? '<rect x="24" y="16" width="672" height="268" rx="24" fill="#101024" stroke="#2F3769"/>'
     : '<rect x="64" y="28" width="1152" height="384" rx="30" fill="#101024" stroke="#2F3769"/>';
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
-  <desc id="desc">Wenlan: your source-backed knowledge base, built to compound.</desc>
+  <desc id="desc">${esc(`Wenlan: ${copy.title.join(" ")}`)}</desc>
   <rect width="${width}" height="${height}" fill="${BANNER.dark}"/>
   ${frame}
   ${content}
@@ -98,13 +113,17 @@ function makeBanner(viewport) {
 
   return {
     group: "banner",
-    name: mobile ? "readme-banner-mobile" : "readme-banner",
+    name: `readme-banner${locale === "en" ? "" : `-${locale}`}${mobile ? "-mobile" : ""}`,
     width,
     height,
     background: BANNER.dark,
-    requiredCopy: REQUIRED_BANNER_COPY,
+    requiredCopy: ["WENLAN", ...copy.title],
     svg,
   };
+}
+
+function makeBanner(viewport, locale = "en") {
+  return makeSimpleBanner(viewport, locale);
 }
 
 function fontData(filename) {
@@ -149,7 +168,8 @@ function embeddedFonts() {
 }
 
 function selectedAssets(only) {
-  const banner = [makeBanner("desktop"), makeBanner("mobile")];
+  const banner = Object.keys(BANNER_COPY).flatMap((locale) =>
+    [makeBanner("desktop", locale), makeBanner("mobile", locale)]);
   const overview = ["en", "zh-Hans", "zh-Hant"].flatMap((locale) => [
     makeOverview(locale, "desktop"),
     makeOverview(locale, "mobile"),
@@ -183,9 +203,10 @@ async function renderSvgToPng(asset, pngPath) {
   }
   const browser = await chromium.launch({ headless: true });
   try {
+    const rasterScale = asset.group === "banner" ? 2 : 1;
     const context = await browser.newContext({
       viewport: { width: asset.width, height: asset.height },
-      deviceScaleFactor: 1,
+      deviceScaleFactor: rasterScale,
     });
     const page = await context.newPage();
     await page.setContent(
@@ -278,6 +299,7 @@ async function renderSvgToPng(asset, pngPath) {
         fontCss,
         width,
         height,
+        rasterScale,
         background,
       }) => {
         const parsed = new DOMParser().parseFromString(svgSource, "image/svg+xml");
@@ -296,13 +318,13 @@ async function renderSvgToPng(asset, pngPath) {
           });
 
           const canvas = document.createElement("canvas");
-          canvas.width = width;
-          canvas.height = height;
+          canvas.width = width * rasterScale;
+          canvas.height = height * rasterScale;
           const context2d = canvas.getContext("2d");
           if (!context2d) throw new Error("README canvas context is unavailable");
           context2d.fillStyle = background;
-          context2d.fillRect(0, 0, width, height);
-          context2d.drawImage(image, 0, 0, width, height);
+          context2d.fillRect(0, 0, canvas.width, canvas.height);
+          context2d.drawImage(image, 0, 0, canvas.width, canvas.height);
           return canvas.toDataURL("image/png").split(",", 2)[1];
         } finally {
           URL.revokeObjectURL(url);
@@ -312,6 +334,7 @@ async function renderSvgToPng(asset, pngPath) {
         fontCss: embeddedFonts(),
         width: asset.width,
         height: asset.height,
+        rasterScale,
         background: asset.background,
       });
       fs.writeFileSync(pngPath, Buffer.from(pngBase64, "base64"));
@@ -478,4 +501,7 @@ if (require.main === module) {
 
 module.exports = {
   checkPngMatchesExpected,
+  checkAsset,
+  makeBanner,
+  writeAsset,
 };
