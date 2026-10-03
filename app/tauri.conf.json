@@ -76,6 +76,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["wenlan"]
+      }
+    },
     "updater": {
       "active": true,
       "endpoints": [
