@@ -204,8 +204,9 @@ Page, episodic, and fact channels are opt-in and degrade to the remaining search
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
+<a id="two-lifecycles-one-maintained-knowledge-system"></a>
 
-### Two lifecycles, one maintained knowledge system
+### Knowledge changes. History stays.
 
 A generated wiki can go stale; a memory store can fragment into disconnected facts. Wenlan links two lifecycles without collapsing them into one layer.
 

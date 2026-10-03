@@ -20,18 +20,18 @@
     <path d="M1090 292 C1248 214 1514 232 1662 354 C1768 474 1720 752 1560 890 C1420 1002 1170 944 1082 778 C1008 638 988 420 1090 292Z" fill="#F2F7F3" fill-opacity="0.76" stroke="#C7DACB" stroke-width="1.5"/>
     <text x="1110" y="298" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="start">實體群組</text>
     <text x="1110" y="318" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="500" fill="#8B93A3" text-anchor="start">依關係密度分組</text>
-    <path d="M350 405 C454 428 520 492 590 540" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
-    <path d="M448 778 C522 760 566 700 610 680" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
-    <path d="M496 536 C542 540 558 566 580 580" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
-    <path d="M520 900 C546 812 592 762 650 740" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
-    <path d="M496 528 C700 300 956 314 1080 452" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
-    <path d="M872 744 C902 792 932 812 966 826" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
-    <path d="M328 450 C430 650 650 934 910 900" fill="none" stroke="#586174" stroke-width="1.2" stroke-opacity="0.32" stroke-linecap="round"/>
-    <path d="M1260 420 C1312 382 1348 354 1360 344" fill="none" stroke="#6F8F76" stroke-width="2.2" stroke-opacity="0.78" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
-    <path d="M1270 512 C1360 530 1408 560 1422 588" fill="none" stroke="#6F8F76" stroke-width="1.6" stroke-opacity="0.68" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
-    <path d="M1302 724 C1270 704 1246 660 1224 576" fill="none" stroke="#6F8F76" stroke-width="3.4" stroke-opacity="0.84" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
-    <path d="M1492 422 C1524 466 1538 504 1534 518" fill="none" stroke="#6F8F76" stroke-width="1.4" stroke-opacity="0.6" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
-    <path d="M1460 680 C1436 700 1420 714 1412 724" fill="none" stroke="#6F8F76" stroke-width="1.8" stroke-opacity="0.66" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
+    <path data-from="sourceOne" data-to="page" data-relation="citation" d="M350 405 C454 428 520 492 590 540" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
+<path data-from="sourceTwo" data-to="page" data-relation="citation" d="M448 778 C522 760 566 700 610 680" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
+<path data-from="memoryOne" data-to="page" data-relation="support" d="M496 536 C542 540 558 566 580 580" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
+<path data-from="memoryTwo" data-to="page" data-relation="support" d="M520 900 C546 812 592 762 650 740" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
+<path data-from="memoryOne" data-to="entityOne" data-relation="about" d="M496 528 C700 300 956 314 1080 452" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
+<path data-from="page" data-to="linkedPage" data-relation="refines" d="M872 744 C902 792 932 812 966 826" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
+<path data-from="sourceOne" data-to="linkedPage" data-relation="citation" d="M328 450 C430 650 650 934 910 900" fill="none" stroke="#586174" stroke-width="1.2" stroke-opacity="0.32" stroke-linecap="round"/>
+<path data-from="entityOne" data-to="entityTwo" data-relation="related_to" d="M1260 420 C1312 382 1348 354 1360 344" fill="none" stroke="#6F8F76" stroke-width="2.2" stroke-opacity="0.78" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
+<path data-from="entityOne" data-to="entityThree" data-relation="related_to" d="M1270 512 C1360 530 1408 560 1422 588" fill="none" stroke="#6F8F76" stroke-width="1.6" stroke-opacity="0.68" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
+<path data-from="entityFour" data-to="entityOne" data-relation="part_of" d="M1302 724 C1270 704 1246 660 1224 576" fill="none" stroke="#6F8F76" stroke-width="3.4" stroke-opacity="0.84" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
+<path data-from="entityTwo" data-to="entityThree" data-relation="related_to" d="M1492 422 C1524 466 1538 504 1534 518" fill="none" stroke="#6F8F76" stroke-width="1.4" stroke-opacity="0.6" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
+<path data-from="entityThree" data-to="entityFour" data-relation="related_to" d="M1460 680 C1436 700 1420 714 1412 724" fill="none" stroke="#6F8F76" stroke-width="1.8" stroke-opacity="0.66" stroke-linecap="round" marker-end="url(#network-zh-Hant-desktop-relation-arrow)"/>
     <g data-fit-region="network-zh-Hant-desktop-source-使用者訪談" data-fit-x="178" data-fit-y="268" data-fit-width="184" data-fit-height="184" data-check-overlap="true">
 
       <circle cx="270" cy="360" r="92" fill="#F7F8FA" stroke="#E3E7EE" stroke-width="1.5"/>

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=ded9b35985717fdb3b754a62ea18939036a30e8656b4601bb2f4f9842b5192fb -->
+<!-- README_SYNC: source=README.md sha256=d37b170604ca1a51807bb44de4d33297cf3dc83091c38c15baa8217961ce4ef3 -->
 
 <p align="center">
   <picture>
@@ -207,8 +207,10 @@ Wenlan 的核心搜索是本地混合检索流程，不是单一的向量查询�
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
+<a id="two-lifecycles-one-maintained-knowledge-system"></a>
+<a id="两套生命周期一个持续维护的知识系统"></a>
 
-### 两套生命周期，一个持续维护的知识系统
+### 知识会改变，历史仍会保留。
 
 一次生成的 wiki 会过时；只存记忆又容易碎成互不相连的事实。Wenlan 连接两套生命周期，但不把它们混成同一层。
 

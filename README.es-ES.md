@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=ded9b35985717fdb3b754a62ea18939036a30e8656b4601bb2f4f9842b5192fb -->
+<!-- README_SYNC: source=README.md sha256=d37b170604ca1a51807bb44de4d33297cf3dc83091c38c15baa8217961ce4ef3 -->
 
 <p align="center">
   <picture>
@@ -208,8 +208,10 @@ Los canales de Página, episódicos y de hechos son opcionales y recurren a las 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
+<a id="two-lifecycles-one-maintained-knowledge-system"></a>
+<a id="dos-ciclos-de-vida-un-sistema-de-conocimiento-mantenido"></a>
 
-### Dos ciclos de vida, un sistema de conocimiento mantenido
+### El conocimiento cambia. El historial permanece.
 
 Una wiki generada puede quedar obsoleta; un almacén de memoria puede fragmentarse en hechos desconectados. Wenlan vincula dos ciclos de vida sin colapsarlos en una sola capa.
 

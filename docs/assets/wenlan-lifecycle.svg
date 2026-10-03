@@ -84,12 +84,8 @@
       <circle cx="974" cy="578" r="7" fill="#5E58C8"/>
       <circle cx="878" cy="682" r="7" fill="#5E58C8"/>
       <circle cx="782" cy="578" r="7" fill="#5E58C8"/>
-      <text x="878" y="440" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">UNDERSTAND</text>
-      <text x="1000" y="584" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="start">CONNECT</text>
-      <text x="878" y="726" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">RECONCILE</text>
-      <text x="738" y="584" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="end">VERIFY</text>
       <path d="M680 728 C728 728 744 660 780 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-desktop-arrow)"/>
-      <text x="704" y="710" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY SUPPORT</text>
+      <text x="700" y="758" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#5E58C8" text-anchor="start">MEMORY SUPPORT</text>
       <path d="M878 692 V782" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-desktop-warm-arrow)"/>
       <rect x="730" y="798" width="296" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
       <text x="878" y="824" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="middle">OPTIONAL CONFLICT REVIEW</text>
@@ -105,7 +101,7 @@
       <text x="1190" y="394" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">PAGE v11</text>
       <rect x="1136" y="502" width="56" height="112" rx="8" fill="#FBF6EA" stroke="#E5D3AA"/>
       <text x="1164" y="542" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8C5F16" text-anchor="middle">v11</text>
-      <text x="1164" y="566" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="500" fill="#8C5F16" text-anchor="middle">STALE</text>
+      <text x="1164" y="566" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8C5F16" text-anchor="middle">STALE</text>
       <g filter="url(#lifecycle-en-desktop-page-shadow)">
         <rect x="1192" y="330" width="510" height="454" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
@@ -139,19 +135,11 @@
 
   </g>
     <path d="M992 578 C1076 578 1128 606 1198 614" fill="none" stroke="#6F8F76" stroke-width="2.5" marker-end="url(#lifecycle-en-desktop-sage-arrow)"/>
-    <text x="1094" y="532" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#4F7558" text-anchor="middle">STALE PAGE</text>
+    <text x="1066" y="562" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#4F7558" text-anchor="middle">STALE PAGE</text>
     <g data-fit-region="lifecycle-en-desktop-footer" data-fit-x="74" data-fit-y="966" data-fit-width="1652" data-fit-height="106" data-check-overlap="false">
 
-      <text x="88" y="1007" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">OPTIONAL MODEL PASSES</text>
-      <text x="88" y="1043" font-family="'Fraunces', Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Enrich</text>
-<circle cx="160" cy="1037.6" r="2.5" fill="#E3E7EE"/>
-<text x="174" y="1043" font-family="'Fraunces', Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Link</text>
-<circle cx="227" cy="1037.6" r="2.5" fill="#E3E7EE"/>
-<text x="241" y="1043" font-family="'Fraunces', Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Reconcile</text>
-<circle cx="341" cy="1037.6" r="2.5" fill="#E3E7EE"/>
-<text x="355" y="1043" font-family="'Fraunces', Georgia, serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Verify</text>
-      <text x="724" y="1007" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">RECONCILE</text>
-      <text x="724" y="1043" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">Configured model / off by default / opt-in</text>
+      <text x="88" y="1007" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">BACKGROUND UPKEEP</text>
+      <text x="88" y="1043" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="400" fill="#586174" text-anchor="start">Model steps need a configured model; conflict reconciliation is off by default.</text>
       <text x="1698" y="1043" font-family="'Fraunces', Georgia, serif" font-size="17" font-weight="600" fill="#4F7558" text-anchor="end">Supersession keeps the earlier memory.</text>
 
   </g>

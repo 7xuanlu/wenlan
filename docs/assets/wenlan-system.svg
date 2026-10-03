@@ -68,58 +68,53 @@
     </g>
 
   </g>
-    <g data-fit-region="overview-en-desktop-page" data-fit-x="470" data-fit-y="246" data-fit-width="650" data-fit-height="544" data-check-overlap="false">
+    <g data-fit-region="overview-en-desktop-page" data-fit-x="470" data-fit-y="228" data-fit-width="650" data-fit-height="600" data-check-overlap="false">
 
       <g filter="url(#overview-en-desktop-page-shadow)">
-        <rect x="470" y="246" width="650" height="544" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
+        <rect x="470" y="228" width="650" height="600" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="518" y="292" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">MAINTAINED PAGE</text>
+      <text x="518" y="274" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">MAINTAINED PAGE</text>
       <g>
-      <rect x="978" y="270" width="102" height="30" rx="15" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="1029" y="289.94" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
+      <rect x="978" y="252" width="102" height="30" rx="15" fill="#F2F7F3" stroke="#C7DACB"/>
+      <text x="1029" y="271.94" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
     </g>
-      <text x="518" y="354" font-family="'Fraunces', Georgia, serif" font-size="38" font-weight="600" fill="#1A1A2E" text-anchor="start">What your work knows now</text>
-      <text x="518" y="386" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#8B93A3" text-anchor="start">Last revised 13h ago</text>
-      <circle cx="696" cy="381" r="2.5" fill="#E3E7EE"/>
-      <text x="708" y="386" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#8B93A3" text-anchor="start">6 supporting records</text>
-      <text x="518" y="456" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">CURRENT SYNTHESIS</text>
-      <rect x="518" y="483" width="320" height="9" rx="4.5" fill="#DDE2EA"/>
-      <rect x="518" y="504" width="382" height="9" rx="4.5" fill="#E7EAF0"/>
+      <text x="518" y="336" font-family="'Fraunces', Georgia, serif" font-size="38" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
+      <text x="518" y="372" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="400" fill="#8B93A3" text-anchor="start">Illustrative example · 2 references</text>
+      <text x="518" y="418" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">THE CORE IDEA</text>
+      <text x="518" y="450" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">Choose an action, use a tool,</text>
+<text x="518" y="480" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">read the result, then repeat. [1]</text>
       <g>
-      <rect x="914" y="474" width="106" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="967" y="494.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
+      <rect x="518" y="500" width="176" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="606" y="521.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#586174" text-anchor="middle">Tool-use notes [1]</text>
     </g>
+      <text x="518" y="572" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">MY WORKFLOW</text>
+      <text x="518" y="602" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">Before switching Claude or Codex,</text>
+<text x="518" y="632" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">save the goal, decisions, and next step. [2]</text>
       <g>
-      <rect x="1028" y="474" width="84" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
-      <text x="1070" y="494.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#5E58C8" text-anchor="middle">mem_42</text>
+      <rect x="518" y="652" width="193" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
+      <text x="614.5" y="673.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#5E58C8" text-anchor="middle">Handoff decision [2]</text>
     </g>
-      <rect x="518" y="551" width="402" height="9" rx="4.5" fill="#DDE2EA"/>
-      <rect x="518" y="572" width="278" height="9" rx="4.5" fill="#E7EAF0"/>
+      <circle cx="1064" cy="668" r="6" fill="#B5842E"/>
+      <line x1="1064" y1="676" x2="1064" y2="698" stroke="#B5842E" stroke-width="1.5"/>
+      <text x="518" y="718" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">LINKED KNOWLEDGE</text>
       <g>
-      <rect x="934" y="542" width="106" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="987" y="562.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_11</text>
-    </g>
-      <circle cx="1064" cy="557" r="6" fill="#B5842E"/>
-      <line x1="1064" y1="565" x2="1064" y2="590" stroke="#B5842E" stroke-width="1.5"/>
-      <text x="518" y="634" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">LINKED KNOWLEDGE</text>
-      <g>
-      <rect x="518" y="654" width="145" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="590.5" y="676.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">project overview</text>
+      <rect x="518" y="736" width="86" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="561" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">Tool use</text>
     </g>
 <g>
-      <rect x="675" y="654" width="115" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="732.5" y="676.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">decision log</text>
+      <rect x="616" y="736" width="80" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="656" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">Context</text>
     </g>
 <g>
-      <rect x="802" y="654" width="145" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="874.5" y="676.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">related research</text>
+      <rect x="708" y="736" width="88" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="752" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">Handoffs</text>
     </g>
-      <text x="518" y="754" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">Plain Markdown · Inspectable citations · Versioned change log</text>
+      <text x="518" y="792" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">Plain Markdown · Inspectable citations · Change log</text>
 
   </g>
     <g data-fit-region="overview-en-desktop-changed-support" data-fit-x="1124" data-fit-y="704" data-fit-width="390" data-fit-height="80" data-check-overlap="true">
 
-        <path d="M1064 590 C1064 678 1110 710 1142 716" fill="none" stroke="#B5842E" stroke-width="1.5"/>
+        <path d="M1064 698 C1064 718 1110 716 1142 716" fill="none" stroke="#B5842E" stroke-width="1.5"/>
         <text x="1154" y="724" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8C5F16" text-anchor="start">When a Page is stale</text>
         <text x="1154" y="754" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="17" font-weight="600" fill="#586174" text-anchor="start">It rebuilds from current support.</text>
 

@@ -151,3 +151,60 @@ test("diagrams retain bounded model, review, and citation claims", () => {
     assert.doesNotMatch(network, /Pages connect through Entities/u);
   }
 });
+
+test("overview shows an illustrative, source-linked Agent Loop note instead of placeholder IDs", () => {
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const { svg } = makeOverview(locale, viewport);
+      assert.match(svg, />Agent Loop</u);
+      assert.match(svg, /Claude/u);
+      assert.match(svg, /Codex/u);
+      assert.match(svg, /\[1\]/u);
+      assert.match(svg, /\[2\]/u);
+      assert.match(svg, /Illustrative example|示例内容|示例內容/u);
+      assert.doesNotMatch(svg, /source_\d+|mem_\d+|fill="#DDE2EA"/u);
+      assert.match(svg, /MY WORKFLOW|我的做法/u);
+    }
+  }
+});
+
+test("desktop and mobile graph layouts preserve the exact same evidence relationships", () => {
+  const expected = [
+    "sourceOne>page:citation", "sourceTwo>page:citation",
+    "memoryOne>page:support", "memoryTwo>page:support",
+    "memoryOne>entityOne:about", "page>linkedPage:refines",
+    "sourceOne>linkedPage:citation", "entityOne>entityTwo:related_to",
+    "entityOne>entityThree:related_to", "entityFour>entityOne:part_of",
+    "entityTwo>entityThree:related_to", "entityThree>entityFour:related_to",
+  ];
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const { svg } = makeKnowledgeNetwork(locale, viewport);
+      const actual = [...svg.matchAll(/data-from="([^"]+)" data-to="([^"]+)" data-relation="([^"]+)"/gu)]
+        .map(([, from, to, relation]) => `${from}>${to}:${relation}`);
+      assert.deepEqual(actual, expected, `${locale}/${viewport}`);
+    }
+  }
+});
+
+test("lifecycle keeps one readable upkeep explanation and localized stale labels", () => {
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const { svg } = makeLifecycle(locale, viewport);
+      assert.doesNotMatch(svg, />UNDERSTAND<|>RECONCILE<|>VERIFY<|>理解<|>核對</u);
+      assert.match(svg, /configured model|模型步骤需配置模型|模型步驟需設定模型/u);
+      if (locale !== "en") {
+        assert.doesNotMatch(svg, />STALE</u);
+        assert.match(svg, />待更新</u);
+      }
+    }
+  }
+});
+
+test("mobile diagrams retain content while reducing the previous combined height by at least 20 percent", () => {
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    const assets = [makeOverview(locale, "mobile"), makeKnowledgeNetwork(locale, "mobile"), makeLifecycle(locale, "mobile")];
+    assert.ok(assets.every((asset) => asset.width === 720));
+    assert.ok(assets.reduce((sum, asset) => sum + asset.height, 0) <= (2210 + 2000 + 2820) * 0.8);
+  }
+});
