@@ -41,7 +41,10 @@ CLAUDE_RUNNER_UNPINNED=$(grep -Ec 'wenlan-mcp@(latest|\^|~)' plugin/scripts/wenl
 # plugin.json at run time, so it must carry no hardcoded pin that could drift.
 CODEX_RUNNER_HARDCODED_PINS=$(grep -Eo 'wenlan-mcp@\^[0-9]+\.[0-9]+\.[0-9]+' plugin-codex/bin/wenlan-mcp-runner.sh | sed -E 's/.*@\^//' | sort -u || true)
 CODEX_RUNNER_DERIVES_PIN=$(grep -c '\.codex-plugin/plugin\.json' plugin-codex/bin/wenlan-mcp-runner.sh || true)
-CLAUDE_SETUP_TAGS=$(grep -Eo '/v[0-9]+\.[0-9]+\.[0-9]+/install\.sh' plugin/skills/setup/SKILL.md | sed -E 's|/v([^/]+)/install\.sh|\1|' | sort -u || true)
+# The Claude setup skill installs through the exact-pinned `wenlan` npm package;
+# the Claude directory rejects a download piped into a shell and unpinned packages.
+CLAUDE_SETUP_TAGS=$(grep -Eo 'npx -y wenlan@[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)? setup' plugin/skills/setup/SKILL.md | sed -E 's/.*@([^ ]+) setup/\1/' | sort -u || true)
+CLAUDE_SETUP_UNPINNED=$(grep -Ec 'npx -y wenlan(@(latest|\^|~)[^ ]*)? setup|install\.sh' plugin/skills/setup/SKILL.md || true)
 CODEX_SETUP_TAGS=$(grep -Eo '/v[0-9]+\.[0-9]+\.[0-9]+/install\.sh' plugin-codex/skills/setup/SKILL.md | sed -E 's|/v([^/]+)/install\.sh|\1|' | sort -u || true)
 
 echo "Tag:         $TAG_VER"
@@ -82,13 +85,18 @@ fi
 
 for pin in $CLAUDE_SETUP_TAGS; do
     if [[ "$pin" != "$TAG_VER" ]]; then
-        echo "ERROR: Claude plugin setup install tag drift — ${pin} is not ${TAG_VER}"
+        echo "ERROR: Claude plugin setup install pin drift — ${pin} is not ${TAG_VER}"
         exit 1
     fi
 done
 
 if [[ -z "$CLAUDE_SETUP_TAGS" ]]; then
-    echo "ERROR: Claude plugin setup install tag missing"
+    echo "ERROR: Claude plugin setup install pin missing"
+    exit 1
+fi
+
+if [[ "$CLAUDE_SETUP_UNPINNED" != "0" ]]; then
+    echo "ERROR: Claude plugin setup runs an unpinned wenlan package or an install.sh download; the Claude directory rejects it"
     exit 1
 fi
 

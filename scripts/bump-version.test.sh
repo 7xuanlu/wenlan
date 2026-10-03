@@ -71,7 +71,7 @@ cat > "$TMPDIR_TEST/package.json" <<EOF
 EOF
 
 cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
+Bash: npx -y wenlan@0.4.1 setup
 EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
@@ -151,7 +151,7 @@ APP_PKG_VER=$(jq -r .version "$TMPDIR_TEST/package.json")
 [[ "$APP_TAURI_VER" == "0.5.0" ]] || { echo "FAIL: app/tauri.conf.json not bumped (got $APP_TAURI_VER)"; exit 1; }
 [[ "$APP_PKG_VER" == "0.5.0" ]] || { echo "FAIL: package.json not bumped (got $APP_PKG_VER)"; exit 1; }
 grep -q '# x-release-please-version' "$TMPDIR_TEST/app/Cargo.toml" || { echo "FAIL: app/Cargo.toml lost its x-release-please-version marker"; exit 1; }
-grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" || { echo "FAIL: setup skill installer not bumped"; exit 1; }
+grep -q 'npx -y wenlan@0.5.0 setup' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" || { echo "FAIL: setup skill installer not bumped"; exit 1; }
 grep -q 'exec npx -y wenlan-mcp@0.5.0 "\$@"' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" || { echo "FAIL: Claude runner exact pin not bumped"; exit 1; }
 grep -q 'wenlan-mcp@0\.4\.1' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" && { echo "FAIL: Claude runner still carries the old pin"; exit 1; }
 grep -q 'wenlan-mcp@\^\${ver}' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" || { echo "FAIL: Codex runner must keep deriving its pin from plugin.json"; exit 1; }
