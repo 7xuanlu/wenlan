@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c19db1b5a08a0ead94e02d391920ed034537c47b71d1f72f696966fee37825ad -->
+<!-- README_SYNC: source=README.md sha256=2a49328fcd22bc919f7d58a62912f8e211ad0c4412e5f75b2f8213128ef70308 -->
 
 <p align="center">
   <picture>
@@ -41,7 +41,6 @@ https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
   <a href="#mcp-setup">連接你的 AI</a>
 </p>
 
----
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -128,7 +127,6 @@ npx -y wenlan setup
 </details>
 
 
----
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -165,7 +163,7 @@ Wenlan 讓持續進行的工作不只留在聊天視窗裡。你可以保存選�
 - **記憶保留工作真正教會你的內容。** AI agent 捕獲原子的決策、經驗、修正與取代關係，並保留出處。
 - **頁面彙整目前知識。** Wenlan 把相關來源與記憶整理成附有引用的 Markdown，讓你反覆使用、更新與審核。
 
-**更新方式：** 來源與捕獲的記憶都能作為同一頁面的依據。記憶歷史會記錄個別決策的變化；頁面歷史則記錄支撐頁面的依據與修訂。自動更新時，符合條件、由系統維護的頁面可直接更新；你編輯過的頁面則會收到修訂提案。審核讓你決定是否套用更新，但不代表 AI 的結論一定正確。
+**更新方式：** 來源與捕獲的記憶都能作為同一頁面的依據。記憶歷史會記錄個別記憶的變化；頁面歷史則記錄支撐頁面的依據與修訂。自動更新時，符合條件、由系統維護的頁面可直接更新；你編輯過的頁面則會收到修訂提案。審核讓你決定是否套用更新，但不代表 AI 的結論一定正確。
 
 技術讀者可參考：Wenlan 採用 LLM wiki 的做法。資料模型、檢索與維護規則詳見 [LLM-wiki 實作指南](https://wenlan.app/zh-TW/learn/distilled-wiki-pages-ai-memory) 與[技術基礎](docs/technical-foundations.md)。
 
@@ -239,10 +237,10 @@ Capture 與明確的 supersession 屬於核心流程。模型支援的階段只�
 | 操作 | Wenlan 做什麼 |
 |---|---|
 | **Capture** | AI agent 每次寫入一條完整、自足的想法，遵循 Zettelkasten 的原子筆記原則，而不是保存整段對話。 |
-| **Classify** | 設定本地模型後，Wenlan 將記憶分為 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；呼叫端明確提供的準確類型優先。 |
-| **Enrich** | 設定本地模型後，在可用時補充結構化欄位、檢索提示、事件日期、品質、重要性與標籤。 |
+| **Classify** | 設定語言模型後，Wenlan 將記憶分為 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；呼叫端明確提供的準確類型優先。 |
+| **Enrich** | 設定語言模型後，在可用時補充結構化欄位、檢索提示、事件日期、品質、重要性與標籤。 |
 | **Link** | 保留出處；啟用 enrichment 後，把記憶連結到知識圖譜中的實體與關係。 |
-| **Reconcile** | 明確取代舊說法時保留 `supersedes` 鏈。若發起替換的 agent 信任等級低於 full，該替換會自動進入人工審核佇列，無需任何開關。可選的本地模型流程還可以把受保護內容的衝突放入審核，而不是覆蓋歷史；這個流程預設關閉，必須明確啟用。 |
+| **Reconcile** | 明確取代舊說法時保留 `supersedes` 鏈。若發起替換的 agent 信任等級低於 full，該替換會自動進入人工審核佇列，無需任何開關。可選的模型流程還可以把受保護內容的衝突放入審核，而不是覆蓋歷史；這個流程預設關閉，必須明確啟用。 |
 
 進階設定：使用 `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` 啟用這個 Reconcile 流程。
 
@@ -282,7 +280,6 @@ a1b2c3d distill: 4 pages
 
 </details>
 
----
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
@@ -332,7 +329,6 @@ a1b2c3d distill: 4 pages
 
 **從一段值得留下的對話開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。
 
----
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -396,7 +392,6 @@ AI 工具連接好後，可以直接這樣說：
 
 移除：app 中「登入時在背景執行文瀾」開關會移除開機註冊——關閉它並結束程式，刪除 `Wenlan.app` 或執行 Windows 解除安裝程式，然後刪除上述資料夾。`wenlan background off` 只會停止守護程序並關閉開機自動啟動，不會移除開機註冊；僅使用 CLI 的安裝請改為參照 [PRIVACY.md](docs/PRIVACY.md) 中守護程序的解除安裝項目。Wenlan 寫入的路徑列在其中。
 
----
 
 <a id="evaluation"></a>
 
@@ -411,7 +406,6 @@ AI 工具連接好後，可以直接這樣說：
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
----
 
 <a id="learn-more"></a>
 
@@ -448,7 +442,6 @@ AI 工具連接好後，可以直接這樣說：
 - [Wenlan 與 claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan 與 Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
----
 
 ## 貢獻
 
@@ -467,7 +460,6 @@ pnpm build:all
 
 `pnpm dev:all` 是桌面 app 受支援的開發進入點。它讓開發用的連接埠、資料、行程歸屬、app 識別、MCP socket 與 Remote Access 狀態都與已安裝的正式執行環境隔離；未處於該隔離環境的 debug build 會拒絕啟動。完整開發流程見本 repository 的 [AGENTS.md](AGENTS.md) 與 [CONTRIBUTING.md](.github/CONTRIBUTING.md)，以及儲存庫內的 [app/AGENTS.md](app/AGENTS.md)。安全性問題請見 [SECURITY.md](.github/SECURITY.md)，隱私權政策請見 [PRIVACY.md](docs/PRIVACY.md)，也請閱讀 [Code of Conduct](.github/CODE_OF_CONDUCT.md)。
 
----
 
 <a id="code-signing-policy"></a>
 
@@ -485,7 +477,6 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 SignPath 的申請正在審核中，Windows 安裝包尚未簽署。
 
----
 
 <a id="license"></a>
 
@@ -498,7 +489,6 @@ Wenlan 採用兩種授權，依 repository 的不同部分劃分。
 
 這個劃分是刻意為之。Apache-2.0 的程式碼可以用在 AGPL-3.0 程式裡，所以桌面 app 建立在 runtime 之上，兩種授權都不會被違反。
 
----
 
 <a id="acknowledgments"></a>
 

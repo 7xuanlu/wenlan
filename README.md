@@ -39,7 +39,6 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
   <a href="#mcp-setup">Connect&nbsp;your&nbsp;AI</a>
 </p>
 
----
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -125,7 +124,6 @@ Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.
 
 </details>
 
----
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -162,7 +160,7 @@ Wenlan gives ongoing work a place outside the chat window. Keep selected documen
 - **Memories preserve what work teaches you.** Agents capture atomic decisions, lessons, corrections, and supersession with provenance.
 - **Pages compile current knowledge.** Wenlan turns relevant Sources and Memories into source-cited Markdown you can reuse, refresh, and review.
 
-**How updates work:** Sources and captured Memories can both support the same Page. Memory history records changes to individual decisions; Page history records the supporting evidence and revisions. During automatic refresh, eligible machine-maintained Pages can update directly, while Pages you have edited receive proposed revisions. Review lets you decide whether to apply an update; it is not a guarantee that the AI's conclusion is correct.
+**How updates work:** Sources and captured Memories can both support the same Page. Memory history records changes to individual Memories; Page history records the supporting evidence and revisions. During automatic refresh, eligible machine-maintained Pages can update directly, while Pages you have edited receive proposed revisions. Review lets you decide whether to apply an update; it is not a guarantee that the AI's conclusion is correct.
 
 For technical readers: Wenlan follows the **LLM wiki** pattern. See the [implementation guide](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) and [technical foundations](docs/technical-foundations.md) for the data model, retrieval, and maintenance rules.
 
@@ -236,10 +234,10 @@ Capture and explicit supersession are core. Model-backed stages run only when th
 | Operation | What Wenlan does |
 |---|---|
 | **Capture** | Agents write one complete, self-contained idea per Memory, following the Zettelkasten atomic-note principle instead of saving the whole conversation. |
-| **Classify** | With the on-device model, Wenlan assigns `identity`, `preference`, `decision`, `lesson`, `gotcha`, or `fact`; a precise type supplied by the caller remains authoritative. |
-| **Enrich** | With the on-device model, adds structured fields, retrieval cues, event dates, quality, importance, and tags when available. |
+| **Classify** | With a configured language model, Wenlan assigns `identity`, `preference`, `decision`, `lesson`, `gotcha`, or `fact`; a precise type supplied by the caller remains authoritative. |
+| **Enrich** | With a configured language model, adds structured fields, retrieval cues, event dates, quality, importance, and tags when available. |
 | **Link** | Retains provenance and, when enrichment is enabled, connects Memories to entities and relations in the knowledge graph. |
-| **Reconcile** | Explicit replacements preserve a `supersedes` chain. A replacement from an agent whose trust level is below full queues for human review automatically, no flag required. An optional on-device pass can also queue protected conflicts for review instead of overwriting history; that pass is off by default and must be explicitly enabled. |
+| **Reconcile** | Explicit replacements preserve a `supersedes` chain. A replacement from an agent whose trust level is below full queues for human review automatically, no flag required. An optional model-backed pass can also queue protected conflicts for review instead of overwriting history; that pass is off by default and must be explicitly enabled. |
 
 Advanced configuration: set `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` to enable that reconcile pass.
 
@@ -279,7 +277,6 @@ a1b2c3d distill: 4 pages
 
 </details>
 
----
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
@@ -329,7 +326,6 @@ Optional background organization and Page updates need a [configured model](#mod
 
 **Try it with one conversation worth keeping.** [Get started](#start-in-30-seconds). Star this repo if you'd like to come back and try it later.
 
----
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -391,7 +387,6 @@ Nothing is locked in. Pages and session notes are Markdown under `~/.wenlan/`; m
 
 To uninstall: the app's *Run Wenlan in background at login* toggle removes the launch registration — turn it off, quit, and delete `Wenlan.app` or run the Windows uninstaller, then delete the folders above. `wenlan background off` only stops the daemon and disables autostart; it does not remove the launch registration, so a CLI-only install should instead follow the daemon uninstall bullet in [PRIVACY.md](docs/PRIVACY.md). The paths Wenlan writes are listed there.
 
----
 
 <a id="evaluation"></a>
 
@@ -406,7 +401,6 @@ This is a retrieval-only snapshot, not a claim about end-to-end answer quality. 
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
----
 
 <a id="learn-more"></a>
 
@@ -443,7 +437,6 @@ More detailed documentation, concepts, and comparisons:
 - [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
----
 
 ## Contributing
 
@@ -462,7 +455,6 @@ pnpm build:all
 
 `pnpm dev:all` is the supported development entry point for the desktop app. It keeps development ports, data, process ownership, app identity, MCP sockets, and Remote Access state separate from the installed production runtime; a debug app started without that isolation refuses to run. See this repository's [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md), plus the in-tree [app/AGENTS.md](app/AGENTS.md), for the complete development workflow. Security reports: [SECURITY.md](.github/SECURITY.md). Privacy policy: [PRIVACY.md](docs/PRIVACY.md). Please also read the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
----
 
 <a id="code-signing-policy"></a>
 
@@ -480,7 +472,6 @@ Multi-factor authentication is required of every maintainer, on GitHub and on Si
 
 The SignPath application is pending. Windows installers are not signed yet.
 
----
 
 <a id="license"></a>
 
@@ -493,7 +484,6 @@ Wenlan uses two licenses, one per part of the repository.
 
 The split is deliberate. Apache-2.0 code may be used inside an AGPL-3.0 program, so the desktop app builds on the runtime without either license being violated.
 
----
 
 <a id="acknowledgments"></a>
 

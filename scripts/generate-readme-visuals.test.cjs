@@ -10,6 +10,8 @@ const {
 } = require("./generate-readme-visuals.cjs");
 const {
   family,
+  makeOverview,
+  makeLifecycle,
   makeKnowledgeNetwork,
 } = require("./readme-product-visuals.cjs");
 
@@ -77,31 +79,15 @@ test("PNG verification reports dimension mismatches", async () => {
   assert.match(errors[0], /is \d+x\d+; generated output is \d+x\d+/u);
 });
 
-test("Chinese visual font stacks preserve Wenlan's branded Latin faces", () => {
-  assert.equal(
-    family("zh-Hans", "heading"),
-    '"Fraunces", "Songti SC", "STSong", "PingFang SC", Georgia, serif',
-  );
-  assert.equal(
-    family("zh-Hans", "body"),
-    '"Instrument Sans", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, sans-serif',
-  );
-  assert.equal(
-    family("zh-Hans", "mono"),
-    '"JetBrains Mono", "PingFang SC", "Hiragino Sans GB", ui-monospace, monospace',
-  );
-  assert.equal(
-    family("zh-Hant", "heading"),
-    '"Fraunces", "Songti TC", "STSong", "PingFang TC", Georgia, serif',
-  );
-  assert.equal(
-    family("zh-Hant", "body"),
-    '"Instrument Sans", "PingFang TC", "Hiragino Sans CNS", -apple-system, BlinkMacSystemFont, sans-serif',
-  );
-  assert.equal(
-    family("zh-Hant", "mono"),
-    '"JetBrains Mono", "PingFang TC", "Hiragino Sans CNS", ui-monospace, monospace',
-  );
+test("all diagram locales reuse the app's typography tokens", () => {
+  const css = require("node:fs").readFileSync(path.join(__dirname, "../src/index.css"), "utf8");
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const kind of ["heading", "body", "mono"]) {
+      const expected = css.match(new RegExp(`--mem-font-${kind}:\\s*([^;]+);`))[1];
+      assert.equal(family(locale, kind), expected);
+      assert.doesNotMatch(family(locale, kind), /Songti|STSong/u);
+    }
+  }
 });
 
 test("knowledge-network visual distinguishes entities and relation semantics", () => {
@@ -147,5 +133,21 @@ test("every knowledge-network locale keeps direction and strength semantics", ()
       assert.equal((svg.match(/0\.82/gu) ?? []).length, 1, `${locale}/${viewport} confidence exemplar`);
       assert.doesNotMatch(svg, /ENTITY PAGE|实体页面|實體頁面/u);
     }
+  }
+});
+
+test("diagrams retain bounded model, review, and citation claims", () => {
+  for (const viewport of ["desktop", "mobile"]) {
+    const overview = makeOverview("en", viewport).svg;
+    const lifecycle = makeLifecycle("en", viewport).svg;
+    const network = makeKnowledgeNetwork("en", viewport).svg;
+    assert.match(overview, /configured model/u);
+    assert.match(overview, /Automatic refresh proposes changes/u);
+    assert.match(lifecycle, /CITATION CHECK PASSED/u);
+    assert.match(lifecycle, /AUTOMATIC REFRESH · EDITED PAGE/u);
+    assert.match(lifecycle, /Supersession keeps the earlier memory/u);
+    assert.doesNotMatch(lifecycle, /VERIFIED REBUILD|Archive, never delete|On-device \/ off/u);
+    assert.match(network, /Conceptual example/u);
+    assert.doesNotMatch(network, /Pages connect through Entities/u);
   }
 });

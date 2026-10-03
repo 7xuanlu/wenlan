@@ -14,7 +14,7 @@ const {
 
 const ROOT = path.resolve(__dirname, "..");
 const ASSET_DIR = path.join(ROOT, "docs", "assets");
-const FONT_DIR = path.join(__dirname, "readme-visual-fonts");
+const FONT_DIR = path.join(ROOT, "public", "fonts");
 const TOOL_DIR = path.join(__dirname, "readme-visuals");
 const visualRequire = createRequire(path.join(TOOL_DIR, "package.json"));
 
@@ -83,9 +83,9 @@ function makeSimpleBanner(viewport, locale) {
   const { width, height } = BANNER_VIEWPORTS[viewport];
   const mobile = viewport === "mobile";
   const copy = BANNER_COPY[locale];
-  const prefix = `banner-${viewport}`;
+  const prefix = `banner-${locale}-${viewport}`;
   const text = (x, y, value, size, color = BANNER.white, weight = 400, anchor = "start", letterSpacing = null) =>
-    `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}"${anchor === "start" ? "" : ` text-anchor="${anchor}"`}${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
+    `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
   const content = mobile
     ? `${logoMarkup({ x: 294, y: 30, size: 132, prefix })}
   ${text(360, 190, "WENLAN", 28, BANNER.cyan, 700, "middle", 4)}
@@ -138,32 +138,12 @@ let renderFontCss;
 
 function embeddedFonts() {
   if (renderFontCss) return renderFontCss;
-  renderFontCss = `
-    @font-face {
-      font-family: "Fraunces";
-      font-style: normal;
-      font-weight: 600;
-      src: url(data:font/ttf;base64,${fontData("Fraunces-600.ttf")}) format("truetype");
-    }
-    @font-face {
-      font-family: "Instrument Sans";
-      font-style: normal;
-      font-weight: 400;
-      src: url(data:font/ttf;base64,${fontData("InstrumentSans-400.ttf")}) format("truetype");
-    }
-    @font-face {
-      font-family: "Instrument Sans";
-      font-style: normal;
-      font-weight: 600;
-      src: url(data:font/ttf;base64,${fontData("InstrumentSans-600.ttf")}) format("truetype");
-    }
-    @font-face {
-      font-family: "JetBrains Mono";
-      font-style: normal;
-      font-weight: 500;
-      src: url(data:font/ttf;base64,${fontData("JetBrainsMono-500.ttf")}) format("truetype");
-    }
-  `;
+  // Embed the same bundled variable fonts used by the desktop app. No network
+  // requests and no separate static-font copies with different weight metrics.
+  renderFontCss = fs.readFileSync(path.join(FONT_DIR, "fonts.css"), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//gu, "")
+    .replace(/url\(\/fonts\/([A-Za-z0-9_-]+\.woff2)\)/gu,
+      (_, filename) => `url(data:font/woff2;base64,${fontData(filename)})`);
   return renderFontCss;
 }
 

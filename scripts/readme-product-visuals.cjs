@@ -34,17 +34,14 @@ const C = {
   warmSoft: "#FAF2ED",
 };
 
-const FONTS = {
-  heading: '"Fraunces", Georgia, serif',
-  body: '"Instrument Sans", -apple-system, BlinkMacSystemFont, sans-serif',
-  mono: '"JetBrains Mono", ui-monospace, monospace',
-  hansHeading: '"Fraunces", "Songti SC", "STSong", "PingFang SC", Georgia, serif',
-  hansBody: '"Instrument Sans", "PingFang SC", "Hiragino Sans GB", -apple-system, BlinkMacSystemFont, sans-serif',
-  hansMono: '"JetBrains Mono", "PingFang SC", "Hiragino Sans GB", ui-monospace, monospace',
-  hantHeading: '"Fraunces", "Songti TC", "STSong", "PingFang TC", Georgia, serif',
-  hantBody: '"Instrument Sans", "PingFang TC", "Hiragino Sans CNS", -apple-system, BlinkMacSystemFont, sans-serif',
-  hantMono: '"JetBrains Mono", "PingFang TC", "Hiragino Sans CNS", ui-monospace, monospace',
-};
+// Use the app's actual typography tokens, including its system CJK fallbacks.
+// Keeping a second set of stacks here caused the diagrams to drift from the app.
+const appCss = require("node:fs").readFileSync(require("node:path").join(__dirname, "../src/index.css"), "utf8");
+const FONTS = Object.fromEntries(["heading", "body", "mono"].map((kind) => {
+  const value = appCss.match(new RegExp(`--mem-font-${kind}:\\s*([^;]+);`))?.[1];
+  if (!value) throw new Error(`Missing app typography token: ${kind}`);
+  return [kind, value];
+}));
 
 const OVERVIEW_COPY = {
   en: {
@@ -90,10 +87,10 @@ const OVERVIEW_COPY = {
     ],
     changed: "When a Page is stale",
     changedLead: "It rebuilds from current support.",
-    upkeep: "Wenlan handles routine upkeep",
-    upkeepLead: "Organize, connect, cite, and refresh in the background.",
+    upkeep: "Use your AI, or enable upkeep",
+    upkeepLead: "Background upkeep needs a configured model.",
     authority: "You keep authority",
-    authorityLead: "Potential conflicts can surface; changes to your writing wait.",
+    authorityLead: "Automatic refresh proposes changes to pages you edited.",
   },
   "zh-Hans": {
     description: "来源与记忆分别支撑同一个持续维护的页面。",
@@ -127,10 +124,10 @@ const OVERVIEW_COPY = {
     backSteps: ["打开当前页面", "从 AI 工具中提问", "带着完整脉络继续"],
     changed: "页面过时后",
     changedLead: "依当前依据重新构建。",
-    upkeep: "日常维护交给 Wenlan",
-    upkeepLead: "在后台整理、关联、引用与更新。",
+    upkeep: "用现有 AI，或开启后台维护",
+    upkeepLead: "后台整理与更新需要配置模型。",
     authority: "你保留决定权",
-    authorityLead: "潜在冲突可以浮现；对你文字的改动会等待判断。",
+    authorityLead: "自动更新你编辑过的页面时，先提出修订。",
   },
   "zh-Hant": {
     description: "來源與記憶分別支撐同一個持續維護的頁面。",
@@ -164,10 +161,10 @@ const OVERVIEW_COPY = {
     backSteps: ["開啟目前頁面", "從 AI 工具中提問", "帶著完整脈絡繼續"],
     changed: "頁面過時後",
     changedLead: "依目前依據重新構建。",
-    upkeep: "日常維護交給 Wenlan",
-    upkeepLead: "在背景整理、關聯、引用與更新。",
+    upkeep: "用現有 AI，或開啟背景維護",
+    upkeepLead: "背景整理與更新需要設定模型。",
     authority: "你保留決定權",
-    authorityLead: "潛在衝突可以浮現；對你文字的改動會等待判斷。",
+    authorityLead: "自動更新你編輯過的頁面時，先提出修訂。",
   },
 };
 
@@ -213,17 +210,17 @@ const LIFECYCLE_COPY = {
     current: "CURRENT",
     maintainedPage: "Maintained Page",
     pageMeta: "v12 / 6 supporting records",
-    verified: "VERIFIED REBUILD",
+    verified: "CITATION CHECK PASSED",
     prior: "Recent changes remain inspectable",
     versions: "v10 / v11 / v12",
-    humanPage: "HUMAN-OWNED PAGE",
-    humanLead: "Changes to your prose become a proposed revision.",
-    mobileHumanLead: ["Changes to your prose become", "a proposed revision."],
+    humanPage: "AUTOMATIC REFRESH · EDITED PAGE",
+    humanLead: "Proposed changes wait for your review.",
+    mobileHumanLead: ["Proposed changes wait for your review."],
     background: "OPTIONAL MODEL PASSES",
     phases: ["Enrich", "Link", "Reconcile", "Verify"],
     runs: "RECONCILE",
-    schedule: "On-device / off by default / explicit opt-in",
-    archive: "Archive, never delete.",
+    schedule: "Configured model / off by default / opt-in",
+    archive: "Supersession keeps the earlier memory.",
   },
   "zh-Hans": {
     eyebrow: "两套相连的生命周期",
@@ -263,17 +260,17 @@ const LIFECYCLE_COPY = {
     current: "当前",
     maintainedPage: "持续维护的页面",
     pageMeta: "v12 / 6 条支撑记录",
-    verified: "已验证的重建",
+    verified: "引用检查通过",
     prior: "近期变化仍可检查",
     versions: "v10 / v11 / v12",
-    humanPage: "人工拥有的页面",
-    humanLead: "对你文字的改动会成为修订提案。",
-    mobileHumanLead: ["对你文字的改动会成为修订提案。"],
+    humanPage: "自动更新 · 你编辑过的页面",
+    humanLead: "修订提案等你审核后再应用。",
+    mobileHumanLead: ["修订提案等你审核后再应用。"],
     background: "可选模型流程",
     phases: ["丰富", "连接", "校正", "验证"],
     runs: "校正",
-    schedule: "本地模型 / 默认关闭 / 明确启用",
-    archive: "只封存，不删除。",
+    schedule: "已配置模型 / 默认关闭 / 明确启用",
+    archive: "取代旧记忆时，保留前后关联。",
   },
   "zh-Hant": {
     eyebrow: "兩套相連的生命週期",
@@ -313,32 +310,31 @@ const LIFECYCLE_COPY = {
     current: "目前",
     maintainedPage: "持續維護的頁面",
     pageMeta: "v12 / 6 條支撐紀錄",
-    verified: "已驗證的重建",
+    verified: "引用檢查通過",
     prior: "近期變化仍可檢查",
     versions: "v10 / v11 / v12",
-    humanPage: "人工擁有的頁面",
-    humanLead: "對你文字的改動會成為修訂提案。",
-    mobileHumanLead: ["對你文字的改動會成為修訂提案。"],
+    humanPage: "自動更新 · 你編輯過的頁面",
+    humanLead: "修訂提案等你審核後再套用。",
+    mobileHumanLead: ["修訂提案等你審核後再套用。"],
     background: "可選模型流程",
     phases: ["豐富", "連接", "校正", "驗證"],
     runs: "校正",
-    schedule: "本地模型 / 預設關閉 / 明確啟用",
-    archive: "只封存，不刪除。",
+    schedule: "已設定模型 / 預設關閉 / 明確啟用",
+    archive: "取代舊記憶時，保留前後關聯。",
   },
 };
 
 const NETWORK_COPY = {
   en: {
-    description: "Knowledge and source Pages connect through Entities; atomic Memories preserve the evidence behind them.",
+    description: "Pages cite sources and memories. Memories link to entities, which connect through typed relations.",
     eyebrow: "KNOWLEDGE GRAPH",
     title: "Connected like a graph. Readable like a wiki.",
     mobileTitle: ["Connected like a graph.", "Readable like a wiki."],
-    subtitle: "Knowledge and source Pages connect through Entities; atomic Memories preserve the evidence behind them.",
+    subtitle: "Pages cite sources and memories. Memories link to entities and their connections.",
     mobileSubtitle: [
-      "Knowledge and source Pages",
-      "connect through Entities;",
-      "atomic Memories preserve",
-      "the evidence behind them.",
+      "Pages cite sources and memories.",
+      "Memories link to entities",
+      "and their connections.",
     ],
     knowledgePage: "KNOWLEDGE PAGE",
     entity: "ENTITY",
@@ -361,17 +357,17 @@ const NETWORK_COPY = {
     concept: "CONCEPT",
     linkedPage: "Launch strategy",
     edgeLabels: ["CITES", "SUPPORTS", "ABOUT", "REFINES", "RELATED TO · 0.82", "PART OF"],
-    footer: "Readable Pages · Atomic evidence · Typed connections",
+    footer: "Conceptual example · Pages, evidence, and connections",
   },
   "zh-Hans": {
-    description: "知识页面与来源页面通过实体相连；原子记忆保留背后的依据。",
+    description: "页面引用来源与记忆；记忆连接实体，实体之间保留明确关系。",
     eyebrow: "知识图谱",
     title: "像图谱一样相连，像 Wiki 一样可读。",
     mobileTitle: ["像图谱一样相连，", "像 Wiki 一样可读。"],
-    subtitle: "知识页面与来源页面通过实体相连；原子记忆保留背后的依据。",
+    subtitle: "页面引用来源与记忆；记忆连接实体，实体之间保留明确关系。",
     mobileSubtitle: [
-      "知识页面与来源页面通过实体相连；",
-      "原子记忆保留背后的依据。",
+      "页面引用来源与记忆；",
+      "记忆连接实体，实体之间保留明确关系。",
     ],
     knowledgePage: "知识页面",
     entity: "实体",
@@ -394,17 +390,17 @@ const NETWORK_COPY = {
     concept: "概念",
     linkedPage: "发布策略",
     edgeLabels: ["引用", "支撑", "关于", "延伸", "相关 · 0.82", "属于"],
-    footer: "可读页面 · 原子依据 · 明确关系",
+    footer: "概念示意 · 页面、依据与关联",
   },
   "zh-Hant": {
-    description: "知識頁面與來源頁面透過實體相連；原子記憶保留背後的依據。",
+    description: "頁面引用來源與記憶；記憶連接實體，實體之間保留明確關係。",
     eyebrow: "知識圖譜",
     title: "像圖譜一樣相連，像 Wiki 一樣可讀。",
     mobileTitle: ["像圖譜一樣相連，", "像 Wiki 一樣可讀。"],
-    subtitle: "知識頁面與來源頁面透過實體相連；原子記憶保留背後的依據。",
+    subtitle: "頁面引用來源與記憶；記憶連接實體，實體之間保留明確關係。",
     mobileSubtitle: [
-      "知識頁面與來源頁面透過實體相連；",
-      "原子記憶保留背後的依據。",
+      "頁面引用來源與記憶；",
+      "記憶連接實體，實體之間保留明確關係。",
     ],
     knowledgePage: "知識頁面",
     entity: "實體",
@@ -427,7 +423,7 @@ const NETWORK_COPY = {
     concept: "概念",
     linkedPage: "發布策略",
     edgeLabels: ["引用", "支撐", "關於", "延伸", "相關 · 0.82", "屬於"],
-    footer: "可讀頁面 · 原子依據 · 明確關係",
+    footer: "概念示意 · 頁面、依據與關聯",
   },
 };
 
@@ -440,11 +436,7 @@ function esc(value) {
 }
 
 function family(locale, kind) {
-  if (locale === "en") return FONTS[kind];
-  const prefix = locale === "zh-Hant" ? "hant" : "hans";
-  if (kind === "heading") return FONTS[`${prefix}Heading`];
-  if (kind === "mono") return FONTS[`${prefix}Mono`];
-  return FONTS[`${prefix}Body`];
+  return FONTS[kind];
 }
 
 function text({
@@ -737,23 +729,12 @@ function overviewPage({
     size: mobile ? 18 : 14,
   }).markup;
   const traitsY = y + height - (mobile ? 42 : 36);
-  const traits = mobile
-    ? dotSeparated({
-      locale,
-      x: x + pad,
-      y: traitsY,
-      labels: c.mobilePageTraits,
-      size: locale === "en" ? 20 : 21,
-      gap: 10,
-    })
-    : dotSeparated({
-      locale,
-      x: x + pad,
-      y: traitsY,
-      labels: c.pageTraits,
-      size: 15,
-      gap: 12,
-    });
+  const traits = text({
+    locale, x: x + pad, y: traitsY,
+    value: (mobile ? c.mobilePageTraits : c.pageTraits).join(" · "),
+    size: mobile ? (locale === "en" ? 20 : 21) : 15,
+    weight: 600, fill: C.secondary,
+  });
 
   return region({
     id: `${prefix}-page`,
@@ -772,7 +753,6 @@ function overviewPage({
       ${text({ locale, x: x + pad, y: y + (mobile ? 158 : 140), value: c.revised, size: mobile ? 20 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
       ${mobile ? "" : `<circle cx="${x + pad + 178}" cy="${y + 135}" r="2.5" fill="${C.border}"/>`}
       ${text({ locale, x: mobile ? x + pad : x + pad + 190, y: y + (mobile ? 188 : 140), value: c.records, size: mobile ? 20 : 14, kind: "mono", weight: 500, fill: C.tertiary })}
-      <line x1="${x + pad}" y1="${y + (mobile ? 216 : 174)}" x2="${x + width - pad}" y2="${y + (mobile ? 216 : 174)}" stroke="${C.border}"/>
       ${text({ locale, x: x + pad, y: y + (mobile ? 256 : 210), value: c.synthesis, size: mobile ? 20 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
       <rect x="${x + pad}" y="${y + (mobile ? 286 : 237)}" width="${mobile ? 280 : 320}" height="9" rx="4.5" fill="#DDE2EA"/>
       <rect x="${x + pad}" y="${y + (mobile ? 310 : 258)}" width="${mobile ? 338 : 382}" height="9" rx="4.5" fill="#E7EAF0"/>
@@ -781,11 +761,10 @@ function overviewPage({
       <rect x="${x + pad}" y="${y + (mobile ? 416 : 305)}" width="${mobile ? 348 : 402}" height="9" rx="4.5" fill="#DDE2EA"/>
       <rect x="${x + pad}" y="${y + (mobile ? 440 : 326)}" width="${mobile ? 252 : 278}" height="9" rx="4.5" fill="#E7EAF0"/>
       ${citationTwo}
-      <circle cx="${x + width - (mobile ? 88 : 56)}" cy="${y + (mobile ? 476 : 311)}" r="6" fill="${C.amber}"/>
-      <line x1="${x + width - (mobile ? 88 : 56)}" y1="${y + (mobile ? 484 : 319)}" x2="${x + width - (mobile ? 88 : 56)}" y2="${y + (mobile ? 514 : 344)}" stroke="${C.amber}" stroke-width="1.5"/>
+      <circle cx="${x + width - (mobile ? 20 : 56)}" cy="${y + (mobile ? 476 : 311)}" r="6" fill="${C.amber}"/>
+      <line x1="${x + width - (mobile ? 20 : 56)}" y1="${y + (mobile ? 484 : 319)}" x2="${x + width - (mobile ? 20 : 56)}" y2="${y + (mobile ? 514 : 344)}" stroke="${C.amber}" stroke-width="1.5"/>
       ${text({ locale, x: x + pad, y: y + (mobile ? 550 : 388), value: c.linked, size: mobile ? 20 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
       ${linkedRow}
-      <line x1="${x + pad}" y1="${y + height - (mobile ? 78 : 70)}" x2="${x + width - pad}" y2="${y + height - (mobile ? 78 : 70)}" stroke="${C.border}"/>
       ${traits}
     `,
   });
@@ -833,7 +812,6 @@ function overviewDesktop(c, locale, prefix) {
     content: `
       ${text({ locale, x: 1208, y: 328, value: c.backLabel, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
       ${lines({ locale, x: 1208, y: 382, values: c.backWords, size: locale === "en" ? 34 : 36, lineHeight: 50, kind: "heading", weight: 600 })}
-      <line x1="1208" y1="522" x2="1534" y2="522" stroke="${C.border}"/>
       ${c.backSteps.map((step, index) => {
         const cy = 566 + index * 48;
         return `<circle cx="1221" cy="${cy}" r="12" fill="${C.indigoSoft}" stroke="#D2CFF0"/>
@@ -849,7 +827,6 @@ function overviewDesktop(c, locale, prefix) {
     width: 1472,
     height: 100,
     content: `
-      <line x1="64" y1="842" x2="1536" y2="842" stroke="${C.border}"/>
       <circle cx="84" cy="885" r="7" fill="${C.sage}"/>
       ${text({ locale, x: 106, y: 882, value: c.upkeep, size: locale === "en" ? 20 : 21, kind: "heading", weight: 600 })}
       ${text({ locale, x: 106, y: 912, value: c.upkeepLead, size: locale === "en" ? 16 : 17, fill: C.secondary })}
@@ -1058,7 +1035,7 @@ function overviewMobile(c, locale, prefix) {
       width: 426,
       height: 72,
       content: `
-        <path d="M592 1072 C650 1170 652 1340 632 1397" fill="none" stroke="${C.amber}" stroke-width="1.5"/>
+        <path d="M660 1164 C674 1250 670 1340 632 1397" fill="none" stroke="${C.amber}" stroke-width="1.5"/>
         ${text({ locale, x: 280, y: 1420, value: c.changed, size: 20, kind: "mono", weight: 500, fill: C.amberDark })}
         ${text({ locale, x: 280, y: 1454, value: c.changedLead, size: locale === "en" ? 24 : 25, weight: 600, fill: C.secondary })}
       `,
@@ -1070,7 +1047,6 @@ function overviewMobile(c, locale, prefix) {
       width: 640,
       height: 270,
       content: `
-        <line x1="40" y1="1500" x2="680" y2="1500" stroke="${C.border}"/>
         ${text({ locale, x: 40, y: 1542, value: c.backLabel, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
         ${outputWords}
       `,
@@ -1082,19 +1058,17 @@ function overviewMobile(c, locale, prefix) {
       width: 640,
       height: 300,
       content: `
-        <line x1="40" y1="1840" x2="680" y2="1840" stroke="${C.border}"/>
         <circle cx="54" cy="1894" r="7" fill="${C.sage}"/>
         ${text({ locale, x: 78, y: 1892, value: c.upkeep, size: locale === "en" ? 26 : 28, kind: "heading", weight: 600 })}
         ${lines({
           locale,
           x: 78,
           y: 1930,
-          values: locale === "en" ? ["Organize, connect, cite, and refresh", "in the background."] : [c.upkeepLead],
+          values: locale === "en" ? ["Background upkeep needs", "a configured model."] : [c.upkeepLead],
           size: locale === "en" ? 24 : 25,
           lineHeight: 30,
           fill: C.secondary,
         })}
-        <line x1="78" y1="1995" x2="642" y2="1995" stroke="${C.border}"/>
         <circle cx="54" cy="2050" r="7" fill="${C.warm}"/>
         ${text({ locale, x: 78, y: 2048, value: c.authority, size: locale === "en" ? 26 : 28, kind: "heading", weight: 600 })}
         ${lines({
@@ -1102,7 +1076,7 @@ function overviewMobile(c, locale, prefix) {
           x: 78,
           y: 2086,
           values: locale === "en"
-            ? ["Potential conflicts can surface for review;", "changes to your writing wait for judgment."]
+            ? ["Automatic refresh proposes changes", "to pages you edited."]
             : [c.authorityLead],
           size: locale === "en" ? 24 : 25,
           lineHeight: 30,
@@ -1207,7 +1181,7 @@ function networkEntityNode({
     content: `
       <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.indigoSoft}" stroke="#AAA5E5" stroke-width="1.5"/>
       ${text({ locale, x: cx, y: cy - 28, value: c.entity, size: 10, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
-      ${text({ locale, x: cx, y: cy + 5, value: title, size: titleSize, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 5, value: title, size: titleSize, weight: 600, anchor: "middle" })}
       ${text({ locale, x: cx, y: cy + 34, value: subtype, size: 10, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
     `,
   });
@@ -1232,7 +1206,7 @@ function networkSourceNode({
       <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.raised}" stroke="${C.border}" stroke-width="1.5"/>
       ${documentGlyph({ x: cx - 13, y: cy - 62, color: C.secondary })}
       ${text({ locale, x: cx, y: cy - 16, value: c.sourcePage, size: 10, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
-      ${text({ locale, x: cx, y: cy + 22, value: title, size: locale === "en" ? 19 : 20, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 22, value: title, size: locale === "en" ? 19 : 20, weight: 600, anchor: "middle" })}
     `,
   });
 }
@@ -1255,7 +1229,7 @@ function networkKnowledgeNode({
     content: `
       <circle cx="${cx}" cy="${cy}" r="${radius}" fill="${C.surface}" stroke="${C.indigo}" stroke-width="1.6"/>
       ${text({ locale, x: cx, y: cy - 20, value: c.knowledgePage, size: 10, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
-      ${text({ locale, x: cx, y: cy + 18, value: title, size: locale === "en" ? 20 : 22, kind: "heading", weight: 600, anchor: "middle" })}
+      ${text({ locale, x: cx, y: cy + 18, value: title, size: locale === "en" ? 20 : 22, weight: 600, anchor: "middle" })}
     `,
   });
 }
@@ -1331,7 +1305,6 @@ function networkHero({
       }).markup}
       ${text({ locale, x: x + pad, y: y + (mobile ? 88 : 82), value: c.heroTitle, size: mobile ? (locale === "en" ? 27 : 28) : (locale === "en" ? 30 : 31), kind: "heading", weight: 600 })}
       ${text({ locale, x: x + pad, y: y + (mobile ? 118 : 112), value: c.heroMeta, size: mobile ? 16 : 12, kind: "mono", weight: 500, fill: C.tertiary })}
-      <line x1="${x + pad}" y1="${y + (mobile ? 136 : 132)}" x2="${x + width - pad}" y2="${y + (mobile ? 136 : 132)}" stroke="${C.border}"/>
       <rect x="${x + pad}" y="${y + (mobile ? 150 : 150)}" width="${mobile ? 168 : 184}" height="${mobile ? 7 : 8}" rx="4" fill="#D9DEE7"/>
       <rect x="${x + pad + (mobile ? 180 : 196)}" y="${y + (mobile ? 150 : 150)}" width="${mobile ? 56 : 70}" height="${mobile ? 7 : 8}" rx="4" fill="#E3E7EE"/>
     `,
@@ -1367,7 +1340,7 @@ function networkDesktop(c, locale, prefix) {
     ${edge("M448 778 C522 760 566 700 610 680")}
     ${edge("M496 536 C542 540 558 566 580 580", C.indigo, 1.8, 0.62)}
     ${edge("M520 900 C546 812 592 762 650 740", C.indigo, 1.8, 0.62)}
-    ${edge("M944 566 C1026 546 1064 506 1080 490", C.indigo, 1.8, 0.62)}
+    ${edge("M496 528 C700 300 956 314 1080 452", C.indigo, 1.8, 0.62)}
     ${edge("M872 744 C902 792 932 812 966 826")}
     ${edge("M328 450 C430 650 650 934 910 900", C.secondary, 1.2, 0.32)}
     ${edge("M1260 420 C1312 382 1348 354 1360 344", C.sage, 2.2, 0.78, true)}
@@ -1375,12 +1348,11 @@ function networkDesktop(c, locale, prefix) {
     ${edge("M1302 724 C1270 704 1246 660 1224 576", C.sage, 3.4, 0.84, true)}
     ${edge("M1492 422 C1524 466 1538 504 1534 518", C.sage, 1.4, 0.60, true)}
     ${edge("M1460 680 C1436 700 1420 714 1412 724", C.sage, 1.8, 0.66, true)}
-    ${edge("M1068 858 C1144 844 1202 824 1242 800")}
     ${networkSourceNode({ locale, c, prefix, cx: 270, cy: 360, radius: 92, title: c.sourceOne })}
     ${networkSourceNode({ locale, c, prefix, cx: 360, cy: 800, radius: 94, title: c.sourceTwo })}
+    ${networkHero({ locale, c, prefix, cx: 770, cy: 610 })}
     ${networkMemoryNode({ locale, c, prefix, cx: 480, cy: 535, id: "mem_42", labelX: 460, labelAnchor: "end" })}
     ${networkMemoryNode({ locale, c, prefix, cx: 520, cy: 915, id: "mem_77" })}
-    ${networkHero({ locale, c, prefix, cx: 770, cy: 610 })}
     ${networkKnowledgeNode({ locale, c, prefix, cx: 1000, cy: 890, radius: 90, title: c.linkedPage })}
     ${networkEntityNode({ locale, c, prefix, cx: 1180, cy: 480, radius: 100, title: c.entityOne, subtype: c.project })}
     ${networkEntityNode({ locale, c, prefix, cx: 1450, cy: 345, radius: 84, title: c.entityTwo, subtype: c.tool })}
@@ -1388,7 +1360,7 @@ function networkDesktop(c, locale, prefix) {
     ${networkEntityNode({ locale, c, prefix, cx: 1340, cy: 790, radius: 92, title: c.entityFour, subtype: c.concept })}
     ${networkEdgeLabel({ locale, x: 450, y: 444, value: labels[0] })}
     ${networkEdgeLabel({ locale, x: 548, y: 574, value: labels[1] })}
-    ${networkEdgeLabel({ locale, x: 1026, y: 528, value: labels[2] })}
+    ${networkEdgeLabel({ locale, x: 900, y: 365, value: labels[2] })}
     ${networkEdgeLabel({ locale, x: 910, y: 786, value: labels[3] })}
     ${networkEdgeLabel({ locale, x: 1324, y: 374, value: labels[4] })}
     ${networkEdgeLabel({ locale, x: 1262, y: 654, value: labels[5] })}
@@ -1401,7 +1373,6 @@ function networkDesktop(c, locale, prefix) {
       height: 58,
       checkOverlap: false,
       content: `
-        <line x1="80" y1="1018" x2="1720" y2="1018" stroke="${C.border}"/>
         ${text({ locale, x: 900, y: 1060, value: c.footer, size: locale === "en" ? 15 : 16, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
       `,
     })}
@@ -1431,13 +1402,13 @@ function networkMobile(c, locale, prefix) {
     })}
     <g data-fit-region="${prefix}-graph-field" data-fit-x="40" data-fit-y="290" data-fit-width="640" data-fit-height="1600" data-check-overlap="true">
     <path d="M292 1110 C394 1028 610 1060 672 1220 C724 1400 680 1720 562 1840 C438 1936 300 1780 286 1550 C270 1360 228 1186 292 1110Z" fill="${C.sageSoft}" fill-opacity="0.76" stroke="#C7DACB" stroke-width="1.8"/>
-    ${text({ locale, x: 520, y: 1070, value: c.entityCommunity, size: 17, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
-    ${text({ locale, x: 520, y: 1096, value: c.communityMethod, size: 14, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
+    ${text({ locale, x: 520, y: 1030, value: c.entityCommunity, size: 17, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
+    ${text({ locale, x: 520, y: 1056, value: c.communityMethod, size: 14, kind: "mono", weight: 500, fill: C.tertiary, anchor: "middle" })}
     ${edge("M224 452 C264 534 284 612 300 658")}
     ${edge("M504 496 C462 560 430 610 414 648")}
     ${edge("M268 610 C300 628 316 650 326 664", C.indigo, 2.1, 0.68)}
     ${edge("M494 650 C466 668 446 684 432 700", C.indigo, 2.1, 0.68)}
-    ${edge("M384 974 C378 1016 386 1054 404 1084", C.indigo, 2.1, 0.66)}
+    ${edge("M514 658 C674 752 656 1016 466 1106", C.indigo, 2.1, 0.66)}
     ${edge("M222 1008 C276 956 290 924 300 892")}
     ${edge("M476 1164 C520 1194 548 1232 558 1266", C.sage, 2.8, 0.78, true)}
     ${edge("M446 1240 C430 1320 416 1384 408 1426", C.sage, 1.8, 0.68, true)}
@@ -1446,9 +1417,9 @@ function networkMobile(c, locale, prefix) {
     ${edge("M400 1590 C430 1644 462 1670 482 1674", C.sage, 1.8, 0.66, true)}
     ${networkSourceNode({ locale, c, prefix, cx: 160, cy: 390, radius: 88, title: c.sourceOne })}
     ${networkSourceNode({ locale, c, prefix, cx: 560, cy: 430, radius: 88, title: c.sourceTwo })}
+    ${networkHero({ locale, c, prefix, cx: 360, cy: 810, mobile: true })}
     ${networkMemoryNode({ locale, c, prefix, cx: 250, cy: 610, id: "mem_42", labelX: 230, labelAnchor: "end", mobile: true })}
     ${networkMemoryNode({ locale, c, prefix, cx: 500, cy: 650, id: "mem_77", labelX: 482, labelAnchor: "end", mobile: true })}
-    ${networkHero({ locale, c, prefix, cx: 360, cy: 810, mobile: true })}
     ${networkKnowledgeNode({ locale, c, prefix, cx: 140, cy: 1070, radius: 82, title: c.linkedPage })}
     ${networkEntityNode({ locale, c, prefix, cx: 406, cy: 1170, radius: 88, title: c.entityOne, subtype: c.project })}
     ${networkEntityNode({ locale, c, prefix, cx: 574, cy: 1348, radius: 78, title: c.entityTwo, subtype: c.tool })}
@@ -1456,7 +1427,7 @@ function networkMobile(c, locale, prefix) {
     ${networkEntityNode({ locale, c, prefix, cx: 536, cy: 1740, radius: 82, title: c.entityFour, subtype: c.concept })}
     ${networkEdgeLabel({ locale, x: 258, y: 544, value: labels[0], size: 17 })}
     ${networkEdgeLabel({ locale, x: 306, y: 686, value: labels[1], size: 17 })}
-    ${networkEdgeLabel({ locale, x: 394, y: 1034, value: labels[2], size: 17 })}
+    ${networkEdgeLabel({ locale, x: 586, y: 986, value: labels[2], size: 17 })}
     ${networkEdgeLabel({ locale, x: 246, y: 970, value: labels[3], size: 17 })}
     ${networkEdgeLabel({ locale, x: 536, y: 1240, value: labels[4], size: 17 })}
     ${networkEdgeLabel({ locale, x: 316, y: 1398, value: labels[5], size: 17 })}
@@ -1469,7 +1440,6 @@ function networkMobile(c, locale, prefix) {
       height: 58,
       checkOverlap: false,
       content: `
-        <line x1="40" y1="1910" x2="680" y2="1910" stroke="${C.border}"/>
         ${text({ locale, x: 360, y: 1952, value: c.footer, size: locale === "en" ? 18 : 19, kind: "mono", weight: 500, fill: C.secondary, anchor: "middle" })}
       `,
     })}
@@ -1597,11 +1567,9 @@ function memoryObjectDesktop(c, locale, prefix) {
       ${oldMemory}
       ${text({ locale, x: 250, y: 826, value: c.oldLinked, size: locale === "en" ? 14 : 15, weight: 600, fill: C.sageDark })}
       <circle cx="102" cy="642" r="5" fill="${C.indigo}"/>
-      <line x1="110" y1="642" x2="188" y2="642" stroke="${C.border}"/>
       ${text({ locale, x: 88, y: 674, value: c.enrich, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
       ${text({ locale, x: 88, y: 696, value: c.enrichDetail, size: locale === "en" ? 14 : 15, weight: 600, fill: C.secondary })}
       <circle cx="102" cy="728" r="5" fill="${C.indigo}"/>
-      <line x1="110" y1="728" x2="188" y2="728" stroke="${C.border}"/>
       ${text({ locale, x: 88, y: 760, value: c.connect, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
       ${text({ locale, x: 88, y: 782, value: c.connectDetail, size: locale === "en" ? 14 : 15, weight: 600, fill: C.secondary })}
     `,
@@ -1670,7 +1638,6 @@ function pageObjectDesktop(c, locale, prefix) {
       ${chip({ locale, x: 1568, y: 350, label: c.current, width: locale === "en" ? 102 : 82, height: 28, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 12 }).markup}
       ${text({ locale, x: 1224, y: 424, value: c.maintainedPage, size: locale === "en" ? 36 : 34, kind: "heading", weight: 600 })}
       ${text({ locale, x: 1224, y: 454, value: c.pageMeta, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
-      <line x1="1224" y1="482" x2="1670" y2="482" stroke="${C.border}"/>
       <rect x="1224" y="514" width="280" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="1224" y="536" width="346" height="9" rx="4.5" fill="#E3E7EE"/>
       ${chip({ locale, x: 1580, y: 505, label: "source_07", width: 108, height: 30, mono: true }).markup}
@@ -1679,7 +1646,6 @@ function pageObjectDesktop(c, locale, prefix) {
       <rect x="1236" y="620" width="250" height="8" rx="4" fill="#BFD0C2"/>
       <rect x="1236" y="640" width="322" height="8" rx="4" fill="#D6E2D8"/>
       ${chip({ locale, x: 1570, y: 606, label: "mem_77", width: 88, height: 30, fill: C.surface, stroke: "#C7DACB", color: C.sageDark, mono: true }).markup}
-      <line x1="1224" y1="702" x2="1670" y2="702" stroke="${C.border}"/>
       ${text({ locale, x: 1224, y: 738, value: c.prior, size: locale === "en" ? 15 : 16, weight: 600, fill: C.sageDark })}
       ${text({ locale, x: 1638, y: 738, value: c.versions, size: 13, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
       <path d="M1408 784 V822" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
@@ -1710,7 +1676,6 @@ function lifecycleFooterDesktop(c, locale, prefix) {
     height: 106,
     checkOverlap: false,
     content: `
-      <line x1="74" y1="966" x2="1726" y2="966" stroke="${C.border}"/>
       ${text({ locale, x: 88, y: 1007, value: c.background, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
       ${phaseMarkup}
       ${text({ locale, x: 724, y: 1007, value: c.runs, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
@@ -1777,7 +1742,6 @@ function memoryObjectMobile(c, locale, prefix) {
       <path d="M266 880 H354" stroke="${C.indigo}" stroke-width="1.6" marker-end="url(#${prefix}-arrow)"/>
       ${chip({ locale, x: 372, y: 860, label: "mem_42", width: 96, height: 36, fill: C.indigoSoft, stroke: "#D2CFF0", color: C.indigo, mono: true, size: 18 }).markup}
       ${text({ locale, x: 158, y: 928, value: c.oldLinked, size: locale === "en" ? 24 : 25, weight: 600, fill: C.sageDark })}
-      <line x1="126" y1="982" x2="666" y2="982" stroke="${C.border}"/>
       <circle cx="142" cy="1012" r="5" fill="${C.indigo}"/>
       ${text({ locale, x: 160, y: 1006, value: c.enrich, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       ${text({ locale, x: 160, y: 1040, value: c.enrichDetail, size: locale === "en" ? 22 : 23, weight: 600, fill: C.secondary })}
@@ -1797,13 +1761,12 @@ function refineryHubMobile(c, locale, prefix) {
     height: 630,
     checkOverlap: false,
     content: `
-      <line x1="40" y1="1090" x2="680" y2="1090" stroke="${C.border}"/>
       <rect x="214" y="1142" width="292" height="94" rx="8" fill="${C.raised}" stroke="${C.border}"/>
       ${documentGlyph({ x: 240, y: 1174, color: C.secondary })}
       ${text({ locale, x: 282, y: 1178, value: c.sourceChanged, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       ${text({ locale, x: 282, y: 1212, value: "source_11", size: 28, kind: "heading", weight: 600 })}
       <path d="M360 1236 V1300" fill="none" stroke="${C.indigo}" stroke-width="2" marker-end="url(#${prefix}-arrow)"/>
-      <path d="M310 1092 C310 1150 248 1250 250 1352" fill="none" stroke="${C.indigo}" stroke-width="1.8" marker-end="url(#${prefix}-arrow)"/>
+      <path d="M126 900 C74 976 142 1124 250 1352" fill="none" stroke="${C.indigo}" stroke-width="1.8" marker-end="url(#${prefix}-arrow)"/>
       ${text({ locale, x: 62, y: 1274, value: c.memoryCorrected, size: 20, kind: "mono", weight: 500, fill: C.indigo })}
       <circle cx="360" cy="1420" r="126" fill="${C.surface}" stroke="${C.border}"/>
       <circle cx="360" cy="1420" r="98" fill="none" stroke="${C.indigo}" stroke-width="3" stroke-dasharray="122 30"/>
@@ -1836,7 +1799,6 @@ function pageObjectMobile(c, locale, prefix) {
     height: 780,
     checkOverlap: false,
     content: `
-      <line x1="40" y1="1750" x2="680" y2="1750" stroke="${C.border}"/>
       ${text({ locale, x: 40, y: 1794, value: c.pageLabel, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       ${text({ locale, x: 40, y: 1842, value: c.pageTitle, size: locale === "en" ? 34 : 36, kind: "heading", weight: 600 })}
       <rect x="92" y="1928" width="520" height="454" rx="8" fill="${C.raised}" stroke="${C.border}"/>
@@ -1851,7 +1813,6 @@ function pageObjectMobile(c, locale, prefix) {
       ${chip({ locale, x: 518, y: 1888, label: c.current, width: locale === "en" ? 108 : 88, height: 38, fill: C.sageSoft, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 18 }).markup}
       ${text({ locale, x: 170, y: 1970, value: c.maintainedPage, size: locale === "en" ? 36 : 34, kind: "heading", weight: 600 })}
       ${text({ locale, x: 170, y: 2004, value: c.pageMeta, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
-      <line x1="170" y1="2032" x2="626" y2="2032" stroke="${C.border}"/>
       <rect x="170" y="2064" width="276" height="9" rx="4.5" fill="#D9DEE7"/>
       <rect x="170" y="2088" width="338" height="9" rx="4.5" fill="#E3E7EE"/>
       ${chip({ locale, x: 504, y: 2052, label: "source_07", width: 122, height: 38, mono: true, size: 18 }).markup}
@@ -1860,7 +1821,6 @@ function pageObjectMobile(c, locale, prefix) {
       <rect x="182" y="2180" width="250" height="8" rx="4" fill="#BFD0C2"/>
       <rect x="182" y="2202" width="316" height="8" rx="4" fill="#D6E2D8"/>
       ${chip({ locale, x: 508, y: 2165, label: "mem_77", width: 96, height: 38, fill: C.surface, stroke: "#C7DACB", color: C.sageDark, mono: true, size: 18 }).markup}
-      <line x1="170" y1="2264" x2="626" y2="2264" stroke="${C.border}"/>
       ${text({ locale, x: 170, y: 2300, value: c.prior, size: locale === "en" ? 24 : 25, weight: 600, fill: C.sageDark })}
       ${text({ locale, x: 612, y: 2326, value: c.versions, size: 20, kind: "mono", weight: 500, fill: C.tertiary, anchor: "end" })}
       <path d="M398 2340 V2400" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
@@ -1900,7 +1860,6 @@ function lifecycleFooterMobile(c, locale, prefix) {
     height: 220,
     checkOverlap: false,
     content: `
-      <line x1="40" y1="2550" x2="680" y2="2550" stroke="${C.border}"/>
       ${text({ locale, x: 40, y: 2590, value: c.background, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
       ${phases}
       ${text({ locale, x: 40, y: 2682, value: c.runs, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c19db1b5a08a0ead94e02d391920ed034537c47b71d1f72f696966fee37825ad -->
+<!-- README_SYNC: source=README.md sha256=2a49328fcd22bc919f7d58a62912f8e211ad0c4412e5f75b2f8213128ef70308 -->
 
 <p align="center">
   <picture>
@@ -41,7 +41,6 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
   <a href="#mcp-setup">连接你的 AI</a>
 </p>
 
----
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -128,7 +127,6 @@ npx -y wenlan setup
 </details>
 
 
----
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -165,7 +163,7 @@ Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选�
 - **记忆保留工作真正教会你的内容。** AI agent 捕获原子的决策、经验、修正与取代关系，并保留出处。
 - **页面汇总当前知识。** Wenlan 把相关来源与记忆整理成带引用的 Markdown，让你反复使用、刷新与审核。
 
-**更新方式：** 来源与捕获的记忆都可以作为同一页面的依据。记忆历史记录各项决策的变化；页面历史则记录支撑页面的依据与修订。自动更新时，符合条件、由系统维护的页面可以直接更新；你编辑过的页面则会收到修订提案。审核让你决定是否应用更新，但不代表 AI 的结论一定正确。
+**更新方式：** 来源与捕获的记忆都可以作为同一页面的依据。记忆历史记录各项记忆的变化；页面历史则记录支撑页面的依据与修订。自动更新时，符合条件、由系统维护的页面可以直接更新；你编辑过的页面则会收到修订提案。审核让你决定是否应用更新，但不代表 AI 的结论一定正确。
 
 技术读者可参考：Wenlan 遵循 LLM wiki 模式。数据模型、检索与维护规则请见 [LLM-wiki 实现指南](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory) 和[技术基础](docs/technical-foundations.md)。
 
@@ -239,10 +237,10 @@ Capture 与明确的 supersession 属于核心流程。模型支持的阶段只�
 | 操作 | Wenlan 做什么 |
 |---|---|
 | **Capture** | AI agent 每次写入一条完整、自足的想法，遵循 Zettelkasten 的原子笔记原则，而不是保存整段对话。 |
-| **Classify** | 配置本地模型后，Wenlan 将记忆分为 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；调用方明确提供的准确类型优先。 |
-| **Enrich** | 配置本地模型后，在可用时补充结构化字段、检索提示、事件日期、质量、重要性与标签。 |
+| **Classify** | 配置语言模型后，Wenlan 将记忆分为 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；调用方明确提供的准确类型优先。 |
+| **Enrich** | 配置语言模型后，在可用时补充结构化字段、检索提示、事件日期、质量、重要性与标签。 |
 | **Link** | 保留出处；启用 enrichment 后，把记忆连接到知识图谱中的实体与关系。 |
-| **Reconcile** | 明确取代旧说法时保留 `supersedes` 链。若发起替换的 agent 信任级别低于 full，该替换会自动进入人工审核队列，无需任何开关。可选的本地模型流程还可以把受保护内容的冲突放入审核，而不是覆盖历史；这个流程默认关闭，必须明确启用。 |
+| **Reconcile** | 明确取代旧说法时保留 `supersedes` 链。若发起替换的 agent 信任级别低于 full，该替换会自动进入人工审核队列，无需任何开关。可选的模型流程还可以把受保护内容的冲突放入审核，而不是覆盖历史；这个流程默认关闭，必须明确启用。 |
 
 高级设置：使用 `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` 启用这个 Reconcile 流程。
 
@@ -282,7 +280,6 @@ a1b2c3d distill: 4 pages
 
 </details>
 
----
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
@@ -332,7 +329,6 @@ a1b2c3d distill: 4 pages
 
 **从一段值得留下的对话开始。** [开始使用](#start-in-30-seconds)。想之后再试，也可以先给这个 repo 一颗 Star，方便回来找到它。
 
----
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -396,7 +392,6 @@ AI 工具连接好后，可以直接这样说：
 
 卸载：app 中「登录时在后台运行文澜」开关会移除开机注册——关闭它并退出，删除 `Wenlan.app` 或运行 Windows 卸载程序，然后删除上述文件夹。`wenlan background off` 只会停止守护进程并关闭开机自启，不会移除开机注册；仅使用 CLI 的安装请改为参照 [PRIVACY.md](docs/PRIVACY.md) 中守护进程的卸载条目。Wenlan 写入的路径列在其中。
 
----
 
 <a id="evaluation"></a>
 
@@ -411,7 +406,6 @@ AI 工具连接好后，可以直接这样说：
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
----
 
 <a id="learn-more"></a>
 
@@ -448,7 +442,6 @@ AI 工具连接好后，可以直接这样说：
 - [Wenlan 与 claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan 与 Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
----
 
 ## 贡献
 
@@ -467,7 +460,6 @@ pnpm build:all
 
 `pnpm dev:all` 是桌面 app 受支持的开发入口。它让开发用的端口、数据、进程归属、app 标识、MCP socket 与 Remote Access 状态都与已安装的生产运行时隔离；未处于该隔离环境的 debug build 会拒绝启动。完整开发流程见本 repository 的 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](.github/CONTRIBUTING.md)，以及仓库内的 [app/AGENTS.md](app/AGENTS.md)。安全性问题请见 [SECURITY.md](.github/SECURITY.md)，隐私政策请见 [PRIVACY.md](docs/PRIVACY.md)，也请阅读 [Code of Conduct](.github/CODE_OF_CONDUCT.md)。
 
----
 
 <a id="code-signing-policy"></a>
 
@@ -485,7 +477,6 @@ Free code signing provided by [SignPath.io](https://about.signpath.io), certific
 
 SignPath 的申请正在审核中，Windows 安装包尚未签名。
 
----
 
 <a id="license"></a>
 
@@ -498,7 +489,6 @@ Wenlan 采用两种许可，按 repository 的不同部分划分。
 
 这个划分是有意为之。Apache-2.0 的代码可以用在 AGPL-3.0 程序里，所以桌面 app 建立在 runtime 之上，两种许可都不会被违反。
 
----
 
 <a id="acknowledgments"></a>
 

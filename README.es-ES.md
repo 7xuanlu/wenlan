@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c19db1b5a08a0ead94e02d391920ed034537c47b71d1f72f696966fee37825ad -->
+<!-- README_SYNC: source=README.md sha256=2a49328fcd22bc919f7d58a62912f8e211ad0c4412e5f75b2f8213128ef70308 -->
 
 <p align="center">
   <picture>
@@ -41,7 +41,6 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
   <a href="#mcp-setup">Conectar&nbsp;tu&nbsp;IA</a>
 </p>
 
----
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -129,7 +128,6 @@ Instrucciones manuales y específicas por herramienta: [Configuración asistida 
 </details>
 
 
----
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -166,7 +164,7 @@ Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puede
 - **Las Memorias preservan lo que el trabajo te enseña.** Los agentes capturan decisiones atómicas, lecciones, correcciones y sustituciones con procedencia.
 - **Las Páginas compilan el conocimiento actual.** Wenlan convierte Fuentes y Memorias relevantes en Markdown con citas de fuente que puedes reutilizar, actualizar y revisar.
 
-**Cómo se actualizan las páginas:** Tanto las Fuentes como las Memorias capturadas pueden sustentar una misma Página. El historial de Memoria registra los cambios en cada decisión; el historial de la Página registra las fuentes que la sustentan y sus revisiones. Durante la actualización automática, las Páginas elegibles mantenidas por el sistema pueden actualizarse directamente; las que hayas editado reciben una revisión propuesta. La revisión te permite decidir si aplicarla; no garantiza que la conclusión de la IA sea correcta.
+**Cómo se actualizan las páginas:** Tanto las Fuentes como las Memorias capturadas pueden sustentar una misma Página. El historial de Memoria registra los cambios en cada Memoria; el historial de la Página registra las fuentes que la sustentan y sus revisiones. Durante la actualización automática, las Páginas elegibles mantenidas por el sistema pueden actualizarse directamente; las que hayas editado reciben una revisión propuesta. La revisión te permite decidir si aplicarla; no garantiza que la conclusión de la IA sea correcta.
 
 Para lectores técnicos: Wenlan sigue el patrón de las wikis para LLM. Consulta la [guía de implementación de LLM wiki](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) y los [fundamentos técnicos](docs/technical-foundations.md) para conocer el modelo de datos, la recuperación y las reglas de mantenimiento.
 
@@ -240,10 +238,10 @@ La captura y la sustitución explícita son fundamentales. Las etapas basadas en
 | Operación | Lo que hace Wenlan |
 |---|---|
 | **Captura** | Los agentes escriben una idea completa y autónoma por Memoria, siguiendo el principio de nota atómica de Zettelkasten en lugar de guardar toda la conversación. |
-| **Clasifica** | Con el modelo en el dispositivo, Wenlan asigna `identity` (identidad), `preference` (preferencia), `decision` (decisión), `lesson` (lección), `gotcha` (advertencia) o `fact` (hecho); un tipo preciso proporcionado por el cliente tiene prioridad. |
-| **Enriquece** | Con el modelo en el dispositivo, añade campos estructurados, pistas de recuperación, fechas de eventos, calidad, importancia y etiquetas cuando estén disponibles. |
+| **Clasifica** | Con un modelo de lenguaje configurado, Wenlan asigna `identity` (identidad), `preference` (preferencia), `decision` (decisión), `lesson` (lección), `gotcha` (advertencia) o `fact` (hecho); un tipo preciso proporcionado por el cliente tiene prioridad. |
+| **Enriquece** | Con un modelo de lenguaje configurado, añade campos estructurados, pistas de recuperación, fechas de eventos, calidad, importancia y etiquetas cuando estén disponibles. |
 | **Vincula** | Mantiene la procedencia y, cuando el enriquecimiento está habilitado, conecta Memorias con entidades y relaciones en el grafo de conocimiento. |
-| **Reconcilia** | Los reemplazos explícitos preservan una cadena de `supersedes` (sustituye). Un reemplazo de un agente cuyo nivel de confianza sea inferior a "full" se pone en cola para revisión humana automáticamente, sin necesidad de ninguna opción. Un paso opcional en el dispositivo también puede poner en cola conflictos protegidos para revisión en lugar de sobrescribir el historial; ese paso está desactivado por defecto y debe habilitarse explícitamente. |
+| **Reconcilia** | Los reemplazos explícitos preservan una cadena de `supersedes` (sustituye). Un reemplazo de un agente cuyo nivel de confianza sea inferior a "full" se pone en cola para revisión humana automáticamente, sin necesidad de ninguna opción. Un paso opcional basado en un modelo también puede poner en cola conflictos protegidos para revisión en lugar de sobrescribir el historial; ese paso está desactivado por defecto y debe habilitarse explícitamente. |
 
 Configuración avanzada: establece `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` para habilitar ese paso de reconciliación.
 
@@ -283,7 +281,6 @@ a1b2c3d distill: 4 pages
 
 </details>
 
----
 
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
@@ -333,7 +330,6 @@ La organización y las actualizaciones de Páginas en segundo plano son opcional
 
 **Empieza con una conversación que merezca conservarse.** [Primeros pasos](#start-in-30-seconds). Si prefieres probarlo más adelante, guarda este repositorio con una estrella.
 
----
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -397,7 +393,6 @@ Nada queda encerrado. Las páginas y las notas de sesión son Markdown en `~/.we
 
 Para desinstalar: el interruptor *Ejecutar Wenlan en segundo plano al iniciar sesión* de la app elimina el registro de arranque — desactívalo, cierra la app y borra `Wenlan.app` o ejecuta el desinstalador de Windows, y después borra las carpetas anteriores. `wenlan background off` solo detiene el daemon y desactiva el arranque automático; no elimina el registro de arranque, así que una instalación solo de CLI debe seguir en su lugar el punto de desinstalación del daemon en [PRIVACY.md](docs/PRIVACY.md). Las rutas que Wenlan escribe están ahí.
 
----
 
 <a id="evaluation"></a>
 
@@ -412,7 +407,6 @@ Esto es una instantánea de solo recuperación, no una afirmación sobre la cali
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
----
 
 <a id="learn-more"></a>
 
@@ -449,7 +443,6 @@ Documentación más detallada, conceptos y comparaciones:
 - [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
----
 
 ## Contribuir
 
@@ -468,7 +461,6 @@ pnpm build:all
 
 `pnpm dev:all` es el punto de entrada de desarrollo admitido para la aplicación de escritorio. Mantiene los puertos de desarrollo, los datos, la propiedad de los procesos, la identidad de la aplicación, los sockets MCP y el estado de Remote Access separados del runtime de producción instalado; una compilación de depuración iniciada sin ese aislamiento se niega a ejecutarse. Consulta el [AGENTS.md](AGENTS.md) y [CONTRIBUTING.md](.github/CONTRIBUTING.md) de este repositorio, además del [app/AGENTS.md](app/AGENTS.md) dentro del repositorio, para el flujo de trabajo de desarrollo completo. Reportes de seguridad: [SECURITY.md](.github/SECURITY.md). Política de privacidad: [PRIVACY.md](docs/PRIVACY.md). Por favor, lee también el [Código de Conducta](.github/CODE_OF_CONDUCT.md).
 
----
 
 <a id="code-signing-policy"></a>
 
@@ -486,7 +478,6 @@ La autenticación multifactor es obligatoria para cada mantenedor, en GitHub y e
 
 La solicitud a SignPath está pendiente. Los instaladores de Windows aún no están firmados.
 
----
 
 <a id="license"></a>
 
@@ -499,7 +490,6 @@ Wenlan usa dos licencias, una por cada parte del repositorio.
 
 La separación es deliberada. El código Apache-2.0 puede usarse dentro de un programa AGPL-3.0, así que la aplicación de escritorio se apoya en el runtime sin que ninguna de las dos licencias se incumpla.
 
----
 
 <a id="acknowledgments"></a>
 
