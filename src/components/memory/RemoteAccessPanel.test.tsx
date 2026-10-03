@@ -97,6 +97,12 @@ describe("RemoteAccessPanel consent and connection", () => {
     await waitFor(() => expect(mocks.clipboardWrite).toHaveBeenCalledWith(pairing.resource));
     expect(screen.queryByText(/private.trycloudflare/)).not.toBeInTheDocument();
   });
+  it("labels the URL for web and mobile apps and sends local apps to Add a tool", async () => {
+    await connectedPanel();
+    expect(screen.getByRole("heading", { name: "MCP URL for web and mobile apps" })).toBeInTheDocument();
+    expect(screen.queryByText(/Codex MCP URL/)).not.toBeInTheDocument();
+    expect(screen.getByText(/like Codex or Claude Code, use Add a tool above/)).toBeInTheDocument();
+  });
   it("reconnect restarts transport at the saved revision without disabling or reconfiguring", async () => {
     await connectedPanel();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));

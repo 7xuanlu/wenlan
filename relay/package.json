@@ -22,8 +22,8 @@
   "overrides": {
     "miniflare@4.20260730.0": {
       "sharp": "0.35.4",
-      "undici": "7.29.0",
       "workerd": "1.20260911.1"
-    }
+    },
+    "undici": "7.29.1"
   }
 }
