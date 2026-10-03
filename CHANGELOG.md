@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.16](https://github.com/7xuanlu/wenlan/compare/v0.18.15...v0.18.16) (2026-10-03)
+
+
+### Bug Fixes
+
+* **connect:** send local AI apps to Add a tool instead of the relay ([#787](https://github.com/7xuanlu/wenlan/issues/787)) ([bf9047b](https://github.com/7xuanlu/wenlan/commit/bf9047bf5f3102dc8c8079bc15c01fea9f5e3182))
+
 ## [0.18.15](https://github.com/7xuanlu/wenlan/compare/v0.18.14...v0.18.15) (2026-10-03)
 
 
