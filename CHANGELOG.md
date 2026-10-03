@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.15](https://github.com/7xuanlu/wenlan/compare/v0.18.14...v0.18.15) (2026-10-03)
+
+
+### Bug Fixes
+
+* **plugin:** install the runtime through the pinned npm package, not a piped script ([#790](https://github.com/7xuanlu/wenlan/issues/790)) ([b12461b](https://github.com/7xuanlu/wenlan/commit/b12461bfb29fbbe4944d73e881aa24f1a6d39bbe))
+
 ## [0.18.14](https://github.com/7xuanlu/wenlan/compare/v0.18.13...v0.18.14) (2026-09-30)
 
 
