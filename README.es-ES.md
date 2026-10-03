@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2a49328fcd22bc919f7d58a62912f8e211ad0c4412e5f75b2f8213128ef70308 -->
+<!-- README_SYNC: source=README.md sha256=ded9b35985717fdb3b754a62ea18939036a30e8656b4601bb2f4f9842b5192fb -->
 
 <p align="center">
   <picture>
@@ -35,12 +35,6 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 <p align="center">
   <sub>Una Página mantenida en la aplicación de escritorio: abre cualquier cita para inspeccionar la Fuente o Memoria detrás de la afirmación.</sub>
 </p>
-
-<p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest">Descargar&nbsp;la&nbsp;aplicación</a> ·
-  <a href="#mcp-setup">Conectar&nbsp;tu&nbsp;IA</a>
-</p>
-
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>

@@ -34,12 +34,6 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
   <sub>A maintained Page in the desktop app: open any citation to inspect the Source or Memory behind the claim.</sub>
 </p>
 
-<p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest">Download&nbsp;the&nbsp;app</a> ·
-  <a href="#mcp-setup">Connect&nbsp;your&nbsp;AI</a>
-</p>
-
-
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
 

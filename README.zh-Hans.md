@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2a49328fcd22bc919f7d58a62912f8e211ad0c4412e5f75b2f8213128ef70308 -->
+<!-- README_SYNC: source=README.md sha256=ded9b35985717fdb3b754a62ea18939036a30e8656b4601bb2f4f9842b5192fb -->
 
 <p align="center">
   <picture>
@@ -35,12 +35,6 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 <p align="center">
   <sub>桌面 app 中持续维护的页面：打开任意引用，就能检查这条结论背后的来源或记忆。</sub>
 </p>
-
-<p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest">下载&#8288;桌面&#8288;版</a> ·
-  <a href="#mcp-setup">连接你的 AI</a>
-</p>
-
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
