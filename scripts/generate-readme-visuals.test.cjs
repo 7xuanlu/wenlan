@@ -6,6 +6,7 @@ const test = require("node:test");
 
 const {
   checkPngMatchesExpected,
+  makeBanner,
 } = require("./generate-readme-visuals.cjs");
 const {
   family,
@@ -13,6 +14,40 @@ const {
 } = require("./readme-product-visuals.cjs");
 
 const ASSET_DIR = path.resolve(__dirname, "..", "docs", "assets");
+
+test("approved banners use the simple four-locale tagline and preserve HEAD geometry", () => {
+  const expected = {
+    en: ["A living personal wiki.", "AI organizes. You stay in control."],
+    "zh-Hant": ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
+    "zh-Hans": ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
+    "es-ES": ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+  };
+
+  for (const [locale, lines] of Object.entries(expected)) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const banner = makeBanner(viewport, locale);
+      const suffix = locale === "en" ? "" : `-${locale}`;
+      assert.equal(banner.name, `readme-banner${suffix}${viewport === "mobile" ? "-mobile" : ""}`);
+      assert.deepEqual([banner.width, banner.height], viewport === "desktop" ? [1280, 440] : [720, 300]);
+      assert.match(banner.svg, new RegExp(`>${lines[0].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
+      assert.match(banner.svg, new RegExp(`>${lines[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
+      assert.equal((banner.svg.match(/letter-spacing="4"/gu) ?? []).length, 1);
+      assert.doesNotMatch(banner.svg, /data-fit-region|input-1|input-2|topic-page|\[1\]|\[2\]/u);
+      assert.match(
+        banner.svg,
+        viewport === "desktop"
+          ? /transform="translate\(144 104\) scale\(0\.453125\)"/u
+          : /transform="translate\(294 30\) scale\(0\.2578125\)"/u,
+      );
+      assert.match(
+        banner.svg,
+        viewport === "desktop"
+          ? /<rect x="64" y="28" width="1152" height="384" rx="30"/u
+          : /<rect x="24" y="16" width="672" height="268" rx="24"/u,
+      );
+    }
+  }
+});
 
 test("PNG verification rejects different content with identical dimensions", async () => {
   const expectedPath = path.join(ASSET_DIR, "wenlan-system.png");

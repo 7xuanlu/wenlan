@@ -1,13 +1,15 @@
-<!-- README_SYNC: source=README.md sha256=040c28938eb21aaff4ce53163bcd0c396dcbdb1c334cf835c8e50749761de70d -->
+<!-- README_SYNC: source=README.md sha256=603283f413172fd3f030ff46b9874aabde127cbd4434e6b1b4a4f6720400154c -->
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan：有来源支撑、会持续积累的知识库。" width="100%">
+    <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-zh-Hans-mobile.png">
+    <img src="./docs/assets/readme-banner-zh-Hans.png" alt="Wenlan：持续更新的个人维基。AI 帮你整理，你保有主导权。" width="100%">
   </picture>
 </p>
 
-和 AI 聊出的成果，不该在对话结束后消失。Wenlan 会建立真正需要的页面，并在来源变化时让它们保持最新；只有需要判断时才找你。
+Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链接的页面，让你和 AI 工具在已有成果上继续工作。
+
+来源有变，AI 跟着更新页面。如果你编辑过页面，Wenlan 会提出修订，让你确认是否采用，而不是自动覆盖你的内容。
 
 <p align="center">
   <a href="./README.md">English</a> | 简体中文 | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
@@ -28,10 +30,15 @@
   <a href="#learn-more">进&#8288;一&#8288;步&#8288;了&#8288;解</a>
 </p>
 
-https://github.com/user-attachments/assets/418c9006-80bd-4250-b28a-f3914e47749c
+https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 <p align="center">
   <sub>桌面 app 中持续维护的页面：打开任意引用，就能检查这条结论背后的来源或记忆。</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/7xuanlu/wenlan/releases/latest">下载&#8288;桌面&#8288;版</a> ·
+  <a href="#mcp-setup">让&#8288;你的&#8288; AI &#8288;完成&#8288;设置</a>
 </p>
 
 ---
@@ -40,6 +47,8 @@ https://github.com/user-attachments/assets/418c9006-80bd-4250-b28a-f3914e47749c
 <a id="start-in-30-seconds"></a>
 
 ## 开始使用
+
+**开始前请注意：** 保存和搜索不需要生成式模型；后台 AI 整理需要配置受支持的本地或云端模型。你也可以改用已连接的 AI 工具明确整理页面。只安装 Wenlan 不会启用自动页面生成。
 
 Wenlan 以单个本地 daemon 运行。桌面 app 内置这个 daemon；无 GUI 的安装方式提供的是同一个 daemon，只是没有窗口。两种方式下，你的 AI 客户端访问的都是同一个知识库。
 
@@ -86,7 +95,7 @@ npx -y wenlan setup
 
 这个命令会下载预编译的 CLI、后台服务（daemon）与 MCP 连接器，启动并验证本地服务；不需要安装 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以采用自动化的 [shell 设置流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 请从 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下载对应的 archive。macOS Intel 目前[没有受支持的完整 runtime 安装方式](crates/wenlan-cli/README.md#macos-intel)。
 
-手动与各 client 设置说明：[AI 辅助设置](docs/setup-with-ai.md) · [Claude Code plugin](plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 与 MCP](crates/wenlan-cli/README.md)。
+手动与各 client 设置说明：[AI 辅助设置](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 与 MCP](crates/wenlan-cli/README.md)。
 
 ---
 
@@ -95,7 +104,7 @@ npx -y wenlan setup
 
 ## 这是什么？
 
-Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新、每个结论都能追溯来源的知识库。原始材料保留为来源；工作中的决策、经验与修正成为长期记忆；两者都能支撑同一批持续维护的页面。
+Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选定的文档和对话，记下过程中的决定，再把它们整理成可阅读、编辑和重用的页面。页面生成与后台维护需要先配置[AI 路径](#models-and-privacy)。
 
 <p align="center">
   <picture>
@@ -106,7 +115,7 @@ Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新
 
 <a id="what-wenlan-is-not"></a>
 
-**适合需要长期延续的工作。** Wenlan 面向研究者、写作者、顾问、产品团队与软件团队：当知识散落在文档、笔记和 AI 对话里，它会把这些材料变成可检查、能随项目持续改进的页面，而不是另一份聊天记录或孤立的记忆库。它不是生活管理系统，也不是嵌入其他产品的 memory SDK。
+**适合需要长期延续的工作。** 如果你连续几天或几周用 AI 处理同一个主题，却常常要翻找之前的资料、重新解释已经做出的决定，Wenlan 就是为这种工作流程设计的。它不是生活管理系统，也不是嵌入其他产品的 memory SDK。你仍可继续使用 Obsidian；Wenlan 不承诺替代它的插件或迁移 vault 的所有功能。
 
 **一个知识系统，三种角色：**
 
@@ -114,14 +123,9 @@ Wenlan 把文档、笔记和过去的 AI 对话整理成会随工作持续更新
 - **记忆保留工作真正教会你的内容。** AI agent 捕获原子的决策、经验、修正与取代关系，并保留出处。
 - **页面汇总当前知识。** Wenlan 把相关来源与记忆整理成带引用的 Markdown，让你反复使用、刷新与审核。
 
-**在 LLM-wiki 的基础上继续推进：**
+**更新方式：** 来源与捕获的记忆都可以作为同一页面的依据。记忆历史记录各项决策的变化；页面历史则记录支撑页面的依据与修订。自动更新时，符合条件、由系统维护的页面可以直接更新；你编辑过的页面则会收到修订提案。审核让你决定是否应用更新，但不代表 AI 的结论一定正确。
 
-- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：** Karpathy 提出不可变的来源、由 AI 维护的 Markdown Wiki，以及会随你和 AI 一起演进、规定组织与维护方式的 Schema（规则层）。Wenlan 以[类型化记忆字段](docs/technical-foundations.md#typed-memory-schema)与内建规则，落实页面结构、出处、引用、刷新、归属和审核。
-- **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2)：** Rohitg00 加入记忆生命周期。Wenlan 把这个方向做成可以直接使用的产品：可追溯的来源、由 AI agent 按 Zettelkasten（卡片盒笔记法）捕获的原子记忆（每条只表达一个完整想法），以及同时由两者建立并持续维护的页面。
-
-完整流程请见 [LLM-wiki 实现指南](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory)。
-
-**Wenlan 最独特的做法：** 来源与原子记忆会分别支撑持续维护的页面。记忆历史保留知识如何改变；页面历史说明当前结论由哪些依据支撑。机器维护的页面可以依当前依据重建；对人工文字的改动则成为可审核的修订，不会直接覆盖。
+技术读者可参考：Wenlan 遵循 LLM wiki 模式。数据模型、检索与维护规则请见 [LLM-wiki 实现指南](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory) 和[技术基础](docs/technical-foundations.md)。
 
 <a id="knowledge-graph"></a>
 
@@ -200,9 +204,11 @@ Capture 与明确的 supersession 属于核心流程。模型支持的阶段只�
 | **Cite** | 保留引用记录与验证状态；自动 refresh 若未通过引用支撑检查，就会丢弃草稿。 |
 | **Track** | 记录哪些证据支撑页面、页面为何过时，以及有上限的变更记录。 |
 | **Refresh** | 页面被标记为过时后，依当前证据重建符合条件、由机器维护的页面。 |
-| **Review** | 对你编辑过的页面提出修订，而不是静默改写。 |
+| **Review** | 自动更新时，对你编辑过的页面提出修订，而非静默改写。 |
 
-例如，导入一份设计文档，再让 Codex 捕获一次调试决策。Wenlan 可以把两者整理成一个同时引用两份依据的页面。这个页面 refresh 时，会依当前依据重建；如果你已经编辑过它，改动提案会等待审核。
+例如，导入一份设计文档，再让 Codex 记下一项调试决策。Wenlan 可以把两者整理成同一个页面，并引用两者。自动更新时，页面会依据当前材料重建；如果你编辑过它，更新提案会等你审核。
+
+**审核范围：** 这是一项更新政策，不是保护你文件的安全机制。直接编辑文件或通过本地手动编辑 API 所做的修改，不会进入这个审核队列。明确强制重新生成也可能替换已编辑的页面；桌面 app 会在执行前要求确认。
 
 <a id="local-markdown"></a>
 
@@ -268,6 +274,8 @@ a1b2c3d distill: 4 pages
 ### 离线队列（outbox）
 
 如果本地守护进程无法访问，`wenlan capture` 和 `wenlan brief update` 会把请求写入本地持久化队列（outbox）并正常退出。守护进程恢复后，它会通过常规 HTTP 路由排空这些写入；用 `wenlan outbox status` 查看队列，或用 `wenlan outbox drain` 立即重放。被守护进程直接拒绝的写入（4xx，例如未通过内容质量检查）会带着回执移动到 `outbox/failed/`，而不是无限重试；传输失败或服务器错误（5xx）则留在队列中等待下一次排空，排空每 60 秒自动运行一次。
+
+<a id="models-and-privacy"></a>
 
 ### 模型与隐私
 

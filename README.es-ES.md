@@ -1,13 +1,15 @@
-<!-- README_SYNC: source=README.md sha256=040c28938eb21aaff4ce53163bcd0c396dcbdb1c334cf835c8e50749761de70d -->
+<!-- README_SYNC: source=README.md sha256=603283f413172fd3f030ff46b9874aabde127cbd4434e6b1b4a4f6720400154c -->
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan: tu base de conocimientos respaldada por fuentes, diseñada para acumular valor con el tiempo." width="100%">
+    <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-es-ES-mobile.png">
+    <img src="./docs/assets/readme-banner-es-ES.png" alt="Wenlan: Una wiki personal viva. La IA organiza. Tú tienes el control." width="100%">
   </picture>
 </p>
 
-El trabajo útil con IA no debería desaparecer cuando termina una conversación. Wenlan construye las páginas adecuadas y las mantiene actualizadas a medida que las fuentes cambian, solicitando intervención solo cuando se requiere criterio humano.
+Wenlan convierte tus documentos, notas y conversaciones con IA en páginas editables con enlaces a sus fuentes, para que tú y tus herramientas de IA podáis seguir trabajando a partir de ellas.
+
+Cuando las fuentes cambian, la IA mantiene las páginas al día. Si has editado una página, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
@@ -28,10 +30,15 @@ El trabajo útil con IA no debería desaparecer cuando termina una conversación
   <a href="#learn-more">Leer&nbsp;más</a>
 </p>
 
-https://github.com/user-attachments/assets/d8b2ad4a-f97a-4a15-97a8-9105478de18a
+https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>Una Página mantenida en la aplicación de escritorio: abre cualquier cita para inspeccionar la Fuente o Memoria detrás de la afirmación.</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/7xuanlu/wenlan/releases/latest">Descargar&nbsp;la&nbsp;aplicación</a> ·
+  <a href="#mcp-setup">Configurar&nbsp;con&nbsp;tu&nbsp;IA</a>
 </p>
 
 ---
@@ -40,6 +47,8 @@ https://github.com/user-attachments/assets/d8b2ad4a-f97a-4a15-97a8-9105478de18a
 <a id="start-in-30-seconds"></a>
 
 ## Primeros pasos
+
+**Antes de empezar:** guardar y buscar no requieren un modelo generativo. La organización en segundo plano mediante IA requiere configurar un modelo local o en la nube. Como alternativa, usa una herramienta de IA conectada para organizar páginas de forma explícita. Instalar Wenlan por sí solo no activa la generación automática de páginas.
 
 Wenlan funciona como un único daemon local. La aplicación de escritorio lo lleva dentro; la instalación sin interfaz te da ese mismo daemon sin ventana. En ambos casos, tus clientes de IA acceden a la misma base de conocimiento.
 
@@ -86,7 +95,7 @@ npx -y wenlan setup
 
 Esto descarga la CLI precompilada, el daemon y el conector MCP, inicia el entorno local y lo verifica. No se requiere toolchain de Rust ni Cargo. Linux x64/ARM64 con glibc tiene una [ruta de configuración automática de shell](docs/setup-with-ai.md#install-the-runtime); Windows x64 utiliza el archivo correspondiente de [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel actualmente [no tiene una instalación completa soportada del runtime](crates/wenlan-cli/README.md#macos-intel).
 
-Instrucciones manuales y específicas por cliente: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
+Instrucciones manuales y específicas por cliente: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/.claude-plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
 
 ---
 
@@ -95,7 +104,7 @@ Instrucciones manuales y específicas por cliente: [Configuración asistida por 
 
 ## ¿Qué es esto?
 
-Wenlan convierte documentos, notas y conversaciones pasadas con IA en una base de conocimientos respaldada por fuentes que se mantiene actualizada a medida que tu trabajo evoluciona. Las fuentes siguen siendo rastreables; las decisiones, lecciones y correcciones se convierten en memorias duraderas; ambas pueden sustentar las mismas Páginas mantenidas.
+Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
 
 <p align="center">
   <picture>
@@ -106,7 +115,7 @@ Wenlan convierte documentos, notas y conversaciones pasadas con IA en una base d
 
 <a id="what-wenlan-is-not"></a>
 
-**Construido para trabajos continuos.** Wenlan es para investigadores, escritores, consultores, equipos de producto y equipos de software cuyo conocimiento está disperso en documentos, notas y conversaciones de IA. Convierte ese material en Páginas inspeccionables que pueden mejorar a través de proyectos y semanas, no en otro historial de chat o almacén de memoria aislado. No es un sistema de gestión de vida ni un SDK de memoria embebido dentro de otro producto.
+**Pensado para trabajos que continúan.** Si usas la IA durante días o semanas para el mismo tema y tienes que buscar continuamente el material anterior o volver a explicar decisiones ya tomadas, Wenlan está pensado para ese flujo de trabajo. No es un sistema de gestión personal ni un SDK de memoria integrado en otro producto. Puedes seguir usando Obsidian; Wenlan no promete sustituir sus plugins ni migrar todas las funciones de tu vault.
 
 **Un sistema de conocimiento, tres roles:**
 
@@ -114,12 +123,9 @@ Wenlan convierte documentos, notas y conversaciones pasadas con IA en una base d
 - **Las Memorias preservan lo que el trabajo te enseña.** Los agentes capturan decisiones atómicas, lecciones, correcciones y sustituciones con procedencia.
 - **Las Páginas compilan el conocimiento actual.** Wenlan convierte Fuentes y Memorias relevantes en Markdown con citas de fuente que puedes reutilizar, actualizar y revisar.
 
-**La base de LLM-wiki, extendida:**
+**Cómo se actualizan las páginas:** Tanto las Fuentes como las Memorias capturadas pueden sustentar una misma Página. El historial de Memoria registra los cambios en cada decisión; el historial de la Página registra las fuentes que la sustentan y sus revisiones. Durante la actualización automática, las Páginas elegibles mantenidas por el sistema pueden actualizarse directamente; las que hayas editado reciben una revisión propuesta. La revisión te permite decidir si aplicarla; no garantiza que la conclusión de la IA sea correcta.
 
-- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):** Karpathy definió Fuentes inmutables, una Wiki en Markdown mantenida por IA y un Esquema de reglas co-evolutivas para estructurarla y mantenerla. Wenlan implementa esa base con [campos de Memoria tipados](docs/technical-foundations.md#typed-memory-schema) y reglas integradas para la estructura de Páginas, procedencia, citas, actualización, propiedad y revisión.
-- **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2):** Rohitg00 añadió un ciclo de vida de memoria. Wenlan concreta esa dirección con Fuentes rastreables, Memorias atómicas estilo Zettelkasten capturadas por agentes (una idea completa por cada una) y Páginas mantenidas construidas a partir de ambas.
-
-**El elemento distintivo de Wenlan:** Las Fuentes y las Memorias atómicas sustentan independientemente las Páginas mantenidas. El historial de Memoria preserva cómo cambió el conocimiento; el historial de la Página muestra qué evidencia actual sustenta la síntesis. Las Páginas mantenidas por máquina pueden reconstruirse a partir del sustento actual, mientras que los cambios en la escritura humana esperan como revisiones revisables.
+Para lectores técnicos: Wenlan sigue el patrón de las wikis para LLM. Consulta la [guía de implementación de LLM wiki](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) y los [fundamentos técnicos](docs/technical-foundations.md) para conocer el modelo de datos, la recuperación y las reglas de mantenimiento.
 
 <a id="knowledge-graph"></a>
 
@@ -198,9 +204,11 @@ Configuración avanzada: establece `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` para habi
 | **Cita** | Mantiene los registros de citas y el estado de verificación; la actualización automática descarta un borrador cuando falla la verificación del respaldo de las citas. |
 | **Rastrea** | Registra qué evidencia sustenta la Página, por qué quedó obsoleta y un registro de cambios limitado. |
 | **Actualiza** | Cuando una Página se marca como obsoleta, reconstruye las Páginas mantenidas automáticamente que cumplen los requisitos a partir de la evidencia actual. |
-| **Revisa** | Convierte los cambios en una Página que editaste en una revisión propuesta en lugar de una reescritura silenciosa. |
+| **Revisa** | Durante la actualización automática, propone cambios en las Páginas que hayas editado, en lugar de reescribirlas sin avisar. |
 
-Por ejemplo, importa un documento de diseño y captura una decisión de depuración en Codex. Wenlan puede compilar una Página que cite ambos. Cuando esa Página se actualice, se reconstruirá a partir de su sustento actual; si la has editado, el cambio propuesto esperará revisión.
+Por ejemplo, importa un documento de diseño y guarda en Codex una decisión de depuración. Wenlan puede reunir ambos en una Página con citas a las dos fuentes. Cuando la Página se actualice automáticamente, se reconstruirá a partir de los materiales que la sustentan; si la has editado, la propuesta de cambio quedará pendiente de revisión.
+
+**Alcance de la revisión:** es una política de actualización, no una barrera de seguridad para tus archivos. Las ediciones directas en archivos y las realizadas mediante la API local de edición manual no pasan por esta cola. Una regeneración forzada y explícita también puede reemplazar una Página editada; la aplicación de escritorio pide confirmación antes de hacerlo.
 
 <a id="local-markdown"></a>
 
@@ -266,6 +274,8 @@ El bucle tiene cuatro pasos:
 ### Cola offline (outbox)
 
 Si el daemon local no está accesible, `wenlan capture` y `wenlan brief update` escriben sus solicitudes en una cola local duradera (outbox) y terminan correctamente. Cuando el daemon vuelve, drena esas escrituras por las rutas HTTP normales; revisa la cola con `wenlan outbox status` o pide una reproducción inmediata con `wenlan outbox drain`. Una escritura que el daemon rechaza de plano (un 4xx, por ejemplo al no pasar el control de calidad del contenido) se mueve a `outbox/failed/` con un recibo en lugar de reintentarse para siempre; un fallo de transporte o un error del servidor (5xx) la deja en la cola para el siguiente drenaje, que se ejecuta automáticamente cada 60 segundos.
+
+<a id="models-and-privacy"></a>
 
 ### Modelos y privacidad
 

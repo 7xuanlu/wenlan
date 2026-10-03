@@ -1,11 +1,13 @@
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan: your source-backed knowledge base, built to compound." width="100%">
+    <img src="./docs/assets/readme-banner.png" alt="Wenlan: A living personal wiki. AI organizes. You stay in control." width="100%">
   </picture>
 </p>
 
-Useful work with AI shouldn't disappear when a conversation ends. Wenlan builds the right pages and keeps them current as sources change, asking only when judgment is needed.
+Wenlan turns your documents, notes, and AI conversations into editable pages with links to their sources, so you and your AI tools can keep building on them.
+
+As sources change, AI keeps the pages current. If you’ve edited a page, Wenlan proposes revisions for you to review instead of automatically overwriting your work.
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
@@ -26,10 +28,15 @@ Useful work with AI shouldn't disappear when a conversation ends. Wenlan builds 
   <a href="#learn-more">Learn&nbsp;more</a>
 </p>
 
-https://github.com/user-attachments/assets/d8b2ad4a-f97a-4a15-97a8-9105478de18a
+https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>A maintained Page in the desktop app: open any citation to inspect the Source or Memory behind the claim.</sub>
+</p>
+
+<p align="center">
+  <a href="https://github.com/7xuanlu/wenlan/releases/latest">Download&nbsp;the&nbsp;app</a> ·
+  <a href="#mcp-setup">Set&nbsp;up&nbsp;with&nbsp;your&nbsp;AI</a>
 </p>
 
 ---
@@ -38,6 +45,8 @@ https://github.com/user-attachments/assets/d8b2ad4a-f97a-4a15-97a8-9105478de18a
 <a id="start-in-30-seconds"></a>
 
 ## Get started
+
+**Before you start:** saving and searching do not require a generative model. Background AI organization requires a configured local or cloud model. Alternatively, use a connected AI tool to organize pages explicitly. Installing Wenlan alone does not enable automatic page generation.
 
 Wenlan runs as one local daemon. The desktop app carries that daemon inside it; the headless install gives you the same daemon without a window. Your AI clients reach the same knowledge base either way.
 
@@ -95,7 +104,7 @@ Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.
 
 ## What is this?
 
-Wenlan turns documents, notes, and past AI conversations into a source-backed knowledge base that stays current as your work evolves. Sources remain traceable; decisions, lessons, and corrections become durable memories; both can support the same maintained Pages.
+Wenlan gives ongoing work a place outside the chat window. Keep selected documents and conversations, save decisions made along the way, and organize them into pages you can read, edit, and reuse. Page generation and background maintenance depend on the [configured AI path](#models-and-privacy).
 
 <p align="center">
   <picture>
@@ -106,7 +115,7 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 
 <a id="what-wenlan-is-not"></a>
 
-**Built for work that continues.** Wenlan is for researchers, writers, consultants, product teams, and software teams whose knowledge is scattered across documents, notes, and AI conversations. It turns that material into inspectable Pages that can improve across projects and weeks, not another chat history or isolated memory store. It is not a life-management system or a memory SDK embedded inside another product.
+**Built for work that continues.** If you use AI on the same topic over days or weeks and keep hunting for earlier material or re-explaining decisions, this is the workflow Wenlan is built around. It is not a life-management system or a memory SDK embedded inside another product. You can keep using Obsidian; Wenlan does not promise to replace its plugins or migrate every vault feature.
 
 **One knowledge system, three roles:**
 
@@ -114,14 +123,9 @@ Wenlan turns documents, notes, and past AI conversations into a source-backed kn
 - **Memories preserve what work teaches you.** Agents capture atomic decisions, lessons, corrections, and supersession with provenance.
 - **Pages compile current knowledge.** Wenlan turns relevant Sources and Memories into source-cited Markdown you can reuse, refresh, and review.
 
-**The LLM-wiki foundation, extended:**
+**How updates work:** Sources and captured Memories can both support the same Page. Memory history records changes to individual decisions; Page history records the supporting evidence and revisions. During automatic refresh, eligible machine-maintained Pages can update directly, while Pages you have edited receive proposed revisions. Review lets you decide whether to apply an update; it is not a guarantee that the AI's conclusion is correct.
 
-- **[LLM-wiki v1](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):** Karpathy defined immutable Sources, an AI-maintained Markdown Wiki, and a co-evolving Schema of rules for structuring and maintaining it. Wenlan implements that foundation with [typed Memory fields](docs/technical-foundations.md#typed-memory-schema) and built-in rules for Page structure, provenance, citations, refresh, ownership, and review.
-- **[LLM-wiki v2](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2):** Rohitg00 added a memory lifecycle. Wenlan makes that direction concrete with traceable Sources, agent-captured Zettelkasten-style atomic Memories (one complete idea each), and maintained Pages built from both.
-
-For the complete workflow, see the [LLM-wiki implementation guide](https://wenlan.app/learn/distilled-wiki-pages-ai-memory).
-
-**Wenlan's distinctive move:** Sources and atomic Memories independently support maintained Pages. Memory history preserves how knowledge changed; Page history shows which current evidence supports the synthesis. Machine-maintained Pages can rebuild from current support, while changes to human writing wait as reviewable revisions.
+For technical readers: Wenlan follows the **LLM wiki** pattern. See the [implementation guide](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) and [technical foundations](docs/technical-foundations.md) for the data model, retrieval, and maintenance rules.
 
 <a id="knowledge-graph"></a>
 
@@ -200,9 +204,11 @@ Advanced configuration: set `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` to enable that r
 | **Cite** | Retains citation records and verification status; automatic refresh discards a draft when its citation-support check fails. |
 | **Track** | Records which evidence supports the Page, why it became stale, and a bounded changelog. |
 | **Refresh** | When a Page is marked stale, rebuilds the eligible machine-maintained Page from current evidence. |
-| **Review** | Turns changes to a Page you edited into a proposed revision instead of a silent rewrite. |
+| **Review** | During automatic refresh, turns changes to a Page you edited into a proposed revision instead of a silent rewrite. |
 
-For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. When that Page is refreshed, it rebuilds from its current support; if you have edited it, the proposed change waits for review.
+For example, import a design document and capture a debugging decision in Codex. Wenlan can compile one Page that cites both. When that Page is automatically refreshed, it rebuilds from its current support; if you have edited it, the proposed change waits for review.
+
+**Review scope:** this is an update policy, not a security barrier around your files. Direct file edits and the local manual-edit API do not pass through this queue. An explicit forced regeneration can also replace an edited Page; the desktop app asks for confirmation before that action.
 
 <a id="local-markdown"></a>
 
