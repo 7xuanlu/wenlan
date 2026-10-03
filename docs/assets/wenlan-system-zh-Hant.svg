@@ -1,6 +1,6 @@
 <svg width="1600" height="980" viewBox="0 0 1600 980" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">你的資料與工作經驗，成為 持續更新的知識庫。</title>
-    <desc id="desc">來源與記憶分別支撐同一個持續維護的頁面。</desc>
+    <desc id="desc">Agent Loop 筆記示例：結合重試原則與一次介面修正的教訓，將桌面和手機畫面檢查補進完成條件。</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1600" height="980" fill="#FCFCFB"/>
 
@@ -80,34 +80,34 @@
     </g>
       <text x="518" y="336" font-family="'Fraunces', Georgia, serif" font-size="40" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
       <text x="518" y="372" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="400" fill="#8B93A3" text-anchor="start">示例內容 · 2 個引用示例</text>
-      <text x="518" y="418" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">核心概念</text>
-      <text x="518" y="450" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">決定下一步、使用工具、讀取結果，</text>
-<text x="518" y="480" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">再依結果繼續下一輪。[1]</text>
+      <text x="518" y="418" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">卡住時怎麼做</text>
+      <text x="518" y="450" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">同一錯誤再次出現，先查原因；</text>
+<text x="518" y="480" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">沒有新證據，不原樣重試。[1]</text>
       <g>
-      <rect x="518" y="500" width="156" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="596" y="521.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#586174" text-anchor="middle">工具使用筆記 [1]</text>
+      <rect x="518" y="500" width="172" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="604" y="521.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#586174" text-anchor="middle">Agent 設計指南 [1]</text>
     </g>
-      <text x="518" y="572" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">我的做法</text>
-      <text x="518" y="602" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">換到 Claude 或 Codex 前，</text>
-<text x="518" y="632" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">先留下目標、已做決定與下一步。[2]</text>
+      <text x="518" y="558" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">一次實作後補上的規則</text>
+      <text x="518" y="586" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">測試全過，手機標籤仍被連線遮住。</text>
+<text x="518" y="616" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="23" font-weight="400" fill="#1A1A2E" text-anchor="start">新增驗收：桌面與手機畫面都要看。[2]</text>
       <g>
-      <rect x="518" y="652" width="124" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
-      <text x="580" y="673.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#5E58C8" text-anchor="middle">交接決定 [2]</text>
+      <rect x="518" y="664" width="156" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
+      <text x="596" y="685.08" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#5E58C8" text-anchor="middle">版面檢查筆記 [2]</text>
     </g>
       <circle cx="1064" cy="668" r="6" fill="#B5842E"/>
       <line x1="1064" y1="676" x2="1064" y2="698" stroke="#B5842E" stroke-width="1.5"/>
       <text x="518" y="718" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#8B93A3" text-anchor="start">相關知識</text>
       <g>
       <rect x="518" y="736" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="560" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">工具使用</text>
+      <text x="560" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">驗收清單</text>
     </g>
 <g>
-      <rect x="614" y="736" width="70" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="649" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">上下文</text>
+      <rect x="614" y="736" width="98" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="663" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">失敗與重試</text>
     </g>
 <g>
-      <rect x="696" y="736" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="738" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">工作交接</text>
+      <rect x="724" y="736" width="84" height="34" rx="17" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="766" y="758.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">工作交接</text>
     </g>
       <text x="518" y="792" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#586174" text-anchor="start">純 Markdown · 引用可檢查 · 變更紀錄</text>
 
@@ -121,19 +121,19 @@
   </g>
     <g data-fit-region="overview-zh-Hant-desktop-back-to-work" data-fit-x="1208" data-fit-y="308" data-fit-width="326" data-fit-height="390" data-check-overlap="true">
 
-      <text x="1208" y="328" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">回到你的工作</text>
+      <text x="1208" y="328" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">下次用 Claude / Codex 工作</text>
       <text x="1208" y="382" font-family="'Fraunces', Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">閱讀。</text>
 <text x="1208" y="432" font-family="'Fraunces', Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">提問。</text>
 <text x="1208" y="482" font-family="'Fraunces', Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">繼續使用。</text>
       <circle cx="1221" cy="566" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
         <text x="1221" y="571" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">1</text>
-        <text x="1248" y="571" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">開啟目前頁面</text>
+        <text x="1248" y="571" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">Claude / Codex 先讀這頁</text>
 <circle cx="1221" cy="614" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
         <text x="1221" y="619" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">2</text>
-        <text x="1248" y="619" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">從 AI 工具中提問</text>
+        <text x="1248" y="619" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">沿用已有的驗收條件</text>
 <circle cx="1221" cy="662" r="12" fill="#F3F2FC" stroke="#D2CFF0"/>
         <text x="1221" y="667" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#5E58C8" text-anchor="middle">3</text>
-        <text x="1248" y="667" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">帶著完整脈絡繼續</text>
+        <text x="1248" y="667" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="start">不再只看測試是否通過</text>
 
   </g>
     <g data-fit-region="overview-zh-Hant-desktop-authority" data-fit-x="64" data-fit-y="842" data-fit-width="1472" data-fit-height="100" data-check-overlap="true">

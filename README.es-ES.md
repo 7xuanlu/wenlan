@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d37b170604ca1a51807bb44de4d33297cf3dc83091c38c15baa8217961ce4ef3 -->
+<!-- README_SYNC: source=README.md sha256=107e6cc91f363915ef95a1c68aa25e95a927e209b6d33ca322c5d4371998257d -->
 
 <p align="center">
   <picture>
@@ -139,12 +139,14 @@ Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte co
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Las fuentes y memorias sustentan independientemente una Página mantenida. Wenlan puede reconstruir una Página obsoleta a partir de su sustento actual; la revisión de conflictos opcional puede resaltar conflictos protegidos, y los cambios en la escritura humana esperan al usuario." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Fuentes y memorias se reúnen en una nota de ejemplo sobre Agent Loop. Una lección concreta complementa las pautas de reintento: las pruebas pasaron, pero una línea aún tapaba una etiqueta en móvil. La revisión visual en escritorio y móvil pasa a formar parte de los criterios que Claude o Codex pueden reutilizar." width="100%">
   </picture>
 </p>
 
 <details>
 <summary>Cómo se conectan las fuentes, memorias y páginas</summary>
+
+La nota de ejemplo adapta una [guía de diseño de agentes](https://www.anthropic.com/engineering/building-effective-agents) y las [correcciones de los diagramas de este README](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296). Ilustra conocimiento reutilizable, no resultados medidos de clientes ni una página generada automáticamente.
 
 Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
 

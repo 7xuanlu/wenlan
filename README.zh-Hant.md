@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d37b170604ca1a51807bb44de4d33297cf3dc83091c38c15baa8217961ce4ef3 -->
+<!-- README_SYNC: source=README.md sha256=107e6cc91f363915ef95a1c68aa25e95a927e209b6d33ca322c5d4371998257d -->
 
 <p align="center">
   <picture>
@@ -138,12 +138,14 @@ npx -y wenlan setup
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-system-zh-Hant.png" alt="來源與記憶分別支撐同一個持續維護的頁面。頁面過時後，Wenlan 可以依目前依據重建；可選的衝突審核可以讓受保護內容的衝突浮現，對人工文字的改動則等待使用者判斷。" width="100%">
+    <img src="./docs/assets/wenlan-system-zh-Hant.png" alt="來源與記憶整理成 Agent Loop 筆記示例：重試原則結合一次具體教訓，測試通過但手機標籤仍被連線遮住。因此把桌面與手機畫面檢查補進驗收條件，供後續使用 Claude 或 Codex 時沿用。" width="100%">
   </picture>
 </p>
 
 <details>
 <summary>來源、記憶與頁面如何協作</summary>
+
+圖中筆記取材自 [Agent 設計指南](https://www.anthropic.com/engineering/building-effective-agents)與[這份 README 的圖稿審查修正](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296)，示範如何留下可重用的工作準則，不是使用者成效數據或自動產頁的實測紀錄。
 
 Wenlan 讓持續進行的工作不只留在聊天視窗裡。你可以保存選定的文件與對話，記下過程中的決定，再把它們整理成可閱讀、編輯和重用的頁面。頁面生成與背景維護需要先設定[AI 路徑](#models-and-privacy)。
 

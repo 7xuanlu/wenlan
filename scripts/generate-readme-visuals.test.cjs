@@ -163,7 +163,10 @@ test("overview shows an illustrative, source-linked Agent Loop note instead of p
       assert.match(svg, /\[2\]/u);
       assert.match(svg, /Illustrative example|示例内容|示例內容/u);
       assert.doesNotMatch(svg, /source_\d+|mem_\d+|fill="#DDE2EA"/u);
-      assert.match(svg, /MY WORKFLOW|我的做法/u);
+      assert.match(svg, /ADDED AFTER A UI FIX|一次实践后补上的规则|一次實作後補上的規則/u);
+      assert.match(svg, /Tests passed; a line still covered a label|测试全过，手机标签仍被连线遮住|測試全過，手機標籤仍被連線遮住/u);
+      assert.match(svg, /desktop and mobile views|桌面与手机画面都要看|桌面與手機畫面都要看/u);
+      assert.doesNotMatch(svg, /THE CORE IDEA|核心概念|Choose an action, use a tool|先留下目标|先留下目標/u);
     }
   }
 });

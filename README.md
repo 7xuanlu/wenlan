@@ -135,12 +135,14 @@ Your pages are local Markdown files you can read, edit, and take with you.
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. Wenlan can rebuild a stale Page from its current support; optional conflict review can surface protected conflicts, and changes to human writing wait for the user." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories feed an illustrative Agent Loop page. It combines retry guidance with a concrete lesson: tests passed, but a line still covered a mobile label. Desktop and mobile visual checks become part of the completion criteria for later work with Claude or Codex." width="100%">
   </picture>
 </p>
 
 <details>
 <summary>How sources, memories, and pages work together</summary>
+
+The example adapts [agent-design guidance](https://www.anthropic.com/engineering/building-effective-agents) and [this README's diagram-review fixes](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296) into a working note. It illustrates reusable knowledge, not a measured customer outcome or an automatically generated page.
 
 Wenlan gives ongoing work a place outside the chat window. Keep selected documents and conversations, save decisions made along the way, and organize them into pages you can read, edit, and reuse. Page generation and background maintenance depend on the [configured AI path](#models-and-privacy).
 

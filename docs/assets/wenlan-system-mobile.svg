@@ -1,6 +1,6 @@
 <svg width="720" height="1780" viewBox="0 0 720 1780" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">Your sources and working knowledge become a knowledge base that stays current.</title>
-    <desc id="desc">Sources and memories independently support a maintained Page.</desc>
+    <desc id="desc">An illustrative Agent Loop note combines retry guidance with a lesson from a UI fix: inspect desktop and mobile views even when tests pass.</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="720" height="1780" fill="#FCFCFB"/>
 
@@ -85,34 +85,35 @@
     </g>
       <text x="74" y="698" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
       <text x="74" y="738" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="400" fill="#8B93A3" text-anchor="start">Illustrative example · 2 references</text>
-      <text x="74" y="800" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">THE CORE IDEA</text>
-      <text x="74" y="834" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">Choose an action, use a tool,</text>
-<text x="74" y="866" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">read the result, then repeat. [1]</text>
+      <text x="74" y="800" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">WHEN THE LOOP STALLS</text>
+      <text x="74" y="834" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">A repeated error is a reason to investigate,</text>
+<text x="74" y="866" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">not to run the same step again. [1]</text>
       <g>
-      <rect x="74" y="890" width="213" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="180.5" y="916.6" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#586174" text-anchor="middle">Tool-use notes [1]</text>
+      <rect x="74" y="890" width="253" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="200.5" y="916.6" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#586174" text-anchor="middle">Agent design guide [1]</text>
     </g>
-      <text x="74" y="980" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">MY WORKFLOW</text>
-      <text x="74" y="1014" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">Before switching Claude or Codex,</text>
-<text x="74" y="1046" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">save the goal, decisions, and next step. [2]</text>
+      <text x="74" y="970" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">ADDED AFTER A UI FIX</text>
+      <text x="74" y="1002" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">Tests passed; a line still covered a label.</text>
+<text x="74" y="1032" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">Before calling a UI fix done, inspect</text>
+<text x="74" y="1062" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="400" fill="#1A1A2E" text-anchor="start">the desktop and mobile views. [2]</text>
       <g>
-      <rect x="74" y="1070" width="234" height="38" rx="19" fill="#F3F2FC" stroke="#D2CFF0"/>
-      <text x="191" y="1096.6" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#5E58C8" text-anchor="middle">Handoff decision [2]</text>
+      <rect x="74" y="1080" width="263" height="38" rx="19" fill="#F3F2FC" stroke="#D2CFF0"/>
+      <text x="205.5" y="1106.6" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#5E58C8" text-anchor="middle">Diagram review note [2]</text>
     </g>
       <circle cx="660" cy="1086" r="6" fill="#B5842E"/>
       <line x1="660" y1="1094" x2="660" y2="1124" stroke="#B5842E" stroke-width="1.5"/>
       <text x="74" y="1160" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">LINKED KNOWLEDGE</text>
       <g>
-      <rect x="74" y="1186" width="102" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="125" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Tool use</text>
+      <rect x="74" y="1186" width="188" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="168" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Completion checks</text>
     </g>
 <g>
-      <rect x="184" y="1186" width="95" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="231.5" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Context</text>
+      <rect x="270" y="1186" width="169" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="354.5" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Failed attempts</text>
     </g>
 <g>
-      <rect x="287" y="1186" width="105" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="339.5" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Handoffs</text>
+      <rect x="447" y="1186" width="105" height="40" rx="20" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="499.5" y="1212.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">Handoffs</text>
     </g>
       <text x="74" y="1258" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#586174" text-anchor="start">Markdown · Citations · Change log</text>
 
@@ -126,7 +127,7 @@
   </g>
     <g data-fit-region="overview-en-mobile-back-to-work" data-fit-x="40" data-fit-y="1398" data-fit-width="640" data-fit-height="94" data-check-overlap="true">
 
-        <text x="40" y="1424" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">BACK TO YOUR WORK</text>
+        <text x="40" y="1424" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">NEXT TASK · Claude / Codex</text>
         <text x="142" y="1464" font-family="'Fraunces', Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="middle">Read it.</text>
 <text x="362" y="1464" font-family="'Fraunces', Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="middle">Ask it.</text>
 <text x="582" y="1464" font-family="'Fraunces', Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="middle">Reuse it.</text>

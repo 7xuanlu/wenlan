@@ -43,9 +43,16 @@ const FONTS = Object.fromEntries(["heading", "body", "mono"].map((kind) => {
   return [kind, value];
 }));
 
+// This is a reusable working note, not a definition or a product description.
+// [1] Editorial takeaway from Anthropic's environmental-feedback guidance:
+// https://www.anthropic.com/engineering/building-effective-agents (Agents).
+// [2] Project-owned diagram-review lesson: passing generator tests did not
+// catch text crossed by graph edges. The rendered fixes are in 061fbc6a.
+// The composition is illustrative, not a customer testimonial or evidence
+// that Wenlan autonomously generated, stored, or reused this example page.
 const OVERVIEW_COPY = {
   en: {
-    description: "Sources and memories independently support a maintained Page.",
+    description: "An illustrative Agent Loop note combines retry guidance with a lesson from a UI fix: inspect desktop and mobile views even when tests pass.",
     eyebrow: "WENLAN KNOWLEDGE SYSTEM",
     title: [
       "Your sources and working knowledge become",
@@ -73,22 +80,22 @@ const OVERVIEW_COPY = {
     pageTitle: "Agent Loop",
     revised: "Illustrative example",
     records: "2 references",
-    synthesis: "THE CORE IDEA",
-    exampleLines: ["Choose an action, use a tool,", "read the result, then repeat. [1]"],
-    workflow: "MY WORKFLOW",
-    workflowLines: ["Before switching Claude or Codex,", "save the goal, decisions, and next step. [2]"],
-    sourceRef: "Tool-use notes [1]",
-    memoryRef: "Handoff decision [2]",
+    synthesis: "WHEN THE LOOP STALLS",
+    exampleLines: ["A repeated error is a reason to investigate,", "not to run the same step again. [1]"],
+    workflow: "ADDED AFTER A UI FIX",
+    workflowLines: ["Tests passed; a line still covered a label.", "Before calling a UI fix done, inspect", "the desktop and mobile views. [2]"],
+    sourceRef: "Agent design guide [1]",
+    memoryRef: "Diagram review note [2]",
     linked: "LINKED KNOWLEDGE",
-    linkedTags: ["Tool use", "Context", "Handoffs"],
+    linkedTags: ["Completion checks", "Failed attempts", "Handoffs"],
     pageTraits: ["Plain Markdown", "Inspectable citations", "Change log"],
     mobilePageTraits: ["Markdown", "Citations", "Change log"],
-    backLabel: "BACK TO YOUR WORK",
+    backLabel: "NEXT TASK · Claude / Codex",
     backWords: ["Read it.", "Ask it.", "Reuse it."],
     backSteps: [
-      "Open the current Page",
-      "Ask from your AI tool",
-      "Continue with full context",
+      "Claude / Codex reads this page",
+      "Reuses its completion checks",
+      "Checks more than green tests",
     ],
     changed: "When a Page is stale",
     changedLead: "It rebuilds from current support.",
@@ -98,7 +105,7 @@ const OVERVIEW_COPY = {
     authorityLead: "Automatic refresh proposes changes to pages you edited.",
   },
   "zh-Hans": {
-    description: "来源与记忆分别支撑同一个持续维护的页面。",
+    description: "Agent Loop 笔记示例：结合重试原则与一次界面修正的教训，将桌面和手机画面检查补进完成条件。",
     eyebrow: "WENLAN 知识系统",
     title: ["你的资料与工作经验，成为", "持续更新的知识库。"],
     mobileTitle: ["你的资料与工作经验，", "成为持续更新的知识库。"],
@@ -119,19 +126,19 @@ const OVERVIEW_COPY = {
     pageTitle: "Agent Loop",
     revised: "示例内容",
     records: "2 个引用示例",
-    synthesis: "核心概念",
-    exampleLines: ["决定下一步、使用工具、读取结果，", "再依结果继续下一轮。[1]"],
-    workflow: "我的做法",
-    workflowLines: ["换到 Claude 或 Codex 前，", "先留下目标、已做决定与下一步。[2]"],
-    sourceRef: "工具使用笔记 [1]",
-    memoryRef: "交接决定 [2]",
+    synthesis: "卡住时怎么做",
+    exampleLines: ["同一错误再次出现，先查原因；", "没有新证据，不原样重试。[1]"],
+    workflow: "一次实践后补上的规则",
+    workflowLines: ["测试全过，手机标签仍被连线遮住。", "新增验收：桌面与手机画面都要看。[2]"],
+    sourceRef: "Agent 设计指南 [1]",
+    memoryRef: "版面检查笔记 [2]",
     linked: "相关知识",
-    linkedTags: ["工具使用", "上下文", "工作交接"],
+    linkedTags: ["验收清单", "失败与重试", "工作交接"],
     pageTraits: ["纯 Markdown", "引用可检查", "变更记录"],
     mobilePageTraits: ["Markdown", "引用", "变更记录"],
-    backLabel: "回到你的工作",
+    backLabel: "下次用 Claude / Codex 工作",
     backWords: ["阅读。", "提问。", "继续使用。"],
-    backSteps: ["打开当前页面", "从 AI 工具中提问", "带着完整脉络继续"],
+    backSteps: ["Claude / Codex 先读这页", "沿用已有的验收条件", "不再只看测试是否通过"],
     changed: "页面过时后",
     changedLead: "依当前依据重新构建。",
     upkeep: "用现有 AI，或开启后台维护",
@@ -140,7 +147,7 @@ const OVERVIEW_COPY = {
     authorityLead: "自动更新你编辑过的页面时，先提出修订。",
   },
   "zh-Hant": {
-    description: "來源與記憶分別支撐同一個持續維護的頁面。",
+    description: "Agent Loop 筆記示例：結合重試原則與一次介面修正的教訓，將桌面和手機畫面檢查補進完成條件。",
     eyebrow: "WENLAN 知識系統",
     title: ["你的資料與工作經驗，成為", "持續更新的知識庫。"],
     mobileTitle: ["你的資料與工作經驗，", "成為持續更新的知識庫。"],
@@ -161,19 +168,19 @@ const OVERVIEW_COPY = {
     pageTitle: "Agent Loop",
     revised: "示例內容",
     records: "2 個引用示例",
-    synthesis: "核心概念",
-    exampleLines: ["決定下一步、使用工具、讀取結果，", "再依結果繼續下一輪。[1]"],
-    workflow: "我的做法",
-    workflowLines: ["換到 Claude 或 Codex 前，", "先留下目標、已做決定與下一步。[2]"],
-    sourceRef: "工具使用筆記 [1]",
-    memoryRef: "交接決定 [2]",
+    synthesis: "卡住時怎麼做",
+    exampleLines: ["同一錯誤再次出現，先查原因；", "沒有新證據，不原樣重試。[1]"],
+    workflow: "一次實作後補上的規則",
+    workflowLines: ["測試全過，手機標籤仍被連線遮住。", "新增驗收：桌面與手機畫面都要看。[2]"],
+    sourceRef: "Agent 設計指南 [1]",
+    memoryRef: "版面檢查筆記 [2]",
     linked: "相關知識",
-    linkedTags: ["工具使用", "上下文", "工作交接"],
+    linkedTags: ["驗收清單", "失敗與重試", "工作交接"],
     pageTraits: ["純 Markdown", "引用可檢查", "變更紀錄"],
     mobilePageTraits: ["Markdown", "引用", "變更紀錄"],
-    backLabel: "回到你的工作",
+    backLabel: "下次用 Claude / Codex 工作",
     backWords: ["閱讀。", "提問。", "繼續使用。"],
-    backSteps: ["開啟目前頁面", "從 AI 工具中提問", "帶著完整脈絡繼續"],
+    backSteps: ["Claude / Codex 先讀這頁", "沿用已有的驗收條件", "不再只看測試是否通過"],
     changed: "頁面過時後",
     changedLead: "依目前依據重新構建。",
     upkeep: "用現有 AI，或開啟背景維護",
@@ -730,7 +737,7 @@ function overviewPage({
   const memoryReference = chip({
     locale,
     x: x + pad,
-    y: y + (mobile ? 490 : 424),
+    y: y + (mobile ? 500 : 436),
     label: c.memoryRef,
     height: mobile ? 38 : 30,
     fill: C.indigoSoft,
@@ -764,8 +771,8 @@ function overviewPage({
       ${text({ locale, x: x + pad, y: y + (mobile ? 220 : 190), value: c.synthesis, size: mobile ? 20 : 15, kind: "mono", weight: 500, fill: C.tertiary })}
       ${lines({ locale, x: x + pad, y: y + (mobile ? 254 : 222), values: c.exampleLines, size: mobile ? 25 : 23, lineHeight: mobile ? 32 : 30, fill: C.ink })}
       ${sourceReference}
-      ${text({ locale, x: x + pad, y: y + (mobile ? 400 : 344), value: c.workflow, size: mobile ? 20 : 15, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${lines({ locale, x: x + pad, y: y + (mobile ? 434 : 374), values: c.workflowLines, size: mobile ? 25 : 23, lineHeight: mobile ? 32 : 30, fill: C.ink })}
+      ${text({ locale, x: x + pad, y: y + (mobile ? 390 : 330), value: c.workflow, size: mobile ? 20 : 15, kind: "mono", weight: 500, fill: C.tertiary })}
+      ${lines({ locale, x: x + pad, y: y + (mobile ? 422 : 358), values: c.workflowLines, size: mobile ? 25 : 23, lineHeight: 30, fill: C.ink })}
       ${memoryReference}
       <circle cx="${x + width - (mobile ? 20 : 56)}" cy="${y + (mobile ? 506 : 440)}" r="6" fill="${C.amber}"/>
       <line x1="${x + width - (mobile ? 20 : 56)}" y1="${y + (mobile ? 514 : 448)}" x2="${x + width - (mobile ? 20 : 56)}" y2="${y + (mobile ? 544 : 470)}" stroke="${C.amber}" stroke-width="1.5"/>
