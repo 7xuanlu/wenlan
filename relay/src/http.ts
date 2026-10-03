@@ -121,6 +121,7 @@ function pairingPage(view: { pairingId: string; clientId: string; status: string
   const body = view ? `<p class="intro">Your knowledge stays on your device. You choose what this connection can access.</p>
 <p class="status" data-state="${state}" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="pairing-status">${approved ? 'Approved on your device' : 'Waiting for device approval'}</span></p>
 <section class="pairing-step"${approved ? ' hidden' : ''}><h2>Approve in Wenlan</h2>
+<div class="open-app"><p>Wenlan on this computer? Skip the copy and paste.</p><a id="open-in-wenlan" class="button primary" href="wenlan://pair?code=${htmlEscape(view.pairingId)}">Open in Wenlan</a></div>
 <p>Open <strong>Settings &gt; Connections</strong> in the Wenlan app. Paste this code into <strong>Authorize a connection</strong>, review the request, then approve.</p>
 <label for="pairing-code">Pairing code</label><div class="code-row"><textarea id="pairing-code" readonly rows="2" spellcheck="false">${htmlEscape(view.pairingId)}</textarea>
 <button id="copy-code" type="button">Copy code</button></div>

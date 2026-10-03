@@ -52,6 +52,7 @@
     "externalBin": []
   },
   "plugins": {
+    "deep-link": null,
     "updater": null
   }
 }

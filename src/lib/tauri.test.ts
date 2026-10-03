@@ -85,6 +85,12 @@ describe('remote access consent bridge', () => {
     });
   });
 
+  it('takes a waiting pairing link without forwarding arguments', async () => {
+    mockInvoke.mockResolvedValueOnce('a'.repeat(64));
+    await expect(tauri.takeRemotePairingLink()).resolves.toBe('a'.repeat(64));
+    expect(mockInvoke).toHaveBeenCalledWith('take_remote_pairing_link');
+  });
+
   it('queries status and connection health without forwarding arguments', async () => {
     await tauri.getRemoteAccessStatus();
     expect(mockInvoke).toHaveBeenLastCalledWith('get_remote_access_status');

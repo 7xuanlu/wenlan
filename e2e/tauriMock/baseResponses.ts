@@ -66,6 +66,8 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     };
     case "get_resolved_routing": return resolvedRouting();
+    // The main shell asks on every launch whether a wenlan://pair link is waiting.
+    case "take_remote_pairing_link": return null;
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };

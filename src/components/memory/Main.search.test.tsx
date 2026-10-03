@@ -8,6 +8,7 @@ import { i18n } from "../../i18n";
 import { RECENT_PAGES_STORAGE_KEY } from "../../lib/recentPages";
 import { RECENT_SPACES_STORAGE_KEY } from "../../lib/recentSpaces";
 import type { Page, SearchResult, Space } from "../../lib/tauri";
+import { clearPendingPairingCode } from "../../lib/pairingLink";
 import Main from "./Main";
 
 const eventListeners = vi.hoisted(
@@ -27,6 +28,7 @@ const draftIdentityMock = vi.hoisted(
   () => vi.fn<() => { readonly draftId: string | null; readonly version: number | null }>(),
 );
 const setSearchQueryMock = vi.hoisted(() => vi.fn());
+const takeRemotePairingLinkMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const useSearchMock = vi.hoisted(() => vi.fn(() => ({
   query: "",
   setQuery: setSearchQueryMock,
@@ -54,6 +56,7 @@ vi.mock("../../lib/tauri", () => ({
   openFile: openFileMock,
   openSearchResult: openSearchResultMock,
   deleteFileChunks: vi.fn().mockResolvedValue(undefined),
+  takeRemotePairingLink: takeRemotePairingLinkMock,
   // Never settles, so the toolbar Activity button stays the plain navigation
   // button these routing tests click.
   getActivity: vi.fn(() => new Promise(() => {})),
@@ -408,6 +411,9 @@ describe("Main search", () => {
     openSearchResultMock.mockReset();
     openSearchResultMock.mockResolvedValue(undefined);
     setSearchQueryMock.mockReset();
+    takeRemotePairingLinkMock.mockReset();
+    takeRemotePairingLinkMock.mockResolvedValue(null);
+    clearPendingPairingCode();
     draftRequestBackMock.mockReset();
     draftRequestBackMock.mockImplementation(async (onBack) => onBack());
     draftFlushMock.mockReset();
@@ -419,6 +425,21 @@ describe("Main search", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
+  });
+
+  it("opens Connections for a wenlan://pair link that launched the app", async () => {
+    takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
+    renderMain();
+    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
+  });
+
+  it("opens Connections when a pairing link arrives while the app is open", async () => {
+    renderMain();
+    expect(screen.getByTestId("home-page")).toBeVisible();
+    expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
+    takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
+    await act(async () => { eventListeners.get("remote-pairing-link")?.(); });
+    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
   });
 
   it("returns an onboarding import to real knowledge, then back to Home", async () => {
