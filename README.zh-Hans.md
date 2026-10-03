@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=107e6cc91f363915ef95a1c68aa25e95a927e209b6d33ca322c5d4371998257d -->
+<!-- README_SYNC: source=README.md sha256=8072a34667d46095f8110330ed44225087f80b94f323a722bd91f758a1d12626 -->
 
 <p align="center">
   <picture>
@@ -137,7 +137,7 @@ npx -y wenlan setup
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hans-mobile.png">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-zh-Hans-mobile.png">
     <img src="./docs/assets/wenlan-system-zh-Hans.png" alt="来源与记忆整理成 Agent Loop 笔记示例：重试原则结合一次具体教训，测试通过但手机标签仍被连线遮住。因此把桌面与手机画面检查补进验收条件，供后续使用 Claude 或 Codex 时沿用。" width="100%">
   </picture>
 </p>

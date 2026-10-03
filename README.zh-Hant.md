@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=107e6cc91f363915ef95a1c68aa25e95a927e209b6d33ca322c5d4371998257d -->
+<!-- README_SYNC: source=README.md sha256=8072a34667d46095f8110330ed44225087f80b94f323a722bd91f758a1d12626 -->
 
 <p align="center">
   <picture>
@@ -137,7 +137,7 @@ npx -y wenlan setup
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hant-mobile.png">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-zh-Hant-mobile.png">
     <img src="./docs/assets/wenlan-system-zh-Hant.png" alt="來源與記憶整理成 Agent Loop 筆記示例：重試原則結合一次具體教訓，測試通過但手機標籤仍被連線遮住。因此把桌面與手機畫面檢查補進驗收條件，供後續使用 Claude 或 Codex 時沿用。" width="100%">
   </picture>
 </p>

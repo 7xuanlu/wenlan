@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=107e6cc91f363915ef95a1c68aa25e95a927e209b6d33ca322c5d4371998257d -->
+<!-- README_SYNC: source=README.md sha256=8072a34667d46095f8110330ed44225087f80b94f323a722bd91f758a1d12626 -->
 
 <p align="center">
   <picture>
@@ -138,7 +138,7 @@ Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte co
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-mobile.png">
     <img src="./docs/assets/wenlan-system.png" alt="Fuentes y memorias se reúnen en una nota de ejemplo sobre Agent Loop. Una lección concreta complementa las pautas de reintento: las pruebas pasaron, pero una línea aún tapaba una etiqueta en móvil. La revisión visual en escritorio y móvil pasa a formar parte de los criterios que Claude o Codex pueden reutilizar." width="100%">
   </picture>
 </p>

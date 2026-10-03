@@ -134,7 +134,7 @@ Your pages are local Markdown files you can read, edit, and take with you.
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-mobile.png">
     <img src="./docs/assets/wenlan-system.png" alt="Sources and memories feed an illustrative Agent Loop page. It combines retry guidance with a concrete lesson: tests passed, but a line still covered a mobile label. Desktop and mobile visual checks become part of the completion criteria for later work with Claude or Codex." width="100%">
   </picture>
 </p>
