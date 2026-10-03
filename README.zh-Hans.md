@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=603283f413172fd3f030ff46b9874aabde127cbd4434e6b1b4a4f6720400154c -->
+<!-- README_SYNC: source=README.md sha256=7b969d289e5ca8e0a1295d0f080322c6710dd6565349b38211c116b28d5fa68f -->
 
 <p align="center">
   <picture>
@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 <p align="center">
   <a href="https://github.com/7xuanlu/wenlan/releases/latest">下载&#8288;桌面&#8288;版</a> ·
-  <a href="#mcp-setup">让&#8288;你的&#8288; AI &#8288;完成&#8288;设置</a>
+  <a href="#mcp-setup">连接你的 AI</a>
 </p>
 
 ---
@@ -48,23 +48,17 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 ## 开始使用
 
-**开始前请注意：** 保存和搜索不需要生成式模型；后台 AI 整理需要配置受支持的本地或云端模型。你也可以改用已连接的 AI 工具明确整理页面。只安装 Wenlan 不会启用自动页面生成。
-
-Wenlan 以单个本地 daemon 运行。桌面 app 内置这个 daemon；无 GUI 的安装方式提供的是同一个 daemon，只是没有窗口。两种方式下，你的 AI 客户端访问的都是同一个知识库。
-
 <a id="start-with-the-app"></a>
 <a id="open-the-wiki"></a>
 <a id="desktop-app"></a>
 
-### 桌面 app
+### 1. 下载并打开 Wenlan
 
-从 [Releases 页面](https://github.com/7xuanlu/wenlan/releases/latest)下载：
+[下载桌面版](https://github.com/7xuanlu/wenlan/releases/latest)，安装后打开：
 
-- **macOS（Apple Silicon）：** 打开 `.dmg`，把 Wenlan 拖进「应用程序」。App 已签名并通过公证，首次启动不会有警告。也可以改用终端安装：`/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"`（下载、核对 SHA-256、放进「应用程序」）。
-- **Windows x64：** 运行 `-setup.exe`。安装包尚未签名，SmartScreen 提示「Windows 已保护你的电脑」时，点「更多信息」，再点「仍要运行」。
-- **Linux：** 暂时没有桌面版，请使用下面的无 GUI runtime。
-
-App 内已打包 daemon、CLI 与 MCP 连接器，启动时会自动运行 daemon，并会为检测到的 AI 客户端提供接入：Claude Code 与 Codex 安装 plugin，其余客户端写入 MCP 配置。升级时把新 app 拖到旧 app 上覆盖并打开（Wenlan 0.17.0 及更早的版本需要先手动退出）。
+- **macOS（Apple Silicon）：** 打开 `.dmg`，把 Wenlan 拖进「应用程序」。App 已签名并通过公证。
+- **Windows x64：** 运行 `-setup.exe`。安装包尚未签名。如果 SmartScreen 显示警告，请先确认文件来自官方 Releases 页面，再点「更多信息」→「仍要运行」。
+- **Linux：** 暂时没有桌面版；可按照[设置指南](docs/setup-with-ai.md#install-the-runtime)，不通过桌面 app，直接搭配 AI 工具使用。
 
 <a id="claude-code-in-30-seconds"></a>
 
@@ -73,36 +67,84 @@ App 内已打包 daemon、CLI 与 MCP 连接器，启动时会自动运行 daemo
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### 让你的 AI 完成设置
+### 2. 让常用 AI 共用你的维基
 
-把下面这段贴给 Claude Code、Codex，或其他能够读取设置指南的工具：
+在 Wenlan 的设置引导中，连接 Claude Code、Codex 等工具，让它们使用同一份知识。
+
+<details>
+<summary>连接时需要帮助？让 AI 协助设置</summary>
+
+如有提示，请重新启动 AI 工具。需要协助设置时，把下面这段贴给 Claude Code、Codex，或其他能够读取设置指南的工具：
 
 ```text
-请为当前 AI 客户端设置 Wenlan，并严格遵循：
+请按照这份指南，将当前的 AI 工具连接到 Wenlan：
 https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
-只安装这个客户端需要的内容。完成后验证本地 runtime、
-Wenlan connection，以及一次 capture/recall round trip。
+如果已安装 Wenlan，请沿用现有安装。
+只设置当前这个 AI 工具，并确认它能保存及找回一条测试记忆。
 ```
 
-指南会识别当前使用的 client，把各平台命令留在专门文档中。除非你明确要求，否则它不会设置所有 AI 工具。
+</details>
 
-只需要在 macOS Apple Silicon 上运行的无 GUI 本地服务？
+### 3. 留下成果，下次接着用
+
+> 把这次讨论的重点整理成 Wenlan 页面。
+
+<details>
+<summary>模型、其他安装方式与更新</summary>
+
+**模型**
+
+你可以请已连接的 AI 整理页面。要让 Wenlan 自己在后台整理，则需要[配置模型](#models-and-privacy)。
+
+**从终端安装 macOS app**
+
+安装程序会下载 app、核对 SHA-256，并放进「应用程序」：
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+```
+
+**不使用桌面 app**
+
+在 macOS Apple Silicon 上运行：
 
 ```bash
 npx -y wenlan setup
 ```
 
+`npx` 需要 Node.js；若未安装，可先运行 `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash`，再运行 `wenlan setup --basic`。
+
 这个命令会下载预编译的 CLI、后台服务（daemon）与 MCP 连接器，启动并验证本地服务；不需要安装 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以采用自动化的 [shell 设置流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 请从 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下载对应的 archive。macOS Intel 目前[没有受支持的完整 runtime 安装方式](crates/wenlan-cli/README.md#macos-intel)。
 
-手动与各 client 设置说明：[AI 辅助设置](docs/setup-with-ai.md) · [Claude Code plugin](plugin/.claude-plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 与 MCP](crates/wenlan-cli/README.md)。
+**安装内容与更新方式**
+
+桌面 app 内置 daemon、CLI 与 MCP 连接器，打开时会启动 daemon，并提供检测到的 AI 工具接入选项：Claude Code、Codex 使用 plugin，其他支持工具使用 MCP 设置。不使用桌面 app 时，运行的也是同一个 daemon；两种方式都让 AI 工具访问同一个本地知识库。
+
+更新 macOS app 时，把新 app 拖到旧 app 上覆盖并打开。Wenlan 0.17.0 及更早的版本需要先手动退出。
+
+手动与各工具设置说明：[AI 辅助设置](docs/setup-with-ai.md) · [Claude Code plugin](plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 与 MCP](crates/wenlan-cli/README.md)。
+
+</details>
+
 
 ---
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
 
-## 这是什么？
+<a id="这是什么"></a>
+
+## 你与 AI 共用的个人维基
+
+- **下次接着做。** 请 Claude Code 或 Codex 参考已有的 Wenlan 页面，继续下一项工作。
+- **看得到依据。** 点击引用，查看原始文档、对话或决策记录。
+- **自己的修改，自己决定。** 自动更新你编辑过的页面时，Wenlan 会提出修订，交给你确认。
+
+页面是本地 Markdown 文件，你可以阅读、编辑，也能带走。
+
+<details>
+<summary>工作原理：来源、记忆、搜索与更新</summary>
 
 Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选定的文档和对话，记下过程中的决定，再把它们整理成可阅读、编辑和重用的页面。页面生成与后台维护需要先配置[AI 路径](#models-and-privacy)。
 
@@ -228,6 +270,8 @@ a1b2c3d distill: 4 pages
 9f8e7d6 session: embedding-work
 ```
 
+</details>
+
 ---
 
 <a id="what-you-get"></a>
@@ -236,24 +280,47 @@ a1b2c3d distill: 4 pages
 
 ## 能力
 
-- **对话导入：** 导入 ChatGPT 或 Claude 的 ZIP；Wenlan 会自动跳过已经导入的对话。
-- **文档来源：** 导入单个 `.md`、`.txt` 或可提取文本的 `.pdf`，递归读取包含它们的文件夹，或索引 Obsidian 仓库中的 Markdown。
-- **增量同步：** 单个文件与普通文件夹来源会在后台追踪变化；Obsidian 仓库保持只读，按需重新同步。
-- **原子记忆（Atomic Memory）：** MCP 客户端把一个完整的决策、经验、更正、偏好或事实存成一条，并用[溯源与取代](https://wenlan.app/learn/ai-memory-provenance)记录它来自哪里、替代了什么。
-- **[类型化补全（Typed enrichment）](docs/technical-foundations.md#typed-memory-schema)：** 配好模型后，Wenlan 会分类每条记忆，并补上该类型定义的结构化字段、日期、标签、检索提示与图谱链接。
-- **[来源支撑页面（Source-backed Pages）](https://wenlan.app/docs/source-backed-pages)：** 把相关来源与记忆提炼成带来源标记与 `[[wikilinks]]` 的 Markdown 页面；daemon 还能验证并记录逐条引用。
-- **引用门控更新（Citation-gated refresh）：** 自动刷新时，引用支撑不足的草稿会被拒绝；机器页面可更新，用户文字只进入待审修订。
-- **[混合检索（Hybrid retrieval）](docs/technical-foundations.md#retrieval-pipeline)：** FTS5 找原词，本地 BGE embedding 找语义，RRF 融合排序，图谱链接补充脉络。
-- **[检索通道（Retrieval channels）](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选的页面、情节记忆（episodic）与逐事实（per-fact）通道扩大召回；cross-encoder 重排提高精度。
-- **[知识图谱（Knowledge graph）](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 类型化实体、关系与观察连接人物、项目、主张及其支撑记忆。
-- **[人在回路审查（Human-in-the-loop）](https://wenlan.app/docs/review-and-trust)：** 日常工作保持自动；受保护冲突、页面修订、实体合并与新词汇才等待判断。
-- **[空间（Spaces）](https://wenlan.app/docs/spaces)：** 用明确范围隔开工作、个人、客户与代码库的记忆、页面和检索结果。
-- **[本地 daemon + MCP](https://wenlan.app/docs/architecture)：** 一个轻量 Rust daemon 作为本地唯一事实来源。桌面 app 与 CLI 直接调用它；各 AI client 通过小型 MCP 连接器访问同一份知识。
-- **自定义集成：** localhost HTTP API 可接收其他采集流程准备好的文本、网页内容与记忆。
-- **后台维护：** 关闭桌面 app 后，daemon 仍会继续执行已配置的同步、补全、引用与页面更新。
-- **[模型选择](docs/technical-foundations.md#model-roles)：** 基础检索留在本机；补全与合成可用设备端 Qwen、兼容 OpenAI 的本地接口或云端模型。
-- **[可检查的所有权](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 记忆与图谱留在本地 libSQL；Markdown、引用、修订、git 历史与 Obsidian 导出都可检查。
-- **只读健康检查：** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) 检查本地服务；[`lint`](plugin/skills/lint/SKILL.md) 找出格式错误的引用、孤立链接、损坏的 embedding，以及搜索索引或图谱完整性问题，但不会改写知识。
+### 导入你的资料
+
+- **留下有用的 AI 对话：** 导入 ChatGPT 或 Claude 导出的 ZIP，已导入的对话不会重复加入。
+- **导入现有笔记：** 导入 Markdown、文本文件或可提取文本的 PDF，也能批量读取文件夹，或把 Obsidian 仓库接为来源。扫描版 PDF 需先提取文本。
+- **快速记录：** 直接在桌面 app 记下想法或决策，不必先打开 AI 对话。
+- **[请 AI 记住工作重点](https://wenlan.app/learn/ai-memory-provenance)：** 请 AI 工具记下决策、经验、更正、偏好与事实，保留来源及替代的旧记录。
+- **导入其他 wiki：** 通过 CLI 或 API 导入外部 OKF wiki，保留来源引用与链接。目前不支持重新导入 Wenlan 自己导出的 OKF。
+
+### 浏览你的个人 wiki
+
+- **[可编辑、有来源的页面](https://wenlan.app/docs/source-backed-pages)：** 把相关文档与记忆整理成 Markdown 页面，附引用与页面链接。
+- **卡片或列表：** 用适合自己的方式浏览页面、实体与空间。
+- **[知识图谱](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 探索人物、项目、主张与支撑记忆之间的关系。
+
+### 配合 AI 继续工作
+
+- **[换个 AI，也能接着用](https://wenlan.app/docs/architecture)：** 连接后，Claude Code、Codex 与其他 MCP 客户端，可使用和桌面 app、CLI 相同的本地页面与记忆。
+- **[原词与语义搜索](docs/technical-foundations.md#retrieval-pipeline)：** 结合精确匹配与本地语义搜索，图谱关系可补充相关背景。
+- **[需要时，搜索得更细](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选择搜索页面与更细致的记忆，并重新排序结果。
+- **[不同项目，分开管理](https://wenlan.app/docs/spaces)：** 用空间选择 AI 这次要搜索的工作、个人、客户或代码库知识。
+- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你授权的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
+- **接入自己的工具：** 通过本地 HTTP API 传入准备好的文本、网页内容或记忆；它接收内容，不会代为抓取网址。
+
+### 持续更新与维护
+
+后台整理与页面更新是可选功能，需要先[配置模型](#models-and-privacy)。
+
+- **增量同步：** 文件与文件夹会在后台追踪变化；Obsidian 仓库保持只读，需要时再同步。
+- **[整理已存的知识](docs/technical-foundations.md#typed-memory-schema)：** 配置模型后，可协助补上类型、字段、相关日期、标签、搜索提示与图谱链接。
+- **有引用才更新：** 自动更新会拒绝引用不足的草稿。AI 生成的页面可以更新；你编辑过的页面则先提出修订。
+- **[需要判断才审核](https://wenlan.app/docs/review-and-trust)：** 审核受保护的冲突、页面修订、实体合并与新词汇。
+- **进度看得见：** 在 Activity 查看进度与受阻原因。本地服务运行时，关闭 app 窗口后仍可继续执行已配置的同步、补全与符合条件的页面更新。
+
+### 保有数据与控制权
+
+- **[数据在本地，也能检查](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 保留 Markdown 页面、引用、修订、git 历史与 Obsidian 导出；记忆与图谱存于本地 libSQL。
+- **把 wiki 带走：** 从设置或 CLI，把各空间符合条件的页面导出成 OKF v0.2 wiki。这是 wiki 导出，不是完整数据库备份。
+- **[模型自己选](docs/technical-foundations.md#model-roles)：** 基础检索留在本机。可选的补全与页面合成能用设备端 Qwen、本地接口或云端模型；远程服务会收到该任务所需的内容。
+- **检查问题，确认后修复：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 与 [lint](plugin/skills/lint/SKILL.md) 只报告问题，不改写知识。支持的修复可在 app 预览，确认后应用并验证。
+
+**从一段值得留下的对话开始。** [开始使用](#start-in-30-seconds)。想之后再试，也可以先给这个 repo 一颗 Star，方便回来找到它。
 
 ---
 
@@ -262,18 +329,44 @@ a1b2c3d distill: 4 pages
 
 ## 日常流程
 
-日常使用分成一个小循环：取回相关知识、保存工作重点、以 handoff 收尾，再由 Wenlan 整理下次需要的内容。每一轮都改善同一个知识库，不再累积互不相连的历史。
+AI 工具连接好后，可以直接这样说：
 
-这个循环分成四步：
+### 开始工作前
 
-1. **工作时随手保存与查找。** `/capture <thing>` 保存决策、经验、踩坑或事实，并记录来源。`/recall <query>` 只取回相关内容，不加载全部历史。
-2. **找到最新知识。** 打开相关 Page、搜索，或使用 `/recall <query>`；`/brief [topic]` 读取 Brief（Space 的滚动项目摘要，由 `/handoff` 首次写入）；提供 topic 时，会另行附上同一 Space 的相关上下文。其他 AI 工具可使用等价的 page、search、recall 与 brief 工具。
-3. **闭合循环。** `/handoff` 记录本次改动，并把类型化的逐项更新应用到当前 Space Brief。
-4. **让 wiki 保持最新。** `/distill` 主动建立或刷新页面。可选的模型流程会在两次工作之间补充已保存内容、连接相关知识，并刷新符合条件的页面。`/lint` 检查知识库健康状态；`/curate` 让你审核页面更新提案，以及可选 Reconcile 流程产生的冲突项目。
+> 找出我存进 Wenlan 的［主题］相关资料，包括之前的决定与来源。
+
+### 得到有用的结论时
+
+> 把这个决定、背后的原因和来源记到 Wenlan。
+
+### 值得整理成页面时
+
+> 把［主题］的已存资料整理成 Wenlan 页面，已有的就更新，并保留引用。
+
+在 Wenlan 里阅读、编辑页面、查看来源。下次做相关工作时，请 AI 先读这一页，再接着做。
+
+<details>
+<summary>插件指令与维护</summary>
+
+- **找回背景：** `/recall <query>` 搜索已存的知识。`/brief [topic]` 读取当前空间的项目摘要；加上主题时，会补充同一空间的相关内容。
+- **留下重点：** `/capture <thing>` 记下决策、经验、更正、偏好或事实，并保留来源。
+- **工作收尾：** `/handoff` 记录这次的进展，创建或更新空间的项目摘要，方便下次继续。
+- **整理与审核：** `/distill` 创建或更新 wiki 页面。`/lint` 检查知识库状态；`/curate` 审核待处理的记录或修订。
+
+这些快捷指令由 Wenlan 插件提供。其他已连接的客户端使用对应的 MCP 工具。可选的后台整理与页面更新需要先[配置模型](#models-and-privacy)。
+
+[完整指令参考](plugin/skills/README.md)。
+
+</details>
+
+<details>
+<summary>CLI 离线队列详情</summary>
 
 ### 离线队列（outbox）
 
 如果本地守护进程无法访问，`wenlan capture` 和 `wenlan brief update` 会把请求写入本地持久化队列（outbox）并正常退出。守护进程恢复后，它会通过常规 HTTP 路由排空这些写入；用 `wenlan outbox status` 查看队列，或用 `wenlan outbox drain` 立即重放。被守护进程直接拒绝的写入（4xx，例如未通过内容质量检查）会带着回执移动到 `outbox/failed/`，而不是无限重试；传输失败或服务器错误（5xx）则留在队列中等待下一次排空，排空每 60 秒自动运行一次。
+
+</details>
 
 <a id="models-and-privacy"></a>
 

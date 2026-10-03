@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=603283f413172fd3f030ff46b9874aabde127cbd4434e6b1b4a4f6720400154c -->
+<!-- README_SYNC: source=README.md sha256=7b969d289e5ca8e0a1295d0f080322c6710dd6565349b38211c116b28d5fa68f -->
 
 <p align="center">
   <picture>
@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <a href="https://github.com/7xuanlu/wenlan/releases/latest">Descargar&nbsp;la&nbsp;aplicación</a> ·
-  <a href="#mcp-setup">Configurar&nbsp;con&nbsp;tu&nbsp;IA</a>
+  <a href="#mcp-setup">Conectar&nbsp;tu&nbsp;IA</a>
 </p>
 
 ---
@@ -48,23 +48,17 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 ## Primeros pasos
 
-**Antes de empezar:** guardar y buscar no requieren un modelo generativo. La organización en segundo plano mediante IA requiere configurar un modelo local o en la nube. Como alternativa, usa una herramienta de IA conectada para organizar páginas de forma explícita. Instalar Wenlan por sí solo no activa la generación automática de páginas.
-
-Wenlan funciona como un único daemon local. La aplicación de escritorio lo lleva dentro; la instalación sin interfaz te da ese mismo daemon sin ventana. En ambos casos, tus clientes de IA acceden a la misma base de conocimiento.
-
 <a id="start-with-the-app"></a>
 <a id="open-the-wiki"></a>
 <a id="desktop-app"></a>
 
-### Aplicación de escritorio
+### 1. Descarga y abre Wenlan
 
-Descarga desde la [página de Releases](https://github.com/7xuanlu/wenlan/releases/latest):
+[Descarga la aplicación](https://github.com/7xuanlu/wenlan/releases/latest) y ábrela tras instalarla:
 
-- **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada, así que no hay ningún aviso en el primer arranque. Desde el terminal en su lugar: `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"` (descarga, comprueba el SHA-256, la mueve a Aplicaciones).
-- **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado, así que cuando SmartScreen muestre "Windows protegió su PC", elige "Más información" y luego "Ejecutar de todas formas".
-- **Linux:** todavía no tiene versión de escritorio; usa el entorno de ejecución sin interfaz de abajo.
-
-La aplicación incluye el daemon, la CLI y el conector MCP, arranca el daemon al abrirse y ofrece conectar los clientes de IA que detecta: el plugin para Claude Code y Codex, una entrada MCP para el resto. Para actualizar, arrastra la aplicación nueva sobre la antigua y ábrela (Wenlan 0.17.0 y anteriores hay que cerrarlos a mano antes).
+- **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada.
+- **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado. Si SmartScreen muestra un aviso, confirma que lo has descargado de la página oficial de Releases antes de elegir "Más información" → "Ejecutar de todas formas".
+- **Linux:** todavía no tiene versión de escritorio; sigue la [guía de configuración](docs/setup-with-ai.md#install-the-runtime) para usar Wenlan con tus herramientas de IA sin la aplicación.
 
 <a id="claude-code-in-30-seconds"></a>
 
@@ -73,36 +67,85 @@ La aplicación incluye el daemon, la CLI y el conector MCP, arranca el daemon al
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### Configuración con tu IA
+### 2. Conecta tus IA a la misma wiki
 
-Pega esto en Claude Code, Codex o cualquier otra herramienta que pueda seguir una guía de configuración:
+En la configuración de Wenlan, conecta Claude Code, Codex u otras herramientas de IA compatibles para que usen el mismo conocimiento.
+
+<details>
+<summary>¿Necesitas ayuda? Pídesela a tu IA</summary>
+
+Reinicia tu herramienta de IA si se te indica. Si necesitas ayuda con la configuración, pega esto en Claude Code, Codex u otra herramienta que pueda seguir una guía:
 
 ```text
-Configura Wenlan para este cliente de IA siguiendo:
+Conecta esta herramienta de IA a Wenlan siguiendo:
 https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
-Instala solo lo que este cliente necesite. Luego verifica el entorno de ejecución local,
-su conexión con Wenlan y un ciclo completo de captura/recuerdo.
+Reutiliza mi instalación de Wenlan si ya existe.
+Configura solo esta herramienta y comprueba que puede guardar y recuperar
+una memoria de prueba.
 ```
 
-La guía detecta qué cliente estás utilizando y mantiene los comandos específicos del cliente fuera de este README. No configura todas las herramientas de IA a menos que se lo pidas.
+</details>
 
-¿Necesitas solo el entorno de ejecución (headless) en macOS Apple Silicon?
+### 3. Guarda tu trabajo para retomarlo
+
+> Convierte lo más importante de esta conversación en una página de Wenlan.
+
+<details>
+<summary>Modelos, instalación y actualizaciones</summary>
+
+**Modelos**
+
+Puedes pedirle a tu IA conectada que organice las páginas. Para que Wenlan las organice en segundo plano, [configura un modelo](#models-and-privacy).
+
+**Instalar la aplicación de macOS desde el terminal**
+
+El instalador descarga la aplicación, comprueba su SHA-256 y la mueve a Aplicaciones:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+```
+
+**Sin la aplicación de escritorio**
+
+En macOS Apple Silicon:
 
 ```bash
 npx -y wenlan setup
 ```
 
+`npx` requiere Node.js. Si no lo tienes, ejecuta `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash` y después `wenlan setup --basic`.
+
 Esto descarga la CLI precompilada, el daemon y el conector MCP, inicia el entorno local y lo verifica. No se requiere toolchain de Rust ni Cargo. Linux x64/ARM64 con glibc tiene una [ruta de configuración automática de shell](docs/setup-with-ai.md#install-the-runtime); Windows x64 utiliza el archivo correspondiente de [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel actualmente [no tiene una instalación completa soportada del runtime](crates/wenlan-cli/README.md#macos-intel).
 
-Instrucciones manuales y específicas por cliente: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/.claude-plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
+**Qué se instala y cómo actualizar**
+
+La aplicación incluye el daemon, la CLI y el conector MCP. Inicia el daemon al abrirse y ofrece conectar los clientes detectados mediante el plugin de Claude Code o Codex, o una entrada MCP para otros clientes compatibles. La instalación sin interfaz ejecuta el mismo daemon sin ventana; en ambos casos, tus herramientas de IA usan la misma base de conocimiento local.
+
+Para actualizar la aplicación de macOS, arrastra la nueva sobre la antigua y ábrela. Cierra manualmente Wenlan 0.17.0 y anteriores antes de hacerlo.
+
+Instrucciones manuales y específicas por herramienta: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
+
+</details>
+
 
 ---
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
 
-## ¿Qué es esto?
+<a id="qué-es-esto"></a>
+
+## Tu wiki, para ti y tu IA
+
+- **Retoma donde lo dejaste.** Pide a Claude Code o Codex que use una página existente de Wenlan para tu siguiente tarea.
+- **Consulta de dónde viene una respuesta.** Abre las citas de una página para ver los documentos, conversaciones o decisiones guardadas que la sustentan.
+- **Mantén el control de tus cambios.** Cuando Wenlan actualiza automáticamente una página que has editado, propone cambios para que los revises.
+
+Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
+
+<details>
+<summary>Cómo funciona: fuentes, memoria, búsqueda y actualizaciones</summary>
 
 Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
 
@@ -228,6 +271,8 @@ a1b2c3d distill: 4 pages
 9f8e7d6 session: embedding-work
 ```
 
+</details>
+
 ---
 
 <a id="what-you-get"></a>
@@ -236,24 +281,47 @@ a1b2c3d distill: 4 pages
 
 ## Capacidades
 
-- **Importación de chats:** Importa archivos ZIP de exportación de ChatGPT o Claude; Wenlan omite automáticamente las conversaciones ya importadas.
-- **Fuentes de documentos:** Ingiere un archivo `.md`, `.txt` o `.pdf` del que se pueda extraer texto; procesa de forma recursiva una carpeta que los contenga; o indexa el Markdown de un vault de Obsidian.
-- **Sincronización incremental:** Las Fuentes de archivos y carpetas regulares rastrean los cambios en segundo plano; los vaults de Obsidian permanecen de solo lectura y se resincronizan bajo demanda.
-- **Memoria Atómica:** Los clientes MCP guardan una sola decisión, lección, corrección, preferencia o hecho completo, con [procedencia y sustitución](https://wenlan.app/learn/ai-memory-provenance) que registran de dónde vino y qué reemplaza.
-- **[Enriquecimiento tipado](docs/technical-foundations.md#typed-memory-schema):** Un modelo configurado clasifica cada Memoria y luego añade los campos estructurados definidos para su tipo, además de fechas, etiquetas, pistas de recuperación y enlaces de grafo.
-- **[Páginas respaldadas por fuentes](https://wenlan.app/docs/source-backed-pages):** Destila Fuentes y Memorias relacionadas en Páginas Markdown con referencias de fuente y `[[wikilinks]]`; el daemon puede verificar y registrar citas por afirmación.
-- **Actualización condicionada por citas:** La actualización automática rechaza borradores con pocas citas; las Páginas de máquina se actualizan mientras que las ediciones humanas se convierten en revisiones revisables.
-- **[Recuperación híbrida](docs/technical-foundations.md#retrieval-pipeline):** FTS5 encuentra palabras exactas, embeddings BGE locales encuentran el significado y RRF fusiona sus rangos; los enlaces de grafo pueden añadir contexto.
-- **[Canales de recuperación](docs/technical-foundations.md#optional-channels-and-defaults):** Canales opcionales de Página, episódicos y por hecho amplían la recuperación; la re-clasificación por cross-encoder puede mejorar la precisión.
-- **[Grafo de conocimiento](docs/technical-foundations.md#graph-data-and-entity-resolution):** Entidades tipadas, relaciones y observaciones conectan personas, proyectos, afirmaciones y Memorias de apoyo.
-- **[Revisión con intervención humana](https://wenlan.app/docs/review-and-trust):** El trabajo rutinario sigue siendo automático; los conflictos protegidos, las revisiones de Páginas, las fusiones de entidades y el vocabulario nuevo esperan juicio humano.
-- **[Espacios](https://wenlan.app/docs/spaces):** Mantén el conocimiento laboral, personal, de clientes y de repositorio dentro de un alcance de recuperación explícito.
-- **[Daemon local + MCP](https://wenlan.app/docs/architecture):** Un daemon de Rust ligero es la única fuente de verdad local. La aplicación de escritorio y la CLI lo llaman directamente; los clientes de IA utilizan pequeños conectores MCP para acceder al mismo conocimiento.
-- **Integraciones personalizadas:** La API HTTP de localhost acepta texto preparado, contenido de páginas web y Memorias de otros flujos de captura.
-- **Mantenimiento en segundo plano:** El daemon sigue trabajando después de cerrar la aplicación de escritorio, ejecutando la sincronización configurada, el enriquecimiento, el trabajo de citas y la actualización de Páginas elegibles.
-- **[Elección de modelo](docs/technical-foundations.md#model-roles):** La recuperación base permanece local; el enriquecimiento y la síntesis pueden usar Qwen en el dispositivo, un endpoint local o un modelo en la nube configurado.
-- **[Propiedad inspeccionable](https://wenlan.app/learn/markdown-local-index-ai-memory):** Las Memorias y los datos del grafo permanecen en libSQL local; el Markdown, las citas, las revisiones, el historial de git y las exportaciones de Obsidian permanecen inspeccionables.
-- **Comprobaciones de estado de solo lectura:** [`doctor`](https://wenlan.app/docs/diagnostics-and-issue-reports) verifica el runtime; [`lint`](plugin/skills/lint/SKILL.md) encuentra citas mal formadas, enlaces huérfanos, embeddings rotos y problemas de integridad del índice de búsqueda o del grafo sin reescribir el conocimiento.
+### Incorpora tu material
+
+- **Conserva conversaciones útiles con IA:** Importa archivos ZIP de ChatGPT o Claude sin duplicar conversaciones ya importadas.
+- **Incorpora tus notas actuales:** Incorpora Markdown, texto o PDF con texto extraíble, por archivo o carpeta; indexa un vault de Obsidian. Los PDF escaneados requieren extraer el texto primero.
+- **Captura rápida:** Guarda una idea o decisión directamente en la aplicación de escritorio sin abrir un chat con IA.
+- **[Guarda decisiones con tu IA](https://wenlan.app/learn/ai-memory-provenance):** Pide a tu herramienta de IA que guarde decisiones, lecciones, correcciones, preferencias y hechos, con sus fuentes y los registros que sustituyen.
+- **Importa otra wiki:** Importa una wiki OKF externa mediante la CLI o la API, conservando referencias y enlaces. No se admite reimportar las propias exportaciones OKF de Wenlan.
+
+### Explora tu wiki personal
+
+- **[Páginas editables con fuentes](https://wenlan.app/docs/source-backed-pages):** Convierte documentos y Memorias relacionados en Páginas Markdown con citas y enlaces a otras Páginas.
+- **Tarjetas o listas:** Explora Páginas, Entidades y Espacios con la vista que prefieras.
+- **[Grafo de conocimiento](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explora conexiones entre personas, proyectos, afirmaciones y las Memorias que las respaldan.
+
+### Úsalo con tus herramientas de IA
+
+- **[Continúa con otra herramienta de IA](https://wenlan.app/docs/architecture):** Una vez conectados, Claude Code, Codex y otros clientes MCP pueden usar las mismas Páginas y Memorias locales que la aplicación de escritorio y la CLI.
+- **[Busca por palabras y significado](docs/technical-foundations.md#retrieval-pipeline):** Combina coincidencias exactas con búsqueda semántica local; las conexiones del grafo pueden aportar contexto.
+- **[Búsqueda avanzada opcional](docs/technical-foundations.md#optional-channels-and-defaults):** Busca en Páginas y Memorias más detalladas, con reordenación opcional para afinar los resultados.
+- **[Separa tus proyectos](https://wenlan.app/docs/spaces):** Usa Espacios para elegir qué conocimiento laboral, personal, de clientes o de repositorios busca tu IA.
+- **Acceso web (experimental):** Conecta un cliente web de IA compatible a un Espacio autorizado mientras tu ordenador está conectado. Las consultas y los resultados pasan por un relay; consulta el [funcionamiento del acceso y sus límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
+- **Conecta tus propias herramientas:** Envía texto preparado, contenido web o Memorias mediante la API HTTP local. Acepta contenido, no URL para descargar.
+
+### Mantén el conocimiento al día
+
+La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
+
+- **Sincronización incremental:** Las Fuentes de archivos y carpetas rastrean cambios en segundo plano. Los vaults de Obsidian siguen siendo de solo lectura y se sincronizan bajo demanda.
+- **[Organiza el conocimiento guardado](docs/technical-foundations.md#typed-memory-schema):** Un modelo configurado puede añadir tipos, detalles estructurados, fechas relevantes, etiquetas, pistas de búsqueda y enlaces del grafo a las Memorias.
+- **Actualizaciones respaldadas por citas:** La actualización automática rechaza borradores con citas insuficientes. Las Páginas generadas por IA pueden actualizarse; los cambios en las que has editado se proponen para revisión.
+- **[Revisa cuando hace falta criterio](https://wenlan.app/docs/review-and-trust):** Revisa conflictos protegidos, cambios de Páginas, fusiones de entidades y vocabulario nuevo.
+- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, el enriquecimiento y las actualizaciones de Páginas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
+
+### Conserva tus datos y el control
+
+- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/markdown-local-index-ai-memory):** Conserva Páginas Markdown, citas, revisiones, historial de git y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
+- **Llévate tu wiki:** Exporta las Páginas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
+- **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. El enriquecimiento y la síntesis opcionales pueden usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
+- **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
+
+**Empieza con una conversación que merezca conservarse.** [Primeros pasos](#start-in-30-seconds). Si prefieres probarlo más adelante, guarda este repositorio con una estrella.
 
 ---
 
@@ -262,18 +330,44 @@ a1b2c3d distill: 4 pages
 
 ## Flujo diario
 
-El sistema anterior se convierte en un pequeño bucle diario: comienza con el conocimiento relevante, captura lo que importa mientras trabajas, cierra con una entrega (handoff) y deja que Wenlan refine lo que debería volver la próxima vez. Cada paso deja la misma base de conocimientos más refinada en lugar de crear otro historial desconectado.
+Una vez conectada tu herramienta de IA, puedes pedirle lo que necesitas con tus propias palabras:
 
-El bucle tiene cuatro pasos:
+### Antes de empezar una tarea
 
-1. **Encontrar el conocimiento actual.** Abre una Página relevante, busca o usa `/recall <consulta>`; `/brief [tema]` lee el Brief del Espacio actual y, si proporcionas un tema, añade contexto etiquetado por separado de ese mismo Espacio. Los clientes sin comandos de plugin usan las herramientas equivalentes de página, búsqueda, recuerdo y brief.
-2. **Capturar y encontrar conocimiento mientras trabajas.** `/capture <cosa>` guarda una decisión, lección, advertencia o hecho con su fuente. `/recall <consulta>` recupera solo lo que es relevante en lugar de cargar todo tu historial.
-3. **Cerrar el bucle.** `/handoff` registra qué cambió y aplica actualizaciones tipadas a cada elemento del Brief del Espacio actual.
-4. **Mantener la wiki actualizada.** `/distill` crea o actualiza páginas deliberadamente. Entre sesiones, pasos opcionales basados en modelos pueden enriquecer capturas, conectar entidades relacionadas y actualizar páginas elegibles. `/lint` verifica la salud del conocimiento; `/curate` te presenta las revisiones propuestas y cualquier elemento de revisión de conflictos creado por el paso de reconciliación opcional.
+> Busca lo que he guardado en Wenlan sobre [tema], incluidas las decisiones anteriores y sus fuentes.
+
+### Cuando llegues a una conclusión útil
+
+> Guarda esta decisión y por qué la tomamos en Wenlan, con sus fuentes.
+
+### Cuando un tema merezca una página
+
+> Crea o actualiza una página de Wenlan sobre [tema] con el material que hemos guardado. Conserva las citas.
+
+Abre la página en Wenlan para leerla, editarla y consultar sus fuentes. La próxima vez, pide a tu IA que la use para continuar el trabajo.
+
+<details>
+<summary>Comandos del plugin y mantenimiento</summary>
+
+- **Recupera el contexto:** `/recall <consulta>` busca en el conocimiento guardado. `/brief [tema]` lee el resumen del proyecto del Espacio actual; un tema opcional añade contexto relacionado de ese mismo Espacio.
+- **Guarda lo importante:** `/capture <contenido>` guarda una decisión, lección, corrección, preferencia o hecho con su fuente.
+- **Cierra la sesión:** `/handoff` registra los avances y crea o actualiza el resumen del proyecto del Espacio para la próxima vez.
+- **Organiza y revisa:** `/distill` crea o actualiza páginas de la wiki. `/lint` comprueba el estado del conocimiento; `/curate` revisa capturas o revisiones pendientes.
+
+Estos comandos están disponibles a través de los plugins de Wenlan. Otros clientes conectados usan las herramientas MCP equivalentes. La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
+
+[Referencia completa de comandos](plugin/skills/README.md).
+
+</details>
+
+<details>
+<summary>Detalles de la cola offline de la CLI</summary>
 
 ### Cola offline (outbox)
 
 Si el daemon local no está accesible, `wenlan capture` y `wenlan brief update` escriben sus solicitudes en una cola local duradera (outbox) y terminan correctamente. Cuando el daemon vuelve, drena esas escrituras por las rutas HTTP normales; revisa la cola con `wenlan outbox status` o pide una reproducción inmediata con `wenlan outbox drain`. Una escritura que el daemon rechaza de plano (un 4xx, por ejemplo al no pasar el control de calidad del contenido) se mueve a `outbox/failed/` con un recibo en lugar de reintentarse para siempre; un fallo de transporte o un error del servidor (5xx) la deja en la cola para el siguiente drenaje, que se ejecuta automáticamente cada 60 segundos.
+
+</details>
 
 <a id="models-and-privacy"></a>
 
