@@ -63,19 +63,14 @@ fi
   runtime:
 
 ```bash
-PLUGIN_JSON="${CLAUDE_PLUGIN_ROOT:-plugin}/.claude-plugin/plugin.json"
-[ -r "$PLUGIN_JSON" ] || PLUGIN_JSON=".claude-plugin/plugin.json"
-EXPECTED_VER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON")"
-RELEASE_VER="${EXPECTED_VER%%+*}"
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash
+npx -y wenlan@0.18.14 setup
 export PATH="$HOME/.wenlan/bin:$PATH"
-wenlan setup --basic
-wenlan background on
 ```
 
-Then continue to the health and version re-probe below. The installer deliberately
-targets the latest stable runtime. Do not downgrade a newer runtime to match a
-stale plugin cache.
+That is the same pinned package step 3 uses; the same platform limits and
+manual fallback apply. Then continue to the health and version re-probe below.
+The package deliberately installs the latest stable runtime. Do not downgrade a
+newer runtime to match a stale plugin cache.
 
 ### 3. Bootstrap
 
@@ -85,14 +80,21 @@ Detect whether the `wenlan` CLI is on PATH:
 command -v wenlan >/dev/null 2>&1 && echo present || echo absent
 ```
 
-If absent, install and configure local memory:
+If absent, install and configure local memory with the `wenlan` npm package,
+pinned to this plugin's exact version. It installs the runtime into
+`~/.wenlan/bin`, runs `wenlan setup --basic` and `wenlan background on`, and
+prints the status:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.18.14/install.sh | bash
+npx -y wenlan@0.18.14 setup
 export PATH="$HOME/.wenlan/bin:$PATH"
-wenlan setup --basic
-wenlan background on
 ```
+
+The package supports macOS Apple Silicon and needs Node.js. On any other
+platform, or when `npx` is missing or the command fails, do not fetch or run an
+installer yourself. Stop and tell the user to install the runtime by following
+<https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
+then run `/wenlan:setup` again.
 
 If present but the local runtime is down:
 

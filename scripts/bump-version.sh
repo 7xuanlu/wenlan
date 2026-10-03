@@ -70,15 +70,18 @@ fi
 grep -q "npx -y wenlan-mcp@${NEW_VERSION} " "$CLAUDE_RUNNER" || { echo "ERROR: $CLAUDE_RUNNER has no exact wenlan-mcp pin to rewrite" >&2; exit 1; }
 echo "  Updated $CLAUDE_RUNNER (exact wenlan-mcp pin)"
 
-# 5. /setup skill install.sh URL pinned to current tag (not `main`), so the
-# install one-liner is reproducible at the release boundary.
+# 5. /setup skill installer pins. The Claude directory only lets a plugin run
+# repository code or a package pinned to an exact version, so the Claude skill
+# carries a literal `npx -y wenlan@X.Y.Z setup`. The Codex skill keeps its
+# install.sh URL pinned to the current tag (not `main`).
 SETUP_SKILL="plugin/skills/setup/SKILL.md"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$SETUP_SKILL"
+    sed -i '' -E "s|(npx -y wenlan@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( setup)|\\1${NEW_VERSION}\\3|g" "$SETUP_SKILL"
 else
-    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$SETUP_SKILL"
+    sed -i -E "s|(npx -y wenlan@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( setup)|\\1${NEW_VERSION}\\3|g" "$SETUP_SKILL"
 fi
-echo "  Updated $SETUP_SKILL (install.sh tag pin)"
+grep -q "npx -y wenlan@${NEW_VERSION} setup" "$SETUP_SKILL" || { echo "ERROR: $SETUP_SKILL has no exact wenlan pin to rewrite" >&2; exit 1; }
+echo "  Updated $SETUP_SKILL (exact wenlan npm pin)"
 
 CODEX_SETUP_SKILL="plugin-codex/skills/setup/SKILL.md"
 if [[ "$(uname)" == "Darwin" ]]; then

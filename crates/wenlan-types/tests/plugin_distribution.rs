@@ -45,7 +45,6 @@ fn plugin_setup_repairs_stale_daemon_versions() {
             "Compare daemon version vs plugin manifest version",
             "If mismatch, check the direction before repairing.",
             "Only if the daemon release is older than the plugin release, repair the",
-            "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash",
             "wenlan setup --basic",
             "wenlan background on",
             "Runtime and plugin versions still differ after repair",
@@ -69,6 +68,20 @@ fn plugin_setup_repairs_stale_daemon_versions() {
             "/setup skill should not advertise the removed /init command"
         );
     }
+
+    // The Claude directory only lets a plugin run repository code or a package
+    // pinned to an exact version, so the Claude skill installs through the
+    // pinned `wenlan` npm package and never pipes a download into a shell.
+    assert!(
+        setup.contains("npx -y wenlan@") && !setup.contains("install.sh"),
+        "Claude /setup must install through the pinned wenlan npm package, not install.sh"
+    );
+    assert!(
+        codex_setup.contains(
+            "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash"
+        ),
+        "Codex /setup missing stale-daemon repair contract: tag-pinned install.sh"
+    );
 
     assert!(
         hook.contains("Run /wenlan:setup to repair"),
