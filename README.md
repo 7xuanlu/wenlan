@@ -140,17 +140,17 @@ Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.
 
 Your pages are local Markdown files you can read, edit, and take with you.
 
-<details>
-<summary>How it works: sources, memory, search, and updates</summary>
-
-Wenlan gives ongoing work a place outside the chat window. Keep selected documents and conversations, save decisions made along the way, and organize them into pages you can read, edit, and reuse. Page generation and background maintenance depend on the [configured AI path](#models-and-privacy).
-
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
     <img src="./docs/assets/wenlan-system.png" alt="Sources and memories independently support a maintained Page. Wenlan can rebuild a stale Page from its current support; optional conflict review can surface protected conflicts, and changes to human writing wait for the user." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>How sources, memories, and pages work together</summary>
+
+Wenlan gives ongoing work a place outside the chat window. Keep selected documents and conversations, save decisions made along the way, and organize them into pages you can read, edit, and reuse. Page generation and background maintenance depend on the [configured AI path](#models-and-privacy).
 
 <a id="what-wenlan-is-not"></a>
 
@@ -166,11 +166,11 @@ Wenlan gives ongoing work a place outside the chat window. Keep selected documen
 
 For technical readers: Wenlan follows the **LLM wiki** pattern. See the [implementation guide](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) and [technical foundations](docs/technical-foundations.md) for the data model, retrieval, and maintenance rules.
 
+</details>
+
 <a id="knowledge-graph"></a>
 
 ### A knowledge graph that gets more useful over time
-
-The entity-relation graph is one part of Wenlan's wider connected wiki. **Knowledge Pages** hold maintained synthesis, **Entities** anchor reusable people, projects, and concepts, **Source Pages** make imported or synchronized material inspectable, and atomic **Memories** preserve decisions and changes. They work through separate, explicit links: Page-to-Page wikilinks, Page evidence, Memory-to-Entity links, and directed Entity relations.
 
 <p align="center">
   <picture>
@@ -178,6 +178,11 @@ The entity-relation graph is one part of Wenlan's wider connected wiki. **Knowle
     <img src="./docs/assets/wenlan-knowledge-network.png" alt="Conceptual model of Wenlan's connected knowledge system, with Knowledge Pages, Source Pages, atomic Memories, and Entities connected through Page links, evidence, Memory-to-Entity links, and Entity relations." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>Graph and search details</summary>
+
+The entity-relation graph is one part of Wenlan's wider connected wiki. **Knowledge Pages** hold maintained synthesis, **Entities** anchor reusable people, projects, and concepts, **Source Pages** make imported or synchronized material inspectable, and atomic **Memories** preserve decisions and changes. They work through separate, explicit links: Page-to-Page wikilinks, Page evidence, Memory-to-Entity links, and directed Entity relations.
 
 Within the entity graph, a configured enrichment model extracts typed Entities, observations, and directed relations from Memories. Entity linking and resolution reuse existing nodes instead of treating every mention as new; each Memory keeps its Source and can link to multiple Entities. [How the connected model is stored ->](docs/technical-foundations.md#connected-knowledge-model)
 
@@ -202,6 +207,8 @@ Wenlan's core search is a local hybrid pipeline, not a single vector lookup. Eac
 
 Page, episodic, and fact channels are opt-in and degrade to the remaining search signals if unavailable. Space still limits the read scope. [Methods, defaults, and limitations ->](docs/technical-foundations.md)
 
+</details>
+
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
@@ -216,6 +223,9 @@ A generated wiki can go stale; a memory store can fragment into disconnected fac
     <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after an explicit superseding capture. When a Page is stale, Wenlan rebuilds it from current Sources and Memories, records the revision, and stages changes to human writing for review." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>Updates, review, and local files</summary>
 
 #### Atomic Memory
 

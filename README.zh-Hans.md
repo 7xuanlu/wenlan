@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7b969d289e5ca8e0a1295d0f080322c6710dd6565349b38211c116b28d5fa68f -->
+<!-- README_SYNC: source=README.md sha256=c19db1b5a08a0ead94e02d391920ed034537c47b71d1f72f696966fee37825ad -->
 
 <p align="center">
   <picture>
@@ -143,17 +143,17 @@ npx -y wenlan setup
 
 页面是本地 Markdown 文件，你可以阅读、编辑，也能带走。
 
-<details>
-<summary>工作原理：来源、记忆、搜索与更新</summary>
-
-Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选定的文档和对话，记下过程中的决定，再把它们整理成可阅读、编辑和重用的页面。页面生成与后台维护需要先配置[AI 路径](#models-and-privacy)。
-
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-zh-Hans-mobile.png">
     <img src="./docs/assets/wenlan-system-zh-Hans.png" alt="来源与记忆分别支撑同一个持续维护的页面。页面过时后，Wenlan 可以依当前依据重建；可选的冲突审核可以让受保护内容的冲突浮现，对人工文字的改动则等待用户判断。" width="100%">
   </picture>
 </p>
+
+<details>
+<summary>来源、记忆与页面如何协作</summary>
+
+Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选定的文档和对话，记下过程中的决定，再把它们整理成可阅读、编辑和重用的页面。页面生成与后台维护需要先配置[AI 路径](#models-and-privacy)。
 
 <a id="what-wenlan-is-not"></a>
 
@@ -169,11 +169,11 @@ Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选�
 
 技术读者可参考：Wenlan 遵循 LLM wiki 模式。数据模型、检索与维护规则请见 [LLM-wiki 实现指南](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory) 和[技术基础](docs/technical-foundations.md)。
 
+</details>
+
 <a id="knowledge-graph"></a>
 
 ### 越用越有价值的知识图谱
-
-实体关系图谱只是 Wenlan 更大连接式 wiki 的一部分。**知识页面**保留持续维护的结论，**实体**固定可复用的人物、项目与概念，**来源页面**让导入或同步的材料可检查，原子**记忆**则保留决策与变化。它们通过彼此分开的明确连接协作：页面间的 wikilink、页面依据、记忆到实体的连接，以及实体间的有向关系。
 
 <p align="center">
   <picture>
@@ -181,6 +181,11 @@ Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选�
     <img src="./docs/assets/wenlan-knowledge-network-zh-Hans.png" alt="Wenlan 连接式知识系统的概念图：知识页面、来源页面、原子记忆与实体通过页面链接、依据、记忆到实体的连接和实体关系互相连接。" width="100%">
   </picture>
 </p>
+
+<details>
+<summary>图谱与搜索的技术细节</summary>
+
+实体关系图谱只是 Wenlan 更大连接式 wiki 的一部分。**知识页面**保留持续维护的结论，**实体**固定可复用的人物、项目与概念，**来源页面**让导入或同步的材料可检查，原子**记忆**则保留决策与变化。它们通过彼此分开的明确连接协作：页面间的 wikilink、页面依据、记忆到实体的连接，以及实体间的有向关系。
 
 在实体图谱这一层，配置 enrichment 模型后，Wenlan 会从记忆中提取带类型的实体、观察与有方向的关系。实体链接与解析会复用已有节点，而不是把每次提及都当成新事物；每条记忆仍保留来源，并可连接多个实体。[查看连接模型如何存储 ->](docs/technical-foundations.md#connected-knowledge-model)
 
@@ -205,6 +210,8 @@ Wenlan 的核心搜索是本地混合检索流程，不是单一的向量查询�
 
 页面、情节记忆与事实（fact）通道都需要主动启用；不可用时会退回其余搜索信号。Space 仍负责限制读取范围。[查看方法、默认值与限制 ->](docs/technical-foundations.md)
 
+</details>
+
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
@@ -219,6 +226,9 @@ Wenlan 的核心搜索是本地混合检索流程，不是单一的向量查询�
     <img src="./docs/assets/wenlan-lifecycle-zh-Hans.png" alt="明确取代旧说法的新记忆仍会保留前后关联。页面过时后，Wenlan 会依当前来源与记忆重建、记录修订，并把对人工文字的改动变成审核提案。" width="100%">
   </picture>
 </p>
+
+<details>
+<summary>更新、审核与本地文件的细节</summary>
 
 #### 原子记忆
 

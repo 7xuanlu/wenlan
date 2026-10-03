@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7b969d289e5ca8e0a1295d0f080322c6710dd6565349b38211c116b28d5fa68f -->
+<!-- README_SYNC: source=README.md sha256=c19db1b5a08a0ead94e02d391920ed034537c47b71d1f72f696966fee37825ad -->
 
 <p align="center">
   <picture>
@@ -144,17 +144,17 @@ Instrucciones manuales y específicas por herramienta: [Configuración asistida 
 
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
-<details>
-<summary>Cómo funciona: fuentes, memoria, búsqueda y actualizaciones</summary>
-
-Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
-
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-system-mobile.png">
     <img src="./docs/assets/wenlan-system.png" alt="Las fuentes y memorias sustentan independientemente una Página mantenida. Wenlan puede reconstruir una Página obsoleta a partir de su sustento actual; la revisión de conflictos opcional puede resaltar conflictos protegidos, y los cambios en la escritura humana esperan al usuario." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>Cómo se conectan las fuentes, memorias y páginas</summary>
+
+Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
 
 <a id="what-wenlan-is-not"></a>
 
@@ -170,11 +170,11 @@ Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puede
 
 Para lectores técnicos: Wenlan sigue el patrón de las wikis para LLM. Consulta la [guía de implementación de LLM wiki](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) y los [fundamentos técnicos](docs/technical-foundations.md) para conocer el modelo de datos, la recuperación y las reglas de mantenimiento.
 
+</details>
+
 <a id="knowledge-graph"></a>
 
 ### Un grafo de conocimiento que se vuelve más útil con el tiempo
-
-El grafo de entidad-relación es una parte de la wiki conectada más amplia de Wenlan. Las **Páginas de Conocimiento** contienen la síntesis mantenida, las **Entidades** anclan personas, proyectos y conceptos reutilizables, las **Páginas de Fuente** hacen que el material importado o sincronizado sea inspeccionable, y las **Memorias** atómicas preservan decisiones y cambios. Funcionan a través de enlaces separados y explícitos: wikilinks de Página a Página, evidencia de Página, enlaces de Memoria a Entidad y relaciones de Entidad dirigidas.
 
 <p align="center">
   <picture>
@@ -182,6 +182,11 @@ El grafo de entidad-relación es una parte de la wiki conectada más amplia de W
     <img src="./docs/assets/wenlan-knowledge-network.png" alt="Modelo conceptual del sistema de conocimiento conectado de Wenlan, con Páginas de Conocimiento, Páginas de Fuente, Memorias atómicas y Entidades conectadas a través de enlaces de Página, evidencia, enlaces de Memoria a Entidad y relaciones de Entidad." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>Detalles del grafo y la búsqueda</summary>
+
+El grafo de entidad-relación es una parte de la wiki conectada más amplia de Wenlan. Las **Páginas de Conocimiento** contienen la síntesis mantenida, las **Entidades** anclan personas, proyectos y conceptos reutilizables, las **Páginas de Fuente** hacen que el material importado o sincronizado sea inspeccionable, y las **Memorias** atómicas preservan decisiones y cambios. Funcionan a través de enlaces separados y explícitos: wikilinks de Página a Página, evidencia de Página, enlaces de Memoria a Entidad y relaciones de Entidad dirigidas.
 
 Dentro del grafo de entidades, un modelo de enriquecimiento configurado extrae Entidades tipadas, observaciones y relaciones dirigidas a partir de las Memorias. El enlace y la resolución de entidades reutilizan nodos existentes en lugar de tratar cada mención como nueva; cada Memoria conserva su Fuente y puede vincularse a múltiples Entidades. [Cómo se almacena el modelo conectado ->](docs/technical-foundations.md#connected-knowledge-model)
 
@@ -206,6 +211,8 @@ La búsqueda central de Wenlan es un pipeline híbrido local, no una simple bús
 
 Los canales de Página, episódicos y de hechos son opcionales y recurren a las señales de búsqueda restantes si no están disponibles. El Espacio sigue limitando el alcance de lectura. [Métodos, valores predeterminados y limitaciones ->](docs/technical-foundations.md)
 
+</details>
+
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
@@ -220,6 +227,9 @@ Una wiki generada puede quedar obsoleta; un almacén de memoria puede fragmentar
     <img src="./docs/assets/wenlan-lifecycle.png" alt="Una memoria anterior permanece vinculada después de una captura de sustitución explícita. Cuando una Página está obsoleta, Wenlan la reconstruye a partir de Fuentes y Memorias actuales, registra la revisión y pone los cambios en la escritura humana en espera para revisión." width="100%">
   </picture>
 </p>
+
+<details>
+<summary>Actualizaciones, revisión y archivos locales</summary>
 
 #### Memoria Atómica
 
