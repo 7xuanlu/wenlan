@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=12b4fe0ec7dca2f1cfb61410f9aa6858c524c0169c99d869b785e2565deeb8a4 -->
+<!-- README_SYNC: source=README.md sha256=fda8304774e07fce492dbec2bd92d13c42f6df9114598eabb4eec4cf8ec2ef28 -->
 
 <p align="center">
   <picture>
@@ -33,7 +33,7 @@ Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链
 https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 <p align="center">
-  <sub>桌面 app 中持续维护的页面：打开任意引用，就能检查这条结论背后的来源或记忆。</sub>
+  <sub>开场为组合示意，并非 app 的原生三栏界面；后续为 app 实际操作录像，展示页面与来源引用。</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -85,11 +85,13 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 ### 3. 创建你的第一页维基
 
-> 把讨论整理成附来源的 Wenlan 主题页。
+在已连接的 AI 工具中，打开一段值得保留的工作对话，选定要整理的主题：
 
-已经有资料？先[导入笔记或 ChatGPT／Claude 导出的对话](#what-can-i-bring-in)，再请 AI 按主题整理成页面。
+> 把这段对话中［主题］的结论与理由，整理成附来源引用的 Wenlan 页面。
 
-打开页面，查看依据、补上自己的想法；之后也能请 AI 根据这一页继续工作。
+也可以先[导入笔记或 ChatGPT／Claude 导出的对话](#what-can-i-bring-in)，再请 AI 把其中一个主题整理成页面。
+
+完成后，在 Wenlan 打开新页面，点击引用查看来源，也能补上自己的想法。下次做相关工作时，请 AI 先读这一页再继续。
 
 后台整理与自动更新是可选功能，需要[设置模型](#models-and-privacy)。终端安装、其他平台与更新方式，请见[设置指南](docs/setup-and-data.zh-Hans.md#installation)。
 

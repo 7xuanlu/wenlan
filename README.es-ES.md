@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=12b4fe0ec7dca2f1cfb61410f9aa6858c524c0169c99d869b785e2565deeb8a4 -->
+<!-- README_SYNC: source=README.md sha256=fda8304774e07fce492dbec2bd92d13c42f6df9114598eabb4eec4cf8ec2ef28 -->
 
 <p align="center">
   <picture>
@@ -33,7 +33,7 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
-  <sub>Una Página mantenida en la aplicación de escritorio: abre cualquier cita para inspeccionar la Fuente o Memoria detrás de la afirmación.</sub>
+  <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con páginas y citas a sus fuentes.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -86,11 +86,13 @@ una memoria de prueba.
 
 ### 3. Crea tu primera página de wiki
 
-> Organiza esta conversación en una página temática de Wenlan con citas a las fuentes.
+En tu herramienta de IA conectada, abre una conversación de trabajo que merezca la pena conservar y elige un tema:
 
-¿Ya tienes material? [Importa notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in) y pídele a tu IA que organice un tema en una página.
+> Organiza las conclusiones, los motivos y las fuentes sobre [tema] de esta conversación en una página de Wenlan con citas a las fuentes.
 
-Abre la página, consulta sus fuentes y añade tus propias ideas. Después, pídele a tu IA que continúe el trabajo a partir de ella.
+También puedes [importar notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in) y pedirle a tu IA que organice uno de sus temas en una página.
+
+Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consultar su fuente y añade tus propias ideas. La próxima vez que trabajes en ese tema, pídele a tu IA que lea esta página antes de continuar.
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 

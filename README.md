@@ -31,7 +31,7 @@ As sources change, you can ask AI to update the pages or enable background updat
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
-  <sub>A maintained Page in the desktop app: open any citation to inspect the Source or Memory behind the claim.</sub>
+  <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including pages and source citations.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -83,11 +83,13 @@ Set up only this AI tool, then check that it can save and find a test memory.
 
 ### 3. Create your first wiki page
 
-> Organize this discussion into a Wenlan topic page with source citations.
+In your connected AI tool, open a work conversation worth keeping and choose a topic:
 
-Already have material? [Import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in), then ask your AI to organize a topic into a page.
+> Turn the conclusions, reasoning, and sources about [topic] in this conversation into a Wenlan page with source citations.
 
-Open the page, check its sources, and add your own thoughts. Later, ask your AI to build on it.
+Or [import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in), then ask your AI to organize a topic from that material into a page.
+
+When it's ready, open the new page in Wenlan, click a citation to check its source, and add your own thoughts. Next time you work on that topic, ask your AI to read this page before continuing.
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
