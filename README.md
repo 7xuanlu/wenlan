@@ -103,7 +103,7 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 
 - **Turn scattered material into connected topics.** Bring documents, notes, and AI conversations together in linked pages, with citations you can open and check.
 - **Read it yourself. Use it with your AI.** Read and edit your pages, or ask Claude Code or Codex to use them for your next task.
-- **Keep knowledge current, with you in control.** When AI updates a page you've edited, you get a proposed revision to review.
+- **Maintain knowledge without starting over.** Track source changes, update related pages, and keep their history. AI proposes revisions to pages you've edited for you to review.
 
 Your pages are local Markdown files you can read, edit, and take with you.
 
@@ -161,7 +161,11 @@ Review applies to AI updates; direct file edits and forced regeneration follow d
 
 ### Already using Obsidian with AI plugins?
 
-AI plugins can already help you read and edit notes in Obsidian. Wenlan brings scattered documents and AI conversations into source-linked topic pages for Claude Code, Codex, and other tools to share, with update history and revision review in one workflow.
+You can use [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) for AI-assisted reading and editing, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) to find related notes, and [Obsidian Git](https://github.com/Vinzent03/obsidian-git) to keep version history. That gives you flexibility, but choosing how the plugins work together, when to organize new material, and how to update older pages is still a workflow you arrange.
+
+Wenlan connects topic-page creation, source-change tracking, page updates, and revision history in one workflow, saving you the work of assembling and maintaining those steps yourself. You can read the resulting knowledge directly or let Claude Code, Codex, and other tools build on it.
+
+Ask your connected AI to update a page, or [configure a model](#models-and-privacy) to enable background updates. When AI updates a page you've edited, Wenlan proposes a revision for you to review.
 
 Connect your existing Obsidian vault as a read-only source without moving your notes. Wenlan does not modify the vault or sync changes back to it.
 
@@ -222,27 +226,39 @@ Optional background organization and Page updates need a [configured model](#mod
 
 Once your AI tool is connected, you can ask in plain language:
 
+With the Wenlan plugin installed, you can also use the slash commands below.
+
 ### Before starting a task
 
 > Find what I've saved in Wenlan about [topic], including earlier decisions and their sources.
+
+Shortcut: `/recall [topic]`
 
 ### When you reach a useful conclusion
 
 > Save this decision and why we made it in Wenlan, with its sources.
 
+Shortcut: `/capture [decision, reasons, and sources]`
+
 ### When a topic deserves a page
 
 > Create or update a Wenlan page on [topic] from the material we've saved. Keep the citations.
 
+To organize saved knowledge into pages: `/distill`
+
 Open the page in Wenlan to read, edit, and check its sources. Next time, ask your AI to use it for your next task.
+
+### When you wrap up
+
+> Save this session's progress, decisions, and open questions in Wenlan so we can pick up next time.
+
+Shortcut: `/handoff`
 
 <details>
 <summary>Plugin commands and maintenance</summary>
 
-- **Find context:** `/recall <query>` searches saved knowledge. `/brief [topic]` reads the current Space's project summary; an optional topic adds related context from that Space.
-- **Save what matters:** `/capture <thing>` saves a decision, lesson, correction, preference, or fact with its source.
-- **Wrap up a session:** `/handoff` records what changed and creates or updates the Space's project summary for next time.
-- **Organize and review:** `/distill` creates or refreshes wiki pages. `/lint` checks knowledge health; `/curate` reviews pending captures or revisions.
+- **Read the project summary:** `/brief [topic]` reads the current Space's project summary; an optional topic adds related context from that Space.
+- **Check and review:** `/lint` checks knowledge health; `/curate` reviews pending captures or revisions.
 
 These shortcuts are available through the Wenlan plugins. Other connected clients use the equivalent MCP tools. Optional background organization and Page updates need a [configured model](#models-and-privacy).
 

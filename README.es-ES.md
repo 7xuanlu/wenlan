@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=b77341f8e404a56fe06c7ba6c68f47e9a7fa022661bd13fb0618f7be20d77cdc -->
+<!-- README_SYNC: source=README.md sha256=12b4fe0ec7dca2f1cfb61410f9aa6858c524c0169c99d869b785e2565deeb8a4 -->
 
 <p align="center">
   <picture>
@@ -107,7 +107,7 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 
 - **Reúne material disperso por temas.** Organiza documentos, notas y conversaciones con IA en páginas conectadas, con citas que puedes abrir y comprobar.
 - **Para ti y para tu IA.** Lee y edita tus páginas, o pide a Claude Code o Codex que las use para continuar el trabajo.
-- **Conocimiento actualizado, bajo tu control.** Cuando la IA actualiza una página que has editado, te propone una revisión para que decidas si aceptarla.
+- **Mantén tu conocimiento sin empezar de cero.** Sigue los cambios en las fuentes, actualiza las páginas relacionadas y conserva su historial. La IA propone las revisiones de las páginas que has editado para que decidas si aceptarlas.
 
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
@@ -166,7 +166,11 @@ La revisión se aplica a las actualizaciones de la IA; la edición directa de ar
 
 ### ¿Ya usas Obsidian con plugins de IA?
 
-Los plugins de IA ya pueden ayudarte a leer y editar notas en Obsidian. Wenlan reúne documentos y conversaciones con IA dispersos en páginas temáticas con enlaces a sus fuentes, que Claude Code, Codex y otras herramientas pueden compartir, con historial de cambios y revisión de propuestas en un mismo flujo de trabajo.
+Puedes usar [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) para leer y editar notas con IA, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) para encontrar contenido relacionado y [Obsidian Git](https://github.com/Vinzent03/obsidian-git) para conservar el historial de versiones. Tienes mucha flexibilidad, pero debes decidir cómo combinar los plugins, cuándo organizar el material nuevo y cómo actualizar las páginas anteriores.
+
+Wenlan reúne la creación de páginas temáticas, el seguimiento de cambios en las fuentes, las actualizaciones y el historial de revisiones en un mismo flujo de trabajo, ahorrándote el trabajo de conectar y mantener esos pasos por tu cuenta. Puedes leer el conocimiento organizado o dejar que Claude Code, Codex y otras herramientas lo usen para continuar el trabajo.
+
+Pide a tu IA conectada que actualice una página o [configura un modelo](#models-and-privacy) para activar las actualizaciones en segundo plano. Si has editado una página, Wenlan te propone la revisión para que decidas si aceptarla.
 
 Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus notas. Wenlan no modifica la bóveda ni sincroniza los cambios de vuelta.
 
@@ -227,27 +231,39 @@ La organización y las actualizaciones de Páginas en segundo plano son opcional
 
 Una vez conectada tu herramienta de IA, puedes pedirle lo que necesitas con tus propias palabras:
 
+Con el plugin de Wenlan instalado, también puedes usar los comandos con barra que aparecen a continuación.
+
 ### Antes de empezar una tarea
 
 > Busca lo que he guardado en Wenlan sobre [tema], incluidas las decisiones anteriores y sus fuentes.
+
+Atajo: `/recall [tema]`
 
 ### Cuando llegues a una conclusión útil
 
 > Guarda esta decisión y por qué la tomamos en Wenlan, con sus fuentes.
 
+Atajo: `/capture [decisión, motivos y fuentes]`
+
 ### Cuando un tema merezca una página
 
 > Crea o actualiza una página de Wenlan sobre [tema] con el material que hemos guardado. Conserva las citas.
 
+Para organizar el conocimiento guardado en páginas: `/distill`
+
 Abre la página en Wenlan para leerla, editarla y consultar sus fuentes. La próxima vez, pide a tu IA que la use para continuar el trabajo.
+
+### Al terminar la sesión
+
+> Guarda los avances, las decisiones y las preguntas pendientes de esta sesión en Wenlan para continuar la próxima vez.
+
+Atajo: `/handoff`
 
 <details>
 <summary>Comandos del plugin y mantenimiento</summary>
 
-- **Recupera el contexto:** `/recall <consulta>` busca en el conocimiento guardado. `/brief [tema]` lee el resumen del proyecto del Espacio actual; un tema opcional añade contexto relacionado de ese mismo Espacio.
-- **Guarda lo importante:** `/capture <contenido>` guarda una decisión, lección, corrección, preferencia o hecho con su fuente.
-- **Cierra la sesión:** `/handoff` registra los avances y crea o actualiza el resumen del proyecto del Espacio para la próxima vez.
-- **Organiza y revisa:** `/distill` crea o actualiza páginas de la wiki. `/lint` comprueba el estado del conocimiento; `/curate` revisa capturas o revisiones pendientes.
+- **Lee el resumen del proyecto:** `/brief [tema]` lee el resumen del proyecto del Espacio actual; un tema opcional añade contexto relacionado de ese mismo Espacio.
+- **Comprueba y revisa:** `/lint` comprueba el estado del conocimiento; `/curate` revisa capturas o revisiones pendientes.
 
 Estos comandos están disponibles a través de los plugins de Wenlan. Otros clientes conectados usan las herramientas MCP equivalentes. La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
 

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=b77341f8e404a56fe06c7ba6c68f47e9a7fa022661bd13fb0618f7be20d77cdc -->
+<!-- README_SYNC: source=README.md sha256=12b4fe0ec7dca2f1cfb61410f9aa6858c524c0169c99d869b785e2565deeb8a4 -->
 
 <p align="center">
   <picture>
@@ -106,7 +106,7 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 - **零散的资料，整理成主题。** 文档、笔记与 AI 对话，汇总成彼此连接的页面，引用可以点击查证。
 - **自己看，也给 AI 用。** 直接阅读、编辑，也能让 Claude Code、Codex 接着用。
-- **持续更新，保留你的主导权。** AI 更新你编辑过的页面前，会先提出修订让你确认。
+- **后续维护有流程，不必每次从头整理。** 跟踪来源变化、更新相关页面并保留历史；你编辑过的内容，先确认修订再更新。
 
 页面是本地 Markdown 文件，你可以阅读、编辑，也能带走。
 
@@ -165,7 +165,11 @@ Agent Loop 不只是一篇笔记：它连接重试准则、界面检查的经验
 
 ### 已经在用 Obsidian 和 AI 插件？
 
-AI 插件已能帮你读写 Obsidian 笔记。Wenlan 把零散的文档与 AI 对话整理成附来源的主题页，让 Claude Code、Codex 等工具共用，并在同一套流程中保留更新历史与修订审核。
+你可以用 [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) 让 AI 读写笔记、用 [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) 找相关内容，再用 [Obsidian Git](https://github.com/Vinzent03/obsidian-git) 保留版本。自由度很高，但插件怎么搭配、资料何时整理、旧页面如何更新，仍需要自己安排。
+
+Wenlan 把整理成页、跟踪来源变化、更新相关内容和保留修订历史接成一套流程，省下自行搭建与维护的工夫。整理好的知识，自己能阅读，也能让 Claude Code、Codex 接着用。
+
+可以直接请已连接的 AI 更新页面，也能[配置模型](#models-and-privacy)启用后台更新。你编辑过的页面，更新前先提出修订，由你确认是否采用。
 
 现有 Obsidian 仓库可以接为只读来源，不必搬动笔记。Wenlan 不会修改原本的仓库，也不会把变更同步回去。
 
@@ -226,27 +230,39 @@ AI 插件已能帮你读写 Obsidian 笔记。Wenlan 把零散的文档与 AI �
 
 AI 工具连接好后，可以直接这样说：
 
+安装 Wenlan 插件后，也能用快捷指令。
+
 ### 开始工作前
 
 > 找出我存进 Wenlan 的［主题］相关资料，包括之前的决定与来源。
+
+快捷指令：`/recall [主题]`
 
 ### 得到有用的结论时
 
 > 把这个决定、背后的原因和来源记到 Wenlan。
 
+快捷指令：`/capture [决定、理由与来源]`
+
 ### 值得整理成页面时
 
 > 把［主题］的已存资料整理成 Wenlan 页面，已有的就更新，并保留引用。
 
+将已存知识整理成页面：`/distill`
+
 在 Wenlan 里阅读、编辑页面、查看来源。下次做相关工作时，请 AI 先读这一页，再接着做。
+
+### 工作收尾时
+
+> 把这次的进展、决定和待解决的问题记到 Wenlan，方便下次继续。
+
+快捷指令：`/handoff`
 
 <details>
 <summary>插件指令与维护</summary>
 
-- **找回背景：** `/recall <query>` 搜索已存的知识。`/brief [topic]` 读取当前空间的项目摘要；加上主题时，会补充同一空间的相关内容。
-- **留下重点：** `/capture <thing>` 记下决策、经验、更正、偏好或事实，并保留来源。
-- **工作收尾：** `/handoff` 记录这次的进展，创建或更新空间的项目摘要，方便下次继续。
-- **整理与审核：** `/distill` 创建或更新 wiki 页面。`/lint` 检查知识库状态；`/curate` 审核待处理的记录或修订。
+- **读取项目摘要：** `/brief [topic]` 读取当前空间的项目摘要；加上主题时，会补充同一空间的相关内容。
+- **检查与审核：** `/lint` 检查知识库状态；`/curate` 审核待处理的记录或修订。
 
 这些快捷指令由 Wenlan 插件提供。其他已连接的客户端使用对应的 MCP 工具。可选的后台整理与页面更新需要先[配置模型](#models-and-privacy)。
 
