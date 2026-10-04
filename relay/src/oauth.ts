@@ -4,7 +4,7 @@ import { cleanupKV } from './cleanup-kv.ts';
 import { beginPairing, consumePairing, type PairingStore } from './pairing.ts';
 import { type ConnectorRoute, type QueryGrant, type ProxyOptions } from './proxy.ts';
 import { forwardSessionQuery } from './sessions.ts';
-import { authorizationGrantActive, claimAuthorizationGrant, replaceClientAuthorization } from './grants.ts';
+import { authorizationGrantActive, authorizationGrantEnd, claimAuthorizationGrant, replaceClientAuthorization } from './grants.ts';
 import { randomSecret, validSecret } from './secrets.ts';
 
 export interface OAuthEnv {
@@ -14,6 +14,7 @@ export interface OAuthEnv {
 interface StoredAuthorization { request: AuthRequest; expiresAt: number }
 const authorizationKey = (id: string) => `oauth-request:${id}`;
 export const QUERY_SCOPE = 'wenlan:query';
+const IDLE_REFRESH_SECONDS = 30 * 24 * 60 * 60;
 
 function canonicalOrigin(value: string): string {
   const url = new URL(value);
@@ -135,12 +136,14 @@ export function createOAuthProvider<Env extends OAuthEnv>(
     apiRoute: '/mcp', apiHandler, defaultHandler,
     authorizeEndpoint: `${origin}/authorize`, tokenEndpoint: `${origin}/oauth/token`,
     clientRegistrationEndpoint: `${origin}/oauth/register`,
-    accessTokenTTL: 900, refreshTokenTTL: 30 * 24 * 60 * 60,
+    // A refresh token lapses after 30 idle days; each refresh slides it, capped
+    // by the Wenlan consent and grant records (see the callback below).
+    accessTokenTTL: 900, refreshTokenTTL: IDLE_REFRESH_SECONDS, refreshTokenIdleTTL: IDLE_REFRESH_SECONDS,
     clientRegistrationTTL: 90 * 24 * 60 * 60,
-    scopesSupported: [QUERY_SCOPE], allowPlainPKCE: false, allowImplicitFlow: false,
+    scopesSupported: [QUERY_SCOPE], requiredScopes: [QUERY_SCOPE],
     allowTokenExchangeGrant: false, clientIdMetadataDocumentEnabled: false,
     resourceMetadata: { resource: `${origin}/mcp`, authorization_servers: [origin],
-      scopes_supported: [QUERY_SCOPE], bearer_methods_supported: ['header'], resource_name: 'Wenlan' },
+      bearer_methods_supported: ['header'], resource_name: 'Wenlan' },
     tokenExchangeCallback: async ({ props, userId, requestedScope, grantType, grantId, clientId }) => {
       if (requestedScope.length !== 1 || requestedScope[0] !== QUERY_SCOPE) {
         throw new OAuthError('invalid_scope', { description: 'Wenlan query permission is required' });
@@ -159,10 +162,18 @@ export function createOAuthProvider<Env extends OAuthEnv>(
       }
       const identity = { grantId, clientId };
       const grant = { subject: userId, connectorId: bound.connectorId, space: route.space, generation: route.generation };
-      const valid = grantType === 'authorization_code'
-        ? await claimAuthorizationGrant(store, identity, grant, bound.authorizationId)
-        : await authorizationGrantActive(store, identity, grant);
-      if (!valid) throw new OAuthError('invalid_grant', { description: 'Wenlan authorization is no longer valid' });
+      // The library revokes the grant on invalid_grant, so only permanent
+      // denials may use it; storage failures surface as server errors instead.
+      const invalid = () => new OAuthError('invalid_grant', { description: 'Wenlan authorization is no longer valid' });
+      if (grantType === 'authorization_code') {
+        if (!await claimAuthorizationGrant(store, identity, grant, bound.authorizationId)) throw invalid();
+        return;
+      }
+      const end = await authorizationGrantEnd(store, identity, grant);
+      const remaining = end === null ? 0 : Math.floor((end - Date.now()) / 1000);
+      // The provider refuses idle TTLs under 60 seconds; the grant is spent by then.
+      if (remaining < 60) throw invalid();
+      return { refreshTokenIdleTTL: Math.min(IDLE_REFRESH_SECONDS, remaining) };
     },
     // Avoid the library's default warning logs containing request error details.
     onError: () => {},

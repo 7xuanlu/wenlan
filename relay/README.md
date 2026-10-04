@@ -392,7 +392,7 @@ credential rotation and revocation transitions. Enrollment probes the protected
 connector contract before storing a route and issues a separate random management
 credential, stored only as a hash. The device-derived subject is not an email or
 cloud-account identity. Routes expire after 24 hours; management credentials
-expire after 30 days and can be rotated before expiry. These access lifetimes
+expire after 90 days and can be rotated before expiry. These access lifetimes
 are distinct from the asynchronous physical cleanup described below.
 
 Route refresh authenticates before probing, then rechecks ownership and a
@@ -461,10 +461,12 @@ Wrangler installation.
 The adapter stores a validated authorization request, starts the existing
 pairing flow, and completes authorization only after single-use consumption of
 desktop-approved pairing. It uses a fixed HTTPS resource/issuer, S256 PKCE,
-15-minute access tokens and 30-day refresh tokens. DCR registrations use an
-explicit fixed `90 * 24 * 60 * 60`-second TTL from registration; ordinary
-authorization, code exchange and refresh use do not extend it. Once that
-registration expires, the old client must re-register and obtain fresh desktop
+15-minute access tokens and refresh tokens that lapse after 30 days without
+use. Each refresh restarts that window, never past the authorization's 90-day
+end. DCR registrations use an explicit `90 * 24 * 60 * 60`-second TTL from
+registration; a successful token request in its second half renews it for
+another 90 days. Registrations made before the 1.x library carry no renewal
+stamp and keep their original schedule. Once a registration expires, the old client must re-register and obtain fresh desktop
 consent before it can authorize or refresh, even when its authorization grant is
 still retained. The runtime test models expiry by removing the exact synthetic
 client KV key; it does not establish a 90-day wall-clock expiry receipt. Existing
@@ -478,8 +480,12 @@ expiry instead of authorization-time props. Code exchange/refresh and queries
 read current device authorization state. An ordinary expired tunnel can still
 renew OAuth credentials, but no query is forwarded through an expired route.
 Revoked devices or changed scope generations cannot mint new credentials.
-The SQLite consent and grant records cap authorization at 30 days;
-later access requires a fresh consent flow even if a library refresh token remains.
+The SQLite consent and grant records cap authorization at 90 days, and the
+device's management credential caps it too; refresh and every query check that
+end directly rather than waiting for the cleanup sweep. Later access requires a
+fresh consent flow even if a library refresh token remains.
+The library revokes a grant and its tokens whenever this check answers
+`invalid_grant`, so the check uses it only for permanent denials.
 
 `src/grants.ts` adds atomic authorization-code claims after the library verifies
 PKCE, client and resource. A regression exposed two successful simultaneous
@@ -623,7 +629,7 @@ or rate buckets remain. Full-scan latency depends on record count and backlog;
 these local results do not establish a fixed production deletion deadline.
 
 - Expired five-minute pairing transactions, request snapshots and their bindings
-  are deleted; current-consent pointers are deleted after their 30-day expiry.
+  are deleted; current-consent pointers are deleted after their 90-day expiry.
 - Revoked/expired devices and their protected route credentials are deleted.
   An expired tunnel route is retained while its management credential can renew
   it, so temporary offline status does not force re-enrollment.
@@ -644,11 +650,11 @@ no stored raw exception. Alarms construct provider helpers directly, without
 requiring a preceding OAuth HTTP request.
 
 This covers authority records and explicit/device-invalidated grant cleanup,
-not a universal provider-KV purge. DCR registrations already use the fixed
-90-day TTL described above; the pinned provider writes unexchanged code grants
-with a 600-second KV TTL and access-token records with their token TTL. Refresh
-grant expiry is fixed at code exchange and is not extended by token rotation.
-These configured expirations are not measured production deletion receipts.
+not a universal provider-KV purge. DCR registrations use the 90-day TTL
+described above; the pinned provider writes unexchanged code grants with a
+600-second KV TTL and access-token records with their token TTL. Each refresh
+moves the refresh grant's KV expiry to 30 days later, never past the Wenlan
+grant end, so an unused grant expires on its own. These configured expirations are not measured production deletion receipts.
 Legacy client migration, the provider's internal replacement cleanup,
 eventual-KV reappearance, quota/backlog alerts and deployed retention
 measurements remain review gates.

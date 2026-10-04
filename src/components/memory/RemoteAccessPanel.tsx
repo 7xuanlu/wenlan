@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
@@ -10,6 +10,7 @@ import {
   reconnectRemoteAccess, revokeRemoteGrant, testRemoteMcpConnection, toggleRemoteAccess,
   type RemoteAccessStatus, type RemotePairing, type RemoteGrantPage,
 } from "../../lib/tauri";
+import { clearPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
 import { Button, StatusChip, Tag, Toggle } from "./settings/primitives";
 
 const STATUS = ["remote-access-status"] as const;
@@ -20,7 +21,7 @@ const secondary = "text-[var(--mem-text-secondary)] text-sm";
 const errorClass = "text-sm text-[var(--mem-status-danger-text)] break-words";
 
 export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const id = useId();
   const cache = useQueryClient();
   const statusQuery = useQuery({ queryKey: STATUS, queryFn: getRemoteAccessStatus });
@@ -32,12 +33,16 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [consented, setConsented] = useState(false);
   const [pairingId, setPairingId] = useState("");
-  const [inspection, setInspection] = useState<{ request: RemotePairing; revision: string } | null>(null);
+  // fromLink: the request came from a wenlan://pair link, not a pasted code.
+  const [inspection, setInspection] = useState<{ request: RemotePairing; revision: string; fromLink: boolean } | null>(null);
   const [approved, setApproved] = useState(false);
   const [copied, setCopied] = useState(false);
   const [probe, setProbe] = useState<string | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
   const [grantNotice, setGrantNotice] = useState<string | null>(null);
+  const [autoInspect, setAutoInspect] = useState<string | null>(null);
+  const pairingRef = useRef<HTMLDivElement>(null);
+  const linkedCode = usePendingPairingCode();
   const implicitSpace = currentSpace && spaces.some((space) => space.name === currentSpace)
     ? currentSpace : spaces.length === 1 ? spaces[0].name : "";
   const space = selected ?? profile?.space ?? implicitSpace;
@@ -85,6 +90,13 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     setGrantNotice(null);
   }, [profile?.revision]);
 
+  // A link fills in the code and opens the review. Approving still takes a click.
+  useEffect(() => {
+    if (!linkedCode) return;
+    clearPendingPairingCode();
+    setAutoInspect(linkedCode);
+  }, [linkedCode]);
+
   const action = useMutation({
     mutationFn: (operation: () => Promise<void>) => operation(),
     onSettled: async () => {
@@ -109,13 +121,13 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     if (!ready || !profile?.enabled || pending || !scopeExists) throw new Error(t("remoteAccess.scopeRequired"));
     cache.setQueryData(STATUS, await reconnectRemoteAccess(profile.revision));
   };
-  const inspect = async () => {
+  const inspect = async (code = pairingId, fromLink = false) => {
     setApproved(false);
     setInspection(null);
     if (!profile) throw new Error(t("remoteAccess.scopeRequired"));
     const revision = profile.revision;
-    const request = await inspectRemotePairing(revision, pairingId.trim());
-    setInspection({ revision, request });
+    const request = await inspectRemotePairing(revision, code.trim());
+    setInspection({ revision, request, fromLink });
   };
   const approve = async () => {
     if (!inspection || inspection.revision !== profile?.revision || inspection.request.expiresAt <= Date.now()) {
@@ -129,6 +141,16 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   };
   const queryError = profileQuery.error ?? statusQuery.error ?? spacesQuery.error;
   const busy = action.isPending;
+  const canReview = connected && Boolean(profile?.enabled);
+
+  // A cold start can deliver the link before Web access reconnects; review it once connected.
+  useEffect(() => {
+    if (!autoInspect || !canReview || busy) return;
+    setAutoInspect(null);
+    setPairingId(autoInspect);
+    pairingRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    action.mutate(() => inspect(autoInspect, true));
+  }, [autoInspect, canReview, busy]);
 
   return (
     <div className="min-w-0 space-y-4" style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text)" }}>
@@ -184,7 +206,9 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
         })}>{t("remoteAccess.testConnection")}</Button>}
         {probe && <span role="status" className={secondary}>{probe}</span>}
       </div>}
-      {connected && profile?.enabled && <>
+      {autoInspect && !canReview &&
+        <p role="status" className={secondary}>{t(isOn ? "remoteAccess.pairingLinkWaiting" : "remoteAccess.pairingLinkAccessOff")}</p>}
+      {canReview && profile && <>
         {publicMcp && <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
           <h4 className="text-sm font-semibold">{t("remoteAccess.endpoint")}</h4>
           <div className="flex items-start gap-2 min-w-0">
@@ -197,7 +221,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
           </div>
           <p className={secondary}>{t("remoteAccess.localAppsHint")}</p>
         </div>}
-        <div className="border-t border-[var(--mem-border)] pt-4 space-y-3">
+        <div ref={pairingRef} className="border-t border-[var(--mem-border)] pt-4 space-y-3">
           <h4 className="text-sm font-semibold">{t("remoteAccess.pairingTitle")}</h4>
           <label htmlFor={id + "-pairing"} className="block text-sm">{t("remoteAccess.pairingCode")}</label>
           <div className="flex flex-wrap gap-2">
@@ -208,6 +232,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
               onClick={() => action.mutate(inspect)}>{t("remoteAccess.inspectPairing")}</Button>
           </div>
           {inspection && inspection.revision === profile.revision && <div className="space-y-2">
+            {inspection.fromLink && <p role="note" className="text-sm font-medium break-words">{t("remoteAccess.pairingFromLink")}</p>}
             <dl className="text-sm space-y-1">
               <dt className={secondary}>{t("remoteAccess.clientId")}</dt>
               <dd className="break-all font-mono text-xs">{inspection.request.clientId}</dd>
@@ -238,6 +263,10 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
                 <p className="font-mono text-xs break-all">{grant.clientId}</p>
                 <p className={secondary + " break-words"}>{grant.space}</p>
                 <p className={secondary}>{t(grant.status === "active" ? "remoteAccess.grantActive" : "remoteAccess.grantRevoked")}</p>
+                {/* The relay's latest end for this connection; 30 idle days end it sooner. */}
+                {grant.status === "active" && Number.isFinite(grant.expiresAt) && <p className={secondary}>
+                  {t("remoteAccess.grantExpires", { date: new Date(grant.expiresAt).toLocaleDateString(i18n.resolvedLanguage ?? i18n.language) })}
+                </p>}
                 {grant.cleanupPending && <p className={secondary}>{t("remoteAccess.cleanupPending")}</p>}
               </div>
               {(grant.status === "active" || grant.cleanupPending) && <Button variant="secondary" size="sm" disabled={busy}

@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-libra
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
+import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 const mocks = vi.hoisted(() => Object.fromEntries([
@@ -40,7 +41,7 @@ beforeEach(() => {
   mocks.testRemoteMcpConnection.mockResolvedValue({ ok: true, latency_ms: 42, error: null });
   mocks.clipboardWrite.mockResolvedValue(undefined);
 });
-afterEach(async () => { cleanup(); vi.useRealTimers(); await i18n.changeLanguage("en"); });
+afterEach(async () => { cleanup(); vi.useRealTimers(); clearPendingPairingCode(); await i18n.changeLanguage("en"); });
 
 describe("RemoteAccessPanel consent and connection", () => {
   it("requires explicit scope consent, without creating a single-Space selector", async () => {
@@ -202,6 +203,22 @@ describe("pairing and grants", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("expired or changed");
     expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
   });
+  it("shows when an authorized connection stops working", async () => {
+    const expiresAt = Date.now() + 29 * 24 * 60 * 60 * 1000;
+    mocks.listRemoteGrants.mockResolvedValue({ items: [
+      { id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false, expiresAt },
+      { id: "g2", clientId: "client-B", space: "review", status: "inactive", cleanupPending: false, expiresAt },
+    ], cursor: null });
+    await connectedPanel();
+    const date = new Date(expiresAt).toLocaleDateString("en");
+    expect(await screen.findAllByText(`Ends on ${date} at the latest, or after 30 days without use. Then connect again from your AI app.`)).toHaveLength(1);
+    cleanup();
+    await i18n.changeLanguage("zh-Hant");
+    panel();
+    // The date follows the app language, not the OS locale.
+    const zhDate = new Date(expiresAt).toLocaleDateString("zh-Hant");
+    expect(await screen.findByText(`最晚於 ${zhDate} 結束；連續 30 天未使用也會結束。之後請在 AI 應用程式中重新連線。`)).toBeInTheDocument();
+  });
   it("shows authoritative revocation separately from token cleanup", async () => {
     mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false }], cursor: null });
     mocks.revokeRemoteGrant.mockResolvedValue({ revoked: true, cleanupPending: true });
@@ -215,6 +232,77 @@ describe("pairing and grants", () => {
     panel();
     expect(await screen.findByText("共享 Space")).toBeInTheDocument();
     expect(await screen.findByText(new RegExp(consent))).toBeInTheDocument();
+  });
+});
+
+describe("pairing link (wenlan://pair)", () => {
+  const fromLink = "This request came from a link. Approve it only if you just started this connection in your AI app yourself.";
+  it("fills in the code and opens the review, but never approves on its own", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledWith("r1", pairing.pairingId));
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue(pairing.pairingId);
+    expect(await screen.findByText(pairing.clientId)).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(fromLink);
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Approve connection" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledWith("r1", pairing));
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+  it("takes the link once, so reopening the panel does not review it again", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledTimes(1));
+    cleanup();
+    await connectedPanel();
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue("");
+    expect(mocks.inspectRemotePairing).toHaveBeenCalledTimes(1);
+  });
+  it("waits for Web access to connect before reviewing a linked code", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    setPendingPairingCode(pairing.pairingId);
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "starting" });
+    panel();
+    expect(await screen.findByText("Got a pairing request from a link. It opens here once Web access is connected.")).toBeInTheDocument();
+    expect(mocks.inspectRemotePairing).not.toHaveBeenCalled();
+    const handler = (listen as unknown as { mock: { calls: Array<[string, (event: { payload: unknown }) => void]> } }).mock.calls[0][1];
+    // The native side reports connected from now on, to the event and to re-reads.
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    await act(async () => { handler({ payload: connected }); });
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledWith("r1", pairing.pairingId));
+    expect(await screen.findByText(pairing.clientId)).toBeInTheDocument();
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+  });
+  it("editing the code drops the from-link warning", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await screen.findByRole("note");
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: "b".repeat(64) } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    await screen.findByRole("button", { name: "Approve connection" });
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+  it("keeps the warning on a link that arrives while another approval is still saving", async () => {
+    const linked = "c".repeat(64);
+    let finishApprove: () => void = () => {};
+    mocks.approveRemotePairing.mockImplementationOnce(() => new Promise<void>((resolve) => { finishApprove = resolve; }));
+    await connectedPanel();
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: pairing.pairingId } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve connection" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledTimes(1));
+    act(() => { setPendingPairingCode(linked); });
+    await act(async () => { finishApprove(); });
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenLastCalledWith("r1", linked));
+    expect(await screen.findByRole("note")).toHaveTextContent(fromLink);
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue(linked);
+  });
+  it("says so when a link arrives while Web access is off", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    panel();
+    expect(await screen.findByText(/but Web access is off/)).toBeInTheDocument();
+    expect(mocks.inspectRemotePairing).not.toHaveBeenCalled();
   });
 });
 

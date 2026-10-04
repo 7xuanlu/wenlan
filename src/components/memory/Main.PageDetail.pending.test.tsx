@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Main from "./Main";
+import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
@@ -173,6 +174,34 @@ describe("Main published PageDetail navigation guards", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    clearPendingPairingCode();
+  });
+
+  it("opens Connections for a pairing link only after a pending page save", async () => {
+    const { user } = renderMain();
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start page save" }));
+    act(() => setPendingPairingCode("a".repeat(64)));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Finish page save" }));
+    await waitFor(() => expect(screen.queryByTestId("page-detail")).toBeNull());
+  });
+
+  it("drops a pairing link when the user keeps unsaved page edits", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { user } = renderMain();
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Make page dirty" }));
+    act(() => setPendingPairingCode("a".repeat(64)));
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+
+    // A later save must not bring the dropped link back.
+    await user.click(screen.getByRole("button", { name: "Start page save" }));
+    await user.click(screen.getByRole("button", { name: "Finish page save" }));
+    expect(confirmSpy).toHaveBeenCalledOnce();
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
   });
 
   it("blocks sidebar, search focus, and quit while a page save is pending", async () => {

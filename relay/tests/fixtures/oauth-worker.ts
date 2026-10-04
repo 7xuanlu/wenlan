@@ -15,6 +15,8 @@ interface Env extends OAuthEnv { AUTHORITY: DurableObjectNamespace }
 export class FixtureOAuthAuthority {
   provider;
   constructor(private state: DurableObjectState, private env: Env) {
+    // Models a transient storage failure in the token exchange's route lookup.
+    let failRouteLoads = false;
     this.provider = createOAuthProvider<Env>(origin, {
       fetch: async (request, env) => {
         const url = new URL(request.url);
@@ -34,6 +36,17 @@ export class FixtureOAuthAuthority {
           return Response.json(identity && await approvePairing(state.storage, args.pairingId, identity,
             { clientId: args.clientId, resource: `${origin}/mcp`, space: candidate.space }));
         }
+        // Models wall-clock time reaching a grant's stored end without waiting for it.
+        if (url.pathname === '/fixture/grant-end') {
+          const key = `oauth-grant:${args.subject}:${args.grantId}`;
+          const receipt = await state.storage.get<Record<string, unknown>>(key);
+          if (receipt) await state.storage.put(key, { ...receipt, expiresAt: Number(args.expiresAt) });
+          return Response.json(!!receipt);
+        }
+        if (url.pathname === '/fixture/fail-route-loads') {
+          failRouteLoads = String(args.on) === 'true';
+          return Response.json(true);
+        }
         if (url.pathname === '/fixture/revoke') return Response.json(
           await revokeDevice(state.storage, args.deviceId, args.managementToken));
         if (url.pathname === '/fixture/finish') return Response.json(
@@ -52,7 +65,10 @@ export class FixtureOAuthAuthority {
             headers: new Headers(init?.headers).has('mcp-session-id') ? {} : { 'mcp-session-id': crypto.randomUUID() },
           });
         }) as typeof fetch),
-    }, async id => await state.storage.get<ConnectorRoute>(connectorKey(id)) ?? null, state.storage);
+    }, async id => {
+      if (failRouteLoads) throw new Error('Synthetic route storage failure');
+      return await state.storage.get<ConnectorRoute>(connectorKey(id)) ?? null;
+    }, state.storage);
   }
   fetch(request: Request) {
     const ctx = { waitUntil: (promise: Promise<unknown>) => this.state.waitUntil(promise),

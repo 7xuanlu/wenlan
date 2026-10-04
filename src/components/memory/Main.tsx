@@ -11,10 +11,12 @@ import {
   openSearchResult as openSearchResultTarget,
   searchEntities,
   searchPages,
+  takeRemotePairingLink,
   type Page,
   type SearchResult,
   type Space,
 } from "../../lib/tauri";
+import { clearPendingPairingCode, setPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
 import ActivityStatus from "./activity/ActivityStatus";
@@ -226,8 +228,12 @@ export default function Main({
 
   const afterNavigationGuards = (
     action: (sourceView: View) => void,
+    onRefused?: () => void,
   ): (() => void) => {
-    if (!canLeaveCurrentPage()) return () => {};
+    if (!canLeaveCurrentPage()) {
+      onRefused?.();
+      return () => {};
+    }
     return afterPageDraftFlush(action);
   };
 
@@ -285,7 +291,7 @@ export default function Main({
   }, [initialMemoryId, activeTab, pageSavePending]);
 
   // Navigate forward — pushes current view onto history stack
-  const navigateTo = (next: View) => {
+  const navigateTo = (next: View, onRefused?: () => void) => {
     if (
       view.kind === "page"
       && next.kind === "page"
@@ -296,7 +302,7 @@ export default function Main({
     afterNavigationGuards((sourceView) => {
       setViewHistory((prev) => [...prev, sourceView]);
       setView(next);
-    });
+    }, onRefused);
   };
 
   const navigateHome = () => {
@@ -462,6 +468,29 @@ export default function Main({
     });
     return () => { unlisten.then((f) => f()); };
   }, [queryClient]);
+
+  // "Open in Wenlan" on the relay pairing page sends a wenlan://pair link. The
+  // native side holds the code until asked, so a link that launched the app is
+  // not lost before this listener exists.
+  useEffect(() => {
+    const pull = () => {
+      takeRemotePairingLink()
+        .then((code) => { if (code) setPendingPairingCode(code); })
+        .catch(() => {});
+    };
+    pull();
+    const unlisten = listen("remote-pairing-link", pull);
+    return () => { unlisten.then((f) => f()); };
+  }, []);
+
+  // The Connections panel takes the code; it stays pending until the panel is
+  // shown. Keeping unsaved page edits drops the link rather than parking it.
+  const pendingPairingCode = usePendingPairingCode();
+  useEffect(() => {
+    if (!pendingPairingCode || pageSavePending) return;
+    if (view.kind === "settings" && view.section === "agents") return;
+    navigateTo({ kind: "settings", section: "agents" }, clearPendingPairingCode);
+  }, [pendingPairingCode, pageSavePending]);
 
   // Cmd+K global shortcut (fired from App.tsx) — focus the header search input.
   useEffect(() => {

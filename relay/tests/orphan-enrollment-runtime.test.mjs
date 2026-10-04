@@ -71,7 +71,7 @@ test('lost enrollment response leaves no accessible grant and expires through re
       assert.equal(device.subject, device.id);
       assert.match(device.credentialHash, /^[a-f0-9]{64}$/);
       assert.equal(Object.hasOwn(device, 'managementToken'), false);
-      assert.equal(device.expiresAt - route.expiresAt, 29 * 24 * 60 * 60 * 1000);
+      assert.equal(device.expiresAt - route.expiresAt, 89 * 24 * 60 * 60 * 1000);
       assert(route.expiresAt >= before + 24 * 60 * 60 * 1000);
       assert(route.expiresAt <= Date.now() + 24 * 60 * 60 * 1000);
       assert.equal(backendCalls, 2, 'only anonymous denial and protected connector validation may run');

@@ -212,6 +212,95 @@ test('real OAuth library requires pairing and enforces PKCE, resource and token 
       tokens = await response.json();
       assert.equal((await query(tokens.access_token)).status, 200);
     });
+    const refreshWith = (selected, refreshToken) => token({ grant_type: 'refresh_token',
+      client_id: selected.client_id, refresh_token: refreshToken, resource });
+    const grantKeyOf = issued => { const [userId, grantId] = issued.refresh_token.split(':'); return `grant:${userId}:${grantId}`; };
+    const nowSeconds = () => Math.floor(Date.now() / 1000);
+    async function pairedClient(name) {
+      const registered = await post('/oauth/register', { client_name: name,
+        redirect_uris: [redirectUri], grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'], token_endpoint_auth_method: 'none' });
+      assert.equal(registered.status, 201);
+      const selected = await registered.json();
+      const exchanged = await exchange(await code(selected), { client_id: selected.client_id });
+      assert.equal(exchanged.status, 200);
+      return { client: selected, tokens: await exchanged.json() };
+    }
+    async function setGrantEnd(issued, expiresAtMs) {
+      const [subject, grantId] = issued.refresh_token.split(':');
+      assert.equal(await (await post('/fixture/grant-end', { subject, grantId, expiresAt: expiresAtMs })).json(), true);
+    }
+    await t.test('each refresh renews the 30-day idle window, capped by the grant end', async () => {
+      const kv = await runtime.getKVNamespace('OAUTH_KV');
+      const grantKey = grantKeyOf(tokens);
+      const issued = await kv.get(grantKey, 'json');
+      assert.ok(Math.abs(issued.expiresAt - (nowSeconds() + 30 * 86400)) <= 5);
+      // Models 29 idle days: one hour of refresh lifetime remains.
+      await kv.put(grantKey, JSON.stringify({ ...issued, expiresAt: nowSeconds() + 3600 }));
+      let response = await refreshWith(client, tokens.refresh_token);
+      assert.equal(response.status, 200);
+      tokens = await response.json();
+      assert.ok(Math.abs((await kv.get(grantKey, 'json')).expiresAt - (nowSeconds() + 30 * 86400)) <= 5,
+        'a refresh restarts the 30-day idle window');
+      // Models the grant two days before its 90-day end.
+      await setGrantEnd(tokens, Date.now() + 2 * 86_400_000);
+      response = await refreshWith(client, tokens.refresh_token);
+      assert.equal(response.status, 200);
+      tokens = await response.json();
+      assert.equal(tokens.expires_in, 900);
+      assert.ok(Math.abs((await kv.get(grantKey, 'json')).expiresAt - (nowSeconds() + 2 * 86400)) <= 5,
+        'renewal never runs past the grant end');
+      assert.equal((await query(tokens.access_token)).status, 200);
+    });
+    await t.test('30 idle days end a connection', async () => {
+      const kv = await runtime.getKVNamespace('OAUTH_KV');
+      const idle = await pairedClient('Idle synthetic client');
+      const grantKey = grantKeyOf(idle.tokens);
+      await kv.put(grantKey, JSON.stringify({ ...await kv.get(grantKey, 'json'), expiresAt: nowSeconds() + 30 }));
+      const rejected = await refreshWith(idle.client, idle.tokens.refresh_token);
+      assert.equal(rejected.status, 400);
+      assert.deepEqual(await rejected.json(), { error: 'invalid_grant', error_description: 'Refresh token has expired' });
+    });
+    await t.test('a grant at its end is refused and its tokens are revoked', async () => {
+      const kv = await runtime.getKVNamespace('OAUTH_KV');
+      const spent = await pairedClient('Spent synthetic client');
+      // Under a minute left: the provider cannot issue a shorter refresh window.
+      await setGrantEnd(spent.tokens, Date.now() + 30_000);
+      const rejected = await refreshWith(spent.client, spent.tokens.refresh_token);
+      assert.equal(rejected.status, 400);
+      assert.deepEqual(await rejected.json(), { error: 'invalid_grant', error_description: 'Wenlan authorization is no longer valid' });
+      assert.equal(await kv.get(grantKeyOf(spent.tokens)), null, 'the library revokes a grant the callback refuses');
+      assert.equal((await query(spent.tokens.access_token)).status, 401);
+    });
+    await t.test('a storage failure during refresh is a server error and keeps the grant', async () => {
+      const kv = await runtime.getKVNamespace('OAUTH_KV');
+      const kept = await pairedClient('Transient synthetic client');
+      assert.equal(await (await post('/fixture/fail-route-loads', { on: true })).json(), true);
+      try {
+        const failed = await refreshWith(kept.client, kept.tokens.refresh_token);
+        assert.ok(failed.status >= 500, `expected a server error, got ${failed.status}`);
+        await failed.body?.cancel();
+      } finally {
+        assert.equal(await (await post('/fixture/fail-route-loads', { on: false })).json(), true);
+      }
+      assert.notEqual(await kv.get(grantKeyOf(kept.tokens)), null, 'a transient failure must not revoke the grant');
+      const retried = await refreshWith(kept.client, kept.tokens.refresh_token);
+      assert.equal(retried.status, 200);
+      await retried.body?.cancel();
+    });
+    await t.test('a registration used in its second half renews for another 90 days', async () => {
+      const kv = await runtime.getKVNamespace('OAUTH_KV');
+      const used = await pairedClient('Renewing synthetic client');
+      const clientKey = `client:${used.client.client_id}`;
+      const soon = nowSeconds() + 3600;
+      await kv.put(clientKey, JSON.stringify({ ...await kv.get(clientKey, 'json'), registrationExpiresAt: soon }),
+        { expiration: soon });
+      const response = await refreshWith(used.client, used.tokens.refresh_token);
+      assert.equal(response.status, 200);
+      await response.body?.cancel();
+      const renewed = await clientExpiration(used.client.client_id);
+      assert.ok(Math.abs(renewed - (nowSeconds() + clientRegistrationTTL)) <= 5);
+    });
     await t.test('device revocation prevents existing OAuth access reaching the connector', async () => {
       assert.equal(await (await post('/fixture/revoke', { deviceId: device.id,
         managementToken: device.managementToken })).json(), true);
@@ -234,24 +323,26 @@ test('real OAuth library requires pairing and enforces PKCE, resource and token 
       const expected = Math.floor(Date.now() / 1000) + clientRegistrationTTL;
       assert.ok(Number.isInteger(registeredExpiration));
       assert.ok(Math.abs(registeredExpiration - expected) <= 5);
-      // A distinct test expiry detects sliding writes even within one second.
+      // A distinct test expiry detects sliding writes even within one second. Only
+      // the KV expiry moves: the stored registration stamp stays in its first half,
+      // where the provider never renews it (second-half renewal is tested above).
       const fixedExpiration = Math.floor(Date.now() / 1000) + 3600;
       await kv.put(clientKey, await kv.get(clientKey), { expiration: fixedExpiration });
       const lifecycleDevice = await (await post('/fixture/enroll', {})).json();
       const grant = await code(expiringClient, lifecycleDevice);
       assert.equal(await clientExpiration(expiringClient.client_id), fixedExpiration,
-        'authorization must not slide DCR expiration');
+        'authorization must not renew a first-half registration');
       const exchanged = await exchange(grant, { client_id: expiringClient.client_id });
       assert.equal(exchanged.status, 200);
       let lifecycleTokens = await exchanged.json();
       assert.equal(await clientExpiration(expiringClient.client_id), fixedExpiration,
-        'code exchange must not slide DCR expiration');
+        'code exchange must not renew a first-half registration');
       const refreshed = await token({ grant_type: 'refresh_token', client_id: expiringClient.client_id,
         refresh_token: lifecycleTokens.refresh_token, resource });
       assert.equal(refreshed.status, 200);
       lifecycleTokens = await refreshed.json();
       assert.equal(await clientExpiration(expiringClient.client_id), fixedExpiration,
-        'refresh must not slide DCR expiration');
+        'refresh must not renew a first-half registration');
 
       const [userId, grantId] = lifecycleTokens.refresh_token.split(':');
       const grantKey = `grant:${userId}:${grantId}`;
