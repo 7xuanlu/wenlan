@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/tauri/tauri-v2-schema.json",
   "productName": "Wenlan",
-  "version": "0.18.15",
+  "version": "0.18.16",
   "identifier": "com.wenlan.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -78,7 +78,9 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["wenlan"]
+        "schemes": [
+          "wenlan"
+        ]
       }
     },
     "updater": {
