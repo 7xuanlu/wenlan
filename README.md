@@ -51,6 +51,8 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 - **Windows x64:** run the `-setup.exe`. It is not signed yet. If SmartScreen warns you, confirm you downloaded it from the official Releases page before choosing "More info" → "Run anyway".
 - **Linux:** no desktop build yet; follow the [setup guide](docs/setup-with-ai.md#install-the-runtime) to use Wenlan with your AI tools without the app.
 
+First launch downloads a model for local search, so keep an internet connection until setup finishes. [Download and privacy details](docs/PRIVACY.md#when-wenlan-reaches-the-network).
+
 <a id="claude-code-in-30-seconds"></a>
 
 <a id="codex-plugin"></a>
@@ -61,6 +63,8 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 ### 2. Connect your AI tools to one wiki
 
 In Wenlan's setup, connect Claude Code, Codex, or other supported AI tools so they can use the same knowledge.
+
+Your connected AI can write the pages. You do not need to install an additional local language model.
 
 <details>
 <summary>Need help connecting? Ask your AI</summary>
@@ -81,12 +85,14 @@ Set up only this AI tool, then check that it can save and find a test memory.
 
 > Turn the key takeaways from this conversation into a Wenlan page.
 
+Already have material? [Import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in), then ask your AI to organize a topic into a page.
+
 <details>
 <summary>Models, installation options, and updates</summary>
 
 **Models**
 
-You can ask your connected AI to organize pages. For Wenlan to organize them in the background, [configure a model](#models-and-privacy).
+Background organization and automatic Page updates are optional and need a [configured model](#models-and-privacy). This is separate from the search model downloaded at first launch.
 
 **macOS app from the terminal**
 
@@ -117,6 +123,8 @@ To upgrade the macOS app, drag the new app over the old one and open it. Quit We
 Manual and client-specific instructions: [AI-assisted setup](docs/setup-with-ai.md) · [Claude Code plugin](plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI and MCP](crates/wenlan-cli/README.md).
 
 </details>
+
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/7xuanlu/wenlan/issues). Issues are public: do not include private notes, access credentials, Remote Access identifiers, or unredacted logs.
 
 
 <a id="what-does-wenlan-build"></a>

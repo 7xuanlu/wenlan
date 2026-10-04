@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=5a3f6fb987ab2d6da4197975d3116e7ae8cd498845dc7e335e00638887f74ba4 -->
+<!-- README_SYNC: source=README.md sha256=6740849ced7932c676aaa3efecaa37212380f604090f7ef5d7f3d6fa9e47cb90 -->
 
 <p align="center">
   <picture>
@@ -53,6 +53,8 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 - **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado. Si SmartScreen muestra un aviso, confirma que lo has descargado de la página oficial de Releases antes de elegir "Más información" → "Ejecutar de todas formas".
 - **Linux:** todavía no tiene versión de escritorio; sigue la [guía de configuración](docs/setup-with-ai.md#install-the-runtime) para usar Wenlan con tus herramientas de IA sin la aplicación.
 
+Al iniciar por primera vez, Wenlan descarga un modelo para la búsqueda local. Mantén la conexión a internet hasta terminar la configuración. [Detalles de descarga y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
+
 <a id="claude-code-in-30-seconds"></a>
 
 <a id="codex-plugin"></a>
@@ -63,6 +65,8 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 ### 2. Conecta tus IA a la misma wiki
 
 En la configuración de Wenlan, conecta Claude Code, Codex u otras herramientas de IA compatibles para que usen el mismo conocimiento.
+
+Tu IA conectada puede redactar las páginas. No necesitas instalar un modelo de lenguaje local adicional.
 
 <details>
 <summary>¿Necesitas ayuda? Pídesela a tu IA</summary>
@@ -84,12 +88,14 @@ una memoria de prueba.
 
 > Convierte lo más importante de esta conversación en una página de Wenlan.
 
+¿Ya tienes material? [Importa notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in) y pídele a tu IA que organice un tema en una página.
+
 <details>
 <summary>Modelos, instalación y actualizaciones</summary>
 
 **Modelos**
 
-Puedes pedirle a tu IA conectada que organice las páginas. Para que Wenlan las organice en segundo plano, [configura un modelo](#models-and-privacy).
+La organización en segundo plano y la actualización automática de Páginas son opcionales y necesitan un [modelo configurado](#models-and-privacy). Es distinto del modelo de búsqueda que se descarga al iniciar por primera vez.
 
 **Instalar la aplicación de macOS desde el terminal**
 
@@ -120,6 +126,8 @@ Para actualizar la aplicación de macOS, arrastra la nueva sobre la antigua y á
 Instrucciones manuales y específicas por herramienta: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
 
 </details>
+
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/7xuanlu/wenlan/issues). Los issues son públicos: no incluyas notas privadas, credenciales, identificadores de Acceso remoto ni registros sin anonimizar.
 
 
 

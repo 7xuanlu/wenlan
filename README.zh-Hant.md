@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=5a3f6fb987ab2d6da4197975d3116e7ae8cd498845dc7e335e00638887f74ba4 -->
+<!-- README_SYNC: source=README.md sha256=6740849ced7932c676aaa3efecaa37212380f604090f7ef5d7f3d6fa9e47cb90 -->
 
 <p align="center">
   <picture>
@@ -53,6 +53,8 @@ https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 - **Windows x64：** 執行 `-setup.exe`。安裝包尚未簽署。如果 SmartScreen 顯示警告，請先確認檔案來自官方 Releases 頁面，再點選「其他資訊」→「仍要執行」。
 - **Linux：** 暫時沒有桌面版；可依照[設定指南](docs/setup-with-ai.md#install-the-runtime)，不透過桌面 app，直接搭配 AI 工具使用。
 
+首次啟動會下載本地搜尋模型，設定完成前請保持連網。[下載與隱私說明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
+
 <a id="claude-code-in-30-seconds"></a>
 
 <a id="codex-plugin"></a>
@@ -63,6 +65,8 @@ https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 ### 2. 讓常用 AI 共用你的維基
 
 在 Wenlan 的設定導引中，連接 Claude Code、Codex 等工具，讓它們使用同一份知識。
+
+直接請已連接的 AI 撰寫頁面，不必另外安裝本地語言模型。
 
 <details>
 <summary>連接時需要幫忙？讓 AI 協助設定</summary>
@@ -81,14 +85,16 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 ### 3. 留下成果，下次接著用
 
-> 把這次討論的重點整理成 Wenlan 頁面。
+> 把這次討論整理成 Wenlan 頁面。
+
+已經有資料？先[匯入筆記或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)，再請 AI 按主題整理成頁面。
 
 <details>
 <summary>模型、其他安裝方式與更新</summary>
 
 **模型**
 
-你可以請已連接的 AI 整理頁面。要讓 Wenlan 自己在背景整理，則需要[設定模型](#models-and-privacy)。
+背景整理與自動更新需[另外設定模型](#models-and-privacy)。這是可選功能，與搜尋模型不同。
 
 **從終端機安裝 macOS app**
 
@@ -119,6 +125,8 @@ npx -y wenlan setup
 手動與各工具設定說明：[AI 輔助設定](docs/setup-with-ai.md) · [Claude Code plugin](plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 與 MCP](crates/wenlan-cli/README.md)。
 
 </details>
+
+遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/7xuanlu/wenlan/issues)。Issue 是公開的，請勿附上私人筆記、存取憑證、遠端存取識別碼或未遮蔽的紀錄。
 
 
 
