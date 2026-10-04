@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d3e65adb40f3e544a3ca4a6f02800ba3238fe1b0396abd78c5ff15a206185680 -->
+<!-- README_SYNC: source=README.md sha256=d8fc8afb14de62ae76eacc48f8e780e5abf65c085195d1409c452a62b588d21e -->
 
 <p align="center">
   <picture>
@@ -391,19 +391,51 @@ Si el daemon local no está accesible, `wenlan capture` y `wenlan brief update` 
 
 ### Modelos y privacidad
 
+Puedes usar tu IA conectada para escribir páginas sin instalar otro modelo de lenguaje local. La organización y las actualizaciones automáticas en segundo plano son opcionales y requieren configurar un modelo.
+
+- **La búsqueda es local.** El modelo de búsqueda se descarga al iniciar por primera vez y se ejecuta en tu equipo, sin clave de API.
+- **La IA conectada puede recibir tus conocimientos.** Un cliente de IA en la nube puede enviar el contenido recuperado a su proveedor. Si eliges un modelo en la nube para organizar material, también recibirá lo necesario para esa tarea. El almacenamiento local no convierte esas interacciones en locales.
+- **Las estadísticas de uso están desactivadas por defecto.** Si las activas, Wenlan envía recuentos limitados de operaciones, versión y plataforma, no tus conocimientos ni un identificador de instalación. [Detalles](docs/PRIVACY.md#telemetry).
+
+Consulta la [información de red y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network) para las descargas, comprobaciones de actualizaciones, imágenes remotas y acceso remoto opcional.
+
+<details>
+<summary>Opciones de modelos y detalles técnicos</summary>
+
 - **Recuperación base local:** El [modelo de embedding BGE](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) se ejecuta a través de FastEmbed en tu máquina para la búsqueda híbrida y no necesita clave de API.
 - **Síntesis opcional en el dispositivo:** El enriquecimiento y la síntesis de Páginas pueden usar [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) o [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF), según la elección del usuario, a través de [llama.cpp](https://github.com/ggml-org/llama.cpp). Wenlan no descarga ni activa un modelo de lenguaje hasta que elijas uno.
 - **Otros proveedores:** Un endpoint local compatible con OpenAI como Ollama o LM Studio, o un proveedor en la nube configurado, pueden suministrar el enriquecimiento y la síntesis basados en modelos.
 - **Divulgación de nube:** Si el endpoint del modelo que seleccionas es remoto, Wenlan envía los prompts del sistema y del usuario de esa tarea a ese endpoint. La recuperación local y la síntesis en el dispositivo permanecen en tu máquina.
-- **Estadísticas de uso opcionales:** Desactivadas por defecto. Si optas por activarlas, Wenlan envía recuentos acotados de operaciones, la versión y la plataforma, no el contenido de tus conocimientos ni un identificador de instalación. Consulta la [política de privacidad](docs/PRIVACY.md#telemetry).
 
 Referencia completa del flujo de trabajo: [plugin/skills](plugin/skills/README.md). Roles técnicos del modelo: [fundamentos técnicos](docs/technical-foundations.md#model-roles).
 
+</details>
+
 ### Tus datos y la desinstalación
 
-Nada queda encerrado. Las páginas y las notas de sesión son Markdown en `~/.wenlan/`; las memorias viven en una base de datos libSQL dentro del directorio de datos de la plataforma (`~/Library/Application Support/wenlan/` en macOS, `~/.local/share/wenlan/` en Linux, `%LOCALAPPDATA%\wenlan\` en Windows). Copia esas dos carpetas para hacer una copia de seguridad o mover tu Wenlan. Si esta instalación se actualizó desde Origin, todavía conserva una copia completa de sus datos en `~/.origin/` y en la carpeta hermana de datos `origin` (`~/Library/Application Support/origin/` en macOS, `~/.local/share/origin/` en Linux, `%LOCALAPPDATA%\origin\` en Windows); borra o copia también esas dos.
+Tus páginas y notas de sesión son archivos Markdown; las memorias y el grafo se guardan en una base de datos local. Puedes conservar tus conocimientos al desinstalar la app.
 
-Para desinstalar: el interruptor *Ejecutar Wenlan en segundo plano al iniciar sesión* de la app elimina el registro de arranque — desactívalo, cierra la app y borra `Wenlan.app` o ejecuta el desinstalador de Windows, y después borra las carpetas anteriores. `wenlan background off` solo detiene el daemon y desactiva el arranque automático; no elimina el registro de arranque, así que una instalación solo de CLI debe seguir en su lugar el punto de desinstalación del daemon en [PRIVACY.md](docs/PRIVACY.md). Las rutas que Wenlan escribe están ahí.
+<details>
+<summary>Ubicación de archivos, copias de seguridad y eliminación</summary>
+
+**Ubicaciones predeterminadas**
+
+- Páginas y notas de sesión: `~/.wenlan/`.
+- Base de datos y datos del entorno de ejecución: `~/Library/Application Support/wenlan/` en macOS, `~/.local/share/wenlan/` en Linux o `%LOCALAPPDATA%\wenlan\` en Windows.
+
+**Copia de seguridad de tus conocimientos**
+
+Cierra la app y detén el servicio en segundo plano antes de copiar estas carpetas. Incluye cualquier carpeta de páginas o datos que hayas configurado aparte. Exportar la wiki no equivale a una copia completa de la base de datos.
+
+Si actualizaste desde Origin, comprueba también `~/.origin/` y la carpeta hermana de datos `origin` de tu plataforma. Inclúyelas al respaldar material antiguo o elimínalas solo si quieres borrarlo.
+
+**Desinstalación**
+
+Desactiva *Ejecutar Wenlan en segundo plano al iniciar sesión* en Ajustes, cierra la app y elimina `Wenlan.app` o ejecuta el desinstalador de Windows. Las carpetas de conocimientos se conservan; bórralas solo si ya no necesitas los datos y tienes las copias de seguridad necesarias.
+
+`wenlan background off` detiene el daemon y desactiva el arranque automático, pero no elimina el registro del servicio. Para desinstalar solo la CLI o revisar ajustes restantes de clientes de IA, credenciales y otros archivos, consulta los [detalles de eliminación](docs/PRIVACY.md#data-deletion).
+
+</details>
 
 
 <a id="evaluation"></a>

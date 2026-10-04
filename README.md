@@ -384,19 +384,51 @@ If the local daemon is unreachable, `wenlan capture` and `wenlan brief update` w
 
 ### Models and privacy
 
+Use your connected AI to write pages without installing an additional local language model. Background organization and automatic updates are optional and need a configured model.
+
+- **Search stays local.** The search model downloads at first launch and runs on your machine, without an API key.
+- **Connected AI can receive your knowledge.** A cloud AI client can send retrieved content to its provider. Choosing a cloud model for background organization also sends the material needed for that task. Local storage does not make those interactions local.
+- **Usage statistics are off by default.** If you opt in, Wenlan sends limited operation counts, version, and platform, not your knowledge content or an installation ID. [Details](docs/PRIVACY.md#telemetry).
+
+See [network and privacy details](docs/PRIVACY.md#when-wenlan-reaches-the-network) for downloads, update checks, remote images, and optional remote access.
+
+<details>
+<summary>Model choices and technical details</summary>
+
 - **Local base retrieval:** The [BGE embedding model](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) runs through FastEmbed on your machine for hybrid search and needs no API key.
 - **Optional on-device synthesis:** Enrichment and Page synthesis can use user-selected [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) or [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) through [llama.cpp](https://github.com/ggml-org/llama.cpp). Wenlan does not download or activate a language model until you choose one.
 - **Other providers:** An OpenAI-compatible local endpoint such as Ollama or LM Studio, or a configured cloud provider, can supply model-backed enrichment and synthesis instead.
 - **Cloud disclosure:** If the model endpoint you select is remote, Wenlan sends that task's system and user prompts to it. Local retrieval and on-device synthesis stay on your machine.
-- **Optional usage statistics:** Off by default. If you opt in, Wenlan sends bounded operation counts, version and platform—not your knowledge content or an installation ID. See [privacy](docs/PRIVACY.md#telemetry).
 
 Full workflow reference: [plugin/skills](plugin/skills/README.md). Technical model roles: [technical foundations](docs/technical-foundations.md#model-roles).
 
+</details>
+
 ### Your data and uninstall
 
-Nothing is locked in. Pages and session notes are Markdown under `~/.wenlan/`; memories live in one libSQL database under the platform data directory (`~/Library/Application Support/wenlan/` on macOS, `~/.local/share/wenlan/` on Linux, `%LOCALAPPDATA%\wenlan\` on Windows). Copy those two folders to back up or move a Wenlan. An install upgraded from Origin still holds a full copy of its data in `~/.origin/` and in the sibling `origin` data folder (`~/Library/Application Support/origin/` on macOS, `~/.local/share/origin/` on Linux, `%LOCALAPPDATA%\origin\` on Windows); delete or copy those two as well.
+Your pages and session notes are Markdown files; memories and the graph live in a local database. You can keep your knowledge when you uninstall the app.
 
-To uninstall: the app's *Run Wenlan in background at login* toggle removes the launch registration — turn it off, quit, and delete `Wenlan.app` or run the Windows uninstaller, then delete the folders above. `wenlan background off` only stops the daemon and disables autostart; it does not remove the launch registration, so a CLI-only install should instead follow the daemon uninstall bullet in [PRIVACY.md](docs/PRIVACY.md). The paths Wenlan writes are listed there.
+<details>
+<summary>File locations, backup, and removal</summary>
+
+**Default locations**
+
+- Pages and session notes: `~/.wenlan/`.
+- Database and runtime data: `~/Library/Application Support/wenlan/` on macOS, `~/.local/share/wenlan/` on Linux, or `%LOCALAPPDATA%\wenlan\` on Windows.
+
+**Backing up your knowledge**
+
+Quit the app and stop the background service before copying these folders. Include any custom page or data folders you configured. A wiki export is not a full database backup.
+
+If you upgraded from Origin, also check `~/.origin/` and the sibling `origin` platform data folder for older copies. Include those when backing up old material, or remove them only if you intend to delete it.
+
+**Uninstalling**
+
+Turn off *Run Wenlan in background at login* in Settings, quit the app, then delete `Wenlan.app` or run the Windows uninstaller. Your knowledge folders remain; delete them only if you no longer want the data and have any backup you need.
+
+`wenlan background off` stops the daemon and disables autostart, but does not remove the service registration. CLI-only uninstall, leftover AI-client settings, credentials, and other stored files are covered in the [removal details](docs/PRIVACY.md#data-deletion).
+
+</details>
 
 
 <a id="evaluation"></a>

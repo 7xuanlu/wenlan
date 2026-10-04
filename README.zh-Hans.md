@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d3e65adb40f3e544a3ca4a6f02800ba3238fe1b0396abd78c5ff15a206185680 -->
+<!-- README_SYNC: source=README.md sha256=d8fc8afb14de62ae76eacc48f8e780e5abf65c085195d1409c452a62b588d21e -->
 
 <p align="center">
   <picture>
@@ -390,19 +390,51 @@ AI 工具连接好后，可以直接这样说：
 
 ### 模型与隐私
 
-- **本地基础检索：** [BGE 向量模型（embedding model）](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) 通过 FastEmbed 在你的设备上运行，用于混合搜索，不需要 API key。
-- **可选的设备端整理：** 内容补充（enrichment）与页面汇总可以使用你选择的 [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) 或 [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)，并通过 [llama.cpp](https://github.com/ggml-org/llama.cpp) 运行。你没有选择前，Wenlan 不会下载或启用语言模型。
+先用已连接的 AI 写页面，不必另装本地语言模型。后台整理与自动更新是可选功能，需要另外设置模型。
+
+- **搜索在本机运行。** 首次启动会下载搜索模型，之后在你的电脑上运行，不需要 API key。
+- **连接 AI，就可能传出内容。** 云端 AI 可将读取的知识传给其提供商；选用云端模型整理资料，也会发送该任务所需的内容。本地存储不代表这些交互都留在本机。
+- **使用统计默认关闭。** 同意后才发送有限的操作计数、版本与平台，不包含知识内容或安装标识。[查看说明](docs/PRIVACY.md#telemetry)。
+
+模型下载、更新检查、远程图片与可选远程访问的联网行为，请见[隐私说明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
+
+<details>
+<summary>模型选项与技术细节</summary>
+
+- **本地基础检索：** [BGE 向量模型](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) 通过 FastEmbed 在你的设备上运行，用于混合搜索，不需要 API key。
+- **可选的设备端整理：** 内容补充与页面汇总可使用你选择的 [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) 或 [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)，通过 [llama.cpp](https://github.com/ggml-org/llama.cpp) 运行。未经选择，不会下载或启用语言模型。
 - **其他模型来源：** Ollama 或 LM Studio 等 OpenAI 兼容的本地端点，或已设置的云端 provider，也可以提供模型支持的内容补充与页面汇总。
 - **云端说明：** 如果你选择的模型端点位于远端，Wenlan 会把该任务需要的 system prompt 与 user prompt 发给它。本地检索与设备端整理仍留在你的设备上。
-- **可选使用统计：** 默认关闭。只有你同意后，Wenlan 才会发送有限的操作计数、版本与平台，不包含知识内容或安装标识。详见[隐私说明](docs/PRIVACY.md#telemetry)。
 
 完整 workflow 参考：[plugin/skills](plugin/skills/README.md)。模型分工与限制见：[技术基础（英文）](docs/technical-foundations.md#model-roles)。
 
+</details>
+
 ### 你的数据与卸载
 
-没有任何锁定。页面和会话笔记是 `~/.wenlan/` 下的 Markdown；记忆保存在平台数据目录下的一个 libSQL 数据库中（macOS 为 `~/Library/Application Support/wenlan/`，Linux 为 `~/.local/share/wenlan/`，Windows 为 `%LOCALAPPDATA%\wenlan\`）。复制这两个文件夹即可备份或迁移你的 Wenlan。如果这次安装是从 Origin 升级而来，仍会在 `~/.origin/` 和同级的 `origin` 数据文件夹中（macOS 为 `~/Library/Application Support/origin/`，Linux 为 `~/.local/share/origin/`，Windows 为 `%LOCALAPPDATA%\origin\`）各保留一份完整数据；这两个文件夹也请一并删除或复制。
+页面与会话笔记是 Markdown 文件；记忆与图谱保存在本地数据库。卸载 app 时，可以保留你的知识数据。
 
-卸载：app 中「登录时在后台运行文澜」开关会移除开机注册——关闭它并退出，删除 `Wenlan.app` 或运行 Windows 卸载程序，然后删除上述文件夹。`wenlan background off` 只会停止守护进程并关闭开机自启，不会移除开机注册；仅使用 CLI 的安装请改为参照 [PRIVACY.md](docs/PRIVACY.md) 中守护进程的卸载条目。Wenlan 写入的路径列在其中。
+<details>
+<summary>文件位置、备份与卸载方式</summary>
+
+**默认位置**
+
+- 页面与会话笔记：`~/.wenlan/`。
+- 数据库与运行环境数据：macOS 为 `~/Library/Application Support/wenlan/`，Linux 为 `~/.local/share/wenlan/`，Windows 为 `%LOCALAPPDATA%\wenlan\`。
+
+**备份知识数据**
+
+复制文件夹前，先退出 app 并停止后台服务。自定义页面或数据位置也要备份。只导出 wiki 不等于完整的数据库备份。
+
+如果曾从 Origin 升级，请另外检查 `~/.origin/` 与同级的 `origin` 平台数据文件夹是否留有旧数据。备份旧数据时一并保留；只有打算删除时才移除。
+
+**卸载程序**
+
+在设置中关闭「登录时在后台运行文澜」，退出 app，再删除 `Wenlan.app` 或运行 Windows 卸载程序。知识数据文件夹会保留；只有确定不再需要数据，并已完成所需备份时，才另外删除。
+
+`wenlan background off` 会停止 daemon 并关闭自动启动，但不会移除服务注册。仅使用 CLI 的卸载方式、AI 工具中残留的设置、凭据与其他文件，请见[完整卸载说明](docs/PRIVACY.md#data-deletion)。
+
+</details>
 
 
 <a id="evaluation"></a>
