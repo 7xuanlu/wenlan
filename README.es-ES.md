@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6740849ced7932c676aaa3efecaa37212380f604090f7ef5d7f3d6fa9e47cb90 -->
+<!-- README_SYNC: source=README.md sha256=d3e65adb40f3e544a3ca4a6f02800ba3238fe1b0396abd78c5ff15a206185680 -->
 
 <p align="center">
   <picture>
@@ -84,11 +84,13 @@ una memoria de prueba.
 
 </details>
 
-### 3. Guarda tu trabajo para retomarlo
+### 3. Crea tu primera página de wiki
 
-> Convierte lo más importante de esta conversación en una página de Wenlan.
+> Organiza esta conversación en una página temática de Wenlan con citas a las fuentes.
 
 ¿Ya tienes material? [Importa notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in) y pídele a tu IA que organice un tema en una página.
+
+Abre la página, consulta sus fuentes y añade tus propias ideas. Después, pídele a tu IA que continúe el trabajo a partir de ella.
 
 <details>
 <summary>Modelos, instalación y actualizaciones</summary>
@@ -138,9 +140,9 @@ Instrucciones manuales y específicas por herramienta: [Configuración asistida 
 
 ## Tu wiki, para ti y tu IA
 
-- **Retoma donde lo dejaste.** Pide a Claude Code o Codex que use una página existente de Wenlan para tu siguiente tarea.
-- **Consulta de dónde viene una respuesta.** Abre las citas de una página para ver los documentos, conversaciones o decisiones guardadas que la sustentan.
-- **Mantén el control de tus cambios.** Cuando Wenlan actualiza automáticamente una página que has editado, propone cambios para que los revises.
+- **Reúne material disperso por temas.** Organiza documentos, notas y conversaciones con IA en páginas conectadas, con citas que puedes abrir y comprobar.
+- **Para ti y para tu IA.** Lee y edita tus páginas, o pide a Claude Code o Codex que las use para continuar el trabajo.
+- **Conocimiento actualizado, bajo tu control.** Al activar las actualizaciones en segundo plano, las páginas que hayas editado recibirán propuestas de revisión para que decidas si aceptarlas.
 
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 

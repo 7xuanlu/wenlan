@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6740849ced7932c676aaa3efecaa37212380f604090f7ef5d7f3d6fa9e47cb90 -->
+<!-- README_SYNC: source=README.md sha256=d3e65adb40f3e544a3ca4a6f02800ba3238fe1b0396abd78c5ff15a206185680 -->
 
 <p align="center">
   <picture>
@@ -83,11 +83,13 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 </details>
 
-### 3. 留下成果，下次接著用
+### 3. 建立你的第一頁維基
 
-> 把這次討論整理成 Wenlan 頁面。
+> 把討論整理成附來源的 Wenlan 主題頁。
 
 已經有資料？先[匯入筆記或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)，再請 AI 按主題整理成頁面。
+
+打開頁面，查看依據、補上自己的想法；之後也能請 AI 根據這一頁繼續工作。
 
 <details>
 <summary>模型、其他安裝方式與更新</summary>
@@ -137,9 +139,9 @@ npx -y wenlan setup
 
 ## 你與 AI 共用的個人維基
 
-- **下次接著做。** 請 Claude Code 或 Codex 參考已有的 Wenlan 頁面，繼續下一項工作。
-- **看得到依據。** 點開引用，查看原始文件、對話或決策紀錄。
-- **自己的修改，自己決定。** 自動更新你編輯過的頁面時，Wenlan 會提出修訂，交給你確認。
+- **散落的資料，整理成主題。** 文件、筆記與 AI 對話，彙整成彼此連結的頁面，引用可以點開查證。
+- **自己看，也給 AI 用。** 直接閱讀、編輯，也能讓 Claude Code、Codex 接著用。
+- **持續更新，保留你的主導權。** 啟用背景更新後，你編輯過的頁面會先收到修訂提案，由你確認是否採用。
 
 頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 

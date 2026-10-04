@@ -81,11 +81,13 @@ Set up only this AI tool, then check that it can save and find a test memory.
 
 </details>
 
-### 3. Keep your work for next time
+### 3. Create your first wiki page
 
-> Turn the key takeaways from this conversation into a Wenlan page.
+> Organize this discussion into a Wenlan topic page with source citations.
 
 Already have material? [Import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in), then ask your AI to organize a topic into a page.
+
+Open the page, check its sources, and add your own thoughts. Later, ask your AI to build on it.
 
 <details>
 <summary>Models, installation options, and updates</summary>
@@ -134,9 +136,9 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 
 ## Your wiki, for you and your AI
 
-- **Pick up where you left off.** Ask Claude Code or Codex to use an existing Wenlan page for your next task.
-- **See where an answer came from.** Open a page's citations to inspect the documents, conversations, or saved decisions behind it.
-- **Keep control of your edits.** When Wenlan automatically refreshes a page you've edited, it proposes changes for you to review.
+- **Turn scattered material into connected topics.** Bring documents, notes, and AI conversations together in linked pages, with citations you can open and check.
+- **Read it yourself. Use it with your AI.** Read and edit your pages, or ask Claude Code or Codex to use them for your next task.
+- **Keep knowledge current, with you in control.** With background updates enabled, pages you've edited receive proposed revisions for you to review.
 
 Your pages are local Markdown files you can read, edit, and take with you.
 
