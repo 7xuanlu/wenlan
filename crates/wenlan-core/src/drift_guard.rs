@@ -3842,9 +3842,9 @@ fn ordinary_pr_required_path_excludes_release_and_unowned_platform_backstops() {
         "the independent MCP platform compile must gate conclusion"
     );
     assert_eq!(
-        ci["jobs"]["mcp-platform"]["timeout-minutes"].as_u64(),
-        Some(20),
-        "the focused MCP platform compile must keep a 20-minute ceiling"
+        ci["jobs"]["mcp-platform"]["timeout-minutes"].as_str(),
+        Some("${{ matrix.os == 'windows-2022' && 30 || 20 }}"),
+        "the focused MCP platform compile must keep a bounded 20-minute macOS / 30-minute Windows ceiling"
     );
 }
 
