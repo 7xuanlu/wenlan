@@ -719,7 +719,10 @@ class PlatformPlanTests(unittest.TestCase):
         job = workflow.split("\n  mcp-platform:\n", 1)[1].split(
             "\n  canonical-acceptance:\n", 1
         )[0]
-        self.assertIn("    timeout-minutes: 20\n", job)
+        self.assertIn(
+            "    timeout-minutes: ${{ matrix.os == 'windows-2022' && 30 || 20 }}\n",
+            job,
+        )
         self.assertIn("run: cargo check -p wenlan-mcp --lib --bins", job)
         self.assertIn("run: cargo check -p wenlan-mcp --examples", job)
         self.assertNotIn("--all-targets", job)
