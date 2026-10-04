@@ -106,6 +106,26 @@ test("knowledge-network visual distinguishes entities and relation semantics", (
   assert.doesNotMatch(asset.svg, /IN PROGRESS/u);
 });
 
+test("overview memory icon matches the app navigation brain geometry", () => {
+  const navigation = require("node:fs").readFileSync(
+    path.join(__dirname, "../src/components/memory/navigation/PrimaryNavigation.tsx"), "utf8",
+  );
+  const brain = navigation.match(/data-navigation-icon="brain"[\s\S]*?<\/svg>/u)?.[0];
+  assert.ok(brain, "App memory navigation icon must exist");
+  const appPaths = [...brain.matchAll(/"(M[^"\n]+)"/gu)].map((match) => match[1]);
+  assert.equal(appPaths.length, 6);
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const icon = makeOverview(locale, viewport).svg.match(/<g data-icon="app-memory-brain"[\s\S]*?<\/g>/u)?.[0];
+      assert.ok(icon, `${locale}/${viewport} memory icon`);
+      assert.deepEqual([...icon.matchAll(/<path d="([^"]+)"/gu)].map((match) => match[1]), appPaths);
+      assert.ok(icon.includes(`scale(${28 / 24})`));
+      assert.match(icon, /stroke-width="1\.8"/u);
+      assert.match(icon, /stroke-linejoin="round"/u);
+    }
+  }
+});
+
 test("knowledge-network visual has desktop and mobile assets for both Chinese locales", () => {
   assert.equal(
     makeKnowledgeNetwork("zh-Hans", "desktop").name,

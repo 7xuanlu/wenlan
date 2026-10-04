@@ -655,9 +655,18 @@ function documentGlyph({ x, y, color = C.secondary }) {
 }
 
 function memoryGlyph({ x, y, color = C.indigo }) {
-  return `<g fill="none" stroke="${color}" stroke-width="1.7" stroke-linecap="round">
-    <path d="M${x + 3} ${y + 6}c0-3 2-5 5-5 2 0 4 1 5 3 1-2 3-3 5-3 3 0 5 2 5 5v14c0 3-2 5-5 5H${x + 8}c-3 0-5-2-5-5z"/>
-    <path d="M${x + 8} ${y + 8}h10M${x + 8} ${y + 13}h10M${x + 8} ${y + 18}h7"/>
+  // Match the memory navigation icon in PrimaryNavigation.tsx. A regression test
+  // compares these paths with the app so the illustration cannot drift silently.
+  const paths = [
+    "M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8",
+    "M8.5 13a3.5 3.5 0 0 1 3.5 3.5v1a3.5 3.5 0 0 1 -7 0v-1.8",
+    "M17.5 16a3.5 3.5 0 0 0 0 -7h-.5",
+    "M19 9.3v-2.8a3.5 3.5 0 0 0 -7 0",
+    "M6.5 16a3.5 3.5 0 0 1 0 -7h.5",
+    "M5 9.3v-2.8a3.5 3.5 0 0 1 7 0v10",
+  ];
+  return `<g data-icon="app-memory-brain" transform="translate(${x} ${y}) scale(${28 / 24})" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    ${paths.map((geometry) => `<path d="${geometry}"/>`).join("\n")}
   </g>`;
 }
 
