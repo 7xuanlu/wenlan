@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d8fc8afb14de62ae76eacc48f8e780e5abf65c085195d1409c452a62b588d21e -->
+<!-- README_SYNC: source=README.md sha256=630beef466be7d618d24504faa58150cb3b1f227bf13d159d45ad7e25b51f0ed -->
 
 <p align="center">
   <picture>
@@ -92,42 +92,7 @@ una memoria de prueba.
 
 Abre la página, consulta sus fuentes y añade tus propias ideas. Después, pídele a tu IA que continúe el trabajo a partir de ella.
 
-<details>
-<summary>Modelos, instalación y actualizaciones</summary>
-
-**Modelos**
-
-La organización en segundo plano y la actualización automática de Páginas son opcionales y necesitan un [modelo configurado](#models-and-privacy). Es distinto del modelo de búsqueda que se descarga al iniciar por primera vez.
-
-**Instalar la aplicación de macOS desde el terminal**
-
-El instalador descarga la aplicación, comprueba su SHA-256 y la mueve a Aplicaciones:
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
-```
-
-**Sin la aplicación de escritorio**
-
-En macOS Apple Silicon:
-
-```bash
-npx -y wenlan setup
-```
-
-`npx` requiere Node.js. Si no lo tienes, ejecuta `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash` y después `wenlan setup --basic`.
-
-Esto descarga la CLI precompilada, el daemon y el conector MCP, inicia el entorno local y lo verifica. No se requiere toolchain de Rust ni Cargo. Linux x64/ARM64 con glibc tiene una [ruta de configuración automática de shell](docs/setup-with-ai.md#install-the-runtime); Windows x64 utiliza el archivo correspondiente de [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel actualmente [no tiene una instalación completa soportada del runtime](crates/wenlan-cli/README.md#macos-intel).
-
-**Qué se instala y cómo actualizar**
-
-La aplicación incluye el daemon, la CLI y el conector MCP. Inicia el daemon al abrirse y ofrece conectar los clientes detectados mediante el plugin de Claude Code o Codex, o una entrada MCP para otros clientes compatibles. La instalación sin interfaz ejecuta el mismo daemon sin ventana; en ambos casos, tus herramientas de IA usan la misma base de conocimiento local.
-
-Para actualizar la aplicación de macOS, arrastra la nueva sobre la antigua y ábrela. Cierra manualmente Wenlan 0.17.0 y anteriores antes de hacerlo.
-
-Instrucciones manuales y específicas por herramienta: [Configuración asistida por IA](docs/setup-with-ai.md) · [Plugin de Claude Code](plugin/README.md) · [Plugin de Codex](plugin-codex/README.md) · [CLI y MCP](crates/wenlan-cli/README.md).
-
-</details>
+La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
 ¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/7xuanlu/wenlan/issues). Los issues son públicos: no incluyas notas privadas, credenciales, identificadores de Acceso remoto ni registros sin anonimizar.
 
@@ -153,28 +118,9 @@ Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte co
   </picture>
 </p>
 
-<details>
-<summary>Cómo se conectan las fuentes, memorias y páginas</summary>
-
-La nota de ejemplo adapta una [guía de diseño de agentes](https://www.anthropic.com/engineering/building-effective-agents) y las [correcciones de los diagramas de este README](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296). Ilustra conocimiento reutilizable, no resultados medidos de clientes ni una página generada automáticamente.
-
-Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. La generación de páginas y su mantenimiento en segundo plano requieren configurar la [vía de IA](#models-and-privacy).
-
 <a id="what-wenlan-is-not"></a>
 
-**Pensado para trabajos que continúan.** Si usas la IA durante días o semanas para el mismo tema y tienes que buscar continuamente el material anterior o volver a explicar decisiones ya tomadas, Wenlan está pensado para ese flujo de trabajo. No es un sistema de gestión personal ni un SDK de memoria integrado en otro producto. Puedes seguir usando Obsidian; Wenlan no promete sustituir sus plugins ni migrar todas las funciones de tu vault.
-
-**Un sistema de conocimiento, tres roles:**
-
-- **Las Fuentes mantienen rastreable el material que lee Wenlan.** Las conversaciones importadas permanecen como registros capturados; los archivos registrados sincronizan su contenido actual a medida que cambian.
-- **Las Memorias preservan lo que el trabajo te enseña.** Los agentes capturan decisiones atómicas, lecciones, correcciones y sustituciones con procedencia.
-- **Las Páginas compilan el conocimiento actual.** Wenlan convierte Fuentes y Memorias relevantes en Markdown con citas de fuente que puedes reutilizar, actualizar y revisar.
-
-**Cómo se actualizan las páginas:** Tanto las Fuentes como las Memorias capturadas pueden sustentar una misma Página. El historial de Memoria registra los cambios en cada Memoria; el historial de la Página registra las fuentes que la sustentan y sus revisiones. Durante la actualización automática, las Páginas elegibles mantenidas por el sistema pueden actualizarse directamente; las que hayas editado reciben una revisión propuesta. La revisión te permite decidir si aplicarla; no garantiza que la conclusión de la IA sea correcta.
-
-Para lectores técnicos: Wenlan sigue el patrón de las wikis para LLM. Consulta la [guía de implementación de LLM wiki](https://wenlan.app/learn/distilled-wiki-pages-ai-memory) y los [fundamentos técnicos](docs/technical-foundations.md) para conocer el modelo de datos, la recuperación y las reglas de mantenimiento.
-
-</details>
+La ilustración muestra una regla de trabajo reutilizable, no resultados de clientes ni una prueba de generación automática de páginas. [Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages).
 
 <a id="knowledge-graph"></a>
 
@@ -189,35 +135,10 @@ El ejemplo de Agent Loop conecta una pauta de reintentos, una lección de una re
   </picture>
 </p>
 
-<details>
-<summary>Detalles del grafo y la búsqueda</summary>
-
-El grafo de entidad-relación es una parte de la wiki conectada más amplia de Wenlan. Las **Páginas de Conocimiento** contienen la síntesis mantenida, las **Entidades** anclan personas, proyectos y conceptos reutilizables, las **Páginas de Fuente** hacen que el material importado o sincronizado sea inspeccionable, y las **Memorias** atómicas preservan decisiones y cambios. Funcionan a través de enlaces separados y explícitos: wikilinks de Página a Página, evidencia de Página, enlaces de Memoria a Entidad y relaciones de Entidad dirigidas.
-
-Dentro del grafo de entidades, un modelo de enriquecimiento configurado extrae Entidades tipadas, observaciones y relaciones dirigidas a partir de las Memorias. El enlace y la resolución de entidades reutilizan nodos existentes en lugar de tratar cada mención como nueva; cada Memoria conserva su Fuente y puede vincularse a múltiples Entidades. [Cómo se almacena el modelo conectado ->](docs/technical-foundations.md#connected-knowledge-model)
-
-- **Significado y dirección:** Las relaciones utilizan un vocabulario predefinido como `uses` (usa), `part_of` (parte de), `contradicts` (contradice) y `replaced_by` (reemplazado por); los tipos desconocidos se reasignan a `related_to` (relacionado con) y se convierten en propuestas de vocabulario revisables.
-- **Fuerza y procedencia:** Una relación puede almacenar confianza, una explicación y su Memoria de origen, para que las afirmaciones más fuertes y más débiles sigan siendo distinguibles e inspeccionables.
-- **Comunidades que se enriquecen con el tiempo:** La propagación de etiquetas agrupa Entidades por densidad de relación, ponderada por el recuento de relaciones entre cada par. Estos grupos pueden organizar resúmenes de corpus opcionales mientras que los enlaces de Entidad añaden contexto de recuperación.
-- **Corrección sin borrado:** Las afirmaciones relacionadas, las correcciones y las sustituciones explícitas permanecen inspeccionables juntas mientras se conservan las Fuentes originales y el historial de Memoria.
-
-Durante la recuperación, la coincidencia densa de entidades encuentra entidades relevantes para la consulta. Cuando existen enlaces de grafo elegibles, el flujo de grafo-memoria predeterminado potencia las Memorias vinculadas como una tercera señal de [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf). La ruta depende de los datos y el alcance, y los límites de Espacio (Space) se siguen aplicando. [Cómo funciona la ruta del grafo ->](docs/technical-foundations.md#graph-assisted-retrieval)
-
 <a id="retrieval"></a>
+<a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
 
-### Recuperación a través de palabras, significado y conexiones
-
-La búsqueda central de Wenlan es un pipeline híbrido local, no una simple búsqueda de vectores. Cada etapa tiene una tarea diferente:
-
-- **Coincidencia literal, [SQLite FTS5](https://www.sqlite.org/fts5.html):** un índice de texto completo encuentra términos literales, identificadores y frases.
-- **Significado similar, FastEmbed + [`Qdrant/bge-base-en-v1.5-onnx-Q`](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q):** un modelo inglés cuantizado crea embeddings de 768 dimensiones; [libSQL cosine DiskANN](https://turso.tech/blog/approximate-nearest-neighbor-search-with-diskann-in-libsql) los indexa para la recuperación de vecinos más cercanos aproximados.
-- **Clasificación combinada, [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) ponderado (`k = 60`):** las listas de clasificación léxica y semántica se fusionan sin fingir que sus puntuaciones brutas comparten una escala; la similitud de coseno también pondera la contribución del vector.
-- **Contexto conectado, flujo de grafo-memoria:** los enlaces de entidad elegibles añaden una tercera señal RRF mientras que el alcance de lectura activo sigue filtrando las Memorias devueltas.
-- **Precisión opcional, re-clasificación por cross-encoder:** a diferencia de los embeddings, [`jinaai/jina-reranker-v1-turbo-en`](https://huggingface.co/jinaai/jina-reranker-v1-turbo-en) o [`BAAI/bge-reranker-base`](https://huggingface.co/BAAI/bge-reranker-base) lee cada par consulta-candidato y reordena el grupo más pequeño; la re-clasificación está desactivada por defecto.
-
-Los canales de Página, episódicos y de hechos son opcionales y recurren a las señales de búsqueda restantes si no están disponibles. El Espacio sigue limitando el alcance de lectura. [Métodos, valores predeterminados y limitaciones ->](docs/technical-foundations.md)
-
-</details>
+Sigue una página hasta los conceptos y las fuentes relacionados. [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -236,62 +157,12 @@ La nueva experiencia mejora tus notas sin ocultar decisiones anteriores. Este ej
   </picture>
 </p>
 
-<details>
-<summary>Actualizaciones, revisión y archivos locales</summary>
-
-Una wiki generada puede quedar obsoleta; un almacén de memoria puede fragmentarse en hechos desconectados. Wenlan vincula dos ciclos de vida sin colapsarlos en una sola capa.
-
-#### Memoria Atómica
-
-`CAPTURA -> CLASIFICA -> ENRIQUECE -> VINCULA -> RECONCILIA`
-
-La captura y la sustitución explícita son fundamentales. Las etapas basadas en modelos se ejecutan solo cuando el modelo correspondiente está configurado, y el paso de reconciliación está desactivado por defecto.
-
-| Operación | Lo que hace Wenlan |
-|---|---|
-| **Captura** | Los agentes escriben una idea completa y autónoma por Memoria, siguiendo el principio de nota atómica de Zettelkasten en lugar de guardar toda la conversación. |
-| **Clasifica** | Con un modelo de lenguaje configurado, Wenlan asigna `identity` (identidad), `preference` (preferencia), `decision` (decisión), `lesson` (lección), `gotcha` (advertencia) o `fact` (hecho); un tipo preciso proporcionado por el cliente tiene prioridad. |
-| **Enriquece** | Con un modelo de lenguaje configurado, añade campos estructurados, pistas de recuperación, fechas de eventos, calidad, importancia y etiquetas cuando estén disponibles. |
-| **Vincula** | Mantiene la procedencia y, cuando el enriquecimiento está habilitado, conecta Memorias con entidades y relaciones en el grafo de conocimiento. |
-| **Reconcilia** | Los reemplazos explícitos preservan una cadena de `supersedes` (sustituye). Un reemplazo de un agente cuyo nivel de confianza sea inferior a "full" se pone en cola para revisión humana automáticamente, sin necesidad de ninguna opción. Un paso opcional basado en un modelo también puede poner en cola conflictos protegidos para revisión en lugar de sobrescribir el historial; ese paso está desactivado por defecto y debe habilitarse explícitamente. |
-
-Configuración avanzada: establece `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` para habilitar ese paso de reconciliación.
-
-#### Página Mantenida
-
-`DESTILA -> CITA -> RASTREA -> ACTUALIZA -> REVISA`
-
-| Operación | Lo que hace Wenlan |
-|---|---|
-| **Destila** | Compila Fuentes y Memorias relacionadas en una Página Markdown. |
-| **Cita** | Mantiene los registros de citas y el estado de verificación; la actualización automática descarta un borrador cuando falla la verificación del respaldo de las citas. |
-| **Rastrea** | Registra qué evidencia sustenta la Página, por qué quedó obsoleta y un registro de cambios limitado. |
-| **Actualiza** | Cuando una Página se marca como obsoleta, reconstruye las Páginas mantenidas automáticamente que cumplen los requisitos a partir de la evidencia actual. |
-| **Revisa** | Durante la actualización automática, propone cambios en las Páginas que hayas editado, en lugar de reescribirlas sin avisar. |
-
-Por ejemplo, importa un documento de diseño y guarda en Codex una decisión de depuración. Wenlan puede reunir ambos en una Página con citas a las dos fuentes. Cuando la Página se actualice automáticamente, se reconstruirá a partir de los materiales que la sustentan; si la has editado, la propuesta de cambio quedará pendiente de revisión.
-
-**Alcance de la revisión:** es una política de actualización, no una barrera de seguridad para tus archivos. Las ediciones directas en archivos y las realizadas mediante la API local de edición manual no pasan por esta cola. Una regeneración forzada y explícita también puede reemplazar una Página editada; la aplicación de escritorio pide confirmación antes de hacerlo.
-
 <a id="local-markdown"></a>
+<a id="memoria-atómica"></a>
+<a id="página-mantenida"></a>
+<a id="markdown-local-que-funciona-con-obsidian"></a>
 
-### Markdown local que funciona con Obsidian
-
-Tu síntesis duradera permanece en archivos ordinarios en lugar de un formato de editor propietario:
-
-- **Archivos planos:** Las Páginas y notas de sesión permanecen como Markdown en `~/.wenlan/`.
-- **Historial inspeccionable:** Los flujos de destilación y entrega pueden registrar lotes lógicos de archivos mediante commits en un repositorio git local.
-- **Coexistencia con Obsidian:** Wenlan lee un vault existente como una fuente. Crea un enlace simbólico de `~/.wenlan/pages/` hacia el vault o exporta una Página desde la aplicación de escritorio; tus ediciones siguen siendo propiedad humana, y las actualizaciones posteriores de la máquina se convierten en revisiones revisables.
-
-El historial local es directamente inspeccionable:
-
-```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
-```
-
-</details>
+La revisión se aplica a las actualizaciones automáticas; la edición directa de archivos y la regeneración forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
 
 
 <a id="what-you-get"></a>
@@ -378,14 +249,9 @@ Estos comandos están disponibles a través de los plugins de Wenlan. Otros clie
 
 </details>
 
-<details>
-<summary>Detalles de la cola offline de la CLI</summary>
+<a id="cola-offline-outbox"></a>
 
-### Cola offline (outbox)
-
-Si el daemon local no está accesible, `wenlan capture` y `wenlan brief update` escriben sus solicitudes en una cola local duradera (outbox) y terminan correctamente. Cuando el daemon vuelve, drena esas escrituras por las rutas HTTP normales; revisa la cola con `wenlan outbox status` o pide una reproducción inmediata con `wenlan outbox drain`. Una escritura que el daemon rechaza de plano (un 4xx, por ejemplo al no pasar el control de calidad del contenido) se mueve a `outbox/failed/` con un recibo en lugar de reintentarse para siempre; un fallo de transporte o un error del servidor (5xx) la deja en la cola para el siguiente drenaje, que se ejecuta automáticamente cada 60 segundos.
-
-</details>
+[Escrituras offline y reenvío desde la CLI](docs/setup-and-data.es-ES.md#offline-queue).
 
 <a id="models-and-privacy"></a>
 
@@ -399,43 +265,13 @@ Puedes usar tu IA conectada para escribir páginas sin instalar otro modelo de l
 
 Consulta la [información de red y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network) para las descargas, comprobaciones de actualizaciones, imágenes remotas y acceso remoto opcional.
 
-<details>
-<summary>Opciones de modelos y detalles técnicos</summary>
-
-- **Recuperación base local:** El [modelo de embedding BGE](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) se ejecuta a través de FastEmbed en tu máquina para la búsqueda híbrida y no necesita clave de API.
-- **Síntesis opcional en el dispositivo:** El enriquecimiento y la síntesis de Páginas pueden usar [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) o [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF), según la elección del usuario, a través de [llama.cpp](https://github.com/ggml-org/llama.cpp). Wenlan no descarga ni activa un modelo de lenguaje hasta que elijas uno.
-- **Otros proveedores:** Un endpoint local compatible con OpenAI como Ollama o LM Studio, o un proveedor en la nube configurado, pueden suministrar el enriquecimiento y la síntesis basados en modelos.
-- **Divulgación de nube:** Si el endpoint del modelo que seleccionas es remoto, Wenlan envía los prompts del sistema y del usuario de esa tarea a ese endpoint. La recuperación local y la síntesis en el dispositivo permanecen en tu máquina.
-
-Referencia completa del flujo de trabajo: [plugin/skills](plugin/skills/README.md). Roles técnicos del modelo: [fundamentos técnicos](docs/technical-foundations.md#model-roles).
-
-</details>
+[Opciones y configuración de modelos](docs/setup-and-data.es-ES.md#models).
 
 ### Tus datos y la desinstalación
 
 Tus páginas y notas de sesión son archivos Markdown; las memorias y el grafo se guardan en una base de datos local. Puedes conservar tus conocimientos al desinstalar la app.
 
-<details>
-<summary>Ubicación de archivos, copias de seguridad y eliminación</summary>
-
-**Ubicaciones predeterminadas**
-
-- Páginas y notas de sesión: `~/.wenlan/`.
-- Base de datos y datos del entorno de ejecución: `~/Library/Application Support/wenlan/` en macOS, `~/.local/share/wenlan/` en Linux o `%LOCALAPPDATA%\wenlan\` en Windows.
-
-**Copia de seguridad de tus conocimientos**
-
-Cierra la app y detén el servicio en segundo plano antes de copiar estas carpetas. Incluye cualquier carpeta de páginas o datos que hayas configurado aparte. Exportar la wiki no equivale a una copia completa de la base de datos.
-
-Si actualizaste desde Origin, comprueba también `~/.origin/` y la carpeta hermana de datos `origin` de tu plataforma. Inclúyelas al respaldar material antiguo o elimínalas solo si quieres borrarlo.
-
-**Desinstalación**
-
-Desactiva *Ejecutar Wenlan en segundo plano al iniciar sesión* en Ajustes, cierra la app y elimina `Wenlan.app` o ejecuta el desinstalador de Windows. Las carpetas de conocimientos se conservan; bórralas solo si ya no necesitas los datos y tienes las copias de seguridad necesarias.
-
-`wenlan background off` detiene el daemon y desactiva el arranque automático, pero no elimina el registro del servicio. Para desinstalar solo la CLI o revisar ajustes restantes de clientes de IA, credenciales y otros archivos, consulta los [detalles de eliminación](docs/PRIVACY.md#data-deletion).
-
-</details>
+[Ubicación de archivos, copias de seguridad y eliminación](docs/setup-and-data.es-ES.md#backup-and-removal).
 
 
 <a id="evaluation"></a>
@@ -508,19 +344,13 @@ pnpm build:all
 
 <a id="code-signing-policy"></a>
 
-## Code signing policy
+## Política de firma de código
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Las versiones de escritorio para macOS están firmadas con Developer ID y notarizadas. Los instaladores de Windows aún no están firmados.
 
-- **Autores:** [@7xuanlu](https://github.com/7xuanlu), que puede hacer commit en este repositorio sin una revisión adicional.
-- **Revisores:** [@7xuanlu](https://github.com/7xuanlu). Todo cambio de alguien que no sea committer llega como pull request y se revisa antes de fusionarse.
-- **Aprobadores:** [@7xuanlu](https://github.com/7xuanlu), que aprueba cada solicitud de firma y así decide qué versión se firma.
+Las versiones se compilan desde commits etiquetados mediante el workflow de release de este repositorio, en runners alojados por GitHub. Los mantenedores deben usar autenticación multifactor en GitHub.
 
-La autenticación multifactor es obligatoria para cada mantenedor, en GitHub y en SignPath, y nadie se añade a ninguno de los dos sin ella. Las versiones se compilan únicamente con el workflow de release por etiqueta de este repositorio, en runners alojados por GitHub, desde el commit al que apunta la etiqueta.
-
-**Política de privacidad:** [PRIVACY.md](docs/PRIVACY.md) — qué guarda Wenlan, dónde lo guarda y cada caso que conocemos en que accede a la red. Cómo se firma cada plataforma: [docs/code-signing.md](docs/code-signing.md).
-
-La solicitud a SignPath está pendiente. Los instaladores de Windows aún no están firmados.
+[Detalles de firma por plataforma (en inglés)](docs/code-signing.md) · [Política de privacidad (en inglés)](docs/PRIVACY.md).
 
 
 <a id="license"></a>

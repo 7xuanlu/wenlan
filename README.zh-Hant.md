@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=d8fc8afb14de62ae76eacc48f8e780e5abf65c085195d1409c452a62b588d21e -->
+<!-- README_SYNC: source=README.md sha256=630beef466be7d618d24504faa58150cb3b1f227bf13d159d45ad7e25b51f0ed -->
 
 <p align="center">
   <picture>
@@ -91,42 +91,7 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 打開頁面，查看依據、補上自己的想法；之後也能請 AI 根據這一頁繼續工作。
 
-<details>
-<summary>模型、其他安裝方式與更新</summary>
-
-**模型**
-
-背景整理與自動更新需[另外設定模型](#models-and-privacy)。這是可選功能，與搜尋模型不同。
-
-**從終端機安裝 macOS app**
-
-安裝程式會下載 app、核對 SHA-256，並放進「應用程式」：
-
-```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
-```
-
-**不使用桌面 app**
-
-在 macOS Apple Silicon 上執行：
-
-```bash
-npx -y wenlan setup
-```
-
-`npx` 需要 Node.js；若未安裝，可先執行 `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash`，再執行 `wenlan setup --basic`。
-
-這個命令會下載預先編譯的 CLI、背景服務（daemon）與 MCP 連接器，啟動並驗證本地服務；不需要安裝 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以採用自動化的 [shell 設定流程](docs/setup-with-ai.md#install-the-runtime)；Windows x64 請從 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下載對應的 archive。macOS Intel 目前[沒有受支援的完整 runtime 安裝方式](crates/wenlan-cli/README.md#macos-intel)。
-
-**安裝內容與更新方式**
-
-桌面 app 內建 daemon、CLI 與 MCP 連接器，開啟時會啟動 daemon，並提供偵測到的 AI 工具接入選項：Claude Code、Codex 使用 plugin，其他支援工具使用 MCP 設定。不使用桌面 app 時，執行的也是同一個 daemon；兩種方式都讓 AI 工具存取同一個本地知識庫。
-
-更新 macOS app 時，把新 app 拖到舊 app 上覆蓋並開啟。Wenlan 0.17.0 及更早的版本需要先手動結束。
-
-手動與各工具設定說明：[AI 輔助設定](docs/setup-with-ai.md) · [Claude Code plugin](plugin/README.md) · [Codex plugin](plugin-codex/README.md) · [CLI 與 MCP](crates/wenlan-cli/README.md)。
-
-</details>
+背景整理與自動更新是可選功能，需要[設定模型](#models-and-privacy)。終端機安裝、其他平台與更新方式，請見[設定指南](docs/setup-and-data.zh-Hant.md#installation)。
 
 遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/7xuanlu/wenlan/issues)。Issue 是公開的，請勿附上私人筆記、存取憑證、遠端存取識別碼或未遮蔽的紀錄。
 
@@ -152,28 +117,9 @@ npx -y wenlan setup
   </picture>
 </p>
 
-<details>
-<summary>來源、記憶與頁面如何協作</summary>
-
-圖中筆記取材自 [Agent 設計指南](https://www.anthropic.com/engineering/building-effective-agents)與[這份 README 的圖稿審查修正](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296)，示範如何留下可重用的工作準則，不是使用者成效數據或自動產頁的實測紀錄。
-
-Wenlan 讓持續進行的工作不只留在聊天視窗裡。你可以保存選定的文件與對話，記下過程中的決定，再把它們整理成可閱讀、編輯和重用的頁面。頁面生成與背景維護需要先設定[AI 路徑](#models-and-privacy)。
-
 <a id="what-wenlan-is-not"></a>
 
-**適合需要長期延續的工作。** 如果你會連續幾天或幾週用 AI 處理同一個主題，卻常常要翻找先前資料、重新解釋已做的決定，Wenlan 就是為這種工作流程設計的。它不是生活管理系統，也不是嵌入其他產品的 memory SDK。你仍可繼續使用 Obsidian；Wenlan 不承諾取代其外掛或完整搬移 vault 功能。
-
-**一個知識系統，三種角色：**
-
-- **來源讓 Wenlan 讀到的材料始終可追溯。** 匯入的對話保留為擷取時的紀錄；已登錄檔案會隨內容變化同步目前版本。
-- **記憶保留工作真正教會你的內容。** AI agent 擷取原子的決策、經驗、修正與取代關係，並保留出處。
-- **頁面彙整目前知識。** Wenlan 把相關來源與記憶整理成附有引用的 Markdown，讓你反覆使用、更新與審核。
-
-**更新方式：** 來源與記下的記憶都能作為同一頁面的依據。記憶歷史會記錄個別記憶的變化；頁面歷史則記錄支撐頁面的依據與修訂。自動更新時，符合條件、由系統維護的頁面可直接更新；你編輯過的頁面則會收到修訂提案。審核讓你決定是否套用更新，但不代表 AI 的結論一定正確。
-
-技術讀者可參考：Wenlan 採用 LLM wiki 的做法。資料模型、檢索與維護規則詳見 [LLM-wiki 實作指南](https://wenlan.app/zh-TW/learn/distilled-wiki-pages-ai-memory) 與[技術基礎](docs/technical-foundations.md)。
-
-</details>
+圖中是可重用工作準則的整理示例，不代表使用者成效或自動產頁實測。[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
 
 <a id="knowledge-graph"></a>
 
@@ -188,35 +134,10 @@ Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗
   </picture>
 </p>
 
-<details>
-<summary>圖譜與搜尋的技術細節</summary>
-
-實體關係圖譜只是 Wenlan 更大連接式 wiki 的一部分。**知識頁面**保留持續維護的結論，**實體**固定可複用的人物、專案與概念，**來源頁面**讓匯入或同步的材料可檢查，原子**記憶**則保留決策與變化。它們透過彼此分開的明確連接協作：頁面間的 wikilink、頁面依據、記憶到實體的連接，以及實體間的有向關係。
-
-在實體圖譜這一層，設定 enrichment 模型後，Wenlan 會從記憶中提取帶有類型的實體、觀察與有方向的關係。實體連結與解析會複用既有節點，而不是把每次提及都當成新事物；每條記憶仍保留來源，並可連結多個實體。[查看連接模型如何儲存 ->](docs/technical-foundations.md#connected-knowledge-model)
-
-- **含義與方向：** 關係使用 `uses`、`part_of`、`contradicts`、`replaced_by` 等預置詞彙；未知類型會回退為 `related_to`，並成為可審核的詞彙提案。
-- **強度與出處：** 關係可以保存信賴度、解釋與對應的來源記憶，讓強弱不同的主張仍可區分、可檢查。
-- **形成可複用群組：** 標籤傳播會依關係密度為實體分組，並按每對實體之間的關係數量加權。這些群組可組織選用的全域摘要，實體連結也會為檢索補充脈絡。
-- **修正但不抹除：** 相關說法、修正與明確的取代關係可以放在一起檢查，原始來源與記憶歷史仍會保留。
-
-檢索時，Wenlan 會用實體向量比對找到與問題相關的實體。存在符合條件的圖譜連結時，預設開啟的圖譜記憶訊號（graph-memory stream）會把相連記憶作為第三路 [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf) 排名訊號加以提升。這個路徑取決於現有圖譜資料與讀取範圍，Space 邊界仍然有效。[查看圖譜檢索如何運作 ->](docs/technical-foundations.md#graph-assisted-retrieval)
-
 <a id="retrieval"></a>
+<a id="從關鍵字語意與關聯找回正確內容"></a>
 
-### 從關鍵字、語意與關聯找回正確內容
-
-Wenlan 的核心搜尋是本地混合檢索流程，不是單一的向量查詢。每個階段負責不同工作：
-
-- **原詞比對，[SQLite FTS5](https://www.sqlite.org/fts5.html)：** 全文索引查找字面關鍵字、識別碼與短語。
-- **相近含義，FastEmbed + [`Qdrant/bge-base-en-v1.5-onnx-Q`](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q)：** 量化的英文模型會產生 768 維語意向量；[libSQL cosine DiskANN](https://turso.tech/blog/approximate-nearest-neighbor-search-with-diskann-in-libsql) 再以近似最近鄰搜尋（ANN）快速取得候選。
-- **合併排名，加權 [RRF](https://cormack.uwaterloo.ca/cormacksigir09-rrf.pdf)（`k = 60`）：** 融合原詞與語意排名，不假設兩者的原始分數採用同一尺度；向量訊號還會由餘弦相似度加權。
-- **關聯脈絡，圖譜記憶訊號（graph-memory stream）：** 符合條件的實體連結會加入第三路 RRF 訊號，傳回的記憶仍受目前讀取範圍限制。
-- **可選精排，交叉編碼器（cross-encoder）：** 與分別編碼查詢和記憶的 embedding 不同，[`jinaai/jina-reranker-v1-turbo-en`](https://huggingface.co/jinaai/jina-reranker-v1-turbo-en) 或 [`BAAI/bge-reranker-base`](https://huggingface.co/BAAI/bge-reranker-base) 會同時讀取查詢與單一候選，再對較小的候選池重新排名；預設關閉。
-
-頁面、情節記憶與事實（fact）通道都需要主動啟用；不可用時會退回其餘搜尋訊號。Space 仍負責限制讀取範圍。[查看方法、預設值與限制 ->](docs/technical-foundations.md)
-
-</details>
+從頁面連到相關概念與依據。[圖譜與搜尋如何運作](docs/knowledge-guide.zh-Hant.md#graph-and-search)。
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -235,62 +156,12 @@ Wenlan 的核心搜尋是本地混合檢索流程，不是單一的向量查詢�
   </picture>
 </p>
 
-<details>
-<summary>更新、審核與本地檔案的細節</summary>
-
-一次生成的 wiki 會過時；只存記憶又容易碎成互不相連的事實。Wenlan 連結兩套生命週期，但不把它們混成同一層。
-
-#### 原子記憶
-
-`CAPTURE -> CLASSIFY -> ENRICH -> LINK -> RECONCILE`
-
-Capture 與明確的 supersession 屬於核心流程。模型支援的階段只會在設定相應模型後執行，Reconcile 預設關閉。
-
-| 操作 | Wenlan 做什麼 |
-|---|---|
-| **Capture** | AI agent 每次寫入一條完整、自足的想法，遵循 Zettelkasten 的原子筆記原則，而不是保存整段對話。 |
-| **Classify** | 設定語言模型後，Wenlan 將記憶分為 `identity`、`preference`、`decision`、`lesson`、`gotcha` 或 `fact`；呼叫端明確提供的準確類型優先。 |
-| **Enrich** | 設定語言模型後，在可用時補充結構化欄位、檢索提示、事件日期、品質、重要性與標籤。 |
-| **Link** | 保留出處；啟用 enrichment 後，把記憶連結到知識圖譜中的實體與關係。 |
-| **Reconcile** | 明確取代舊說法時保留 `supersedes` 鏈。若發起替換的 agent 信任等級低於 full，該替換會自動進入人工審核佇列，無需任何開關。可選的模型流程還可以把受保護內容的衝突放入審核，而不是覆蓋歷史；這個流程預設關閉，必須明確啟用。 |
-
-進階設定：使用 `WENLAN_ENABLE_DUAL_POOL_RESOLVE=1` 啟用這個 Reconcile 流程。
-
-#### 持續維護的頁面
-
-`DISTILL -> CITE -> TRACK -> REFRESH -> REVIEW`
-
-| 操作 | Wenlan 做什麼 |
-|---|---|
-| **Distill** | 把相關來源與記憶彙整成一個 Markdown 頁面。 |
-| **Cite** | 保留引用紀錄與驗證狀態；自動 refresh 若未通過引用支撐檢查，就會捨棄草稿。 |
-| **Track** | 記錄哪些證據支撐頁面、頁面為何過時，以及有上限的變更紀錄。 |
-| **Refresh** | 頁面被標記為過時後，依目前證據重建符合條件、由機器維護的頁面。 |
-| **Review** | 自動更新時，對你編輯過的頁面提出修訂，而非靜默改寫。 |
-
-例如，匯入一份設計文件，再讓 Codex 記下一項除錯決策。Wenlan 可以把兩者整理成同一個頁面，並引用兩者。自動更新時，頁面會依目前的依據重建；若你編輯過它，更新提案會等你審閱。
-
-**審核範圍：** 這是更新政策，不是保護你檔案的安全機制。直接編輯檔案或透過本機手動編輯 API 所做的修改，不會進入此審核佇列。明確強制重新生成也可能取代已編輯的頁面；桌面 app 會在執行前要求確認。
-
 <a id="local-markdown"></a>
+<a id="原子記憶"></a>
+<a id="持續維護的頁面"></a>
+<a id="與-obsidian-共存的本地-markdown"></a>
 
-### 與 Obsidian 共存的本地 Markdown
-
-長期知識保留為一般檔案，不被鎖在專有編輯器格式裡：
-
-- **純文字檔案：** 頁面與 session notes 都以 Markdown 保存在 `~/.wenlan/`。
-- **可檢查的歷史：** Distill 與 handoff 可以把邏輯上屬於同一批的檔案提交到本地 git repository。
-- **與 Obsidian 共存：** Wenlan 把現有 vault 當成來源讀取。你可以把 `~/.wenlan/pages/` symlink 到 vault，或從桌面 app 匯出頁面；你的編輯仍由你擁有，之後的機器更新會成為可審核的修訂建議。
-
-本地歷史可以直接檢查：
-
-```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
-```
-
-</details>
+審核針對自動更新；直接改檔與強制重建另有規則。[更新、審核與本地檔案](docs/knowledge-guide.zh-Hant.md#updates-and-history)。
 
 
 <a id="what-you-get"></a>
@@ -377,14 +248,9 @@ AI 工具連接好後，可以直接這樣說：
 
 </details>
 
-<details>
-<summary>CLI 離線佇列詳情</summary>
+<a id="離線佇列outbox"></a>
 
-### 離線佇列（outbox）
-
-如果本機守護程序無法連線，`wenlan capture` 與 `wenlan brief update` 會把請求寫入本機持久化佇列（outbox）並正常結束。守護程序恢復後，它會透過一般 HTTP 路由排空這些寫入；用 `wenlan outbox status` 檢視佇列，或用 `wenlan outbox drain` 立即重播。被守護程序直接拒絕的寫入（4xx，例如未通過內容品質檢查）會連同回條移到 `outbox/failed/`，而不是無限重試；傳輸失敗或伺服器錯誤（5xx）則留在佇列中等待下一次排空，排空每 60 秒自動執行一次。
-
-</details>
+[CLI 離線寫入與重播](docs/setup-and-data.zh-Hant.md#offline-queue)。
 
 <a id="models-and-privacy"></a>
 
@@ -398,43 +264,13 @@ AI 工具連接好後，可以直接這樣說：
 
 模型下載、更新檢查、遠端圖片與選用遠端存取的連網行為，請見[隱私說明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
 
-<details>
-<summary>模型選項與技術細節</summary>
-
-- **本地基礎檢索：** [BGE 向量模型](https://huggingface.co/Qdrant/bge-base-en-v1.5-onnx-Q) 透過 FastEmbed 在你的裝置上執行，用於混合搜尋，不需要 API key。
-- **可選的裝置端整理：** 內容補充與頁面彙整可使用你選擇的 [`Qwen3 4B`](https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF) 或 [`Qwen3.5 9B`](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF)，透過 [llama.cpp](https://github.com/ggml-org/llama.cpp) 執行。未經選擇，不會下載或啟用語言模型。
-- **其他模型來源：** Ollama 或 LM Studio 等 OpenAI 相容的本地端點，或已設定的雲端 provider，也可以提供模型支援的內容補充與頁面彙整。
-- **雲端說明：** 如果你選擇的模型端點位於遠端，Wenlan 會把該任務需要的 system prompt 與 user prompt 傳給它。本地檢索與裝置端整理仍留在你的裝置上。
-
-完整 workflow 參考：[plugin/skills](plugin/skills/README.md)。模型分工與限制見：[技術基礎（英文）](docs/technical-foundations.md#model-roles)。
-
-</details>
+[模型選項與設定](docs/setup-and-data.zh-Hant.md#models)。
 
 ### 你的資料與移除
 
 頁面與工作階段筆記是 Markdown 檔案；記憶與圖譜保存在本地資料庫。移除 app 時，可以保留你的知識資料。
 
-<details>
-<summary>檔案位置、備份與移除方式</summary>
-
-**預設位置**
-
-- 頁面與工作階段筆記：`~/.wenlan/`。
-- 資料庫與執行環境資料：macOS 為 `~/Library/Application Support/wenlan/`，Linux 為 `~/.local/share/wenlan/`，Windows 為 `%LOCALAPPDATA%\wenlan\`。
-
-**備份知識資料**
-
-複製資料夾前，先結束 app 並停止背景服務。自訂的頁面或資料位置也要備份。只匯出 wiki 不等於完整的資料庫備份。
-
-若曾從 Origin 升級，請另外檢查 `~/.origin/` 與同層的 `origin` 平台資料夾是否留有舊資料。備份舊資料時一併保留；只有打算刪除時才移除。
-
-**移除程式**
-
-在設定關閉「登入時在背景執行文瀾」，結束 app，再刪除 `Wenlan.app` 或執行 Windows 解除安裝程式。知識資料夾會保留；只有確定不再需要資料，並已完成所需備份時，才另行刪除。
-
-`wenlan background off` 會停止 daemon 並關閉自動啟動，但不會移除服務註冊。僅使用 CLI 的移除方式、AI 工具中殘留的設定、憑證與其他檔案，請見[完整移除說明](docs/PRIVACY.md#data-deletion)。
-
-</details>
+[檔案位置、備份與移除方式](docs/setup-and-data.zh-Hant.md#backup-and-removal)。
 
 
 <a id="evaluation"></a>
@@ -507,19 +343,13 @@ pnpm build:all
 
 <a id="code-signing-policy"></a>
 
-## Code signing policy
+## 程式碼簽章政策
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+macOS 桌面版已通過 Developer ID 簽章與公證。Windows 安裝包尚未簽署。
 
-- **Authors：**[@7xuanlu](https://github.com/7xuanlu)，可直接向本 repository 提交 commit，無需額外 review。
-- **Reviewers：**[@7xuanlu](https://github.com/7xuanlu)。非 committer 的每一處改動都以 pull request 形式提交，合併前先經過 review。
-- **Approvers：**[@7xuanlu](https://github.com/7xuanlu)，審批每一次簽章請求，決定哪一個 release 被簽章。
+發行版由 GitHub 託管的執行環境，依照此儲存庫的版本標籤與對應提交建置。維護者必須在 GitHub 啟用多因素驗證。
 
-本專案要求每位 maintainer 在 GitHub 與 SignPath 上都啟用多因素驗證；未啟用者不會被加入其中任何一方。Release 只由本 repository 的 tag release workflow 建置，執行在 GitHub 託管的 runner 上，來源是該 tag 指向的 commit。
-
-**隱私權政策：**[PRIVACY.md](docs/PRIVACY.md) —— Wenlan 保存什麼、保存在哪裡，以及我們已知它會存取網路的各種情況。各平台的簽章方式見 [docs/code-signing.md](docs/code-signing.md)。
-
-SignPath 的申請正在審核中，Windows 安裝包尚未簽署。
+[各平台的簽章說明（英文）](docs/code-signing.md) · [隱私權政策（英文）](docs/PRIVACY.md)。
 
 
 <a id="license"></a>
