@@ -181,48 +181,49 @@ async fn test_tunneled_host_passes_full_mcp_handshake_with_auth() {
     handle.abort();
 }
 
-/// Secondary regression: `--no-auth` loopback mode (the Origin.app
-/// production shape, fronted by cloudflared) must also accept foreign
-/// Host headers. cloudflared forwards the public tunnel hostname to
-/// 127.0.0.1:PORT regardless of whether auth is configured — this was
-/// the real-world miss in the first fix, which only disabled
-/// allowed_hosts when a token was set.
+/// Loopback binding alone does not prevent DNS rebinding. Without a bearer
+/// token, foreign Host headers must be rejected before MCP session allocation.
 #[tokio::test]
-async fn test_no_auth_mode_also_allows_tunneled_host() {
+async fn test_no_auth_mode_rejects_foreign_host_and_accepts_loopback() {
     let port = portpicker::pick_unused_port().expect("no free port");
     let config = test_config(port, None);
-
     let handle = tokio::spawn(async move {
         wenlan_mcp::serve::run_serve(config).await.unwrap();
     });
-
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(format!("http://127.0.0.1:{}/mcp", port))
-        .header("Host", "my-tunnel.trycloudflare.com")
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json, text/event-stream")
-        .body(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#,
-        )
-        .send()
-        .await
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
         .unwrap();
-
-    let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    assert_ne!(
-        status, 403,
-        "--no-auth + tunneled Host must not be rejected; got {status} {body}"
-    );
-    assert!(
-        !body.contains("Host header is not allowed"),
-        "response must not be the rmcp DNS-rebinding reject body; got: {body}"
-    );
-
+    let mut responses = Vec::new();
+    for host in ["my-tunnel.trycloudflare.com", "127.0.0.1", "localhost"] {
+        let response = client
+            .post(format!("http://127.0.0.1:{port}/mcp"))
+            .header("Host", format!("{host}:{port}"))
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .body(
+                r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}"#,
+            )
+            .send()
+            .await
+            .unwrap();
+        let status = response.status();
+        let has_session = response.headers().contains_key("mcp-session-id");
+        let body = response.text().await.unwrap();
+        responses.push((host, status, has_session, body));
+    }
     handle.abort();
+    for (host, status, has_session, body) in responses {
+        if host == "my-tunnel.trycloudflare.com" {
+            assert_eq!(status, 403, "foreign Host must be rejected: {body}");
+            assert!(!has_session, "rejected Host must not allocate a session");
+        } else {
+            assert_eq!(status, 200, "loopback Host {host} must work: {body}");
+            assert!(has_session, "loopback handshake must create a session");
+        }
+    }
 }
 
 #[tokio::test]

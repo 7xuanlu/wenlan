@@ -1,5 +1,5 @@
 //! The public query profile must never forward the daemon's full wire objects.
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{json, Value};
 use wenlan_mcp::client::WenlanClient;
 use wenlan_mcp::tools::{BriefParams, RecallParams, ToolProfile, TransportMode, WenlanMcpServer};
@@ -84,7 +84,7 @@ fn assert_output(result: &CallToolResult, expected: Value) {
     assert_eq!(result.is_error, Some(false));
     assert_eq!(result.structured_content.as_ref(), Some(&expected));
     assert_eq!(result.content.len(), 1);
-    let RawContent::Text(text) = &result.content[0].raw else {
+    let ContentBlock::Text(text) = &result.content[0] else {
         panic!("expected JSON text")
     };
     assert_eq!(serde_json::from_str::<Value>(&text.text).unwrap(), expected);
@@ -117,7 +117,7 @@ async fn query_recall_projects_hits_and_supplemental_pages() {
             .await
             .unwrap();
         assert!(standard.structured_content.is_none());
-        let RawContent::Text(text) = &standard.content[0].raw else {
+        let ContentBlock::Text(text) = &standard.content[0] else {
             panic!()
         };
         assert!(text.text.starts_with("1 results (2.5ms)\n"));
@@ -151,7 +151,7 @@ async fn query_brief_projects_ready_and_related_context() {
             .await
             .unwrap();
         assert!(standard.structured_content.is_none());
-        let RawContent::Text(text) = &standard.content[0].raw else {
+        let ContentBlock::Text(text) = &standard.content[0] else {
             panic!()
         };
         assert!(text.text.contains("SECRET_SENTINEL_item (v4)"));
@@ -227,7 +227,7 @@ async fn query_sources_omit_unavailable_evidence_without_changing_standard() {
             .await
             .unwrap();
         assert!(standard.structured_content.is_none());
-        let RawContent::Text(text) = &standard.content[0].raw else {
+        let ContentBlock::Text(text) = &standard.content[0] else {
             panic!()
         };
         assert_eq!(

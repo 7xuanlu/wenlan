@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::{CallToolResult, ContentBlock};
 use wenlan_core::{db::MemoryDB, NoopEmitter};
 use wenlan_mcp::{
     client::WenlanClient,
@@ -58,7 +58,7 @@ fn make_server(base_url: &str) -> WenlanMcpServer {
 /// Extract the text body from a successful CallToolResult.
 fn text_of(result: &CallToolResult) -> String {
     for content in &result.content {
-        if let RawContent::Text(t) = &content.raw {
+        if let ContentBlock::Text(t) = &content {
             return t.text.clone();
         }
     }

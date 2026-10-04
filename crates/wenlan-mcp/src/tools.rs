@@ -6,7 +6,7 @@ use rmcp::{
     handler::server::tool::ToolCallContext,
     handler::server::wrapper::Parameters,
     model::{
-        CallToolRequestParams, CallToolResult, Content, Implementation, InitializeResult,
+        CallToolRequestParams, CallToolResult, ContentBlock, Implementation, InitializeResult,
         ListToolsResult, PaginatedRequestParams, ServerCapabilities, Tool,
     },
     service::{NotificationContext, RequestContext, RoleServer},
@@ -1238,7 +1238,7 @@ fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
             "The daemon response exceeded Wenlan MCP's size limit. The {verb} was not completed."
         ),
     };
-    CallToolResult::error(vec![Content::text(msg)])
+    CallToolResult::error(vec![ContentBlock::text(msg)])
 }
 
 /// Call a daemon HTTP method and short-circuit on transport error.
@@ -1413,7 +1413,7 @@ impl WenlanMcpServer {
         let resp: StoreMemoryResponse =
             try_call!(self.client.post("/api/memory/store", &req), "memory store");
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             format_capture_success(&resp),
         )]))
     }
@@ -1444,7 +1444,7 @@ impl WenlanMcpServer {
             output.push_str(&format!("\n\nCompiled pages:\n{}", pages_json));
         }
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     pub async fn brief_impl(&self, params: BriefParams) -> Result<CallToolResult, McpError> {
@@ -1502,7 +1502,7 @@ impl WenlanMcpServer {
             }
         };
 
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
     }
 
     pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
@@ -1534,11 +1534,11 @@ impl WenlanMcpServer {
             .to_string();
 
         if context.is_empty() {
-            Ok(CallToolResult::success(vec![Content::text(
+            Ok(CallToolResult::success(vec![ContentBlock::text(
                 "No relevant context found".to_string(),
             )]))
         } else {
-            Ok(CallToolResult::success(vec![Content::text(context)]))
+            Ok(CallToolResult::success(vec![ContentBlock::text(context)]))
         }
     }
 
@@ -1652,7 +1652,7 @@ impl WenlanMcpServer {
                 .map_err(|error| McpError::internal_error(error.to_string(), None))?;
             return Ok(CallToolResult::structured(value));
         }
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             report.render_text(),
         )]))
     }
@@ -1662,7 +1662,7 @@ impl WenlanMcpServer {
         params: GetLintAgentWorkPageParams,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Lint agent work pages are available only over local stdio MCP.".to_string(),
             )]));
         }
@@ -1724,7 +1724,7 @@ impl WenlanMcpServer {
 
     fn reject_remote_lint_repair(&self) -> Option<CallToolResult> {
         (self.transport == TransportMode::Http).then(|| {
-            CallToolResult::error(vec![Content::text(
+            CallToolResult::error(vec![ContentBlock::text(
                 "Lint repair operations are not available over remote connections. Use local stdio MCP on the machine running Wenlan."
                     .to_string(),
             )])
@@ -1915,7 +1915,7 @@ impl WenlanMcpServer {
 
     pub async fn forget_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Delete operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to delete memories."
                     .to_string(),
@@ -1928,7 +1928,7 @@ impl WenlanMcpServer {
             "delete"
         );
 
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             if resp.deleted {
                 "Memory deleted"
             } else {
@@ -1958,7 +1958,7 @@ impl WenlanMcpServer {
                         .get("hint")
                         .and_then(|v| v.as_str())
                         .unwrap_or("no matching target");
-                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
                         "Could not resolve target `{}`. {}",
                         unresolved, hint
                     ))]));
@@ -1970,7 +1970,7 @@ impl WenlanMcpServer {
                 // thin wrapper; the synthesis lives where the LLM is.
                 let pretty =
                     serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
-                Ok(CallToolResult::success(vec![Content::text(pretty)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(pretty)]))
             }
             Err(e) => Ok(tool_error(e, "distill")),
         }
@@ -1991,12 +1991,12 @@ impl WenlanMcpServer {
             try_call!(self.client.post("/api/memory/list", &req), "list_pending");
         let body = serde_json::to_string_pretty(&resp.memories)
             .unwrap_or_else(|e| format!("serialization error: {e}"));
-        Ok(CallToolResult::success(vec![Content::text(body)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(body)]))
     }
 
     pub async fn confirm_memory_impl(&self, memory_id: &str) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Confirm operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan for review."
                     .to_string(),
@@ -2011,7 +2011,7 @@ impl WenlanMcpServer {
             // The daemon 404s an unknown id, but an older daemon returns 200
             // without `updated`, which defaults to `true` so that response
             // still reads as success (mirrors forget_impl's flag branch).
-            Ok(resp) => Ok(CallToolResult::success(vec![Content::text(
+            Ok(resp) => Ok(CallToolResult::success(vec![ContentBlock::text(
                 if resp.updated {
                     format!("Memory {} confirmed.", memory_id)
                 } else {
@@ -2037,7 +2037,7 @@ impl WenlanMcpServer {
             self.client.post("/api/memory/entities", &req),
             "create_entity"
         );
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             format_entity_ready_response(resp),
         )]))
     }
@@ -2053,7 +2053,7 @@ impl WenlanMcpServer {
         );
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} entities (total {})\n{}",
             resp.entities.len(),
             resp.total,
@@ -2066,7 +2066,7 @@ impl WenlanMcpServer {
         params: ArchiveEntitiesParams,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Archive operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to archive detected entities."
                     .to_string(),
@@ -2080,7 +2080,7 @@ impl WenlanMcpServer {
             self.client.post("/api/memory/entities/archive", &req),
             "archive_entities"
         );
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             format_entity_bulk_response(&resp, "archive", "Archived"),
         )]))
     }
@@ -2090,7 +2090,7 @@ impl WenlanMcpServer {
         params: RestoreEntitiesParams,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Restore operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to restore archived entities."
                     .to_string(),
@@ -2104,7 +2104,7 @@ impl WenlanMcpServer {
             self.client.post("/api/memory/entities/restore", &req),
             "restore_entities"
         );
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             format_entity_bulk_response(&resp, "restore", "Restored"),
         )]))
     }
@@ -2129,7 +2129,7 @@ impl WenlanMcpServer {
         let resp: ListRefinementsResponse = try_call!(self.client.get(&path), "list_refinements");
         let pretty = serde_json::to_string_pretty(&resp.proposals)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} pending review proposals\n{}",
             resp.proposals.len(),
             pretty
@@ -2141,7 +2141,7 @@ impl WenlanMcpServer {
         params: RejectRefinementParams,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Review proposal operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to reject proposals."
                     .to_string(),
@@ -2155,7 +2155,7 @@ impl WenlanMcpServer {
             self.client.post(&path, &serde_json::json!({})),
             "reject_refinement"
         );
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Review proposal {} dismissed.",
             resp.id
         ))]))
@@ -2166,7 +2166,7 @@ impl WenlanMcpServer {
         params: AcceptRefinementParams,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Review proposal operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to accept proposals."
                     .to_string(),
@@ -2184,7 +2184,7 @@ impl WenlanMcpServer {
         };
         let resp: AcceptRefinementResponse =
             try_call!(self.client.post(&path, &request), "accept_refinement");
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Review proposal {} accepted (action={}).",
             resp.id, resp.action_applied
         ))]))
@@ -2195,7 +2195,7 @@ impl WenlanMcpServer {
         params: CreateRelationParams,
     ) -> Result<CallToolResult, McpError> {
         if params.source_memory_id.trim().is_empty() {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "source_memory_id must not be blank; pass the id returned by capture.".to_string(),
             )]));
         }
@@ -2208,7 +2208,7 @@ impl WenlanMcpServer {
             "create_relation source preflight"
         );
         if source.memory.is_none() {
-            return Ok(CallToolResult::error(vec![Content::text(format!(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Source memory {} is missing or not visible; relation was not created.",
                 params.source_memory_id
             ))]));
@@ -2230,7 +2230,7 @@ impl WenlanMcpServer {
             self.client.post("/api/memory/relations", &req),
             "create_relation"
         );
-        Ok(CallToolResult::success(vec![Content::text(
+        Ok(CallToolResult::success(vec![ContentBlock::text(
             format_relation_ready_response(resp),
         )]))
     }
@@ -2242,14 +2242,14 @@ impl WenlanMcpServer {
         match params.page_id {
             Some(page_id) => {
                 if params.source_memory_ids.is_empty() {
-                    return Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "source_memory_ids is required when refreshing — carry through \
                          the stale page's existing list from distill output"
                             .to_string(),
                     )]));
                 }
                 if self.transport == TransportMode::Http {
-                    return Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "Update operations are not available over remote connections. \
                          Use local MCP on the machine running Wenlan to update pages."
                             .to_string(),
@@ -2270,11 +2270,11 @@ impl WenlanMcpServer {
                 // in place; the daemon stages a revision card. Surface that so the
                 // caller does not believe the prose was rewritten.
                 let msg = format_update_page_response(&page_id, resp);
-                Ok(CallToolResult::success(vec![Content::text(msg)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(msg)]))
             }
             None => {
                 let Some(title) = params.title else {
-                    return Ok(CallToolResult::error(vec![Content::text(
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "title is required when creating a page (no page_id given)".to_string(),
                     )]));
                 };
@@ -2291,14 +2291,14 @@ impl WenlanMcpServer {
                 let resp: CreatePageResponse =
                     try_call!(self.client.post("/api/pages", &req), "write_page");
                 let text = format_create_page_response(resp);
-                Ok(CallToolResult::success(vec![Content::text(text)]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
         }
     }
 
     pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Delete operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to delete pages."
                     .to_string(),
@@ -2320,7 +2320,7 @@ impl WenlanMcpServer {
 
         let path = format!("/api/pages/{}", page_id);
         let resp: DeletePageResponse = try_call!(self.client.delete(&path), "delete_page");
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "Page {} {}",
             page_id, resp.status
         ))]))
@@ -2333,7 +2333,7 @@ impl WenlanMcpServer {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
         {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Invalid page id. Use the page's opaque identifier, not a URL or file path.",
             )]));
         }
@@ -2348,7 +2348,7 @@ impl WenlanMcpServer {
         let visible = visible_page_sources_for_standard(&resp, crate::lock_state::is_locked());
         let pretty = serde_json::to_string_pretty(&visible)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} sources\n{}",
             visible.len(),
             pretty
@@ -2364,7 +2364,7 @@ impl WenlanMcpServer {
             try_call!(self.client.get(&path), "get_memory_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "chain depth {}\n{}",
             resp.chain_depth, pretty
         ))]))
@@ -2376,7 +2376,7 @@ impl WenlanMcpServer {
             try_call!(self.client.get(&path), "get_page_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "version {} ({} entries)\n{}",
             resp.current_version,
             resp.entries.len(),
@@ -2389,7 +2389,7 @@ impl WenlanMcpServer {
         req: AcceptRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Revision operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to accept memory revisions."
                     .to_string(),
@@ -2402,7 +2402,7 @@ impl WenlanMcpServer {
         );
         let pretty = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(pretty)]))
     }
 
     pub async fn dismiss_revision_impl(
@@ -2410,7 +2410,7 @@ impl WenlanMcpServer {
         req: DismissRevisionRequest,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![Content::text(
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Revision operations are not available over remote connections. \
                  Use local MCP on the machine running Wenlan to dismiss memory revisions."
                     .to_string(),
@@ -2423,7 +2423,7 @@ impl WenlanMcpServer {
         );
         let pretty = serde_json::to_string_pretty(&response)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(pretty)]))
+        Ok(CallToolResult::success(vec![ContentBlock::text(pretty)]))
     }
 
     pub async fn list_pending_imports_impl(
@@ -2440,7 +2440,7 @@ impl WenlanMcpServer {
             serde_json::to_string_pretty(&resp)
         }
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} pending import(s)\n{}",
             resp.len(),
             pretty
@@ -2468,7 +2468,7 @@ impl WenlanMcpServer {
             try_call!(self.client.get(&path), "list_rejections");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} rejection(s)\n{}",
             resp.len(),
             pretty
@@ -2487,7 +2487,7 @@ impl WenlanMcpServer {
             try_call!(self.client.get(&path), "list_pending_revisions");
         let pretty = serde_json::to_string_pretty(&resp)
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![Content::text(format!(
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
             "{} pending revision(s)\n{}",
             resp.len(),
             pretty
@@ -3279,7 +3279,7 @@ impl WenlanMcpServer {
     fn local_only_refusal(&self, name: &str) -> Option<CallToolResult> {
         (self.transport == TransportMode::Http && LOCAL_ONLY_TOOL_NAMES.contains(&name)).then(
             || {
-                CallToolResult::error(vec![Content::text(
+                CallToolResult::error(vec![ContentBlock::text(
                     "This tool is not available over remote connections. Use local stdio MCP on the machine running Wenlan."
                         .to_string(),
                 )])
@@ -3291,7 +3291,7 @@ impl WenlanMcpServer {
     /// router can deserialize arguments or invoke a daemon request.
     fn query_only_refusal(&self, name: &str) -> Option<CallToolResult> {
         (self.tool_profile == ToolProfile::QueryOnly && !QUERY_ONLY_TOOL_NAMES.contains(&name))
-            .then(|| CallToolResult::error(vec![Content::text(QUERY_ONLY_REFUSAL_MESSAGE)]))
+            .then(|| CallToolResult::error(vec![ContentBlock::text(QUERY_ONLY_REFUSAL_MESSAGE)]))
     }
 }
 
@@ -3596,8 +3596,8 @@ mod tests {
             "repair apply",
         );
         assert_eq!(result.is_error, Some(true));
-        match &result.content[0].raw {
-            rmcp::model::RawContent::Text(text) => {
+        match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => {
                 assert!(text.text.contains("HTTP 409"));
                 assert!(text.text.contains("repair_background_writer_busy"));
             }
@@ -3622,8 +3622,8 @@ mod tests {
                 .local_only_refusal(name)
                 .unwrap_or_else(|| panic!("expected {name} to be refused over HTTP"));
             let content = &result.content[0];
-            match content.raw {
-                rmcp::model::RawContent::Text(ref tc) => {
+            match content {
+                rmcp::model::ContentBlock::Text(ref tc) => {
                     assert!(
                         tc.text.contains("not available over remote connections"),
                         "refusal for {name} missing the standard message: {}",
@@ -4098,8 +4098,8 @@ mod tests {
     }
 
     fn refusal_text(result: &CallToolResult) -> &str {
-        match &result.content[0].raw {
-            rmcp::model::RawContent::Text(text) => &text.text,
+        match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => &text.text,
             other => panic!("expected text refusal, got {other:?}"),
         }
     }
@@ -4856,8 +4856,8 @@ mod tests {
             .await
             .unwrap();
         for result in [prepare, apply, verify] {
-            match &result.content[0].raw {
-                rmcp::model::RawContent::Text(text) => {
+            match &result.content[0] {
+                rmcp::model::ContentBlock::Text(text) => {
                     assert!(text.text.contains("not available over remote connections"));
                 }
                 other => panic!("unexpected content: {other:?}"),
@@ -5497,8 +5497,8 @@ mod tests {
         let result = server.forget_impl("mem_123").await.unwrap();
         // Should return error content, not an Err
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -5529,8 +5529,8 @@ mod tests {
         };
         let result = server.accept_revision_impl(req).await.unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -5558,8 +5558,8 @@ mod tests {
         };
         let result = server.dismiss_revision_impl(req).await.unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -5593,8 +5593,8 @@ mod tests {
         };
         let result = server.write_page_impl(params).await.unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -5662,8 +5662,8 @@ mod tests {
         .await
         .expect("empty-source guard must return before any daemon retry")
         .unwrap();
-        let text = match &result.content[0].raw {
-            rmcp::model::RawContent::Text(text) => &text.text,
+        let text = match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => &text.text,
             other => panic!("expected text content, got {other:?}"),
         };
         assert!(
@@ -6359,7 +6359,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let rmcp::model::RawContent::Text(text) = &result.content[0].raw else {
+        let rmcp::model::ContentBlock::Text(text) = &result.content[0] else {
             panic!("expected text content");
         };
         assert!(text.text.contains("not available over remote connections"));
@@ -6390,7 +6390,7 @@ mod tests {
             })
             .await
             .unwrap();
-        let rmcp::model::RawContent::Text(text) = &result.content[0].raw else {
+        let rmcp::model::ContentBlock::Text(text) = &result.content[0] else {
             panic!("expected text content");
         };
         assert!(text.text.contains("not available over remote connections"));
@@ -6487,8 +6487,8 @@ mod tests {
         let server = make_server(TransportMode::Http, "agent", None);
         let result = server.delete_page_impl("page_123").await.unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -6525,8 +6525,8 @@ mod tests {
             .await
             .unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
@@ -6565,8 +6565,8 @@ mod tests {
             .await
             .unwrap();
         let content = &result.content[0];
-        match content.raw {
-            rmcp::model::RawContent::Text(ref tc) => {
+        match content {
+            rmcp::model::ContentBlock::Text(ref tc) => {
                 assert!(tc.text.contains("not available over remote connections"));
             }
             _ => panic!("expected text content"),
