@@ -109,6 +109,19 @@ async fn fixture_with_replacement(
     escape_trigger: bool,
     replace_unknown: bool,
 ) -> Fixture {
+    fixture_with_effects(retire_grounded, escape_trigger, replace_unknown, false).await
+}
+
+async fn fixture_with_retirement_metadata_escape() -> Fixture {
+    fixture_with_effects(true, false, false, true).await
+}
+
+async fn fixture_with_effects(
+    retire_grounded: bool,
+    escape_trigger: bool,
+    replace_unknown: bool,
+    retirement_metadata_escape: bool,
+) -> Fixture {
     let (db, dir) = crate::db::tests::test_db().await;
     let from = db
         .create_entity("Relation CAS Alpha", "concept", Some("work"))
@@ -159,6 +172,27 @@ async fn fixture_with_replacement(
              VALUES ('escape-row','preserve me','memory','escape-memory','Other',0,1,'text','work');
              CREATE TRIGGER relation_repair_escape AFTER INSERT ON edges WHEN NEW.edge_type='relates'
              BEGIN UPDATE memories SET content='unexpected write' WHERE id='escape-row'; END;"
+        ).await.unwrap();
+    }
+    if retirement_metadata_escape {
+        db.test_primary_session()
+            .await
+            .execute(
+                "UPDATE edges SET payload=json_set(COALESCE(payload,'{}'),'$.source_memory_id','grounded-source') WHERE edge_id=?1",
+                libsql::params![target_id.clone()],
+            )
+            .await
+            .unwrap();
+        db.test_primary_session().await.execute_batch(
+            "CREATE TRIGGER relation_repair_retirement_metadata_escape
+             AFTER UPDATE OF valid_until ON edges
+             WHEN OLD.valid_until IS NULL AND NEW.valid_until IS NOT NULL
+                  AND NEW.edge_type='relates'
+             BEGIN
+                 UPDATE edges
+                 SET payload=json_set(COALESCE(payload,'{}'),'$.source_memory_id','trigger-corruption')
+                 WHERE edge_id=NEW.edge_id;
+             END;",
         ).await.unwrap();
     }
     let mut owners = vec![from.clone(), to.clone()];
@@ -416,6 +450,52 @@ async fn relation_retirement_preserves_grounded_provenance_and_updates_graph_ato
         .unwrap();
     assert!(
         matches!(edges.rows[0][valid], wenlan_types::repair_relation::RepairRelationSqlValue::Integer { value } if value > 0)
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn retirement_metadata_escape_rolls_back_and_preserves_original_provenance() {
+    let f = fixture_with_retirement_metadata_escape().await;
+    let before =
+        f.db.capture_relation_repair_state(&f.manifest)
+            .await
+            .unwrap();
+    let result =
+        f.db.relation_repair_cas(&f.manifest, &f.rollback, |_| Ok(()))
+            .await;
+    assert!(
+        matches!(result, Err(WenlanError::Validation(ref code)) if code.starts_with("repair_relation_effects_retire_row_changed_")),
+        "retirement metadata escape unexpectedly committed: {result:?}"
+    );
+    assert_eq!(
+        before,
+        f.db.capture_relation_repair_state(&f.manifest)
+            .await
+            .unwrap(),
+        "failed retirement must roll back the edge row and its original provenance"
+    );
+    let session = f.db.test_primary_session().await;
+    let wenlan_types::repair::RepairTarget::EntityRelation { relation_id, .. } =
+        f.manifest.target()
+    else {
+        unreachable!()
+    };
+    let mut rows = session
+        .query(
+            "SELECT json_extract(payload,'$.source_memory_id') FROM edges WHERE edge_id=?1",
+            libsql::params![relation_id.clone()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap(),
+        "grounded-source"
     );
 }
 

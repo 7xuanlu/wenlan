@@ -325,6 +325,7 @@ async fn resolve_on_snapshot(
             )
         }
     };
+    let is_retire = matches!(&selection.choice, EntityRelationRepairChoice::Retire { .. });
     for endpoint in [&from, &to] {
         require_owner(&candidate, RepairAffectedRecordKind::Entity, endpoint)?;
         let mut rows = snapshot
@@ -340,7 +341,12 @@ async fn resolve_on_snapshot(
             .await
             .map_err(snapshot_error)?
             .ok_or_else(|| conflict("repair_target_stale"))?;
-        require_space(scope, &row.get::<String>(0).map_err(database_error)?)?;
+        // A retirement is authorized by the registered source endpoint. The
+        // destination must still be a live, owned endpoint, but may belong to
+        // another Space. Add remains scoped on both endpoints.
+        if !is_retire || endpoint == &from {
+            require_space(scope, &row.get::<String>(0).map_err(database_error)?)?;
+        }
     }
     Ok(EntityRelationRepairResolution {
         review_binding: binding,

@@ -105,6 +105,19 @@ async fn selection(
     EntityRelationRepairSelection { review_id, choice }
 }
 
+async fn set_entity_space(db: &MemoryDB, entity_id: &str, space: &str) {
+    db.test_primary_session()
+        .await
+        .execute(
+            "UPDATE pages SET space=?1 WHERE id=(
+                 SELECT page_id FROM entity_page_map WHERE entity_id=?2
+             )",
+            libsql::params![space.to_string(), entity_id.to_string()],
+        )
+        .await
+        .unwrap();
+}
+
 // Fresh database receipts with explicitly synthetic semantic judgments. This
 // exercises the real orchestration and durable queue, not model correctness.
 async fn relation_flow_reports(
@@ -568,6 +581,115 @@ async fn relation_retirement_is_bound_to_exact_predicate_not_just_endpoint_pair(
         db.list_relations_between(&from, &to).await.unwrap().len(),
         2
     );
+}
+
+#[tokio::test]
+async fn registered_retirement_scope_follows_source_endpoint_across_spaces() {
+    let (db, _dir, candidate, from, to) =
+        fixture(LintSemanticAction::RemoveEntityRelation, Some("related_to")).await;
+    let relation_id = db
+        .create_relation(&from, &to, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    set_entity_space(&db, &to, "other").await;
+    let selected = selection(
+        &db,
+        &candidate,
+        EntityRelationRepairChoice::Retire {
+            relation_id: relation_id.clone(),
+        },
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    let result = resolve_on_snapshot(
+        &snapshot,
+        &RepairLintScope::registered("work".to_string()).unwrap(),
+        &selected,
+        candidate,
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "source-scoped retirement failed: {result:?}"
+    );
+    let result = result.unwrap();
+    assert_eq!(result.from_entity, from);
+    assert_eq!(result.to_entity, to);
+    assert_eq!(result.retire_relation_ids, vec![relation_id]);
+    snapshot.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn registered_retirement_rejects_a_foreign_source_endpoint() {
+    let (db, _dir, candidate, from, to) =
+        fixture(LintSemanticAction::RemoveEntityRelation, Some("related_to")).await;
+    let relation_id = db
+        .create_relation(&from, &to, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    set_entity_space(&db, &from, "other").await;
+    let selected = selection(
+        &db,
+        &candidate,
+        EntityRelationRepairChoice::Retire { relation_id },
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    assert!(matches!(
+        resolve_on_snapshot(
+            &snapshot,
+            &RepairLintScope::registered("work".to_string()).unwrap(),
+            &selected,
+            candidate,
+        )
+        .await,
+        Err(WenlanError::Conflict(code)) if code == "repair_target_scope_mismatch"
+    ));
+    snapshot.finish().await.unwrap();
+}
+
+#[tokio::test]
+async fn registered_add_still_requires_both_endpoints_in_scope() {
+    let (db, _dir, mut candidate, from, to) =
+        fixture(LintSemanticAction::AddEntityRelation, None).await;
+    set_entity_space(&db, &to, "other").await;
+    db.test_primary_session()
+        .await
+        .execute(
+            "INSERT INTO memories (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,space)
+             VALUES ('scope-source-row','Alpha works with Beta','memory','scope-source','Source',0,10,'text','work')",
+            (),
+        )
+        .await
+        .unwrap();
+    candidate.affected_records.push(
+        RepairAffectedRecord::try_new(RepairAffectedRecordKind::Memory, "scope-source".to_string())
+            .unwrap(),
+    );
+    candidate.affected_records.sort();
+    let selected = selection(
+        &db,
+        &candidate,
+        EntityRelationRepairChoice::Add {
+            from_entity: from,
+            to_entity: to,
+            relation_type: "related_to".into(),
+            source_memory_id: Some("scope-source".into()),
+        },
+    )
+    .await;
+    let snapshot = db.open_lint_snapshot().await.unwrap();
+    assert!(matches!(
+        resolve_on_snapshot(
+            &snapshot,
+            &RepairLintScope::registered("work".to_string()).unwrap(),
+            &selected,
+            candidate,
+        )
+        .await,
+        Err(WenlanError::Conflict(code)) if code == "repair_target_scope_mismatch"
+    ));
+    snapshot.finish().await.unwrap();
 }
 
 #[tokio::test]

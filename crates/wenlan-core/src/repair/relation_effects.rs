@@ -801,10 +801,15 @@ fn prior_payload_changed(
 fn validate_retired(
     before: &BTreeMap<String, Edge>,
     after: &BTreeMap<String, Edge>,
+    before_table: &RepairRelationTableSnapshot,
+    after_table: &RepairRelationTableSnapshot,
     retire_ids: &[String],
     started_at: i64,
     finished_at: i64,
 ) -> Result<Vec<(Edge, Edge)>, WenlanError> {
+    let id_column = column(before_table, "edge_id")?;
+    let valid_until_column = column(before_table, "valid_until")?;
+    let superseded_by_column = column(before_table, "superseded_by")?;
     let mut pairs = Vec::with_capacity(retire_ids.len());
     for id in retire_ids {
         let prior = before
@@ -830,6 +835,30 @@ fn validate_retired(
         require(
             matches!(&current.superseded_by, RepairRelationSqlValue::Null),
             format!("retire_superseded_by_{id}"),
+        )?;
+        let prior_row = before_table
+            .rows
+            .iter()
+            .find(|row| matches!(row.get(id_column), Some(RepairRelationSqlValue::Text { value }) if value == id))
+            .ok_or_else(|| invalid(format!("retire_row_missing_before_{id}")))?;
+        let current_row = after_table
+            .rows
+            .iter()
+            .find(|row| matches!(row.get(id_column), Some(RepairRelationSqlValue::Text { value }) if value == id))
+            .ok_or_else(|| invalid(format!("retire_row_missing_after_{id}")))?;
+        let mut normalized_row = current_row.clone();
+        for index in [valid_until_column, superseded_by_column] {
+            let prior_value = prior_row
+                .get(index)
+                .ok_or_else(|| invalid(format!("retire_row_short_before_{id}")))?;
+            let current_value = normalized_row
+                .get_mut(index)
+                .ok_or_else(|| invalid(format!("retire_row_short_after_{id}")))?;
+            *current_value = prior_value.clone();
+        }
+        require(
+            normalized_row == *prior_row,
+            format!("retire_row_changed_{id}"),
         )?;
         pairs.push((prior, current));
     }
@@ -1611,6 +1640,8 @@ pub(crate) fn validate(
     validate_window(started_at, finished_at)?;
     validate_shapes(before, after)?;
     let (relation_id, from, to, change) = validate_manifest(manifest)?;
+    let before_edge_table = table(before, RepairRelationTable::Edges)?;
+    let after_edge_table = table(after, RepairRelationTable::Edges)?;
     let (before_edges, after_edges) = parse_edges(before, after)?;
     let retire_target_ids = vec![relation_id.to_string()];
     let (is_add, requested, canonical, source_memory_id, confidence, retire_ids, promotion) =
@@ -1669,6 +1700,8 @@ pub(crate) fn validate(
         validate_retired(
             &before_edges,
             &after_edges,
+            before_edge_table,
+            after_edge_table,
             retire_ids,
             started_at,
             finished_at,
@@ -1729,6 +1762,8 @@ pub(crate) fn validate(
         validate_retired(
             &before_edges,
             &after_edges,
+            before_edge_table,
+            after_edge_table,
             retire_ids,
             started_at,
             finished_at,
