@@ -14,7 +14,7 @@
 //! unit test. This file extends coverage to `CaptureParams` and `RecallParams` and also
 //! verifies the alias round-trips through the `capture_impl` / `recall_impl` dispatch path.
 
-use rmcp::model::RawContent;
+use rmcp::model::ContentBlock;
 use wenlan_mcp::client::WenlanClient;
 use wenlan_mcp::tools::{CaptureParams, RecallParams, TransportMode, WenlanMcpServer};
 use wenlan_types::memory::SearchResult;
@@ -28,8 +28,8 @@ fn make_server(client: WenlanClient) -> WenlanMcpServer {
 
 fn text_of(result: &rmcp::model::CallToolResult) -> String {
     for content in &result.content {
-        match &content.raw {
-            RawContent::Text(text) => return text.text.clone(),
+        match content {
+            ContentBlock::Text(text) => return text.text.clone(),
             _ => continue,
         }
     }

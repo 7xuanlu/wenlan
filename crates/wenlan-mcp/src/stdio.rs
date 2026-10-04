@@ -77,7 +77,7 @@ where
                                     "Method not found",
                                     None,
                                 ),
-                                request.id.clone(),
+                                Some(request.id.clone()),
                             );
                             if self.inner.send(response).await.is_err() {
                                 return None;
