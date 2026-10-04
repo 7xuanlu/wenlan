@@ -150,6 +150,20 @@ describe("FirstUseGuide navigation", () => {
     expect(onImport).toHaveBeenCalledTimes(1);
     expect(onSources).toHaveBeenCalledTimes(1);
     expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onConnect).toHaveBeenCalledWith();
+  });
+
+  it.each(["ChatGPT", "Codex", "Claude"])("forwards the sample's %s setup destination", (label) => {
+    const onConnect = vi.fn();
+    renderGuide({ onConnect });
+    fireEvent.click(screen.getByRole("button", { name: "Try an example" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip to result" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use with AI" }));
+    fireEvent.click(screen.getByRole("tab", { name: label }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
+    expect(onConnect).toHaveBeenCalledWith(label.toLowerCase());
+    expect(mockedListPages).not.toHaveBeenCalled();
+    expect(mockedBatches).not.toHaveBeenCalled();
   });
 });
 
@@ -581,6 +595,30 @@ describe("FirstUseGuide live view saved memories", () => {
 });
 
 describe("live model availability", () => {
+  it("shows model-status pending without hiding real import progress", async () => {
+    vi.mocked(getResolvedRouting).mockReturnValue(new Promise(() => {}));
+    mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByText("Checking whether an AI model is available to organize your notes.")).toBeVisible();
+    expect(screen.getByTestId("import-phase-store")).toHaveAttribute("data-state", "complete");
+    expect(screen.queryByTestId("import-phase-detect")).not.toBeInTheDocument();
+    expect(screen.queryByText("Nothing here yet")).not.toBeInTheDocument();
+  });
+
+  it("reports a failed model-status read and recovers through Retry", async () => {
+    const healthyRouting = await getResolvedRouting();
+    vi.mocked(getResolvedRouting).mockRejectedValue(new Error("routing unavailable"));
+    mockedBatches.mockResolvedValue({ batches: [makeBatch()] });
+    renderGuide({ initialView: "live" });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Wenlan couldn't check the AI model.");
+    expect(screen.getByTestId("import-phase-store")).toHaveAttribute("data-state", "complete");
+    expect(screen.queryByTestId("import-phase-detect")).not.toBeInTheDocument();
+    vi.mocked(getResolvedRouting).mockResolvedValue(healthyRouting);
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Your memories are saved and ready to use. Wenlan will show organization progress as it works.")).toBeVisible();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("shows a setup action instead of promising progress when imported data has no AI route", async () => {
     vi.mocked(getResolvedRouting).mockResolvedValue({
       everyday: { source: "basic", model: null, mode: "unconfigured", pin: null },

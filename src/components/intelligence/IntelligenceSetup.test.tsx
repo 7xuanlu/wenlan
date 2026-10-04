@@ -165,7 +165,7 @@ describe("OnDeviceModelCard", () => {
         <OnDeviceModelCard />
       </QueryClientProvider>,
     );
-    expect(await screen.findByText("Model catalog unavailable — check your connection.")).toBeInTheDocument();
+    expect(await screen.findByText("Model catalog unavailable. Check your connection.")).toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
 
@@ -206,7 +206,7 @@ describe("OnDeviceModelCard", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Load" }));
 
-    await waitFor(() => expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "on_device"));
+    await waitFor(() => expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true));
     expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-4b-instruct-2507");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["activity"] });

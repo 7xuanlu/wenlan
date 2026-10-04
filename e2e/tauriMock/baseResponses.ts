@@ -16,9 +16,33 @@ function optionalString(args: unknown, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+/** Set this global before the app boots to give one spec a routing answer:
+ *  `page.addInitScript(() => { window.__WENLAN_MOCK_RESOLVED_ROUTING__ = {...} })`.
+ *  The shape is `ResolvedRouting` from src/lib/tauri.ts. */
+export const MOCK_RESOLVED_ROUTING_KEY = "__WENLAN_MOCK_RESOLVED_ROUTING__";
+
+/** What `get_resolved_routing` answers.
+ *
+ *  The default is null, and null means one specific thing: a daemon old enough
+ *  to have no routing endpoint. It is NOT "nothing is pinned" — that is a real
+ *  answer with `mode: "unconfigured"`. The fixture claims the older daemon
+ *  because that is the state with no behavior to get wrong: the launch-time pin
+ *  fill reads routing on every mount of the main shell and writes nothing on
+ *  null, and Home keeps its original copy.
+ *
+ *  A spec that needs a real routing state, such as the unpinned everyday job
+ *  that makes Home offer "Choose a model", sets the override above instead of
+ *  changing this default for every other spec. */
+function resolvedRouting(): unknown {
+  const override = Reflect.get(globalThis, MOCK_RESOLVED_ROUTING_KEY);
+  return override === undefined ? null : override;
+}
+
 export function baseResponse(command: string, args: unknown, context: BaseResponseContext): unknown {
   switch (command) {
     case "should_show_wizard": case "get_clipboard_enabled": return false;
+    case "get_remote_access_profile": return null;
+    case "get_remote_access_status": return { status: "off" };
     case "set_traffic_lights_visible": case "set_setup_completed": return null;
     case "list_agent_activity": return context.activityRows;
     case "list_agents": return [{ id: "agent-claude-code", name: "claude-code", display_name: "Claude Code", agent_type: "claude-code", description: null, enabled: true, trust_level: "full", last_seen_at: 1_783_728_000, memory_count: context.memoryCount, created_at: 1_783_728_000, updated_at: 1_783_728_000 }];
@@ -41,6 +65,9 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     };
+    case "get_resolved_routing": return resolvedRouting();
+    // The main shell asks on every launch whether a wenlan://pair link is waiting.
+    case "take_remote_pairing_link": return null;
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };
@@ -52,6 +79,8 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
     case "list_communities": return { schema_version: COMMUNITY_READ_SCHEMA_VERSION, communities: [], next_cursor: null };
     case "list_community_members": return { schema_version: COMMUNITY_READ_SCHEMA_VERSION, members: [], next_cursor: null };
     case "get_page_revisions": return { page_id: optionalString(args, "pageId") ?? "", current_version: 1, user_edited: false, entries: [] };
+    // Settings export: a fixture writes no folder, so it reports an empty bundle.
+    case "export_pages_as_okf": return { exported: 0, skipped: 0, failed: 0 };
     default: throw new UnknownTauriCommandError(command);
   }
 }

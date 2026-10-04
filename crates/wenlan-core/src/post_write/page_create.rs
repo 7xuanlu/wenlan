@@ -53,6 +53,7 @@ pub(super) async fn write_document_source_page_impl(
     file_path: &str,
     expected_content_hash: Option<&str>,
     expected_page_version: Option<i64>,
+    space: Option<&str>,
     agent: &str,
 ) -> Result<WriteResult, WenlanError> {
     if title.trim().is_empty() || content.trim().is_empty() || source_memory_ids.is_empty() {
@@ -89,6 +90,7 @@ pub(super) async fn write_document_source_page_impl(
                 queue_source_id,
                 file_path,
                 expected_content_hash,
+                space,
             )
             .await?
         }

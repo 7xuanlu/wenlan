@@ -109,7 +109,18 @@ describe("fillUnsetPins", () => {
       written: { everyday: "on_device", synthesis: null },
       inEffect: { everyday: "on_device", synthesis: "anthropic" },
     });
-    expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", null);
+    // The fill's pins came from a read, so the write must be the atomic one:
+    // a pin the user chose since that read has to win.
+    expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", null, true);
+  });
+
+  it("asks the daemon to keep a pin set between the read and the write", async () => {
+    // The fill is a read then a write. Without the flag, a user who pins a job
+    // in that window has their choice overwritten by what the read saw.
+    mocks.getResolvedRouting.mockResolvedValue(routing({ pool: onDevice }));
+    mocks.setSourcePin.mockResolvedValue(undefined);
+    await fillUnsetPins();
+    expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true);
   });
 
   it("skips the write when every job is pinned, and reports the pins already in effect", async () => {
@@ -169,7 +180,7 @@ describe("fillUnsetPinsWithRetry", () => {
       inEffect: { everyday: "on_device", synthesis: "external" },
     });
     expect(mocks.setSourcePin).toHaveBeenCalledTimes(2);
-    expect(mocks.setSourcePin).toHaveBeenLastCalledWith("on_device", null);
+    expect(mocks.setSourcePin).toHaveBeenLastCalledWith("on_device", null, true);
   });
 
   it("retries a failed routing read", async () => {

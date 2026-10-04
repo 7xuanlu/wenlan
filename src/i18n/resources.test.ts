@@ -59,6 +59,18 @@ describe("translation resources", () => {
     ]);
   });
 
+  it("distinguishes local storage from connected tools and network traffic", () => {
+    expect(resources.en.translation.settings.footer).toContain(
+      "unless you configure a feature that sends them",
+    );
+    expect(resources["zh-Hans"].translation.settings.footer).toContain(
+      "除非你配置了会发送数据的功能",
+    );
+    expect(resources["zh-Hant"].translation.settings.footer).toContain(
+      "除非你設定了會傳送資料的功能",
+    );
+  });
+
   it("describes one editing view without exposing Markdown as a peer mode", () => {
     for (const locale of supportedAppLocales) {
       const editor = resources[locale].translation.pageDetail.editor;
@@ -202,6 +214,7 @@ describe("translation resources", () => {
     expect(datelines).toEqual([
       {
         lastDistilled: "Last distilled {{time}}",
+        lastUpdated: "Last updated {{time}}",
         sourceMemories_one: "from {{count}} memory",
         sourceMemories_other: "from {{count}} memories",
         relativeJustNow: "just now",
@@ -214,6 +227,7 @@ describe("translation resources", () => {
       },
       {
         lastDistilled: "上次精炼：{{time}}",
+        lastUpdated: "上次更新：{{time}}",
         sourceMemories_one: "来自 {{count}} 条记忆",
         sourceMemories_other: "来自 {{count}} 条记忆",
         relativeJustNow: "刚刚",
@@ -226,6 +240,7 @@ describe("translation resources", () => {
       },
       {
         lastDistilled: "上次精煉：{{time}}",
+        lastUpdated: "上次更新：{{time}}",
         sourceMemories_one: "來自 {{count}} 則記憶",
         sourceMemories_other: "來自 {{count}} 則記憶",
         relativeJustNow: "剛剛",

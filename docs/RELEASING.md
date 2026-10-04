@@ -1,6 +1,6 @@
 # Releasing Wenlan (daemon side)
 
-This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app (`app/` crate, AGPL-3.0-only) was folded into this monorepo on 2026-07-20; its signed-bundle build is the `app-bundle` job in `.github/workflows/release.yml`, tag-triggered alongside the daemon release (ad-hoc signed until Apple Developer code-signing secrets land).
+This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server` daemon, `wenlan-mcp` connector, and shared crates (`wenlan-types`, `wenlan-core`). The desktop app (`app/` crate, AGPL-3.0-only) was folded into this monorepo on 2026-07-20; its bundle build is the `app-bundle` job in `.github/workflows/release.yml`, alongside the daemon release. Developer ID signing and notarization are configured separately from the Tauri updater signature; see [code signing](code-signing.md). A local ad-hoc candidate is not evidence of the published bundle's signing status.
 
 ## How release-please works
 
@@ -100,7 +100,7 @@ Release workflow changes have static mutation-tested contracts in `scripts/relea
 
 `wenlan-mcp` lives in this monorepo under `crates/wenlan-mcp` and shares the workspace Apache-2.0 license.
 
-Nothing is notified when the prerelease flag clears: the Claude Code plugin ships from this repo's own `.claude-plugin/marketplace.json`, which sources `plugin/` by `git-subdir` with no `ref` pin, so it tracks the default branch and has no release-time pin to sync.
+Nothing is notified when the prerelease flag clears: both Claude channels track the default branch. The Claude Code marketplace (`.claude-plugin/marketplace.json`) sources `plugin/` by `git-subdir` with no `ref` pin, and the claude.ai directory listing is bound to the `plugin` path on `main`, so each channel picks up a release on its next sync. The version-bearing files inside `plugin/` (the `plugin.json` version, the exact `npx -y wenlan-mcp@<version>` pin in `plugin/scripts/wenlan-mcp-runner.sh`, and the install tag in the setup skill) are rewritten by `scripts/bump-version.sh` on the Release PR and checked by `scripts/validate-versions.sh`; they are the only release-time sync the plugin needs.
 
 ## Required secrets
 

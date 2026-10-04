@@ -196,7 +196,7 @@ export async function listSources(): Promise<SourceStatus[]> {
 
 // ===== Registered Sources =====
 
-export type SourceTypeStr = "obsidian" | "directory";
+export type SourceTypeStr = "obsidian" | "directory" | "okf";
 export type SyncStatusStr =
   | "Active"
   | "Paused"
@@ -209,7 +209,8 @@ export type SyncStatusStr =
  * treats these as opaque keys and matches known values for targeted
  * messaging, falling through to a generic message otherwise.
  *
- * Known values (as of this writing): "google_drive_offline", "file_read_errors".
+ * Known values (as of this writing): "google_drive_offline", "file_read_errors",
+ * "document_enrichment_failed" (the files read fine, the worker gave up on them).
  */
 export type SyncErrorDetail = string;
 
@@ -223,6 +224,12 @@ export interface RegisteredSource {
   memory_count: number;
   last_sync_errors?: number;
   last_sync_error_detail?: SyncErrorDetail | null;
+  /** Space new documents land in; set only for okf sources. */
+  space?: string | null;
+  /** okf sources: queued files not yet prepared after the last sync. */
+  queued_files?: number;
+  /** okf sources: files not yet handed to the queue after the last sync. */
+  waiting_files?: number;
 }
 
 export interface SyncStats {
@@ -231,6 +238,10 @@ export interface SyncStats {
   skipped: number;
   errors: number;
   error_detail?: SyncErrorDetail | null;
+  /** okf sources only: queued files not yet prepared after this sync. */
+  queued_files?: number;
+  /** okf sources only: files not yet handed to the queue after this sync. */
+  waiting_files?: number;
 }
 
 export async function listRegisteredSources(): Promise<RegisteredSource[]> {
@@ -495,11 +506,23 @@ export async function getResolvedRouting(): Promise<ResolvedRouting | null> {
 
 // Patch-based like setModelChoice: null leaves a pin untouched, "" clears it, a
 // source name pins. Only call once getResolvedRouting() returned non-null.
+//
+// onlyIfUnset makes a fill-the-blanks write atomic on the daemon: a named pin
+// lands only on a job that holds none. Pass it whenever the pins being sent came
+// from an earlier routing read, so a pin the user chose since that read wins.
+// Leave it off for a choice the user just made, because that one must overwrite.
+//
+// The key is omitted when false, so every call that predates the flag puts the
+// same arguments on the wire as before. This mirrors the Rust side, which adds
+// only_if_unset to the daemon request body only when it is true.
 export async function setSourcePin(
   everydaySource: string | null,
-  synthesisSource: string | null
+  synthesisSource: string | null,
+  onlyIfUnset = false
 ): Promise<void> {
-  return invoke("set_source_pin", { everydaySource, synthesisSource });
+  const args: Record<string, unknown> = { everydaySource, synthesisSource };
+  if (onlyIfUnset) args.onlyIfUnset = true;
+  return invoke("set_source_pin", args);
 }
 
 export interface SystemInfo {
@@ -2442,6 +2465,31 @@ export async function exportConceptToObsidian(
   return exportPageToObsidian(conceptId, vaultPath);
 }
 
+/**
+ * The typed rejection `export_pages_as_okf` returns, before sending anything,
+ * when the background service predates OKF export (app/src/search.rs
+ * `OKF_EXPORT_ERROR_DAEMON_TOO_OLD`). Such a service would write an Obsidian
+ * export into the folder and still report success.
+ */
+export const OKF_EXPORT_ERROR_DAEMON_TOO_OLD = "okf-export:daemon-too-old";
+
+export function isOkfExportDaemonTooOld(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : error;
+  return text === OKF_EXPORT_ERROR_DAEMON_TOO_OLD;
+}
+
+/**
+ * Write every page, across all Spaces, as an OKF v0.2 bundle into `targetDir`
+ * (an absolute folder path). The daemon decides whether the folder is safe to
+ * write: a non-empty folder that is not an earlier Wenlan OKF export, or a
+ * truth cutover in progress, rejects with a 409 whose sentence
+ * {@link daemonErrorMessage} extracts. A service too old to write OKF rejects
+ * with {@link OKF_EXPORT_ERROR_DAEMON_TOO_OLD} instead.
+ */
+export async function exportPagesAsOkf(targetDir: string): Promise<ExportStats> {
+  return invoke("export_pages_as_okf", { targetDir });
+}
+
 // ===== Knowledge Directory =====
 
 export async function getKnowledgePath(): Promise<string> {
@@ -3042,28 +3090,86 @@ export async function listAgentActivity(
 export type RemoteAccessStatus =
   | { status: "off" }
   | { status: "starting" }
-  | { status: "connected"; tunnel_url: string; relay_url: string | null }
+  | { status: "connected"; tunnel_url: string | null; relay_url: string | null }
   | { status: "error"; error: string };
 
 export async function toggleRemoteAccess(
   enabled: boolean,
+  expectedRevision?: string,
 ): Promise<RemoteAccessStatus> {
-  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled });
+  return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled, expectedRevision: expectedRevision ?? null });
+}
+
+export async function reconnectRemoteAccess(expectedRevision: string): Promise<RemoteAccessStatus> {
+  return invoke<RemoteAccessStatus>("reconnect_remote_access", { expectedRevision });
+}
+
+export interface RemoteAccessProfile {
+  revision: string;
+  space: string;
+  enabled: boolean;
+  disconnect_pending: boolean;
+  credential_expires_at: number | null;
+}
+
+export async function getRemoteAccessProfile(): Promise<RemoteAccessProfile | null> {
+  return invoke<RemoteAccessProfile | null>("get_remote_access_profile");
+}
+
+export async function configureRemoteAccess(space: string, expectedRevision?: string): Promise<RemoteAccessProfile> {
+  return invoke<RemoteAccessProfile>("configure_remote_access", { space, expectedRevision: expectedRevision ?? null });
 }
 
 export async function getRemoteAccessStatus(): Promise<RemoteAccessStatus> {
   return invoke<RemoteAccessStatus>("get_remote_access_status");
 }
 
-/** Result of a one-shot probe against the Remote MCP tunnel's `/health`. */
+export interface RemotePairing {
+  pairingId: string;
+  clientId: string;
+  resource: string;
+  scopes: string[];
+  expiresAt: number;
+}
+
+export interface RemoteGrant {
+  id: string;
+  clientId: string;
+  space: string;
+  createdAt: number;
+  expiresAt: number;
+  status: 'active' | 'inactive';
+  cleanupPending: boolean;
+}
+
+export interface RemoteGrantPage { items: RemoteGrant[]; cursor: string | null }
+export interface RemoteGrantRevocation { revoked: boolean; cleanupPending: boolean }
+
+export async function inspectRemotePairing(expectedRevision: string, pairingId: string): Promise<RemotePairing> {
+  return invoke("inspect_remote_pairing", { expectedRevision, pairingId });
+}
+export async function approveRemotePairing(expectedRevision: string, inspected: RemotePairing): Promise<void> {
+  return invoke("approve_remote_pairing", { expectedRevision, inspected });
+}
+export async function listRemoteGrants(expectedRevision: string, cursor: string | null = null): Promise<RemoteGrantPage> {
+  return invoke("list_remote_grants", { expectedRevision, cursor });
+}
+export async function revokeRemoteGrant(expectedRevision: string, grantId: string): Promise<RemoteGrantRevocation> {
+  return invoke("revoke_remote_grant", { expectedRevision, grantId });
+}
+/** Takes the pairing code from the last `wenlan://pair` link, if one is waiting. */
+export async function takeRemotePairingLink(): Promise<string | null> {
+  return invoke("take_remote_pairing_link");
+}
+
+/** Native protected-backend and authenticated relay control-plane probe. */
 export interface RemoteConnectionTest {
   ok: boolean;
   latency_ms: number | null;
   error: string | null;
 }
 
-/** One-shot health probe for the Remote MCP tunnel. Used by the
- *  "Test connection" button in `RemoteAccessPanel`. */
+/** Does not prove a ChatGPT/Codex OAuth conversation or tool execution. */
 export async function testRemoteMcpConnection(): Promise<RemoteConnectionTest> {
   return invoke<RemoteConnectionTest>("test_remote_mcp_connection");
 }

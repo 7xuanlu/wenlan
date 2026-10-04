@@ -26,6 +26,7 @@ struct Recorded {
     path: String,
     #[allow(dead_code)]
     body: String,
+    space_header: Option<String>,
 }
 
 /// Spawn a one-shot stub HTTP/1.1 server that answers the next request with the
@@ -62,6 +63,7 @@ fn spawn_stub(responses: Vec<String>) -> (String, Arc<Mutex<Vec<Recorded>>>) {
                     let path = it.next().unwrap_or("").to_string();
 
                     let mut content_length = 0usize;
+                    let mut space_header = None;
                     loop {
                         let mut line = String::new();
                         if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -74,6 +76,11 @@ fn spawn_stub(responses: Vec<String>) -> (String, Arc<Mutex<Vec<Recorded>>>) {
                         if let Some(rest) = lower.strip_prefix("content-length:") {
                             content_length = rest.trim().parse().unwrap_or(0);
                         }
+                        if lower.starts_with("x-wenlan-space:") {
+                            space_header = line
+                                .split_once(':')
+                                .map(|(_, value)| value.trim().to_string());
+                        }
                     }
                     let mut body = vec![0u8; content_length];
                     if content_length > 0 && reader.read_exact(&mut body).is_err() {
@@ -84,6 +91,7 @@ fn spawn_stub(responses: Vec<String>) -> (String, Arc<Mutex<Vec<Recorded>>>) {
                         method,
                         path,
                         body: String::from_utf8_lossy(&body).to_string(),
+                        space_header,
                     });
 
                     let resp_body = responses.lock().unwrap().pop_front();
@@ -228,6 +236,73 @@ fn ingest_table_format_renders_human_summary() {
         .assert()
         .success()
         .stdout(predicates::str::contains("file(s) found"));
+}
+
+#[test]
+fn sources_add_okf_sends_the_type_and_space_and_renders_the_batch() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let abs = std::fs::canonicalize(dir.path()).expect("canonicalize");
+    let abs_str = abs.to_string_lossy().to_string();
+    let source = serde_json::json!({
+        "id": "okf-wiki",
+        "source_type": "okf",
+        "path": abs_str,
+        "status": "Active",
+        "last_sync": null,
+        "file_count": 0,
+        "memory_count": 0,
+        "space": "Research",
+    })
+    .to_string();
+    let stats = r#"{"files_found":1200,"ingested":1000,"skipped":0,"errors":0,"queued_files":1000,"waiting_files":200}"#;
+
+    let (base, recorded) = spawn_stub(vec![source, stats.to_string()]);
+
+    cli()
+        .env("WENLAN_HOST", &base)
+        .env_remove("WENLAN_SPACE")
+        .args([
+            "sources",
+            "add",
+            "--type",
+            "okf",
+            "--space",
+            "Research",
+            dir.path().to_str().unwrap(),
+            "--format",
+            "table",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(
+            "1000 file(s) queued for preparation, 200 waiting for the next batch",
+        ));
+
+    let reqs = recorded.lock().unwrap().clone();
+    let add = reqs
+        .iter()
+        .find(|r| r.method == "POST" && r.path == "/api/sources")
+        .expect("POST /api/sources");
+    let body: serde_json::Value = serde_json::from_str(&add.body).expect("JSON body");
+    assert_eq!(body["source_type"], "okf");
+    assert_eq!(add.space_header.as_deref(), Some("Research"));
+}
+
+#[test]
+fn sources_add_directory_refuses_a_space_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    cli()
+        .env("WENLAN_HOST", "http://127.0.0.1:9")
+        .args([
+            "sources",
+            "add",
+            "--space",
+            "Research",
+            dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("not supported by this command"));
 }
 
 #[test]

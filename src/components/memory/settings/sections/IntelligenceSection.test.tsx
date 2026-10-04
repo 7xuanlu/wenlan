@@ -173,7 +173,7 @@ describe("IntelligenceSection", () => {
     expect(await within(everydayRow).findByText("Qwen3 4B Instruct")).toBeInTheDocument();
 
     const synthesisRow = screen.getByText("Synthesis model").closest("button")!;
-    expect(within(synthesisRow).getByText("No model is assigned — pages still update whenever your AI tools use Wenlan.")).toBeInTheDocument();
+    expect(within(synthesisRow).getByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")).toBeInTheDocument();
   });
 
   it("shows the On-device row's capability hint alongside its state-derived meta", async () => {
@@ -264,7 +264,40 @@ describe("IntelligenceSection", () => {
     const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
     await userEvent.click(synthesisRow);
 
-    expect(await screen.findByText("Pinned to Anthropic — currently unavailable, using OpenAI for now.")).toBeInTheDocument();
+    expect(await screen.findByText("Pinned to Anthropic, which is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
+  });
+
+  // ── Copy truth: a pinned_unavailable route is configured but its model is
+  // not serving, so the COLLAPSED row chip says so instead of plain
+  // "Configured". Mutation proof: dropping the `view.degraded` chip branch
+  // renders "Configured" here and fails the degraded-text assertion.
+  it("pinned_unavailable job: the collapsed row shows the degraded chip, not plain Configured", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(
+      pinnedRouting({
+        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
+      })
+    );
+    renderSection();
+
+    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
+    // Waiting on the routed meta settles the routing query first, so the chip
+    // assertion cannot false-green on the still-loading row. The chip is a
+    // sibling of the name button, so scope chip queries to the header parent.
+    await within(synthesisRow).findByText("OpenAI · gpt-5.2");
+    const synthesisHeader = synthesisRow.parentElement!;
+    expect(within(synthesisHeader).getByText("Configured, model unavailable")).toBeInTheDocument();
+    expect(within(synthesisHeader).queryByText("Running")).not.toBeInTheDocument();
+    // Degraded is not success: the chip wears the warning tone, never green.
+    const degradedChipClass = within(synthesisHeader).getByText("Configured, model unavailable").closest("span[aria-live]")?.getAttribute("class") ?? "";
+    expect(degradedChipClass).toContain("mem-status-warning");
+    expect(degradedChipClass).not.toContain("mem-status-success");
+
+    // The healthy job row keeps the plain Configured chip.
+    const everydayRow = screen.getByText("Everyday model").closest("button")!;
+    await within(everydayRow).findByText("Anthropic · Opus 4.6");
+    expect(within(everydayRow.parentElement!).getByText("Configured")).toBeInTheDocument();
+    const healthyChipClass = within(everydayRow.parentElement!).getByText("Configured").closest("span[aria-live]")?.getAttribute("class") ?? "";
+    expect(healthyChipClass).toContain("mem-status-success");
   });
 
   // ── Headline (d): PINNED_UNAVAILABLE with no pin on the wire (a daemon that
@@ -284,7 +317,7 @@ describe("IntelligenceSection", () => {
     const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
     await userEvent.click(synthesisRow);
 
-    expect(await screen.findByText("The pinned source is currently unavailable — using OpenAI for now.")).toBeInTheDocument();
+    expect(await screen.findByText("The pinned source is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
     expect(screen.queryByText(/Pinned to/)).not.toBeInTheDocument();
   });
 
@@ -310,7 +343,7 @@ describe("IntelligenceSection", () => {
     ).toBeInTheDocument();
     // The collapsed meta keeps the cloud-required string; the body no longer repeats it.
     expect(
-      within(rowRoot).getAllByText("No model is assigned — pages still update whenever your AI tools use Wenlan.")
+      within(rowRoot).getAllByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")
     ).toHaveLength(1);
   });
 
@@ -434,7 +467,7 @@ describe("IntelligenceSection", () => {
     renderSection();
 
     const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    await within(everydayRow).findByText("No background model — your wiki updates through your AI tools.");
+    await within(everydayRow).findByText("No background model. Your wiki updates through your AI tools.");
     // The with-model summary must NOT appear when nothing serves the job.
     expect(within(everydayRow).queryByText("Files and links new memories in the background")).not.toBeInTheDocument();
     const header = everydayRow.parentElement!;

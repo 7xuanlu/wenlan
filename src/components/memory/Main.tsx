@@ -11,10 +11,12 @@ import {
   openSearchResult as openSearchResultTarget,
   searchEntities,
   searchPages,
+  takeRemotePairingLink,
   type Page,
   type SearchResult,
   type Space,
 } from "../../lib/tauri";
+import { clearPendingPairingCode, setPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
 import ActivityStatus from "./activity/ActivityStatus";
@@ -54,6 +56,7 @@ import { activeNavigationForView, type View } from "./navigation/viewState";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
+import { useLaunchPinFill } from "../../lib/launchPinFill";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
@@ -92,6 +95,11 @@ export default function Main({
 }: MainProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  // Give the unpinned routing jobs a source once per launch. Main is the first
+  // screen a set-up user reaches, and the only fills before this one lived in
+  // the webview, so a quit during the model download left both jobs blank
+  // forever. See src/lib/launchPinFill.ts.
+  useLaunchPinFill();
   const mainContentRef = useRef<HTMLElement>(null);
   const pageDraftEditorRef = useRef<PageDraftEditorHandle>(null);
   const pendingDraftNavigationRef = useRef<{
@@ -125,6 +133,9 @@ export default function Main({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const contextSpace = viewHistory.slice().reverse().find(
+    (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
+  );
   const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
   // The Activity button's summary. Owned here, beside the toolbar that renders
   // it, so the toggle keeps a stable identity for the outside-click listener.
@@ -217,8 +228,12 @@ export default function Main({
 
   const afterNavigationGuards = (
     action: (sourceView: View) => void,
+    onRefused?: () => void,
   ): (() => void) => {
-    if (!canLeaveCurrentPage()) return () => {};
+    if (!canLeaveCurrentPage()) {
+      onRefused?.();
+      return () => {};
+    }
     return afterPageDraftFlush(action);
   };
 
@@ -276,7 +291,7 @@ export default function Main({
   }, [initialMemoryId, activeTab, pageSavePending]);
 
   // Navigate forward — pushes current view onto history stack
-  const navigateTo = (next: View) => {
+  const navigateTo = (next: View, onRefused?: () => void) => {
     if (
       view.kind === "page"
       && next.kind === "page"
@@ -287,7 +302,7 @@ export default function Main({
     afterNavigationGuards((sourceView) => {
       setViewHistory((prev) => [...prev, sourceView]);
       setView(next);
-    });
+    }, onRefused);
   };
 
   const navigateHome = () => {
@@ -453,6 +468,29 @@ export default function Main({
     });
     return () => { unlisten.then((f) => f()); };
   }, [queryClient]);
+
+  // "Open in Wenlan" on the relay pairing page sends a wenlan://pair link. The
+  // native side holds the code until asked, so a link that launched the app is
+  // not lost before this listener exists.
+  useEffect(() => {
+    const pull = () => {
+      takeRemotePairingLink()
+        .then((code) => { if (code) setPendingPairingCode(code); })
+        .catch(() => {});
+    };
+    pull();
+    const unlisten = listen("remote-pairing-link", pull);
+    return () => { unlisten.then((f) => f()); };
+  }, []);
+
+  // The Connections panel takes the code; it stays pending until the panel is
+  // shown. Keeping unsaved page edits drops the link rather than parking it.
+  const pendingPairingCode = usePendingPairingCode();
+  useEffect(() => {
+    if (!pendingPairingCode || pageSavePending) return;
+    if (view.kind === "settings" && view.section === "agents") return;
+    navigateTo({ kind: "settings", section: "agents" }, clearPendingPairingCode);
+  }, [pendingPairingCode, pageSavePending]);
 
   // Cmd+K global shortcut (fired from App.tsx) — focus the header search input.
   useEffect(() => {
@@ -855,6 +893,7 @@ export default function Main({
             />
           ) : view.kind === "settings" ? (
             <SettingsPage
+              currentSpace={contextSpace?.spaceName}
               section={view.section ?? "general"}
               onBack={navigateBack}
               onSetupAgent={() => navigateTo({ kind: "connect-agent" })}
@@ -970,7 +1009,9 @@ export default function Main({
               batchId={view.batchId}
               onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
               onSources={() => navigateTo({ kind: "settings", section: "sources" })}
-              onConnect={() => navigateTo({ kind: "connect-agent" })}
+              onConnect={(client) => navigateTo(client === "codex" || client === "claude"
+                ? { kind: "connect-agent" }
+                : { kind: "settings", section: "agents" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
                 setViewHistory((previous) => [...previous, {

@@ -11,29 +11,46 @@ import {
   setTrafficLightsVisible,
   shouldShowWizard,
   setSetupCompleted,
+  startDaemonSidecar,
+  getWireState,
 } from "./lib/tauri";
-import { BOOT_QUERY_RETRY, bootQueryRetryDelay } from "./lib/bootRetryPolicy";
+import {
+  ATTEMPT_TIMEOUT_MS,
+  BOOT_QUERY_RETRY,
+  BOOT_SLOW_NOTICE_MS,
+  bootQueryRetryDelay,
+  runBootGate,
+} from "./lib/bootRetryPolicy";
 import Main from "./components/memory/Main";
 import SetupWizard from "./components/SetupWizard";
 import { RuntimeOverlays } from "./components/RuntimeOverlays";
+import { dragStripHeight } from "./lib/windowChrome";
 
 export default function App() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data: showWizard, isPending: wizardPending, isError: wizardError } = useQuery({
     queryKey: ["shouldShowWizard"],
-    queryFn: shouldShowWizard,
+    queryFn: ({ signal }) => runBootGate(shouldShowWizard, {
+      retry: BOOT_QUERY_RETRY,
+      delay: bootQueryRetryDelay,
+      attemptTimeoutMs: ATTEMPT_TIMEOUT_MS,
+      signal,
+    }),
     staleTime: Infinity,
-    // Overrides main.tsx's global retry:false — the first-run daemon install
-    // (app/src/lib.rs) is spawned async and races this query, so it needs to
-    // survive that window instead of failing on the first miss.
+    // The first-run daemon install (app/src/lib.rs) is spawned async and
+    // races this query, so the gate must survive that window instead of
+    // failing on the first miss. Retries live in runBootGate, not here:
+    // React Query pauses its own retries while document.visibilityState is
+    // "hidden", and a hidden or occluded WKWebView window reports hidden, so
+    // a gate that relies on query retries parks until the window is visible
+    // again instead of failing closed on its own.
     // The schedule and, more importantly, the total budget live in
     // ./lib/bootRetryPolicy: it has to outlast the Rust health loop's own
     // ~152s wait for this same daemon, or the fail-closed branch below shows
     // the first-run wizard to a configured user while startup is still
     // waiting. Each attempt is separately bounded to 5s (app/src/api.rs).
-    retry: BOOT_QUERY_RETRY,
-    retryDelay: bootQueryRetryDelay,
+    retry: false,
     // This is a Tauri IPC call to a daemon on localhost, not a network request.
     // The default "online" mode would PAUSE it whenever navigator.onLine is
     // false (fetchStatus "paused", never "fetching"), so an offline machine
@@ -52,6 +69,17 @@ export default function App() {
   }
 
   const [migration, setMigration] = useState<{ current: number; total: number; phase: string } | null>(null);
+  // Rust decided, before this webview existed, that it could not put the
+  // background service under launchd. It says so once on this event and then
+  // runs degraded: no config hydration, no file watcher, no sync. Nothing in
+  // the frontend used to listen, so the only symptom a user ever saw was
+  // memories that quietly never went anywhere.
+  const [fallbackMode, setFallbackMode] = useState(false);
+  const [fallbackDismissed, setFallbackDismissed] = useState(false);
+  // How long the gate has been holding the "Starting Wenlan" screen. The gate
+  // itself is allowed the better part of three minutes (bootRetryPolicy), and
+  // for all of it the screen said one thing and named nothing.
+  const [bootSlow, setBootSlow] = useState(false);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const quitGuardRef = useRef<(() => Promise<boolean>) | null>(null);
@@ -160,6 +188,23 @@ export default function App() {
     return () => { unlisten.then((f) => f()); };
   }, []);
 
+  useEffect(() => {
+    const unlisten = listen("origin-fallback-mode", () => {
+      setFallbackMode(true);
+      setFallbackDismissed(false);
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, []);
+
+  useEffect(() => {
+    if (!wizardPending) {
+      setBootSlow(false);
+      return;
+    }
+    const id = setTimeout(() => setBootSlow(true), BOOT_SLOW_NOTICE_MS);
+    return () => clearTimeout(id);
+  }, [wizardPending]);
+
   // Embedding migration progress overlay
   useEffect(() => {
     const unlisten1 = listen<{ current: number; total: number; phase: string }>(
@@ -243,6 +288,11 @@ export default function App() {
         aria-live="polite"
       >
         <p className="text-lg">{t("common.startingRuntime")}</p>
+        {bootSlow && (
+          <p className="text-sm mt-2" data-testid="boot-slow-notice">
+            {t("boot.stillWaiting")}
+          </p>
+        )}
       </div>
     );
   } else if (showWizard || wizardError) {
@@ -251,7 +301,12 @@ export default function App() {
     // existing user whose daemon is dead for 15s+ sees the wizard too, but its
     // step-5 task thread already surfaces "daemon isn't reachable" + Retry,
     // which is the intended repair surface for that tradeoff.
-    body = <SetupWizard onComplete={handleWizardComplete} />;
+    // `wizardError` is not "this user is new", it is "we never got an
+    // answer". The wizard says which of the two it is instead of opening on
+    // welcome copy that reads as a wiped install.
+    body = (
+      <SetupWizard onComplete={handleWizardComplete} daemonGateErrored={!!wizardError} />
+    );
   } else if (migration) {
     const pct = migration.total > 0 ? Math.round((migration.current / migration.total) * 100) : 0;
     body = (
@@ -278,6 +333,9 @@ export default function App() {
 
   return (
     <>
+      {fallbackMode && !fallbackDismissed && (
+        <FallbackServiceBanner onDismiss={() => setFallbackDismissed(true)} />
+      )}
       {body}
       <RuntimeOverlays
         variant={
@@ -287,5 +345,120 @@ export default function App() {
         }
       />
     </>
+  );
+}
+
+/** Persistent, dismissable, and above everything: the wizard and Main both
+ *  paint a full-viewport surface of their own, so this is fixed rather than
+ *  stacked, or one of the two would push it off screen. */
+function FallbackServiceBanner({ onDismiss }: { onDismiss: () => void }) {
+  const { t } = useTranslation();
+  const [starting, setStarting] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  // `starting` renders the button; this refuses the second click that lands
+  // before React has re-rendered with it.
+  const startingRef = useRef(false);
+
+  async function handleStart() {
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
+    setFailure(null);
+    try {
+      const result = await startDaemonSidecar();
+      if (result.status === "failed") {
+        setFailure(result.message);
+        return;
+      }
+      // started / already_running / launchd_managed says a process was
+      // spawned, not that it answers. The wizard's daemon row never trusted
+      // that word on its own and neither does this banner: dismissing on a
+      // spawn alone would retire the only warning the user has while sync is
+      // still silently dead.
+      const wire = await getWireState();
+      if (!wire.daemon.reachable) {
+        setFailure(wire.daemon.error ?? t("boot.startNotReachable"));
+        return;
+      }
+      onDismiss();
+    } catch (err) {
+      setFailure(err instanceof Error ? err.message : String(err));
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
+    }
+  }
+
+  return (
+    <div
+      role="alert"
+      data-testid="fallback-service-banner"
+      style={{
+        position: "fixed",
+        // On macOS the title bar is an overlay: the traffic lights sit in the
+        // top 32px of the webview and would cover the banner's first words.
+        // Start below that strip, like the wizard's own drag region does.
+        top: dragStripHeight(),
+        left: 0,
+        right: 0,
+        zIndex: 70,
+        display: "flex",
+        alignItems: "center",
+        gap: "12px",
+        padding: "10px 16px",
+        fontFamily: "var(--mem-font-body)",
+        fontSize: "var(--mem-text-sm)",
+        lineHeight: "1.5",
+        color: "var(--mem-status-warning-text)",
+        backgroundColor: "var(--mem-status-warning-bg)",
+        borderBottom: "1px solid var(--mem-status-warning-border)",
+      }}
+    >
+      <span style={{ flex: 1, minWidth: 0 }}>
+        {t("boot.fallbackBanner")}
+        {failure && (
+          <span style={{ display: "block", color: "var(--mem-status-danger-text)" }}>
+            {t("boot.startFailed")} {failure}
+          </span>
+        )}
+      </span>
+      <button
+        type="button"
+        onClick={() => { void handleStart(); }}
+        disabled={starting}
+        data-testid="fallback-start-service"
+        style={{
+          flexShrink: 0,
+          padding: "4px 10px",
+          borderRadius: "6px",
+          border: "1px solid var(--mem-status-warning-border)",
+          background: "transparent",
+          color: "inherit",
+          cursor: starting ? "default" : "pointer",
+          fontFamily: "inherit",
+          fontSize: "inherit",
+        }}
+      >
+        {starting ? t("boot.starting") : t("boot.startService")}
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        aria-label={t("boot.dismiss")}
+        style={{
+          flexShrink: 0,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          color: "inherit",
+          padding: 2,
+          lineHeight: 0,
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M3 3L9 9M9 3L3 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        </svg>
+      </button>
+    </div>
   );
 }

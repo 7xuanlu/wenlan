@@ -845,6 +845,22 @@ impl WenlanClient {
         self.post_json(&path, &submission).await
     }
 
+    /// Write every page, across all Spaces, as a pure OKF v0.2 bundle into
+    /// `target_dir`. No Space header is sent, which matches
+    /// `wenlan export okf <DIR>` without `--space`. The daemon owns target
+    /// safety: a foreign or unsafe directory and a truth cutover come back as
+    /// 409, a relative path as 422, with the daemon's reason in the body.
+    pub async fn export_pages_okf(
+        &self,
+        target_dir: String,
+    ) -> Result<wenlan_types::ExportStats, String> {
+        let request = wenlan_types::requests::ExportPagesRequest {
+            vault_path: Some(target_dir),
+            format: Some(wenlan_types::requests::ExportFormat::Okf),
+        };
+        self.post_json("/api/pages/export", &request).await
+    }
+
     pub async fn prepare_repair(
         &self,
         request: wenlan_types::repair::PrepareRepairRequest,
@@ -1623,10 +1639,17 @@ impl WenlanClient {
     /// Written as raw JSON because the pinned `UpdateConfigRequest` predates these
     /// fields (mirrors `set_external_llm`). Only call once the routing endpoint is
     /// known present — never PATCH unknown fields at an old daemon.
+    ///
+    /// `only_if_unset` asks the daemon to write a named pin only for a job that
+    /// holds none, which is what a fill-the-blanks caller means: it read routing
+    /// first, and a pin the user chose since that read must win. The field is
+    /// sent only when it is true, so an unflagged write is byte-identical to
+    /// what this client sent before the flag existed.
     pub async fn set_source_pin(
         &self,
         everyday_source: Option<String>,
         synthesis_source: Option<String>,
+        only_if_unset: bool,
     ) -> Result<(), String> {
         let mut body = sparse_update_config(empty_update())?;
         if let Some(v) = everyday_source {
@@ -1634,6 +1657,9 @@ impl WenlanClient {
         }
         if let Some(v) = synthesis_source {
             body["synthesis_source"] = serde_json::Value::String(v);
+        }
+        if only_if_unset {
+            body["only_if_unset"] = serde_json::Value::Bool(true);
         }
         let _resp: serde_json::Value = self.put_json("/api/config", &body).await?;
         Ok(())
@@ -1709,6 +1735,7 @@ fn empty_update() -> wenlan_types::requests::UpdateConfigRequest {
         everyday_source: None,
         synthesis_source: None,
         page_map_auto_suggest: None,
+        only_if_unset: None,
         // Tri-state (Option<Option<_>>): outer None = omit from JSON =
         // preserve the stored key. Note sparse_update_config strips nulls,
         // so a future caller passing Some(None) to clear the key must bypass
@@ -2429,6 +2456,64 @@ mod tests {
         assert_eq!(remote_req.skip_apps, None);
     }
 
+    #[tokio::test]
+    async fn export_pages_okf_posts_the_okf_format_for_every_space() {
+        let (base_url, request) = serve_json_once(r#"{"exported":3,"skipped":1,"failed":0}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let stats = client
+            .export_pages_okf("/Users/someone/okf-bundle".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!((stats.exported, stats.skipped, stats.failed), (3, 1, 0));
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/pages/export HTTP/1.1"
+        );
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({ "vault_path": "/Users/someone/okf-bundle", "format": "okf" })
+        );
+        // All Spaces: a Space header would narrow the bundle to one Space.
+        assert!(
+            !request.to_ascii_lowercase().contains("x-wenlan-space"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_pages_okf_keeps_the_daemon_refusal_in_the_error() {
+        let (base_url, request) = serve_response_once(
+            "409 Conflict",
+            r#"{"error":"directory is not empty and is not a Wenlan OKF export"}"#,
+        )
+        .await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let error = client
+            .export_pages_okf("/Users/someone/Documents".to_string())
+            .await
+            .expect_err("the fixture refuses the target");
+
+        assert!(
+            error.contains("HTTP POST /api/pages/export returned 409"),
+            "{error}"
+        );
+        assert!(
+            error.contains(r#"{"error":"directory is not empty and is not a Wenlan OKF export"}"#),
+            "{error}"
+        );
+        request.await.unwrap();
+    }
+
     fn request_body(request: &str) -> serde_json::Value {
         let (_, body) = request.split_once("\r\n\r\n").unwrap();
         serde_json::from_str(body).unwrap()
@@ -2656,14 +2741,37 @@ mod tests {
         };
 
         client
-            .set_source_pin(Some("external".into()), None)
+            .set_source_pin(Some("external".into()), None, false)
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        let body = request_body(&request);
+        assert_eq!(body, serde_json::json!({"everyday_source": "external"}));
+        // Stated on its own because it is the compatibility promise: an
+        // unflagged call is byte-identical to what shipped before the flag, so
+        // a daemon that predates it sees nothing new.
+        assert!(body.get("only_if_unset").is_none());
+    }
+
+    #[tokio::test]
+    async fn set_source_pin_sends_only_if_unset_when_filling_blanks() {
+        let config_body = r#"{"skip_apps":[],"skip_title_patterns":[],"private_browsing_detection":true,"setup_completed":true,"clipboard_enabled":true,"screen_capture_enabled":false,"remote_access_enabled":false}"#;
+        let (base_url, request) = serve_json_once(config_body).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        client
+            .set_source_pin(Some("on_device".into()), None, true)
             .await
             .unwrap();
 
         let request = request.await.unwrap();
         assert_eq!(
             request_body(&request),
-            serde_json::json!({"everyday_source": "external"})
+            serde_json::json!({"everyday_source": "on_device", "only_if_unset": true})
         );
     }
 

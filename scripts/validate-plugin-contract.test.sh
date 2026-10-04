@@ -193,9 +193,17 @@ assert_rejects "claude marketplace category drift" \
     perl -0pi -e 's/"category": "productivity"/"category": "memory"/' \
     "$TMPDIR_TEST/root/.claude-plugin/marketplace.json"
 
-assert_rejects "claude manifest category drift" \
-    perl -0pi -e 's/"category": "productivity"/"category": "memory"/' \
+assert_rejects "claude manifest displayName drift" \
+    perl -0pi -e 's/"displayName": "Wenlan"/"displayName": "Origin"/' \
     "$TMPDIR_TEST/root/plugin/.claude-plugin/plugin.json"
+
+assert_rejects "claude manifest category reintroduced" \
+    perl -0pi -e 's/"displayName": "Wenlan",/"displayName": "Wenlan",\n  "category": "productivity",/' \
+    "$TMPDIR_TEST/root/plugin/.claude-plugin/plugin.json"
+
+assert_rejects "claude MCP runner path drift" \
+    perl -0pi -e 's|/scripts/wenlan-mcp-runner\.sh|/bin/wenlan-mcp-runner.sh|' \
+    "$TMPDIR_TEST/root/plugin/.mcp.json"
 
 assert_rejects "claude marketplace description drift" \
     perl -0pi -e 's/"description": "A living knowledge base/"description": "A memory layer/' \

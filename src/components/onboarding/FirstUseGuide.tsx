@@ -25,6 +25,7 @@ import {
   summarizeImportBatches,
 } from "../memory/ImportPhases";
 import { FirstUseSample } from "./FirstUseSample";
+import type { SampleClient } from "./firstUseSampleData";
 import "./firstUseGuide.css";
 
 export type FirstUseGuideView = "guide" | "live";
@@ -33,7 +34,7 @@ export interface FirstUseGuideProps {
   onBack: () => void;
   onImport: () => void;
   onSources: () => void;
-  onConnect: () => void;
+  onConnect: (client?: SampleClient) => void;
   onOpenIntelligence: () => void;
   onOpenPage: (id: string) => void;
   /** Entry view. The parent passes "live" when returning from a real import. */
@@ -212,7 +213,7 @@ export function FirstUseGuide({
               <button
                 type="button"
                 className="fug-button-secondary"
-                onClick={onConnect}
+                onClick={() => onConnect()}
               >
                 {t("firstUse.chooser.connectAction")}
               </button>
@@ -379,6 +380,17 @@ function FirstUseLive({
           ) : null}
           {needsIntelligence ? (
             <p className="fus-note" role="status">{t("firstUse.live.needsIntelligence")}</p>
+          ) : null}
+          {!settled && routingQuery.isPending ? (
+            <p className="fus-note" role="status">{t("firstUse.live.modelStatusPending")}</p>
+          ) : null}
+          {!settled && routingQuery.isError ? (
+            <div className="fus-state" role="alert">
+              <p>{t("firstUse.live.modelStatusFailed")}</p>
+              <button type="button" className="fug-button-secondary" onClick={() => void routingQuery.refetch()}>
+                {t("firstUse.live.retry")}
+              </button>
+            </div>
           ) : null}
           {summary.complete ? (
             <p className="fus-note">{t("importBatch.backgroundSettled")}</p>

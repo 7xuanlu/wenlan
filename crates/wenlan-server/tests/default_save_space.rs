@@ -338,6 +338,8 @@ async fn create_page_rejects_conflicting_aliases_and_mirrors_default() {
         .unwrap()
         .filter_map(Result::ok)
         .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        // The OKF root `index.md` is a reserved document, not a page.
+        .filter(|entry| !entry.file_name().eq_ignore_ascii_case("index.md"))
         .count();
     assert_eq!(page_files, 1, "page projection must stay inside TempDir");
 }

@@ -7,6 +7,9 @@ import { daemonMeetsFloor } from "../../src/lib/daemonVersion";
 
 type Args = Record<string, unknown> | undefined;
 const PAGE_EDIT_DAEMON_FLOOR = "0.14.1";
+// app/src/search.rs `OKF_EXPORT_DAEMON_FLOOR` and its typed rejection.
+const OKF_EXPORT_DAEMON_FLOOR = "0.18.9";
+const OKF_EXPORT_ERROR_DAEMON_TOO_OLD = "okf-export:daemon-too-old";
 
 // The client fixtures below carry `Reading`s, not booleans (src/lib/tauri.ts).
 // Spelling them out inline five times per row buries the fixture, so they get
@@ -371,6 +374,16 @@ const nativeRepairRequired = async (): Promise<never> => {
   throw new Error("Source repair requires the native Wenlan app.");
 };
 
+// Remote pairing/grants in the LIVE path: these Tauri commands are native to
+// the desktop backend (relay profile store, pairing ceremony) with no daemon
+// HTTP route, so the browser preview cannot perform them. Reads with an
+// honest empty answer live in DEFAULTS below; anything that would mutate
+// state or complete a security ceremony fails explicitly instead of
+// reporting a fabricated success.
+const nativeRemoteAccessRequired = async (): Promise<never> => {
+  throw new Error("Remote access pairing and grants require the native Wenlan app.");
+};
+
 // Exported (not just module-local) so the parity test below can read the
 // covered-command key sets without re-parsing this file.
 export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
@@ -389,6 +402,13 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   repair_prepare_operation: nativeRepairRequired,
   repair_prepare_operation_status: nativeRepairRequired,
   repair_prepare_operation_cancel: nativeRepairRequired,
+
+  // --- remote pairing/grants (native-only; see nativeRemoteAccessRequired) ---
+  configure_remote_access: nativeRemoteAccessRequired,
+  reconnect_remote_access: nativeRemoteAccessRequired,
+  inspect_remote_pairing: nativeRemoteAccessRequired,
+  approve_remote_pairing: nativeRemoteAccessRequired,
+  revoke_remote_grant: nativeRemoteAccessRequired,
 
   // --- import ---
   // The import view is the one screen whose whole point is what happens
@@ -635,6 +655,15 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   },
   get_page_revisions: (a) => get(`/api/pages/${enc(a.pageId)}/revisions`),
   redistill_page: (a) => post(`/api/distill/${enc(a.pageId)}`, {}),
+  // Mirrors app/src/search.rs `export_pages_okf_checked`: an older daemon
+  // gets no export request, and no Space header means every Space.
+  export_pages_as_okf: async (a) => {
+    const health = await get("/api/health");
+    if (!daemonMeetsFloor(String(health?.version ?? ""), OKF_EXPORT_DAEMON_FLOOR)) {
+      throw OKF_EXPORT_ERROR_DAEMON_TOO_OLD;
+    }
+    return post("/api/pages/export", { vault_path: a.targetDir, format: "okf" });
+  },
   update_page: async (a) => {
     const health = await get("/api/health");
     const reportedVersion = String(health?.version ?? "");
@@ -1006,6 +1035,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // wrong keys where the Rust command returns a struct doesn't just render empty —
   // it white-screens the step (RemoteAccessPanel reads status.status unguarded).
   set_traffic_lights_visible: null,
+  // No wenlan://pair link can reach a browser preview.
+  take_remote_pairing_link: null,
   set_setup_completed: null,
   is_run_at_login_enabled: false,
   list_watch_paths: [],
@@ -1024,6 +1055,15 @@ export const DEFAULTS: Record<string, unknown> = {
   get_external_llm: [null, null],
   get_system_info: null,
   get_remote_access_status: { status: "off" },
+  // No relay profile exists in a browser preview (the native-only mutations
+  // are explicit errors in HANDLERS above); null is the real contract
+  // (tauri.ts types this `RemoteAccessProfile | null`), so the panel renders
+  // its off state instead of a fabricated profile.
+  get_remote_access_profile: null,
+  // Unreachable while status is off and no credential is issued, and there is
+  // no relay to page through here; the empty RemoteGrantPage keeps the shape
+  // without claiming any grant was read.
+  list_remote_grants: { items: [], cursor: null },
   // The five clients a real machine actually reports (this is verbatim what
   // detect_mcp_clients_cmd returns on the maintainer's Mac, incl. one already
   // configured). This used to be `[]`, which meant the preview only ever showed

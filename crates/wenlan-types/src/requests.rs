@@ -655,6 +655,17 @@ pub struct UpdateConfigRequest {
     /// preserve stored value; present = set. Never gates the explicit improve route.
     #[serde(default)]
     pub page_map_auto_suggest: Option<bool>,
+    /// Scopes `everyday_source` and `synthesis_source` in this same request to
+    /// jobs that are currently unpinned. No other field is affected. Omitted or
+    /// `false` = overwrite, which is what every caller did before this field
+    /// existed, so an older client keeps its behavior unchanged.
+    ///
+    /// A fill-the-blanks caller reads routing and then writes the pins it found
+    /// unset. Those are two requests, so without this flag a pin the user sets
+    /// in between is silently overwritten. With it the daemon re-checks under
+    /// the write, and an invalid value is still rejected before anything saves.
+    #[serde(default)]
+    pub only_if_unset: Option<bool>,
 }
 
 // ===== Chunks / indexed files =====
@@ -811,6 +822,21 @@ pub struct RefreshPageRequest {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ExportPagesRequest {
     pub vault_path: Option<String>,
+    /// Bundle format. Absent (or `obsidian`) keeps the historical
+    /// Obsidian-vault behavior byte for byte; `okf` writes a pure OKF v0.2
+    /// bundle instead. Same scope resolution and `page_write_permit` filter
+    /// either way.
+    #[serde(default)]
+    pub format: Option<ExportFormat>,
+}
+
+/// Bundle format for `POST /api/pages/export`. Serde-only: the daemon
+/// matches on the variant, nothing else reads this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ExportFormat {
+    Obsidian,
+    Okf,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -983,6 +1009,19 @@ mod tests {
         let r: UpdateConfigRequest =
             serde_json::from_str(r#"{"external_llm_api_key":"sk-x"}"#).unwrap();
         assert_eq!(r.external_llm_api_key, Some(Some("sk-x".to_string())));
+    }
+
+    #[test]
+    fn update_config_request_only_if_unset_defaults_to_absent() {
+        // Every body written before this field existed must still deserialize,
+        // and must mean "overwrite" exactly as it did then.
+        let r: UpdateConfigRequest =
+            serde_json::from_str(r#"{"everyday_source":"on_device"}"#).unwrap();
+        assert_eq!(r.only_if_unset, None);
+        let r: UpdateConfigRequest =
+            serde_json::from_str(r#"{"everyday_source":"on_device","only_if_unset":true}"#)
+                .unwrap();
+        assert_eq!(r.only_if_unset, Some(true));
     }
 
     #[test]

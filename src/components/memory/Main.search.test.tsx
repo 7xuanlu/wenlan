@@ -8,6 +8,7 @@ import { i18n } from "../../i18n";
 import { RECENT_PAGES_STORAGE_KEY } from "../../lib/recentPages";
 import { RECENT_SPACES_STORAGE_KEY } from "../../lib/recentSpaces";
 import type { Page, SearchResult, Space } from "../../lib/tauri";
+import { clearPendingPairingCode } from "../../lib/pairingLink";
 import Main from "./Main";
 
 const eventListeners = vi.hoisted(
@@ -27,6 +28,7 @@ const draftIdentityMock = vi.hoisted(
   () => vi.fn<() => { readonly draftId: string | null; readonly version: number | null }>(),
 );
 const setSearchQueryMock = vi.hoisted(() => vi.fn());
+const takeRemotePairingLinkMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const useSearchMock = vi.hoisted(() => vi.fn(() => ({
   query: "",
   setQuery: setSearchQueryMock,
@@ -54,6 +56,7 @@ vi.mock("../../lib/tauri", () => ({
   openFile: openFileMock,
   openSearchResult: openSearchResultMock,
   deleteFileChunks: vi.fn().mockResolvedValue(undefined),
+  takeRemotePairingLink: takeRemotePairingLinkMock,
   // Never settles, so the toolbar Activity button stays the plain navigation
   // button these routing tests click.
   getActivity: vi.fn(() => new Promise(() => {})),
@@ -131,13 +134,14 @@ vi.mock("./PageDetail", () => ({
 }));
 vi.mock("./DistillReviewPanel", () => ({ default: () => <div /> }));
 vi.mock("./SettingsPage", () => ({
-  default: (props: { onSetupAgent?: () => void }) => (
-    <div data-testid="settings-page">
+  default: (props: { onSetupAgent?: () => void; section?: string; onBack?: () => void }) => (
+    <div data-testid="settings-page" data-section={props.section}>
       <button type="button" onClick={props.onSetupAgent}>Connect agent</button>
+      <button type="button" onClick={props.onBack}>Settings back</button>
     </div>
   ),
 }));
-vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
+vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div data-testid="client-setup-wizard" /> }));
 vi.mock("./Sidebar", () => ({
   default: (props: {
     activeNavigation?: string | null;
@@ -316,6 +320,7 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
     onImport: () => void;
     onBack: () => void;
     onOpenPage: (id: string) => void;
+    onConnect: (client?: "chatgpt" | "codex" | "claude") => void;
   }) => (
     <section
       data-testid="first-use-guide"
@@ -325,6 +330,10 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
       <button type="button" onClick={props.onImport}>Bring memories</button>
       <button type="button" onClick={props.onBack}>Leave first use</button>
       <button type="button" onClick={() => props.onOpenPage("library-page")}>Open knowledge result</button>
+      <button type="button" onClick={() => props.onConnect("chatgpt")}>Connect ChatGPT sample</button>
+      <button type="button" onClick={() => props.onConnect("codex")}>Connect Codex sample</button>
+      <button type="button" onClick={() => props.onConnect("claude")}>Connect Claude sample</button>
+      <button type="button" onClick={() => props.onConnect()}>Connect unspecified tool</button>
     </section>
   ),
 }));
@@ -402,6 +411,9 @@ describe("Main search", () => {
     openSearchResultMock.mockReset();
     openSearchResultMock.mockResolvedValue(undefined);
     setSearchQueryMock.mockReset();
+    takeRemotePairingLinkMock.mockReset();
+    takeRemotePairingLinkMock.mockResolvedValue(null);
+    clearPendingPairingCode();
     draftRequestBackMock.mockReset();
     draftRequestBackMock.mockImplementation(async (onBack) => onBack());
     draftFlushMock.mockReset();
@@ -413,6 +425,21 @@ describe("Main search", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
+  });
+
+  it("opens Connections for a wenlan://pair link that launched the app", async () => {
+    takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
+    renderMain();
+    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
+  });
+
+  it("opens Connections when a pairing link arrives while the app is open", async () => {
+    renderMain();
+    expect(screen.getByTestId("home-page")).toBeVisible();
+    expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
+    takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
+    await act(async () => { eventListeners.get("remote-pairing-link")?.(); });
+    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
   });
 
   it("returns an onboarding import to real knowledge, then back to Home", async () => {
@@ -427,6 +454,29 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Leave first use" }));
     expect(screen.getByTestId("home-page")).toBeVisible();
   });
+
+  it.each(["ChatGPT sample", "unspecified tool"])("routes %s to web-capable agent settings and back", async (client) => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Start first use" }));
+    await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
+    expect(screen.getByTestId("settings-page")).toHaveAttribute("data-section", "agents");
+    expect(screen.queryByTestId("client-setup-wizard")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Settings back" }));
+    expect(screen.getByTestId("first-use-guide")).toBeVisible();
+  });
+
+  it.each(["Codex sample", "Claude sample"])(
+    "keeps %s on local client setup",
+    async (client) => {
+      const user = userEvent.setup();
+      renderMain();
+      await user.click(screen.getByRole("button", { name: "Start first use" }));
+      await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
+      expect(screen.getByTestId("client-setup-wizard")).toBeVisible();
+      expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
+    },
+  );
 
   it("cancelling an onboarding import returns without claiming knowledge was formed", async () => {
     const user = userEvent.setup();

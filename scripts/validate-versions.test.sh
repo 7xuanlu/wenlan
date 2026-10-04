@@ -9,6 +9,8 @@ mkdir -p \
     "$TMPDIR_TEST/crates/wenlan-mcp/npm" \
     "$TMPDIR_TEST/crates/wenlan-cli/npm" \
     "$TMPDIR_TEST/plugin/.claude-plugin" \
+    "$TMPDIR_TEST/plugin/scripts" \
+    "$TMPDIR_TEST/plugin/skills/setup" \
     "$TMPDIR_TEST/plugin-codex/.codex-plugin" \
     "$TMPDIR_TEST/plugin-codex/bin" \
     "$TMPDIR_TEST/plugin-codex/skills/setup" \
@@ -58,9 +60,16 @@ version = "0.5.0" # x-release-please-version
 EOF
 echo '{"version": "0.5.0"}' > "$TMPDIR_TEST/app/tauri.conf.json"
 echo '{"name": "wenlan-app", "version": "0.5.0"}' > "$TMPDIR_TEST/package.json"
+cat > "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" <<EOF
+# wenlan-mcp-pin: kept in lockstep by scripts/bump-version.sh
+exec npx -y wenlan-mcp@0.5.0 "\$@"
+EOF
 cat > "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" <<EOF
 plugin_json="\${here}/../.codex-plugin/plugin.json"
 exec npx -y "wenlan-mcp@^\${ver}" --agent-name "\${agent_name}" "\$@"
+EOF
+cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
+npx -y wenlan@0.5.0 setup
 EOF
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
 curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash
@@ -162,6 +171,50 @@ if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-ver
     exit 1
 fi
 echo "PASS test 7: Codex setup install tag drift detected"
+perl -0pi -e 's|/v0\.4\.9/install\.sh|/v0.5.0/install.sh|g' "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md"
+
+# Test 8: Claude runner exact pin must equal the tag
+perl -0pi -e 's/wenlan-mcp\@0\.5\.0/wenlan-mcp\@0.4.9/' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 8: should have detected Claude runner pin drift"
+    exit 1
+fi
+echo "PASS test 8: Claude runner pin drift detected"
+
+perl -0pi -e 's/wenlan-mcp\@0\.4\.9/wenlan-mcp\@0.5.0/' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+
+# Test 8b: an unpinned Claude launcher (@latest / ^) is rejected even when the
+# exact pin is present and correct, so the check is independent of pin drift.
+echo 'exec npx -y wenlan-mcp@latest "$@"' >> "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 8b: should have rejected an unpinned Claude runner launcher"
+    exit 1
+fi
+echo "PASS test 8b: unpinned Claude runner launcher rejected"
+perl -0pi -e 's/\nexec npx -y wenlan-mcp\@latest "\$\@"\n//' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh"
+
+# Test 8d: Claude setup install pin drift is caught like the Codex one
+perl -0pi -e 's|wenlan\@0\.5\.0 setup|wenlan\@0.4.9 setup|g' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
+if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+    echo "FAIL test 8d: should have detected Claude setup install pin drift"
+    exit 1
+fi
+echo "PASS test 8d: Claude setup install pin drift detected"
+perl -0pi -e 's|wenlan\@0\.4\.9 setup|wenlan\@0.5.0 setup|g' "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
+
+# Test 8e: a download piped into a shell, or an unpinned package, in the
+# Claude setup skill is rejected even when the exact pin is also present.
+for bad in 'curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash' 'npx -y wenlan@latest setup' 'npx -y wenlan setup'; do
+    echo "$bad" >> "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
+    if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
+        echo "FAIL test 8e: should have rejected Claude setup line: $bad"
+        exit 1
+    fi
+    printf 'npx -y wenlan@0.5.0 setup\n' > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
+done
+echo "PASS test 8e: unpinned or piped Claude setup installer rejected"
+(cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh" >/dev/null)
+echo "PASS test 8c: restored fixture validates again"
 
 assert_release_job_pins_release_sha() {
     local workflow="$1"

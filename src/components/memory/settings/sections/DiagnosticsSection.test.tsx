@@ -380,7 +380,7 @@ describe("DiagnosticsSection", () => {
       fireEvent.click(screen.getByText("Start Wenlan"));
 
       expect(
-        await screen.findByText("Couldn't start Wenlan — sidecar quarantined"),
+        await screen.findByText("Couldn't start Wenlan: sidecar quarantined"),
       ).toBeInTheDocument();
       // A failed start must not claim to have re-probed.
       expect(vi.mocked(getWireState).mock.calls.length).toBe(callsBefore);
@@ -526,7 +526,7 @@ describe("DiagnosticsSection", () => {
       await screen.findByText("Wenlan runtime");
       expect(
         screen.getByText(
-          "Wenlan is registered twice for Claude Desktop. Remove the manual MCP entry — Wenlan is already connected automatically.",
+          "Wenlan is registered twice for Claude Desktop. Remove the manual MCP entry. Wenlan is already connected automatically.",
         ),
       ).toBeInTheDocument();
       expect(screen.queryByText(/registered twice for Claude Code/)).not.toBeInTheDocument();
@@ -620,7 +620,7 @@ describe("DiagnosticsSection", () => {
       await screen.findByText("Wenlan runtime");
       expect(
         screen.getByText(
-          "Cursor's config lists Wenlan twice — as wenlan and under its old name origin. Cursor starts two copies until the old entry is removed.",
+          "Cursor's config lists Wenlan twice: as wenlan and under its old name origin. Cursor starts two copies until the old entry is removed.",
         ),
       ).toBeInTheDocument();
       // The `!has_plugin` gate: the plugin client never shows the raw+raw box.

@@ -57,6 +57,9 @@ fn source(id: &str, path: &str, status: SyncStatus) -> Source {
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     }
 }
 

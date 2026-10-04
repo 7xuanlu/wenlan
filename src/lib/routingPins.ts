@@ -69,9 +69,19 @@ function asSourcePin(pin: string | null): SourcePin | null {
 }
 
 /** What a fill did, from the routing read it acted on. `written` is what this
- *  fill sent (null for a job left alone, both null when nothing was sent);
- *  `inEffect` is each job's pin once that write lands: the written pin, or the
- *  one the job already held. */
+ *  fill sent: null for a job left alone, both null when nothing was sent.
+ *
+ *  `inEffect` is READ-SIDE ONLY. It is this client's expectation of each job's
+ *  pin, computed from the one routing snapshot the fill acted on plus what it
+ *  sent, and it is never read back from the daemon. It is normally right, and
+ *  it is wrong in exactly the case `onlyIfUnset` exists for: if the user pins a
+ *  job between the read and the write, the daemon keeps their pin and
+ *  `inEffect` still names the pin this fill sent.
+ *
+ *  So use it for copy and logging, never as proof of what the daemon holds. A
+ *  caller that needs the truth must re-read routing after the write. Nothing
+ *  does today, which is why this stays a prediction rather than costing every
+ *  fill a second round trip. */
 export interface PinFill {
   written: { everyday: SourcePin | null; synthesis: SourcePin | null };
   inEffect: { everyday: SourcePin | null; synthesis: SourcePin | null };
@@ -85,16 +95,18 @@ export interface PinFill {
  *  with every job already pinned writes nothing and still reports the pins in
  *  effect.
  *
- *  Preservation rests on the daemon's patch semantics: a job already pinned at
- *  the read is sent as null, which the daemon leaves untouched even if the user
- *  changes it before the write lands. The one unguarded window is a job that
- *  was unset at the read and pinned before the write. */
+ *  Preservation rests on two things. A job already pinned at the read is sent
+ *  as null, which the daemon leaves untouched even if the user changes it
+ *  before the write lands. A job that was unset at the read but pinned before
+ *  the write is covered by `onlyIfUnset`: the daemon re-checks under the write
+ *  and keeps the user's pin. On a daemon that predates that flag the field is
+ *  ignored and this window is unguarded, as it was before. */
 export async function fillUnsetPins(): Promise<PinFill | null> {
   const routing = await getResolvedRouting();
   if (!routing) return null;
   const written = pinsToFill(routing);
   if (written.everyday !== null || written.synthesis !== null) {
-    await setSourcePin(written.everyday, written.synthesis);
+    await setSourcePin(written.everyday, written.synthesis, true);
   }
   return {
     written,

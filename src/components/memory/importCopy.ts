@@ -7,7 +7,7 @@
 //
 // Each locale carries its own fully localized export prompt body: both the
 // shown instructions and the copied text come from `exportPromptBody` via
-// t(). Only the [TYPE] machine tags — and their protocol meaning — stay
+// t(). Only the [TYPE] machine tags and their protocol meaning stay
 // literal in every locale, never translated. Brand names ChatGPT/Claude
 // stay literal; "Other" is localized via `sourceOther`.
 //
@@ -15,7 +15,7 @@
 
 export const EXPORT_PROMPT = `Export all of my stored memories and any context you've learned about me. Preserve my words verbatim where possible.
 
-EVERY line MUST follow this exact format — no exceptions:
+EVERY line MUST follow this exact format. No exceptions:
 [TYPE] - content
 
 TYPE must be exactly one of: identity, preference, decision, lesson, gotcha, fact
@@ -39,7 +39,7 @@ Example output:
 
 Rules:
 - NO section headers, category labels, or grouping text
-- NO explanations before or after — ONLY the tagged lines
+- NO explanations before or after. ONLY the tagged lines.
 - One memory per line
 - Wrap entire output in a single code block`;
 
@@ -130,7 +130,7 @@ export const hansImportView = {
   exportPrompt: "导出提示词",
   exportPromptBody: `导出我存储的所有记忆以及你学到的关于我的上下文。尽量保留我的原话。
 
-每一行都必须严格遵循以下格式——没有例外：
+每一行都必须严格遵循以下格式，没有例外：
 [TYPE] - content
 
 TYPE 必须是以下之一：identity, preference, decision, lesson, gotcha, fact
@@ -154,7 +154,7 @@ TYPE 必须是以下之一：identity, preference, decision, lesson, gotcha, fac
 
 规则：
 - 不要章节标题、分类标签或分组文字
-- 不要前后解释——只要带标签的行
+- 不要前后解释，只要带标签的行
 - 每行一条记忆
 - 整个输出包在一个代码块里`,
   instructions: "说明",
@@ -206,7 +206,7 @@ export const hantImportView = {
   exportPrompt: "匯出提示詞",
   exportPromptBody: `匯出我儲存的所有記憶以及你學到的關於我的上下文。盡量保留我的原話。
 
-每一行都必須嚴格遵循以下格式——沒有例外：
+每一行都必須嚴格遵循以下格式，沒有例外：
 [TYPE] - content
 
 TYPE 必須是以下之一：identity, preference, decision, lesson, gotcha, fact
@@ -230,7 +230,7 @@ TYPE 必須是以下之一：identity, preference, decision, lesson, gotcha, fac
 
 規則：
 - 不要章節標題、分類標籤或分組文字
-- 不要前後解釋——只要帶標籤的行
+- 不要前後解釋，只要帶標籤的行
 - 每行一則記憶
 - 整個輸出包在一個程式碼區塊裡`,
   instructions: "說明",

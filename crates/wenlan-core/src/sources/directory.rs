@@ -9,13 +9,13 @@ use std::time::UNIX_EPOCH;
 
 use sha2::{Digest, Sha256};
 
-use crate::quality_gate::QualityGate;
+use crate::quality_gate::{is_cjk_char, meaningful_word_count, QualityGate};
 use crate::sources::obsidian::note_to_documents;
 use crate::sources::RawDocument;
 use crate::tuning::GateConfig;
 
 /// Maximum file size for text/markdown files (1 MB).
-const MAX_TEXT_SIZE: u64 = 1024 * 1024;
+pub(crate) const MAX_TEXT_SIZE: u64 = 1024 * 1024;
 
 /// Maximum file size for PDF files (10 MB).
 const MAX_PDF_SIZE: u64 = 10 * 1024 * 1024;
@@ -251,7 +251,7 @@ pub fn file_to_documents(
 /// Stamp folder provenance onto every doc, then admit each through the
 /// min-text heuristic + quality gate. Returns `Ingested` if any doc survives,
 /// otherwise `Skipped` with the collected rejection reasons.
-fn finalize_file_documents(
+pub(crate) fn finalize_file_documents(
     docs: Vec<RawDocument>,
     content_hash: &str,
     extension: &str,
@@ -382,7 +382,7 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-fn modified_unix_seconds(metadata: &fs::Metadata) -> i64 {
+pub(crate) fn modified_unix_seconds(metadata: &fs::Metadata) -> i64 {
     metadata
         .modified()
         .ok()
@@ -439,7 +439,7 @@ pub fn extract_pdf_text(bytes: &[u8]) -> Result<String, String> {
 /// BOM detection first (UTF-8/16/32), then valid-UTF-8 fast path, then a
 /// UTF-16 heuristic (null-byte density), finally a Windows-1252 (latin1) decode
 /// which is lossless for single-byte inputs.
-fn decode_text_bytes(bytes: &[u8]) -> String {
+pub(crate) fn decode_text_bytes(bytes: &[u8]) -> String {
     if let Some((encoding, bom_len)) = encoding_rs::Encoding::for_bom(bytes) {
         let (text, _, _) = encoding.decode(&bytes[bom_len..]);
         return text.into_owned();
@@ -494,11 +494,19 @@ fn normalize_extracted_text(content: &str) -> String {
 /// Reject content with too little real text (image-only/garbage PDFs, near-empty
 /// files). Returns a human reason when below floor, `None` when it passes.
 fn min_text_rejection_detail(content: &str) -> Option<String> {
-    let words = content
-        .split_whitespace()
-        .filter(|word| word.chars().any(|c| c.is_alphanumeric()))
-        .count();
-    let non_ws_chars = content.chars().filter(|c| !c.is_whitespace()).count();
+    // Shared with the quality gate's own floor so a CJK file isn't skipped
+    // here by a plain split_whitespace count and then admitted (or vice
+    // versa) by quality_gate.rs's CJK-aware one.
+    let words = meaningful_word_count(content);
+    // Weight each CJK char as 2 toward the floor, the same way the quality
+    // gate treats CJK content as denser than a plain char count suggests:
+    // CJK scripts have no whitespace between words, so an all-CJK file with
+    // real content can still be short in raw char count.
+    let non_ws_chars: usize = content
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| if is_cjk_char(c) { 2 } else { 1 })
+        .sum();
 
     if words == 0 || non_ws_chars == 0 {
         return Some("no extractable text (no OCR in v1)".to_string());
@@ -836,6 +844,64 @@ mod tests {
                 assert!(reason.contains("no extractable text") || reason.contains("too short"));
             }
             other => panic!("expected skipped image-only pdf, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_to_documents_admits_one_paragraph_chinese_markdown() {
+        let tmp = TempDir::new().unwrap();
+        let path = create_file(
+            tmp.path(),
+            "chinese-note.md",
+            "今天下午我們決定採用新的檔案管理方案，並且會在下週開始逐步導入到所有專案中，同時也會準備教學文件給團隊成員參考使用。"
+                .as_bytes(),
+        );
+
+        match file_to_documents("src1", &path, Some(tmp.path())) {
+            FileOutcome::Ingested(docs) => assert!(!docs.is_empty()),
+            FileOutcome::Skipped(reason) => {
+                panic!("one-paragraph Chinese note should not be skipped as too short: {reason}")
+            }
+            other => panic!("expected ingest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_to_documents_admits_twelve_char_chinese_note() {
+        // 12 CJK chars -> ceil(12/2) = 6 words (>= MIN_EXTRACTED_WORDS 5), and
+        // weighted 2-per-char -> 24 non-whitespace chars (>= the 20 floor).
+        // Un-weighted, 12 raw chars would fail that second floor even though
+        // the word count already clears it -- the CJK weighting is what
+        // admits this file.
+        let tmp = TempDir::new().unwrap();
+        let path = create_file(
+            tmp.path(),
+            "short-note.md",
+            "今天天氣非常晴朗真好啊耶".as_bytes(),
+        );
+
+        match file_to_documents("src1", &path, Some(tmp.path())) {
+            FileOutcome::Ingested(docs) => assert!(!docs.is_empty()),
+            FileOutcome::Skipped(reason) => {
+                panic!("12-char Chinese note should not be skipped as too short: {reason}")
+            }
+            other => panic!("expected ingest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_to_documents_skips_three_char_chinese_file() {
+        // 3 CJK chars -> ceil(3/2) = 2 words, below MIN_EXTRACTED_WORDS (5).
+        // CJK fairness must not disable the floor entirely.
+        let tmp = TempDir::new().unwrap();
+        let path = create_file(tmp.path(), "too-short.md", "你好嗎".as_bytes());
+
+        match file_to_documents("src1", &path, Some(tmp.path())) {
+            FileOutcome::Skipped(reason) => assert!(
+                reason.contains("too short"),
+                "expected a too-short skip, got: {reason}"
+            ),
+            other => panic!("expected skip for 3-char CJK file, got {other:?}"),
         }
     }
 

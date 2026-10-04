@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Hook canary — verify-the-verifier for the repo's Claude Code gates.
 # Feeds synthetic tool input or repository fixtures through each protection hook and asserts
-# BOTH directions: the block path fires (exit 2) and the allow path stays
-# quiet (exit 0). A gate nobody has ever seen fire is indistinguishable from
-# a dead one — this is the durable evidence (audit 2026-07-02, PR #324).
+# BOTH directions: protection hooks block unsafe input (exit 2), while the stop
+# scan reports findings as advisory and exits 0. A hook nobody has ever seen
+# exercise is indistinguishable from a dead one — this is the durable evidence
+# (audit 2026-07-02, PR #324).
 # Run: bash .claude/hooks/test-hooks.sh   (the weekly harness retro runs it too)
 set -u
 cd "$(dirname "$0")"
@@ -44,8 +45,8 @@ rp_got="$(printf '{"tool_input":{"file_path":"Cargo.toml"}}' | CLAUDE_PROJECT_DI
 if [ "$rp_got" -eq 0 ]; then echo "PASS  release-please: relative unmarked Cargo.toml allows"; else echo "FAIL  release-please: relative unmarked Cargo.toml allows (want exit 0, got $rp_got)"; fails=$((fails + 1)); fi
 rm -rf "$RP_TMP"
 
-stop_t() { # desc fixture want-exit
-  local tmp got filename
+stop_t() { # desc fixture want-exit [want-stdout-substring]
+  local tmp got filename output want_output="${4:-}"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/wenlan-stop-hook.XXXXXX")
   mkdir -p "$tmp/.claude"
   printf '[workspace]\n' > "$tmp/Cargo.toml"
@@ -98,27 +99,41 @@ stop_t() { # desc fixture want-exit
   if [ -n "$filename" ]; then
     git -C "$tmp" add -- "$filename"
   fi
-  CLAUDE_PROJECT_DIR="$tmp" bash "$PWD/pre-stop-gate.sh" >/dev/null 2>&1
+  output="$(CLAUDE_PROJECT_DIR="$tmp" bash "$PWD/pre-stop-gate.sh" 2>"$tmp/stderr")"
   got=$?
-  rm -rf "$tmp"
   if [ "$got" -eq "$3" ]; then
-    echo "PASS  $1"
+    if [ -n "$want_output" ] && [[ "$output" != *"$want_output"* ]]; then
+      echo "FAIL  $1 (exit $got ok, but stdout missing '$want_output': $output)"
+      fails=$((fails + 1))
+    elif [ "$2" != clean ] && ! printf '%s\n' "$output" | jq -e '.systemMessage | type == "string"' >/dev/null 2>&1; then
+      echo "FAIL  $1 (stdout is not a valid systemMessage JSON envelope: $output)"
+      fails=$((fails + 1))
+    elif [ "$2" = clean ] && [ -n "$output" ]; then
+      echo "FAIL  $1 (clean stop must not emit an advisory systemMessage: $output)"
+      fails=$((fails + 1))
+    elif [ "$2" = clean ] && [ -e "$tmp/.claude/progress.txt" ]; then
+      echo "FAIL  $1 (stop hook must not append .claude/progress.txt)"
+      fails=$((fails + 1))
+    else
+      echo "PASS  $1"
+    fi
   else
     echo "FAIL  $1 (want exit $3, got $got)"
     fails=$((fails + 1))
   fi
+  rm -rf "$tmp"
 }
 
-stop_t "pre-stop: block staged todo!" rust-todo 2
-stop_t "pre-stop: block staged assert!(true)" rust-assert-true 2
-stop_t "pre-stop: block staged assert_eq!(true,true)" rust-assert-eq 2
-stop_t "pre-stop: block staged unimplemented!" rust-unimplemented 2
-stop_t "pre-stop: block staged FIXME" rust-fixme 2
-stop_t "pre-stop: block staged assert(true)" ts-assert 2
-stop_t "pre-stop: block staged expect(true).toBe(true)" ts-expect 2
-stop_t "pre-stop: block staged TS skip" ts-skip 2
-stop_t "pre-stop: block staged test.skip" ts-test-skip 2
-stop_t "pre-stop: block staged xit" ts-xit 2
+stop_t "pre-stop: advise staged todo!" rust-todo 0 "pre-stop-gate advisory"
+stop_t "pre-stop: advise staged assert!(true)" rust-assert-true 0
+stop_t "pre-stop: advise staged assert_eq!(true,true)" rust-assert-eq 0
+stop_t "pre-stop: advise staged unimplemented!" rust-unimplemented 0
+stop_t "pre-stop: advise staged FIXME" rust-fixme 0
+stop_t "pre-stop: advise staged assert(true)" ts-assert 0
+stop_t "pre-stop: advise staged expect(true).toBe(true)" ts-expect 0
+stop_t "pre-stop: advise staged TS skip" ts-skip 0
+stop_t "pre-stop: advise staged test.skip" ts-test-skip 0
+stop_t "pre-stop: advise staged xit" ts-xit 0
 stop_t "pre-stop: allow clean tree" clean 0
 
 # ---- wrapper-level cases: exercise the REAL settings.json command strings, not

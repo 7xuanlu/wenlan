@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import {
   getActiveImportBatches,
   getMemoryStats,
+  getResolvedRouting,
   listEntities,
   type MemoryStats,
   type Page,
@@ -480,6 +481,18 @@ const EMPTY_ACTION_STYLE: React.CSSProperties = {
  * names the precondition and offers the setting that removes it, and only with
  * one is the deadline promise allowed.
  *
+ * A configured provider is necessary and not sufficient. Background synthesis
+ * runs through the per-job source pins, and an everyday job with no pin
+ * resolves to no provider at all, so a user who quit during the model download
+ * can have a loaded model and still never see a page. That state gets its own
+ * copy: the deadline promise is replaced by what actually unblocks it, and the
+ * same Settings action is offered.
+ *
+ * A pin whose source is not loadable right now is a third state, and it is not
+ * the same sentence. That user did choose a model, so telling them to choose
+ * one reads as if their choice never registered. They are told their choice is
+ * unavailable instead, with the same way into Settings.
+ *
  * Until the provider queries answer, neither claim is made: the lead, the
  * ghost preview and "Write a page" are true in every state, so they render
  * immediately and the provider-dependent sentence and button appear once the
@@ -506,6 +519,30 @@ function HomeEmptyState({
   const { configured: providerConfigured, isResolved: providerResolved } =
     useProviderConfigured();
   const needsProvider = providerResolved && !providerConfigured;
+  // A configured provider is not enough for a page to compile: background work
+  // routes through the per-job source pins, and an unpinned everyday job
+  // resolves to nothing that can synthesize. The same query key Settings uses,
+  // so the two surfaces share one cache and cannot disagree.
+  const routing = useQuery({ queryKey: ["resolvedRouting"], queryFn: getResolvedRouting });
+  // A daemon that predates the routing endpoint answers null: it has no pins to
+  // read, and its promise is as true as it was before, so it keeps the old copy.
+  const everydayMode =
+    routing.isSuccess && routing.data != null ? routing.data.everyday.mode : null;
+  // Three states, because two of them block pages for different reasons and a
+  // user who already chose a model must not be told to choose one. "pinned" is
+  // the only mode that can compile; "pinned_unavailable" means their choice is
+  // made but not loadable right now; anything else means no choice is recorded.
+  // An unrecognized mode from a newer daemon falls in with the unpinned case,
+  // so a mode we cannot read never earns the deadline promise.
+  const routingPinUnavailable = everydayMode === "pinned_unavailable";
+  const routingUnpinned =
+    everydayMode !== null && everydayMode !== "pinned" && !routingPinUnavailable;
+  // Neither claim is made until the answer behind it is known. The precondition
+  // copy needs only the provider answer; the deadline promise and its two
+  // alternatives need the routing answer too.
+  const showProviderSentence = providerResolved && (!providerConfigured || routing.isSuccess);
+  const needsRouting = providerResolved && providerConfigured && routingUnpinned;
+  const pinUnavailable = providerResolved && providerConfigured && routingPinUnavailable;
   return (
     <section data-testid="wiki-page-empty" aria-labelledby="wiki-page-empty-title">
       <h2
@@ -521,7 +558,7 @@ function HomeEmptyState({
       >
         {t("home.empty.noPages")}
       </h2>
-      {providerResolved && (
+      {showProviderSentence && (
         <p
           style={{
             fontFamily: "var(--mem-font-body)",
@@ -532,9 +569,13 @@ function HomeEmptyState({
             maxWidth: "62ch",
           }}
         >
-          {providerConfigured
-            ? t("home.empty.compiling")
-            : t("home.empty.needsProvider")}
+          {!providerConfigured
+            ? t("home.empty.needsProvider")
+            : routingPinUnavailable
+              ? t("home.empty.pinUnavailable")
+              : routingUnpinned
+                ? t("home.empty.needsRouting")
+                : t("home.empty.compiling")}
         </p>
       )}
 
@@ -543,7 +584,7 @@ function HomeEmptyState({
           display: "flex",
           flexWrap: "wrap",
           gap: 10,
-          margin: providerResolved ? "0 0 24px" : "14px 0 24px",
+          margin: showProviderSentence ? "0 0 24px" : "14px 0 24px",
         }}
       >
         {onStartFirstUse && (
@@ -561,7 +602,7 @@ function HomeEmptyState({
             {t("firstUse.entry")}
           </button>
         )}
-        {needsProvider && (
+        {(needsProvider || needsRouting || pinUnavailable) && (
           <button
             type="button"
             className="home-empty-action"
@@ -573,7 +614,11 @@ function HomeEmptyState({
               color: "var(--mem-accent-indigo)",
             }}
           >
-            {t("home.empty.turnOnModel")}
+            {pinUnavailable
+              ? t("home.empty.openSettings")
+              : needsRouting
+                ? t("home.empty.chooseModel")
+                : t("home.empty.turnOnModel")}
           </button>
         )}
         <button

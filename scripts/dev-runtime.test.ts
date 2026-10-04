@@ -621,10 +621,15 @@ describe("scoped dev runtime", () => {
   });
 
   it("remote access passes the selected dev daemon URL to wenlan-mcp", () => {
+    // `--origin-url` moved out of the monolith into the relay runtime module;
+    // each half is asserted where it now lives so the chain is not weakened.
+    const relayRuntime = readFileSync(resolve(root, "app/src/remote_relay/runtime.rs"), "utf8");
     const remoteAccess = readFileSync(resolve(root, "app/src/remote_access.rs"), "utf8");
 
-    expect(remoteAccess).toContain('"--origin-url"');
+    expect(relayRuntime).toContain('"--origin-url"');
+    expect(relayRuntime).toContain("pub fn mcp_args(origin_url: &str");
     expect(remoteAccess).toContain("crate::api::WenlanClient::new().base_url()");
+    expect(remoteAccess).toContain("relay_runtime::mcp_args(&origin_url");
     expect(remoteAccess).toContain("mcp_child.pid()");
     expect(remoteAccess).toContain("listener_pid_for_port");
     expect(remoteAccess).toContain("wait_for_generation_change");
@@ -632,11 +637,20 @@ describe("scoped dev runtime", () => {
   });
 
   it("remote cleanup verifies listener identity before sending signals", () => {
+    // The old `*_process_identity` helper names were refactored into a
+    // measured-identity + expected-command gate; assert the current names so
+    // the identity-before-signal contract stays pinned.
     const remoteAccess = readFileSync(resolve(root, "app/src/remote_access.rs"), "utf8");
+    const orphan = readFileSync(resolve(root, "app/src/remote_relay/orphan.rs"), "utf8");
 
-    expect(remoteAccess).toContain("wenlan_mcp_process_identity");
-    expect(remoteAccess).toContain("cloudflared_process_identity");
-    expect(remoteAccess).toContain("refusing to kill non-wenlan-mcp listener");
+    expect(remoteAccess).toContain("measured_process_identity");
+    expect(remoteAccess).toContain("is_expected_remote_mcp_command");
+    expect(remoteAccess).toContain("is_expected_remote_tunnel_command");
+    expect(remoteAccess).toContain("signal_owned_process");
+    expect(remoteAccess).toContain("cleanup_orphaned_mcp");
+    // The shared orphan policy only signals after the probed identity matches
+    // the expected one; anything else is Gone/Replaced/Unknown, never a kill.
+    expect(orphan).toContain("identity == expected_identity");
   });
 
   it("documents dev:all as the supported isolated app entry point", () => {

@@ -27,10 +27,13 @@ const CLIENTS = [
   { name: "Gemini CLI", client_type: "gemini_cli", config_path: "~/.gemini/settings.json", detected: YES, already_configured: NO, has_raw_entry: NO, has_raw_duplicate: NO, has_plugin: NO },
 ];
 
-function renderList(qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
+function renderList(
+  qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
+  connectedFamilies?: Set<string>,
+) {
   return render(
     <QueryClientProvider client={qc}>
-      <ClientSetupList />
+      <ClientSetupList connectedFamilies={connectedFamilies} />
     </QueryClientProvider>,
   );
 }
@@ -164,13 +167,48 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     expect(screen.queryByText("Claude Code")).not.toBeInTheDocument();
   });
 
-  it("shows an all-connected note when every detected client is already configured", async () => {
+  it("shows an all-connected note when every configured client is already seen in the roster", async () => {
     mocks.detectMcpClients.mockResolvedValue([
       { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
     ]);
-    renderList();
+    renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["claude-code"]));
 
     expect(await screen.findByText("Every detected tool is already connected")).toBeInTheDocument();
+    expect(screen.queryByText(/to activate/)).not.toBeInTheDocument();
+  });
+
+  it("names configured-but-unseen tools as needing a restart, not as connected", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+      { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+    ]);
+    renderList();
+
+    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code, Cursor to activate.")).toBeInTheDocument();
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+  });
+
+  it("lists only the unseen tool when one hidden client is already seen in the roster", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: NO, has_raw_entry: NO, has_raw_duplicate: NO, has_plugin: NO },
+      { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+    ]);
+    renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["cursor"]));
+
+    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code to activate.")).toBeInTheDocument();
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+  });
+
+  it("never names an undetected client under the restart note, even when configured", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+      { name: "Gemini CLI", client_type: "gemini_cli", config_path: "~/.gemini/settings.json", detected: NO, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+    ]);
+    renderList();
+
+    expect(await screen.findByText("Every detected tool is set up. Restart Cursor to activate.")).toBeInTheDocument();
+    expect(screen.queryByText("Gemini CLI")).not.toBeInTheDocument();
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
   });
 
   // Coherence pass: the roster above is the single source of truth for what

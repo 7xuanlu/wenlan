@@ -621,9 +621,16 @@ mod tests {
             "fresh projection must not apply; got {:?}",
             stats
         );
+        // The projection writer also emits the reserved OKF `index.md`,
+        // which the watcher scans and skips (no `origin_id`).
         assert_eq!(
-            stats.scanned, 1,
-            "exactly one md file should be scanned; got {:?}",
+            stats.scanned, 2,
+            "page plus reserved index.md should be scanned; got {:?}",
+            stats
+        );
+        assert_eq!(
+            stats.skipped_no_origin_id, 1,
+            "reserved index.md must be skipped, not applied; got {:?}",
             stats
         );
         assert_eq!(

@@ -14,7 +14,7 @@ HELPERS="$REPO_ROOT/scripts/first-run"
 HEALTH="http://127.0.0.1:7878/api/health"
 export CLAUDE_PLUGIN_ROOT="$RELEASE_SRC/plugin"
 HOOK="$CLAUDE_PLUGIN_ROOT/hooks/check-daemon.sh"
-RUNNER="$CLAUDE_PLUGIN_ROOT/bin/wenlan-mcp-runner.sh"
+RUNNER="$CLAUDE_PLUGIN_ROOT/scripts/wenlan-mcp-runner.sh"
 SKILL="$CLAUDE_PLUGIN_ROOT/skills/setup/SKILL.md"
 PLUGIN_JSON="$CLAUDE_PLUGIN_ROOT/.claude-plugin/plugin.json"
 OS="$(uname -s)"
@@ -130,7 +130,7 @@ info doctor-binary "$W"
 check_output doctor "Daemon: running on" -- "$W" doctor
 
 # Step 5: MCP through the plugin's runner; prove it picked the installed binary, not npx.
-info runner-candidates "installed=$(ls -l "$BIN_DIR/wenlan-mcp" 2>&1) local=$([ -x "$CLAUDE_PLUGIN_ROOT/bin/wenlan-mcp.local" ] && echo present || echo absent) WENLAN_MCP_DEV_BIN=${WENLAN_MCP_DEV_BIN:-unset}"
+info runner-candidates "installed=$(ls -l "$BIN_DIR/wenlan-mcp" 2>&1) local=$([ -x "$CLAUDE_PLUGIN_ROOT/scripts/wenlan-mcp.local" ] && echo present || echo absent) WENLAN_MCP_DEV_BIN=${WENLAN_MCP_DEV_BIN:-unset}"
 check_output runner-uses-installed-binary "exec $BIN_DIR/wenlan-mcp" -- bash -c 'bash -x "$1" --version 2>&1 | grep -F "+ exec"' _ "$RUNNER"
 MCP_BIN="$RUNNER" MCP_ARGS='[]' EXPECT_TOOL_COUNT=29 MCP_TOOLS=capture,recall,brief \
     python3 "$HELPERS/mcp-roundtrip.py"

@@ -36,7 +36,7 @@ The skills do not store data themselves. They guide Claude Code to use the local
 | `forget` | Delete a memory by ID. |
 | `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
 
-Plugin metadata lives in [`.claude-plugin`](../.claude-plugin/README.md).
+Plugin metadata lives in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json); the listing README is [`../README.md`](../README.md).
 
 ## Choosing the active space
 

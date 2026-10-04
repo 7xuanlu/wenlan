@@ -7,7 +7,7 @@
 // the Activity feed (actions, groups, filters, relative times). A second
 // `activity:` key in the same object literal silently REPLACES the first, so
 // reusing the name would delete the feed's copy with no error at the wiring
-// site — only a wall of t() type errors in ActivityFeed.tsx. Relative times
+// site, with only a wall of t() type errors in ActivityFeed.tsx. Relative times
 // come from the existing `activity.relative.*`; there is one such vocabulary. The three objects must keep identical key sets (parity is enforced
 // by src/i18n/resources.test.ts).
 //

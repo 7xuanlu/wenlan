@@ -14,12 +14,12 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wenlan_types::{
     requests::{
-        AddEntityAliasRequest, ListEntitiesRequest, ListMemoriesRequest, MergeEntityRequest,
-        SearchMemoryRequest, SearchRequest, SetDefaultSpaceRequest, StoreMemoryRequest,
-        UpdateAgentRequest,
+        AddEntityAliasRequest, ExportFormat, ExportPagesRequest, ListEntitiesRequest,
+        ListMemoriesRequest, MergeEntityRequest, SearchMemoryRequest, SearchRequest,
+        SetDefaultSpaceRequest, StoreMemoryRequest, UpdateAgentRequest,
     },
     responses::{
-        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, HealthResponse,
+        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, ExportStats, HealthResponse,
         ListEntitiesResponse, ListMemoriesResponse, MemoryDetailResponse, MergeEntityResponse,
         PendingRevisionItem, RevisionAcceptResponse, RevisionDismissResponse, SearchMemoryResponse,
         SearchResponse, StoreMemoryResponse,
@@ -49,6 +49,12 @@ pub struct SyncStats {
     pub error_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<String>,
+    /// OKF sources only: queued files not yet prepared after this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_files: Option<u64>,
+    /// OKF sources only: files not yet handed to the queue after this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_files: Option<u64>,
 }
 
 /// Local mirror of the daemon's `AmbientSweepReport`/`AmbientJobSweepResult`
@@ -586,12 +592,49 @@ impl WenlanClient {
             .await
             .context("parsing /api/memory/entities/{id}/aliases response")
     }
+
+    /// POST /api/pages/export with `format: "okf"` — write a pure OKF v0.2
+    /// bundle of every exportable page into `dir`. Used by
+    /// `wenlan export okf`. The daemon owns the safety checks (absolute
+    /// path, empty-or-previous-export target); its error text reaches the
+    /// caller through `ensure_daemon_success`.
+    ///
+    /// The daemon version is checked first: a daemon older than
+    /// [`OKF_EXPORT_DAEMON_FLOOR`] ignores `format` and writes an Obsidian
+    /// export into `dir` while reporting success, so nothing is sent to it.
+    pub async fn export_pages_okf(&self, dir: String) -> Result<ExportStats> {
+        let version = self.health().await?.version;
+        if !daemon_supports_okf_export(&version) {
+            anyhow::bail!(
+                "OKF export needs Wenlan daemon {OKF_EXPORT_DAEMON_FLOOR} or newer, but the \
+                 running daemon is {version}. Run `wenlan restart` so it runs the updated \
+                 version (or update the install it starts from), then try again. \
+                 Nothing was exported."
+            );
+        }
+        let url = format!("{}/api/pages/export", self.base_url);
+        let req = ExportPagesRequest {
+            vault_path: Some(dir),
+            format: Some(ExportFormat::Okf),
+        };
+        let resp = self
+            .send(
+                self.http.post(&url).json(&req),
+                &format!("POST {} failed", url),
+            )
+            .await?;
+        let resp = ensure_daemon_success(resp, &url).await?;
+        resp.json()
+            .await
+            .context("parsing /api/pages/export response")
+    }
 }
 
 /// Non-success response -> `anyhow::Error` carrying the daemon's own error
 /// message, not just the status line `error_for_status()` alone gives.
-/// Used only by `list_entities`, `merge_entity`, `add_entity_alias`; every
-/// other client method keeps `error_for_status()` as-is.
+/// Used only by `list_entities`, `merge_entity`, `add_entity_alias` and
+/// `export_pages_okf`; every other client method keeps `error_for_status()`
+/// as-is.
 async fn ensure_daemon_success(resp: reqwest::Response, url: &str) -> Result<reqwest::Response> {
     if resp.status().is_success() {
         return Ok(resp);
@@ -615,6 +658,32 @@ fn daemon_error_message(body: &str) -> String {
         .unwrap_or_else(|_| body.trim().to_string())
 }
 
+/// First release whose daemon honors `format: "okf"` on
+/// `POST /api/pages/export` (#760). The app keeps its own copy in
+/// `app/src/search.rs`.
+const OKF_EXPORT_DAEMON_FLOOR: &str = "0.18.9";
+
+/// Whether a daemon reporting `version` from `/api/health` writes an OKF
+/// bundle. Only a stable `major.minor.patch` counts; a pre-release or an
+/// unreadable version is refused, the same rule as the app's daemon floors.
+fn daemon_supports_okf_export(version: &str) -> bool {
+    fn parse(version: &str) -> Option<(u64, u64, u64)> {
+        let core = version.split('+').next()?;
+        if core.contains('-') {
+            return None;
+        }
+        let mut parts = core.split('.');
+        let parsed = (
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+            parts.next()?.parse().ok()?,
+        );
+        parts.next().is_none().then_some(parsed)
+    }
+    let floor = parse(OKF_EXPORT_DAEMON_FLOOR).expect("the OKF export floor is a valid release");
+    parse(version).is_some_and(|candidate| candidate >= floor)
+}
+
 fn build_list_request(
     limit: Option<usize>,
     memory_type: Option<String>,
@@ -630,7 +699,133 @@ fn build_list_request(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_list_request, daemon_error_message, WenlanClient};
+    use super::{
+        build_list_request, daemon_error_message, daemon_supports_okf_export, WenlanClient,
+    };
+
+    #[test]
+    fn okf_export_floor_is_the_first_release_with_the_format() {
+        assert!(daemon_supports_okf_export("0.18.9"));
+        assert!(daemon_supports_okf_export("0.18.10"));
+        assert!(daemon_supports_okf_export("0.19.0+abc123"));
+        assert!(daemon_supports_okf_export("1.0.0"));
+        assert!(!daemon_supports_okf_export("0.18.8"));
+        assert!(!daemon_supports_okf_export("0.18.9-rc.1"));
+        assert!(!daemon_supports_okf_export("0.18"));
+        assert!(!daemon_supports_okf_export("0.18.9.1"));
+        assert!(!daemon_supports_okf_export(""));
+    }
+
+    /// A fake daemon on an ephemeral port that answers `/api/health` with
+    /// `version` and the export route with fixed stats, one request per
+    /// connection, recording each request line until the test stops it.
+    fn fake_daemon(
+        version: &'static str,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::thread::JoinHandle<Vec<String>>,
+    ) {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+        use std::sync::atomic::Ordering;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral port");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let base = format!("http://{}", listener.local_addr().expect("local addr"));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop_flag = stop.clone();
+        let handle = std::thread::spawn(move || {
+            let mut seen = Vec::new();
+            while !stop_flag.load(Ordering::Relaxed) {
+                let stream = match listener.accept() {
+                    Ok((stream, _)) => stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("accept failed: {e}"),
+                };
+                stream.set_nonblocking(false).expect("blocking stream");
+                let mut reader = BufReader::new(stream);
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).expect("request line");
+                let mut content_length = 0usize;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).expect("header line");
+                    if header == "\r\n" || header.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:")
+                    {
+                        content_length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; content_length];
+                reader.read_exact(&mut body).expect("request body");
+                let request_line = request_line.trim_end().to_string();
+                let json = if request_line.starts_with("GET /api/health ") {
+                    format!(r#"{{"status":"ok","db_initialized":true,"version":"{version}"}}"#)
+                } else {
+                    r#"{"exported":2,"skipped":0,"failed":0}"#.to_string()
+                };
+                seen.push(request_line);
+                let mut stream = reader.into_inner();
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{json}",
+                    json.len()
+                )
+                .expect("write response");
+            }
+            seen
+        });
+        (base, stop, handle)
+    }
+
+    #[tokio::test]
+    async fn okf_export_sends_nothing_to_a_daemon_older_than_the_floor() {
+        let (base, stop, handle) = fake_daemon("0.18.8");
+        let error = client_for(&base)
+            .with_recovery(false)
+            .export_pages_okf("/tmp/okf-bundle".to_string())
+            .await
+            .expect_err("a 0.18.8 daemon would write an Obsidian export");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let seen = handle.join().expect("fake daemon thread");
+
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("needs Wenlan daemon 0.18.9 or newer"),
+            "{text}"
+        );
+        assert!(text.contains("running daemon is 0.18.8"), "{text}");
+        assert!(text.contains("wenlan restart"), "{text}");
+        assert_eq!(seen, vec!["GET /api/health HTTP/1.1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn okf_export_posts_to_a_daemon_at_the_floor() {
+        let (base, stop, handle) = fake_daemon("0.18.9");
+        let stats = client_for(&base)
+            .with_recovery(false)
+            .export_pages_okf("/tmp/okf-bundle".to_string())
+            .await
+            .expect("a 0.18.9 daemon writes the bundle");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let seen = handle.join().expect("fake daemon thread");
+
+        assert_eq!(stats.exported, 2);
+        assert_eq!(
+            seen,
+            vec![
+                "GET /api/health HTTP/1.1".to_string(),
+                "POST /api/pages/export HTTP/1.1".to_string(),
+            ]
+        );
+    }
 
     #[test]
     fn daemon_error_message_reads_error_envelope() {

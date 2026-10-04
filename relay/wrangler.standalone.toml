@@ -1,0 +1,36 @@
+# Provisioned configuration. Integrated security review is required before deploy.
+name = "wenlan-relay"
+account_id = "8ccecf6c1d98fc9b84533e55dec1b2ac"
+main = "src/worker.ts"
+compatibility_date = "2026-09-08"
+compatibility_flags = ["enable_request_signal"]
+workers_dev = true
+
+[[routes]]
+pattern = "relay.wenlan.app"
+custom_domain = true
+
+[vars]
+PUBLIC_ORIGIN = "https://relay.wenlan.app"
+# Public challenge for the Wenlan submission, not an authentication credential.
+DOMAIN_VERIFICATION_TOKEN = "nVNhRt7XTSdA0FYRnoWa5g_SnyCh8FCfICfQd0ALywY"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "ed4a99faf6554605913834b0fdc29028"
+
+[[durable_objects.bindings]]
+name = "AUTHORITY"
+class_name = "RelayAuthority"
+
+[[migrations]]
+tag = "wenlan-authority-v1"
+new_sqlite_classes = ["RelayAuthority"]
+
+[[rules]]
+type = "Data"
+globs = ["**/*.png"]
+fallthrough = false
+
+[observability]
+enabled = false

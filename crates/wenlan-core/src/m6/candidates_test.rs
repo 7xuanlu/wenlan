@@ -612,9 +612,12 @@ async fn a_model_failure_charges_the_attempt_and_defers() {
         .await,
         1
     );
+    // `updated_at` is stamped by the same statement as `next_attempt_at`, so
+    // the difference is the backoff exactly; a second `unixepoch()` read here
+    // would be off by one whenever the wall clock ticks in between.
     assert_eq!(
         db.scalar(
-            "SELECT next_attempt_at - unixepoch() FROM genesis_candidates
+            "SELECT next_attempt_at - updated_at FROM genesis_candidates
               WHERE candidate_id = 'cand-a'",
             ()
         )

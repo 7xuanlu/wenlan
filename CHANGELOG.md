@@ -1,5 +1,112 @@
 # Changelog
 
+## [0.18.16](https://github.com/7xuanlu/wenlan/compare/v0.18.15...v0.18.16) (2026-10-04)
+
+
+### Features
+
+* open relay pairing requests in Wenlan with one click ([#795](https://github.com/7xuanlu/wenlan/issues/795)) ([2b2d88d](https://github.com/7xuanlu/wenlan/commit/2b2d88d40a3f9fe7c27fea74d53eec1ab069a6ea))
+
+
+### Bug Fixes
+
+* **ci:** allow bounded Windows platform cache cleanup ([#797](https://github.com/7xuanlu/wenlan/issues/797)) ([b01b6ba](https://github.com/7xuanlu/wenlan/commit/b01b6ba0b5e766b2a6ca3996f2050955b7a60599))
+* **connect:** send local AI apps to Add a tool instead of the relay ([#787](https://github.com/7xuanlu/wenlan/issues/787)) ([bf9047b](https://github.com/7xuanlu/wenlan/commit/bf9047bf5f3102dc8c8079bc15c01fea9f5e3182))
+
+## [0.18.15](https://github.com/7xuanlu/wenlan/compare/v0.18.14...v0.18.15) (2026-10-03)
+
+
+### Bug Fixes
+
+* **plugin:** install the runtime through the pinned npm package, not a piped script ([#790](https://github.com/7xuanlu/wenlan/issues/790)) ([b12461b](https://github.com/7xuanlu/wenlan/commit/b12461bfb29fbbe4944d73e881aa24f1a6d39bbe))
+
+## [0.18.14](https://github.com/7xuanlu/wenlan/compare/v0.18.13...v0.18.14) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** preserve device authorization when reconnecting transport ([#788](https://github.com/7xuanlu/wenlan/issues/788)) ([908777f](https://github.com/7xuanlu/wenlan/commit/908777ffed76aa04fb5e0a6c7adcbc48ee2ae227))
+
+## [0.18.13](https://github.com/7xuanlu/wenlan/compare/v0.18.12...v0.18.13) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** refresh authorized connections after OAuth approval ([#785](https://github.com/7xuanlu/wenlan/issues/785)) ([073b294](https://github.com/7xuanlu/wenlan/commit/073b2945d4a3feace72e19842935d1a540ad9ff3))
+* **plugin:** clear the directory portal blocker and add a plugin icon ([#783](https://github.com/7xuanlu/wenlan/issues/783)) ([3dd07ed](https://github.com/7xuanlu/wenlan/commit/3dd07ed7a37ca5d97e1903c5216adac12b90bd0c))
+* **plugin:** make the Claude plugin pass directory portal validation ([#781](https://github.com/7xuanlu/wenlan/issues/781)) ([5a7b097](https://github.com/7xuanlu/wenlan/commit/5a7b097ba09b268526445cfaae97ff77e62e5a2e))
+* **release:** validate the Claude runner version pin ([#786](https://github.com/7xuanlu/wenlan/issues/786)) ([1ff2b03](https://github.com/7xuanlu/wenlan/commit/1ff2b03c5febb56dddb56a1ae5e4bbd155b4e0b0))
+
+## [0.18.12](https://github.com/7xuanlu/wenlan/compare/v0.18.11...v0.18.12) (2026-09-23)
+
+
+### Features
+
+* **relay:** integrate authenticated local-first desktop access ([#777](https://github.com/7xuanlu/wenlan/issues/777)) ([92db83c](https://github.com/7xuanlu/wenlan/commit/92db83c053890d0a5aa74e51b1e91278a842d160))
+
+## [0.18.11](https://github.com/7xuanlu/wenlan/compare/v0.18.10...v0.18.11) (2026-09-21)
+
+
+### Features
+
+* **sources:** import OKF bundles as a source type that keeps provenance and links ([#766](https://github.com/7xuanlu/wenlan/issues/766)) ([25c8d01](https://github.com/7xuanlu/wenlan/commit/25c8d017f108728745722b2c37a70b186ea7b3b7))
+
+
+### Bug Fixes
+
+* **export:** fix three OKF conformance defects and stop a reserved-name migration deleting edits ([#768](https://github.com/7xuanlu/wenlan/issues/768)) ([4797161](https://github.com/7xuanlu/wenlan/commit/47971618cf9559aab57cfd5b79a9c9636cbfa64d))
+* **export:** stop three more ways a vault edit could be overwritten, and keep an obstructed sweep on the books ([#770](https://github.com/7xuanlu/wenlan/issues/770)) ([bd8bc6c](https://github.com/7xuanlu/wenlan/commit/bd8bc6c8dda9ffb7cde1b49add0b8f5eaa20793e))
+* **hooks:** stop hooks from acting on changes the caller did not make ([#765](https://github.com/7xuanlu/wenlan/issues/765)) ([f92097f](https://github.com/7xuanlu/wenlan/commit/f92097fb26cc1166fe32a871e4433abbeb637589))
+* **okf:** stop six paths from destroying edits a person made in the vault ([#769](https://github.com/7xuanlu/wenlan/issues/769)) ([9ccb342](https://github.com/7xuanlu/wenlan/commit/9ccb3427f69555721f6f7202837bfd71e2eb38ef))
+
+## [0.18.10](https://github.com/7xuanlu/wenlan/compare/v0.18.9...v0.18.10) (2026-09-17)
+
+
+### Bug Fixes
+
+* **export:** keep a user's index.md and refuse OKF export on an old daemon ([#763](https://github.com/7xuanlu/wenlan/issues/763)) ([84796c1](https://github.com/7xuanlu/wenlan/commit/84796c1b62be7820217b65887b38b0ea91843fd1))
+
+## [0.18.9](https://github.com/7xuanlu/wenlan/compare/v0.18.8...v0.18.9) (2026-09-17)
+
+
+### Features
+
+* **app:** export pages as an OKF bundle from Settings ([#762](https://github.com/7xuanlu/wenlan/issues/762)) ([ed00522](https://github.com/7xuanlu/wenlan/commit/ed00522a0a0df07804a91fdc18729ce5813628b4))
+* **export:** add wenlan export okf for a pure OKF v0.2 bundle ([#760](https://github.com/7xuanlu/wenlan/issues/760)) ([dad9971](https://github.com/7xuanlu/wenlan/commit/dad9971c76e50efc6fde16ccf6f73815e6afe25a))
+* **export:** project pages as an OKF v0.2 bundle ([#759](https://github.com/7xuanlu/wenlan/issues/759)) ([62c038c](https://github.com/7xuanlu/wenlan/commit/62c038cf4b6d84f88f55228666816a8a3aac49ec))
+
+
+### Bug Fixes
+
+* **app:** fail the boot gate closed when the background service is down, even while the window is hidden ([#756](https://github.com/7xuanlu/wenlan/issues/756)) ([413e18a](https://github.com/7xuanlu/wenlan/commit/413e18a2f81d2b9dfe2ba7d6653038bff775b91d))
+* **ingest:** gate quick capture at ten characters like the memory store route ([#754](https://github.com/7xuanlu/wenlan/issues/754)) ([dd73953](https://github.com/7xuanlu/wenlan/commit/dd73953ad484c6ac1a5d73ad69799232a66a7b91))
+* **mcp:** keep stdio open through Antigravity's discover probe and early roots notification ([#761](https://github.com/7xuanlu/wenlan/issues/761)) ([4fbd940](https://github.com/7xuanlu/wenlan/commit/4fbd940f5715c69c654c05f8b38175050bf781b8))
+* **onboard:** say configured, not connected, and write copy without em-dashes ([#755](https://github.com/7xuanlu/wenlan/issues/755)) ([7f1f0c2](https://github.com/7xuanlu/wenlan/commit/7f1f0c2c81c8099b1d788ee5681f81b8305c1ada))
+
+## [0.18.8](https://github.com/7xuanlu/wenlan/compare/v0.18.7...v0.18.8) (2026-09-15)
+
+
+### Features
+
+* **repair:** authenticate cold runtime resumption ([327dd84](https://github.com/7xuanlu/wenlan/commit/327dd84d00a653ab3f80752520bbfb1aae55cf1e))
+* **repair:** persist preparation status and safe cancellation ([8112e6e](https://github.com/7xuanlu/wenlan/commit/8112e6ea6cdd111e84ad7c8ce2e15dd6b35e4959))
+* **repair:** recover and cancel source repair operations in review ([bce48ca](https://github.com/7xuanlu/wenlan/commit/bce48ca931133c8f34c56c5358d424679f4650fb))
+* **repair:** recover preparation status and safely cancel source changes ([ab2c2bd](https://github.com/7xuanlu/wenlan/commit/ab2c2bd28bf6f0c582fec81e53aba21923ae64a3))
+* **review:** add verified source repairs and improve readability ([#739](https://github.com/7xuanlu/wenlan/issues/739)) ([7806219](https://github.com/7xuanlu/wenlan/commit/780621937ff13493bfa636ad35bd2d0a04e13ab1))
+
+
+### Bug Fixes
+
+* **app:** release refused repair resumption attempts ([8f71044](https://github.com/7xuanlu/wenlan/commit/8f710441fe4abcb498b96848ec8093e4dca173ec))
+* **app:** restore normal service after verified cold repair ([cc9de53](https://github.com/7xuanlu/wenlan/commit/cc9de535a230c1d33a22b82c1dd3b601ae806169))
+* **app:** resume normal service after cold source repair ([0f7089c](https://github.com/7xuanlu/wenlan/commit/0f7089c54f00a6f39ec8c3589797c9a63e23e808))
+* **ci:** route deterministic repair tests to platform owners ([7eb47f3](https://github.com/7xuanlu/wenlan/commit/7eb47f34fab376bbae6103fa2adda2f85cd77606))
+* **ingest:** count Chinese, Japanese and Korean text fairly in the length gates ([#751](https://github.com/7xuanlu/wenlan/issues/751)) ([af44707](https://github.com/7xuanlu/wenlan/commit/af4470799ef37c21f1a6b454d3186dfa3eec1202))
+* **onboarding:** make first-use imports, setup and re-distill reliable ([#747](https://github.com/7xuanlu/wenlan/issues/747)) ([3ac4803](https://github.com/7xuanlu/wenlan/commit/3ac4803b6efa5c1b4d3fb4eeea20aa4ecb3d751e))
+* **onboarding:** recover when setup stalls or the background service never starts ([#753](https://github.com/7xuanlu/wenlan/issues/753)) ([e93a03d](https://github.com/7xuanlu/wenlan/commit/e93a03d0fcf2aefbf55d0fa40265a45a0ccdda97))
+* **repair:** persist operation directories and clarify recovery states ([7ec3139](https://github.com/7xuanlu/wenlan/commit/7ec31397df6b115b274952285ff87ade2b7fd290))
+* **routing:** fill source pins at launch and stop promising pages that cannot come ([#752](https://github.com/7xuanlu/wenlan/issues/752)) ([990d0a1](https://github.com/7xuanlu/wenlan/commit/990d0a1b019e46242e2ee1da0a59b254dcbb980b))
+
 ## [0.18.7](https://github.com/7xuanlu/wenlan/compare/v0.18.6...v0.18.7) (2026-09-13)
 
 
