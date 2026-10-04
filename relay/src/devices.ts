@@ -5,7 +5,7 @@ import type { ConnectorRoute } from './proxy.ts';
 import { hashSecret, randomSecret, sameHash, validSecret } from './secrets.ts';
 
 export const ROUTE_TTL_MS = 24 * 60 * 60 * 1000;
-export const CREDENTIAL_TTL_MS = 30 * ROUTE_TTL_MS;
+export const CREDENTIAL_TTL_MS = 90 * ROUTE_TTL_MS;
 export const deviceKey = (id: string) => `device:${id}`;
 export interface DeviceRecord {
   id: string;

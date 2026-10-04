@@ -263,7 +263,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
                 <p className="font-mono text-xs break-all">{grant.clientId}</p>
                 <p className={secondary + " break-words"}>{grant.space}</p>
                 <p className={secondary}>{t(grant.status === "active" ? "remoteAccess.grantActive" : "remoteAccess.grantRevoked")}</p>
-                {/* The relay ends a connection 30 days after approval, even in daily use. */}
+                {/* The relay's latest end for this connection; 30 idle days end it sooner. */}
                 {grant.status === "active" && Number.isFinite(grant.expiresAt) && <p className={secondary}>
                   {t("remoteAccess.grantExpires", { date: new Date(grant.expiresAt).toLocaleDateString(i18n.resolvedLanguage ?? i18n.language) })}
                 </p>}
