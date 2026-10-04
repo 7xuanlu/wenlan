@@ -10,7 +10,7 @@ make_fixture() {
   local root="$TMP_ROOT/$name"
   mkdir -p \
     "$root/scripts" \
-    "$root/plugin/bin" \
+    "$root/plugin/scripts" \
     "$root/plugin-codex/bin" \
     "$root/target/debug" \
     "$root/fake-bin"
@@ -144,7 +144,7 @@ fi
 
 root=$(make_fixture both_plugin_links)
 if run_fixture "$root" >/dev/null 2>&1 \
-  && [ -L "$root/plugin/bin/wenlan-mcp.local" ] \
+  && [ -L "$root/plugin/scripts/wenlan-mcp.local" ] \
   && [ -L "$root/plugin-codex/bin/wenlan-mcp.local" ]; then
   echo "PASS dev sync links both Claude and Codex MCP plugins"
 else

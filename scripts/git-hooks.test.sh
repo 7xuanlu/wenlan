@@ -11,8 +11,73 @@ if grep -Fq 'cargo check --workspace' .githooks/pre-commit; then
   exit 1
 fi
 
-grep -Fq 'scripts/m5-reader-sweep.py --update-inventory' .githooks/pre-commit
-grep -Fq 'git add "$INVENTORY"' .githooks/pre-commit
+grep -Fq 'scripts/m5-reader-sweep.py --check' .githooks/pre-commit
+if grep -Fq '"$PYTHON_BIN" scripts/m5-reader-sweep.py --update-inventory' .githooks/pre-commit; then
+  echo 'pre-commit must not update the M5 reader inventory' >&2
+  exit 1
+fi
+if grep -Fq 'git add "$INVENTORY"' .githooks/pre-commit; then
+  echo 'pre-commit must not stage the M5 reader inventory' >&2
+  exit 1
+fi
+
+# An unstaged source change left by another actor must not expand the hook's
+# scope when the caller only staged an unrelated document. A staged M5 source
+# change still runs --check, without mutating the caller's staged set.
+PRECOMMIT_TMP=$(mktemp -d "${TMPDIR:-/tmp}/wenlan-precommit.XXXXXX")
+trap 'rm -rf -- "$PRECOMMIT_TMP"' EXIT
+mkdir -p "$PRECOMMIT_TMP/.githooks" "$PRECOMMIT_TMP/scripts" "$PRECOMMIT_TMP/crates/wenlan-core/contracts" "$PRECOMMIT_TMP/bin"
+cp .githooks/pre-commit "$PRECOMMIT_TMP/.githooks/pre-commit"
+PRECOMMIT_LOG="$PRECOMMIT_TMP/invocations.log"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$PRECOMMIT_LOG"\nif [ "${2:-}" = --update-inventory ]; then printf generated > crates/wenlan-core/contracts/m5-reader-manifest-inventory.md; fi\n' > "$PRECOMMIT_TMP/bin/python3"
+chmod +x "$PRECOMMIT_TMP/bin/python3"
+git -C "$PRECOMMIT_TMP" init -q
+git -C "$PRECOMMIT_TMP" config user.email hooks@example.test
+git -C "$PRECOMMIT_TMP" config user.name hooks-test
+printf 'before\n' > "$PRECOMMIT_TMP/crates/wenlan-core/changed.txt"
+printf 'baseline inventory\n' > "$PRECOMMIT_TMP/crates/wenlan-core/contracts/m5-reader-manifest-inventory.md"
+git -C "$PRECOMMIT_TMP" add -- crates/wenlan-core/changed.txt crates/wenlan-core/contracts/m5-reader-manifest-inventory.md
+git -C "$PRECOMMIT_TMP" commit -q -m baseline
+printf 'after\n' > "$PRECOMMIT_TMP/crates/wenlan-core/changed.txt"
+printf 'staged\n' > "$PRECOMMIT_TMP/staged.txt"
+git -C "$PRECOMMIT_TMP" add -- staged.txt
+precommit_staged_before=$(git -C "$PRECOMMIT_TMP" diff --cached --name-only)
+if ! (cd "$PRECOMMIT_TMP" && PATH="$PRECOMMIT_TMP/bin:$PATH" PRECOMMIT_LOG="$PRECOMMIT_LOG" bash .githooks/pre-commit >hook.out 2>&1); then
+  echo 'pre-commit should ignore an unstaged M5 source change when only an unrelated document is staged' >&2
+  sed -n '1,80p' "$PRECOMMIT_TMP/hook.out" >&2
+  exit 1
+fi
+precommit_staged_after=$(git -C "$PRECOMMIT_TMP" diff --cached --name-only)
+if [ "$precommit_staged_before" != "$precommit_staged_after" ]; then
+  echo 'pre-commit changed the caller staging area while ignoring an unstaged M5 source change' >&2
+  exit 1
+fi
+if [ -s "$PRECOMMIT_LOG" ]; then
+  echo 'pre-commit ran the M5 inventory check for an unstaged-only source change' >&2
+  exit 1
+fi
+git -C "$PRECOMMIT_TMP" add -- crates/wenlan-core/changed.txt
+precommit_staged_before=$(git -C "$PRECOMMIT_TMP" diff --cached --name-only)
+if ! (cd "$PRECOMMIT_TMP" && PATH="$PRECOMMIT_TMP/bin:$PATH" PRECOMMIT_LOG="$PRECOMMIT_LOG" bash .githooks/pre-commit >hook.out 2>&1); then
+  echo 'pre-commit should check a staged M5 source change' >&2
+  sed -n '1,80p' "$PRECOMMIT_TMP/hook.out" >&2
+  exit 1
+fi
+precommit_staged_after=$(git -C "$PRECOMMIT_TMP" diff --cached --name-only)
+if [ "$precommit_staged_before" != "$precommit_staged_after" ]; then
+  echo 'pre-commit changed the caller staging area while checking a staged M5 source change' >&2
+  exit 1
+fi
+if ! grep -Fxq 'scripts/m5-reader-sweep.py --check' "$PRECOMMIT_LOG"; then
+  echo 'pre-commit did not run --check for a staged M5 source change' >&2
+  exit 1
+fi
+if grep -Fq -- '--update-inventory' "$PRECOMMIT_LOG"; then
+  echo 'pre-commit attempted to update the M5 reader inventory' >&2
+  exit 1
+fi
+echo 'pre-commit staged/unstaged inventory contract: PASS'
+
 grep -Fq 'scripts/m5-reader-sweep.py --check' .githooks/pre-push
 grep -Fq 'lint::serving::tests::review_tests::route_catalog_freezes_exact_global_and_scoped_keys' .githooks/pre-push
 grep -Fq '1 passed' .githooks/pre-push

@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
 static PROJECTION_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -62,6 +62,17 @@ struct PageFileState {
     file: String,
     version: i64,
     last_written: String,
+    /// The index-relevant fields as of the write that produced `file`, so
+    /// `regenerate_index_cap` can build `index.md` from `state.json` instead
+    /// of re-opening and re-parsing every projected file. `None` means a
+    /// legacy entry written before this field existed -- `regenerate_index_cap`
+    /// falls back to a file-head read for those.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    space: Option<String>,
 }
 
 /// What one `reconcile` pass repaired. Logged as a single summary line at
@@ -122,12 +133,50 @@ struct LegacyKnowledgeStateV1 {
     concepts: HashMap<String, PageFileState>,
 }
 
-/// Where a page's markdown goes when the truth gate stops projecting it.
-///
-/// Plain and visible, in the projection root. Not a dotfile: a person looking
-/// for a page that disappeared should be able to find it without being told
-/// where to look.
-const ARCHIVE_DIR: &str = "archive";
+/// Reserved OKF v0.2 root document (spec 2026-09-16-okf-projection.md change
+/// 4). Not a page: no `origin_id`, so `sources::page_watcher` already leaves
+/// it alone, and `lint::pages::traversal::scope_for` excludes it from
+/// `EntryScope::PageMarkdown`.
+const INDEX_FILE: &str = "index.md";
+/// The other filename OKF reserves at every level of the hierarchy (spec 3.1:
+/// a directory's update history). Wenlan does not write one, but the spec says
+/// a concept document may not take the name, so a page titled "Log" gets
+/// `log-page.md` the same way a page titled "Index" gets `index-page.md`.
+const LOG_FILE: &str = "log.md";
+/// Bounded frontmatter read for building `index.md` from projected files —
+/// generous enough for title/description/space/tags, small next to a page body.
+const INDEX_FRONTMATTER_SCAN_BYTES: u64 = 8 * 1024;
+/// Bounded WHOLE-file read for deciding whether `index.md` is ours to replace.
+/// The generated index is one line per page, so this covers a corpus far
+/// larger than any real vault; past it the file is left alone rather than
+/// claimed on the strength of a prefix.
+const INDEX_OWNERSHIP_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Whether a projected filename is the OKF root document. Case-insensitive,
+/// like the default macOS and Windows filesystems.
+pub(crate) fn is_index_file(name: &str) -> bool {
+    name.eq_ignore_ascii_case(INDEX_FILE)
+}
+
+/// Whether a projected filename is one OKF reserves (spec 3.1). Neither may
+/// be a concept document. Case-insensitive, like `is_index_file`.
+pub(crate) fn is_reserved_okf_filename(name: &str) -> bool {
+    is_index_file(name) || name.eq_ignore_ascii_case(LOG_FILE)
+}
+
+/// The filename stem for a page slug. `index.md` and `log.md` are reserved by
+/// OKF and are never a page's file, so a page titled "Index" gets `index-page`
+/// and one titled "Log" gets `log-page`.
+pub(crate) fn page_stem_clear_of_reserved(slug: String) -> String {
+    if is_reserved_okf_filename(&format!("{slug}.md")) {
+        format!("{slug}-page")
+    } else {
+        slug
+    }
+}
+/// Set after the first warning that a user's own `index.md` blocked the
+/// generated one, so a busy projection logs it once rather than per write.
+static USER_INDEX_SKIP_WARNED: AtomicBool = AtomicBool::new(false);
 
 pub struct KnowledgeWriter {
     path: PathBuf,
@@ -172,6 +221,18 @@ impl KnowledgeWriter {
         }
     }
 
+    /// A writer shaped like the reconcile repair path: no stub projection, no
+    /// index regeneration of its own.
+    #[cfg(test)]
+    fn new_for_test_repair(path: PathBuf) -> Self {
+        Self {
+            path,
+            tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
+            reap_orphan_stubs: false,
+            write_provenance: false,
+        }
+    }
+
     #[cfg(test)]
     fn begin_test_write(&self) -> crate::page_projection_tracker::PageProjectionWriteGuard {
         self.tracker.begin_write()
@@ -197,7 +258,7 @@ impl KnowledgeWriter {
         create_projection_root_nofollow(&self.path)?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
             after_open()?;
-            self.write_page_with_lock_held(capabilities, &guard, page)
+            self.write_page_with_lock_held(capabilities, &guard, page, true)
         })
     }
 
@@ -218,10 +279,26 @@ impl KnowledgeWriter {
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
     ) -> Result<String, WenlanError> {
+        self.write_page_with_regenerate_index(guard, page, true)
+    }
+
+    /// [`Self::write_page`], with the `index.md` regeneration made optional.
+    ///
+    /// `reconcile` rewrites potentially many behind pages in one pass and
+    /// regenerates the index once at the end (see `reconcile` below) — asking
+    /// every per-page rewrite to also regenerate it would turn an O(1)
+    /// regeneration into O(pages rewritten) for no benefit, since only the
+    /// final state matters.
+    fn write_page_with_regenerate_index(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+        regenerate_index: bool,
+    ) -> Result<String, WenlanError> {
         self.validate_guard(guard)?;
         create_projection_root_nofollow(&self.path)?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-            self.write_page_with_lock_held(capabilities, guard, page)
+            self.write_page_with_lock_held(capabilities, guard, page, regenerate_index)
         })
     }
 
@@ -230,8 +307,15 @@ impl KnowledgeWriter {
         capabilities: &ProjectionCapabilities,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
+        regenerate_index: bool,
     ) -> Result<String, WenlanError> {
-        self.write_page_with_lock_held_and_hook(capabilities, guard, page, || Ok(()))
+        self.write_page_with_lock_held_and_hook(
+            capabilities,
+            guard,
+            page,
+            || Ok(()),
+            regenerate_index,
+        )
     }
 
     fn write_page_with_lock_held_and_hook<F>(
@@ -240,6 +324,7 @@ impl KnowledgeWriter {
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
         page: &Page,
         after_target_write: F,
+        regenerate_index: bool,
     ) -> Result<String, WenlanError>
     where
         F: FnOnce() -> Result<(), WenlanError>,
@@ -301,15 +386,37 @@ impl KnowledgeWriter {
             }
         }
 
+        // A page leaving a reserved name for its own (see `unique_filename_cap`).
+        let left_reserved_copy = state
+            .pages
+            .get(&page.id)
+            .map(|entry| entry.file.clone())
+            .filter(|old| is_reserved_okf_filename(old) && *old != filename);
         state.pages.insert(
             page.id.clone(),
             PageFileState {
                 file: filename,
                 version: page.version,
                 last_written: page.last_modified.clone(),
+                title: Some(page.title.clone()),
+                description: page.summary.clone(),
+                space: page.space.clone(),
             },
         );
         self.save_state_cap(&capabilities.wenlan, &state)?;
+        let relocated_off_reserved = left_reserved_copy.is_some();
+        if let Some(old) = left_reserved_copy {
+            Self::remove_reserved_name_copy_left_by(&capabilities.root, &old, &page.id);
+        }
+
+        // A relocation forces the index even for a writer that normally skips
+        // it: the entry that just moved is the one link in `index.md` that is
+        // now wrong, and the repair path has no later pass that would fix it.
+        if relocated_off_reserved || (self.write_provenance && regenerate_index) {
+            if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                log::warn!("[knowledge] index.md regeneration failed: {e}");
+            }
+        }
 
         Ok(file_path.to_string_lossy().to_string())
     }
@@ -359,12 +466,25 @@ impl KnowledgeWriter {
             if !self.projection_is_behind(&entry.file, page) {
                 continue;
             }
-            match self.write_page(guard, page) {
+            match self.write_page_with_regenerate_index(guard, page, false) {
                 Ok(_) => stats.rewritten += 1,
                 Err(e) => {
                     log::warn!("[reconcile] repair failed for {}: {e}", page.id);
                     stats.errors += 1;
                 }
+            }
+        }
+        // Regenerate unconditionally, not only when a page above was rewritten:
+        // a fresh knowledge root reconciled for the first time has no index.md
+        // at all yet, even though no page was individually behind.
+        if self.write_provenance {
+            if let Err(e) =
+                KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
+                    let state = self.load_state_cap(&capabilities.wenlan);
+                    self.regenerate_index_cap(capabilities, &state)
+                })
+            {
+                log::warn!("[reconcile] index.md regeneration failed: {e}");
             }
         }
         Ok(stats)
@@ -377,8 +497,21 @@ impl KnowledgeWriter {
         let Ok(raw) = std::fs::read_to_string(self.path.join(filename)) else {
             return true;
         };
-        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&raw);
-        projected_origin_version(&fm) < page.version
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&raw);
+        if projected_origin_version(&fm) < page.version {
+            return true;
+        }
+        // Legacy-shaped file from before the OKF frontmatter existed: no
+        // `type` key at all. Treat it as behind -- and safe to rewrite -- only
+        // when its body matches what we'd render today; a body mismatch means
+        // an offline edit is sitting on top of it, and the watcher must pick
+        // that up first rather than have reconcile clobber it.
+        if fm.fields.contains_key("type") {
+            return false;
+        }
+        let rendered = render_markdown(page);
+        let (_, rendered_body) = crate::sources::obsidian::extract_frontmatter(&rendered);
+        body == rendered_body
     }
 
     /// Remove `write_page` temp files orphaned by a crash between write and
@@ -403,9 +536,24 @@ impl KnowledgeWriter {
         state: &KnowledgeState,
     ) -> Result<String, WenlanError> {
         if let Some(existing) = state.pages.get(page_id) {
-            return Ok(existing.file.clone());
+            // A page projected at a reserved name before it was reserved
+            // moves to a free name on its next write, so the OKF index can
+            // take `index.md` back and no concept document sits at `log.md`.
+            // `write_page` removes the copy it leaves behind
+            // (`remove_reserved_name_copy_left_by`).
+            //
+            // EVERY writer does this, the repair writer included. Leaving a
+            // concept document at a reserved name is the defect; which writer
+            // happens to reach the page next is an accident, and a repair that
+            // rewrites `log.md` in place would keep the violation alive
+            // indefinitely. `write_page` regenerates the index whenever a
+            // relocation happened, so a writer that otherwise skips the index
+            // does not leave it pointing at the old name.
+            if !is_reserved_okf_filename(&existing.file) {
+                return Ok(existing.file.clone());
+            }
         }
-        let base = slugify(title);
+        let base = page_stem_clear_of_reserved(slugify(title));
         let mut candidate = format!("{base}.md");
         let mut n = 2;
         let taken: std::collections::HashSet<&str> = state
@@ -472,6 +620,10 @@ impl KnowledgeWriter {
                 let _ = manifest.save_to(&capabilities.root);
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
+
+                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                    log::warn!("[knowledge] index.md regeneration failed: {e}");
+                }
             }
 
             Ok(())
@@ -903,6 +1055,9 @@ impl KnowledgeWriter {
                 let _ = manifest.save_to(&capabilities.root);
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
+                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                    log::warn!("[knowledge] index.md regeneration failed: {e}");
+                }
             }
             if !stuck.is_empty() {
                 // Loud at the caller too, not only in the per-page log lines:
@@ -952,65 +1107,11 @@ impl KnowledgeWriter {
     /// directory or special file where a page was expected is a conflict rather
     /// than something to move. Already-absent is success -- the invariant cares
     /// that the file is gone from the projection root, not that this pass is the
-    /// one that moved it.
+    /// one that moved it. A file being moved OFF a reserved OKF name does not
+    /// carry that name into `archive/`, which is a level of the hierarchy too;
+    /// [`crate::export::archive::archive_file_from`] owns that rule.
     fn archive_projected_file(root: &Dir, filename: &str) -> Result<(), WenlanError> {
-        match root.symlink_metadata(filename) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(WenlanError::Conflict(
-                    "page_projection_target_invalid".to_string(),
-                ))
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(error) => return Err(WenlanError::Io(error)),
-        }
-        let archive = Self::open_archive_dir(root)?;
-        // `rename` replaces its destination without a word, and the destination
-        // here is an older archived copy of the same page -- the one thing under
-        // this root that the database cannot reproduce. Suffix until free.
-        let stem = filename.strip_suffix(".md").unwrap_or(filename);
-        let mut target = filename.to_string();
-        let mut attempt = 1;
-        while archive.symlink_metadata(&target).is_ok() {
-            attempt += 1;
-            if attempt > 100 {
-                return Err(WenlanError::Conflict(
-                    "page_archive_target_exhausted".to_string(),
-                ));
-            }
-            target = format!("{stem}-{attempt}.md");
-        }
-        root.rename(filename, &archive, &target)?;
-        Ok(())
-    }
-
-    /// The archive directory inside the projection root, created on demand.
-    ///
-    /// A non-directory, or a symlink, sitting on the name is a conflict rather
-    /// than something to write through: the whole point of the move is that the
-    /// bytes end up somewhere known.
-    fn open_archive_dir(root: &Dir) -> Result<Dir, WenlanError> {
-        match root.symlink_metadata(ARCHIVE_DIR) {
-            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
-            Ok(_) => {
-                return Err(WenlanError::Conflict(
-                    "page_archive_target_invalid".to_string(),
-                ))
-            }
-            // `AlreadyExists` here means something created `archive/` between
-            // the probe above and this call -- the user's sync client, or a
-            // second pass. That is the state we wanted, not a failure; letting
-            // it propagate would strand a page whose file is still readable.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                match root.create_dir(ARCHIVE_DIR) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-                    Err(e) => return Err(WenlanError::Io(e)),
-                }
-            }
-            Err(error) => return Err(WenlanError::Io(error)),
-        }
-        Ok(root.open_dir_nofollow(ARCHIVE_DIR)?)
+        crate::export::archive::archive_file_from(root, root, filename)
     }
 
     fn validate_guard(
@@ -1102,6 +1203,342 @@ impl KnowledgeWriter {
         let data = serde_json::to_vec_pretty(state)?;
         write_regular_nofollow(wenlan, "state.json", &data)
     }
+
+    /// Fallback for a legacy `state.json` entry with no `title` field: read
+    /// title/description/space straight from the file's frontmatter, the way
+    /// `regenerate_index_cap` always used to. `None` means the file is
+    /// missing or its frontmatter can't be read this pass -- best-effort, the
+    /// same as the rest of index regeneration.
+    fn read_index_fields_from_file(
+        root: &Dir,
+        filename: &str,
+    ) -> Option<(String, String, Option<String>)> {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = root.open_with(filename, &options).ok()?;
+        let mut head = Vec::new();
+        (&mut file)
+            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+            .read_to_end(&mut head)
+            .ok()?;
+        // Lossy: the scan cap can land mid-character past 8 KiB, and
+        // frontmatter keys/values of interest here sit at the head.
+        let head = String::from_utf8_lossy(&head);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+        let title = fm.get_str("title").unwrap_or(filename).to_string();
+        let description = fm.get_str("description").unwrap_or("").to_string();
+        let space = fm.get_str("space").map(str::to_string);
+        Some((title, description, space))
+    }
+
+    /// After a page moves off a reserved name (`index.md`, `log.md`), clear
+    /// the copy it left there, so the OKF index can take `index.md` back and
+    /// no concept document is left at either. `state` recorded the page at
+    /// that file, so
+    /// a regular file there whose `origin_id` is this page is Wenlan's own
+    /// projection. Anything else is kept: a note the user put there since, a
+    /// symlink, or a file this pass cannot read. Ownership comes from `state`,
+    /// not from the file alone, because a user's note made by copying a page
+    /// file carries that page's `origin_id` too.
+    ///
+    /// The copy is archived rather than unlinked. `origin_id` says Wenlan
+    /// wrote the file; it does not say the bytes are still Wenlan's, because
+    /// an edit made in place in the vault leaves the frontmatter alone. The
+    /// database can rebuild the page at its new name, so nothing is lost by
+    /// moving the old file aside, and [`Self::archive_projected_file`] already
+    /// makes the argument for why that asymmetry decides it. This fires once
+    /// per page, the first time it leaves a reserved name, so `archive/` gains
+    /// one file for a migration that happens to at most the page named "Index"
+    /// and the page named "Log".
+    fn remove_reserved_name_copy_left_by(root: &Dir, file: &str, page_id: &str) {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let Ok(mut handle) = root.open_with(file, &options) else {
+            return;
+        };
+        if !handle.metadata().is_ok_and(|meta| meta.is_file()) {
+            return;
+        }
+        let mut head = Vec::new();
+        if (&mut handle)
+            .take(INDEX_FRONTMATTER_SCAN_BYTES)
+            .read_to_end(&mut head)
+            .is_err()
+        {
+            return;
+        }
+        drop(handle);
+        let head = String::from_utf8_lossy(&head);
+        let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&head);
+        if fm.get_str("origin_id").map(str::trim) != Some(page_id) {
+            return;
+        }
+        if let Err(e) = Self::archive_projected_file(root, file) {
+            log::warn!("[knowledge] could not archive {file} after page {page_id} moved: {e}");
+        }
+    }
+
+    /// Whether the projection may write `index.md`: the name is free, or the
+    /// file there is one this projection could have produced -- frontmatter
+    /// whose only key is `okf_version`, AND a body of nothing but the headings
+    /// and entry lines the renderer emits. Anything else is left alone: a note
+    /// the user made at `index.md` (Obsidian users often keep a home note
+    /// there), a page still projected there, a symlink, a directory, or a file
+    /// this pass cannot read.
+    ///
+    /// The frontmatter test alone was not enough, and this is the same mistake
+    /// the rest of the arc exists to remove: `okf_version` on its own is the
+    /// STANDARD OKF root-index shape, not a Wenlan signature, so a person who
+    /// hand-wrote a conforming root index had it overwritten. Prose typed into
+    /// Wenlan's own generated index was overwritten for the same reason. The
+    /// body is the only evidence available without a recorded digest.
+    ///
+    /// Residual, and deliberate: an edit that still looks machine-generated
+    /// (a reordered or deleted entry line) is still replaced. Closing that
+    /// needs a digest of the last written index in `state.json`, which is a
+    /// schema change and a second state save on every page write.
+    fn index_file_is_replaceable(root: &Dir) -> bool {
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No);
+        let mut file = match root.open_with(INDEX_FILE, &options) {
+            Ok(file) => file,
+            Err(e) => return e.kind() == std::io::ErrorKind::NotFound,
+        };
+        let mut head = Vec::new();
+        // One byte past the limit, so a file too big to read whole is told
+        // apart from one that exactly fills the budget. An index this pass
+        // cannot read whole is an index it cannot claim.
+        let readable = (&mut file)
+            .take(INDEX_OWNERSHIP_SCAN_BYTES + 1)
+            .read_to_end(&mut head)
+            .is_ok()
+            && head.len() as u64 <= INDEX_OWNERSHIP_SCAN_BYTES;
+        drop(file);
+        if !readable {
+            return false;
+        }
+        let head = String::from_utf8_lossy(&head);
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&head);
+        fm.fields.len() == 1 && fm.has("okf_version") && index_body_is_generated(body)
+    }
+
+    /// Regenerate the OKF `index.md` root document from the frontmatter of the
+    /// files currently projected (per `state`), grouped by `space` (`##
+    /// Unfiled` for pages without one), each section's entries sorted by
+    /// title. Read from the projected files rather than a `Page` list because
+    /// `write_page`/`remove_page` only ever have the one page they are
+    /// touching in hand; `reconcile` has the full set but shares this helper
+    /// for one code path.
+    ///
+    /// Best-effort like the stub/manifest projection beside it: a page whose
+    /// frontmatter can't be read this pass is dropped from the index rather
+    /// than failing the write that triggered the regeneration.
+    fn regenerate_index_cap(
+        &self,
+        capabilities: &ProjectionCapabilities,
+        state: &KnowledgeState,
+    ) -> Result<(), WenlanError> {
+        // De-duped and sorted by filename: nothing on disk enforces one state
+        // entry per file (a sync conflict can leave two ids pointing at one
+        // file), and `HashMap` iteration order is not stable.
+        let mut entries: Vec<&PageFileState> = state.pages.values().collect();
+        entries.sort_unstable_by(|a, b| a.file.cmp(&b.file));
+        entries.dedup_by(|a, b| a.file == b.file);
+
+        // Raw `(title, file, description, space)` rows; sanitizing, grouping
+        // and sorting live in `render_index_for_entries` so the OKF bundle
+        // shares them.
+        let mut raw_entries: Vec<(String, String, String, Option<String>)> = Vec::new();
+
+        for state_entry in entries {
+            // `title: Some(_)` means this entry was written by this build and
+            // already carries what the index needs — no file open/parse. A
+            // `None` title is a `state.json` entry from before these fields
+            // existed, so fall back to the file-head read this function used
+            // to always do, for that one file only.
+            let (title, description, space) = match &state_entry.title {
+                Some(title) => (
+                    title.clone(),
+                    state_entry.description.clone().unwrap_or_default(),
+                    state_entry.space.clone(),
+                ),
+                None => {
+                    match Self::read_index_fields_from_file(&capabilities.root, &state_entry.file) {
+                        Some(fields) => fields,
+                        None => continue,
+                    }
+                }
+            };
+            raw_entries.push((title, state_entry.file.clone(), description, space));
+        }
+        // The projection links at the vault root (`/file`); the OKF bundle
+        // reuses this renderer with `/pages/`.
+        let bytes = render_index_for_entries(raw_entries, "/");
+
+        if !Self::index_file_is_replaceable(&capabilities.root) {
+            // Warn once per process: this runs on every page write, and the
+            // user's note staying put is the intended outcome, not a fault.
+            if !USER_INDEX_SKIP_WARNED.swap(true, Ordering::Relaxed) {
+                log::warn!(
+                    "[knowledge] leaving {INDEX_FILE} alone: it is not the index Wenlan \
+                     generates (move or rename it to let Wenlan write the OKF index)"
+                );
+            }
+            return Ok(());
+        }
+
+        let temp_filename = format!(
+            ".index.{}.{}.tmp",
+            std::process::id(),
+            TEMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
+        );
+        write_page_atomically_nofollow(
+            &capabilities.root,
+            INDEX_FILE,
+            &temp_filename,
+            bytes.as_bytes(),
+        )
+    }
+}
+
+/// Collapse `\r`/`\n` in an `index.md` field to a single space and squeeze
+/// runs of whitespace, so a title/description/space that carries a newline
+/// (typed by a user, or from an offline edit) can't split `index.md` into
+/// extra lines or bullets.
+pub(crate) fn sanitize_index_field(s: &str) -> String {
+    s.replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Escape `[` and `]` in text used as markdown link text, so a title
+/// containing a bracket can't break the `[title](...)` link syntax.
+pub(crate) fn escape_index_link_text(s: &str) -> String {
+    s.replace('[', "\\[").replace(']', "\\]")
+}
+
+/// Whether every non-blank line of an `index.md` body is one the index
+/// renderer could have emitted: a `## <space>` heading or a
+/// `* [title](/file)` entry line. Prose, a different heading level, a
+/// checklist, a table, a wikilink -- anything a person would add -- fails, and
+/// the caller then leaves the file alone.
+///
+/// Deliberately a shape test, not a re-render: the index on disk describes the
+/// state BEFORE the write that triggered this pass, so it is expected to
+/// differ from what the pass is about to write. Only its shape is invariant.
+///
+/// The prefixes alone are not enough. `* [` is also how Markdown checklists
+/// start, so `* [ ] buy milk` in somebody's home note passed a `starts_with`
+/// test and their list was replaced by the generated index. An entry line has
+/// to be shaped like one: `* [title](/file.md)`, optionally ` - description`.
+///
+/// Headings-only is rejected too. Every generated index that has a heading has
+/// at least one entry under it, so a file of bare headings is somebody's
+/// outline, not ours.
+fn index_body_is_generated(body: &str) -> bool {
+    let mut entries = 0usize;
+    for line in body.lines().filter(|line| !line.trim().is_empty()) {
+        if line.starts_with("## ") {
+            continue;
+        }
+        if !index_line_is_entry(line) {
+            return false;
+        }
+        entries += 1;
+    }
+    // An index with no pages in it has an empty body and stays ours.
+    entries > 0 || body.trim().is_empty()
+}
+
+/// One rendered entry line: `* [title](/file.md)`, optionally ` - description`.
+/// Anything this cannot parse is treated as not ours, which is the safe
+/// direction: the file is left alone.
+fn index_line_is_entry(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("* [") else {
+        return false;
+    };
+    let Some(link) = rest.find("](") else {
+        return false;
+    };
+    let after = &rest[link + 2..];
+    let Some(close) = after.find(')') else {
+        return false;
+    };
+    let tail = &after[close + 1..];
+    tail.is_empty() || tail.starts_with(" - ")
+}
+
+/// One index line. The ` - ` separator is written only when the page has a
+/// description: a page with an empty summary otherwise rendered as
+/// `* [Title](/page.md) - `, a separator pointing at nothing, in every
+/// projection index and every exported bundle.
+fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
+    let title = escape_index_link_text(title);
+    if description.is_empty() {
+        format!("* [{title}]({link_prefix}{filename})\n")
+    } else {
+        format!("* [{title}]({link_prefix}{filename}) - {description}\n")
+    }
+}
+
+/// Pure OKF `index.md` renderer shared by the projection and the OKF export
+/// bundle. Entries must already be sanitized and title-sorted within their
+/// group; `link_prefix` is `"/"` for the projection (links at the vault
+/// root) and `"/pages/"` for the bundle.
+pub(crate) fn render_index_markdown(
+    by_space: &std::collections::BTreeMap<String, Vec<(String, String, String)>>,
+    unfiled: &[(String, String, String)],
+    link_prefix: &str,
+) -> String {
+    let mut out = String::from("---\nokf_version: \"0.2\"\n---\n\n");
+    for (space, entries) in by_space {
+        out.push_str(&format!("## {space}\n\n"));
+        for (title, filename, description) in entries {
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
+        }
+        out.push('\n');
+    }
+    if !unfiled.is_empty() {
+        out.push_str("## Unfiled\n\n");
+        for (title, filename, description) in unfiled {
+            out.push_str(&index_entry_line(title, link_prefix, filename, description));
+        }
+        out.push('\n');
+    }
+    format!("{}\n", out.trim_end())
+}
+
+/// Sanitize, group by space (`## Unfiled` last) and title-sort raw
+/// `(title, file, description, space)` rows, then render them with
+/// [`render_index_markdown`]. The projection builds its rows from
+/// `state.json`; the OKF bundle builds them from its page list — both flow
+/// through this one grouping so the two indexes cannot drift.
+pub(crate) fn render_index_for_entries(
+    rows: Vec<(String, String, String, Option<String>)>,
+    link_prefix: &str,
+) -> String {
+    let mut by_space: std::collections::BTreeMap<String, Vec<(String, String, String)>> =
+        std::collections::BTreeMap::new();
+    let mut unfiled: Vec<(String, String, String)> = Vec::new();
+    for (title, file, description, space) in rows {
+        let entry = (
+            sanitize_index_field(&title),
+            file,
+            sanitize_index_field(&description),
+        );
+        match space.map(|s| sanitize_index_field(&s)) {
+            Some(space) if !space.is_empty() => {
+                by_space.entry(space).or_default().push(entry);
+            }
+            _ => unfiled.push(entry),
+        }
+    }
+    for entries in by_space.values_mut() {
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    unfiled.sort_by(|a, b| a.0.cmp(&b.0));
+    render_index_markdown(&by_space, &unfiled, link_prefix)
 }
 
 pub struct KnowledgeProjectionWriteRef<'writer> {
@@ -1545,9 +1982,12 @@ impl LockedRepairProjection<'_> {
         page: &Page,
     ) -> Result<String, WenlanError> {
         check_permit(permit, page)?;
-        self.write
-            .writer
-            .write_page_with_lock_held(self.capabilities, &self.write.guard, page)
+        self.write.writer.write_page_with_lock_held(
+            self.capabilities,
+            &self.write.guard,
+            page,
+            true,
+        )
     }
 
     /// The permitted form of [`Self::write_page_with_after_target_write`].
@@ -1571,6 +2011,7 @@ impl LockedRepairProjection<'_> {
             &self.write.guard,
             page,
             after_target_write,
+            true,
         )
     }
 
@@ -4186,17 +4627,39 @@ pub fn render_markdown_for(page: &Page) -> String {
     render_markdown(page)
 }
 
-fn render_markdown(page: &Page) -> String {
-    use crate::export::provenance::{
-        related_frontmatter, render_sources_block, sources_frontmatter, yaml_quoted,
-    };
-    let mut out = String::new();
+/// The `state.json` entry `write_page` records for `page` at `file`, as JSON.
+/// Callers that compare a captured `state.json` against the expected
+/// post-write entry (the rename-repair recovery matcher) go through this so
+/// new `PageFileState` fields stay in sync with the writer.
+pub(crate) fn page_file_state_value(page: &Page, file: &str) -> serde_json::Value {
+    serde_json::to_value(PageFileState {
+        file: file.to_string(),
+        version: page.version,
+        last_written: page.last_modified.clone(),
+        title: Some(page.title.clone()),
+        description: page.summary.clone(),
+        space: page.space.clone(),
+    })
+    .expect("PageFileState serializes")
+}
 
-    // Frontmatter
-    out.push_str("---\n");
+/// Shared OKF page frontmatter (the lines between the `---` delimiters), so
+/// the md projection and the OKF export bundle cannot drift apart.
+///
+/// `include_related` is true for the projection only: the bundle omits
+/// `related:` because its converted body links already carry the edges.
+/// Every other line is identical in both outputs.
+pub(crate) fn page_frontmatter(page: &Page, include_related: bool) -> String {
+    use crate::export::provenance::{related_frontmatter, sources_frontmatter, yaml_quoted};
+    let mut out = String::new();
     out.push_str(&format!("title: {}\n", yaml_quoted(&page.title)));
+    out.push_str("type: page\n");
+    if let Some(ref summary) = page.summary {
+        out.push_str(&format!("description: {}\n", yaml_quoted(summary)));
+    }
     if let Some(ref space) = page.space {
-        out.push_str(&format!("space: {}\n", space));
+        out.push_str(&format!("tags: [{}]\n", yaml_quoted(space)));
+        out.push_str(&format!("space: {}\n", yaml_quoted(space)));
     }
     out.push_str(&format!("origin_id: {}\n", page.id));
     out.push_str(&format!("origin_version: {}\n", page.version));
@@ -4204,10 +4667,44 @@ fn render_markdown(page: &Page) -> String {
     let modified_date: String = page.last_modified.chars().take(10).collect();
     out.push_str(&format!("created: {}\n", created_date));
     out.push_str(&format!("modified: {}\n", modified_date));
+    // `generated.at` is the content's LAST meaningful change, not its birth:
+    // OKF spec 5.2 says consumers read it "to tell a recent edit from a stale
+    // fact". Stamping `created_at` reported a page distilled in April as
+    // April-fresh however many times it had been rewritten since, which is the
+    // one question the field exists to answer.
+    out.push_str(&format!(
+        "generated: {{by: {}, at: {}}}\n",
+        yaml_quoted(&format!("wenlan/{}", crate::version())),
+        yaml_quoted(&page.last_modified)
+    ));
+    let status = if page.stale_reason.is_some() {
+        "draft"
+    } else if page.status != "active" {
+        "deprecated"
+    } else {
+        "stable"
+    };
+    out.push_str(&format!("status: {status}\n"));
+    // `verified:` (review_status == "confirmed") is intentionally omitted: no
+    // confirmation-timestamp column exists on `pages` (verified by grepping
+    // migrations and `Page` for `confirmed_at`/`reviewed_at`), and the spec
+    // forbids fabricating `at`. Add the family back once that column lands.
     // Read-only provenance projection (one-way; the watcher never reads it back).
     out.push_str(&sources_frontmatter(&page.source_memory_ids));
-    let related = related_page_titles(&page.content);
-    out.push_str(&related_frontmatter(&related));
+    if include_related {
+        let related = related_page_titles(&page.content);
+        out.push_str(&related_frontmatter(&related));
+    }
+    out
+}
+
+fn render_markdown(page: &Page) -> String {
+    use crate::export::provenance::render_sources_block;
+    let mut out = String::new();
+
+    // Frontmatter — OKF v0.2 conformant (see specs/2026-09-16-okf-projection.md).
+    out.push_str("---\n");
+    out.push_str(&page_frontmatter(page, true));
     out.push_str("---\n\n");
 
     // Body with wikilinks
@@ -5069,7 +5566,7 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.starts_with("---\n"));
         assert!(content.contains("title: \"Rust Ownership\""));
-        assert!(content.contains("space: rust"));
+        assert!(content.contains("space: \"rust\""));
         assert!(content.contains("origin_id: concept_test123"));
         assert!(content.contains("origin_version: 2"));
         // Wikilinks converted
@@ -5327,6 +5824,72 @@ mod tests {
         );
     }
 
+    /// Review finding 5: the 562 pages projected before the OKF frontmatter
+    /// existed have no `type` key and must gain one on the first reconcile
+    /// after upgrade, without a version bump -- as long as the body on disk
+    /// still matches what we'd render today (no offline edit sitting on it).
+    #[test]
+    fn reconcile_upgrades_legacy_frontmatter_to_okf_when_body_is_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        // Same body a current write would produce, but pre-OKF frontmatter:
+        // no `type` key, same `origin_version` the DB still has.
+        let current = std::fs::read_to_string(&path).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&current);
+        let legacy = format!(
+            "---\ntitle: \"{}\"\norigin_version: {}\n---\n\n{}",
+            page.title, page.version, body
+        );
+        std::fs::write(&path, &legacy).unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(
+            stats.rewritten, 1,
+            "legacy frontmatter with an unchanged body must be upgraded to OKF"
+        );
+        let (fm, _) =
+            crate::sources::obsidian::extract_frontmatter(&std::fs::read_to_string(&path).unwrap());
+        assert_eq!(fm.get_str("type"), Some("page"));
+    }
+
+    /// Review finding 5, the safety half: a legacy file with no `type` key
+    /// but a body that no longer matches `render_markdown` is an offline edit
+    /// sitting on top of pre-OKF frontmatter. Reconcile must leave it alone
+    /// so the watcher gets first crack at it, exactly like the current-format
+    /// offline-edit case above.
+    #[test]
+    fn reconcile_does_not_upgrade_legacy_frontmatter_over_an_offline_edit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let path = writer.write_page_for_test(&page).unwrap();
+
+        let current = std::fs::read_to_string(&path).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&current);
+        let edited_body = body.replace("Rust uses ownership", "Hand-written prose the user typed");
+        let legacy = format!(
+            "---\ntitle: \"{}\"\norigin_version: {}\n---\n\n{}",
+            page.title, page.version, edited_body
+        );
+        std::fs::write(&path, &legacy).unwrap();
+
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+
+        assert_eq!(
+            stats.rewritten, 0,
+            "reconcile must not clobber an offline edit made under legacy frontmatter"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), legacy);
+    }
+
     /// Without a `state.json` entry we cannot tell which file on disk is a
     /// page's projection, and guessing forks a `<slug>-2.md` duplicate against
     /// the real one (the hazard `page_watcher` calls out for vaults synced
@@ -5398,6 +5961,11 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| e.path().extension().is_some_and(|ext| ext == "md"))
+            .filter(|e| {
+                !e.file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(INDEX_FILE)
+            })
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
         assert_eq!(
@@ -5480,8 +6048,9 @@ mod tests {
         let mut page = test_concept();
         page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
         let md = render_markdown(&page);
-        // Read-only frontmatter property.
-        assert!(md.contains("sources: [\"[[mem_1]]\", \"[[mem_2]]\"]"));
+        // Read-only frontmatter property, OKF object-list shape.
+        assert!(md.contains("sources:\n  - {id: \"mem_1\", resource: \"wenlan://memory/mem_1\"}"));
+        assert!(md.contains("  - {id: \"mem_2\", resource: \"wenlan://memory/mem_2\"}"));
         // Delimiter-wrapped Sources block in the body.
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_START));
         assert!(md.contains(crate::export::provenance::SOURCES_BLOCK_END));
@@ -5533,5 +6102,812 @@ mod tests {
         );
         // And the title round-trips intact.
         assert_eq!(fm.get_str("title"), Some("The \"Real\" Architecture"));
+    }
+
+    // ---- OKF v0.2 frontmatter (spec 2026-09-16-okf-projection.md) ----------
+
+    #[test]
+    fn render_markdown_frontmatter_gains_type_page() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("type"), Some("page"));
+    }
+
+    #[test]
+    fn render_markdown_description_reflects_summary_when_present() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("description"), Some("Memory safety without GC"));
+    }
+
+    #[test]
+    fn render_markdown_omits_description_when_no_summary() {
+        let page = Page {
+            summary: None,
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        assert!(!md.contains("description:"));
+    }
+
+    #[test]
+    fn render_markdown_tags_mirror_space_when_present() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.tags(), vec!["rust".to_string()]);
+        // The pre-existing `space:` line is kept alongside the new `tags:`.
+        assert_eq!(fm.get_str("space"), Some("rust"));
+    }
+
+    #[test]
+    fn render_markdown_omits_tags_when_no_space() {
+        let page = Page {
+            space: None,
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        assert!(!md.contains("tags:"));
+    }
+
+    /// `generated.at` answers "how recently did this content change" (OKF 5.2),
+    /// so it carries `last_modified`, never `created_at`. A page distilled once
+    /// and rewritten many times must not read as fresh from the day it was born.
+    #[test]
+    fn render_markdown_generated_stamps_version_and_last_modified() {
+        let mut page = test_concept();
+        page.created_at = "2026-04-01T00:00:00+00:00".to_string();
+        page.last_modified = "2026-09-17T12:00:00+00:00".to_string();
+        let md = render_markdown(&page);
+        assert!(
+            md.contains(&format!(
+                "generated: {{by: \"wenlan/{}\", at: \"{}\"}}",
+                crate::version(),
+                page.last_modified
+            )),
+            "{md}"
+        );
+        assert!(!md.contains("at: \"2026-04-01T00:00:00+00:00\""), "{md}");
+    }
+
+    #[test]
+    fn render_markdown_status_stable_by_default() {
+        let md = render_markdown(&test_concept());
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("stable"));
+    }
+
+    #[test]
+    fn render_markdown_status_draft_when_stale_reason_set() {
+        let page = Page {
+            stale_reason: Some("source_updated".to_string()),
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("draft"));
+    }
+
+    #[test]
+    fn render_markdown_status_deprecated_when_page_not_active() {
+        let page = Page {
+            status: "archived".to_string(),
+            ..test_concept()
+        };
+        let md = render_markdown(&page);
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&md);
+        assert_eq!(fm.get_str("status"), Some("deprecated"));
+    }
+
+    #[test]
+    fn render_markdown_never_emits_verified_without_a_confirmation_timestamp_column() {
+        // `review_status == "confirmed"` (test_concept()'s default) is the ONLY
+        // signal available; the `pages` table has no `confirmed_at`/`reviewed_at`
+        // column (verified by grepping migrations and `Page`), so `verified:`
+        // must never appear rather than fabricate `at`.
+        let page = test_concept();
+        assert_eq!(page.review_status, "confirmed");
+        let md = render_markdown(&page);
+        assert!(!md.contains("verified:"));
+    }
+
+    #[test]
+    fn render_markdown_body_is_unchanged_by_the_new_frontmatter_fields() {
+        // Obsidian graph edges come from the body, not frontmatter: split the
+        // projection at the closing `---` and check the body is exactly the
+        // wikified content plus the delimiter-wrapped Sources block, same as
+        // before this change.
+        let page = test_concept();
+        let md = render_markdown(&page);
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&md);
+        let expected = format!(
+            "{}\n\n{}",
+            convert_links_to_wikilinks(&page.content),
+            crate::export::provenance::render_sources_block(&page.source_memory_ids)
+        );
+        assert_eq!(body, expected);
+    }
+
+    // ---- OKF v0.2 index.md ---------------------------------------------------
+
+    #[test]
+    fn write_page_regenerates_index_with_only_okf_version_frontmatter() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        page_a.space = Some("rust".to_string());
+        let path_a = writer.write_page_for_test(&page_a).unwrap();
+        let filename_a = Path::new(&path_a)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        page_b.space = None;
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let index_path = dir.path().join(INDEX_FILE);
+        assert!(index_path.exists(), "index.md must be projected");
+        let content = std::fs::read_to_string(&index_path).unwrap();
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(
+            fm.fields.len(),
+            1,
+            "index.md's only frontmatter key must be okf_version, got: {:?}",
+            fm.fields
+        );
+        assert_eq!(fm.get_str("okf_version"), Some("0.2"));
+
+        assert!(body.contains("## rust"));
+        assert!(body.contains(&format!("[Alpha](/{filename_a})")));
+        assert!(body.contains("## Unfiled"));
+        assert!(body.contains("[Beta]("));
+    }
+
+    /// Review finding 8: a title is free text -- a newline would split it
+    /// across index.md lines, and an unescaped `]` would close the markdown
+    /// link early. Both must be neutralized in the generated bullet.
+    #[test]
+    fn regenerate_index_sanitizes_a_title_with_a_newline_and_a_bracket() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page = test_concept();
+        page.title = "Weird]\nTitle".to_string();
+        writer.write_page_for_test(&page).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let (_, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(
+            body.lines().filter(|l| l.starts_with("* [")).count(),
+            1,
+            "the title's embedded newline must not add a bullet line; got: {body}"
+        );
+        assert!(
+            body.contains("[Weird\\] Title]("),
+            "the title's `]` must be escaped and its newline collapsed to a space; got: {body}"
+        );
+    }
+
+    /// A page with no summary must not render `* [Title](/file.md) - `: the
+    /// separator would point at nothing, in every projection index on disk.
+    #[test]
+    fn index_line_for_a_page_without_a_summary_has_no_trailing_separator() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut described = test_concept();
+        described.id = "page_described".to_string();
+        described.title = "Described".to_string();
+        described.summary = Some("A real summary".to_string());
+        writer.write_page_for_test(&described).unwrap();
+
+        let mut bare = test_concept();
+        bare.id = "page_bare".to_string();
+        bare.title = "Bare".to_string();
+        bare.summary = None;
+        writer.write_page_for_test(&bare).unwrap();
+
+        // A summary of only whitespace is the same case: `sanitize_index_field`
+        // collapses it to nothing before the line is built.
+        let mut blank = test_concept();
+        blank.id = "page_blank".to_string();
+        blank.title = "Blank".to_string();
+        blank.summary = Some("   \n  ".to_string());
+        writer.write_page_for_test(&blank).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let line = |title: &str| -> String {
+            content
+                .lines()
+                .find(|l| l.starts_with(&format!("* [{title}](")))
+                .unwrap_or_else(|| panic!("no index line for {title}; got: {content}"))
+                .to_string()
+        };
+        assert!(line("Described").ends_with(" - A real summary"));
+        assert!(
+            line("Bare").ends_with(".md)"),
+            "a page with no summary must end at the link; got: {}",
+            line("Bare")
+        );
+        assert!(
+            line("Blank").ends_with(".md)"),
+            "a whitespace-only summary must end at the link; got: {}",
+            line("Blank")
+        );
+        assert!(!content.contains(" - \n"), "{content}");
+    }
+
+    #[test]
+    fn remove_page_regenerates_index_dropping_the_removed_page() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        assert!(std::fs::read_to_string(dir.path().join(INDEX_FILE))
+            .unwrap()
+            .contains(&page.title));
+
+        writer.remove_page_for_test(&page.id).unwrap();
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(!content.contains(&page.title));
+    }
+
+    #[test]
+    fn reconcile_regenerates_index_even_when_no_page_is_rewritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        // Simulate a projection directory reconciled for the first time after
+        // this change ships: every page file is current, but index.md predates
+        // it and is missing.
+        std::fs::remove_file(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(!dir.path().join(INDEX_FILE).exists());
+
+        let stats = writer.reconcile_for_test(&[page]).unwrap();
+        assert_eq!(
+            stats.rewritten, 0,
+            "the page file is current; nothing should be rewritten"
+        );
+        assert!(
+            dir.path().join(INDEX_FILE).exists(),
+            "reconcile must regenerate index.md unconditionally, not only on rewrite"
+        );
+    }
+
+    /// Integrated review F1: a pages folder opened in Obsidian often has a
+    /// home note named `index.md`. Page writes, reconcile and removal must
+    /// leave it byte for byte, including one with its own frontmatter.
+    #[test]
+    fn a_user_index_note_survives_write_reconcile_and_remove() {
+        for note in [
+            "# Home\n\nMy own start page.\n",
+            "---\ntitle: Home\nokf_version: \"0.2\"\n---\n\nMy own start page.\n",
+            "",
+        ] {
+            let dir = tempfile::TempDir::new().unwrap();
+            let index_path = dir.path().join(INDEX_FILE);
+            std::fs::write(&index_path, note).unwrap();
+            let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+            let page = test_concept();
+
+            let page_path = writer.write_page_for_test(&page).unwrap();
+            assert!(
+                Path::new(&page_path).exists(),
+                "the page is still projected"
+            );
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+
+            writer
+                .reconcile_for_test(std::slice::from_ref(&page))
+                .unwrap();
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+
+            writer.remove_page_for_test(&page.id).unwrap();
+            assert_eq!(std::fs::read_to_string(&index_path).unwrap(), note);
+        }
+    }
+
+    /// Prose typed into Wenlan's own generated index survives the next page
+    /// write. This test used to assert the opposite, which is the defect: the
+    /// frontmatter check said "only `okf_version`, so it is ours", and the
+    /// sentence a person typed underneath was overwritten. The index going
+    /// stale is the intended trade -- it is recoverable (move the note aside),
+    /// and the warning says how.
+    #[test]
+    fn a_hand_edit_to_wenlans_own_index_is_not_overwritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let index_path = dir.path().join(INDEX_FILE);
+        let mut edited = std::fs::read_to_string(&index_path).unwrap();
+        edited.push_str("\nWhere I keep my reading queue.\n");
+        std::fs::write(&index_path, &edited).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        writer.write_page_for_test(&page_b).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&index_path).unwrap(),
+            edited,
+            "the index is left exactly as the user left it"
+        );
+    }
+
+    /// An OKF root index somebody hand-wrote is not Wenlan's. `okf_version`
+    /// alone is the STANDARD shape, not a Wenlan signature, so the frontmatter
+    /// check claimed and overwrote an index from another producer.
+    ///
+    /// The body here is prose. An index whose body is genuinely
+    /// indistinguishable from the renderer's output IS still replaced; that is
+    /// the residual recorded at `index_file_is_replaceable`.
+    #[test]
+    fn a_hand_written_okf_index_with_prose_is_left_alone() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\nMy own root index, written by hand.\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Muse: `* [` is also how a Markdown checklist starts, so a to-do list
+    /// under `okf_version`-only frontmatter passed the first version of the
+    /// body-shape test and was replaced.
+    #[test]
+    fn a_checklist_is_not_mistaken_for_index_entries() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n* [ ] buy milk\n* [x] file taxes\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// Every generated index that has a heading has an entry under it, so a
+    /// file of bare headings is somebody's outline.
+    #[test]
+    fn a_headings_only_outline_is_not_mistaken_for_an_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        let theirs = "---\nokf_version: \"0.2\"\n---\n\n## Projects\n\n## Someday\n";
+        std::fs::write(&index_path, theirs).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&index_path).unwrap(), theirs);
+    }
+
+    /// The flip side: an index this projection actually generated is still
+    /// replaceable, so the index keeps updating in the ordinary case.
+    #[test]
+    fn an_untouched_generated_index_is_still_regenerated() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(content.contains("[Alpha]("), "{content}");
+        assert!(content.contains("[Beta]("), "{content}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_index_is_neither_replaced_nor_followed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = outside.path().join("home.md");
+        std::fs::write(&target, "# Elsewhere\n").unwrap();
+        let index_path = dir.path().join(INDEX_FILE);
+        std::os::unix::fs::symlink(&target, &index_path).unwrap();
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+
+        assert!(std::fs::symlink_metadata(&index_path)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "# Elsewhere\n");
+    }
+
+    fn index_frontmatter_keys(dir: &Path) -> Vec<String> {
+        let content = std::fs::read_to_string(dir.join(INDEX_FILE)).unwrap();
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&content);
+        let mut keys: Vec<String> = fm.fields.keys().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    /// PR #763 review: `slugify` lowercases, so a page titled "Index" in an
+    /// empty vault used to be projected at `index.md`, and the OKF index could
+    /// then never be written there.
+    #[test]
+    fn a_page_titled_index_never_takes_the_index_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Index](/index-page.md)"), "{index}");
+    }
+
+    /// OKF reserves `log.md` at every level of the hierarchy for a directory's
+    /// update history (spec 3.1), so a page titled "Log" may not take it, for
+    /// the same reason a page titled "Index" may not take `index.md`.
+    #[test]
+    fn a_page_titled_log_never_takes_the_log_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("log-page.md"), "{page_path}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "log.md is reserved and must stay free"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// A vault projected before `log.md` was reserved holds a page titled
+    /// "Log" there. Its next write moves it to a free name and removes the
+    /// copy left behind, the same migration a page at `index.md` gets.
+    #[test]
+    fn a_page_already_at_log_md_moves_on_its_next_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // Put the projection back where an older build would have left it.
+        std::fs::rename(&moved_path, dir.path().join("log.md")).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(std::fs::read_to_string(&rewritten)
+            .unwrap()
+            .contains(&format!("origin_id: {}", page.id)));
+        assert_eq!(
+            writer.page_filename(&page.id).as_deref(),
+            Some("log-page.md")
+        );
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the copy left at the reserved name must be cleared"
+        );
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Log](/log-page.md)"), "{index}");
+    }
+
+    /// The copy left at a reserved name is archived, not unlinked. Editing a
+    /// page in the vault leaves its frontmatter alone, so `origin_id` cannot
+    /// tell Wenlan's own bytes from bytes the person typed over them, and the
+    /// database can rebuild the page while it cannot rebuild the typing.
+    #[test]
+    fn an_edit_left_at_a_reserved_name_is_archived_not_destroyed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        // An older build left the page at the reserved name, and the person
+        // then added a line to it in place, keeping the frontmatter.
+        let edited = format!(
+            "{}\n\nA line I typed myself.\n",
+            std::fs::read_to_string(&moved_path).unwrap()
+        );
+        std::fs::remove_file(&moved_path).unwrap();
+        std::fs::write(dir.path().join("log.md"), &edited).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        writer.save_state(&state).unwrap();
+
+        page.version += 1;
+        let rewritten = writer.write_page_for_test(&page).unwrap();
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the reserved name must be free again"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive").join("log-page.md")).unwrap(),
+            edited,
+            "the typing must survive in archive/"
+        );
+        assert!(
+            !dir.path().join("archive").join("log.md").exists(),
+            "and must not take the reserved name into archive/, which OKF \
+             reserves at every level too (spec 3.1)"
+        );
+    }
+
+    /// Astra finding 5. The relocation used to be gated on the writer that
+    /// also regenerates the index, so a repair rewrote a legacy page straight
+    /// back onto `log.md` and the conformance defect never cleared. The
+    /// relocation now fires for every writer, and forces the index with it so
+    /// no writer leaves a link pointing at the name it just vacated.
+    #[test]
+    fn the_repair_writer_also_moves_a_page_off_a_reserved_name() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let seed = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Log".to_string();
+        let path = seed.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(
+            dir.path().join("log.md"),
+            format!("---\ntype: page\norigin_id: {}\n---\n\nlegacy\n", page.id),
+        )
+        .unwrap();
+        let mut state = seed.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = "log.md".to_string();
+        seed.save_state(&state).unwrap();
+
+        let repair = KnowledgeWriter::new_for_test_repair(dir.path().to_path_buf());
+        page.version += 1;
+        let rewritten = repair.write_page_for_test(&page).unwrap();
+
+        assert!(rewritten.ends_with("log-page.md"), "{rewritten}");
+        assert!(
+            !dir.path().join("log.md").exists(),
+            "the reserved name must be free again after a repair too"
+        );
+        let index = std::fs::read_to_string(dir.path().join("index.md")).unwrap();
+        assert!(
+            index.contains("/log-page.md") && !index.contains("(/log.md)"),
+            "the relocation forces the index even for a writer that skips it: {index}"
+        );
+    }
+
+    /// A page already titled "Index Page" keeps `index-page.md`; the page
+    /// titled "Index" takes the next free name, never `index.md`.
+    #[test]
+    fn a_page_titled_index_gets_the_next_name_when_index_page_is_taken() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut named = test_concept();
+        named.id = "page_index_page".to_string();
+        named.title = "Index Page".to_string();
+        let named_path = writer.write_page_for_test(&named).unwrap();
+        assert!(named_path.ends_with("index-page.md"), "{named_path}");
+
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-page-2.md"), "{page_path}");
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
+    }
+
+    /// A vault projected before the name was reserved holds a page titled
+    /// "Index" at `index.md`. Its next write moves it to a free name, removes
+    /// the copy left behind, and the OKF index takes the name.
+    #[test]
+    fn a_page_already_at_index_md_moves_on_its_next_write() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+
+        std::fs::rename(&moved_path, dir.path().join(INDEX_FILE)).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = INDEX_FILE.to_string();
+        writer.save_state(&state).unwrap();
+        let projected = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+
+        // Until it is written again, the page's only file stays put: reconcile
+        // finds it current and must not replace it with the index.
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+        assert_eq!(stats.rewritten, 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            projected
+        );
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
+        assert!(std::fs::read_to_string(&page_path)
+            .unwrap()
+            .contains(&format!("origin_id: {}", page.id)));
+        assert_eq!(
+            writer.page_filename(&page.id).as_deref(),
+            Some("index-page.md")
+        );
+        assert_eq!(index_frontmatter_keys(dir.path()), vec!["okf_version"]);
+        let index = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        assert!(index.contains("[Index](/index-page.md)"), "{index}");
+    }
+
+    /// PR #763 closure review: a home note made by copying a page file keeps
+    /// that page's `origin_id`. It is still the user's note, not a copy Wenlan
+    /// left behind, and survives the next page write.
+    #[test]
+    fn a_home_note_copied_from_a_page_file_is_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(dir.path().join(INDEX_FILE)).unwrap();
+        let note = format!(
+            "{}\n\nMy home note.\n",
+            std::fs::read_to_string(&page_path).unwrap()
+        );
+        std::fs::write(dir.path().join(INDEX_FILE), &note).unwrap();
+
+        let mut other = test_concept();
+        other.id = "page_other".to_string();
+        other.title = "Other".to_string();
+        writer.write_page_for_test(&other).unwrap();
+        writer.write_page_for_test(&page).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            note
+        );
+    }
+
+    /// A page recorded at `index.md` moves on its next write, but a note the
+    /// user saved over that file in the meantime is not its copy and stays.
+    #[test]
+    fn a_note_saved_over_a_moving_pages_file_is_kept() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.title = "Index".to_string();
+        let moved_path = writer.write_page_for_test(&page).unwrap();
+        std::fs::remove_file(&moved_path).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().file = INDEX_FILE.to_string();
+        writer.save_state(&state).unwrap();
+        std::fs::write(dir.path().join(INDEX_FILE), "# Home\n").unwrap();
+
+        let page_path = writer.write_page_for_test(&page).unwrap();
+        assert!(page_path.ends_with("index-page.md"), "{page_path}");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap(),
+            "# Home\n"
+        );
+    }
+
+    /// Review finding 4b: each per-page rewrite inside `reconcile` must skip
+    /// its own `index.md` regeneration (`regenerate_index: false`) so only the
+    /// single regeneration at the end of `reconcile` runs -- but the end
+    /// result still has to be correct for every page reconcile rewrote.
+    #[test]
+    fn reconcile_over_three_behind_pages_leaves_a_correct_index() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+
+        let mut page_a = test_concept();
+        page_a.id = "page_a".to_string();
+        page_a.title = "Alpha".to_string();
+        page_a.space = Some("rust".to_string());
+        writer.write_page_for_test(&page_a).unwrap();
+
+        let mut page_b = test_concept();
+        page_b.id = "page_b".to_string();
+        page_b.title = "Beta".to_string();
+        page_b.space = Some("rust".to_string());
+        writer.write_page_for_test(&page_b).unwrap();
+
+        let mut page_c = test_concept();
+        page_c.id = "page_c".to_string();
+        page_c.title = "Gamma".to_string();
+        page_c.space = None;
+        writer.write_page_for_test(&page_c).unwrap();
+
+        // All three DB rows advance past what is on disk, so every one of
+        // them is behind and reconcile rewrites all three.
+        for page in [&mut page_a, &mut page_b, &mut page_c] {
+            page.version += 1;
+        }
+
+        let stats = writer
+            .reconcile_for_test(&[page_a.clone(), page_b.clone(), page_c.clone()])
+            .unwrap();
+        assert_eq!(stats.rewritten, 3);
+
+        let content = std::fs::read_to_string(dir.path().join(INDEX_FILE)).unwrap();
+        let (fm, body) = crate::sources::obsidian::extract_frontmatter(&content);
+        assert_eq!(fm.get_str("okf_version"), Some("0.2"));
+        assert!(body.contains("## rust"));
+        assert!(body.contains("[Alpha]("));
+        assert!(body.contains("[Beta]("));
+        assert!(body.contains("## Unfiled"));
+        assert!(body.contains("[Gamma]("));
+    }
+
+    /// Acceptance 5 fallback (spec 2026-09-16-okf-projection.md): when a
+    /// third-party OKF linter cannot be installed, an in-repo test must assert
+    /// the MUST rules directly -- every non-index `.md` has parseable
+    /// frontmatter with a non-empty `type`, and `index.md` has no other
+    /// frontmatter key. The second half is covered by
+    /// `write_page_regenerates_index_with_only_okf_version_frontmatter`; this
+    /// test covers the first half across every kind of projected file: the
+    /// page itself and its `_sources/` stubs.
+    #[test]
+    fn every_non_index_md_has_parseable_frontmatter_with_a_non_empty_type() {
+        fn collect_md_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_md_files(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    out.push(path);
+                }
+            }
+        }
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        page.source_memory_ids = vec!["mem_1".to_string(), "mem_2".to_string()];
+        writer.write_page_for_test(&page).unwrap();
+
+        let mut md_files = Vec::new();
+        collect_md_files(dir.path(), &mut md_files);
+        let non_index: Vec<_> = md_files
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| !n.eq_ignore_ascii_case(INDEX_FILE))
+                    .unwrap_or(true)
+            })
+            .collect();
+        assert!(
+            non_index.len() >= 3,
+            "expected the page plus two source stubs, got {non_index:?}"
+        );
+        for path in non_index {
+            let content = std::fs::read_to_string(&path).unwrap();
+            let (fm, _body) = crate::sources::obsidian::extract_frontmatter(&content);
+            let ty = fm.get_str("type");
+            assert!(
+                ty.is_some_and(|t| !t.is_empty()),
+                "{path:?} must have a non-empty `type` frontmatter key, got {ty:?}"
+            );
+        }
     }
 }

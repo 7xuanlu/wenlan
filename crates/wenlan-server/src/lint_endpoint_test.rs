@@ -363,6 +363,9 @@ async fn lint_finding_response_stays_complete_and_typed() {
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     };
     let fixture = Fixture::new(vec![source], None).await;
 
@@ -493,6 +496,9 @@ async fn lint_endpoint_uses_configured_process_clock_for_age_buckets() {
         memory_count: 0,
         last_sync_errors: 0,
         last_sync_error_detail: None,
+        space: None,
+        queued_files: 0,
+        waiting_files: 0,
     };
     let fixture = Fixture::new_at(vec![source], None, Some(1_900_000_000)).await;
     fixture

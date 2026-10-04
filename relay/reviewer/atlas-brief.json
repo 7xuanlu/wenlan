@@ -1,0 +1,13 @@
+{
+  "space": "atlas-review",
+  "caller_id": "reviewer-local-setup",
+  "operation_id": "atlas-review-initial-brief",
+  "summary": {
+    "text": "Atlas uses signed requests.",
+    "expected_version": 0
+  },
+  "mutations": [
+    { "kind": "add", "text": "Use signed requests", "state": "active" },
+    { "kind": "add", "text": "Document offline fallback", "state": "backlog" }
+  ]
+}

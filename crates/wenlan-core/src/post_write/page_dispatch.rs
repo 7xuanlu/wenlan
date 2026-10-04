@@ -79,6 +79,8 @@ pub enum PageWrite<'a> {
         file_path: &'a str,
         expected_content_hash: Option<&'a str>,
         expected_page_version: Option<i64>,
+        /// Space for a newly created page; an existing page keeps its Space.
+        space: Option<&'a str>,
         agent: &'a str,
     },
 }
@@ -222,6 +224,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
             file_path,
             expected_content_hash,
             expected_page_version,
+            space,
             agent,
         } => {
             write_document_source_page_impl(
@@ -235,6 +238,7 @@ pub async fn page_write(db: &MemoryDB, write: PageWrite<'_>) -> Result<WriteResu
                 file_path,
                 expected_content_hash,
                 expected_page_version,
+                space,
                 agent,
             )
             .await

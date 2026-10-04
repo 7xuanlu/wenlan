@@ -52,7 +52,7 @@ pub struct AppState {
     pub completed_activities: Vec<Activity>,
     pub app_handle: Option<tauri::AppHandle>,
     /// Remote access tunnel state.
-    pub remote_access: tokio::sync::Mutex<RemoteAccessState>,
+    pub remote_access: std::sync::Arc<tokio::sync::Mutex<RemoteAccessState>>,
 }
 
 impl Default for AppState {
@@ -75,7 +75,9 @@ impl Default for AppState {
             current_activity: None,
             completed_activities: vec![],
             app_handle: None,
-            remote_access: tokio::sync::Mutex::new(RemoteAccessState::default()),
+            remote_access: std::sync::Arc::new(tokio::sync::Mutex::new(
+                RemoteAccessState::default(),
+            )),
         }
     }
 }

@@ -98,21 +98,22 @@ pub fn render_sources_block(source_memory_ids: &[String]) -> String {
     out
 }
 
-/// Render the read-only `sources:` frontmatter line (quoted wikilinks, which
-/// Obsidian requires for list properties). Empty string when no sources.
+/// Render the read-only `sources:` frontmatter block as an OKF v0.2 list of
+/// `{id, resource}` objects. Empty string when no sources.
 /// PROJECTION-OUT ONLY — the watcher never reads this back.
-// ids are `mem_*`-shaped (no YAML-specials), but they still route through
-// `yaml_quoted` for uniform safety — unlike `related_frontmatter`, which takes
-// untrusted free-text titles where escaping is load-bearing.
 pub fn sources_frontmatter(source_memory_ids: &[String]) -> String {
     if source_memory_ids.is_empty() {
         return String::new();
     }
-    let quoted: Vec<String> = source_memory_ids
-        .iter()
-        .map(|id| yaml_quoted(&format!("[[{id}]]")))
-        .collect();
-    format!("sources: [{}]\n", quoted.join(", "))
+    let mut out = String::from("sources:\n");
+    for id in source_memory_ids {
+        out.push_str(&format!(
+            "  - {{id: {}, resource: {}}}\n",
+            yaml_quoted(id),
+            yaml_quoted(&format!("wenlan://memory/{id}"))
+        ));
+    }
+    out
 }
 
 /// Render the read-only `related:` frontmatter line from page→page wikilink
@@ -138,6 +139,11 @@ use std::path::Path;
 /// Subdir under `knowledge_path` for read-only source stubs. The page_watcher
 /// scans only the top-level `.md` files, so this subdir is never synced back.
 pub const SOURCES_STUB_DIR: &str = "_sources";
+
+/// Bounded read for classifying one `_sources/` candidate. A stub is a few
+/// hundred bytes; anything past this is not one, and a file the pass cannot
+/// read whole is one it keeps.
+const STUB_CLASSIFY_SCAN_BYTES: u64 = 1024 * 1024;
 
 /// Maps page_id → the memory ids that page currently cites. Persisted at
 /// `_sources/.manifest.json` so GC knows which stubs are still referenced
@@ -215,48 +221,101 @@ impl StubManifest {
     }
 }
 
-/// Deletes orphan daemon-written stub files (those no longer cited by any page
-/// in `manifest`). Scope is the `origin_stub:` MARKER, not the filename: a
-/// `.md` file under `_sources/` is reaped iff it carries the marker (so it is a
-/// daemon projection) AND its filename is not in the cited set. Files without
-/// the marker — user notes of ANY name, including one named `mem_*.md` — are
-/// never touched. Reaping by marker reaps `import_*` stubs too (whose names
-/// don't start with `mem_`), closing the leak the old name-prefix scope had.
+/// The exact bytes this module writes for one memory's source stub.
+///
+/// One source of truth, because the GC below compares a candidate file against
+/// it to decide whether the file is still Wenlan's to remove.
+fn stub_body(id: &str) -> String {
+    let quoted = yaml_quoted(id);
+    format!(
+        "---\ntype: source\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
+         This is a read-only source projection for memory `{id}`. \
+         Edit the memory in Wenlan, not this file.\n"
+    )
+}
+
+/// The `origin_stub` value in `content`'s leading YAML frontmatter, if it has
+/// one.
+///
+/// A KEY, not a substring. This used to be `content.contains("origin_stub:")`,
+/// which matched the text ANYWHERE in the file, so a note of the user's own
+/// that happened to quote the marker — in a code fence, in a sentence about
+/// how the projection works — read as a daemon stub and was unlinked. The
+/// marker only means "Wenlan wrote this" where [`stub_body`] puts it, which is
+/// the frontmatter block at the top of the file.
+fn frontmatter_origin_stub(content: &str) -> Option<String> {
+    // An editor that normalizes line endings or adds a byte-order mark must
+    // not make a stub Wenlan wrote unrecognizable: a stub that reads as "not
+    // ours" is never reaped and never archived, so it leaks forever.
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let rest = content
+        .strip_prefix("---\n")
+        .or_else(|| content.strip_prefix("---\r\n"))?;
+    let end = rest.find("\n---")?;
+    for line in rest[..end].lines() {
+        // A nested key is indented; ours is at the top level of the block.
+        let Some(raw) = line.strip_prefix("origin_stub:") else {
+            continue;
+        };
+        let raw = raw.trim();
+        return Some(
+            serde_json::from_str::<String>(raw)
+                .unwrap_or_else(|_| raw.trim_matches('"').to_string()),
+        );
+    }
+    None
+}
+
+/// What a GC pass may do with one uncited `.md` file under `_sources/`.
+#[derive(Debug, PartialEq, Eq)]
+enum StubDisposition {
+    /// No `origin_stub` frontmatter key: not Wenlan's file at all. Left alone.
+    NotOurs,
+    /// Byte-identical to what [`stub_body`] writes today AND sitting at the
+    /// filename that stub would have. Regenerable from the database, so
+    /// removing it loses nothing.
+    Pristine,
+    /// Carries the marker but the bytes have changed. Wenlan wrote the file;
+    /// somebody has since typed into it. Archived, never unlinked.
+    Edited,
+}
+
+/// `filename` guards the one case bytes alone cannot: `cp _sources/mem_1.md
+/// _sources/my-copy.md` leaves a file whose bytes are a pristine stub at a
+/// name Wenlan would never write. That copy is the user's, so it is archived
+/// rather than unlinked.
+fn classify_stub(content: &str, filename: &str) -> StubDisposition {
+    match frontmatter_origin_stub(content) {
+        None => StubDisposition::NotOurs,
+        Some(id) if stub_body(&id) == content && stub_filename(&id) == filename => {
+            StubDisposition::Pristine
+        }
+        Some(_) => StubDisposition::Edited,
+    }
+}
+
+/// Clears orphan source stubs: `.md` files under `_sources/` that no page in
+/// `manifest` cites any more.
+///
+/// Scope is the `origin_stub` frontmatter KEY, not the filename and not a
+/// substring of the body. A file is reaped iff it carries that key (so Wenlan
+/// wrote it) AND its filename is not in the cited set. A user note under
+/// `_sources/`, of any name including `mem_*.md`, and whatever its body says,
+/// is never touched. Keying on the marker rather than a name prefix also
+/// reaches `import_*` stubs, closing the leak the old name-prefix scope had.
+///
+/// An orphan Wenlan still recognizes byte for byte is removed; one that has
+/// been edited since is moved to `archive/` instead. The marker proves
+/// authorship, never that the bytes are still Wenlan's.
+///
+/// `knowledge_path` is the projection root, so the archive lands beside the
+/// archived pages rather than inside `_sources/`.
 pub fn gc_orphan_stubs(knowledge_path: &Path, manifest: &StubManifest) -> std::io::Result<()> {
-    let dir = knowledge_path.join(SOURCES_STUB_DIR);
-    if !dir.exists() {
+    if !knowledge_path.join(SOURCES_STUB_DIR).exists() {
         return Ok(());
     }
-    let cited: HashSet<String> = manifest
-        .cited_ids()
-        .iter()
-        .map(|id| stub_filename(id))
-        .collect();
-    for entry in std::fs::read_dir(&dir)?.flatten() {
-        let path = entry.path();
-        let name = match path.file_name().and_then(|n| n.to_str()) {
-            Some(n) => n.to_string(),
-            None => continue,
-        };
-        // Skip non-`.md` files (e.g. the `.manifest.json` projection index).
-        if !name.ends_with(".md") {
-            continue;
-        }
-        // Still cited → keep.
-        if cited.contains(&name) {
-            continue;
-        }
-        // Only reap DAEMON-written stubs (carry the `origin_stub:` marker
-        // written by `project_stubs_for_page`). User notes under `_sources/`
-        // (any name) lack the marker and are spared.
-        let is_daemon_stub = std::fs::read_to_string(&path)
-            .map(|c| c.contains("origin_stub:"))
-            .unwrap_or(false);
-        if is_daemon_stub {
-            let _ = std::fs::remove_file(&path);
-        }
-    }
-    Ok(())
+    let root = Dir::open_ambient_dir(knowledge_path, cap_std::ambient_authority())?;
+    gc_orphan_stubs_in(&root, manifest)
 }
 
 pub(crate) fn gc_orphan_stubs_in(root: &Dir, manifest: &StubManifest) -> std::io::Result<()> {
@@ -274,6 +333,8 @@ pub(crate) fn gc_orphan_stubs_in(root: &Dir, manifest: &StubManifest) -> std::io
         let Some(name_text) = name.to_str() else {
             continue;
         };
+        // Non-`.md` files (the `.manifest.json` projection index) and still
+        // cited stubs are not candidates.
         if !name_text.ends_with(".md") || cited.contains(name_text) {
             continue;
         }
@@ -284,14 +345,27 @@ pub(crate) fn gc_orphan_stubs_in(root: &Dir, manifest: &StubManifest) -> std::io
             Err(_) => continue,
         };
         let mut content = String::new();
-        let daemon_stub = (&mut file)
-            .take(1024 * 1024 + 1)
+        // A file this pass cannot read whole is a file it cannot classify, and
+        // an unclassified file is kept.
+        let readable = (&mut file)
+            .take(STUB_CLASSIFY_SCAN_BYTES + 1)
             .read_to_string(&mut content)
             .is_ok()
-            && content.len() <= 1024 * 1024
-            && content.contains("origin_stub:");
-        if daemon_stub {
-            let _ = dir.remove_file(Path::new(&name));
+            && content.len() as u64 <= STUB_CLASSIFY_SCAN_BYTES;
+        drop(file);
+        if !readable {
+            continue;
+        }
+        match classify_stub(&content, name_text) {
+            StubDisposition::NotOurs => {}
+            StubDisposition::Pristine => {
+                let _ = dir.remove_file(Path::new(&name));
+            }
+            StubDisposition::Edited => {
+                if let Err(e) = crate::export::archive::archive_file_from(root, &dir, name_text) {
+                    log::warn!("[provenance] could not archive edited stub {name_text}: {e}");
+                }
+            }
         }
     }
     Ok(())
@@ -328,28 +402,22 @@ pub fn stub_filename(id: &str) -> String {
 }
 
 /// Project a read-only stub note for each cited memory id under
-/// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call.
+/// `<knowledge_path>/_sources/`. Idempotent: rewrites the stub each call,
+/// except where somebody has typed in it (see [`project_stubs_for_page_in`],
+/// which this delegates to so there is one implementation to keep honest).
 pub fn project_stubs_for_page(
     knowledge_path: &Path,
-    _page_id: &str,
+    page_id: &str,
     source_memory_ids: &[String],
 ) -> std::io::Result<()> {
     if source_memory_ids.is_empty() {
         return Ok(());
     }
-    let dir = knowledge_path.join(SOURCES_STUB_DIR);
-    std::fs::create_dir_all(&dir)?;
-    for id in source_memory_ids {
-        let path = dir.join(stub_filename(id));
-        let quoted = yaml_quoted(id);
-        let body = format!(
-            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
-             This is a read-only source projection for memory `{id}`. \
-             Edit the memory in Wenlan, not this file.\n"
-        );
-        std::fs::write(&path, body)?;
-    }
-    Ok(())
+    // `create_dir_all` first: the old body created a missing projection root on
+    // the way to `_sources/`, and opening a directory does not.
+    std::fs::create_dir_all(knowledge_path)?;
+    let root = Dir::open_ambient_dir(knowledge_path, cap_std::ambient_authority())?;
+    project_stubs_for_page_in(&root, page_id, source_memory_ids)
 }
 
 pub(crate) fn project_stubs_for_page_in(
@@ -363,15 +431,92 @@ pub(crate) fn project_stubs_for_page_in(
     let dir = open_or_create_sources_dir(root, true)?
         .expect("create=true always returns the sources directory");
     for id in source_memory_ids {
-        let quoted = yaml_quoted(id);
-        let body = format!(
-            "---\ntitle: {quoted}\norigin_stub: {quoted}\n---\n\n\
-             This is a read-only source projection for memory `{id}`. \
-             Edit the memory in Wenlan, not this file.\n"
-        );
-        write_regular_nofollow(&dir, &stub_filename(id), body.as_bytes())?;
+        let body = stub_body(id);
+        let name = stub_filename(id);
+        // A stub is a generated, read-only projection of a memory, but the
+        // file sits in somebody's vault and they can type into it. This used
+        // to truncate it on every write of every page that cites the memory,
+        // so an edit survived only until the next refresh. The GC below
+        // protects a stub that has gone ORPHAN; nothing protected one that is
+        // still cited, which is the common case.
+        match stub_target(&dir, &name, body.as_bytes()) {
+            StubTarget::Writable => {}
+            StubTarget::Edited => {
+                if let Err(e) = crate::export::archive::archive_file_from(root, &dir, &name) {
+                    // Same call as the orphan GC makes. If the bytes cannot be
+                    // moved aside they are not overwritten either: skip the
+                    // stub and leave the projection one file behind rather
+                    // than destroy an edit.
+                    log::warn!("[provenance] could not archive edited stub {name}: {e}");
+                    continue;
+                }
+            }
+            StubTarget::Foreign => {
+                log::warn!("[provenance] leaving {name} alone: not a plain file");
+                continue;
+            }
+        }
+        write_regular_nofollow(&dir, &name, body.as_bytes())?;
     }
     Ok(())
+}
+
+/// What the stub projection may do with whatever is already at `name`.
+#[derive(Debug, PartialEq, Eq)]
+enum StubTarget {
+    /// Nothing there, or the bytes are already the ones this pass would write.
+    /// Ours to write.
+    Writable,
+    /// Present, with bytes that are not the ones this pass would write.
+    /// Somebody typed in it: archived before it is replaced.
+    Edited,
+    /// Present, but not something this pass may claim: not a plain file, or a
+    /// plain file it could not read whole. Left exactly as it is.
+    Foreign,
+}
+
+/// Classify the stub file at `name` by comparing it with the bytes this pass
+/// would write. No marker can answer this: a stub's frontmatter is identical
+/// whether or not somebody edited the body, which is the whole lesson of this
+/// arc. The bytes are the only evidence.
+fn stub_target(dir: &Dir, name: &str, planned: &[u8]) -> StubTarget {
+    let metadata = match dir.symlink_metadata(Path::new(name)) {
+        Ok(metadata) => metadata,
+        // Only "nothing there" makes the name ours. Any other stat failure
+        // (a directory this process cannot search, an I/O error) says nothing
+        // about what is at the name, and the write below truncates whatever
+        // is, so it is not attempted.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return StubTarget::Writable,
+        Err(_) => return StubTarget::Foreign,
+    };
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return StubTarget::Foreign;
+    }
+    let mut options = OpenOptions::new();
+    options.read(true).follow(FollowSymlinks::No);
+    let Ok(mut file) = dir.open_with(Path::new(name), &options) else {
+        // Present but unreadable: a file this pass cannot read is a file it
+        // cannot claim, so it is not archived either. Archiving renames, which
+        // needs no read permission, so classifying this as `Edited` would let
+        // the pass take over a name whose bytes it never saw. The orphan GC
+        // keeps such a file; so does this.
+        return StubTarget::Foreign;
+    };
+    let mut content = Vec::new();
+    let readable = (&mut file)
+        .take(STUB_CLASSIFY_SCAN_BYTES + 1)
+        .read_to_end(&mut content)
+        .is_ok()
+        && content.len() as u64 <= STUB_CLASSIFY_SCAN_BYTES;
+    drop(file);
+    if !readable {
+        return StubTarget::Foreign;
+    }
+    if content == planned {
+        StubTarget::Writable
+    } else {
+        StubTarget::Edited
+    }
 }
 
 fn open_or_create_sources_dir(root: &Dir, create: bool) -> std::io::Result<Option<Dir>> {
@@ -505,10 +650,53 @@ mod tests {
     }
 
     #[test]
-    fn sources_frontmatter_quotes_wikilinks() {
+    fn sources_frontmatter_emits_okf_object_list() {
         let ids = ["mem_1".to_string(), "mem_2".to_string()];
         let fm = sources_frontmatter(&ids);
-        assert_eq!(fm, "sources: [\"[[mem_1]]\", \"[[mem_2]]\"]\n");
+        assert_eq!(
+            fm,
+            "sources:\n  - {id: \"mem_1\", resource: \"wenlan://memory/mem_1\"}\n  - {id: \"mem_2\", resource: \"wenlan://memory/mem_2\"}\n"
+        );
+        // Must parse as valid YAML — a flow mapping per list item.
+        let yaml = format!("title: x\n{fm}");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&yaml).expect("OKF sources block must be valid YAML");
+        let sources = parsed
+            .get("sources")
+            .and_then(|v| v.as_sequence())
+            .expect("sources seq");
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[0].get("id").and_then(|v| v.as_str()), Some("mem_1"));
+        assert_eq!(
+            sources[0].get("resource").and_then(|v| v.as_str()),
+            Some("wenlan://memory/mem_1")
+        );
+    }
+
+    /// Review finding 1: an id with YAML-hostile characters (colon, hash,
+    /// space) must not break the flow mapping or leak into `resource` —
+    /// `id` needs the same `yaml_quoted` treatment as `resource`.
+    #[test]
+    fn sources_frontmatter_quotes_odd_character_ids() {
+        let ids = ["mem_a: b #c".to_string()];
+        let fm = sources_frontmatter(&ids);
+        let yaml = format!("title: x\n{fm}");
+        let parsed: serde_yaml::Value =
+            serde_yaml::from_str(&yaml).expect("odd-character id must still parse as YAML");
+        let sources = parsed
+            .get("sources")
+            .and_then(|v| v.as_sequence())
+            .expect("sources seq");
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].get("id").and_then(|v| v.as_str()),
+            Some("mem_a: b #c"),
+            "id must round-trip exactly through YAML"
+        );
+        assert_eq!(
+            sources[0].get("resource").and_then(|v| v.as_str()),
+            Some("wenlan://memory/mem_a: b #c")
+        );
     }
 
     #[test]
@@ -570,6 +758,14 @@ mod tests {
         // Stub identifies the memory and is marked a read-only projection.
         assert!(body.contains("mem_1"));
         assert!(body.contains("read-only"));
+        // OKF v0.2: `type: source` is the first frontmatter key.
+        let (fm, _) = crate::sources::obsidian::extract_frontmatter(&body);
+        assert_eq!(fm.get_str("type"), Some("source"));
+        let fm_start = body.find("---\n").unwrap() + 4;
+        assert!(
+            body[fm_start..].starts_with("type: source\n"),
+            "type: source must be the first frontmatter key, got: {body}"
+        );
     }
 
     #[test]
@@ -644,6 +840,250 @@ mod tests {
         assert!(
             sources.join("mem_decoy.md").exists(),
             "user file named mem_* (no marker) must survive — marker-based, not name-based"
+        );
+    }
+
+    /// Muse: a person's copy of a stub has pristine bytes at a name Wenlan
+    /// would never write. Bytes alone said "regenerable, delete it"; the
+    /// filename says whose file it is.
+    #[test]
+    fn gc_archives_a_users_copy_of_a_stub_instead_of_deleting_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let body = stub_body("mem_1");
+        std::fs::write(sources.join(stub_filename("mem_1")), &body).unwrap();
+        std::fs::write(sources.join("my-copy.md"), &body).unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        assert!(
+            !sources.join(stub_filename("mem_1")).exists(),
+            "the stub at its own name is still reaped"
+        );
+        assert!(
+            !sources.join("my-copy.md").exists(),
+            "the copy is moved, not left in place"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive/my-copy.md")).unwrap(),
+            body,
+            "the user's copy is preserved under archive/"
+        );
+    }
+
+    /// Muse: an editor that normalizes to CRLF or adds a byte-order mark used
+    /// to make a stub read as "not ours", so it was never reaped and leaked.
+    #[test]
+    fn gc_still_recognizes_a_stub_with_crlf_endings_or_a_bom() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::fs::write(
+            sources.join(stub_filename("mem_crlf")),
+            stub_body("mem_crlf").replace('\n', "\r\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            sources.join(stub_filename("mem_bom")),
+            format!("\u{feff}{}", stub_body("mem_bom")),
+        )
+        .unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        // Neither is byte-identical to what stub_body writes, so both are
+        // treated as edited: recognized as ours, and preserved rather than
+        // deleted.
+        assert!(
+            !sources.join(stub_filename("mem_crlf")).exists()
+                && !sources.join(stub_filename("mem_bom")).exists(),
+            "a normalized stub is recognized instead of leaking forever"
+        );
+        assert!(
+            dir.path()
+                .join("archive")
+                .join(stub_filename("mem_crlf"))
+                .exists()
+                && dir
+                    .path()
+                    .join("archive")
+                    .join(stub_filename("mem_bom"))
+                    .exists(),
+            "and bytes Wenlan cannot reproduce exactly are kept"
+        );
+    }
+
+    /// The finding this GC was rewritten for: ownership used to be
+    /// `content.contains("origin_stub:")`, so a note of the user's own that
+    /// merely QUOTED the marker was unlinked on the next projection write.
+    #[test]
+    fn gc_spares_a_user_note_that_mentions_the_marker_in_its_body() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let note = "# How the projection works\n\nEach stub carries \
+                    `origin_stub:` in its frontmatter, which is how GC knows \
+                    the file is Wenlan's.\n";
+        std::fs::write(sources.join("provenance-notes.md"), note).unwrap();
+        // The marker in a fenced block, and one indented under another key:
+        // neither is a top-level frontmatter key of this file.
+        std::fs::write(
+            sources.join("snippet.md"),
+            "---\ntitle: \"notes\"\nmeta:\n  origin_stub: \"mem_x\"\n---\n\n```yaml\norigin_stub: \"mem_x\"\n```\n",
+        )
+        .unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(sources.join("provenance-notes.md")).unwrap(),
+            note,
+            "a user note quoting the marker is not a daemon stub"
+        );
+        assert!(
+            sources.join("snippet.md").exists(),
+            "the marker in a code fence or under a nested key is not ownership"
+        );
+        assert!(
+            !dir.path().join("archive").exists(),
+            "a file that was never Wenlan's is not archived either, just left alone"
+        );
+    }
+
+    /// The marker proves Wenlan WROTE the stub, never that the bytes are still
+    /// Wenlan's: an edit made in place in the vault leaves frontmatter alone.
+    /// So an orphaned stub someone has typed into moves to `archive/` instead
+    /// of being unlinked.
+    #[test]
+    fn gc_archives_an_edited_stub_and_removes_a_pristine_one() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        project_stubs_for_page(
+            dir.path(),
+            "page_a",
+            &["mem_edited".to_string(), "mem_pristine".to_string()],
+        )
+        .unwrap();
+        let edited = format!(
+            "{}\nMy own note about why this memory matters.\n",
+            std::fs::read_to_string(sources.join("mem_edited.md")).unwrap()
+        );
+        std::fs::write(sources.join("mem_edited.md"), &edited).unwrap();
+
+        gc_orphan_stubs(dir.path(), &StubManifest::default()).unwrap();
+
+        assert!(
+            !sources.join("mem_pristine.md").exists(),
+            "an untouched stub is regenerable, so it is removed"
+        );
+        assert!(!sources.join("mem_edited.md").exists(), "edited stub moved");
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive/mem_edited.md")).unwrap(),
+            edited,
+            "the edit is preserved byte for byte in the projection root's archive/"
+        );
+    }
+
+    /// A stub that is STILL CITED and has been typed in is archived before it
+    /// is replaced, the same treatment the orphan GC already gave. The bug
+    /// this covers: the projection truncated it on every write of every page
+    /// citing that memory, so an edit survived only until the next refresh.
+    #[test]
+    fn an_edited_cited_stub_is_archived_before_it_is_rewritten() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        let ids = ["mem_note".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &ids).unwrap();
+        let pristine = std::fs::read_to_string(sources.join("mem_note.md")).unwrap();
+        let edited = format!("{pristine}\nWhy this memory matters to me.\n");
+        std::fs::write(sources.join("mem_note.md"), &edited).unwrap();
+
+        // Any later page citing the same memory re-projects the stub.
+        project_stubs_for_page(dir.path(), "page_b", &ids).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("archive/mem_note.md")).unwrap(),
+            edited,
+            "the edit is preserved byte for byte before the stub is regenerated"
+        );
+        assert_eq!(
+            std::fs::read_to_string(sources.join("mem_note.md")).unwrap(),
+            pristine,
+            "the stub itself is still refreshed to the generated bytes"
+        );
+    }
+
+    /// The archive is for edits, not for traffic: re-projecting an untouched
+    /// stub must not fill `archive/` with copies of bytes nobody changed.
+    #[test]
+    fn an_untouched_cited_stub_is_rewritten_without_archiving() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let ids = ["mem_quiet".to_string()];
+        project_stubs_for_page(dir.path(), "page_a", &ids).unwrap();
+        project_stubs_for_page(dir.path(), "page_b", &ids).unwrap();
+        project_stubs_for_page(dir.path(), "page_c", &ids).unwrap();
+
+        assert!(
+            !dir.path().join("archive").exists(),
+            "no archive entry for a stub nobody edited"
+        );
+    }
+
+    /// Muse: archiving renames, which needs no read permission, so treating an
+    /// unreadable file as "edited" would let the pass take over a name whose
+    /// bytes it never saw. The orphan GC keeps such a file; so does this.
+    #[cfg(unix)]
+    #[test]
+    fn a_cited_stub_this_pass_cannot_read_is_left_alone_not_archived() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::TempDir::new().unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        let theirs = sources.join("mem_locked.md");
+        std::fs::write(&theirs, "a note only this user has\n").unwrap();
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_a", &["mem_locked".to_string()]).unwrap();
+
+        assert!(
+            !dir.path().join("archive/mem_locked.md").exists(),
+            "a file this pass never read must not be claimed by renaming it away"
+        );
+        std::fs::set_permissions(&theirs, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&theirs).unwrap(),
+            "a note only this user has\n",
+            "and its bytes are untouched"
+        );
+    }
+
+    /// A symlink at a stub's name is left exactly as it is: not followed (it
+    /// could point anywhere in the user's vault) and not replaced.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cited_stub_is_neither_followed_nor_replaced() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let outside = tempfile::TempDir::new().unwrap();
+        let target = outside.path().join("elsewhere.md");
+        std::fs::write(&target, "# Not a stub\n").unwrap();
+        let sources = dir.path().join("_sources");
+        std::fs::create_dir_all(&sources).unwrap();
+        std::os::unix::fs::symlink(&target, sources.join("mem_link.md")).unwrap();
+
+        project_stubs_for_page(dir.path(), "page_a", &["mem_link".to_string()]).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&target).unwrap(),
+            "# Not a stub\n",
+            "the symlink was not followed"
+        );
+        assert!(
+            std::fs::symlink_metadata(sources.join("mem_link.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the symlink itself is still there"
         );
     }
 

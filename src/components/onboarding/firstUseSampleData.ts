@@ -55,7 +55,9 @@ export interface SampleCommands {
   /** Recall works on the user's OWN imported data — never on this sample,
    *  which lives only in the walkthrough and no AI can retrieve. */
   recall: string;
-  /** Null when the client cannot write back (the ChatGPT web connector is read-only). */
+  /** Null when the client connector cannot write back (the ChatGPT web
+   *  connector is read-only). The UI shows an explanatory note instead of
+   *  a write command it cannot honor. */
   handoff: string | null;
   brief: string;
 }

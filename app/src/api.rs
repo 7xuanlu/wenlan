@@ -845,6 +845,22 @@ impl WenlanClient {
         self.post_json(&path, &submission).await
     }
 
+    /// Write every page, across all Spaces, as a pure OKF v0.2 bundle into
+    /// `target_dir`. No Space header is sent, which matches
+    /// `wenlan export okf <DIR>` without `--space`. The daemon owns target
+    /// safety: a foreign or unsafe directory and a truth cutover come back as
+    /// 409, a relative path as 422, with the daemon's reason in the body.
+    pub async fn export_pages_okf(
+        &self,
+        target_dir: String,
+    ) -> Result<wenlan_types::ExportStats, String> {
+        let request = wenlan_types::requests::ExportPagesRequest {
+            vault_path: Some(target_dir),
+            format: Some(wenlan_types::requests::ExportFormat::Okf),
+        };
+        self.post_json("/api/pages/export", &request).await
+    }
+
     pub async fn prepare_repair(
         &self,
         request: wenlan_types::repair::PrepareRepairRequest,
@@ -2438,6 +2454,64 @@ mod tests {
         assert_eq!(remote_req.remote_access_enabled, Some(true));
         assert_eq!(remote_req.setup_completed, None);
         assert_eq!(remote_req.skip_apps, None);
+    }
+
+    #[tokio::test]
+    async fn export_pages_okf_posts_the_okf_format_for_every_space() {
+        let (base_url, request) = serve_json_once(r#"{"exported":3,"skipped":1,"failed":0}"#).await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let stats = client
+            .export_pages_okf("/Users/someone/okf-bundle".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!((stats.exported, stats.skipped, stats.failed), (3, 1, 0));
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap_or_default(),
+            "POST /api/pages/export HTTP/1.1"
+        );
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({ "vault_path": "/Users/someone/okf-bundle", "format": "okf" })
+        );
+        // All Spaces: a Space header would narrow the bundle to one Space.
+        assert!(
+            !request.to_ascii_lowercase().contains("x-wenlan-space"),
+            "{request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_pages_okf_keeps_the_daemon_refusal_in_the_error() {
+        let (base_url, request) = serve_response_once(
+            "409 Conflict",
+            r#"{"error":"directory is not empty and is not a Wenlan OKF export"}"#,
+        )
+        .await;
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+
+        let error = client
+            .export_pages_okf("/Users/someone/Documents".to_string())
+            .await
+            .expect_err("the fixture refuses the target");
+
+        assert!(
+            error.contains("HTTP POST /api/pages/export returned 409"),
+            "{error}"
+        );
+        assert!(
+            error.contains(r#"{"error":"directory is not empty and is not a Wenlan OKF export"}"#),
+            "{error}"
+        );
+        request.await.unwrap();
     }
 
     fn request_body(request: &str) -> serde_json::Value {

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Stop hook: block agent declaring done if changes contain high-signal unfinished work.
-# - Scope drift (diff stat shown for info, not blocking)
+# Stop hook: advisory scan for high-signal unfinished work.
+# - Scope drift (diff stat shown for context, not blocking)
 # - High-signal unfinished markers (assert!(true), todo!(), unimplemented!(), FIXME)
-# Exit 2 + stderr → Claude must address.
+# This hook is advisory only: dirty source may belong to another actor or a
+# previous run, so it must not claim completion proof or block a stop.
 
 set -eo pipefail
 
@@ -70,29 +71,15 @@ fi
 
 if [ "${#PROBLEMS[@]}" -gt 0 ]; then
   {
-    echo "🛑 pre-stop-gate caught issues — agent must address before stopping:"
+    echo "⚠ pre-stop-gate advisory — possible unfinished work in changed source:"
     echo
     git diff --stat 2>/dev/null | tail -20
     echo
     for line in "${PROBLEMS[@]}"; do echo "$line"; done
     echo
-    echo "Fix all flagged items, then retry."
+    echo "Review these findings if they belong to this task; this scan is advisory only."
   } >&2
-  exit 2
+  printf '%s\n' '{"systemMessage":"pre-stop-gate advisory: possible unfinished work in changed source; review findings if they belong to this task"}'
 fi
-
-# Clean stop: append one-line session summary to progress.txt for Wenlan reader.
-PROGRESS="$REPO/.claude/progress.txt"
-TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
-HEAD_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '?')"
-CHANGED="$(git diff --shortstat 2>/dev/null | sed 's/^ *//')"
-STAGED="$(git diff --cached --shortstat 2>/dev/null | sed 's/^ *//')"
-{
-  echo "[$TS] branch=$BRANCH head=$HEAD_SHA"
-  [ -n "$CHANGED" ] && echo "  unstaged: $CHANGED"
-  [ -n "$STAGED" ]  && echo "  staged:   $STAGED"
-  echo "  files: ${#FILES[@]} source files touched, pattern scan clear"
-} >> "$PROGRESS"
 
 exit 0

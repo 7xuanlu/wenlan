@@ -42,7 +42,7 @@ interface FamilyRow {
   uniformTrust: string | null;
 }
 
-export default function AgentsSection({ onSetupAgent }: { onSetupAgent?: () => void }) {
+export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupAgent?: () => void; currentSpace?: string }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -240,8 +240,7 @@ export default function AgentsSection({ onSetupAgent }: { onSetupAgent?: () => v
 
       {/* ── Web access ────────────────────────────────────────────── */}
       <section className="mem-fade-up" style={{ animationDelay: "60ms" }}>
-        <SectionHeader label={t("connectMatrix.webRemoteTitle")} />
-        <RemoteAccessPanel />
+        <RemoteAccessPanel currentSpace={currentSpace} />
       </section>
     </>
   );

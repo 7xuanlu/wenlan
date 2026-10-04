@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Page export to an external vault, plus the shared `ExportResult`/`ExportStats` shapes.
 
+pub(crate) mod archive;
 pub mod knowledge;
 pub mod obsidian;
+pub mod okf;
 pub mod provenance;
 
 // ExportStats moved to wenlan-types in Phase 5-D PR2 so the Tauri app can

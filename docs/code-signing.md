@@ -5,7 +5,7 @@ What ships today, and what it takes to make the installers trusted by the OS.
 | Artifact | Today | What the OS shows | Fix |
 | --- | --- | --- | --- |
 | `Wenlan_<ver>_aarch64.dmg`, `Wenlan_aarch64.app.tar.gz` | Developer ID signed and notarized, ticket stapled, from v0.17.4 | None. The first-run gauntlet on v0.17.4 reports `spctl --assess` as `accepted`, `source=Notarized Developer ID` | Done |
-| `Wenlan_<ver>_x64-setup.exe` | unsigned; the READMEs walk the user through the warning | SmartScreen: "Windows protected your PC", unknown publisher | a free SignPath Foundation certificate, section 2; the warning itself fades only as that publisher identity earns reputation |
+| `Wenlan_<ver>_x64-setup.exe` | unsigned; the READMEs disclose this beside the download | SmartScreen may warn about an unknown publisher | Windows signing is not active; see section 2 |
 | `*.sig` next to the app bundles | signed with the Tauri updater key (`TAURI_SIGNING_PRIVATE_KEY`) | nothing; this is what the in-app updater verifies | already done; unrelated to Gatekeeper and SmartScreen |
 | CLI tarballs, `wenlan-windows-x64.zip` | unsigned; `install.sh` strips quarantine and verifies `SHA256SUMS` | none for a terminal install | not needed for launch |
 
@@ -49,7 +49,7 @@ The workflow is already wired, and the secrets are in place: releases from v0.17
    These are the names the Tauri CLI reads (`APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` import the certificate into a temporary keychain on the runner; `APPLE_SIGNING_IDENTITY` overrides `signingIdentity` in `tauri.conf.json`; `APPLE_ID` with `APPLE_PASSWORD` and `APPLE_TEAM_ID` reach only the steps that talk to the notary service, never `pnpm tauri build` — see the outermost-container note below).
 6. **Cut a release** as usual (`docs/RELEASING.md`). In the `app-bundle` job of `release.yml` the steps run in Apple's prescribed order:
    1. *Load Apple signing and notarization secrets* exports the three signing secrets and deliberately withholds the three notarization ones.
-   2. `pnpm tauri build` signs the app and every bundled binary (`wenlan`, `wenlan-server`, `wenlan-mcp`, `cloudflared`) with the hardened runtime and `app/Entitlements.plist`, signs the disk image, and — because it cannot see the notarization secrets — submits nothing.
+   2. `pnpm tauri build` signs the app and the bundled Wenlan binaries (`wenlan`, `wenlan-server`, `wenlan-mcp`) with the hardened runtime and `app/Entitlements.plist`, signs the disk image, and — because it cannot see the notarization secrets — submits nothing. The native reverse relay does not require a `cloudflared` sidecar.
    3. *Notarize and staple the DMG* makes the single submission and staples the ticket to the disk image.
    4. *Staple the app and rebuild the updater archive* staples the same ticket to the `.app` (a lookup, not a second submission), rebuilds `Wenlan_aarch64.app.tar.gz` from the stapled app, and re-signs it with `tauri signer sign`.
    5. *Verify Apple signature and notarization* fails the job unless `codesign --verify --deep --strict` passes and the signing authority is a Developer ID Application certificate, and — when the notarization secrets are set — `spctl --assess --type execute` and `xcrun stapler validate` pass on the `.app`, `stapler validate` plus `spctl --assess --type open` pass on the `.dmg`, and the app mounted from inside the disk image assesses as `source=Notarized Developer ID`.
@@ -67,95 +67,17 @@ The workflow is already wired, and the secrets are in place: releases from v0.17
 - Notarization removes Gatekeeper's block, not every dialog. A quarantined app still shows the one-time "downloaded from the Internet, are you sure you want to open it?" confirmation, which has an Open button. What goes away is the "cannot be opened because Apple cannot check it for malicious software" refusal and the trip to System Settings to approve it. The README one-liner installer strips the quarantine attribute, so that path shows nothing at all.
 - Developer ID signing without notarization still fails Gatekeeper, so set all six secrets together.
 
-## 2. Windows: SignPath Foundation
+## 2. Windows code signing
 
-The provider is chosen: [SignPath Foundation](https://signpath.org/), which signs qualifying open-source projects for free. Nothing is wired yet, because the workflow needs an organization id, a project slug, a signing-policy slug, and an API token that only exist once the Foundation accepts the application. Since June 2023 code-signing private keys must live in hardware, so CI signs through a cloud signer rather than a `.pfx` file in a secret; SignPath is that cloud signer.
+Windows installers are not code-signed. No certificate provider is active for the published Windows installer.
 
-Two consequences of choosing the Foundation tier, both worth knowing before applying. They hold for as long as Wenlan signs through the Foundation; leaving for a paid certificate later is possible, at the cost of restarting publisher reputation under a new identity.
+The [v0.18.16 Windows release job](https://github.com/7xuanlu/wenlan/actions/runs/37169138734/job/111338400326) skipped the prepared signing and signature-verification steps. The [release notes](https://github.com/7xuanlu/wenlan/releases/tag/v0.18.16) disclose the unsigned installer. Prepared workflow steps are not evidence of a signed release.
 
-- **The certificate is issued to SignPath Foundation, not to Wenlan.** Their terms say "The code signing certificate is issued to *SignPath Foundation*. This means that *SignPath Foundation* is the publisher of the OSS project." Windows will name SignPath Foundation as the verified publisher. Do not count on that shared identity to suppress the first warning: SmartScreen weighs the file's hash as well as the certificate, and [Microsoft says](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) "Even when signed, a newly created binary could still show a SmartScreen warning until its hash or publisher certificate accumulates sufficient evidence of positive reputation."
-- **A human probably approves every release.** The Foundation's terms require that "each signing request must be approved by a team member", but their platform documentation lists the approval process as *available* for open-source signing rather than *required*, so the software itself permits an unattended policy. Ask during onboarding which applies. If approval stays on, the Windows job blocks until someone clicks approve and a tag release is no longer unattended.
+The `.sig` distributed with an installer is for the Tauri updater. It is not a Windows Authenticode signature and does not establish a verified Windows publisher.
 
-### Before applying
+If Windows signing is enabled later, verify the final distributed installer with `Get-AuthenticodeSignature`, require a valid signature from the intended publisher, and regenerate updater signatures and checksums after the installer bytes change. Update the four READMEs only after that verification succeeds.
 
-1. **Turn on multi-factor authentication** for the GitHub account. Their terms require it: "All team members must use multi-factor authentication for both SignPath and source code repository access (e.g. GitHub)."
-2. **Publish the code signing policy.** Done: the READMEs carry a `Code signing policy` section naming the Author, Reviewer and Approver roles and the required credit line. The Foundation checks the project's home page for it.
-3. **Apply** at <https://signpath.org/apply>. Expect the repository URL, the license name, the release download URL, and a project description. The application page states no turnaround time, so do not plan a release date around an acceptance date.
-
-   The license answer is "Apache-2.0 and AGPL-3.0-only", not Apache-2.0 alone: `package.json` and `app/Cargo.toml` declare AGPL for the desktop app. Both are OSI-approved and neither part is sold, so the split meets "an OSI-approved Open Source license without commercial dual-licensing"; answering with one license would simply be wrong, and a reviewer who reads the manifests will ask.
-
-### After acceptance
-
-**Ask them one question before building any of this.** SignPath also offers a Windows Key Storage Provider, which would let the build sign the installer in place through Tauri's own `bundle.windows.signCommand` hook. That path skips steps 2, 3 and 4 below outright: nothing is uploaded and re-downloaded, so the updater signature and the checksums are computed once, over the already-signed bytes. The catch is that it produces no GitHub workflow artifact, and origin verification, which the free tier requires, appears to need one. SignPath has not ruled the combination out in writing, so ask; a yes removes most of the work on this page.
-
-Signing is a submission from inside the workflow, not a local `signtool` call: [`signpath/github-action-submit-signing-request`](https://github.com/SignPath/github-action-submit-signing-request) uploads the built installer, waits for the approval, and downloads the signed file. The pieces to add to `app-bundle-windows` in `release.yml`, in order:
-
-1. Upload `*-setup.exe` as a GitHub artifact and submit it, guarded on a `SIGNPATH_CONFIGURED` flag the way the macOS steps are guarded by `APPLE_SIGNING_CONFIGURED`, so a fork without the secret still builds. `SIGNPATH_CONFIGURED` is derived from **all four** required secrets, not from the token alone — a sentinel that measures one fifth of what its name claims is a sentinel a reader will trust for the other four fifths. Raise the action's `wait-for-completion-timeout-in-seconds` past its 600-second default, because it is waiting for a person.
-2. **Set `output-artifact-directory`, and overwrite the built installer with what comes back.** The input is optional and its absence is silent: the action's manifest describes it as "Path where the signed artifact will be saved. If not specified, the task will not download the signed artifact from SignPath". *Stage app bundle assets and checksums* then finds the original unsigned `*-setup.exe` under `target/x86_64-pc-windows-msvc/release/bundle/nsis` exactly as it does today, and a green run publishes the unsigned file. Write the returned file back over that same path — note `skip-decompress` defaults to `false`, so the action extracts the returned archive into the directory — then prove the swap actually happened. Not by timestamp: `skip-decompress` extraction restores the archive entry’s own mtime, so a correctly signed installer can come back older than the file submitted, and a stale leftover can come back newer. Assert instead that exactly one `*-setup.exe` exists on each side, that the returned name matches the built one, and that its SHA-256 **differs** from the submitted file’s — identical bytes mean nothing was signed. `Get-AuthenticodeSignature` in step 5 is what makes the difference *authentic* rather than merely present.
-3. **Re-sign the updater artifact, with the key in scope.** The `.sig` beside the installer is computed over the unsigned bytes, so Authenticode signing invalidates it. Delete it and re-run `pnpm tauri signer sign`, the same repair the macOS path makes after stapling. `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` are `env:` on *Build Windows desktop app bundle* alone, so the new step needs its own copy of both or it cannot sign at all. Regenerating the sidecar `.sig` does not disturb the installer's Authenticode signature, but nothing else may touch those bytes after signing.
-4. Take the SHA-256 checksums from the signed installer, not the unsigned one.
-5. Verify with `Get-AuthenticodeSignature`: status must be `Valid` **and** the publisher must be SignPath Foundation, so a silently skipped download cannot pass as a signed build. Guard it the same way. Two details that are easy to get wrong and impossible to see afterwards:
-   - Compare with **`-cne`, not `-ne`**. PowerShell's `-ne`, `-eq` and `-like` are all case-**insensitive**, so a check written to demand one exact publisher name also accepts `signpath foundation` and every other casing. A certificate is an identity document.
-   - The comparison uses `GetNameInfo(SimpleName)`, which is the common name alone — a different full distinguished name carrying the same common name still passes. Closing that needs the real `Subject`, and nobody here has seen SignPath Foundation's certificate. So the step writes `Subject`, `Issuer` and `Thumbprint` to the run log **unconditionally and before the comparison**: the first signed build's log is the only place those values will ever appear, and the run that most needs them is the one that failed. Pin them afterwards (there is a `TODO` in the step saying so). Do not invent them in advance — a pinned string nobody has verified is a gate that fails the first real build for the wrong reason.
-6. Prove it on a clean machine through the first-run gauntlet's `windows-nsis` leg.
-
-### The switch: `vars.SIGNPATH_ACTIVE`
-
-Presence is not a requirement. `SIGNPATH_CONFIGURED` answers "are the secrets here"; it cannot answer "were they supposed to be", and the difference is the whole hole:
-
-> Every signing step in `app-bundle-windows` is guarded on `SIGNPATH_CONFIGURED`. With no secrets, all five skip, the ORIGINAL unsigned installer is staged, hashed, uploaded — and the job is green. Today that is correct: the application is pending and every fork is in this state. The day the Foundation accepts the application, a repository whose secrets were never installed (or were installed on an environment this job does not use, or resolve as empty) produces **exactly the same green unsigned release**.
-
-So `release.yml` computes a second, independent sentinel:
-
-```yaml
-SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' && secrets.SIGNPATH_PROJECT_SLUG != '' && secrets.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
-SIGNPATH_REQUIRED: ${{ github.repository == '7xuanlu/wenlan' && vars.SIGNPATH_ACTIVE == 'true' }}
-```
-
-`vars.` and not `secrets.`, deliberately: a secret's value cannot be read back by a human or printed in a log, so a switch stored as a secret is a switch nobody can audit. It is compared to the literal `'true'`, so `false`, `0`, `no` and `TRUE` all read as off.
-
-The unguarded *Check SignPath configuration is all-or-nothing, and present when required* step near the top of the job then fails the build when `SIGNPATH_REQUIRED` is true and the four secrets are not all readable, naming each missing one. It runs before the ~40-minute bundle build, so a misconfigured repository is told in seconds. The four combinations:
-
-| `SIGNPATH_REQUIRED` | `SIGNPATH_CONFIGURED` | Result |
-|---|---|---|
-| false | false | green, unsigned installer, stated in the log. Today's upstream state and every fork's. |
-| false | true | green, signed. Signing works before the switch is thrown; the switch only makes it mandatory. |
-| true | true | green, signed. The intended end state. |
-| true | false | **the job fails before building**, naming each missing secret. Never publishes an unsigned installer. |
-
-**Turning signing on is therefore two actions, not one**: install the four secrets, then set the repository variable `SIGNPATH_ACTIVE` to `true` (Settings → Secrets and variables → Actions → Variables). Doing only the first leaves a repository that signs but would silently stop signing if a secret were removed; doing only the second fails the next release loudly, which is the safe half.
-
-`.github/workflows/signpath-status.yml` is what stops the gap between those two actions from lasting. It runs weekly on a schedule as well as on demand, and it reports three states that used to be one:
-
-- **nothing wired** — reported, exits 0. An unwired fork and an unwired upstream are both the expected steady state, and it says explicitly that whether the Foundation has *accepted* the application is UNMEASURED, not "pending".
-- **accepted but not activated** — the API accepts the credentials and `vars.SIGNPATH_ACTIVE` is not `'true'`. **Red**, because this is precisely the state in which a tag release ships a green unsigned installer.
-- **could not measure** — an HTTP 200 whose body does not parse, no HTTP status at all, or an undocumented status. Its own verdict, never folded into success. It previously reported a malformed 200 as "still a working credential", which is a claim about a payload nobody could read.
-
-It also resolves the project and signing-policy slugs rather than asserting them, and does it by **differential probe**: each slug is queried as configured and again with a slug that cannot exist, and only a *difference* between the two answers counts as a measurement. If the API ignores the filter, both answers are identical and the slug is reported UNMEASURED — never validated on the strength of a route that never looked at it.
-
-Two limits to plan around.
-
-**Signing the installer does not cover what it installs.** SignPath has no artifact type for an NSIS container, so it signs the installer as an ordinary PE file and leaves `Wenlan.exe`, the daemon, the CLI, the MCP server and the bundled libraries unsigned on disk. That is enough for the download warning and not enough for Smart App Control, which [Microsoft says](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/smartscreen-reputation) "will block execution of unsigned files unless the file has a positive reputation" and whose "signature checks apply to all executable files, not just those downloaded from the Internet". Treat outer-only signing as a first step, not as finished Windows signing: test the installed binaries on a Windows 11 machine with Smart App Control in enforcement mode before claiming otherwise. Deep-signing them means splitting `pnpm tauri build` into separate compile and bundle phases so the executables can be signed before NSIS packs them, then signing the installer in a second round.
-
-**Bundled upstream binaries stay in the installer.** Exclude cloudflared, the ONNX Runtime and the Vulkan loader from the signing directives, not from the package: the terms allow it — "You may include unsigned binaries of upstream OSS projects, e.g. DLL files, in your signed packages, e.g. MSI installers" — and stripping them would break the app at runtime. SignPath does reserve the right to require fully signed packages later.
-
-### Why not the alternatives
-
-A certificate does not guarantee that a first release avoids a warning. Microsoft withdrew the extended-validation certificate's instant SmartScreen bypass in 2024, so every tier now builds reputation the same way: release after release under one consistent publisher identity. Microsoft's own guidance is that paying the extended-validation premium purely to avoid SmartScreen is "no longer justified". Until reputation accumulates, the READMEs walk Windows users through "More info" and then "Run anyway", which is the same click path an unsigned installer needs.
-
-Prices, country restrictions, and SmartScreen behavior below come from [Microsoft's code signing options for Windows app developers](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options), which lists SignPath Foundation itself as the open-source option — a second reason to try the Foundation before paying anyone. That page does not say who qualifies for it, though: it sends the reader to signpath.org, so the eligibility rules in the Foundation row come from the Foundation's own terms rather than from Microsoft. Read Microsoft's page before buying; these terms drift, and it wins wherever it disagrees with this table.
-
-| Option | Cost and prerequisites | SmartScreen | How it plugs into the build |
-| --- | --- | --- | --- |
-| [Azure Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) (called Trusted Signing until 2026) | about USD 10 per month, plus an Azure subscription and identity validation. An individual developer must live in the United States or Canada. For organizations Microsoft's own two pages disagree: the comparison page says the United States, Canada, the EU and the UK, while the quickstart also lists Australia, New Zealand, Japan, South Korea, Singapore, Switzerland, Norway and Israel. Trust the quickstart, which is the page the service's own prerequisites live on. Identity validation takes 1 to 20 business days, not the few days the price suggests. | warnings at first; reputation builds across releases | `trusted-signing-cli` as `bundle.windows.signCommand` in `app/tauri.windows.conf.json`, with `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` secrets on the `app-bundle-windows` build step |
-| [SignPath Foundation](https://signpath.org/) — **chosen** | free. Requires an OSI-approved license with no commercial dual-licensing, no proprietary component, an actively maintained and already released project, multi-factor authentication on every maintainer account, a published code signing policy, and a build on a trusted build system (GitHub-hosted runners qualify). A maintainer approves every signing request. | same as any ordinary certificate: warnings until reputation accumulates | their GitHub Action submits the built installer and returns it signed |
-| Ordinary certificate (DigiCert, Sectigo, GlobalSign) | roughly USD 150–300 per year; the private key must sit on a hardware module or the vendor's cloud signer | same as Azure Artifact Signing | the vendor's CLI as `signCommand` |
-| Extended-validation certificate | roughly USD 400 per year and up, stricter identity checks | same as an ordinary certificate since 2024 | same as an ordinary certificate |
-| Microsoft Store, MSIX package | free; Microsoft re-signs the package | no warning at all | out of reach today: Tauri bundles NSIS and MSI, not MSIX, and a Store submission of an MSI or EXE installer must still be signed by the publisher |
-
-Azure Artifact Signing is the fallback if the Foundation declines. It costs money rather than an approval click, and an individual developer must be resident in the United States or Canada, so check that first. A paid certificate from a commercial authority works anywhere but needs a hardware module or the vendor's cloud signer, and would be driven by a small wrapper script wired to `bundle.windows.signCommand` in `app/tauri.windows.conf.json` — that overlay file, not `app/tauri.conf.json`, is where the Windows bundle settings live.
-
-Once the first signed installer ships, finish the paperwork the way section 1 does for macOS: update the summary table at the top of this page, and replace the "not signed yet" sentence in `README.md`, `README.es-ES.md`, `README.zh-Hans.md`, and `README.zh-Hant.md`. <!-- drift-ok -->
+Until then, keep the unsigned status visible beside the Windows download. A checksum verifies the downloaded bytes, not a publisher identity.
 
 ## 3. Related integrity checks already in place
 

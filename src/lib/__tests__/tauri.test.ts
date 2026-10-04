@@ -75,6 +75,30 @@ describe("sources, page export, and knowledge wrappers", () => {
     });
   });
 
+  it("exportPagesAsOkf passes targetDir and returns the export counts", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { exportPagesAsOkf } = await import("../tauri");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+      exported: 3,
+      skipped: 1,
+      failed: 0,
+    });
+    const result = await exportPagesAsOkf("/Users/someone/okf-bundle");
+    expect(result).toEqual({ exported: 3, skipped: 1, failed: 0 });
+    expect(invoke).toHaveBeenCalledWith("export_pages_as_okf", {
+      targetDir: "/Users/someone/okf-bundle",
+    });
+  });
+
+  it("isOkfExportDaemonTooOld matches the typed rejection as a string or an Error only", async () => {
+    const { isOkfExportDaemonTooOld, OKF_EXPORT_ERROR_DAEMON_TOO_OLD } = await import("../tauri");
+    expect(isOkfExportDaemonTooOld(OKF_EXPORT_ERROR_DAEMON_TOO_OLD)).toBe(true);
+    expect(isOkfExportDaemonTooOld(new Error(OKF_EXPORT_ERROR_DAEMON_TOO_OLD))).toBe(true);
+    expect(isOkfExportDaemonTooOld("Daemon request failed (409 Conflict)")).toBe(false);
+    expect(isOkfExportDaemonTooOld(new Error("network down"))).toBe(false);
+    expect(isOkfExportDaemonTooOld(undefined)).toBe(false);
+  });
+
   it("testExternalLlm preserves the daemon response envelope", async () => {
     const { invoke } = await import("@tauri-apps/api/core");
     const { testExternalLlm } = await import("../tauri");

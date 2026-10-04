@@ -682,11 +682,8 @@ async fn rename_page_projection_matches_post(
     let (Some(before_page), Some(current_page)) = (before_page, current_page) else {
         return Ok(false);
     };
-    let expected_current_page = serde_json::json!({
-        "file": projection_target_path,
-        "version": after_page.version,
-        "last_written": after_page.last_modified,
-    });
+    let expected_current_page =
+        crate::export::knowledge::page_file_state_value(&after_page, projection_target_path);
     Ok(before_state == current_state
         && before_page.get("file")
             == Some(&serde_json::Value::String(projection_target_path.clone()))

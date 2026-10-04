@@ -38,9 +38,9 @@ fn json_string<'a>(value: &'a Value, key: &str) -> &'a str {
 fn plugin_distribution_contains_required_files() {
     for path in [
         "plugin/.claude-plugin/plugin.json",
-        "plugin/.claude-plugin/README.md",
+        "plugin/README.md",
         "plugin/.mcp.json",
-        "plugin/bin/wenlan-mcp-runner.sh",
+        "plugin/scripts/wenlan-mcp-runner.sh",
         "plugin/hooks/hooks.json",
         "plugin/hooks/check-daemon.sh",
         "plugin/skills/brief/SKILL.md",
@@ -58,7 +58,24 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     let plugin = read_json("plugin/.claude-plugin/plugin.json");
     assert_eq!(json_string(&plugin, "name"), "wenlan");
     assert_eq!(json_string(&plugin, "license"), "Apache-2.0");
-    assert_eq!(json_string(&plugin, "category"), "productivity");
+    assert_eq!(json_string(&plugin, "displayName"), "Wenlan");
+    // `category` lives in marketplace.json; in plugin.json the Claude CLI
+    // validator warns, and the directory portal needs a clean validate.
+    assert!(
+        plugin.get("category").is_none(),
+        "plugin.json must not carry `category`"
+    );
+    // The Claude directory refuses to install a plugin whose folder has a
+    // top-level `bin/` directory. In `.claude-plugin/` it accepts plugin.json
+    // and the listing icon it asks for (`icon.svg`, square, >= 128px); a
+    // README or anything else there fails validation.
+    assert!(!repo_root().join("plugin").join("bin").exists());
+    let mut manifest_dir_entries = fs::read_dir(repo_root().join("plugin/.claude-plugin"))
+        .expect("read plugin/.claude-plugin")
+        .map(|entry| entry.expect("dir entry").file_name())
+        .collect::<Vec<_>>();
+    manifest_dir_entries.sort();
+    assert_eq!(manifest_dir_entries, ["icon.svg", "plugin.json"]);
 
     let keywords = plugin["keywords"].as_array().expect("keywords array");
     for keyword in ["claude-code", "memory", "mcp", "local-first"] {
@@ -72,8 +89,26 @@ fn plugin_manifest_and_mcp_launcher_stay_in_sync() {
     let server = &mcp["mcpServers"]["wenlan"];
     assert_eq!(
         json_string(server, "command"),
-        "${CLAUDE_PLUGIN_ROOT}/bin/wenlan-mcp-runner.sh"
+        "${CLAUDE_PLUGIN_ROOT}/scripts/wenlan-mcp-runner.sh"
     );
+
+    // The directory rejects `npx` launchers with a range or `@latest`, so the
+    // runner carries one literal exact pin equal to the plugin version.
+    let runner = fs::read_to_string(repo_root().join("plugin/scripts/wenlan-mcp-runner.sh"))
+        .expect("read Claude MCP runner");
+    let pins = runner
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .filter_map(|line| line.split("npx -y wenlan-mcp@").nth(1))
+        .map(|rest| rest.split_whitespace().next().unwrap_or(""))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pins,
+        [json_string(&plugin, "version")],
+        "runner must pin exactly plugin.json's version"
+    );
+    assert!(!runner.contains("wenlan-mcp@latest"));
+    assert!(!runner.contains("wenlan-mcp@^"));
 }
 
 #[test]

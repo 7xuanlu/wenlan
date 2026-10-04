@@ -60,34 +60,6 @@ CLI_SRC="$SOURCE_DIR/wenlan$EXE_SUFFIX"
 SERVER_DEST="$BIN_DIR/wenlan-server-$TRIPLE$EXE_SUFFIX"
 MCP_DEST="$BIN_DIR/wenlan-mcp-$TRIPLE$EXE_SUFFIX"
 CLI_DEST="$BIN_DIR/wenlan-$TRIPLE$EXE_SUFFIX"
-CLOUDFLARED_DEST="$BIN_DIR/cloudflared-$TRIPLE$EXE_SUFFIX"
-CLOUDFLARED_SRC=""
-
-if [[ -n "${CLOUDFLARED_BIN:-}" ]]; then
-  if [[ ! -x "$CLOUDFLARED_BIN" ]]; then
-    echo "error: CLOUDFLARED_BIN is set but not executable: $CLOUDFLARED_BIN" >&2
-    exit 1
-  fi
-  CLOUDFLARED_SRC="$CLOUDFLARED_BIN"
-elif [[ "$TRIPLE" == "$HOST_TRIPLE" ]]; then
-  if command -v cloudflared >/dev/null 2>&1; then
-    CLOUDFLARED_SRC="$(command -v cloudflared)"
-  fi
-elif [[ "$PRINT_PATHS" != "true" ]]; then
-  echo "error: CLOUDFLARED_BIN is required for cross-target sidecar prep (TARGET_TRIPLE=$TRIPLE)" >&2
-  echo "       Refusing to copy host cloudflared for non-host target $HOST_TRIPLE -> $TRIPLE." >&2
-  exit 1
-fi
-
-# Checked before the backend build, not after the install step. cloudflared is a
-# hard Tauri externalBin requirement with no fallback, and finding it missing at
-# install time means having waited out a full backend build first.
-if [[ -z "$CLOUDFLARED_SRC" && "$PRINT_PATHS" != "true" ]]; then
-  echo "error: cloudflared not found in PATH; install cloudflared or set CLOUDFLARED_BIN" >&2
-  echo "       Required by Tauri externalBin: binaries/cloudflared-$TRIPLE" >&2
-  echo "       Install: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" >&2
-  exit 1
-fi
 
 if [[ "$PRINT_PATHS" == "true" ]]; then
   printf 'server_src=%s\n' "$SERVER_SRC"
@@ -96,8 +68,6 @@ if [[ "$PRINT_PATHS" == "true" ]]; then
   printf 'server_dest=%s\n' "$SERVER_DEST"
   printf 'mcp_dest=%s\n' "$MCP_DEST"
   printf 'cli_dest=%s\n' "$CLI_DEST"
-  printf 'cloudflared_src=%s\n' "${CLOUDFLARED_SRC:-<CLOUDFLARED_BIN required for cross-target>}"
-  printf 'cloudflared_dest=%s\n' "$CLOUDFLARED_DEST"
   exit 0
 fi
 
@@ -120,8 +90,6 @@ mkdir -p "$BIN_DIR"
 install -m 755 "$SERVER_SRC" "$SERVER_DEST"
 install -m 755 "$MCP_SRC" "$MCP_DEST"
 install -m 755 "$CLI_SRC" "$CLI_DEST"
-
-install -m 755 "$CLOUDFLARED_SRC" "$CLOUDFLARED_DEST"
 
 # Windows needs two runtime DLLs beside the sidecars. The daemon loads ONNX
 # Runtime dynamically there (fastembed's ort-load-dynamic feature, selected in

@@ -2161,11 +2161,14 @@ pub fn spawn_scheduler(
     })
 }
 
-/// Background polling respects an explicit pause but keeps probing unavailable
-/// roots so transient filesystem failures can recover automatically.
+/// Background polling covers Directory and OKF bundle sources, respects an
+/// explicit pause, and keeps probing unavailable roots so transient
+/// filesystem failures can recover automatically.
 fn should_poll_directory_source(source: &wenlan_types::sources::Source) -> bool {
-    source.source_type == wenlan_types::sources::SourceType::Directory
-        && !matches!(source.status, wenlan_types::sources::SyncStatus::Paused)
+    matches!(
+        source.source_type,
+        wenlan_types::sources::SourceType::Directory | wenlan_types::sources::SourceType::Okf
+    ) && !matches!(source.status, wenlan_types::sources::SyncStatus::Paused)
 }
 
 /// One Directory-source sync + document-enrichment-queue-drive pass (§4).
@@ -2178,6 +2181,8 @@ fn should_poll_directory_source(source: &wenlan_types::sources::Source) -> bool 
 /// caller can give that first import the bounded import lane. Intentional
 /// bound: a source that has synced before (including one first synced while
 /// empty) gets no trigger, and its later files wait for the idle-gated lap.
+/// The one exception is an OKF bundle handing over its next batch: files left
+/// waiting by the previous sync are still part of that first import.
 #[cfg(test)]
 async fn sync_directory_sources(db: &Arc<wenlan_core::db::MemoryDB>) -> bool {
     sync_directory_sources_in_scope(db, DirectorySyncScope::All).await
@@ -2198,7 +2203,10 @@ async fn sync_directory_sources_in_scope(
     }) {
         match crate::source_routes::sync_directory_source(db.clone(), source, &config).await {
             Ok(outcome) => {
-                first_sync_queued |= source.last_sync.is_none() && outcome.newly_queued > 0;
+                let continues_import = source.last_sync.is_none()
+                    || (source.source_type == wenlan_types::sources::SourceType::Okf
+                        && source.waiting_files > 0);
+                first_sync_queued |= continues_import && outcome.newly_queued > 0;
             }
             Err(e) => {
                 tracing::warn!("[scheduler] directory sync '{}' failed: {e}", source.id);

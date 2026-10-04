@@ -40,6 +40,9 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     // background job a source. Shared chrome, so it belongs in the contract
     // rather than in a list of screens that are allowed to fail.
     "get_resolved_routing",
+    // The main shell asks once per launch whether a wenlan://pair link
+    // opened the app. Shared chrome, so it belongs in the contract.
+    "take_remote_pairing_link",
   ],
   wikiAndPages: [
     "list_pages",
@@ -135,6 +138,11 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "get_clipboard_enabled",
     "list_all_tags",
     "list_indexed_files",
+  ],
+  // Settings, General: the OKF bundle export. The fixture answers with an
+  // empty bundle; a real export needs the daemon to write a folder.
+  pageExport: [
+    "export_pages_as_okf",
   ],
 } as const;
 

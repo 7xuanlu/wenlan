@@ -1,6 +1,6 @@
 [package]
 name = "wenlan-app"
-version = "0.18.8" # x-release-please-version
+version = "0.18.16" # x-release-please-version
 edition = "2021"
 license = "AGPL-3.0-only"
 default-run = "wenlan-app"
@@ -29,7 +29,9 @@ tauri-plugin-shell = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
-tauri-plugin-single-instance = "2"
+# `deep-link` forwards a wenlan:// link from a second launch (Windows, Linux).
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 
 # Dev-only: gives Claude Code / MCP clients control over the running app
 # (screenshots, DOM, click/type). Excluded from release builds via debug_assertions.
@@ -37,6 +39,8 @@ tauri-plugin-mcp = { git = "https://github.com/P3GLEG/tauri-plugin-mcp" }
 
 # Async
 tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"] }
+futures-util = { version = "0.3", features = ["sink"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -93,7 +97,7 @@ raw-window-handle = "0.6"
 
 # Job object that ends the sidecar daemon with the app (daemon_start::job).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_NetworkManagement_IpHelper", "Win32_Networking_WinSock"] }
 
 [dev-dependencies]
 serial_test = "3"

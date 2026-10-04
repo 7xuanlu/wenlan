@@ -82,6 +82,68 @@ path. Remote HTTP clients can list it, but `accept_refinement` and
 Runtime diagnostics live in the CLI: `wenlan doctor`. They are not part of the
 MCP memory loop.
 
+### Query-only HTTP profile
+
+For a connector that should retrieve knowledge without exposing knowledge-write
+or maintenance tools, explicitly select the query-only profile:
+
+```bash
+WENLAN_SPACE=shared wenlan-mcp serve --tool-profile query-only --token-file /path/to/bearer-token
+```
+
+Native launchers can instead provide the token in a child-only environment
+variable and pass `--token-env WENLAN_REMOTE_MCP_TOKEN`. This is mutually
+exclusive with `--token`, `--token-file`, and `--no-auth`. The explicitly named
+variable must contain 32-128 ASCII letters, digits, `_`, or `-`; missing or
+invalid values stop startup without falling back to a token file. Do not put
+the secret itself in command arguments or log the child's environment. This
+keeps it out of command-line listings, not out of the child process memory or
+the reach of an account that can inspect that process.
+
+This profile advertises only `brief`, `recall`, and `get_page_sources`. The
+server also rejects all other tool names before dispatch, including direct
+calls to hidden tools. It requires a nonempty bearer token; `--no-auth` is not
+permitted. A strict `WENLAN_SPACE` pin is also required; an overridable
+`WENLAN_DEFAULT_SPACE` is not an authorization boundary. The default `standard`
+profile keeps its existing response format.
+
+Query-only also exposes `GET /connector-info` behind the same bearer and Origin
+checks as `/mcp`. It reports contract version 1, `wenlan-mcp`, the query-only
+profile, bearer authentication, and the pinned Space. Relay enrollment must
+check that anonymous access fails and that the authenticated response matches
+the intended Space. This is configuration verification, not proof of device
+ownership. Standard mode has no such endpoint; public `/health` reveals no Space.
+
+Query-only success results include `structuredContent` and matching JSON text;
+each advertised tool has an output schema generated from its response type.
+Search results retain source IDs, titles, content, and archive/review status.
+Brief results retain summary, active/backlog text and gates, plus optional
+related context. Page sources retain source IDs and available source content;
+unavailable linked memories are omitted, including their IDs, because missing
+content may be outside the granted Space. Raw import text, ranking and
+access metadata are not forwarded by these projections. Stored content itself
+can still contain personal data; projection is not content classification or
+authorization. Page IDs must be opaque ASCII letters, digits, `_` or `-`, not
+URLs or filesystem paths; this input check also applies to Standard callers.
+
+"Query-only" describes the available knowledge operations, not an absence of
+all side effects: `recall` still records the query and accessed memory IDs in
+the daemon's private activity history. It therefore declares
+`readOnlyHint: false` under the plugin submission rules.
+
+This is a tool-access boundary, not OAuth or multi-user isolation. It does not
+make a local daemon ready for public marketplace distribution. Public access
+to private libraries still needs authenticated user-to-library routing,
+authorization, consent, revocation, privacy disclosures, and end-to-end tests.
+Do not publish a personal daemon or its bearer token as a universal service.
+
+The repository's [`chatgpt-app-submission.json`](../../chatgpt-app-submission.json)
+is a preparation draft for this profile, not the Standard tool inventory. It
+contains listing suggestions, three annotation justifications, and five positive
+and three negative test cases. The cases explicitly identify pending synthetic
+fixtures and public-host execution. Schema validation is not a test pass, an
+authentication implementation, or approval to upload or submit the draft.
+
 ## Setup Modes
 
 Wenlan works immediately in **local memory** mode: storage, search, recall, and MCP memory are available without a local model or API key.
@@ -93,7 +155,7 @@ Users can opt into more expensive distill cycles:
 
 ## Agent Guidance
 
-The MCP server ships tool instructions that tell agents to capture durable state proactively:
+The Standard profile ships tool instructions that tell agents to capture durable state proactively:
 
 - One idea per capture.
 - Include the why, not just the what.

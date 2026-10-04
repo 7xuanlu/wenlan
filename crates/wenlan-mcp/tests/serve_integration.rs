@@ -273,6 +273,96 @@ async fn test_rejects_disallowed_origin() {
     handle.abort();
 }
 
+#[tokio::test]
+async fn query_only_requires_a_non_empty_bearer_token() {
+    for token in [None, Some(String::new()), Some(" \t\n".into())] {
+        let config = test_config(0, token);
+
+        let error = wenlan_mcp::serve::run_serve_with_profile(
+            config,
+            wenlan_mcp::tools::ToolProfile::QueryOnly,
+        )
+        .await
+        .expect_err("query-only must reject missing or blank auth tokens");
+        assert_eq!(error.to_string(), wenlan_mcp::serve::QUERY_ONLY_AUTH_ERROR);
+    }
+}
+
+#[tokio::test]
+async fn query_only_requires_a_strict_space_pin() {
+    // No test in this binary calls `lock_state::init_from_env()`, so
+    // `locked_space()` stays at its process-default `None` here — this
+    // exercises the same "no pin" state without touching env vars.
+    let config = test_config(0, Some("secret-token".into()));
+
+    let error = wenlan_mcp::serve::run_serve_with_profile(
+        config,
+        wenlan_mcp::tools::ToolProfile::QueryOnly,
+    )
+    .await
+    .expect_err("query-only must reject when no strict WENLAN_SPACE pin is active");
+    assert_eq!(error.to_string(), wenlan_mcp::serve::QUERY_ONLY_SPACE_ERROR);
+}
+
+/// Isolated child-process regression: each scenario spawns the real
+/// `wenlan-mcp` binary with its own environment, so `WENLAN_SPACE` /
+/// `WENLAN_DEFAULT_SPACE` mutation here can never race the env-reading
+/// statics used by other tests in this process.
+#[test]
+fn query_only_without_strict_space_pin_rejects_before_bind() {
+    let scenarios: [(&str, Option<&str>, Option<&str>); 3] = [
+        ("space unset, no default", None, None),
+        ("space unset, default only", None, Some("fallback")),
+        ("space whitespace-only", Some("   "), None),
+    ];
+
+    for (label, space, default_space) in scenarios {
+        let port = portpicker::pick_unused_port().expect("no free port");
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wenlan-mcp"));
+        command.env("WENLAN_NO_AUTOSTART", "1");
+        command.args([
+            "serve",
+            "--tool-profile",
+            "query-only",
+            "--token",
+            "test-token",
+            "--port",
+            &port.to_string(),
+        ]);
+        match space {
+            Some(value) => {
+                command.env("WENLAN_SPACE", value);
+            }
+            None => {
+                command.env_remove("WENLAN_SPACE");
+            }
+        }
+        match default_space {
+            Some(value) => {
+                command.env("WENLAN_DEFAULT_SPACE", value);
+            }
+            None => {
+                command.env_remove("WENLAN_DEFAULT_SPACE");
+            }
+        }
+
+        let output = command.output().expect("wenlan-mcp binary must run");
+        assert!(
+            !output.status.success(),
+            "{label}: must reject without a strict Space pin"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(wenlan_mcp::serve::QUERY_ONLY_SPACE_ERROR),
+            "{label}: stderr={stderr}"
+        );
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "{label}: port must remain free — process must exit before binding"
+        );
+    }
+}
+
 fn test_config(port: u16, token: Option<String>) -> wenlan_mcp::serve::ServeConfig {
     wenlan_mcp::serve::ServeConfig {
         port,
@@ -282,6 +372,196 @@ fn test_config(port: u16, token: Option<String>) -> wenlan_mcp::serve::ServeConf
         agent_name: "test-agent".into(),
         user_id: None,
         allowed_origins: vec!["*".into()],
+    }
+}
+
+#[tokio::test]
+async fn connector_info_is_authenticated_and_query_only() {
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    for profile in ["query-only", "standard"] {
+        let port = portpicker::pick_unused_port().expect("no free port");
+        let child = std::process::Command::new(env!("CARGO_BIN_EXE_wenlan-mcp"))
+            .env("WENLAN_NO_AUTOSTART", "1")
+            .env("WENLAN_SPACE", "synthetic-review")
+            .env_remove("WENLAN_DEFAULT_SPACE")
+            .args([
+                "--origin-url",
+                "http://127.0.0.1:19999",
+                "serve",
+                "--tool-profile",
+                profile,
+                "--token",
+                "synthetic-connector-token",
+                "--port",
+                &port.to_string(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("binary must start");
+        let _guard = ChildGuard(child);
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                if client
+                    .get(format!("{base}/health"))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status().is_success())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("server must become ready");
+
+        let invalid_init = serde_json::json!({
+            "jsonrpc": "2.0", "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": {"name": "synthetic", "version": "1"}}
+        });
+        let anonymous_init = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .json(&invalid_init)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            anonymous_init.status(),
+            401,
+            "auth must run before initialization parsing"
+        );
+        let rejected_init = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .bearer_auth("synthetic-connector-token")
+            .json(&invalid_init)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            rejected_init.status(),
+            400,
+            "every HTTP tool profile applies the pre-allocation initialization guard"
+        );
+        assert!(rejected_init.headers().get("mcp-session-id").is_none());
+        let mut valid_init = invalid_init.clone();
+        valid_init["id"] = serde_json::json!(1);
+        let initialized = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .bearer_auth("synthetic-connector-token")
+            .json(&valid_init)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(initialized.status(), 200);
+        let session_id = initialized.headers()["mcp-session-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        initialized.text().await.unwrap();
+        if profile == "query-only" {
+            let notified = client
+                .post(format!("{base}/mcp"))
+                .header("Accept", "application/json, text/event-stream")
+                .header("Mcp-Session-Id", &session_id)
+                .bearer_auth("synthetic-connector-token")
+                .json(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(notified.status(), 202);
+            let mut events = client
+                .get(format!("{base}/mcp"))
+                .header("Accept", "text/event-stream")
+                .header("Mcp-Session-Id", &session_id)
+                .bearer_auth("synthetic-connector-token")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(events.status(), 200);
+            let heartbeat = tokio::time::timeout(Duration::from_millis(1800), async {
+                let mut text = String::new();
+                while let Some(bytes) = events.chunk().await.unwrap() {
+                    text.push_str(&String::from_utf8_lossy(&bytes));
+                    assert!(text.len() < 4096);
+                    if text.lines().any(|line| line.starts_with(':')) {
+                        return;
+                    }
+                }
+                panic!("SDK SSE stream ended before its heartbeat");
+            })
+            .await;
+            drop(events);
+            assert!(
+                heartbeat.is_ok(),
+                "query-only SDK heartbeat must arrive within 1.8s"
+            );
+        }
+        let deleted = client
+            .delete(format!("{base}/mcp"))
+            .header("Mcp-Session-Id", session_id)
+            .bearer_auth("synthetic-connector-token")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(deleted.status(), 202);
+
+        for token in [None, Some("wrong-token")] {
+            let mut request = client.get(format!("{base}/connector-info"));
+            if let Some(token) = token {
+                request = request.bearer_auth(token);
+            }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), 401);
+            assert!(!response.text().await.unwrap().contains("synthetic-review"));
+        }
+        let response = client
+            .get(format!("{base}/connector-info"))
+            .bearer_auth("synthetic-connector-token")
+            .send()
+            .await
+            .unwrap();
+        if profile == "standard" {
+            assert_eq!(response.status(), 404);
+            continue;
+        }
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(
+            response.json::<serde_json::Value>().await.unwrap(),
+            serde_json::json!({
+                "contract_version": 1,
+                "server": "wenlan-mcp",
+                "tool_profile": "query-only",
+                "space": "synthetic-review",
+                "authentication": "bearer",
+            })
+        );
+        let health = client
+            .get(format!("{base}/health"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(!health.contains("synthetic-review"));
     }
 }
 

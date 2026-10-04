@@ -2,9 +2,11 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +42,7 @@ const tempRoots: string[] = [];
 const pathOverrideEnvKeys = new Set([
   "WENLAN_BACKEND_DIR",
   "CARGO_TARGET_DIR",
+  "CLOUDFLARED_BIN",
   "TARGET_TRIPLE",
   "TAURI_ENV_DEBUG",
   "TAURI_ENV_TARGET_TRIPLE",
@@ -317,12 +320,35 @@ describe("prepare-sidecars backend discovery", () => {
   it("uses the release-aware sidecar prep wrapper from Tauri build config", () => {
     const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
     const tauri = JSON.parse(readFileSync(resolve(root, "app/tauri.conf.json"), "utf8"));
+    const capability = JSON.parse(readFileSync(resolve(root, "app/capabilities/default.json"), "utf8"));
+    const ciWorkflow = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+    const releaseWorkflow = readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8");
 
     expect(packageJson.scripts["prepare:sidecars:tauri-build"]).toBe(
       "node scripts/run-bash.mjs scripts/prepare-tauri-build-sidecars.sh",
     );
     expect(tauri.build.beforeDevCommand).toContain("pnpm prepare:sidecars");
     expect(tauri.build.beforeBuildCommand).toContain("pnpm prepare:sidecars:tauri-build");
+    expect(tauri.bundle.externalBin).toEqual([
+      "binaries/wenlan",
+      "binaries/wenlan-server",
+      "binaries/wenlan-mcp",
+    ]);
+
+    const spawnPermission = capability.permissions.find(
+      (permission: unknown) =>
+        typeof permission === "object" &&
+        permission !== null &&
+        (permission as { identifier?: unknown }).identifier === "shell:allow-spawn",
+    ) as { allow?: Array<{ name?: string }> } | undefined;
+    expect(spawnPermission?.allow?.map((entry) => entry.name)).toEqual([
+      "binaries/wenlan-server",
+      "binaries/wenlan-mcp",
+    ]);
+    expect(JSON.stringify(capability).toLowerCase()).not.toContain("cloudflared");
+
+    expect(ciWorkflow.toLowerCase()).not.toContain("cloudflared");
+    expect(releaseWorkflow.toLowerCase()).not.toContain("cloudflared");
   });
 
   itPosix("does not reach cargo when dev:daemon backend resolution fails", () => {
@@ -349,17 +375,18 @@ describe("prepare-sidecars backend discovery", () => {
     expect(result.stderr).not.toContain("cargo should not run");
   });
 
-  itPosix("fails loud when cloudflared is required but missing", () => {
+  itPosix("stages exactly the three Wenlan executables without cloudflared", () => {
     const base = makeTempRoot();
     const appRoot = resolve(base, "wenlan-app");
     const backendRoot = resolve(base, "wenlan");
     const binRoot = resolve(base, "bin");
+    const sourceDir = resolve(backendRoot, "target/debug");
     writeAppScripts(appRoot);
     writeBackendRepo(backendRoot);
-    mkdirSync(resolve(backendRoot, "target/debug"), { recursive: true });
-    writeExecutable(resolve(backendRoot, "target/debug/wenlan-server"));
-    writeExecutable(resolve(backendRoot, "target/debug/wenlan-mcp"));
-    writeExecutable(resolve(backendRoot, "target/debug/wenlan"));
+    mkdirSync(sourceDir, { recursive: true });
+    writeExecutable(resolve(sourceDir, "wenlan-server"), "server\n");
+    writeExecutable(resolve(sourceDir, "wenlan-mcp"), "mcp\n");
+    writeExecutable(resolve(sourceDir, "wenlan"), "cli\n");
     mkdirSync(binRoot, { recursive: true });
     writeExecutable(
       resolve(binRoot, "rustc"),
@@ -374,9 +401,57 @@ describe("prepare-sidecars backend discovery", () => {
       }),
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("cloudflared not found in PATH");
-    expect(result.stderr).toContain("Required by Tauri externalBin");
+    expect(result.status).toBe(0);
+    const binariesDir = resolve(appRoot, "app/binaries");
+    const expectedExecutables = [
+      "wenlan-server-aarch64-apple-darwin",
+      "wenlan-mcp-aarch64-apple-darwin",
+      "wenlan-aarch64-apple-darwin",
+    ];
+    expect(readdirSync(binariesDir).sort()).toEqual([...expectedExecutables].sort());
+    expect(readFileSync(resolve(binariesDir, expectedExecutables[0]), "utf8")).toBe("server\n");
+    expect(readFileSync(resolve(binariesDir, expectedExecutables[1]), "utf8")).toBe("mcp\n");
+    expect(readFileSync(resolve(binariesDir, expectedExecutables[2]), "utf8")).toBe("cli\n");
+    for (const executable of expectedExecutables) {
+      expect(statSync(resolve(binariesDir, executable)).mode & 0o111).not.toBe(0);
+    }
+  });
+
+  itPosix("uses target-specific executable suffixes without copying host tools", () => {
+    const base = makeTempRoot();
+    const appRoot = resolve(base, "wenlan-app");
+    const backendRoot = resolve(base, "wenlan");
+    const binRoot = resolve(base, "bin");
+    writeAppScripts(appRoot);
+    writeBackendRepo(backendRoot);
+    mkdirSync(binRoot, { recursive: true });
+    writeExecutable(
+      resolve(binRoot, "rustc"),
+      "#!/usr/bin/env bash\nprintf 'host: aarch64-apple-darwin\\n'\n",
+    );
+
+    const output = printPaths(appRoot, {
+      PATH: `${binRoot}:/usr/bin:/bin`,
+      TARGET_TRIPLE: "x86_64-pc-windows-msvc",
+    });
+
+    expect(output).toContain(
+      `server_src=${backendRoot}/target/x86_64-pc-windows-msvc/debug/wenlan-server.exe`,
+    );
+    expect(output).toContain(
+      `mcp_src=${backendRoot}/target/x86_64-pc-windows-msvc/debug/wenlan-mcp.exe`,
+    );
+    expect(output).toContain(
+      `cli_src=${backendRoot}/target/x86_64-pc-windows-msvc/debug/wenlan.exe`,
+    );
+    expect(output).toContain(
+      `server_dest=${appRoot}/app/binaries/wenlan-server-x86_64-pc-windows-msvc.exe`,
+    );
+    expect(output).toContain(
+      `mcp_dest=${appRoot}/app/binaries/wenlan-mcp-x86_64-pc-windows-msvc.exe`,
+    );
+    expect(output).toContain(
+      `cli_dest=${appRoot}/app/binaries/wenlan-x86_64-pc-windows-msvc.exe`,
+    );
   });
 });
-

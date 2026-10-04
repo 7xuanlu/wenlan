@@ -23,6 +23,7 @@ import {
   GRAPH_PAGES,
 } from "../fixtures";
 import { liveInvoke } from "./live-invoke";
+import { invokeRemoteFixture } from "./remote-access";
 
 let graphObsSeq = 0;
 type PreviewPageUpdateRequest = {
@@ -41,6 +42,9 @@ export async function invoke(
 ): Promise<unknown> {
   if (!(window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__) {
     return liveInvoke(cmd, args);
+  }
+  if (new URLSearchParams(window.location.search).get("mode") === "remote-access") {
+    return invokeRemoteFixture(cmd, args);
   }
   switch (cmd) {
     case "daemon_version":

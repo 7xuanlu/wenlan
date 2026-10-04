@@ -4770,6 +4770,8 @@ mod tests {
             .unwrap()
             .flatten()
             .filter(|e| e.path().extension().map(|x| x == "md").unwrap_or(false))
+            // The OKF root `index.md` is a reserved document, not a page.
+            .filter(|e| !e.file_name().eq_ignore_ascii_case("index.md"))
             .collect();
         assert_eq!(entries.len(), 1, "exactly one md file written");
         let content = std::fs::read_to_string(entries[0].path()).unwrap();

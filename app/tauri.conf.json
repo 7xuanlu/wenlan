@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui/nicegui/tauri/tauri-v2-schema.json",
   "productName": "Wenlan",
-  "version": "0.18.8",
+  "version": "0.18.16",
   "identifier": "com.wenlan.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -67,8 +67,7 @@
     "externalBin": [
       "binaries/wenlan",
       "binaries/wenlan-server",
-      "binaries/wenlan-mcp",
-      "binaries/cloudflared"
+      "binaries/wenlan-mcp"
     ],
     "windows": {
       "nsis": {
@@ -77,6 +76,13 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "wenlan"
+        ]
+      }
+    },
     "updater": {
       "active": true,
       "endpoints": [

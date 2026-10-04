@@ -56,6 +56,7 @@ mod maintenance_queue;
 mod maintenance_retro_scan;
 mod memory_point_reads;
 mod migrations_v004_v009;
+mod okf_concepts;
 mod onboarding_milestones;
 mod page_drafts;
 pub mod page_map;
@@ -89,6 +90,7 @@ pub use m5_page_size_snapshot::{M5MutationProbe, M5PageSizeSnapshotDb};
 pub(crate) use maintenance_duplicate_reads::{NearDuplicatePairRead, NearDuplicateSliceReader};
 pub(crate) use maintenance_retro_scan::AutomaticRetroPageScan;
 pub(crate) use memory_point_reads::PendingMemoryRevisionPayload;
+pub use okf_concepts::OkfConceptRecord;
 pub use presence_review::ReviewOutcome;
 pub use truth_exposure::{
     CutoverFence, CutoverLease, CutoverPhase, TruthMarkerAudit, TRUTH_CUTOVER_FENCE_KEY,
@@ -1413,7 +1415,9 @@ pub const EMBEDDING_DIM: usize = 768;
 /// endpoint's space whatever its shadow page's `status`, so an edge can be
 /// written against an ARCHIVED entity -- the precondition for an archived
 /// entity absorbing a recurring mention instead of a duplicate being created
-/// beside it (#708).
+/// beside it (#708). Migration 131 adds `okf_concepts` and
+/// `okf_concept_links`, the provenance and concept links of pages imported
+/// from an OKF bundle source.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1421,7 +1425,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 130;
+pub const SCHEMA_VERSION: u32 = 131;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10227,6 +10231,12 @@ impl MemoryDB {
             if version < 130 {
                 self.migrate_130_edges_space_fence_archived_entities(version)
                     .await?;
+            }
+
+            // Migration 131 (OKF import): `okf_concepts` and
+            // `okf_concept_links`. See okf_concepts::migrate_131_okf_concepts.
+            if version < 131 {
+                self.migrate_131_okf_concepts(version).await?;
             }
         }
 
@@ -32865,7 +32875,10 @@ impl MemoryDB {
                 summary: row.get::<Option<String>>(6).unwrap_or(None),
                 processing: false,
                 memory_type: row.get::<Option<String>>(7).unwrap_or(None),
-                space: row.get::<Option<String>>(8).unwrap_or(None),
+                space: row
+                    .get::<Option<String>>(8)
+                    .unwrap_or(None)
+                    .filter(|space| space != UNFILED_SPACE_ID),
                 source_agent: row.get::<Option<String>>(9).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(10).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
@@ -33659,6 +33672,258 @@ impl MemoryDB {
         Ok(())
     }
 
+    /// Move a folder document's eligible SOURCE pages with its explicit memory
+    /// reassignment, inside `apply_memory_update`'s transaction (never locks;
+    /// any error rolls the memory move back too). Short contract: head is a
+    /// folder document memory; a page moves only if active, `source`,
+    /// machine-owned, non-OKF, scoped to the old owner in both scope columns,
+    /// with every `source_memory_ids` reference and every active outgoing
+    /// page `cites` edge resolving solely to this document. Only scope
+    /// columns, page version/last_modified, and matching edge spaces change.
+    async fn move_folder_source_pages_in_transaction(
+        conn: &libsql::Connection,
+        head_source: &str,
+        head_source_agent: Option<&str>,
+        doc_source_id: &str,
+        old_space: &str,
+        new_space: &str,
+    ) -> Result<(), WenlanError> {
+        if head_source != "memory" || head_source_agent != Some("folder") {
+            return Ok(());
+        }
+        if old_space == new_space {
+            return Ok(());
+        }
+        // Narrow to pages referencing this document by either stored form
+        // (document source_id or chunk row id). Migration 131 always runs on
+        // open, so the OKF tables exist; no legacy probe.
+        let mut candidates: Vec<(String, String)> = Vec::new();
+        {
+            let mut rows = conn
+                .query(
+                    "SELECT id, source_memory_ids FROM pages
+                     WHERE status = 'active' AND creation_kind = 'source'
+                       AND COALESCE(user_edited, 0) = 0
+                       AND space = ?1 AND workspace = ?2
+                       AND EXISTS (
+                           SELECT 1
+                           FROM json_each(COALESCE(pages.source_memory_ids, '[]')) j
+                           WHERE CAST(j.value AS TEXT) = ?3
+                              OR CAST(j.value AS TEXT) IN (
+                                  SELECT m.id FROM memories m
+                                  WHERE m.source = ?4 AND m.source_id = ?3
+                              )
+                       )",
+                    libsql::params![old_space, old_space, doc_source_id, head_source],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("source page inventory: {e}")))?;
+            while let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("source page inventory row: {e}")))?
+            {
+                let id: String = row
+                    .get(0)
+                    .map_err(|e| WenlanError::VectorDb(format!("source page inventory id: {e}")))?;
+                let refs_json: String = row.get(1).unwrap_or_else(|_| "[]".to_string());
+                candidates.push((id, refs_json));
+            }
+        }
+        let now = chrono::Utc::now().to_rfc3339();
+        for (page_id, refs_json) in candidates {
+            let refs: Vec<String> = serde_json::from_str(&refs_json).unwrap_or_default();
+            if refs.is_empty() {
+                continue;
+            }
+            let mut owned = true;
+            for reference in &refs {
+                if !Self::memory_ref_belongs_to_document_in_transaction(
+                    conn,
+                    reference,
+                    head_source,
+                    doc_source_id,
+                )
+                .await?
+                {
+                    owned = false;
+                    break;
+                }
+            }
+            if !owned {
+                continue;
+            }
+            {
+                let mut rows = conn
+                    .query(
+                        "SELECT 1 FROM okf_concepts WHERE page_id = ?1 LIMIT 1",
+                        libsql::params![page_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("source page okf check: {e}")))?;
+                let is_okf = rows
+                    .next()
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("source page okf check row: {e}")))?
+                    .is_some();
+                drop(rows);
+                if is_okf {
+                    continue;
+                }
+                let mut link_rows = conn
+                    .query(
+                        "SELECT 1 FROM okf_concept_links WHERE page_id = ?1 LIMIT 1",
+                        libsql::params![page_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("source page okf link check: {e}"))
+                    })?;
+                let has_links = link_rows
+                    .next()
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("source page okf link check row: {e}"))
+                    })?
+                    .is_some();
+                drop(link_rows);
+                if has_links {
+                    continue;
+                }
+            }
+            // Active canonical page cites edges: nonempty, every destination
+            // resolving solely to this document (chunk row id or document
+            // source_id, per the folder producer's chunk-granular writes).
+            // `dst_kind` is the producer's stored representation (`memory`
+            // or `external` for folder chunks) -- either is accepted only
+            // with a resolved same-document destination, never on its own.
+            let edge_ok = {
+                let mut rows = conn
+                    .query(
+                        "SELECT dst_id, dst_kind FROM edges
+                         WHERE src_id = ?1 AND src_kind = 'page'
+                           AND edge_type = 'cites'
+                           AND valid_until IS NULL",
+                        libsql::params![page_id.as_str()],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("source page cites inventory: {e}"))
+                    })?;
+                let mut seen = 0;
+                let mut agreed = true;
+                while let Some(row) = rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("source page cites inventory row: {e}"))
+                })? {
+                    seen += 1;
+                    let dst_id: String = row.get(0).unwrap_or_default();
+                    let dst_kind: String = row.get(1).unwrap_or_default();
+                    if dst_kind != "memory" && dst_kind != "external" {
+                        agreed = false;
+                        break;
+                    }
+                    if !Self::memory_ref_belongs_to_document_in_transaction(
+                        conn,
+                        &dst_id,
+                        head_source,
+                        doc_source_id,
+                    )
+                    .await?
+                    {
+                        agreed = false;
+                        break;
+                    }
+                }
+                seen > 0 && agreed
+            };
+            if !edge_ok {
+                continue;
+            }
+            let affected = conn
+                .execute(
+                    "UPDATE pages
+                     SET space = ?1, workspace = ?1,
+                         version = version + 1, last_modified = ?2
+                     WHERE id = ?3 AND status = 'active'
+                       AND creation_kind = 'source'
+                       AND COALESCE(user_edited, 0) = 0
+                       AND space = ?4 AND workspace = ?4",
+                    libsql::params![new_space, now.as_str(), page_id.as_str(), old_space],
+                )
+                .await
+                .map_err(|e| WenlanError::VectorDb(format!("source page move {page_id}: {e}")))?;
+            if affected == 0 {
+                return Err(WenlanError::Conflict(format!(
+                    "source page {page_id} changed before space move"
+                )));
+            }
+            conn.execute(
+                "UPDATE edges SET space = ?1
+                 WHERE src_id = ?2 AND src_kind = 'page'
+                   AND edge_type = 'cites'
+                   AND valid_until IS NULL
+                   AND dst_kind IN ('memory', 'external')
+                   AND EXISTS (
+                       SELECT 1 FROM memories m
+                       WHERE (m.id = edges.dst_id OR m.source_id = edges.dst_id)
+                         AND m.source = ?3 AND m.source_id = ?4
+                         AND m.source != 'episode'
+                         AND NOT EXISTS (
+                             SELECT 1 FROM memories foreign_match
+                             WHERE (foreign_match.id = edges.dst_id
+                                 OR foreign_match.source_id = edges.dst_id)
+                               AND foreign_match.source != 'episode'
+                               AND NOT (foreign_match.source = ?3
+                                    AND foreign_match.source_id = ?4)
+                         )
+                   )",
+                libsql::params![new_space, page_id.as_str(), head_source, doc_source_id],
+            )
+            .await
+            .map_err(|e| {
+                WenlanError::VectorDb(format!("source page cites reconcile {page_id}: {e}"))
+            })?;
+        }
+        Ok(())
+    }
+
+    /// One reference (a chunk row id or a document source_id) resolves solely
+    /// to the named document: a matching non-episode row exists AND no
+    /// non-episode row under either key form belongs to any other document,
+    /// so an id/source_id collision can never satisfy ownership. Runs on the
+    /// caller's open transaction.
+    async fn memory_ref_belongs_to_document_in_transaction(
+        conn: &libsql::Connection,
+        reference: &str,
+        head_source: &str,
+        doc_source_id: &str,
+    ) -> Result<bool, WenlanError> {
+        let mut rows = conn
+            .query(
+                "SELECT 1 FROM memories
+                 WHERE (id = ?1 OR source_id = ?1)
+                   AND source = ?2 AND source_id = ?3
+                   AND source != 'episode'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM memories foreign_match
+                       WHERE (foreign_match.id = ?1 OR foreign_match.source_id = ?1)
+                         AND foreign_match.source != 'episode'
+                         AND NOT (foreign_match.source = ?2
+                              AND foreign_match.source_id = ?3)
+                   )
+                 LIMIT 1",
+                libsql::params![reference, head_source, doc_source_id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("source page ownership check: {e}")))?;
+        let belongs = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("source page ownership check row: {e}")))?
+            .is_some();
+        Ok(belongs)
+    }
+
     pub(crate) async fn apply_memory_update(
         &self,
         source_id: &str,
@@ -34038,10 +34303,23 @@ impl MemoryDB {
                 let space = space.unwrap_or_else(|| UNFILED_SPACE_ID.to_string());
                 conn.execute(
                     "UPDATE memories SET space = ?1 WHERE source_id = ?2",
-                    libsql::params![space, source_id],
+                    libsql::params![space.as_str(), source_id],
                 )
                 .await
                 .map_err(|e| WenlanError::VectorDb(format!("update_memory space: {e}")))?;
+                // Folder-source ownership: an explicit memory reassignment
+                // carries the document's eligible SOURCE pages (and only
+                // their matching cites edges) in this same transaction, so
+                // a failure below rolls the memory move back with the pages.
+                Self::move_folder_source_pages_in_transaction(
+                    &conn,
+                    &head.source,
+                    head.source_agent.as_deref(),
+                    source_id,
+                    head.space.as_deref().unwrap_or(UNFILED_SPACE_ID),
+                    &space,
+                )
+                .await?;
             }
             if let Some(memory_type) = requested_memory_type {
                 conn.execute(
@@ -34464,7 +34742,9 @@ impl MemoryDB {
             content: row.get::<String>(2).unwrap_or_default(),
             summary: row.get::<Option<String>>(3).unwrap_or(None),
             memory_type: row.get::<Option<String>>(4).unwrap_or(None),
-            space: row.get::<Option<String>>(5).unwrap_or(None),
+            space: crate::space_context::normalize_unfiled_space(
+                row.get::<Option<String>>(5).unwrap_or(None),
+            ),
             source_agent: row.get::<Option<String>>(6).unwrap_or(None),
             confidence: row.get::<Option<f64>>(7).unwrap_or(None).map(|v| v as f32),
             confirmed: row.get::<i64>(8).unwrap_or(0) != 0,
@@ -35074,7 +35354,10 @@ impl MemoryDB {
                 summary: row.get::<Option<String>>(6).unwrap_or(None),
                 processing: false,
                 memory_type: row.get::<Option<String>>(7).unwrap_or(None),
-                space: row.get::<Option<String>>(8).unwrap_or(None),
+                space: row
+                    .get::<Option<String>>(8)
+                    .unwrap_or(None)
+                    .filter(|space| space != UNFILED_SPACE_ID),
                 source_agent: row.get::<Option<String>>(9).unwrap_or(None),
                 confidence: row.get::<Option<f64>>(10).unwrap_or(None).map(|v| v as f32),
                 confirmed: row.get::<Option<i64>>(11).unwrap_or(None).map(|v| v != 0),
@@ -50503,7 +50786,8 @@ impl MemoryDB {
     }
 
     /// Create a machine-owned document SOURCE Page only while the claimed
-    /// queue row still owns the content hash used to build it.
+    /// queue row still owns the content hash used to build it. `space` is the
+    /// Space a new page lands in (`None` is unfiled); only OKF sources set it.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn insert_document_source_page_at_hash(
         &self,
@@ -50516,6 +50800,7 @@ impl MemoryDB {
         queue_source_id: &str,
         file_path: &str,
         expected_content_hash: Option<&str>,
+        space: Option<&str>,
     ) -> Result<bool, WenlanError> {
         self.insert_page_with_kind_inner(
             id,
@@ -50523,7 +50808,7 @@ impl MemoryDB {
             summary,
             content,
             None,
-            None,
+            space,
             source_memory_ids,
             now,
             "source",
@@ -52613,9 +52898,14 @@ impl MemoryDB {
             .get_page(page_id)
             .await?
             .and_then(|page| page.workspace.or(page.space));
-        let links =
+        let mut links =
             crate::synthesis::wikilinks::resolve_against_pages(self, &labels, scope.as_deref())
                 .await?;
+        // A page imported from an OKF bundle also carries its markdown links
+        // to other concepts, stored as concept ids and resolved here so every
+        // write path yields the same link set.
+        let okf_links = self.okf_links_for_page(page_id, scope.as_deref()).await?;
+        okf_concepts::merge_okf_links(&mut links, okf_links);
         self.replace_page_links(page_id, &links).await
     }
 
@@ -58059,6 +58349,71 @@ impl MemoryDB {
         .await
         .map_err(|e| WenlanError::VectorDb(format!("dequeue_document: {}", e)))?;
         Ok(())
+    }
+
+    /// Count a source's queued documents that are not yet parsed and embedded
+    /// and can still get there: fresh (`last_completed_chunk = -1`) rows that
+    /// are pending, in progress, or paused below the retry cap. `done`,
+    /// `waiting_for_provider` (already prepared), rows past their first model
+    /// chunk, and exhausted paused rows are not counted. An OKF sync hands
+    /// over its next batch only when this is zero.
+    pub async fn count_unprepared_documents_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue
+                 WHERE source_id = ?1
+                   AND last_completed_chunk < 0
+                   AND (status IN ('pending', 'in_progress')
+                        OR (status = 'paused' AND attempt_count < ?2))",
+                libsql::params![source_id, Self::DOC_ENRICHMENT_MAX_ATTEMPTS],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents: {e}")))?;
+        let count = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents row: {e}")))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| WenlanError::VectorDb(format!("count_unprepared_documents col: {e}")))?
+            .unwrap_or(0);
+        Ok(count.max(0) as u64)
+    }
+
+    /// Count a source's queued documents that will never be prepared: paused
+    /// rows at or past the retry cap.
+    ///
+    /// These rows do not hold the batch gate, so without this count a bundle
+    /// whose files all failed permanently would keep reporting `errors: 0` and
+    /// look healthy. The global queue status cannot answer it per source.
+    pub async fn count_exhausted_documents_for_source(
+        &self,
+        source_id: &str,
+    ) -> Result<u64, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM document_enrichment_queue
+                 WHERE source_id = ?1
+                   AND status = 'paused'
+                   AND attempt_count >= ?2",
+                libsql::params![source_id, Self::DOC_ENRICHMENT_MAX_ATTEMPTS],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents: {e}")))?;
+        let count = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents row: {e}")))?
+            .map(|row| row.get::<i64>(0))
+            .transpose()
+            .map_err(|e| WenlanError::VectorDb(format!("count_exhausted_documents col: {e}")))?
+            .unwrap_or(0);
+        Ok(count.max(0) as u64)
     }
 
     /// Fetch the current queue entry for a document, if present.
