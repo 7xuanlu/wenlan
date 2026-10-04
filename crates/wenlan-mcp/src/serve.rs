@@ -74,18 +74,14 @@ pub async fn run_serve_with_profile(
     let token = config.token.clone();
     let allowed_origins = config.allowed_origins.clone();
 
-    // rmcp's default allowed_hosts = [localhost, 127.0.0.1, ::1] is
-    // DNS-rebinding protection for loopback deployments. Every serve
-    // deployment we support is reached through a public tunnel
-    // (cloudflared, ngrok) that forwards the tunnel hostname in Host,
-    // with a separate backend bearer token. Leaving the default in
-    // place rejects every tunneled request with a plain-text 403 the
-    // upstream MCP proxy cannot parse, surfacing to users as a bogus
-    // "-32600 Invalid Request". MCP's custom-header requirement
-    // already triggers CORS preflight, so the Origin allowlist catches
-    // browser-driven DNS rebinding; a local non-browser attacker
-    // bypasses Host checking anyway by hitting 127.0.0.1 directly.
-    let mut mcp_config = StreamableHttpServerConfig::default().disable_allowed_hosts();
+    // Keep the SDK's loopback Host allowlist for unauthenticated servers:
+    // loopback binding and CORS do not stop same-origin DNS rebinding.
+    // Authenticated tunnels forward a public hostname in Host, so only that
+    // mode disables Host filtering; the outer bearer gate still protects it.
+    let mut mcp_config = StreamableHttpServerConfig::default();
+    if token.is_some() {
+        mcp_config = mcp_config.disable_allowed_hosts();
+    }
     if tool_profile == ToolProfile::QueryOnly {
         // Let the SDK frame heartbeats between complete SSE events. Frequent
         // writes also expose a disconnected HTTP reader to the relay runtime.
@@ -186,11 +182,9 @@ pub async fn run_serve_with_profile(
     Ok(())
 }
 
-// rmcp 1.5 can allocate a session before rejecting a non-initialize message,
-// without spawning the service task that normally removes that session.
-// The pinned factory always returns Ok and this SDK lacks the later header
-// mismatch path, so reuse its typed parser before allocation on every HTTP
-// tool profile (GHSA-9pj6-vhgr-3mwh mitigation without an SDK migration).
+// Reject invalid first messages before SDK session allocation on every HTTP
+// tool profile. The SDK also cleans up failed initialization, while this guard
+// retains Wenlan's bounded body size, read timeout, and initialization contract.
 async fn validate_initialization(req: Request, next: Next) -> axum::response::Response {
     let is_mcp = req.uri().path() == "/mcp" || req.uri().path().starts_with("/mcp/");
     let has_session = req

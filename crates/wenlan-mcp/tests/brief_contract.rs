@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::{CallToolResult, ContentBlock};
 use wenlan_mcp::{
     client::WenlanClient,
     tools::{BriefParams, TransportMode, WenlanMcpServer},
@@ -26,8 +26,8 @@ fn text_of(result: &CallToolResult) -> &str {
     result
         .content
         .iter()
-        .find_map(|content| match &content.raw {
-            RawContent::Text(text) => Some(text.text.as_str()),
+        .find_map(|content| match content {
+            ContentBlock::Text(text) => Some(text.text.as_str()),
             _ => None,
         })
         .expect("expected text content")

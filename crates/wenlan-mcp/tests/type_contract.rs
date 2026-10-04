@@ -8,7 +8,7 @@
 //! `serde_json::to_value` - by construction, a passing test proves origin-mcp deserializes
 //! the same JSON origin-server would emit for that shape.
 
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::{CallToolResult, ContentBlock};
 use wenlan_mcp::client::WenlanClient;
 use wenlan_mcp::tools::{
     CaptureParams, ContextParams, CreateRelationParams, ListPendingImportsParams,
@@ -94,8 +94,8 @@ async fn get_page_sources_preserves_valid_opaque_ids() {
 
 fn text_of(result: &CallToolResult) -> String {
     for content in &result.content {
-        match &content.raw {
-            RawContent::Text(text) => return text.text.clone(),
+        match content {
+            ContentBlock::Text(text) => return text.text.clone(),
             _ => continue,
         }
     }
