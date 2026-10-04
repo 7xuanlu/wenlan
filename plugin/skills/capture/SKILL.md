@@ -29,7 +29,7 @@ If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
 
 Call the bundled resolver:
 
-    resolved="$("$CLAUDE_PLUGIN_ROOT/bin/resolve-space.sh" --cwd "$PWD" \
+    resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" \
         ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
     space="$(printf '%s\n' "$resolved" | cut -f1)"
     source_layer="$(printf '%s\n' "$resolved" | cut -f2)"

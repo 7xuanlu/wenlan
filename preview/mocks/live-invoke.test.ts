@@ -942,6 +942,7 @@ describe("liveInvoke remote pairing/grants boundary (live daemon path)", () => {
 
   it.each([
     "configure_remote_access",
+    "reconnect_remote_access",
     "inspect_remote_pairing",
     "approve_remote_pairing",
     "revoke_remote_grant",

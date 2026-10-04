@@ -405,6 +405,7 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
 
   // --- remote pairing/grants (native-only; see nativeRemoteAccessRequired) ---
   configure_remote_access: nativeRemoteAccessRequired,
+  reconnect_remote_access: nativeRemoteAccessRequired,
   inspect_remote_pairing: nativeRemoteAccessRequired,
   approve_remote_pairing: nativeRemoteAccessRequired,
   revoke_remote_grant: nativeRemoteAccessRequired,
@@ -1034,6 +1035,8 @@ export const DEFAULTS: Record<string, unknown> = {
   // wrong keys where the Rust command returns a struct doesn't just render empty —
   // it white-screens the step (RemoteAccessPanel reads status.status unguarded).
   set_traffic_lights_visible: null,
+  // No wenlan://pair link can reach a browser preview.
+  take_remote_pairing_link: null,
   set_setup_completed: null,
   is_run_at_login_enabled: false,
   list_watch_paths: [],

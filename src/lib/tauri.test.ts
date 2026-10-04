@@ -12,6 +12,11 @@ beforeEach(() => {
 });
 
 describe('remote access consent bridge', () => {
+  it('reconnects only transport with the expected revision and no enable flag', async () => {
+    mockInvoke.mockResolvedValue({ status: 'starting' });
+    await expect(tauri.reconnectRemoteAccess('revision-1')).resolves.toEqual({ status: 'starting' });
+    expect(mockInvoke.mock.calls).toEqual([['reconnect_remote_access', { expectedRevision: 'revision-1' }]]);
+  });
   it('loads only the native frontend-safe profile view', async () => {
     mockInvoke.mockResolvedValue(null);
     await expect(tauri.getRemoteAccessProfile()).resolves.toBeNull();
@@ -78,6 +83,12 @@ describe('remote access consent bridge', () => {
     expect(mockInvoke).toHaveBeenCalledWith('revoke_remote_grant', {
       expectedRevision: 'revision-3', grantId: 'grant-1',
     });
+  });
+
+  it('takes a waiting pairing link without forwarding arguments', async () => {
+    mockInvoke.mockResolvedValueOnce('a'.repeat(64));
+    await expect(tauri.takeRemotePairingLink()).resolves.toBe('a'.repeat(64));
+    expect(mockInvoke).toHaveBeenCalledWith('take_remote_pairing_link');
   });
 
   it('queries status and connection health without forwarding arguments', async () => {

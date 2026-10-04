@@ -21,7 +21,8 @@ test('offline preparation uses fresh enrollment but still requires live matching
   const prepared = await prepareNewDeviceSampleAccount(device, options, clock);
   assert.ok(prepared);
   assert.equal(prepared.account.generation, 0);
-  assert.equal(prepared.account.expiresAt, device.expiresAt);
+  // The reviewer login keeps its own 30-day cap inside the longer device credential.
+  assert.equal(prepared.account.expiresAt, Math.min(device.expiresAt, now + 30 * 86_400_000));
   assert.notEqual(prepared.password, device.managementToken);
   const login = { ...input, password: prepared.password };
   const forged = await prepareNewDeviceSampleAccount({ ...device, managementToken: 'f'.repeat(64) }, options, clock);

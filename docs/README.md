@@ -1,6 +1,11 @@
 # Documentation Guide
 
-This directory contains project documentation intended for contributors and maintainers.
+This directory contains user guides and project documentation for contributors and maintainers.
+
+## User guides
+
+- Knowledge, sources, and updates: [English](knowledge-guide.md) · [简体中文](knowledge-guide.zh-Hans.md) · [繁體中文](knowledge-guide.zh-Hant.md) · [Español](knowledge-guide.es-ES.md).
+- Advanced setup, models, and data management: [English](setup-and-data.md) · [简体中文](setup-and-data.zh-Hans.md) · [繁體中文](setup-and-data.zh-Hant.md) · [Español](setup-and-data.es-ES.md).
 
 ## Structure
 

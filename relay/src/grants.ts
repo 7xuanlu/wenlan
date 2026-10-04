@@ -3,7 +3,7 @@ import type { PairingStore, Transaction } from './pairing.ts';
 import type { QueryGrant } from './proxy.ts';
 import type { SessionIdentity } from './sessions.ts';
 import { hashSecret } from './secrets.ts';
-import { authenticatedDeviceTransaction } from './devices.ts';
+import { authenticatedDeviceTransaction, deviceKey, type DeviceRecord } from './devices.ts';
 
 export interface GrantReceipt {
   id: string; clientId: string; subject: string; connectorId: string; space: string;
@@ -19,7 +19,8 @@ export interface GrantView {
   id: string; clientId: string; space: string; createdAt: number; expiresAt: number;
   status: 'active' | 'inactive'; cleanupPending: boolean;
 }
-const MAX_GRANT_MS = 30 * 24 * 60 * 60 * 1000;
+// Absolute cap; the OAuth refresh token separately lapses after 30 idle days.
+const MAX_GRANT_MS = 90 * 24 * 60 * 60 * 1000;
 export const validGrantId = (value: string) => /^[A-Za-z0-9_-]{16,128}$/.test(value);
 const key = (subject: string, id: string) => `oauth-grant:${subject}:${id}`;
 export const clientKey = async (subject: string, clientId: string) => `oauth-client:${subject}:${await hashSecret(clientId)}`;
@@ -32,10 +33,14 @@ export async function replaceClientAuthorization(store: PairingStore, subject: s
   await store.transaction(tx => tx.put(key, { authorizationId, expiresAt: Date.now() + MAX_GRANT_MS } satisfies ClientAuthorization));
 }
 
-async function currentAuthorization(tx: Transaction, subject: string, clientId: string, authorizationId: string) {
+/** The end of this client's current consent, or null once it was replaced or expired. */
+async function consentEnd(tx: Transaction, subject: string, clientId: string, authorizationId: string) {
   const current = await tx.get<ClientAuthorization>(await clientKey(subject, clientId));
   return !!current && current.authorizationId === authorizationId
-    && Number.isFinite(current.expiresAt) && current.expiresAt > Date.now();
+    && Number.isFinite(current.expiresAt) && current.expiresAt > Date.now() ? current.expiresAt : null;
+}
+async function currentAuthorization(tx: Transaction, subject: string, clientId: string, authorizationId: string) {
+  return await consentEnd(tx, subject, clientId, authorizationId) !== null;
 }
 async function binding(identity: SessionIdentity, grant: Pick<QueryGrant, 'subject' | 'connectorId' | 'space' | 'generation'>) {
   return { key: key(grant.subject, identity.grantId),
@@ -78,10 +83,12 @@ export async function listDeviceGrants(store: PairingStore, deviceId: string, cr
     const items: GrantView[] = [];
     for (const record of page) {
       if (record.subject !== device.subject || record.connectorId !== device.id) continue;
-      const active = record.active && record.generation === device.generation && record.expiresAt > now
-        && await currentAuthorization(tx, record.subject, record.clientId, record.authorizationId);
+      const consent = await consentEnd(tx, record.subject, record.clientId, record.authorizationId);
+      const active = record.active && record.generation === device.generation && record.expiresAt > now && consent !== null;
+      // The latest possible end: the grant, its consent and the device credential each cap it.
+      const expiresAt = Math.min(record.expiresAt, consent ?? record.expiresAt, device.credentialExpiresAt);
       items.push({ id: record.id, clientId: record.clientId, space: record.space,
-        createdAt: record.createdAt, expiresAt: record.expiresAt, cleanupPending: record.cleanupPending === true,
+        createdAt: record.createdAt, expiresAt, cleanupPending: record.cleanupPending === true,
         status: active ? 'active' : 'inactive' });
     }
     return { items, ...(records.size > 25 ? { cursor: page.at(-1)!.id } : {}) };
@@ -113,15 +120,29 @@ export async function revokeDeviceGrant(
   } catch { return { revoked: true, cleanupPending: true }; }
 }
 
+/** When an active grant must end at the latest (grant receipt, consent or
+ * device credential, whichever is first), or null when it is no longer active.
+ */
+export async function authorizationGrantEnd(
+  store: PairingStore, identity: SessionIdentity,
+  grant: Pick<QueryGrant, 'subject' | 'connectorId' | 'space' | 'generation'>,
+): Promise<number | null> {
+  const bound = await binding(identity, grant);
+  return store.transaction(async tx => {
+    const receipt = await tx.get<GrantReceipt>(bound.key);
+    if (!receipt || !receipt.active || receipt.owner !== bound.owner
+      || !Number.isFinite(receipt.expiresAt) || receipt.expiresAt <= Date.now()) return null;
+    const device = await tx.get<DeviceRecord>(deviceKey(receipt.connectorId));
+    if (!device || device.id !== receipt.connectorId || device.subject !== receipt.subject
+      || !Number.isFinite(device.expiresAt) || device.expiresAt <= Date.now()) return null;
+    const consent = await consentEnd(tx, receipt.subject, receipt.clientId, receipt.authorizationId);
+    return consent === null ? null : Math.min(receipt.expiresAt, consent, device.expiresAt);
+  });
+}
+
 export async function authorizationGrantActive(
   store: PairingStore, identity: SessionIdentity,
   grant: Pick<QueryGrant, 'subject' | 'connectorId' | 'space' | 'generation'>,
 ): Promise<boolean> {
-  const bound = await binding(identity, grant);
-  return store.transaction(async tx => {
-    const receipt = await tx.get<GrantReceipt>(bound.key);
-    return !!receipt && receipt.active && receipt.owner === bound.owner
-      && Number.isFinite(receipt.expiresAt) && receipt.expiresAt > Date.now()
-      && await currentAuthorization(tx, receipt.subject, receipt.clientId, receipt.authorizationId);
-  });
+  return await authorizationGrantEnd(store, identity, grant) !== null;
 }

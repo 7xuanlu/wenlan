@@ -162,9 +162,11 @@ The relay's control-plane records include:
 Technical expiry denies access; it is not a physical deletion time. Pairing and
 authorization requests and pending reverse enrollments expire after 5 minutes,
 route and session mappings after
-24 hours, management credentials after 30 days, access tokens after 15 minutes,
-refresh tokens after 30 days, client registrations after 90 days from
-registration, and consent/grant records after 30 days. Device revocation
+24 hours, management credentials after 90 days, access tokens after 15 minutes,
+refresh tokens after 30 days without use (each use renews them, up to the
+consent limit), client registrations after 90 days from registration (a
+registration used in its second half renews), and consent/grant records after
+90 days. Device revocation
 disables the device and route. Grant revocation records denial before asking
 the OAuth provider to delete its token records; failed cleanup remains pending
 and is retried by bounded background maintenance: scans are paged, at most one

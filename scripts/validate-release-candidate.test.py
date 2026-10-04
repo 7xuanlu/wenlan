@@ -1206,6 +1206,64 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                         FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
                     )
 
+    def test_runner_pin_bump_preserves_executable_mode_and_exact_content(self) -> None:
+        runner = "plugin/scripts/wenlan-mcp-runner.sh"
+        old, new = release_contents()
+        old[runner] = '#!/usr/bin/env bash\nexec npx -y wenlan-mcp@0.15.3 "$@"\n'
+        new[runner] = old[runner].replace("0.15.3", "0.15.4")
+
+        class ExecutableRunnerApi(FakeContentApi):
+            def tree(self, contents, *, head):
+                records = super().tree(contents, head=head)
+                for record in records:
+                    if record["path"] == runner:
+                        record["mode"] = (
+                            self.head_mode_overrides.get(runner, "100755")
+                            if head else "100755"
+                        )
+                return records
+
+        version, _, paths = VALIDATOR.validate_release_pr_content(
+            ExecutableRunnerApi(old, new), "7xuanlu/wenlan", candidate_pr()
+        )
+        self.assertEqual(version, "0.15.4")
+        self.assertIn(runner, paths)
+        for changed in (
+            new[runner].replace("@0.15.4", "@0.15.5"),
+            new[runner].replace("@0.15.4", "@latest"),
+            new[runner] + "echo unexpected\n",
+        ):
+            with self.subTest(content=changed):
+                with self.assertRaisesRegex(VALIDATOR.CandidateError, "exact version-only"):
+                    VALIDATOR.validate_release_pr_content(
+                        ExecutableRunnerApi(old, {**new, runner: changed}),
+                        "7xuanlu/wenlan", candidate_pr(),
+                    )
+        with self.assertRaisesRegex(VALIDATOR.CandidateError, "Git mode/type changed"):
+            VALIDATOR.validate_release_pr_content(
+                ExecutableRunnerApi(old, new, head_mode_overrides={runner: "100644"}),
+                "7xuanlu/wenlan", candidate_pr(),
+            )
+
+    def test_runner_pin_path_cannot_be_omitted(self) -> None:
+        runner = "plugin/scripts/wenlan-mcp-runner.sh"
+        self.assertIn(runner, VALIDATOR.REQUIRED_RELEASE_PATHS)
+        old, new = release_contents()
+
+        class MissingRunnerApi(FakeContentApi):
+            def get_json(self, path, *, params=None):
+                response = super().get_json(path, params=params)
+                if path.endswith("/files"):
+                    return [item for item in response if item["filename"] != runner]
+                return response
+
+        pr = candidate_pr()
+        pr["changed_files"] -= 1
+        with self.assertRaisesRegex(VALIDATOR.CandidateError, "paths mismatch"):
+            VALIDATOR.validate_release_pr_content(
+                MissingRunnerApi(old, new), "7xuanlu/wenlan", pr
+            )
+
     def test_app_cargo_transform_rejects_extra_line_changes(self) -> None:
         # Positive: the marker-line-only transform accepts a legitimate bump
         # even when app/Cargo.toml carries a dependency literal that happens

@@ -1,12 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
 import { RemoteAccessPanel } from "./RemoteAccessPanel";
+import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 const mocks = vi.hoisted(() => Object.fromEntries([
-  "toggleRemoteAccess", "getRemoteAccessStatus", "getRemoteAccessProfile",
+  "toggleRemoteAccess", "reconnectRemoteAccess", "getRemoteAccessStatus", "getRemoteAccessProfile",
   "configureRemoteAccess", "listSpaces", "inspectRemotePairing", "approveRemotePairing",
   "listRemoteGrants", "revokeRemoteGrant", "testRemoteMcpConnection", "clipboardWrite",
 ].map((key) => [key, vi.fn()])));
@@ -32,6 +33,7 @@ beforeEach(() => {
   mocks.listSpaces.mockResolvedValue([{ id: "s1", name: "review" }]);
   mocks.configureRemoteAccess.mockResolvedValue({ ...profile, enabled: false, revision: "configured" });
   mocks.toggleRemoteAccess.mockResolvedValue({ status: "starting" });
+  mocks.reconnectRemoteAccess.mockResolvedValue({ status: "starting" });
   mocks.inspectRemotePairing.mockResolvedValue(pairing);
   mocks.approveRemotePairing.mockResolvedValue(undefined);
   mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
@@ -39,7 +41,7 @@ beforeEach(() => {
   mocks.testRemoteMcpConnection.mockResolvedValue({ ok: true, latency_ms: 42, error: null });
   mocks.clipboardWrite.mockResolvedValue(undefined);
 });
-afterEach(async () => { await i18n.changeLanguage("en"); });
+afterEach(async () => { cleanup(); vi.useRealTimers(); clearPendingPairingCode(); await i18n.changeLanguage("en"); });
 
 describe("RemoteAccessPanel consent and connection", () => {
   it("requires explicit scope consent, without creating a single-Space selector", async () => {
@@ -96,12 +98,37 @@ describe("RemoteAccessPanel consent and connection", () => {
     await waitFor(() => expect(mocks.clipboardWrite).toHaveBeenCalledWith(pairing.resource));
     expect(screen.queryByText(/private.trycloudflare/)).not.toBeInTheDocument();
   });
-  it("reconnect never starts if disconnect fails", async () => {
+  it("labels the URL for web and mobile apps and sends local apps to Add a tool", async () => {
     await connectedPanel();
-    mocks.toggleRemoteAccess.mockRejectedValue(new Error("Revocation unavailable"));
+    expect(screen.getByRole("heading", { name: "MCP URL for web and mobile apps" })).toBeInTheDocument();
+    expect(screen.queryByText(/Codex MCP URL/)).not.toBeInTheDocument();
+    expect(screen.getByText(/like Codex or Claude Code, use Add a tool above/)).toBeInTheDocument();
+  });
+  it("reconnect restarts transport at the saved revision without disabling or reconfiguring", async () => {
+    await connectedPanel();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Revocation unavailable");
-    expect(mocks.toggleRemoteAccess.mock.calls).toEqual([[false]]);
+    await waitFor(() => expect(mocks.reconnectRemoteAccess).toHaveBeenCalledWith("r1"));
+    expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
+    expect(mocks.configureRemoteAccess).not.toHaveBeenCalled();
+    expect(mocks.revokeRemoteGrant).not.toHaveBeenCalled();
+  });
+  it("reconnect failure never falls back to disabling or enabling access", async () => {
+    await connectedPanel();
+    mocks.reconnectRemoteAccess.mockRejectedValue(new Error("Transport cleanup unconfirmed"));
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Transport cleanup unconfirmed");
+    expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
+  });
+  it("pending disconnect blocks reconnect while preserving explicit Stop", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, enabled: false, disconnect_pending: true });
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    panel();
+    await screen.findByRole("button", { name: "Retry disconnect" });
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
+    expect(mocks.reconnectRemoteAccess).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Retry disconnect" }));
+    await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
   });
   it("surfaces startup disconnect failure and allows stopping despite saved enabled intent", async () => {
     const warning = "Local transport stop requested; remote access settings are not confirmed (Remote access credentials could not be stored safely); server revoke failed: Remote connection unavailable; retry later; disconnect must be retried before app restart";
@@ -176,6 +203,22 @@ describe("pairing and grants", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("expired or changed");
     expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
   });
+  it("shows when an authorized connection stops working", async () => {
+    const expiresAt = Date.now() + 29 * 24 * 60 * 60 * 1000;
+    mocks.listRemoteGrants.mockResolvedValue({ items: [
+      { id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false, expiresAt },
+      { id: "g2", clientId: "client-B", space: "review", status: "inactive", cleanupPending: false, expiresAt },
+    ], cursor: null });
+    await connectedPanel();
+    const date = new Date(expiresAt).toLocaleDateString("en");
+    expect(await screen.findAllByText(`Ends on ${date} at the latest, or after 30 days without use. Then connect again from your AI app.`)).toHaveLength(1);
+    cleanup();
+    await i18n.changeLanguage("zh-Hant");
+    panel();
+    // The date follows the app language, not the OS locale.
+    const zhDate = new Date(expiresAt).toLocaleDateString("zh-Hant");
+    expect(await screen.findByText(`最晚於 ${zhDate} 結束；連續 30 天未使用也會結束。之後請在 AI 應用程式中重新連線。`)).toBeInTheDocument();
+  });
   it("shows authoritative revocation separately from token cleanup", async () => {
     mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false }], cursor: null });
     mocks.revokeRemoteGrant.mockResolvedValue({ revoked: true, cleanupPending: true });
@@ -189,5 +232,206 @@ describe("pairing and grants", () => {
     panel();
     expect(await screen.findByText("共享 Space")).toBeInTheDocument();
     expect(await screen.findByText(new RegExp(consent))).toBeInTheDocument();
+  });
+});
+
+describe("pairing link (wenlan://pair)", () => {
+  const fromLink = "This request came from a link. Approve it only if you just started this connection in your AI app yourself.";
+  it("fills in the code and opens the review, but never approves on its own", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledWith("r1", pairing.pairingId));
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue(pairing.pairingId);
+    expect(await screen.findByText(pairing.clientId)).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent(fromLink);
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Approve connection" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledWith("r1", pairing));
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+  it("takes the link once, so reopening the panel does not review it again", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledTimes(1));
+    cleanup();
+    await connectedPanel();
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue("");
+    expect(mocks.inspectRemotePairing).toHaveBeenCalledTimes(1);
+  });
+  it("waits for Web access to connect before reviewing a linked code", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    setPendingPairingCode(pairing.pairingId);
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    mocks.getRemoteAccessStatus.mockResolvedValue({ status: "starting" });
+    panel();
+    expect(await screen.findByText("Got a pairing request from a link. It opens here once Web access is connected.")).toBeInTheDocument();
+    expect(mocks.inspectRemotePairing).not.toHaveBeenCalled();
+    const handler = (listen as unknown as { mock: { calls: Array<[string, (event: { payload: unknown }) => void]> } }).mock.calls[0][1];
+    // The native side reports connected from now on, to the event and to re-reads.
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    await act(async () => { handler({ payload: connected }); });
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenCalledWith("r1", pairing.pairingId));
+    expect(await screen.findByText(pairing.clientId)).toBeInTheDocument();
+    expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+  });
+  it("editing the code drops the from-link warning", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    await connectedPanel();
+    await screen.findByRole("note");
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: "b".repeat(64) } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    await screen.findByRole("button", { name: "Approve connection" });
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  });
+  it("keeps the warning on a link that arrives while another approval is still saving", async () => {
+    const linked = "c".repeat(64);
+    let finishApprove: () => void = () => {};
+    mocks.approveRemotePairing.mockImplementationOnce(() => new Promise<void>((resolve) => { finishApprove = resolve; }));
+    await connectedPanel();
+    fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: pairing.pairingId } });
+    fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Approve connection" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledTimes(1));
+    act(() => { setPendingPairingCode(linked); });
+    await act(async () => { finishApprove(); });
+    await waitFor(() => expect(mocks.inspectRemotePairing).toHaveBeenLastCalledWith("r1", linked));
+    expect(await screen.findByRole("note")).toHaveTextContent(fromLink);
+    expect(screen.getByRole("textbox", { name: "Pairing code" })).toHaveValue(linked);
+  });
+  it("says so when a link arrives while Web access is off", async () => {
+    setPendingPairingCode(pairing.pairingId);
+    panel();
+    expect(await screen.findByText(/but Web access is off/)).toBeInTheDocument();
+    expect(mocks.inspectRemotePairing).not.toHaveBeenCalled();
+  });
+});
+
+describe("delayed grant reconciliation", () => {
+  // Fake timers are installed BEFORE mounting so the grant refetchInterval is
+  // owned by the fake clock; advancing it exercises the real polling path.
+  async function settle(rounds = 8) {
+    for (let i = 0; i < rounds; i += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    }
+  }
+  it("shows an externally created grant after approval without manual refresh", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+      mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+      mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
+      panel();
+      await settle();
+      expect(screen.getByText("Device connected")).toBeInTheDocument();
+      expect(screen.getByText("No authorized connections")).toBeInTheDocument();
+      const callsBeforeApprove = mocks.listRemoteGrants.mock.calls.length;
+      fireEvent.change(screen.getByRole("textbox", { name: "Pairing code" }), { target: { value: pairing.pairingId } });
+      fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+      await settle();
+      fireEvent.click(screen.getByRole("button", { name: "Approve connection" }));
+      await settle();
+      expect(mocks.approveRemotePairing).toHaveBeenCalledWith("r1", pairing);
+      // Approval invalidation settles to the empty result BEFORE the external
+      // OAuth exchange creates the grant.
+      expect(mocks.listRemoteGrants.mock.calls.length).toBeGreaterThan(callsBeforeApprove);
+      expect(screen.getByText("No authorized connections")).toBeInTheDocument();
+      mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g1", clientId: pairing.clientId, space: "review", status: "active", cleanupPending: false }], cursor: null });
+      const callsBeforeInterval = mocks.listRemoteGrants.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      await settle();
+      expect(mocks.listRemoteGrants.mock.calls.length).toBeGreaterThan(callsBeforeInterval);
+      expect(screen.getByText(pairing.clientId)).toBeInTheDocument();
+      expect(screen.getByText("Authorized")).toBeInTheDocument();
+    } finally { vi.useRealTimers(); }
+  });
+  it("shows a revoked grant as inactive and calls revoke with the exact grant id", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g9", clientId: "client-Z", space: "review", status: "inactive", cleanupPending: false }], cursor: null });
+    mocks.revokeRemoteGrant.mockResolvedValue({ revoked: true, cleanupPending: false });
+    panel();
+    await screen.findByText("Device connected");
+    expect(await screen.findByText("Access revoked")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revoke access" })).not.toBeInTheDocument();
+    expect(mocks.revokeRemoteGrant).not.toHaveBeenCalled();
+    // Active grant path still revokes with exact revision + id.
+    cleanup();
+    mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g9", clientId: "client-Z", space: "review", status: "active", cleanupPending: false }], cursor: null });
+    panel();
+    await screen.findByText("Device connected");
+    fireEvent.click(await screen.findByRole("button", { name: "Revoke access" }));
+    await waitFor(() => expect(mocks.revokeRemoteGrant).toHaveBeenCalledWith("r1", "g9"));
+    await waitFor(() => expect(mocks.revokeRemoteGrant).toHaveBeenCalledTimes(1));
+  });
+  it("stops polling after a grant error until manual refresh succeeds", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+      mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+      mocks.listRemoteGrants.mockRejectedValueOnce(new Error("Grants offline"));
+      mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
+      panel();
+      await settle();
+      expect(screen.getByText("Device connected")).toBeInTheDocument();
+      expect(screen.getByText(/Grants offline/)).toBeInTheDocument();
+      const callsAfterError = mocks.listRemoteGrants.mock.calls.length;
+      expect(callsAfterError).toBeGreaterThan(0);
+      // Paused interval issues no background requests across three periods.
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mocks.listRemoteGrants.mock.calls.length).toBe(callsAfterError);
+      fireEvent.click(screen.getByRole("button", { name: "Refresh connections" }));
+      await settle();
+      expect(mocks.listRemoteGrants.mock.calls.length).toBeGreaterThan(callsAfterError);
+      expect(screen.getByText("No authorized connections")).toBeInTheDocument();
+      // Recovery resumes the interval: the next period polls again.
+      const callsAfterRecovery = mocks.listRemoteGrants.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      expect(mocks.listRemoteGrants.mock.calls.length).toBeGreaterThan(callsAfterRecovery);
+    } finally { vi.useRealTimers(); }
+  });
+  it("refetches grants on remote-access-status events, and disconnect stops polling", async () => {
+    vi.useFakeTimers();
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+      mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+      mocks.listRemoteGrants.mockResolvedValue({ items: [], cursor: null });
+      const view = panel();
+      await settle();
+      expect(screen.getByText("Device connected")).toBeInTheDocument();
+      expect(mocks.listRemoteGrants).toHaveBeenCalled();
+      const handler = (listen as unknown as { mock: { calls: Array<[string, (event: { payload: unknown }) => void]> } }).mock.calls[0][1];
+      mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g2", clientId: "client-event", space: "review", status: "active", cleanupPending: false }], cursor: null });
+      await act(async () => { handler({ payload: connected }); });
+      await settle();
+      expect(screen.getByText("client-event")).toBeInTheDocument();
+      // Disconnect: status leaves connected, so polling must stop entirely.
+      await act(async () => { handler({ payload: { status: "off" } }); });
+      await settle();
+      const callsAfterDisconnect = mocks.listRemoteGrants.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mocks.listRemoteGrants.mock.calls.length).toBe(callsAfterDisconnect);
+      view.unmount();
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mocks.listRemoteGrants.mock.calls.length).toBe(callsAfterDisconnect);
+    } finally { vi.useRealTimers(); }
+  });
+  it("stops an active polling interval when the panel unmounts", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+      mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+      const view = panel();
+      await settle();
+      const initialCalls = mocks.listRemoteGrants.mock.calls.length;
+      expect(initialCalls).toBeGreaterThan(0);
+      await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+      await settle();
+      expect(mocks.listRemoteGrants.mock.calls.length).toBeGreaterThan(initialCalls);
+      view.unmount();
+      const callsAtUnmount = mocks.listRemoteGrants.mock.calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+      expect(mocks.listRemoteGrants.mock.calls.length).toBe(callsAtUnmount);
+    } finally { vi.useRealTimers(); }
   });
 });

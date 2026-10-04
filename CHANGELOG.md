@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.18.16](https://github.com/7xuanlu/wenlan/compare/v0.18.15...v0.18.16) (2026-10-04)
+
+
+### Features
+
+* open relay pairing requests in Wenlan with one click ([#795](https://github.com/7xuanlu/wenlan/issues/795)) ([2b2d88d](https://github.com/7xuanlu/wenlan/commit/2b2d88d40a3f9fe7c27fea74d53eec1ab069a6ea))
+
+
+### Bug Fixes
+
+* **ci:** allow bounded Windows platform cache cleanup ([#797](https://github.com/7xuanlu/wenlan/issues/797)) ([b01b6ba](https://github.com/7xuanlu/wenlan/commit/b01b6ba0b5e766b2a6ca3996f2050955b7a60599))
+* **connect:** send local AI apps to Add a tool instead of the relay ([#787](https://github.com/7xuanlu/wenlan/issues/787)) ([bf9047b](https://github.com/7xuanlu/wenlan/commit/bf9047bf5f3102dc8c8079bc15c01fea9f5e3182))
+
+## [0.18.15](https://github.com/7xuanlu/wenlan/compare/v0.18.14...v0.18.15) (2026-10-03)
+
+
+### Bug Fixes
+
+* **plugin:** install the runtime through the pinned npm package, not a piped script ([#790](https://github.com/7xuanlu/wenlan/issues/790)) ([b12461b](https://github.com/7xuanlu/wenlan/commit/b12461bfb29fbbe4944d73e881aa24f1a6d39bbe))
+
+## [0.18.14](https://github.com/7xuanlu/wenlan/compare/v0.18.13...v0.18.14) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** preserve device authorization when reconnecting transport ([#788](https://github.com/7xuanlu/wenlan/issues/788)) ([908777f](https://github.com/7xuanlu/wenlan/commit/908777ffed76aa04fb5e0a6c7adcbc48ee2ae227))
+
+## [0.18.13](https://github.com/7xuanlu/wenlan/compare/v0.18.12...v0.18.13) (2026-09-30)
+
+
+### Bug Fixes
+
+* **app:** refresh authorized connections after OAuth approval ([#785](https://github.com/7xuanlu/wenlan/issues/785)) ([073b294](https://github.com/7xuanlu/wenlan/commit/073b2945d4a3feace72e19842935d1a540ad9ff3))
+* **plugin:** clear the directory portal blocker and add a plugin icon ([#783](https://github.com/7xuanlu/wenlan/issues/783)) ([3dd07ed](https://github.com/7xuanlu/wenlan/commit/3dd07ed7a37ca5d97e1903c5216adac12b90bd0c))
+* **plugin:** make the Claude plugin pass directory portal validation ([#781](https://github.com/7xuanlu/wenlan/issues/781)) ([5a7b097](https://github.com/7xuanlu/wenlan/commit/5a7b097ba09b268526445cfaae97ff77e62e5a2e))
+* **release:** validate the Claude runner version pin ([#786](https://github.com/7xuanlu/wenlan/issues/786)) ([1ff2b03](https://github.com/7xuanlu/wenlan/commit/1ff2b03c5febb56dddb56a1ae5e4bbd155b4e0b0))
+
 ## [0.18.12](https://github.com/7xuanlu/wenlan/compare/v0.18.11...v0.18.12) (2026-09-23)
 
 

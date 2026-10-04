@@ -3100,6 +3100,10 @@ export async function toggleRemoteAccess(
   return invoke<RemoteAccessStatus>("toggle_remote_access", { enabled, expectedRevision: expectedRevision ?? null });
 }
 
+export async function reconnectRemoteAccess(expectedRevision: string): Promise<RemoteAccessStatus> {
+  return invoke<RemoteAccessStatus>("reconnect_remote_access", { expectedRevision });
+}
+
 export interface RemoteAccessProfile {
   revision: string;
   space: string;
@@ -3152,6 +3156,10 @@ export async function listRemoteGrants(expectedRevision: string, cursor: string 
 }
 export async function revokeRemoteGrant(expectedRevision: string, grantId: string): Promise<RemoteGrantRevocation> {
   return invoke("revoke_remote_grant", { expectedRevision, grantId });
+}
+/** Takes the pairing code from the last `wenlan://pair` link, if one is waiting. */
+export async function takeRemotePairingLink(): Promise<string | null> {
+  return invoke("take_remote_pairing_link");
 }
 
 /** Native protected-backend and authenticated relay control-plane probe. */

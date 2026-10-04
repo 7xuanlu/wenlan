@@ -11,7 +11,7 @@
     "test:runtime": "node tests/run-ci.mjs runtime"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "0.10.3"
+    "@cloudflare/workers-oauth-provider": "1.2.1"
   },
   "devDependencies": {
     "esbuild": "0.28.1",
@@ -22,8 +22,8 @@
   "overrides": {
     "miniflare@4.20260730.0": {
       "sharp": "0.35.4",
-      "undici": "7.29.0",
       "workerd": "1.20260911.1"
-    }
+    },
+    "undici": "7.29.1"
   }
 }

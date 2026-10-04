@@ -23,6 +23,7 @@ mod indexer;
 mod lifecycle;
 pub mod mcp_config;
 mod page_review;
+mod pairing_link;
 pub mod plugin_install;
 // M5 presence-capability minting (D7). The page-review half is live through
 // `page_review::review_page`; the claim-attest half has no daemon route yet,
@@ -68,6 +69,17 @@ fn set_main_window_dock_visibility<R: tauri::Runtime>(app: &tauri::AppHandle<R>,
 
 #[cfg(not(target_os = "macos"))]
 fn set_main_window_dock_visibility<R: tauri::Runtime>(_app: &tauri::AppHandle<R>, _visible: bool) {}
+
+/// Shows, restores, and focuses the main window (second launch, pairing link).
+pub(crate) fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        set_main_window_dock_visibility(app, true);
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
 
 /// Keep the AppKit traffic lights on the same centreline as Wenlan's header.
 ///
@@ -719,7 +731,6 @@ pub fn run() {
 
     let builder =
         tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            use tauri::Manager;
             // A second launch of a *newer* bundle means the user upgraded and
             // wants the new version, not the old window brought to the front.
             #[cfg(target_os = "macos")]
@@ -744,12 +755,9 @@ pub fn run() {
             }
             #[cfg(not(target_os = "macos"))]
             let _ = &argv;
-            if let Some(window) = app.get_webview_window("main") {
-                set_main_window_dock_visibility(app, true);
-                let _ = window.show();
-                let _ = window.unminimize();
-                let _ = window.set_focus();
-            }
+            // A wenlan:// link in argv has already reached the deep-link
+            // plugin (the single-instance `deep-link` feature forwards it).
+            reveal_main_window(app);
         }));
 
     #[cfg(debug_assertions)]
@@ -764,6 +772,8 @@ pub fn run() {
     };
 
     builder
+        // After single-instance, so a second launch forwards its wenlan:// link.
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_clipboard_x::init())
@@ -772,6 +782,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(Arc::new(RwLock::new(app_state)))
+        .manage(pairing_link::PendingPairingLink::default())
         .manage(Arc::new(tokio::sync::Mutex::new(
             None::<indexer::FileWatcher>,
         )))
@@ -786,6 +797,21 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             {
                 app.set_activation_policy(activation_policy_for_main_window_visible(false));
+            }
+
+            // wenlan://pair?code= links from the relay pairing page. A link
+            // that launched the app is in get_current; later ones arrive here.
+            {
+                use tauri_plugin_deep_link::DeepLinkExt;
+                let link_handle = handle.clone();
+                app.deep_link().on_open_url(move |event| {
+                    pairing_link::accept_urls(&link_handle, &event.urls());
+                });
+                match app.deep_link().get_current() {
+                    Ok(Some(urls)) => pairing_link::accept_urls(&handle, &urls),
+                    Ok(None) => {}
+                    Err(error) => log::warn!("[pairing-link] could not read launch links: {error}"),
+                }
             }
 
             // Tray-app pattern: red-X on the main window hides instead of closing.
@@ -1651,12 +1677,14 @@ pub fn run() {
             search::wire_state,
             // Remote access commands
             search::toggle_remote_access,
+            search::reconnect_remote_access,
             search::get_remote_access_profile,
             search::configure_remote_access,
             search::inspect_remote_pairing,
             search::approve_remote_pairing,
             search::list_remote_grants,
             search::revoke_remote_grant,
+            pairing_link::take_remote_pairing_link,
             search::get_remote_access_status,
             search::test_remote_mcp_connection,
             // Memory nurture commands

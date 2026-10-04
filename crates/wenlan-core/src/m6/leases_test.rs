@@ -301,6 +301,10 @@ async fn the_startup_reap_is_zero_on_an_empty_registry() {
 #[tokio::test]
 async fn each_phase_stores_its_own_ttl() {
     let db = db().await;
+    // Bracket the acquires with the database clock: each stored expiry is
+    // `acquire-time + ttl`, and the acquire time lies in `before..=after`
+    // no matter how many second boundaries the wall clock crosses.
+    let before = db.scalar("SELECT unixepoch()", ()).await;
     let tx = db.tx().await;
     leases::acquire(&tx, LeasePhase::Genesis, "space-a", 7, 0)
         .await
@@ -311,21 +315,26 @@ async fn each_phase_stores_its_own_ttl() {
         .unwrap()
         .expect("frontier lease");
     tx.commit().await.unwrap();
+    let after = db.scalar("SELECT unixepoch()", ()).await;
 
-    assert_eq!(
-        db.scalar(
-            "SELECT expires_at - unixepoch() FROM grouping_leases WHERE phase = 'genesis'",
-            ()
+    let genesis = db
+        .scalar(
+            "SELECT expires_at FROM grouping_leases WHERE phase = 'genesis'",
+            (),
         )
-        .await,
-        900
+        .await;
+    assert!(
+        (before + 900..=after + 900).contains(&genesis),
+        "genesis expiry {genesis} is not acquire-time ({before}..={after}) + 900"
     );
-    assert_eq!(
-        db.scalar(
-            "SELECT expires_at - unixepoch() FROM grouping_leases WHERE phase = 'frontier'",
-            ()
+    let frontier = db
+        .scalar(
+            "SELECT expires_at FROM grouping_leases WHERE phase = 'frontier'",
+            (),
         )
-        .await,
-        120
+        .await;
+    assert!(
+        (before + 120..=after + 120).contains(&frontier),
+        "frontier expiry {frontier} is not acquire-time ({before}..={after}) + 120"
     );
 }

@@ -114,10 +114,11 @@ rows; relation confidence is stored separately and is not the community edge
 weight. The resulting `community_id` can group linked Memories for the optional
 global-context summary path.
 
-Automatic post-ingest extraction currently creates entities without a Space
-value. Those entities can anchor Global and Uncategorized graph searches, but a
-selected-Space graph stream requires entity rows carrying that Space. Returned
-Memories remain filtered by the active read scope.
+Automatic post-ingest extraction assigns each newly created entity the source
+Memory's Space, or Uncategorized when the source has no Space. The selected-Space
+graph stream still depends on eligible entity links being present; this does not
+backfill legacy entity rows or establish retrieval parity. Returned Memories
+remain filtered by the active read scope.
 
 The extraction and commit path is in
 [`kg/entity_extraction.rs`](../crates/wenlan-core/src/kg/entity_extraction.rs);
@@ -196,8 +197,9 @@ Ollama or LM Studio and configured cloud providers remain alternatives.
   parity from this model.
 - A graph can improve retrieval only after model-backed extraction, imported
   graph data, or explicit entity links have created the required substrate.
-- Automatic post-ingest entities currently have no Space value, so they do not
-  anchor selected-Space graph retrieval. Memory results remain scope-filtered.
+- Newly created automatic post-ingest entities inherit the source Memory's Space
+  (or Uncategorized when absent). This does not backfill legacy rows or guarantee
+  selected-Space graph retrieval; Memory results remain scope-filtered.
 - Bounded k-hop BFS exists behind `WENLAN_ENABLE_GRAPH_KHOP`, but its current
   path feeds the legacy observation branch whose rows do not survive Memory
   output. It is not a live Memory-retrieval channel.

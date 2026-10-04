@@ -100,6 +100,9 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       assert.match(html, /id="continue"[^>]*disabled/);
       assert.match(html, /https:\/\/wenlan.app\/docs\/data-and-privacy/);
       assert.match(html, /Settings &gt; Connections/);
+      assert.match(html, /class="local-hint">App on this computer[^<]*<strong>Add a tool<\/strong>/, 'local apps are steered to direct setup');
+      const openLink = /id="open-in-wenlan"[^>]*href="([^"]+)"/.exec(html);
+      assert.equal(openLink?.[1], `wenlan://pair?code=${pairId}`, 'the app link carries only the pairing code, never the browser secret');
       const pendingStatus = await request('/pairing/status', { headers: { cookie } });
       assert.equal(pendingStatus.headers.get('cache-control'), 'no-store');
       assert.deepEqual(await pendingStatus.json(), { status: 'pending' });
