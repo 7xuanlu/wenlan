@@ -101,7 +101,7 @@ test("knowledge-network visual distinguishes entities and relation semantics", (
   assert.match(asset.svg, />MEMORY</u);
   assert.match(asset.svg, /marker-end="url\(#network-en-desktop-relation-arrow\)"/u);
   assert.match(asset.svg, />PART OF</u);
-  assert.match(asset.svg, />RELATED TO · 0\.82</u);
+  assert.match(asset.svg, />RELATED TO</u);
   assert.match(asset.svg, />GROUPED BY RELATION DENSITY</u);
   assert.doesNotMatch(asset.svg, /IN PROGRESS/u);
 });
@@ -150,7 +150,7 @@ test("every knowledge-network locale keeps direction and strength semantics", ()
       for (const pathMarkup of sagePaths) {
         assert.match(pathMarkup, /marker-end=/u, `${locale}/${viewport} sage relation direction`);
       }
-      assert.equal((svg.match(/0\.82/gu) ?? []).length, 1, `${locale}/${viewport} confidence exemplar`);
+      assert.doesNotMatch(svg, /0\.82/u, `${locale}/${viewport} avoids invented numerical confidence`);
       assert.doesNotMatch(svg, /ENTITY PAGE|实体页面|實體頁面/u);
     }
   }
@@ -163,11 +163,11 @@ test("diagrams retain bounded model, review, and citation claims", () => {
     const network = makeKnowledgeNetwork("en", viewport).svg;
     assert.match(overview, /configured model/u);
     assert.match(overview, /Automatic refresh proposes changes/u);
-    assert.match(lifecycle, /CITATION CHECK PASSED/u);
+    assert.match(lifecycle, /ADDED FROM THE UI REVIEW/u);
     assert.match(lifecycle, /AUTOMATIC REFRESH · EDITED PAGE/u);
     assert.match(lifecycle, /Supersession keeps the earlier memory/u);
     assert.doesNotMatch(lifecycle, /VERIFIED REBUILD|Archive, never delete|On-device \/ off/u);
-    assert.match(network, /Conceptual example/u);
+    assert.match(network, /Illustrative example/u);
     assert.doesNotMatch(network, /Pages connect through Entities/u);
   }
 });
@@ -206,6 +206,28 @@ test("desktop and mobile graph layouts preserve the exact same evidence relation
       const actual = [...svg.matchAll(/data-from="([^"]+)" data-to="([^"]+)" data-relation="([^"]+)"/gu)]
         .map(([, from, to, relation]) => `${from}>${to}:${relation}`);
       assert.deepEqual(actual, expected, `${locale}/${viewport}`);
+    }
+  }
+});
+
+test("network and lifecycle continue the same concrete Agent Loop example", () => {
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    for (const viewport of ["desktop", "mobile"]) {
+      const network = makeKnowledgeNetwork(locale, viewport).svg;
+      const lifecycle = makeLifecycle(locale, viewport).svg;
+      for (const svg of [network, lifecycle]) {
+        assert.match(svg, />Agent Loop</u);
+        assert.match(svg, /Illustrative example|ILLUSTRATIVE EXAMPLE|示例内容|示例內容/u);
+        assert.match(svg, /\[1\]/u);
+        assert.match(svg, /\[2\]/u);
+        assert.doesNotMatch(svg, /mem_\d+|source_\d+|fill="#D9DEE7"|v12|Wenlan positioning|Wenlan 定位/u);
+      }
+      assert.match(network, /UI checklist|验收清单|驗收清單/u);
+      assert.match(network, /Retry rule|重试准则|重試準則/u);
+      assert.match(lifecycle, /Tests passed|测试通过就算完成|測試通過就算完成/u);
+      assert.match(lifecycle, /Tests \+ visual checks|测试之外，也要看画面|測試之外，也要看畫面/u);
+      assert.match(lifecycle, /Tests missed a covered label|测试漏掉了被连线遮住的标签|測試漏掉了被連線遮住的標籤/u);
+      assert.match(lifecycle, /Proposed changes wait|修订提案等你审核|修訂提案等你審核/u);
     }
   }
 });

@@ -164,12 +164,14 @@ For technical readers: Wenlan follows the **LLM wiki** pattern. See the [impleme
 
 <a id="knowledge-graph"></a>
 
-### A knowledge graph that gets more useful over time
+### Follow the connections behind a page
+
+The Agent Loop example connects a retry rule, a lesson from a UI review, and an acceptance checklist you can reuse.
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Conceptual model of Wenlan's connected knowledge system, with Knowledge Pages, Source Pages, atomic Memories, and Entities connected through Page links, evidence, Memory-to-Entity links, and Entity relations." width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
+    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Illustrative Agent Loop page citing an agent-design guide and UI-review note; named memories include retry guidance and a visual-check lesson, linked to a reusable acceptance checklist and related concepts and tools." width="100%">
   </picture>
 </p>
 
@@ -210,17 +212,19 @@ Page, episodic, and fact channels are opt-in and degrade to the remaining search
 
 ### Knowledge changes. History stays.
 
-A generated wiki can go stale; a memory store can fragment into disconnected facts. Wenlan links two lifecycles without collapsing them into one layer.
+New experience improves your notes without hiding earlier decisions. This example replaces “tests passed, so the UI is done” with “check tests and the desktop and mobile views,” keeping the reason and evidence for the change.
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="An earlier memory remains linked after an explicit superseding capture. When a Page is stale, Wenlan rebuilds it from current Sources and Memories, records the revision, and stages changes to human writing for review." width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="Illustrative before and after: “tests passed, so the UI is done” becomes “check tests and desktop and mobile views”; the evidence is a mobile label obscured despite passing tests. During automatic refresh, changes to a page you edited are proposed for your review." width="100%">
   </picture>
 </p>
 
 <details>
 <summary>Updates, review, and local files</summary>
+
+A generated wiki can go stale; a memory store can fragment into disconnected facts. Wenlan links two lifecycles without collapsing them into one layer.
 
 #### Atomic Memory
 

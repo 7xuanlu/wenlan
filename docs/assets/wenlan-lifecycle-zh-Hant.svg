@@ -1,6 +1,6 @@
 <svg width="1800" height="1120" viewBox="0 0 1800 1120" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
     <title id="title">知識會改變，歷史仍會保留。</title>
-    <desc id="desc">過時頁面依目前依據重建；被取代的知識仍可追溯。</desc>
+    <desc id="desc">一次介面檢查的經驗補進完成條件；先前的判斷仍可追溯。</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1800" height="1120" fill="#FCFCFB"/>
 
@@ -11,9 +11,9 @@
   </g>
     <g data-fit-region="lifecycle-zh-Hant-desktop-heading" data-fit-x="148" data-fit-y="56" data-fit-width="1578" data-fit-height="130" data-check-overlap="false">
 
-        <text x="148" y="84" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">兩套相連的生命週期</text>
+        <text x="148" y="84" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">AGENT LOOP · 示例內容</text>
         <text x="148" y="136" font-family="'Fraunces', Georgia, serif" font-size="46" font-weight="600" fill="#1A1A2E" text-anchor="start">知識會改變，歷史仍會保留。</text>
-        <text x="148" y="176" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="400" fill="#586174" text-anchor="start">過時頁面依目前依據重建；被取代的知識仍可追溯。</text>
+        <text x="148" y="176" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="400" fill="#586174" text-anchor="start">一次介面檢查的經驗補進完成條件；先前的判斷仍可追溯。</text>
 
   </g>
     <g data-fit-region="lifecycle-zh-Hant-desktop-memory-object" data-fit-x="70" data-fit-y="236" data-fit-width="640" data-fit-height="670" data-check-overlap="false">
@@ -25,14 +25,14 @@
         <text x="142" y="400" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">較早的記憶</text>
         <g>
       <rect x="396" y="382" width="94" height="28" rx="14" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="443" y="400.56" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#586174" text-anchor="middle">已學習</text>
+      <text x="443" y="400.56" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#586174" text-anchor="middle">先前</text>
     </g>
-        <text x="142" y="448" font-family="'Fraunces', Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">mem_42</text>
-        <rect x="142" y="478" width="250" height="9" rx="4.5" fill="#D9DEE7"/>
-        <rect x="142" y="500" width="320" height="9" rx="4.5" fill="#E3E7EE"/>
+        <text x="142" y="448" font-family="'Fraunces', Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">測試通過就算完成</text>
+        <text x="142" y="482" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="400" fill="#586174" text-anchor="start">當時只用測試結果</text>
+<text x="142" y="508" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="400" fill="#586174" text-anchor="start">判斷這次修改是否完成。</text>
         <g>
-      <rect x="142" y="528" width="108" height="30" rx="15" fill="#FFFFFF" stroke="#E3E7EE"/>
-      <text x="196" y="548.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
+      <rect x="142" y="528" width="112" height="30" rx="15" fill="#FFFFFF" stroke="#E3E7EE"/>
+      <text x="198" y="548.32" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="14" font-weight="600" fill="#586174" text-anchor="middle">圖稿審查 [2]</text>
     </g>
       </g>
       <path d="M438 552 C494 570 512 592 512 622" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
@@ -43,16 +43,16 @@
       <text x="250" y="648" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">取代它的新記憶</text>
       <g>
       <rect x="538" y="630" width="94" height="28" rx="14" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="585" y="648.56" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#4F7558" text-anchor="middle">已確認</text>
+      <text x="585" y="648.56" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#4F7558" text-anchor="middle">後來</text>
     </g>
-      <text x="250" y="696" font-family="'Fraunces', Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">mem_77</text>
-      <rect x="250" y="724" width="286" height="9" rx="4.5" fill="#D9DEE7"/>
-      <rect x="250" y="746" width="352" height="9" rx="4.5" fill="#E3E7EE"/>
+      <text x="250" y="696" font-family="'Fraunces', Georgia, serif" font-size="27" font-weight="600" fill="#1A1A2E" text-anchor="start">測試之外，也要看畫面</text>
+      <text x="250" y="727" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="400" fill="#586174" text-anchor="start">測試漏掉了被連線遮住的標籤。</text>
+<text x="250" y="752" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="400" fill="#586174" text-anchor="start">新增：檢查桌面與手機畫面。</text>
       <text x="250" y="790" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#5E58C8" text-anchor="start">取代</text>
       <path d="M346 786 H420" stroke="#5E58C8" stroke-width="1.6" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
       <g>
-      <rect x="436" y="770" width="88" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
-      <text x="480" y="790.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#5E58C8" text-anchor="middle">mem_42</text>
+      <rect x="436" y="770" width="112" height="30" rx="15" fill="#F3F2FC" stroke="#D2CFF0"/>
+      <text x="492" y="790.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#5E58C8" text-anchor="middle">只看測試</text>
     </g>
       <text x="250" y="826" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#4F7558" text-anchor="start">舊說法仍保留關聯</text>
       <circle cx="102" cy="642" r="5" fill="#5E58C8"/>
@@ -72,7 +72,7 @@
     <path d="M791 358h9M791 363h9"/>
   </g>
       <text x="826" y="348" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">來源依據</text>
-      <text x="826" y="378" font-family="'Fraunces', Georgia, serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="start">source_11</text>
+      <text x="826" y="378" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="start">圖稿審查 [2]</text>
       <path d="M878 406 V466" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-zh-Hant-desktop-arrow)"/>
       <circle cx="878" cy="578" r="114" fill="#FFFFFF" stroke="#E3E7EE"/>
       <circle cx="878" cy="578" r="90" fill="none" stroke="#5E58C8" stroke-width="3" stroke-dasharray="112 26"/>
@@ -98,36 +98,30 @@
       <text x="1080" y="302" font-family="'Fraunces', Georgia, serif" font-size="32" font-weight="600" fill="#1A1A2E" text-anchor="start">重新構建，變化留有紀錄。</text>
       <rect x="1130" y="388" width="500" height="406" rx="8" fill="#F7F8FA" stroke="#E3E7EE"/>
       <rect x="1160" y="356" width="500" height="424" rx="8" fill="#FAFAFA" stroke="#E3E7EE"/>
-      <text x="1190" y="394" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">頁面 v11</text>
+      <text x="1190" y="394" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#8B93A3" text-anchor="start">先前</text>
       <rect x="1136" y="502" width="56" height="112" rx="8" fill="#FBF6EA" stroke="#E5D3AA"/>
-      <text x="1164" y="542" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8C5F16" text-anchor="middle">v11</text>
+      <text x="1164" y="542" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8C5F16" text-anchor="middle">先前</text>
       <text x="1164" y="566" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8C5F16" text-anchor="middle">待更新</text>
       <g filter="url(#lifecycle-zh-Hant-desktop-page-shadow)">
         <rect x="1192" y="330" width="510" height="454" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="1224" y="370" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">頁面 v12</text>
+      <text x="1224" y="370" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">更新後的筆記</text>
       <g>
       <rect x="1568" y="350" width="82" height="28" rx="14" fill="#F2F7F3" stroke="#C7DACB"/>
       <text x="1609" y="368.56" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#4F7558" text-anchor="middle">目前</text>
     </g>
-      <text x="1224" y="424" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">持續維護的頁面</text>
-      <text x="1224" y="454" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">v12 / 6 條支撐紀錄</text>
-      <rect x="1224" y="514" width="280" height="9" rx="4.5" fill="#D9DEE7"/>
-      <rect x="1224" y="536" width="346" height="9" rx="4.5" fill="#E3E7EE"/>
+      <text x="1224" y="424" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
+      <text x="1224" y="454" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">完成條件 · 示例內容</text>
+      <text x="1224" y="510" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="22" font-weight="400" fill="#1A1A2E" text-anchor="start">重複出錯，先查原因。[1]</text>
       <g>
-      <rect x="1580" y="505" width="108" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="1634" y="525.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#586174" text-anchor="middle">source_07</text>
+      <rect x="1224" y="536" width="106" height="28" rx="14" fill="#F7F8FA" stroke="#E3E7EE"/>
+      <text x="1277" y="554.94" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="13" font-weight="600" fill="#586174" text-anchor="middle">設計指南 [1]</text>
     </g>
       <rect x="1212" y="574" width="470" height="88" rx="8" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="1236" y="602" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="start">引用檢查通過</text>
-      <rect x="1236" y="620" width="250" height="8" rx="4" fill="#BFD0C2"/>
-      <rect x="1236" y="640" width="322" height="8" rx="4" fill="#D6E2D8"/>
-      <g>
-      <rect x="1570" y="606" width="88" height="30" rx="15" fill="#FFFFFF" stroke="#C7DACB"/>
-      <text x="1614" y="626.32" font-family="'JetBrains Mono', monospace" font-size="14" font-weight="500" fill="#4F7558" text-anchor="middle">mem_77</text>
-    </g>
+      <text x="1236" y="602" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="start">從這次審查補上的規則</text>
+      <text x="1236" y="635" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#4F7558" text-anchor="start">完成前，檢查桌面與手機畫面。[2]</text>
       <text x="1224" y="738" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="16" font-weight="600" fill="#4F7558" text-anchor="start">近期變化仍可檢查</text>
-      <text x="1638" y="738" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="end">v10 / v11 / v12</text>
+      <text x="1638" y="738" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="end">修改前 / 修改後</text>
       <path d="M1408 784 V822" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-zh-Hant-desktop-warm-arrow)"/>
       <rect x="1140" y="838" width="562" height="64" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
       <text x="1164" y="864" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#9F5C32" text-anchor="start">自動更新 · 你編輯過的頁面</text>

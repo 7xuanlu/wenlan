@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8072a34667d46095f8110330ed44225087f80b94f323a722bd91f758a1d12626 -->
+<!-- README_SYNC: source=README.md sha256=5a3f6fb987ab2d6da4197975d3116e7ae8cd498845dc7e335e00638887f74ba4 -->
 
 <p align="center">
   <picture>
@@ -167,12 +167,14 @@ Wenlan 讓持續進行的工作不只留在聊天視窗裡。你可以保存選�
 
 <a id="knowledge-graph"></a>
 
-### 越用越有價值的知識圖譜
+### 從一頁，找到相關的知識
+
+Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗，以及可接著使用的驗收清單。
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Wenlan 連接式知識系統的概念圖：知識頁面、來源頁面、原子記憶與實體透過頁面連結、依據、記憶到實體的連接和實體關係互相連接。" width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hant-mobile.png">
+    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Agent Loop 頁面的示意圖，引用 Agent 設計指南與介面檢查筆記；具名記憶包括重試準則和視覺檢查經驗，並連結到可重用的驗收清單及相關概念與工具。" width="100%">
   </picture>
 </p>
 
@@ -214,17 +216,19 @@ Wenlan 的核心搜尋是本地混合檢索流程，不是單一的向量查詢�
 
 ### 知識會改變，歷史仍會保留。
 
-一次生成的 wiki 會過時；只存記憶又容易碎成互不相連的事實。Wenlan 連結兩套生命週期，但不把它們混成同一層。
+新的經驗補進筆記，過去的判斷仍找得到。以下示例把「測試通過就算完成」改成「測試加上桌面與手機畫面檢查」，保留修正原因與依據。
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="明確取代舊說法的新記憶仍會保留前後關聯。頁面過時後，Wenlan 會依目前來源與記憶重建、記錄修訂，並把對人工文字的改動變成審核提案。" width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hant-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="示意的前後規則：「測試通過就算完成」改為「檢查測試以及桌面與手機畫面」；依據是測試雖通過，手機標籤仍被遮住。自動更新你編輯過的頁面時，修改會以提案交由你審核。" width="100%">
   </picture>
 </p>
 
 <details>
 <summary>更新、審核與本地檔案的細節</summary>
+
+一次生成的 wiki 會過時；只存記憶又容易碎成互不相連的事實。Wenlan 連結兩套生命週期，但不把它們混成同一層。
 
 #### 原子記憶
 

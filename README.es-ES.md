@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8072a34667d46095f8110330ed44225087f80b94f323a722bd91f758a1d12626 -->
+<!-- README_SYNC: source=README.md sha256=5a3f6fb987ab2d6da4197975d3116e7ae8cd498845dc7e335e00638887f74ba4 -->
 
 <p align="center">
   <picture>
@@ -168,12 +168,14 @@ Para lectores técnicos: Wenlan sigue el patrón de las wikis para LLM. Consulta
 
 <a id="knowledge-graph"></a>
 
-### Un grafo de conocimiento que se vuelve más útil con el tiempo
+### Sigue las conexiones que hay detrás de una página
+
+El ejemplo de Agent Loop conecta una pauta de reintentos, una lección de una revisión de interfaz y una lista de aceptación que puedes reutilizar.
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Modelo conceptual del sistema de conocimiento conectado de Wenlan, con Páginas de Conocimiento, Páginas de Fuente, Memorias atómicas y Entidades conectadas a través de enlaces de Página, evidencia, enlaces de Memoria a Entidad y relaciones de Entidad." width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
+    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Página ilustrativa de Agent Loop que cita una guía de diseño de agentes y una nota de revisión de interfaz; las Memorias mencionadas incluyen pautas de reintento y una lección de comprobación visual, enlazadas a una lista de aceptación reutilizable y a conceptos y herramientas relacionados." width="100%">
   </picture>
 </p>
 
@@ -215,17 +217,19 @@ Los canales de Página, episódicos y de hechos son opcionales y recurren a las 
 
 ### El conocimiento cambia. El historial permanece.
 
-Una wiki generada puede quedar obsoleta; un almacén de memoria puede fragmentarse en hechos desconectados. Wenlan vincula dos ciclos de vida sin colapsarlos en una sola capa.
+La nueva experiencia mejora tus notas sin ocultar decisiones anteriores. Este ejemplo cambia «las pruebas pasaron, así que la interfaz está lista» por «comprueba las pruebas y las vistas de escritorio y móvil», conservando el motivo y las pruebas del cambio.
 
 <p align="center">
   <picture>
-    <source media="(max-width: 600px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Una memoria anterior permanece vinculada después de una captura de sustitución explícita. Cuando una Página está obsoleta, Wenlan la reconstruye a partir de Fuentes y Memorias actuales, registra la revisión y pone los cambios en la escritura humana en espera para revisión." width="100%">
+    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="Cambio ilustrativo de regla: «las pruebas pasaron, así que la interfaz está lista» pasa a «comprueba las pruebas y las vistas de escritorio y móvil»; las pruebas pasaron, pero una línea tapaba una etiqueta en móvil. Durante la actualización automática, los cambios en una Página que hayas editado se proponen para que los revises." width="100%">
   </picture>
 </p>
 
 <details>
 <summary>Actualizaciones, revisión y archivos locales</summary>
+
+Una wiki generada puede quedar obsoleta; un almacén de memoria puede fragmentarse en hechos desconectados. Wenlan vincula dos ciclos de vida sin colapsarlos en una sola capa.
 
 #### Memoria Atómica
 

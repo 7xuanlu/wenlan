@@ -1,6 +1,6 @@
 <svg width="1800" height="1120" viewBox="0 0 1800 1120" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-    <title id="title">Connected like a graph. Readable like a wiki.</title>
-    <desc id="desc">Pages cite sources and memories. Memories link to entities, which connect through typed relations.</desc>
+    <title id="title">Follow the connections behind a page.</title>
+    <desc id="desc">Illustrative Agent Loop page connected to retry guidance, a UI-review lesson, an acceptance checklist, and related tools.</desc>
     <style>text { font-kerning: normal; }</style>
     <rect width="1800" height="1120" fill="#FCFCFB"/>
 
@@ -12,8 +12,8 @@
     <g data-fit-region="network-en-desktop-heading" data-fit-x="148" data-fit-y="56" data-fit-width="1578" data-fit-height="138" data-check-overlap="false">
 
         <text x="148" y="84" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#8B93A3" text-anchor="start">KNOWLEDGE GRAPH</text>
-        <text x="148" y="136" font-family="'Fraunces', Georgia, serif" font-size="44" font-weight="600" fill="#1A1A2E" text-anchor="start">Connected like a graph. Readable like a wiki.</text>
-        <text x="148" y="178" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="400" fill="#586174" text-anchor="start">Pages cite sources and memories. Memories link to entities and their connections.</text>
+        <text x="148" y="136" font-family="'Fraunces', Georgia, serif" font-size="44" font-weight="600" fill="#1A1A2E" text-anchor="start">Follow the connections behind a page.</text>
+        <text x="148" y="178" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="400" fill="#586174" text-anchor="start">A retry rule, a UI lesson, and a checklist stay connected to their evidence.</text>
 
   </g>
     <g data-fit-region="network-en-desktop-graph-field" data-fit-x="80" data-fit-y="230" data-fit-width="1640" data-fit-height="780" data-check-overlap="true">
@@ -22,7 +22,7 @@
     <text x="1110" y="318" font-family="'JetBrains Mono', monospace" font-size="9" font-weight="500" fill="#8B93A3" text-anchor="start">GROUPED BY RELATION DENSITY</text>
     <path data-from="sourceOne" data-to="page" data-relation="citation" d="M350 405 C454 428 520 492 590 540" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
 <path data-from="sourceTwo" data-to="page" data-relation="citation" d="M448 778 C522 760 566 700 610 680" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
-<path data-from="memoryOne" data-to="page" data-relation="support" d="M496 536 C542 540 558 566 580 580" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
+<path data-from="memoryOne" data-to="page" data-relation="support" d="M496 536 C524 556 528 604 560 628" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
 <path data-from="memoryTwo" data-to="page" data-relation="support" d="M520 900 C546 812 592 762 650 740" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
 <path data-from="memoryOne" data-to="entityOne" data-relation="about" d="M496 528 C700 300 956 314 1080 452" fill="none" stroke="#5E58C8" stroke-width="1.8" stroke-opacity="0.62" stroke-linecap="round"/>
 <path data-from="page" data-to="linkedPage" data-relation="refines" d="M872 744 C902 792 932 812 966 826" fill="none" stroke="#5E58C8" stroke-width="1.5" stroke-opacity="0.46" stroke-linecap="round"/>
@@ -32,7 +32,7 @@
 <path data-from="entityFour" data-to="entityOne" data-relation="part_of" d="M1302 724 C1270 704 1246 660 1224 576" fill="none" stroke="#6F8F76" stroke-width="3.4" stroke-opacity="0.84" stroke-linecap="round" marker-end="url(#network-en-desktop-relation-arrow)"/>
 <path data-from="entityTwo" data-to="entityThree" data-relation="related_to" d="M1492 422 C1524 466 1538 504 1534 518" fill="none" stroke="#6F8F76" stroke-width="1.4" stroke-opacity="0.6" stroke-linecap="round" marker-end="url(#network-en-desktop-relation-arrow)"/>
 <path data-from="entityThree" data-to="entityFour" data-relation="related_to" d="M1460 680 C1436 700 1420 714 1412 724" fill="none" stroke="#6F8F76" stroke-width="1.8" stroke-opacity="0.66" stroke-linecap="round" marker-end="url(#network-en-desktop-relation-arrow)"/>
-    <g data-fit-region="network-en-desktop-source-User interviews" data-fit-x="178" data-fit-y="268" data-fit-width="184" data-fit-height="184" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-source-Agent guide [1]" data-fit-x="178" data-fit-y="268" data-fit-width="184" data-fit-height="184" data-check-overlap="true">
 
       <circle cx="270" cy="360" r="92" fill="#F7F8FA" stroke="#E3E7EE" stroke-width="1.5"/>
       <g fill="none" stroke="#586174" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -41,10 +41,10 @@
     <path d="M264 312h9M264 317h9"/>
   </g>
       <text x="270" y="344" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">SOURCE PAGE</text>
-      <text x="270" y="382" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">User interviews</text>
+      <text x="270" y="382" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">Agent guide [1]</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-source-LLM-wiki notes" data-fit-x="266" data-fit-y="706" data-fit-width="188" data-fit-height="188" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-source-UI review [2]" data-fit-x="266" data-fit-y="706" data-fit-width="188" data-fit-height="188" data-check-overlap="true">
 
       <circle cx="360" cy="800" r="94" fill="#F7F8FA" stroke="#E3E7EE" stroke-width="1.5"/>
       <g fill="none" stroke="#586174" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
@@ -53,78 +53,78 @@
     <path d="M354 752h9M354 757h9"/>
   </g>
       <text x="360" y="784" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="middle">SOURCE PAGE</text>
-      <text x="360" y="822" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">LLM-wiki notes</text>
+      <text x="360" y="822" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="19" font-weight="600" fill="#1A1A2E" text-anchor="middle">UI review [2]</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-hero" data-fit-x="580" data-fit-y="420" data-fit-width="380" data-fit-height="380" data-check-overlap="false">
+    <g data-fit-region="network-en-desktop-hero" data-fit-x="550" data-fit-y="390" data-fit-width="440" data-fit-height="440" data-check-overlap="false">
 
-      <circle cx="770" cy="610" r="190" fill="#F3F2FC" fill-opacity="0.72" stroke="#D2CFF0" stroke-width="1.5"/>
+      <circle cx="770" cy="610" r="220" fill="#F3F2FC" fill-opacity="0.72" stroke="#D2CFF0" stroke-width="1.5"/>
       <g filter="url(#network-en-desktop-page-shadow)">
-        <rect x="605" y="515" width="330" height="190" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
+        <rect x="560" y="480" width="420" height="260" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="635" y="551" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#5E58C8" text-anchor="start">KNOWLEDGE PAGE</text>
+      <text x="590" y="516" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#5E58C8" text-anchor="start">KNOWLEDGE PAGE</text>
       <g>
-      <rect x="823" y="531" width="82" height="28" rx="14" fill="#F2F7F3" stroke="#C7DACB"/>
-      <text x="864" y="549.18" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
+      <rect x="868" y="496" width="82" height="28" rx="14" fill="#F2F7F3" stroke="#C7DACB"/>
+      <text x="909" y="514.18" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
     </g>
-      <text x="635" y="597" font-family="'Fraunces', Georgia, serif" font-size="30" font-weight="600" fill="#1A1A2E" text-anchor="start">Wenlan positioning</text>
-      <text x="635" y="627" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">v7 / 12 supporting records</text>
-      <rect x="635" y="665" width="184" height="8" rx="4" fill="#D9DEE7"/>
-      <rect x="831" y="665" width="70" height="8" rx="4" fill="#E3E7EE"/>
+      <text x="590" y="562" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
+      <text x="590" y="592" font-family="'JetBrains Mono', monospace" font-size="12" font-weight="500" fill="#8B93A3" text-anchor="start">Reusable working note</text>
+      <text x="590" y="652" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#1A1A2E" text-anchor="start">Investigate repeated errors. [1]</text>
+<text x="590" y="686" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#1A1A2E" text-anchor="start">Inspect both views. [2]</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-memory-mem_42" data-fit-x="328" data-fit-y="507" data-fit-width="132" data-fit-height="58" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-memory-Retry rule [1]" data-fit-x="280" data-fit-y="507" data-fit-width="180" data-fit-height="58" data-check-overlap="true">
 
       <circle cx="480" cy="535" r="9" fill="#5E58C8"/>
       <circle cx="480" cy="535" r="16" fill="none" stroke="#D2CFF0"/>
-      <text x="460" y="532" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#1A1A2E" text-anchor="end">mem_42</text>
+      <text x="460" y="532" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#1A1A2E" text-anchor="end">Retry rule [1]</text>
       <text x="460" y="552" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="end">MEMORY</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-memory-mem_77" data-fit-x="502" data-fit-y="887" data-fit-width="132" data-fit-height="58" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-memory-UI lesson [2]" data-fit-x="502" data-fit-y="887" data-fit-width="180" data-fit-height="58" data-check-overlap="true">
 
       <circle cx="520" cy="915" r="9" fill="#5E58C8"/>
       <circle cx="520" cy="915" r="16" fill="none" stroke="#D2CFF0"/>
-      <text x="540" y="912" font-family="'JetBrains Mono', monospace" font-size="13" font-weight="500" fill="#1A1A2E" text-anchor="start">mem_77</text>
+      <text x="540" y="912" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="15" font-weight="600" fill="#1A1A2E" text-anchor="start">UI lesson [2]</text>
       <text x="540" y="932" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#8B93A3" text-anchor="start">MEMORY</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-knowledge-Launch strategy" data-fit-x="910" data-fit-y="800" data-fit-width="180" data-fit-height="180" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-knowledge-UI checklist" data-fit-x="910" data-fit-y="800" data-fit-width="180" data-fit-height="180" data-check-overlap="true">
 
       <circle cx="1000" cy="890" r="90" fill="#FFFFFF" stroke="#5E58C8" stroke-width="1.6"/>
       <text x="1000" y="870" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">KNOWLEDGE PAGE</text>
-      <text x="1000" y="908" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#1A1A2E" text-anchor="middle">Launch strategy</text>
+      <text x="1000" y="908" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#1A1A2E" text-anchor="middle">UI checklist</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-entity-Wenlan" data-fit-x="1080" data-fit-y="380" data-fit-width="200" data-fit-height="200" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-entity-Agent Loop" data-fit-x="1080" data-fit-y="380" data-fit-width="200" data-fit-height="200" data-check-overlap="true">
 
       <circle cx="1180" cy="480" r="100" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
       <text x="1180" y="452" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
-      <text x="1180" y="485" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Wenlan</text>
-      <text x="1180" y="514" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">PROJECT</text>
+      <text x="1180" y="485" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Agent Loop</text>
+      <text x="1180" y="514" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">CONCEPT</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-entity-Obsidian" data-fit-x="1366" data-fit-y="261" data-fit-width="168" data-fit-height="168" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-entity-Claude Code" data-fit-x="1366" data-fit-y="261" data-fit-width="168" data-fit-height="168" data-check-overlap="true">
 
       <circle cx="1450" cy="345" r="84" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
       <text x="1450" y="317" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
-      <text x="1450" y="350" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Obsidian</text>
+      <text x="1450" y="350" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Claude Code</text>
       <text x="1450" y="379" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">TECHNOLOGY</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-entity-LLM-wiki" data-fit-x="1422" data-fit-y="522" data-fit-width="176" data-fit-height="176" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-entity-Codex" data-fit-x="1422" data-fit-y="522" data-fit-width="176" data-fit-height="176" data-check-overlap="true">
 
       <circle cx="1510" cy="610" r="88" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
       <text x="1510" y="582" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
-      <text x="1510" y="615" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">LLM-wiki</text>
-      <text x="1510" y="644" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">CONCEPT</text>
+      <text x="1510" y="615" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Codex</text>
+      <text x="1510" y="644" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">TECHNOLOGY</text>
 
   </g>
-    <g data-fit-region="network-en-desktop-entity-Knowledge graph" data-fit-x="1248" data-fit-y="698" data-fit-width="184" data-fit-height="184" data-check-overlap="true">
+    <g data-fit-region="network-en-desktop-entity-Verification" data-fit-x="1248" data-fit-y="698" data-fit-width="184" data-fit-height="184" data-check-overlap="true">
 
       <circle cx="1340" cy="790" r="92" fill="#F3F2FC" stroke="#AAA5E5" stroke-width="1.5"/>
       <text x="1340" y="762" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#5E58C8" text-anchor="middle">ENTITY</text>
-      <text x="1340" y="795" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#1A1A2E" text-anchor="middle">Knowledge graph</text>
+      <text x="1340" y="795" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="21" font-weight="600" fill="#1A1A2E" text-anchor="middle">Verification</text>
       <text x="1340" y="824" font-family="'JetBrains Mono', monospace" font-size="10" font-weight="500" fill="#586174" text-anchor="middle">CONCEPT</text>
 
   </g>
@@ -133,8 +133,8 @@
     <text x="450" y="444" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">CITES</text>
   </g>
     <g>
-    <rect x="512" y="558" width="72" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
-    <text x="548" y="574" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">SUPPORTS</text>
+    <rect x="472" y="588" width="72" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="508" y="604" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">SUPPORTS</text>
   </g>
     <g>
     <rect x="874" y="349" width="52" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
@@ -145,8 +145,8 @@
     <text x="910" y="786" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">REFINES</text>
   </g>
     <g>
-    <rect x="1261.5" y="358" width="125" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
-    <text x="1324" y="374" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">RELATED TO · 0.82</text>
+    <rect x="1282.5" y="358" width="83" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="1324" y="374" font-family="'JetBrains Mono', monospace" font-size="11" font-weight="500" fill="#586174" text-anchor="middle">RELATED TO</text>
   </g>
     <g>
     <rect x="1230.5" y="638" width="63" height="23" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
@@ -155,7 +155,7 @@
     </g>
     <g data-fit-region="network-en-desktop-footer" data-fit-x="80" data-fit-y="1018" data-fit-width="1640" data-fit-height="58" data-check-overlap="false">
 
-        <text x="900" y="1060" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#586174" text-anchor="middle">Conceptual example · Pages, evidence, and connections</text>
+        <text x="900" y="1060" font-family="'JetBrains Mono', monospace" font-size="15" font-weight="500" fill="#586174" text-anchor="middle">Illustrative example · Same sources and lessons as the first page</text>
 
   </g>
 
