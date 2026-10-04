@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=630beef466be7d618d24504faa58150cb3b1f227bf13d159d45ad7e25b51f0ed -->
+<!-- README_SYNC: source=README.md sha256=b77341f8e404a56fe06c7ba6c68f47e9a7fa022661bd13fb0618f7be20d77cdc -->
 
 <p align="center">
   <picture>
@@ -9,7 +9,7 @@
 
 Wenlan convierte tus documentos, notas y conversaciones con IA en páginas editables con enlaces a sus fuentes, para que tú y tus herramientas de IA podáis seguir trabajando a partir de ellas.
 
-Cuando las fuentes cambian, la IA mantiene las páginas al día. Si has editado una página, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
+Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o activar las actualizaciones en segundo plano. Si has editado una página, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
@@ -107,7 +107,7 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 
 - **Reúne material disperso por temas.** Organiza documentos, notas y conversaciones con IA en páginas conectadas, con citas que puedes abrir y comprobar.
 - **Para ti y para tu IA.** Lee y edita tus páginas, o pide a Claude Code o Codex que las use para continuar el trabajo.
-- **Conocimiento actualizado, bajo tu control.** Al activar las actualizaciones en segundo plano, las páginas que hayas editado recibirán propuestas de revisión para que decidas si aceptarlas.
+- **Conocimiento actualizado, bajo tu control.** Cuando la IA actualiza una página que has editado, te propone una revisión para que decidas si aceptarla.
 
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
@@ -162,7 +162,13 @@ La nueva experiencia mejora tus notas sin ocultar decisiones anteriores. Este ej
 <a id="página-mantenida"></a>
 <a id="markdown-local-que-funciona-con-obsidian"></a>
 
-La revisión se aplica a las actualizaciones automáticas; la edición directa de archivos y la regeneración forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
+La revisión se aplica a las actualizaciones de la IA; la edición directa de archivos y la regeneración forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
+
+### ¿Ya usas Obsidian con plugins de IA?
+
+Los plugins de IA ya pueden ayudarte a leer y editar notas en Obsidian. Wenlan reúne documentos y conversaciones con IA dispersos en páginas temáticas con enlaces a sus fuentes, que Claude Code, Codex y otras herramientas pueden compartir, con historial de cambios y revisión de propuestas en un mismo flujo de trabajo.
+
+Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus notas. Wenlan no modifica la bóveda ni sincroniza los cambios de vuelta.
 
 
 <a id="what-you-get"></a>

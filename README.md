@@ -7,7 +7,7 @@
 
 Wenlan turns your documents, notes, and AI conversations into editable pages with links to their sources, so you and your AI tools can keep building on them.
 
-As sources change, AI keeps the pages current. If you’ve edited a page, Wenlan proposes revisions for you to review instead of automatically overwriting your work.
+As sources change, you can ask AI to update the pages or enable background updates. If you’ve edited a page, Wenlan proposes revisions for you to review instead of automatically overwriting your work.
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
@@ -103,7 +103,7 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 
 - **Turn scattered material into connected topics.** Bring documents, notes, and AI conversations together in linked pages, with citations you can open and check.
 - **Read it yourself. Use it with your AI.** Read and edit your pages, or ask Claude Code or Codex to use them for your next task.
-- **Keep knowledge current, with you in control.** With background updates enabled, pages you've edited receive proposed revisions for you to review.
+- **Keep knowledge current, with you in control.** When AI updates a page you've edited, you get a proposed revision to review.
 
 Your pages are local Markdown files you can read, edit, and take with you.
 
@@ -157,7 +157,13 @@ New experience improves your notes without hiding earlier decisions. This exampl
 <a id="maintained-page"></a>
 <a id="local-markdown-that-works-with-obsidian"></a>
 
-Review applies to automatic updates; direct file edits and forced regeneration follow different rules. [Updates, review, and local files](docs/knowledge-guide.md#updates-and-history).
+Review applies to AI updates; direct file edits and forced regeneration follow different rules. [Updates, review, and local files](docs/knowledge-guide.md#updates-and-history).
+
+### Already using Obsidian with AI plugins?
+
+AI plugins can already help you read and edit notes in Obsidian. Wenlan brings scattered documents and AI conversations into source-linked topic pages for Claude Code, Codex, and other tools to share, with update history and revision review in one workflow.
+
+Connect your existing Obsidian vault as a read-only source without moving your notes. Wenlan does not modify the vault or sync changes back to it.
 
 
 <a id="what-you-get"></a>

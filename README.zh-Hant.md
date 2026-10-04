@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=630beef466be7d618d24504faa58150cb3b1f227bf13d159d45ad7e25b51f0ed -->
+<!-- README_SYNC: source=README.md sha256=b77341f8e404a56fe06c7ba6c68f47e9a7fa022661bd13fb0618f7be20d77cdc -->
 
 <p align="center">
   <picture>
@@ -9,7 +9,7 @@
 
 Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連結的頁面，讓你和 AI 工具在已有成果上繼續工作。
 
-來源有變，AI 跟著更新頁面。如果你編輯過頁面，Wenlan 會提出修訂，讓你確認是否採用，而不是自動覆寫你的內容。
+來源有變，可以請 AI 更新頁面，也能啟用背景更新。如果你編輯過頁面，Wenlan 會提出修訂，讓你確認是否採用，而不是自動覆寫你的內容。
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文 | <a href="./README.es-ES.md">Español</a>
@@ -106,7 +106,7 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 - **散落的資料，整理成主題。** 文件、筆記與 AI 對話，彙整成彼此連結的頁面，引用可以點開查證。
 - **自己看，也給 AI 用。** 直接閱讀、編輯，也能讓 Claude Code、Codex 接著用。
-- **持續更新，保留你的主導權。** 啟用背景更新後，你編輯過的頁面會先收到修訂提案，由你確認是否採用。
+- **持續更新，保留你的主導權。** AI 更新你編輯過的頁面前，會先提出修訂讓你確認。
 
 頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 
@@ -161,7 +161,13 @@ Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗
 <a id="持續維護的頁面"></a>
 <a id="與-obsidian-共存的本地-markdown"></a>
 
-審核針對自動更新；直接改檔與強制重建另有規則。[更新、審核與本地檔案](docs/knowledge-guide.zh-Hant.md#updates-and-history)。
+審核針對 AI 更新；直接改檔與強制重建另有規則。[更新、審核與本地檔案](docs/knowledge-guide.zh-Hant.md#updates-and-history)。
+
+### 已經在用 Obsidian 和 AI 套件？
+
+AI 套件已能幫你讀寫 Obsidian 筆記。Wenlan 把散落的文件與 AI 對話整理成附來源的主題頁，讓 Claude Code、Codex 等工具共用，並在同一套流程中保留更新歷史與修訂審核。
+
+現有 Obsidian 儲存庫可以接為唯讀來源，不必搬動筆記。Wenlan 不會修改原本的儲存庫，也不會把變更同步回去。
 
 
 <a id="what-you-get"></a>
