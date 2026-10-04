@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.18.16](https://github.com/7xuanlu/wenlan/compare/v0.18.15...v0.18.16) (2026-10-04)
+
+
+### Features
+
+* open relay pairing requests in Wenlan with one click ([#795](https://github.com/7xuanlu/wenlan/issues/795)) ([2b2d88d](https://github.com/7xuanlu/wenlan/commit/2b2d88d40a3f9fe7c27fea74d53eec1ab069a6ea))
+
+
+### Bug Fixes
+
+* **ci:** allow bounded Windows platform cache cleanup ([#797](https://github.com/7xuanlu/wenlan/issues/797)) ([b01b6ba](https://github.com/7xuanlu/wenlan/commit/b01b6ba0b5e766b2a6ca3996f2050955b7a60599))
+* **connect:** send local AI apps to Add a tool instead of the relay ([#787](https://github.com/7xuanlu/wenlan/issues/787)) ([bf9047b](https://github.com/7xuanlu/wenlan/commit/bf9047bf5f3102dc8c8079bc15c01fea9f5e3182))
+
 ## [0.18.15](https://github.com/7xuanlu/wenlan/compare/v0.18.14...v0.18.15) (2026-10-03)
 
 
