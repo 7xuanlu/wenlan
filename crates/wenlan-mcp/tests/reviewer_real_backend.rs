@@ -3,7 +3,7 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
-use rmcp::model::{CallToolResult, RawContent};
+use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::{json, Value};
 use tokio::{sync::RwLock, task::JoinHandle};
 use wenlan_core::{db::MemoryDB, NoopEmitter};
@@ -30,7 +30,7 @@ fn output(result: CallToolResult) -> Value {
     assert_eq!(result.is_error, Some(false), "{result:?}");
     let structured = result.structured_content.unwrap();
     assert_eq!(result.content.len(), 1);
-    let RawContent::Text(text) = &result.content[0].raw else {
+    let ContentBlock::Text(text) = &result.content[0] else {
         panic!("expected JSON text");
     };
     assert_eq!(
