@@ -211,13 +211,13 @@ describe("pairing and grants", () => {
     ], cursor: null });
     await connectedPanel();
     const date = new Date(expiresAt).toLocaleDateString("en");
-    expect(await screen.findAllByText(`Works until ${date}. After that, connect again from your AI app.`)).toHaveLength(1);
+    expect(await screen.findAllByText(`Ends on ${date} at the latest, or after 30 days without use. Then connect again from your AI app.`)).toHaveLength(1);
     cleanup();
     await i18n.changeLanguage("zh-Hant");
     panel();
     // The date follows the app language, not the OS locale.
     const zhDate = new Date(expiresAt).toLocaleDateString("zh-Hant");
-    expect(await screen.findByText(`可用到 ${zhDate}，之後請在 AI 應用程式中重新連線。`)).toBeInTheDocument();
+    expect(await screen.findByText(`最晚於 ${zhDate} 結束；連續 30 天未使用也會結束。之後請在 AI 應用程式中重新連線。`)).toBeInTheDocument();
   });
   it("shows authoritative revocation separately from token cleanup", async () => {
     mocks.listRemoteGrants.mockResolvedValue({ items: [{ id: "g1", clientId: "client-A", space: "review", status: "active", cleanupPending: false }], cursor: null });

@@ -1,16 +1,24 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { authorizationGrantActive, claimAuthorizationGrant, listDeviceGrants, revokeDeviceGrant, replaceClientAuthorization } from '../src/grants.ts';
-import { enrollDevice, rotateDeviceCredential, authenticateDevice } from '../src/devices.ts';
+import { authorizationGrantActive, authorizationGrantEnd, claimAuthorizationGrant, clientKey, listDeviceGrants, revokeDeviceGrant, replaceClientAuthorization, type ClientAuthorization } from '../src/grants.ts';
+import { enrollDevice, rotateDeviceCredential, authenticateDevice, deviceKey, type DeviceRecord } from '../src/devices.ts';
 import { MemoryStore } from './fixtures/memory-store.ts';
 
 const identity = { grantId: 'grant-a', clientId: 'client-a' };
 const grant = { subject: 'device', connectorId: 'device', space: 'review', generation: 1 };
 const authorizationId = 'c'.repeat(64);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The synthetic grant's device record; its credential outlives every grant unless a test says otherwise. */
+async function seedDevice(store: MemoryStore, expiresAt = Date.now() + 365 * DAY_MS) {
+  await store.transaction(tx => tx.put(deviceKey(grant.connectorId), { id: grant.connectorId, subject: grant.subject,
+    credentialHash: 'h'.repeat(64), enabled: true, revision: 0, expiresAt } satisfies DeviceRecord));
+}
 
 test('an unclaimed or differently bound grant is never active', async () => {
   const store = new MemoryStore();
+  await seedDevice(store);
   assert.equal(await authorizationGrantActive(store, identity, grant), false);
   await replaceClientAuthorization(store, grant.subject, identity.clientId, authorizationId);
   assert.equal(await claimAuthorizationGrant(store, identity, grant, authorizationId), true);
@@ -31,12 +39,51 @@ test('concurrent claims have one winner and replay revokes the grant durably', a
   assert.equal(await claimAuthorizationGrant(store, identity, grant, authorizationId), false);
 });
 
-test('expired grant receipts cannot refresh authorization', async t => {
+test('grant receipts stay active up to the 90-day cap and never after it', async t => {
   const store = new MemoryStore();
+  const start = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  await seedDevice(store);
   await replaceClientAuthorization(store, grant.subject, identity.clientId, authorizationId);
   assert.equal(await claimAuthorizationGrant(store, identity, grant, authorizationId), true);
-  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 31 * 24 * 60 * 60 * 1000 });
+  assert.equal(await authorizationGrantEnd(store, identity, grant), start + 90 * DAY_MS);
+  t.mock.timers.setTime(start + 31 * DAY_MS);
+  assert.equal(await authorizationGrantActive(store, identity, grant), true, 'use past 30 days no longer ends the grant');
+  t.mock.timers.setTime(start + 90 * DAY_MS);
   assert.equal(await authorizationGrantActive(store, identity, grant), false);
+  assert.equal(await authorizationGrantEnd(store, identity, grant), null);
+});
+
+test('the grant end is the earlier of the receipt and its consent', async t => {
+  const store = new MemoryStore();
+  const start = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  await seedDevice(store);
+  await replaceClientAuthorization(store, grant.subject, identity.clientId, authorizationId);
+  t.mock.timers.setTime(start + 2 * DAY_MS);
+  assert.equal(await claimAuthorizationGrant(store, identity, grant, authorizationId), true);
+  assert.equal(await authorizationGrantEnd(store, identity, grant), start + 90 * DAY_MS, 'consent was given two days earlier');
+  // A record written before this change keeps its stored 30-day end.
+  const key = await clientKey(grant.subject, identity.clientId);
+  await store.transaction(tx => tx.put(key, { authorizationId, expiresAt: start + 30 * DAY_MS } satisfies ClientAuthorization));
+  assert.equal(await authorizationGrantEnd(store, identity, grant), start + 30 * DAY_MS);
+});
+
+test('a grant ends no later than its device credential, before any cleanup sweep', async t => {
+  const store = new MemoryStore();
+  const start = Date.now();
+  t.mock.timers.enable({ apis: ['Date'], now: start });
+  await seedDevice(store, start + 10 * DAY_MS);
+  await replaceClientAuthorization(store, grant.subject, identity.clientId, authorizationId);
+  assert.equal(await claimAuthorizationGrant(store, identity, grant, authorizationId), true);
+  assert.equal(await authorizationGrantEnd(store, identity, grant), start + 10 * DAY_MS);
+  t.mock.timers.setTime(start + 10 * DAY_MS);
+  assert.equal(await authorizationGrantEnd(store, identity, grant), null);
+  assert.equal(await authorizationGrantActive(store, identity, grant), false);
+  await seedDevice(store, start + 365 * DAY_MS);
+  assert.equal(await authorizationGrantActive(store, identity, grant), true, 'only the credential end denied it');
+  await store.transaction(tx => tx.delete(deviceKey(grant.connectorId)));
+  assert.equal(await authorizationGrantEnd(store, identity, grant), null, 'a removed device ends the grant');
 });
 
 async function managed() {
@@ -67,6 +114,22 @@ test('device management lists only its own grants without secrets or internal au
   for (const secret of [device.managementToken, 'b'.repeat(43), 'credentialHash', 'owner', 'connectorId']) assert(!serialized.includes(secret));
   assert.equal((await listDeviceGrants(store, other.id, other.managementToken))!.items.length, 0);
   assert.equal(await listDeviceGrants(store, device.id, other.managementToken), null);
+});
+
+test('listed grant ends are capped by consent and the device credential', async () => {
+  const { store, device, first, second } = await managed();
+  const listed = async () => (await listDeviceGrants(store, device.id, device.managementToken))!.items;
+  const grantEnd = (await listed()).find(item => item.id === first.grantId)!.expiresAt;
+  assert.equal(device.expiresAt - grantEnd < 60_000, true, 'a fresh grant ends with its 90-day device credential');
+  const earlier = Date.now() + 5 * DAY_MS;
+  const key = await clientKey(device.id, first.clientId);
+  await store.transaction(tx => tx.put(key, { authorizationId, expiresAt: earlier } satisfies ClientAuthorization));
+  assert.equal((await listed()).find(item => item.id === first.grantId)!.expiresAt, earlier);
+  const record = (await store.transaction(tx => tx.get<DeviceRecord>(deviceKey(device.id))))!;
+  const deviceEnd = Date.now() + 3 * DAY_MS;
+  await store.transaction(tx => tx.put(deviceKey(device.id), { ...record, expiresAt: deviceEnd }));
+  for (const item of await listed()) assert.equal(item.expiresAt, deviceEnd);
+  assert.equal((await listed()).find(item => item.id === second.grantId)!.status, 'active');
 });
 
 test('per-grant revocation denies one client without disabling the device or its other grant', async () => {
