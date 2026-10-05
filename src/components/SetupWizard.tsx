@@ -1206,19 +1206,19 @@ function SettingUpStep({
             // wall-clock timestamp isn't enough either: React StrictMode
             // double-invokes this effect inside the same millisecond, which
             // 422s the second write and reds the row. Keep the nonce, and keep
-            // the whole string under 200 chars so the nonce is inside the
-            // window the daemon actually compares.
-            const probeContent =
-              "Wenlan setup check: confirms this device can store and " +
-              "recall a memory. Safe to ignore — it deletes itself right " +
-              `after this check. (${crypto.randomUUID()})`;
+            // every locale's `probeMemory` under 200 chars with the nonce
+            // filled in, so the nonce sits inside the window the daemon
+            // actually compares (resources.test.ts pins this). The copy is
+            // localized because a failed cleanup leaves it in the user's
+            // memories, where it has to explain itself.
+            const probeContent = t("setup.settingUp.probeMemory", {
+              nonce: crypto.randomUUID(),
+            });
             storeMemory({ content: probeContent, source_agent: "wenlan-setup" })
               .then((stored) =>
                 getMemoryDetail(stored.source_id).then((detail) => {
                   if (!detail || detail.source_id !== stored.source_id) {
-                    throw new Error(
-                      "Stored a test memory but couldn't read it back.",
-                    );
+                    throw new Error(t("setup.settingUp.daemonReadBackFailed"));
                   }
                   return stored.source_id;
                 }),
@@ -1230,9 +1230,9 @@ function SettingUpStep({
                   // works, so a failed delete must never fail the row — but
                   // silently swallowing it (the old `.catch(() => {})`)
                   // strands a Wenlan-authored memory in the user's knowledge
-                  // base while the row's own copy claims "it deletes itself
-                  // right after this check". One retry, then a non-fatal
-                  // warning the row surfaces instead of a lie.
+                  // base while the row's own copy says the test memory "is
+                  // removed right after". One retry, then a non-fatal warning
+                  // that tells the user how to find and delete it.
                   void deleteMemory(sourceId).catch(() =>
                     deleteMemory(sourceId).catch(() => {
                       setWarnings((prev) => ({

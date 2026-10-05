@@ -2052,7 +2052,7 @@ describe("SetupWizard", () => {
       expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Couldn't set up");
     });
     expect(
-      screen.getByText(/Stored a test memory but couldn't read it back\./),
+      screen.getByText(/Wenlan saved a test memory but couldn't find it again\./),
     ).toBeInTheDocument();
     // Never cleaned up: cleanup only runs once the round trip has actually
     // proved the pipeline works.
@@ -2075,7 +2075,7 @@ describe("SetupWizard", () => {
     expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
     expect(
       screen.queryByText(
-        "Couldn't remove the test memory. You can delete it from your knowledge base.",
+        'Wenlan couldn\'t remove its test memory. Search for "Wenlan setup check" to find it and delete it.',
       ),
     ).not.toBeInTheDocument();
   });
@@ -2098,7 +2098,7 @@ describe("SetupWizard", () => {
     expect(screen.queryByText("delete failed")).not.toBeInTheDocument();
 
     const warningText =
-      "Couldn't remove the test memory. You can delete it from your knowledge base.";
+      'Wenlan couldn\'t remove its test memory. Search for "Wenlan setup check" to find it and delete it.';
     await waitFor(() => {
       expect(screen.getByText(warningText)).toBeInTheDocument();
     });
@@ -3055,7 +3055,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
       fireEvent.click(screen.getByRole("button", { name: label }));
 
       const alert = await screen.findByRole("alert");
-      expect(alert).toHaveTextContent("The Wenlan daemon isn't reachable.");
+      expect(alert).toHaveTextContent("Wenlan's background service isn't responding. Try again in a moment.");
       await waitFor(() => expect(screen.getByRole("button", { name: label })).toBeEnabled());
       expect(onComplete).toHaveBeenCalledTimes(1);
 
