@@ -47,6 +47,8 @@ export async function invoke(
     return invokeRemoteFixture(cmd, args);
   }
   switch (cmd) {
+    case "quick_capture":
+      return 1;
     case "daemon_version":
       return "0.14.1";
     case "record_page_editor_diagnostic":

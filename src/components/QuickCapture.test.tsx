@@ -8,10 +8,8 @@ import QuickCapture from "./QuickCapture";
 
 const mockedInvoke = vi.mocked(invoke);
 
-// Real user agents from the two webviews that matter here. The quick-capture
-// window is transparent and undecorated on both, but only macOS turns the
-// native window shadow off (app/src/lib.rs, `setHasShadow: NO`), so only macOS
-// has to paint one in CSS.
+// The standalone window draws no exterior shadow on any platform, so the user
+// agents below only prove the absence holds everywhere rather than scoping it.
 const MACOS_WKWEBVIEW =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15";
 const WINDOWS_WEBVIEW2 =
@@ -21,7 +19,7 @@ const LINUX_WEBKITGTK =
 
 const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 
-/** Replace the ambient user agent, the way `needsCssWindowShadow` reads it. */
+/** Replace the ambient user agent for a render. */
 function setPlatform(userAgent: string | undefined): void {
   Object.defineProperty(globalThis, "navigator", {
     value: userAgent === undefined ? undefined : { userAgent },
@@ -37,46 +35,11 @@ afterEach(() => {
   }
 });
 
-/**
- * The card, found by IDENTITY rather than by presentation.
- *
- * This used to be `container.querySelector(".rounded-xl")`, and that is not a
- * selection, it is a coincidence that keeps working. `querySelector` returns
- * the FIRST match and never says how many there were, so a second element
- * picking up the same utility class -- a Tailwind class, present for its corner
- * radius and nothing else -- silently redirects every assertion below onto the
- * wrong node. And the assertions are all `expect(...).toBe("none")`: an element
- * with no inline shadow at all satisfies them for the wrong reason, so the test
- * would keep passing while the card it was written about lost its shadow. A
- * control that cannot fail is worse than no control.
- *
- * Preferred hook: `data-testid="quick-capture-card"`. It does NOT exist yet --
- * `src/components/QuickCapture.tsx` is owned by another agent in this
- * workstream and is not mine to edit, so adding it is a REQUIRED FOLLOW-UP and
- * this helper is written to use it the moment it lands.
- *
- * Until then the identity used is SEMANTIC and asserted UNIQUE: the card is the
- * one element whose inline style carries BOTH a `border-color` and a
- * `box-shadow`. That pair is exactly the decision under test -- `borderAccent`
- * plus the platform-scoped `boxShadow` -- and it distinguishes the card from
- * the Save button, which sets an inline `box-shadow` but no `border-color`.
- * `toHaveLength(1)` is what makes it able to fail: if the component changes so
- * that two elements match, or none does, this throws instead of quietly
- * measuring something else.
- */
+/** The card, selected by its stable test id. */
 function findCard(container: HTMLElement): HTMLElement {
   const tagged = container.querySelectorAll('[data-testid="quick-capture-card"]');
-  if (tagged.length > 0) {
-    expect(tagged).toHaveLength(1);
-    return tagged[0] as HTMLElement;
-  }
-  const byIdentity = Array.from(container.querySelectorAll<HTMLElement>("[style]")).filter(
-    (el) => el.style.borderColor !== "" && el.style.boxShadow !== "",
-  );
-  // Exactly one, or the identity this test relies on no longer holds and the
-  // right outcome is a loud failure rather than a silent redirect.
-  expect(byIdentity).toHaveLength(1);
-  return byIdentity[0];
+  expect(tagged).toHaveLength(1);
+  return tagged[0] as HTMLElement;
 }
 
 /**
@@ -101,7 +64,7 @@ function renderCapture(standalone: boolean) {
   // than about two elements that happen to be in the same container.
   expect(wrapper.contains(card)).toBe(true);
   expect(wrapper).not.toBe(card);
-  return { wrapper, card };
+  return { container, wrapper, card };
 }
 
 /** Inset in px, whichever way React and jsdom chose to serialise a zero. */
@@ -109,58 +72,97 @@ function insetPx(el: HTMLElement): number {
   return parseInt(el.style.padding || "0", 10);
 }
 
-describe("QuickCapture standalone window shadow is platform-scoped", () => {
-  it("keeps the CSS shadow on macOS, where the NSWindow draws none", () => {
-    setPlatform(MACOS_WKWEBVIEW);
-    const { wrapper, card } = renderCapture(true);
+function queryTextareaAndSave(container: HTMLElement) {
+  const textarea = container.querySelector("textarea");
+  expect(textarea).toBeTruthy();
+  const buttons = Array.from(container.querySelectorAll("button"));
+  const saveButton = buttons.find((b) => b.textContent === "Save");
+  expect(saveButton).toBeTruthy();
+  return { textarea: textarea as HTMLTextAreaElement, saveButton: saveButton as HTMLButtonElement };
+}
 
-    // app/src/lib.rs sets setHasShadow:NO on this NSWindow, so removing the CSS
-    // shadow would flatten the card against the desktop behind it.
-    expect(card.style.boxShadow).not.toBe("none");
-    expect(card.style.boxShadow).toContain("32px");
-    // And the shadow needs somewhere to render: an outer shadow is clipped at
-    // the viewport edge without a transparent margin.
-    expect(insetPx(wrapper)).toBe(12);
-  });
+describe("QuickCapture standalone window has no exterior shadow or inset", () => {
+  const platforms: Array<[string, string | undefined]> = [
+    ["macOS", MACOS_WKWEBVIEW],
+    ["Windows", WINDOWS_WEBVIEW2],
+    ["Linux", LINUX_WEBKITGTK],
+    ["unknown", undefined],
+  ];
 
-  it("drops the shadow and the inset on a Windows layered window", () => {
-    setPlatform(WINDOWS_WEBVIEW2);
-    const { wrapper, card } = renderCapture(true);
-
-    // The reported bug: this shadow composites as a flat grey band, not a halo
-    // that fades into the desktop.
-    expect(card.style.boxShadow).toBe("none");
-    expect(insetPx(wrapper)).toBe(0);
-  });
-
-  it("treats Linux like Windows -- layered windows composite the same way", () => {
-    setPlatform(LINUX_WEBKITGTK);
+  it.each(platforms)("empty draft on %s: no shadow, no inset", (_name, ua) => {
+    setPlatform(ua);
     const { wrapper, card } = renderCapture(true);
 
     expect(card.style.boxShadow).toBe("none");
     expect(insetPx(wrapper)).toBe(0);
   });
 
-  it("defaults an unknown platform to no shadow, which cannot look broken", () => {
-    // No navigator at all is the real first-paint / unknown-host case. A card
-    // missing its shadow reads as plain; a shadow the compositor cannot blend
-    // reads as a rendering artifact, so the unknown side takes the former.
-    setPlatform(undefined);
-    const { wrapper, card } = renderCapture(true);
+  it.each(platforms)("draft with content on %s: no shadow or glow, no inset", (_name, ua) => {
+    setPlatform(ua);
+    const { container, wrapper } = renderCapture(true);
 
-    expect(card.style.boxShadow).toBe("none");
+    const { textarea } = queryTextareaAndSave(container);
+    fireEvent.change(textarea, { target: { value: "long enough to save this draft" } });
+
+    const freshCard = findCard(container);
+    expect(freshCard.style.boxShadow).toBe("none");
+    expect(insetPx(wrapper)).toBe(0);
+  });
+
+  it.each(platforms)("pending save on %s: no shadow or glow, no inset", async (_name, ua) => {
+    setPlatform(ua);
+    mockedInvoke.mockReset();
+    // Never resolves: the mutation stays pending for the assertion.
+    mockedInvoke.mockImplementationOnce(() => new Promise(() => {}));
+    const { container, wrapper } = renderCapture(true);
+
+    const { textarea, saveButton } = queryTextareaAndSave(container);
+    fireEvent.change(textarea, { target: { value: "long enough to save this draft" } });
+    fireEvent.click(saveButton);
+
+    // Pending label proves the mutation started; the card must still be flat.
+    expect(await screen.findByText("Saving...")).toBeTruthy();
+    const freshCard = findCard(container);
+    expect(freshCard.style.boxShadow).toBe("none");
+    expect(insetPx(wrapper)).toBe(0);
+  });
+
+  it.each(platforms)("saved state on %s: no shadow or glow, no inset", async (_name, ua) => {
+    setPlatform(ua);
+    mockedInvoke.mockReset();
+    mockedInvoke.mockResolvedValueOnce({ ok: true });
+    const { container, wrapper } = renderCapture(true);
+
+    const { textarea, saveButton } = queryTextareaAndSave(container);
+    fireEvent.change(textarea, { target: { value: "long enough to save this draft" } });
+    fireEvent.click(saveButton);
+
+    expect(await screen.findByText("Saved to memory")).toBeTruthy();
+    const freshCard = findCard(container);
+    expect(freshCard.style.boxShadow).toBe("none");
     expect(insetPx(wrapper)).toBe(0);
   });
 
   it("leaves the modal's shadow alone on every platform", () => {
     // The modal floats over the app on an opaque backdrop with room around it.
-    // Nothing about the host window applies, so it must not be scoped at all.
     for (const ua of [MACOS_WKWEBVIEW, WINDOWS_WEBVIEW2, LINUX_WEBKITGTK]) {
       setPlatform(ua);
       const { card } = renderCapture(false);
       expect(card.style.boxShadow).not.toBe("none");
       expect(card.style.boxShadow).toContain("32px");
     }
+  });
+
+  it("keeps the modal's draft glow", () => {
+    setPlatform(MACOS_WKWEBVIEW);
+    const { container } = renderCapture(false);
+
+    const { textarea } = queryTextareaAndSave(container);
+    fireEvent.change(textarea, { target: { value: "long enough to save this draft" } });
+
+    const freshCard = findCard(container);
+    expect(freshCard.style.boxShadow).not.toBe("none");
+    expect(freshCard.style.boxShadow).toContain("32px");
   });
 });
 
