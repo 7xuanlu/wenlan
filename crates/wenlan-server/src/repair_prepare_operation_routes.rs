@@ -54,14 +54,15 @@ async fn handle_prepare_operation(
     match store.begin_prepare_operation(&request)? {
         BeginPrepareOperation::Existing(status) => Ok(Json(status)),
         BeginPrepareOperation::Run(bound) => {
-            let classification = matches!(
+            let include_deep = matches!(
                 request.request.choice(),
                 wenlan_types::repair_current::CurrentRepairChoice::ReclassifyMemory { .. }
+                    | wenlan_types::repair_current::CurrentRepairChoice::EntityRelation { .. }
             );
             let mut fresh = crate::lint_routes::fresh_repair_reports(
                 state,
                 request.request.lint_scope(),
-                classification,
+                include_deep,
             )
             .await?;
             if fresh.store.root() != bound.root() {

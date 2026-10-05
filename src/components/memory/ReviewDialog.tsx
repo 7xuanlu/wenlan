@@ -187,6 +187,7 @@ function sourceRepairHint(t: TFunction, item: Extract<ReviewItem, { kind: "refin
     case "memories.enrichment_failures": return t("sourceRepair.extractionHint");
     case "pages.duplicate_active_titles": return t("sourceRepair.duplicateHint");
     case "memories.semantic.classification": return t("sourceRepair.classificationHint");
+    case "kg.semantic.entity_relations": return t("sourceRepair.relationHint");
     case "pages.semantic.provenance_adequacy": return t("sourceRepair.provenanceHint");
     case "pages.semantic.faithfulness": return t("sourceRepair.faithfulnessHint");
     default: return item.payload.issue;
@@ -994,7 +995,7 @@ export default function ReviewDialog({
           position: "relative",
           width: "min(760px, 100%)",
           maxHeight: "86vh",
-          overflowY: "auto",
+          overflowY: item?.kind === "refinement" && item.action === "lint_repair_review" ? "hidden" : "auto",
           backgroundColor: "var(--mem-surface)",
           border: "1px solid var(--mem-border)",
           borderRadius: 16,
@@ -1143,7 +1144,9 @@ export default function ReviewDialog({
           </div>
         ) : item ? (
           <>
-            <div style={{ padding: "20px 22px 8px" }}>
+            <div style={{ padding: "20px 22px 8px", ...(item.kind === "refinement" && item.action === "lint_repair_review" ? {
+              minHeight: 0, flex: 1, overflowY: "auto" as const,
+            } : {}) }}>
               <h3
                 style={{
                   fontFamily: "var(--mem-font-heading)",
@@ -1694,6 +1697,10 @@ export default function ReviewDialog({
                 padding: "14px 20px 16px",
                 borderTop: "1px solid var(--mem-detail-divider)",
                 marginTop: 14,
+                ...(item.kind === "refinement" && item.action === "lint_repair_review" ? {
+                  flexShrink: 0,
+                  backgroundColor: "var(--mem-surface)",
+                } : {}),
               }}
             >
               {!reviewDismissBlocked(item) && (

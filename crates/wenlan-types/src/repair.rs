@@ -3,6 +3,10 @@
 
 mod frozen_v1;
 
+use crate::repair_relation::{
+    EntityRelationRepairChoice, EntityRelationRepairSelection, RepairRelationMutation,
+    RepairRelationSnapshot,
+};
 use crate::{
     lint::{
         LintCommitReceipt, LintDbSnapshotMode, LintDbSnapshotReceipt, LintDigest, LintEvidenceRef,
@@ -22,14 +26,18 @@ use frozen_v1::{
     FrozenRepairRollbackArtifactV1, FrozenRepairVerificationReceiptV1,
 };
 
-pub const REPAIR_MANIFEST_SCHEMA_VERSION: u16 = 6;
+pub const REPAIR_MANIFEST_SCHEMA_VERSION: u16 = 7;
 pub const REPAIR_ROLLBACK_FORMAT_VERSION: u16 = 2;
+pub const REPAIR_RELATION_ROLLBACK_FORMAT_VERSION: u16 = 3;
 pub const REPAIR_RECEIPT_SCHEMA_VERSION: u16 = 5;
-const PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION: u16 = 5;
+pub const REPAIR_RELATION_RECEIPT_SCHEMA_VERSION: u16 = 6;
+const PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION: u16 = 6;
+const LEGACY_REPAIR_MANIFEST_SCHEMA_VERSION: u16 = 5;
 const PREVIOUS_REPAIR_ROLLBACK_FORMAT_VERSION: u16 = 1;
 const PREVIOUS_REPAIR_RECEIPT_SCHEMA_VERSION: u16 = 4;
 const REPAIR_VERIFICATION_RECEIPT_SCHEMA_VERSION: u16 = 4;
 pub const REPAIR_CLASSIFICATION_CHECK_ID: &str = "memories.semantic.classification";
+pub const REPAIR_RELATION_CHECK_ID: &str = "kg.semantic.entity_relations";
 const PREVIOUS_LINT_REPORT_SCHEMA_VERSION: u16 = 4;
 const PREVIOUS_LINT_CHECK_CATALOG_VERSION: u16 = 2;
 const REPAIR_MEMORY_STATE_CHECK_ID: &str = "identity.memory_state_integrity";
@@ -74,6 +82,7 @@ pub enum StoredRepairManifest {
     V4(Box<RepairManifest>),
     V5(Box<RepairManifest>),
     V6(Box<RepairManifest>),
+    V7(Box<RepairManifest>),
 }
 
 impl StoredRepairManifest {
@@ -90,6 +99,7 @@ impl StoredRepairManifest {
             4 => serde_json::from_slice(bytes).map(|manifest| Self::V4(Box::new(manifest))),
             5 => serde_json::from_slice(bytes).map(|manifest| Self::V5(Box::new(manifest))),
             6 => serde_json::from_slice(bytes).map(|manifest| Self::V6(Box::new(manifest))),
+            7 => serde_json::from_slice(bytes).map(|manifest| Self::V7(Box::new(manifest))),
             version => Err(serde_json::Error::custom(format!(
                 "unsupported repair manifest schema version {version}"
             ))),
@@ -104,7 +114,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => manifest.manifest_id(),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => manifest.manifest_id(),
         }
     }
 
@@ -118,7 +129,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => StoredRepairDigestRef(manifest.manifest_digest().as_str()),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => StoredRepairDigestRef(manifest.manifest_digest().as_str()),
         }
     }
 
@@ -130,7 +142,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => manifest.canonical_unsigned_bytes(),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => manifest.canonical_unsigned_bytes(),
         }
     }
 
@@ -144,7 +157,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => StoredRepairDigestRef(manifest.rollback().digest().as_str()),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => StoredRepairDigestRef(manifest.rollback().digest().as_str()),
         }
     }
 
@@ -156,7 +170,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => serde_json::to_vec_pretty(manifest),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => serde_json::to_vec_pretty(manifest),
         }
     }
 
@@ -177,7 +192,8 @@ impl StoredRepairManifest {
             | Self::V3(manifest)
             | Self::V4(manifest)
             | Self::V5(manifest)
-            | Self::V6(manifest) => Ok(*manifest),
+            | Self::V6(manifest)
+            | Self::V7(manifest) => Ok(*manifest),
         }
     }
 }
@@ -521,10 +537,101 @@ impl<'de> Deserialize<'de> for RepairRollbackV2 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RepairRollbackPayloadV3 {
+    EntityRelation { snapshot: RepairRelationSnapshot },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RepairRollbackPayloadV3Wire {
+    EntityRelation { snapshot: RepairRelationSnapshot },
+}
+
+impl RepairRollbackPayloadV3 {
+    pub fn entity_relation(snapshot: RepairRelationSnapshot) -> Result<Self, RepairContractError> {
+        snapshot
+            .validate()
+            .map_err(|_| RepairContractError::InvalidRollbackArtifact)?;
+        Ok(Self::EntityRelation { snapshot })
+    }
+
+    pub fn snapshot(&self) -> &RepairRelationSnapshot {
+        match self {
+            Self::EntityRelation { snapshot } => snapshot,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairRollbackPayloadV3 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match RepairRollbackPayloadV3Wire::deserialize(deserializer)? {
+            RepairRollbackPayloadV3Wire::EntityRelation { snapshot } => {
+                Self::entity_relation(snapshot)
+            }
+        }
+        .map_err(D::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RepairRollbackV3 {
+    format_version: u16,
+    payload: RepairRollbackPayloadV3,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RepairRollbackV3Wire {
+    format_version: u16,
+    payload: RepairRollbackPayloadV3,
+}
+
+impl RepairRollbackV3 {
+    pub fn try_new(payload: RepairRollbackPayloadV3) -> Result<Self, RepairContractError> {
+        payload
+            .snapshot()
+            .validate()
+            .map_err(|_| RepairContractError::InvalidRollbackArtifact)?;
+        Ok(Self {
+            format_version: REPAIR_RELATION_ROLLBACK_FORMAT_VERSION,
+            payload,
+        })
+    }
+
+    pub const fn format_version(&self) -> u16 {
+        self.format_version
+    }
+
+    pub const fn payload(&self) -> &RepairRollbackPayloadV3 {
+        &self.payload
+    }
+}
+
+impl<'de> Deserialize<'de> for RepairRollbackV3 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = RepairRollbackV3Wire::deserialize(deserializer)?;
+        if wire.format_version != REPAIR_RELATION_ROLLBACK_FORMAT_VERSION {
+            return Err(D::Error::custom(
+                RepairContractError::InvalidRollbackArtifact,
+            ));
+        }
+        Self::try_new(wire.payload).map_err(D::Error::custom)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoredRepairRollbackArtifact {
     V1(FrozenRepairRollbackArtifactV1),
     V2(RepairRollbackV2),
+    V3(RepairRollbackV3),
 }
 
 impl StoredRepairRollbackArtifact {
@@ -532,6 +639,7 @@ impl StoredRepairRollbackArtifact {
         match serde_json::from_slice::<StoredRollbackVersionProbe>(bytes)?.format_version {
             1 => serde_json::from_slice(bytes).map(Self::V1),
             2 => serde_json::from_slice(bytes).map(Self::V2),
+            3 => serde_json::from_slice(bytes).map(Self::V3),
             version => Err(serde_json::Error::custom(format!(
                 "unsupported repair rollback format version {version}"
             ))),
@@ -542,20 +650,28 @@ impl StoredRepairRollbackArtifact {
         match self {
             Self::V1(rollback) => serde_json::to_vec_pretty(rollback),
             Self::V2(rollback) => serde_json::to_vec_pretty(rollback),
+            Self::V3(rollback) => serde_json::to_vec_pretty(rollback),
         }
     }
 
     pub fn as_v1(&self) -> &FrozenRepairRollbackArtifactV1 {
         match self {
             Self::V1(rollback) => rollback,
-            Self::V2(_) => panic!("repair rollback is not frozen v1"),
+            Self::V2(_) | Self::V3(_) => panic!("repair rollback is not frozen v1"),
         }
     }
 
     pub const fn as_v2(&self) -> Option<&RepairRollbackV2> {
         match self {
-            Self::V1(_) => None,
+            Self::V1(_) | Self::V3(_) => None,
             Self::V2(rollback) => Some(rollback),
+        }
+    }
+
+    pub const fn as_v3(&self) -> Option<&RepairRollbackV3> {
+        match self {
+            Self::V3(rollback) => Some(rollback),
+            Self::V1(_) | Self::V2(_) => None,
         }
     }
 }
@@ -567,6 +683,7 @@ pub enum StoredRepairApplyReceipt {
     V3(RepairApplyReceipt),
     V4(RepairApplyReceipt),
     V5(RepairApplyReceipt),
+    V6(RepairApplyReceipt),
 }
 
 impl StoredRepairApplyReceipt {
@@ -577,6 +694,7 @@ impl StoredRepairApplyReceipt {
             3 => serde_json::from_slice(bytes).map(Self::V3),
             4 => serde_json::from_slice(bytes).map(Self::V4),
             5 => serde_json::from_slice(bytes).map(Self::V5),
+            6 => serde_json::from_slice(bytes).map(Self::V6),
             version => Err(serde_json::Error::custom(format!(
                 "unsupported repair receipt schema version {version}"
             ))),
@@ -586,45 +704,55 @@ impl StoredRepairApplyReceipt {
     pub fn receipt_digest(&self) -> StoredRepairDigestRef<'_> {
         match self {
             Self::V1(receipt) => StoredRepairDigestRef(receipt.receipt_digest().as_str()),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                StoredRepairDigestRef(receipt.receipt_digest().as_str())
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => StoredRepairDigestRef(receipt.receipt_digest().as_str()),
         }
     }
 
     pub fn manifest_id(&self) -> &str {
         match self {
             Self::V1(receipt) => receipt.manifest_id(),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                receipt.manifest_id()
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => receipt.manifest_id(),
         }
     }
 
     pub fn manifest_digest(&self) -> StoredRepairDigestRef<'_> {
         match self {
             Self::V1(receipt) => StoredRepairDigestRef(receipt.manifest_digest().as_str()),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                StoredRepairDigestRef(receipt.manifest_digest().as_str())
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => StoredRepairDigestRef(receipt.manifest_digest().as_str()),
         }
     }
 
     pub fn canonical_unsigned_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
         match self {
             Self::V1(receipt) => receipt.canonical_unsigned_bytes(),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                receipt.canonical_unsigned_bytes()
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => receipt.canonical_unsigned_bytes(),
         }
     }
 
     pub fn persisted_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
         match self {
             Self::V1(receipt) => serde_json::to_vec_pretty(receipt),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                serde_json::to_vec_pretty(receipt)
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => serde_json::to_vec_pretty(receipt),
         }
     }
 
@@ -640,9 +768,11 @@ impl StoredRepairApplyReceipt {
         }
         match self {
             Self::V1(receipt) => frozen_apply_receipt_v1_into_current(receipt),
-            Self::V2(receipt) | Self::V3(receipt) | Self::V4(receipt) | Self::V5(receipt) => {
-                Ok(receipt)
-            }
+            Self::V2(receipt)
+            | Self::V3(receipt)
+            | Self::V4(receipt)
+            | Self::V5(receipt)
+            | Self::V6(receipt) => Ok(receipt),
         }
     }
 }
@@ -1462,6 +1592,21 @@ fn valid_sorted_ids(values: &[String]) -> bool {
         && values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
+fn valid_entity_relation_target(
+    relation_id: &str,
+    from_entity: &str,
+    to_entity: &str,
+    review_owner_ids: &[String],
+) -> bool {
+    valid_nonempty(relation_id)
+        && valid_nonempty(from_entity)
+        && valid_nonempty(to_entity)
+        && from_entity != to_entity
+        && strictly_sorted_unique(review_owner_ids)
+        && review_owner_ids.iter().any(|owner| owner == from_entity)
+        && review_owner_ids.iter().any(|owner| owner == to_entity)
+}
+
 fn valid_columns_and_rows(columns: &[String], rows: &[Vec<String>]) -> bool {
     valid_unique_nonempty(columns)
         && !rows.is_empty()
@@ -1711,6 +1856,13 @@ pub enum RepairTarget {
         page_id: String,
         scope: RepairScope,
     },
+    EntityRelation {
+        relation_id: String,
+        from_entity: String,
+        to_entity: String,
+        review_owner_ids: Vec<String>,
+        scope: RepairScope,
+    },
 }
 
 #[derive(Deserialize)]
@@ -1748,6 +1900,13 @@ enum RepairTargetWire {
     },
     PageProjection {
         page_id: String,
+        scope: RepairScope,
+    },
+    EntityRelation {
+        relation_id: String,
+        from_entity: String,
+        to_entity: String,
+        review_owner_ids: Vec<String>,
         scope: RepairScope,
     },
 }
@@ -1841,6 +2000,26 @@ impl RepairTarget {
         Ok(Self::Page { page_id, scope })
     }
 
+    pub fn entity_relation(
+        relation_id: String,
+        from_entity: String,
+        to_entity: String,
+        review_owner_ids: Vec<String>,
+        scope: RepairScope,
+    ) -> Result<Self, RepairContractError> {
+        if !valid_entity_relation_target(&relation_id, &from_entity, &to_entity, &review_owner_ids)
+        {
+            return Err(RepairContractError::InvalidTarget);
+        }
+        Ok(Self::EntityRelation {
+            relation_id,
+            from_entity,
+            to_entity,
+            review_owner_ids,
+            scope,
+        })
+    }
+
     pub fn memory_source_id(&self) -> &str {
         match self {
             Self::Memory { source_id, .. } => source_id,
@@ -1849,7 +2028,8 @@ impl RepairTarget {
             | Self::Tag { .. }
             | Self::PageLink { .. }
             | Self::Page { .. }
-            | Self::PageProjection { .. } => {
+            | Self::PageProjection { .. }
+            | Self::EntityRelation { .. } => {
                 panic!("repair target is not a memory")
             }
         }
@@ -1863,15 +2043,19 @@ impl RepairTarget {
             | Self::Tag { scope, .. }
             | Self::PageLink { scope, .. }
             | Self::Page { scope, .. }
-            | Self::PageProjection { scope, .. } => scope,
+            | Self::PageProjection { scope, .. }
+            | Self::EntityRelation { scope, .. } => scope,
         }
     }
 
-    fn review_owner_ids(&self) -> Option<Vec<String>> {
+    pub fn review_owner_ids(&self) -> Option<Vec<String>> {
         match self {
             Self::Memory { source_id, .. } => Some(vec![source_id.clone()]),
             Self::PageProjection { page_id, .. } => Some(vec![page_id.clone()]),
             Self::MemoryEntityExtraction { memory_id, .. } => Some(vec![memory_id.clone()]),
+            Self::EntityRelation {
+                review_owner_ids, ..
+            } => Some(review_owner_ids.clone()),
             _ => None,
         }
     }
@@ -1910,6 +2094,15 @@ impl<'de> Deserialize<'de> for RepairTarget {
             RepairTargetWire::Page { page_id, scope } => Self::page(page_id, scope),
             RepairTargetWire::PageProjection { page_id, scope } => {
                 Self::page_projection(page_id, scope)
+            }
+            RepairTargetWire::EntityRelation {
+                relation_id,
+                from_entity,
+                to_entity,
+                review_owner_ids,
+                scope,
+            } => {
+                Self::entity_relation(relation_id, from_entity, to_entity, review_owner_ids, scope)
             }
         }
         .map_err(D::Error::custom)
@@ -2043,6 +2236,44 @@ impl RepairSource {
             lint_scope,
             report_scope,
             check_id: REPAIR_CLASSIFICATION_CHECK_ID.to_string(),
+            finding: Some(finding),
+            deterministic_evidence: vec![],
+            general_snapshots,
+            deep_snapshots: Some(deep_snapshots),
+            general_producer_receipt,
+            deep_producer_receipt: Some(deep_producer_receipt),
+            agent_work_digest: Some(agent_work_digest),
+            review_binding: None,
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_new_entity_relation(
+        lint_scope: RepairLintScope,
+        report_scope: LintScope,
+        finding: LintSemanticFinding,
+        general_snapshots: LintSnapshotReceipts,
+        deep_snapshots: LintSnapshotReceipts,
+        general_producer_receipt: LintProducerReceipt,
+        deep_producer_receipt: LintProducerReceipt,
+        agent_work_digest: LintDigest,
+    ) -> Result<Self, RepairContractError> {
+        if !lint_scope.matches_report_scope_kind(&report_scope)
+            || !matches!(
+                finding.proposed_action(),
+                LintSemanticAction::AddEntityRelation | LintSemanticAction::RemoveEntityRelation
+            )
+            || finding.unresolved_disagreement()
+            || finding.evidence_ids().is_empty()
+        {
+            return Err(RepairContractError::InvalidSource);
+        }
+        Ok(Self {
+            report_schema_version: LINT_REPORT_SCHEMA_VERSION,
+            check_catalog_version: LINT_CHECK_CATALOG_VERSION,
+            lint_scope,
+            report_scope,
+            check_id: REPAIR_RELATION_CHECK_ID.to_string(),
             finding: Some(finding),
             deterministic_evidence: vec![],
             general_snapshots,
@@ -2221,6 +2452,27 @@ impl<'de> Deserialize<'de> for RepairSource {
                 wire.agent_work_digest
                     .ok_or_else(|| D::Error::custom(RepairContractError::InvalidSource))?,
             )
+        } else if wire.check_id == REPAIR_RELATION_CHECK_ID {
+            if !wire.deterministic_evidence.is_empty()
+                || wire.deep_snapshots.is_none()
+                || wire.deep_producer_receipt.is_none()
+            {
+                return Err(D::Error::custom(RepairContractError::InvalidSource));
+            }
+            Self::try_new_entity_relation(
+                wire.lint_scope,
+                wire.report_scope,
+                wire.finding
+                    .ok_or_else(|| D::Error::custom(RepairContractError::InvalidSource))?,
+                wire.general_snapshots,
+                wire.deep_snapshots
+                    .ok_or_else(|| D::Error::custom(RepairContractError::InvalidSource))?,
+                wire.general_producer_receipt,
+                wire.deep_producer_receipt
+                    .ok_or_else(|| D::Error::custom(RepairContractError::InvalidSource))?,
+                wire.agent_work_digest
+                    .ok_or_else(|| D::Error::custom(RepairContractError::InvalidSource))?,
+            )
         } else {
             if wire.finding.is_some() || wire.agent_work_digest.is_some() {
                 return Err(D::Error::custom(RepairContractError::InvalidSource));
@@ -2321,6 +2573,7 @@ pub enum RepairWriter {
     ArchiveEmptySourcePage,
     RegeneratePageProjection,
     QuarantineStalePageProjection,
+    EntityRelation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2369,6 +2622,9 @@ pub enum RepairMutation {
         source_path: String,
         quarantine_path: String,
     },
+    EntityRelation {
+        change: RepairRelationMutation,
+    },
 }
 
 #[derive(Deserialize)]
@@ -2416,6 +2672,9 @@ enum RepairMutationWire {
     QuarantineStalePageProjection {
         source_path: String,
         quarantine_path: String,
+    },
+    EntityRelation {
+        change: RepairRelationMutation,
     },
 }
 
@@ -2568,6 +2827,13 @@ impl RepairMutation {
         })
     }
 
+    pub fn entity_relation(change: RepairRelationMutation) -> Result<Self, RepairContractError> {
+        change
+            .validate()
+            .map_err(|_| RepairContractError::InvalidMutation)?;
+        Ok(Self::EntityRelation { change })
+    }
+
     pub fn before_memory_type(&self) -> Option<&str> {
         match self {
             Self::ReclassifyMemory {
@@ -2590,7 +2856,8 @@ impl RepairMutation {
             | Self::BindPageLink { .. }
             | Self::ArchiveEmptySourcePage { .. }
             | Self::RegeneratePageProjection { .. }
-            | Self::QuarantineStalePageProjection { .. } => None,
+            | Self::QuarantineStalePageProjection { .. }
+            | Self::EntityRelation { .. } => None,
         }
     }
 
@@ -2616,7 +2883,8 @@ impl RepairMutation {
             | Self::BindPageLink { .. }
             | Self::ArchiveEmptySourcePage { .. }
             | Self::RegeneratePageProjection { .. }
-            | Self::QuarantineStalePageProjection { .. } => {
+            | Self::QuarantineStalePageProjection { .. }
+            | Self::EntityRelation { .. } => {
                 panic!("repair mutation is not a memory reclassification")
             }
         }
@@ -2677,6 +2945,7 @@ impl<'de> Deserialize<'de> for RepairMutation {
                 source_path,
                 quarantine_path,
             } => Self::quarantine_stale_page_projection(source_path, quarantine_path),
+            RepairMutationWire::EntityRelation { change } => Self::entity_relation(change),
         }
         .map_err(D::Error::custom)
     }
@@ -2701,6 +2970,11 @@ pub enum RepairMemoryField {
     PageEmbedding,
     PageProjection,
     PageProjectionQuarantine,
+    RelationEdges,
+    CommunityGraphState,
+    RelationVocabulary,
+    RelationActivity,
+    RelationReviewQueue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2814,6 +3088,19 @@ impl RepairAllowedEffects {
         }
     }
 
+    pub fn entity_relation(owner: RepairTarget) -> Self {
+        Self {
+            owner,
+            fields: vec![
+                RepairMemoryField::RelationEdges,
+                RepairMemoryField::CommunityGraphState,
+                RepairMemoryField::RelationVocabulary,
+                RepairMemoryField::RelationActivity,
+                RepairMemoryField::RelationReviewQueue,
+            ],
+        }
+    }
+
     pub fn owner(&self) -> &RepairTarget {
         &self.owner
     }
@@ -2851,6 +3138,14 @@ impl<'de> Deserialize<'de> for RepairAllowedEffects {
                     RepairMemoryField::PageVersion,
                     RepairMemoryField::PageEmbedding,
                     RepairMemoryField::PageProjection,
+                ]
+            || wire.fields
+                == [
+                    RepairMemoryField::RelationEdges,
+                    RepairMemoryField::CommunityGraphState,
+                    RepairMemoryField::RelationVocabulary,
+                    RepairMemoryField::RelationActivity,
+                    RepairMemoryField::RelationReviewQueue,
                 ];
         if !canonical || !supported_shape {
             return Err(D::Error::custom(RepairContractError::InvalidAllowedEffects));
@@ -2896,14 +3191,27 @@ impl RepairRollbackArtifact {
         Self::try_new_for_format(REPAIR_ROLLBACK_FORMAT_VERSION, relative_path, digest)
     }
 
+    pub fn entity_relation(
+        relative_path: String,
+        digest: RepairDigest,
+    ) -> Result<Self, RepairContractError> {
+        Self::try_new_for_format(
+            REPAIR_RELATION_ROLLBACK_FORMAT_VERSION,
+            relative_path,
+            digest,
+        )
+    }
+
     fn try_new_for_format(
         format_version: u16,
         relative_path: String,
         digest: RepairDigest,
     ) -> Result<Self, RepairContractError> {
         let path = Path::new(&relative_path);
-        if !matches!(format_version, 1 | REPAIR_ROLLBACK_FORMAT_VERSION)
-            || !valid_nonempty(&relative_path)
+        if !matches!(
+            format_version,
+            1 | REPAIR_ROLLBACK_FORMAT_VERSION | REPAIR_RELATION_ROLLBACK_FORMAT_VERSION
+        ) || !valid_nonempty(&relative_path)
             || path.is_absolute()
             || path
                 .components()
@@ -3218,7 +3526,7 @@ fn manifest_baseline_schema_matches(
                     .any(|evidence| matches!(evidence, LintEvidenceRef::OpaqueDigest { .. }))
         }
         3 => assertions.target_record_set().is_none(),
-        4 | 5 | REPAIR_MANIFEST_SCHEMA_VERSION
+        4 | 5 | PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION | REPAIR_MANIFEST_SCHEMA_VERSION
             if assertions.target_check_id() == REPAIR_TAG_INTEGRITY_CHECK_ID =>
         {
             assertions.target_record_set().is_some()
@@ -3228,7 +3536,9 @@ fn manifest_baseline_schema_matches(
                     .find(|baseline| baseline.check_id() == REPAIR_TAG_INTEGRITY_CHECK_ID)
                     .is_some_and(|baseline| baseline.affected_records().is_some())
         }
-        4 | 5 | REPAIR_MANIFEST_SCHEMA_VERSION => assertions.target_record_set().is_none(),
+        4 | 5 | PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION | REPAIR_MANIFEST_SCHEMA_VERSION => {
+            assertions.target_record_set().is_none()
+        }
         _ => false,
     }
 }
@@ -3457,13 +3767,14 @@ impl RepairManifestDraft {
         post_assertions: RepairPostAssertions,
     ) -> Result<Self, RepairContractError> {
         let manifest_schema_version = match writer {
+            RepairWriter::EntityRelation => REPAIR_MANIFEST_SCHEMA_VERSION,
             RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => {
-                REPAIR_MANIFEST_SCHEMA_VERSION
+                PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
             }
             RepairWriter::ReclassifyMemory if source.review_binding().is_some() => {
-                REPAIR_MANIFEST_SCHEMA_VERSION
+                PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
             }
-            _ => PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION,
+            _ => LEGACY_REPAIR_MANIFEST_SCHEMA_VERSION,
         };
         Self::try_new_for_schema(
             manifest_schema_version,
@@ -3496,7 +3807,11 @@ impl RepairManifestDraft {
     ) -> Result<Self, RepairContractError> {
         if !matches!(
             manifest_schema_version,
-            2 | 3 | 4 | 5 | REPAIR_MANIFEST_SCHEMA_VERSION
+            2 | 3
+                | 4
+                | 5
+                | PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
+                | REPAIR_MANIFEST_SCHEMA_VERSION
         ) {
             return Err(RepairContractError::UnsupportedManifestSchema);
         }
@@ -3528,6 +3843,21 @@ impl RepairManifestDraft {
             return Err(RepairContractError::InvalidManifest);
         }
         let compatible = match (&target, writer, &mutation, allowed_effects.fields()) {
+            (
+                RepairTarget::EntityRelation {
+                    relation_id,
+                    from_entity,
+                    to_entity,
+                    review_owner_ids,
+                    ..
+                },
+                RepairWriter::EntityRelation,
+                RepairMutation::EntityRelation { change },
+                [RepairMemoryField::RelationEdges, RepairMemoryField::CommunityGraphState, RepairMemoryField::RelationVocabulary, RepairMemoryField::RelationActivity, RepairMemoryField::RelationReviewQueue],
+            ) => {
+                valid_entity_relation_target(relation_id, from_entity, to_entity, review_owner_ids)
+                    && change.validate().is_ok()
+            }
             (
                 RepairTarget::Memory { .. },
                 RepairWriter::ReclassifyMemory,
@@ -3627,40 +3957,50 @@ impl RepairManifestDraft {
             return Err(RepairContractError::UnsupportedWriter);
         }
         let minimum_schema = match writer {
-            RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => 6,
+            RepairWriter::EntityRelation => REPAIR_MANIFEST_SCHEMA_VERSION,
+            RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => {
+                PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
+            }
             RepairWriter::UnstageOrphanRevision
             | RepairWriter::DeleteMemoryEntityLink
             | RepairWriter::ArchiveEmptySourcePage
-            | RepairWriter::QuarantineStalePageProjection => 5,
+            | RepairWriter::QuarantineStalePageProjection => LEGACY_REPAIR_MANIFEST_SCHEMA_VERSION,
             _ => 2,
         };
         let aggregate_writer = matches!(
             writer,
             RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction
         );
+        let relation_writer = writer == RepairWriter::EntityRelation;
         let current_semantic_review_writer = writer == RepairWriter::ReclassifyMemory
-            && manifest_schema_version == REPAIR_MANIFEST_SCHEMA_VERSION;
+            && manifest_schema_version == PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION;
         if manifest_schema_version < minimum_schema
-            || (aggregate_writer
+            || (relation_writer
                 && (manifest_schema_version != REPAIR_MANIFEST_SCHEMA_VERSION
+                    || rollback.format_version() != REPAIR_RELATION_ROLLBACK_FORMAT_VERSION))
+            || (aggregate_writer
+                && (manifest_schema_version != PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
                     || rollback.format_version() != REPAIR_ROLLBACK_FORMAT_VERSION))
             || (current_semantic_review_writer
                 && rollback.format_version() != PREVIOUS_REPAIR_ROLLBACK_FORMAT_VERSION)
             || (!aggregate_writer
+                && !relation_writer
                 && !current_semantic_review_writer
-                && (manifest_schema_version > PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
+                && (manifest_schema_version > LEGACY_REPAIR_MANIFEST_SCHEMA_VERSION
                     || rollback.format_version() != PREVIOUS_REPAIR_ROLLBACK_FORMAT_VERSION))
         {
             return Err(RepairContractError::UnsupportedWriter);
         }
         let expected_review_owner_ids = target.review_owner_ids();
         let review_binding_valid = match writer {
-            RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => source
+            RepairWriter::EntityRelation
+            | RepairWriter::RenamePageTitle
+            | RepairWriter::CompleteEntityExtraction => source
                 .review_binding()
                 .zip(expected_review_owner_ids.as_ref())
                 .is_some_and(|(binding, owner_ids)| binding.owner_ids() == owner_ids),
             RepairWriter::ReclassifyMemory
-                if manifest_schema_version == REPAIR_MANIFEST_SCHEMA_VERSION =>
+                if manifest_schema_version == PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION =>
             {
                 source
                     .review_binding()
@@ -3669,12 +4009,55 @@ impl RepairManifestDraft {
             }
             _ => source.review_binding().is_none(),
         };
+        let relation_source_valid = if writer == RepairWriter::EntityRelation {
+            match (&target, &mutation, source.finding()) {
+                (
+                    RepairTarget::EntityRelation {
+                        relation_id,
+                        review_owner_ids,
+                        ..
+                    },
+                    RepairMutation::EntityRelation {
+                        change:
+                            RepairRelationMutation::Add {
+                                source_memory_id,
+                                confidence_basis_points,
+                                retire_relation_ids,
+                                ..
+                            },
+                    },
+                    Some(finding),
+                ) => {
+                    finding.proposed_action() == LintSemanticAction::AddEntityRelation
+                        && !finding.unresolved_disagreement()
+                        && finding.confidence_basis_points() == *confidence_basis_points
+                        && source_memory_id
+                            .as_ref()
+                            .is_none_or(|source_id| review_owner_ids.contains(source_id))
+                        && !retire_relation_ids.contains(relation_id)
+                }
+                (
+                    RepairTarget::EntityRelation { .. },
+                    RepairMutation::EntityRelation {
+                        change: RepairRelationMutation::Retire,
+                    },
+                    Some(finding),
+                ) => {
+                    finding.proposed_action() == LintSemanticAction::RemoveEntityRelation
+                        && !finding.unresolved_disagreement()
+                }
+                _ => false,
+            }
+        } else {
+            true
+        };
         if allowed_effects.owner() != &target
             || source.check_id() != post_assertions.target_check_id()
             || !repair_writer_authorized_for_source(&source, writer)
             || source.is_general_only_deterministic()
                 != post_assertions.verification_policy().is_general_only()
             || !review_binding_valid
+            || !relation_source_valid
             || source.finding().is_some_and(|finding| {
                 !finding
                     .evidence_ids()
@@ -3705,8 +4088,10 @@ impl RepairManifestDraft {
 
 fn repair_writer_authorized_for_source(source: &RepairSource, writer: RepairWriter) -> bool {
     if source.finding().is_some() {
-        return source.check_id() == REPAIR_CLASSIFICATION_CHECK_ID
-            && writer == RepairWriter::ReclassifyMemory;
+        return (source.check_id() == REPAIR_CLASSIFICATION_CHECK_ID
+            && writer == RepairWriter::ReclassifyMemory)
+            || (source.check_id() == REPAIR_RELATION_CHECK_ID
+                && writer == RepairWriter::EntityRelation);
     }
     matches!(
         (source.check_id(), writer),
@@ -3843,7 +4228,11 @@ impl<'de> Deserialize<'de> for RepairManifest {
         let wire = RepairManifestWire::deserialize(deserializer)?;
         if !matches!(
             wire.manifest_schema_version,
-            2 | 3 | 4 | 5 | REPAIR_MANIFEST_SCHEMA_VERSION
+            2 | 3
+                | 4
+                | 5
+                | PREVIOUS_REPAIR_MANIFEST_SCHEMA_VERSION
+                | REPAIR_MANIFEST_SCHEMA_VERSION
         ) {
             return Err(D::Error::custom(
                 RepairContractError::UnsupportedManifestSchema,
@@ -3875,6 +4264,14 @@ fn applicable_deep_complete(report: &LintReport) -> bool {
         .is_some_and(|check| matches!(check.outcome(), LintOutcome::Pass | LintOutcome::Finding))
 }
 
+fn applicable_deep_relation_complete(report: &LintReport) -> bool {
+    report
+        .checks()
+        .iter()
+        .find(|check| check.check_id() == REPAIR_RELATION_CHECK_ID)
+        .is_some_and(|check| matches!(check.outcome(), LintOutcome::Pass | LintOutcome::Finding))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RepairChoice {
@@ -3892,6 +4289,10 @@ pub enum RepairChoice {
         review_id: String,
         memory_id: String,
         entity_ids: Vec<String>,
+    },
+    EntityRelation {
+        selection: EntityRelationRepairSelection,
+        selected_finding: LintSemanticFinding,
     },
 }
 
@@ -3912,6 +4313,10 @@ enum RepairChoiceWire {
         review_id: String,
         memory_id: String,
         entity_ids: Vec<String>,
+    },
+    EntityRelation {
+        selection: EntityRelationRepairSelection,
+        selected_finding: LintSemanticFinding,
     },
 }
 
@@ -3970,9 +4375,34 @@ impl RepairChoice {
         })
     }
 
+    pub fn entity_relation(
+        selection: EntityRelationRepairSelection,
+        selected_finding: LintSemanticFinding,
+    ) -> Result<Self, RepairContractError> {
+        selection
+            .validate()
+            .map_err(|_| RepairContractError::InvalidPrepareRequest)?;
+        let expected_action = match &selection.choice {
+            EntityRelationRepairChoice::Add { .. } => LintSemanticAction::AddEntityRelation,
+            EntityRelationRepairChoice::Retire { .. } => LintSemanticAction::RemoveEntityRelation,
+        };
+        if selected_finding.proposed_action() != expected_action
+            || selected_finding.unresolved_disagreement()
+        {
+            return Err(RepairContractError::InvalidPrepareRequest);
+        }
+        Ok(Self::EntityRelation {
+            selection,
+            selected_finding,
+        })
+    }
+
     pub fn selected_finding(&self) -> Option<&LintSemanticFinding> {
         match self {
             Self::ReclassifyMemory {
+                selected_finding, ..
+            }
+            | Self::EntityRelation {
                 selected_finding, ..
             } => Some(selected_finding),
             Self::RenamePageTitle { .. } | Self::CompleteEntityExtraction { .. } => None,
@@ -3984,7 +4414,9 @@ impl RepairChoice {
             Self::ReclassifyMemory {
                 after_memory_type, ..
             } => Some(after_memory_type),
-            Self::RenamePageTitle { .. } | Self::CompleteEntityExtraction { .. } => None,
+            Self::RenamePageTitle { .. }
+            | Self::CompleteEntityExtraction { .. }
+            | Self::EntityRelation { .. } => None,
         }
     }
 }
@@ -4010,6 +4442,10 @@ impl<'de> Deserialize<'de> for RepairChoice {
                 memory_id,
                 entity_ids,
             } => Self::complete_entity_extraction(review_id, memory_id, entity_ids),
+            RepairChoiceWire::EntityRelation {
+                selection,
+                selected_finding,
+            } => Self::entity_relation(selection, selected_finding),
         }
         .map_err(D::Error::custom)
     }
@@ -4094,6 +4530,9 @@ impl PrepareRepairRequest {
             RepairChoice::ReclassifyMemory { .. } => deep_report
                 .as_ref()
                 .is_some_and(|deep| applicable_deep_complete(deep) && deep.agent_work().is_some()),
+            RepairChoice::EntityRelation { .. } => deep_report.as_ref().is_some_and(|deep| {
+                applicable_deep_relation_complete(deep) && deep.agent_work().is_some()
+            }),
             RepairChoice::RenamePageTitle { .. }
             | RepairChoice::CompleteEntityExtraction { .. } => true,
         };
@@ -4261,6 +4700,7 @@ impl RepairApplyReceiptDraft {
         writer: RepairWriter,
     ) -> Result<Self, RepairContractError> {
         let receipt_schema_version = match writer {
+            RepairWriter::EntityRelation => REPAIR_RELATION_RECEIPT_SCHEMA_VERSION,
             RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction => {
                 REPAIR_RECEIPT_SCHEMA_VERSION
             }
@@ -4297,7 +4737,7 @@ impl RepairApplyReceiptDraft {
     ) -> Result<Self, RepairContractError> {
         if !matches!(
             receipt_schema_version,
-            2 | 3 | 4 | REPAIR_RECEIPT_SCHEMA_VERSION
+            2 | 3 | 4 | REPAIR_RECEIPT_SCHEMA_VERSION | REPAIR_RELATION_RECEIPT_SCHEMA_VERSION
         ) {
             return Err(RepairContractError::InvalidReceipt);
         }
@@ -4305,6 +4745,7 @@ impl RepairApplyReceiptDraft {
             writer,
             RepairWriter::RenamePageTitle | RepairWriter::CompleteEntityExtraction
         );
+        let relation_writer = writer == RepairWriter::EntityRelation;
         if !valid_manifest_id(&manifest_id)
             || applied_at <= 0
             || before_target_receipt == after_target_receipt
@@ -4319,8 +4760,10 @@ impl RepairApplyReceiptDraft {
                     | RepairWriter::QuarantineStalePageProjection => 4,
                     _ => 2,
                 }
+            || (relation_writer && receipt_schema_version != REPAIR_RELATION_RECEIPT_SCHEMA_VERSION)
             || (aggregate_writer && receipt_schema_version != REPAIR_RECEIPT_SCHEMA_VERSION)
             || (!aggregate_writer
+                && !relation_writer
                 && receipt_schema_version > PREVIOUS_REPAIR_RECEIPT_SCHEMA_VERSION)
         {
             return Err(RepairContractError::InvalidReceipt);
@@ -4387,6 +4830,16 @@ fn repair_receipt_effects_match(
     matches!(
         (actual_effects.owner(), writer, actual_effects.fields()),
         (
+            RepairTarget::EntityRelation { .. },
+            RepairWriter::EntityRelation,
+            [
+                RepairMemoryField::RelationEdges,
+                RepairMemoryField::CommunityGraphState,
+                RepairMemoryField::RelationVocabulary,
+                RepairMemoryField::RelationActivity,
+                RepairMemoryField::RelationReviewQueue,
+            ]
+        ) | (
             RepairTarget::Memory { .. },
             RepairWriter::ReclassifyMemory,
             [RepairMemoryField::MemoryType]
@@ -4577,7 +5030,7 @@ impl<'de> Deserialize<'de> for RepairApplyReceipt {
                 wire.actual_effects,
                 wire.writer,
             ),
-            2 | 3 | 4 | REPAIR_RECEIPT_SCHEMA_VERSION => {
+            2 | 3 | 4 | REPAIR_RECEIPT_SCHEMA_VERSION | REPAIR_RELATION_RECEIPT_SCHEMA_VERSION => {
                 RepairApplyReceiptDraft::try_new_for_schema(
                     wire.receipt_schema_version,
                     wire.manifest_id,

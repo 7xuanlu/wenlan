@@ -249,7 +249,7 @@ pub(super) async fn target_still_actionable(
         RepairWriter::CompleteEntityExtraction => {
             unreachable!("complete entity extraction actionability handled above")
         }
-        RepairWriter::ReclassifyMemory => {
+        RepairWriter::ReclassifyMemory | RepairWriter::EntityRelation => {
             return Err(WenlanError::Validation(
                 "repair_target_assertion_unsupported".to_string(),
             ));

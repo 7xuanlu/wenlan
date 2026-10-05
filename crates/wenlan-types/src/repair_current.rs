@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Request contract for preparing a repair from daemon-fresh lint reports.
 
-use crate::{repair::RepairLintScope, MemoryType};
+use crate::{repair::RepairLintScope, repair_relation::EntityRelationRepairSelection, MemoryType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -23,6 +23,9 @@ pub enum CurrentRepairChoice {
         memory_id: String,
         entity_ids: Vec<String>,
     },
+    EntityRelation {
+        selection: EntityRelationRepairSelection,
+    },
 }
 
 #[derive(Deserialize)]
@@ -43,6 +46,9 @@ enum CurrentRepairChoiceWire {
         review_id: String,
         memory_id: String,
         entity_ids: Vec<String>,
+    },
+    EntityRelation {
+        selection: EntityRelationRepairSelection,
     },
 }
 
@@ -115,6 +121,11 @@ impl CurrentRepairChoice {
             entity_ids,
         })
     }
+
+    pub fn entity_relation(selection: EntityRelationRepairSelection) -> Result<Self, String> {
+        selection.validate()?;
+        Ok(Self::EntityRelation { selection })
+    }
 }
 
 impl<'de> Deserialize<'de> for CurrentRepairChoice {
@@ -139,6 +150,9 @@ impl<'de> Deserialize<'de> for CurrentRepairChoice {
                 memory_id,
                 entity_ids,
             } => Self::complete_entity_extraction(review_id, memory_id, entity_ids),
+            CurrentRepairChoiceWire::EntityRelation { selection } => {
+                Self::entity_relation(selection)
+            }
         };
         choice.map_err(serde::de::Error::custom)
     }
@@ -178,6 +192,9 @@ impl<'de> Deserialize<'de> for PrepareCurrentRepairRequest {
                 } => CurrentRepairChoice::complete_entity_extraction(
                     review_id, memory_id, entity_ids,
                 ),
+                CurrentRepairChoiceWire::EntityRelation { selection } => {
+                    CurrentRepairChoice::entity_relation(selection)
+                }
             }
             .map_err(serde::de::Error::custom)?,
         })

@@ -1,10 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /**
  * JSON contracts for the daemon's approval-gated repair plane.
- * Keep this aligned with `crates/wenlan-types/src/repair.rs` and the lint
- * contract. Reports and manifests are producer evidence; the UI only selects
- * a choice and never manufactures a receipt.
+ * Keep this aligned with `crates/wenlan-types/src/repair.rs`,
+ * `crates/wenlan-types/src/repair_current.rs`,
+ * `crates/wenlan-types/src/repair_relation.rs`, and the lint contract.
+ * Reports and manifests are producer evidence; the UI only selects a choice
+ * and never manufactures a receipt. The entity-relation DTOs live in
+ * `./repairRelationTypes` and are re-exported here.
  */
+import type {
+  EntityRelationRepairChoice,
+  EntityRelationRepairSelection,
+  RepairRelationMutation,
+} from "./repairRelationTypes";
+
+export type {
+  EntityRelationRepairChoice,
+  EntityRelationRepairSelection,
+  RepairRelationMutation,
+};
 
 export type RepairDigest = string;
 export type LintDigest = string;
@@ -221,13 +235,19 @@ export type RepairChoice =
       review_id: string;
       memory_id: string;
       entity_ids: string[];
+    }
+  | {
+      kind: "entity_relation";
+      selection: EntityRelationRepairSelection;
+      selected_finding: RepairSemanticFinding;
     };
 
 /** Server refreshes evidence and prepares while holding its analysis guard. */
 export type CurrentRepairChoice =
   | { kind: "reclassify_memory"; review_id: string; memory_id: string; after_memory_type: RepairMemoryType }
   | { kind: "rename_page_title"; review_id: string; page_id: string; before_title: string; after_title: string }
-  | { kind: "complete_entity_extraction"; review_id: string; memory_id: string; entity_ids: string[] };
+  | { kind: "complete_entity_extraction"; review_id: string; memory_id: string; entity_ids: string[] }
+  | { kind: "entity_relation"; selection: EntityRelationRepairSelection };
 
 export interface PrepareCurrentRepairRequest {
   lint_scope: RepairLintScope;
@@ -254,7 +274,15 @@ export type RepairTarget =
   | { kind: "tag"; source: string; source_id: string; tag: string; scope: RepairScope }
   | { kind: "page_link"; source_page_id: string; label_key: string; scope: RepairScope }
   | { kind: "page"; page_id: string; scope: RepairScope }
-  | { kind: "page_projection"; page_id: string; scope: RepairScope };
+  | { kind: "page_projection"; page_id: string; scope: RepairScope }
+  | {
+      kind: "entity_relation";
+      relation_id: string;
+      from_entity: string;
+      to_entity: string;
+      review_owner_ids: string[];
+      scope: RepairScope;
+    };
 
 export type RepairWriter =
   | "reclassify_memory"
@@ -268,7 +296,8 @@ export type RepairWriter =
   | "bind_page_link"
   | "archive_empty_source_page"
   | "regenerate_page_projection"
-  | "quarantine_stale_page_projection";
+  | "quarantine_stale_page_projection"
+  | "entity_relation";
 
 export type RepairMutation =
   | {
@@ -291,7 +320,8 @@ export type RepairMutation =
   | { kind: "bind_page_link"; before_target_page_id: string | null; after_target_page_id: string }
   | { kind: "archive_empty_source_page"; before_status: string; after_status: string }
   | { kind: "regenerate_page_projection"; database_version: number }
-  | { kind: "quarantine_stale_page_projection"; source_path: string; quarantine_path: string };
+  | { kind: "quarantine_stale_page_projection"; source_path: string; quarantine_path: string }
+  | { kind: "entity_relation"; change: RepairRelationMutation };
 
 export type RepairMemoryField =
   | "memory_type"
@@ -309,7 +339,12 @@ export type RepairMemoryField =
   | "page_version"
   | "page_embedding"
   | "page_projection"
-  | "page_projection_quarantine";
+  | "page_projection_quarantine"
+  | "relation_edges"
+  | "community_graph_state"
+  | "relation_vocabulary"
+  | "relation_activity"
+  | "relation_review_queue";
 
 export interface RepairAllowedEffects {
   owner: RepairTarget;
@@ -375,6 +410,17 @@ export interface RepairRollbackArtifact {
   relative_path: string;
   digest: RepairDigest;
 }
+
+/**
+ * Schema versions for the entity-relation repair family. The daemon prepares
+ * entity-relation manifests at manifest schema V7 with apply receipts at V6
+ * and rollback artifacts at format V3. Older families keep their legacy
+ * versions, so these stay plain numbers on the DTOs and legacy payloads keep
+ * decoding.
+ */
+export const REPAIR_ENTITY_RELATION_MANIFEST_SCHEMA_VERSION = 7;
+export const REPAIR_ENTITY_RELATION_RECEIPT_SCHEMA_VERSION = 6;
+export const REPAIR_ENTITY_RELATION_ROLLBACK_FORMAT_VERSION = 3;
 
 export interface RepairManifest {
   manifest_schema_version: number;

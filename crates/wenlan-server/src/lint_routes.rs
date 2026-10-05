@@ -186,11 +186,12 @@ pub(crate) async fn prepare_current_repair(
     request: PrepareCurrentRepairRequest,
     now_epoch: i64,
 ) -> Result<RepairManifest, ServerError> {
-    let classification = matches!(
+    let include_deep = matches!(
         request.choice(),
         wenlan_types::repair_current::CurrentRepairChoice::ReclassifyMemory { .. }
+            | wenlan_types::repair_current::CurrentRepairChoice::EntityRelation { .. }
     );
-    let mut fresh = fresh_repair_reports(state, request.lint_scope(), classification).await?;
+    let mut fresh = fresh_repair_reports(state, request.lint_scope(), include_deep).await?;
     wenlan_core::repair::current::prepare_current_repair_with_pages(
         &fresh.db,
         &fresh.store,

@@ -12,7 +12,13 @@ import type {
   CurrentRepairChoice,
   RepairApplyReceipt,
   RepairManifest,
+  RepairMemoryField,
   RepairPrepareOperationRequest,
+} from "./repairTypes";
+import {
+  REPAIR_ENTITY_RELATION_MANIFEST_SCHEMA_VERSION,
+  REPAIR_ENTITY_RELATION_RECEIPT_SCHEMA_VERSION,
+  REPAIR_ENTITY_RELATION_ROLLBACK_FORMAT_VERSION,
 } from "./repairTypes";
 
 const CHECK_CLASSIFICATION = "memories.semantic.classification";
@@ -103,9 +109,9 @@ async function manifestFor(identity: RepairReviewIdentity): Promise<RepairManife
   return { ...unsigned, manifest_digest: await sha256Hex(JSON.stringify(unsigned)) } as RepairManifest;
 }
 
-function applyReceiptFor(manifest: RepairManifest): RepairApplyReceipt {
+function applyReceiptFor(manifest: RepairManifest, receiptVersion = 1): RepairApplyReceipt {
   return {
-    receipt_schema_version: 1,
+    receipt_schema_version: receiptVersion,
     manifest_id: manifest.manifest_id,
     manifest_digest: manifest.manifest_digest,
     applied_at: 456,
@@ -117,6 +123,123 @@ function applyReceiptFor(manifest: RepairManifest): RepairApplyReceipt {
     writer: manifest.writer,
     receipt_digest: "3".repeat(64),
   };
+}
+
+const CHECK_ENTITY_RELATIONS = "kg.semantic.entity_relations";
+
+function relationIdentityFor(reviewId: string, ownerIds: string[]): RepairReviewIdentity {
+  return { reviewId, checkId: CHECK_ENTITY_RELATIONS, occurrenceDigest: "a".repeat(64), ownerIds };
+}
+
+const relationAddIdentity = relationIdentityFor("review-relation-add", ["entity-a", "entity-b", "memory-1"]);
+const relationRetireIdentity = relationIdentityFor("review-relation-retire", ["entity-a", "entity-b"]);
+
+function addChoice(source: string | null | undefined): Record<string, unknown> {
+  const choice: Record<string, unknown> = {
+    kind: "add",
+    from_entity: "entity-a",
+    to_entity: "entity-b",
+    relation_type: "reports_to",
+  };
+  if (source !== undefined) choice.source_memory_id = source;
+  return choice;
+}
+
+function selectionFor(reviewId: string, choice: unknown): unknown {
+  return { review_id: reviewId, choice };
+}
+
+function relationOperation(_identity: RepairReviewIdentity, selection: unknown, operationId = OPERATION_ID): RepairPrepareOperationRequest {
+  return {
+    operation_id: operationId,
+    request: {
+      lint_scope: { kind: "uncategorized" },
+      choice: { kind: "entity_relation", selection } as unknown as CurrentRepairChoice,
+    },
+  };
+}
+
+function relationRecord(identity: RepairReviewIdentity, selection: unknown, operationId = OPERATION_ID): RepairPreparationRecord {
+  return { ...identity, ownerIds: [...identity.ownerIds], version: 1, operation: relationOperation(identity, selection, operationId) };
+}
+
+const RELATION_EFFECT_FIELDS: RepairMemoryField[] = [
+  "relation_edges",
+  "community_graph_state",
+  "relation_vocabulary",
+  "relation_activity",
+  "relation_review_queue",
+];
+
+async function relationManifestFor(identity: RepairReviewIdentity, change: "add" | "retire"): Promise<RepairManifest> {
+  const target = {
+    kind: "entity_relation" as const,
+    relation_id: change === "add" ? "relation-new" : "relation-1",
+    from_entity: "entity-a",
+    to_entity: "entity-b",
+    review_owner_ids: [...identity.ownerIds],
+    scope: { kind: "uncategorized" as const },
+  };
+  const mutation = change === "add"
+    ? {
+      kind: "entity_relation" as const,
+      change: {
+        kind: "add" as const,
+        requested_relation_type: "reports_to",
+        canonical_relation_type: "reports_to",
+        source_memory_id: "memory-1",
+        confidence_basis_points: 8750,
+        retire_relation_ids: [] as string[],
+      },
+    }
+    : { kind: "entity_relation" as const, change: { kind: "retire" as const } };
+  const unsigned = {
+    manifest_schema_version: REPAIR_ENTITY_RELATION_MANIFEST_SCHEMA_VERSION,
+    manifest_id: `manifest-${identity.reviewId}`,
+    prepared_at: 123,
+    source: {
+      report_schema_version: 1,
+      check_catalog_version: 1,
+      lint_scope: { kind: "uncategorized" as const },
+      report_scope: { kind: "uncategorized" as const },
+      check_id: identity.checkId,
+      finding: null,
+      deterministic_evidence: [],
+      general_snapshots: {},
+      deep_snapshots: null,
+      general_producer_receipt: { runtime_commit: null },
+      deep_producer_receipt: null,
+      agent_work_digest: null,
+      review_binding: {
+        review_id: identity.reviewId,
+        occurrence_digest: identity.occurrenceDigest,
+        owner_ids: [...identity.ownerIds],
+      },
+    },
+    target,
+    expected_state: { version: null, canonical_receipt: "b".repeat(64) },
+    writer: "entity_relation" as const,
+    mutation,
+    allowed_effects: { owner: target, fields: RELATION_EFFECT_FIELDS },
+    rollback: {
+      format_version: REPAIR_ENTITY_RELATION_ROLLBACK_FORMAT_VERSION,
+      relative_path: "rollback-v3.json",
+      digest: "c".repeat(64),
+    },
+    post_assertions: {
+      target_check_id: identity.checkId,
+      target_evidence_id: "d".repeat(64),
+      general_baseline: [],
+      deep_baseline: [],
+      target_record_set: null,
+      verification_policy: { kind: "general_only" as const },
+      require_complete_general: true,
+      reject_new_actionable: true,
+      reject_new_incomplete: true,
+      allowed_non_target_check_deltas: [],
+    },
+  };
+  return { ...unsigned, manifest_digest: await sha256Hex(JSON.stringify(unsigned)) } as RepairManifest;
 }
 
 beforeEach(() => {
@@ -320,5 +443,183 @@ describe("preparation status validation", () => {
       { operation_id: OPERATION_ID, state: { phase: "ready", manifest, operation: tampered } },
       operation, classificationIdentity,
     )).toBe(false);
+  });
+});
+
+describe("entity-relation preparation durability", () => {
+  it("persists Add with a bound source, sourceless Add, and Retire", () => {
+    const cases: Array<{ identity: RepairReviewIdentity; selection: unknown }> = [
+      { identity: relationAddIdentity, selection: selectionFor(relationAddIdentity.reviewId, addChoice("memory-1")) },
+      // source_memory_id is optional: absent and explicit null both persist.
+      { identity: relationAddIdentity, selection: selectionFor(relationAddIdentity.reviewId, addChoice(undefined)) },
+      { identity: relationAddIdentity, selection: selectionFor(relationAddIdentity.reviewId, addChoice(null)) },
+      // The retired relation id is resolved by the daemon, never invented
+      // from owner ids: relation-1 is not an owner and still persists.
+      {
+        identity: relationRetireIdentity,
+        selection: selectionFor(relationRetireIdentity.reviewId, { kind: "retire", relation_id: "relation-1" }),
+      },
+    ];
+    for (const { identity, selection } of cases) {
+      const record = relationRecord(identity, selection);
+      writeRepairPreparation(record);
+      const read = readRepairPreparation(identity);
+      expect(read.error).toBeNull();
+      expect(read.record).toEqual(record);
+      expect(read.record?.operation.operation_id).toBe(OPERATION_ID);
+    }
+  });
+
+  it("rejects mismatched or malformed relation preparations and keeps stored bytes", () => {
+    const addReview = relationAddIdentity.reviewId;
+    const malformed: unknown[] = [
+      // Wrong nested review id.
+      selectionFor("other-review", addChoice("memory-1")),
+      // Missing endpoint owner.
+      selectionFor(addReview, { ...addChoice("memory-1"), to_entity: "entity-z" }),
+      // Self-loop.
+      selectionFor(addReview, { ...addChoice("memory-1"), to_entity: "entity-a" }),
+      // Malformed predicate.
+      selectionFor(addReview, { ...addChoice("memory-1"), relation_type: "Reports_To" }),
+      selectionFor(addReview, { ...addChoice("memory-1"), relation_type: "" }),
+      selectionFor(addReview, { ...addChoice("memory-1"), relation_type: "9lives" }),
+      // Unbound or empty source owner.
+      selectionFor(addReview, addChoice("memory-2")),
+      selectionFor(addReview, addChoice("")),
+      // Untrimmed and control-character identifiers.
+      selectionFor(addReview, { ...addChoice("memory-1"), from_entity: " entity-a" }),
+      selectionFor(addReview, { ...addChoice("memory-1"), from_entity: "entity-\u0001a" }),
+      // Unknown fields at the wrapper, selection, and choice levels.
+      { kind: "entity_relation", selection: selectionFor(addReview, addChoice("memory-1")), unexpected: true },
+      { review_id: addReview, choice: addChoice("memory-1"), unexpected: true },
+      selectionFor(addReview, { ...addChoice("memory-1"), unexpected: true }),
+      selectionFor(relationRetireIdentity.reviewId, { kind: "retire", relation_id: "relation-1", unexpected: true }),
+      // Retire with an invalid relation id.
+      selectionFor(relationRetireIdentity.reviewId, { kind: "retire", relation_id: "" }),
+      selectionFor(relationRetireIdentity.reviewId, { kind: "retire", relation_id: " relation-1" }),
+      // Unknown nested kind.
+      selectionFor(addReview, { kind: "rename", relation_id: "relation-1" }),
+    ];
+    for (const selection of malformed) {
+      localStorage.setItem(
+        preparationKey(relationAddIdentity.reviewId),
+        JSON.stringify(relationRecord(relationAddIdentity, selection)),
+      );
+      const read = readRepairPreparation(relationAddIdentity);
+      expect(read.record).toBeNull();
+      expect(read.error).not.toBeNull();
+      expect(localStorage.getItem(preparationKey(relationAddIdentity.reviewId))).not.toBeNull();
+    }
+    // A relation choice is not valid under the classification check, and a
+    // classification choice is not valid under the relation check.
+    const crossCheck = relationRecord(classificationIdentity, selectionFor(classificationIdentity.reviewId, addChoice("memory-1")));
+    expect(() => writeRepairPreparation(crossCheck)).toThrow();
+    const legacyUnderRelation = {
+      ...relationAddIdentity,
+      ownerIds: [...relationAddIdentity.ownerIds],
+      version: 1 as const,
+      operation: operationFor(classificationIdentity),
+    };
+    expect(() => writeRepairPreparation(legacyUnderRelation)).toThrow();
+  });
+
+  it("rejects duplicate, unsorted, single, and invalid owner ids", () => {
+    const selections: Array<{ identity: RepairReviewIdentity; selection: unknown }> = [
+      {
+        identity: relationIdentityFor("review-relation-dup", ["entity-a", "entity-a", "memory-1"]),
+        selection: selectionFor("review-relation-dup", addChoice("memory-1")),
+      },
+      {
+        identity: relationIdentityFor("review-relation-unsorted", ["entity-b", "entity-a"]),
+        selection: selectionFor("review-relation-unsorted", { kind: "retire", relation_id: "relation-1" }),
+      },
+      {
+        identity: relationIdentityFor("review-relation-single", ["entity-a"]),
+        selection: selectionFor("review-relation-single", { kind: "retire", relation_id: "relation-1" }),
+      },
+      {
+        identity: relationIdentityFor("review-relation-blank", ["entity-a", "  "]),
+        selection: selectionFor("review-relation-blank", { kind: "retire", relation_id: "relation-1" }),
+      },
+    ];
+    for (const { identity, selection } of selections) {
+      localStorage.setItem(preparationKey(identity.reviewId), JSON.stringify(relationRecord(identity, selection)));
+      const read = readRepairPreparation(identity);
+      expect(read.record).toBeNull();
+      expect(read.error).not.toBeNull();
+      expect(localStorage.getItem(preparationKey(identity.reviewId))).not.toBeNull();
+      expect(() => writeRepairPreparation(relationRecord(identity, selection))).toThrow();
+    }
+  });
+});
+
+describe("entity-relation preparation status validation", () => {
+  it("accepts live phases only for the exact relation operation id", () => {
+    const operation = relationOperation(
+      relationAddIdentity,
+      selectionFor(relationAddIdentity.reviewId, addChoice("memory-1")),
+    );
+    for (const phase of ["not_started", "in_progress", "interrupted"]) {
+      expect(validateRepairPreparationStatus(
+        { operation_id: OPERATION_ID, state: { phase } }, operation, relationAddIdentity,
+      )).toBe(true);
+    }
+    expect(validateRepairPreparationStatus(
+      { operation_id: OPERATION_ID, state: { phase: "cancelled", cancelled_at: 123 } },
+      operation, relationAddIdentity,
+    )).toBe(true);
+    // A nested wrong-review operation never validates, even with live phases.
+    const wrongReview = relationOperation(
+      relationAddIdentity,
+      selectionFor("other-review", addChoice("memory-1")),
+    );
+    expect(validateRepairPreparationStatus(
+      { operation_id: OPERATION_ID, state: { phase: "in_progress" } }, wrongReview, relationAddIdentity,
+    )).toBe(false);
+    expect(validateRepairPreparationStatus(
+      { operation_id: OTHER_OPERATION_ID, state: { phase: "in_progress" } }, operation, relationAddIdentity,
+    )).toBe(false);
+  });
+
+  it("accepts Ready only when the relation manifest binds to this review", async () => {
+    for (const [identity, change] of [
+      [relationAddIdentity, "add"],
+      [relationRetireIdentity, "retire"],
+    ] as const) {
+      const selection = change === "add"
+        ? selectionFor(identity.reviewId, addChoice("memory-1"))
+        : selectionFor(identity.reviewId, { kind: "retire", relation_id: "relation-1" });
+      const operation = relationOperation(identity, selection);
+      const manifest = await relationManifestFor(identity, change);
+      expect(manifest.manifest_schema_version).toBe(REPAIR_ENTITY_RELATION_MANIFEST_SCHEMA_VERSION);
+      expect(manifest.rollback.format_version).toBe(REPAIR_ENTITY_RELATION_ROLLBACK_FORMAT_VERSION);
+      const receipt = applyReceiptFor(manifest, REPAIR_ENTITY_RELATION_RECEIPT_SCHEMA_VERSION);
+      const nested = {
+        manifest_id: manifest.manifest_id,
+        manifest_digest: manifest.manifest_digest,
+        state: { phase: "applied_unverified", apply_receipt: receipt },
+      };
+      expect(validateRepairPreparationStatus(
+        { operation_id: OPERATION_ID, state: { phase: "ready", manifest, operation: nested } },
+        operation, identity,
+      )).toBe(true);
+
+      // Manifest bound to another review.
+      const crossManifest = await relationManifestFor({ ...identity, reviewId: "other-review" }, change);
+      const crossNested = {
+        manifest_id: crossManifest.manifest_id,
+        manifest_digest: crossManifest.manifest_digest,
+        state: { phase: "prepared" as const },
+      };
+      expect(validateRepairPreparationStatus(
+        { operation_id: OPERATION_ID, state: { phase: "ready", manifest: crossManifest, operation: crossNested } },
+        operation, identity,
+      )).toBe(false);
+      // Nested status bound to another manifest.
+      expect(validateRepairPreparationStatus(
+        { operation_id: OPERATION_ID, state: { phase: "ready", manifest, operation: crossNested } },
+        operation, identity,
+      )).toBe(false);
+    }
   });
 });
