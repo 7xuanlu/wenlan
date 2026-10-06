@@ -77,11 +77,17 @@ test("keeps every enabled primary destination inside the Review command contract
 
   await openPrimaryDestination(page, "Memories");
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();
-  const firstMemory = page.getByRole("article").first();
-  await firstMemory.getByRole("button", { name: "Unpin memory" }).click();
-  await expect(firstMemory.getByRole("button", { name: "Pin memory" })).toBeVisible();
-  await firstMemory.getByRole("button", { name: "Unconfirm memory" }).click();
-  await expect(firstMemory.getByRole("button", { name: "Confirm memory" })).toBeVisible();
+  const firstMemory = page.getByRole("article", { name: "Fixture architecture", exact: true });
+  const memoryActions = firstMemory.getByRole("button", { name: "Memory actions", exact: true });
+  await memoryActions.click();
+  await firstMemory.getByRole("menuitem", { name: "Unpin memory", exact: true }).click();
+  await memoryActions.click();
+  await expect(firstMemory.getByRole("menuitem", { name: "Pin memory", exact: true })).toBeVisible();
+  await firstMemory.getByRole("menuitem", { name: "Unconfirm memory", exact: true }).click();
+  await memoryActions.click();
+  await expect(firstMemory.getByRole("menuitem", { name: "Confirm memory", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(memoryActions).toBeFocused();
 
   await openPrimaryDestination(page, "Sources");
   await expect(page.getByRole("heading", { level: 1, name: "Sources", exact: true })).toBeVisible();
