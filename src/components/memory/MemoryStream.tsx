@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Masonry from "react-masonry-css";
 import MemoryCard from "./MemoryCard";
@@ -73,6 +74,7 @@ export default function MemoryStream({
   presentation = "embedded",
 }: MemoryStreamProps) {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const [undoItem, setUndoItem] = useState<{ sourceId: string; timer: number } | null>(null);
   const [expandedChain, setExpandedChain] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>(getStoredViewMode);
@@ -210,7 +212,7 @@ export default function MemoryStream({
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M6 12h12M9 18h6" /></svg>
             <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px" }}>
-              {sortMode === "curated" ? "Curated" : sortMode === "recent" ? "Recent" : "Oldest"}
+              {t(`memoryList.sort.${sortMode}`)}
             </span>
           </button>
           {sortOpen && (
@@ -219,9 +221,9 @@ export default function MemoryStream({
               style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)", minWidth: 140 }}
             >
               {([
-                { value: "curated" as SortMode, label: "Curated first" },
-                { value: "recent" as SortMode, label: "Recent first" },
-                { value: "oldest" as SortMode, label: "Oldest first" },
+                { value: "curated" as SortMode, label: t("memoryList.sort.curated") },
+                { value: "recent" as SortMode, label: t("memoryList.sort.recent") },
+                { value: "oldest" as SortMode, label: t("memoryList.sort.oldest") },
               ]).map(({ value, label }) => (
                 <button
                   key={value}

@@ -12,6 +12,7 @@ const memoryFixtures: readonly MemoryItem[] = [
     source_id: "mem-local-first",
     title: "Local-first decision",
     content: "Wenlan keeps the review workflow local-first so source context stays inspectable.",
+    source_text: "The original conversation remains available when the reader needs more context.",
     summary: "Local-first review workflow",
     memory_type: "decision",
     domain: "Wenlan",
@@ -97,11 +98,15 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   await expect(list).toBeVisible();
   const row = list.getByRole("article", { name: /Local-first decision/i });
   await expect(row).toBeVisible();
-  await expect(row.getByText("Type")).toBeVisible();
-  await expect(row.getByText("Space")).toBeVisible();
-  await expect(row.getByText("Agent")).toBeVisible();
-  await expect(row.getByText("Status")).toBeVisible();
-  await expect(row.getByText("Updated")).toBeVisible();
+  await expect(row.getByText(memoryFixtures[0].content)).toBeVisible();
+  await expect(row.getByText(memoryFixtures[0].title!, { exact: true })).toHaveCount(0);
+  await expect(row.getByText(memoryFixtures[0].source_text!)).toHaveCount(0);
+  await expect(row.locator("dl")).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Delete memory", exact: true })).toHaveCount(0);
+  await row.getByRole("button", { name: "Memory actions", exact: true }).click();
+  await expect(page.getByRole("menuitem", { name: "Unpin memory", exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(row.getByRole("button", { name: "Memory actions", exact: true })).toBeFocused();
   await capture(page, "memory-list-desktop");
 
   await page.setViewportSize({ width: 768, height: 900 });
@@ -119,7 +124,18 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
 
   await row.getByRole("button", { name: "Open memory" }).click();
   await expect(page.getByRole("main", { name: "Memory dossier" })).toBeVisible();
-  await expect(page.getByText("Local-first decision")).toBeVisible();
+  const detail = page.getByRole("main", { name: "Memory dossier" });
+  await expect(detail.getByText(memoryFixtures[0].content)).toBeVisible();
+  await expect(detail.getByText(memoryFixtures[0].source_text!)).not.toBeVisible();
+  await detail.locator("summary").filter({ hasText: /^Source$/ }).click();
+  await expect(detail.getByText(memoryFixtures[0].source_text!)).toBeVisible();
+  await detail.locator("summary").filter({ hasText: /^Source$/ }).click();
+  await detail.locator("summary").filter({ hasText: /^Memory information$/ }).click();
+  await expect(detail.getByRole("button", { name: /decision/ })).toBeVisible();
+  await detail.locator("summary").filter({ hasText: /^Memory information$/ }).click();
+  const bodyParagraph = detail.locator(".content-renderer p").first();
+  // Short memories use reading type, not a length-dependent display headline.
+  await expect(bodyParagraph).toHaveCSS("font-size", "16px");
   await capture(page, "memory-detail-clickthrough");
 
   await page.setViewportSize({ width: 1280, height: 900 });

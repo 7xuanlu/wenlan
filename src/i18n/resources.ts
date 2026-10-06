@@ -735,6 +735,8 @@ const en = {
   },
   memoryDetail: {
     dossierLabel: "Memory dossier",
+    information: "Memory information",
+    actions: "Memory actions",
     backToMemories: "Back to memories",
     copyContextTitle: "Copy structured recap for LLM context",
     copied: "Copied!",
@@ -804,6 +806,8 @@ const en = {
   },
   memoryList: {
     label: "Memory list",
+    actions: "Memory actions",
+    sort: { curated: "Curated first", recent: "Recent first", oldest: "Oldest first" },
     openMemory: "Open memory",
     confirmMemory: "Confirm memory",
     unconfirmMemory: "Unconfirm memory",
@@ -2930,6 +2934,8 @@ const zhHans = {
   },
   memoryDetail: {
     dossierLabel: "记忆档案",
+    information: "记忆信息",
+    actions: "记忆操作",
     backToMemories: "返回记忆",
     copyContextTitle: "复制结构化回顾作为 LLM 上下文",
     copied: "已复制！",
@@ -2999,6 +3005,8 @@ const zhHans = {
   },
   memoryList: {
     label: "记忆列表",
+    actions: "记忆操作",
+    sort: { curated: "优先精选", recent: "最近更新", oldest: "最早更新" },
     openMemory: "打开记忆",
     confirmMemory: "确认记忆",
     unconfirmMemory: "取消确认记忆",
@@ -5095,6 +5103,8 @@ const zhHant = {
   },
   memoryDetail: {
     dossierLabel: "記憶檔案",
+    information: "記憶資訊",
+    actions: "記憶操作",
     backToMemories: "返回記憶",
     copyContextTitle: "複製結構化回顧作為 LLM 上下文",
     copied: "已複製！",
@@ -5164,6 +5174,8 @@ const zhHant = {
   },
   memoryList: {
     label: "記憶列表",
+    actions: "記憶操作",
+    sort: { curated: "優先精選", recent: "最近更新", oldest: "最早更新" },
     openMemory: "開啟記憶",
     confirmMemory: "確認記憶",
     unconfirmMemory: "取消確認記憶",
