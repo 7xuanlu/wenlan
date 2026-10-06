@@ -142,9 +142,12 @@ describe("MemoryCard insight variant", () => {
     expect(onClick).toHaveBeenCalledTimes(2);
 
     expect(screen.getByRole("button", { name: "Open memory" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Unconfirm memory" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Delete memory" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Unpin memory" })).toBeVisible();
+    expect(screen.queryByRole("menuitem", { name: "Unconfirm memory" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    expect(screen.getByRole("menuitem", { name: "Unconfirm memory" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Delete memory" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Unpin memory" })).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
     expect(screen.queryByText(/[\u2605\u2606]/u)).not.toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole("button", { name: "Accept update" }));

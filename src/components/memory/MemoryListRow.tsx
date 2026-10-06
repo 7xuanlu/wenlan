@@ -1,19 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  FACET_COLORS,
   STABILITY_TIERS,
   acceptPendingRevision,
-  agentDisplayName,
   dismissPendingRevision,
   getPendingRevision,
   type MemoryItem,
   type PendingRevision,
 } from "../../lib/tauri";
-import { formatTimeAgo } from "../../lib/dateFormat";
 import ContentRenderer from "./ContentRenderer";
 import { ARCHIVED_MEMORY_OPACITY } from "./archivedMemoryOpacity";
+import "./memoryListReading.css";
 
 interface MemoryListRowProps {
   memory: MemoryItem;
@@ -36,32 +34,56 @@ export default function MemoryListRow({
 }: MemoryListRowProps) {
   const { t } = useTranslation();
   const [deleting, setDeleting] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuFocus = useRef<"first" | "last">("first");
   const [pendingRevision, setPendingRevision] = useState<PendingRevision | null>(null);
 
   const facetType = memory.memory_type ?? "fact";
   const tier = STABILITY_TIERS[facetType] ?? "ephemeral";
   const isConfirmed = memory.stability === "confirmed" || (!memory.stability && memory.confirmed);
-  const stability = memory.stability ?? (memory.confirmed ? "confirmed" : "new");
-  const displayText = memory.source_text || memory.summary || memory.content;
-  const rowTitle = memory.title || displayText || t("memoryList.untitledMemory");
-  const agentLabel = agentDisplayName(memory.source_agent);
-  const statusLabel = (() => {
-    if (isConfirmed) return t("memoryList.statusConfirmed");
-    switch (stability) {
-      case "learned":
-        return t("memoryList.statusLearned");
-      case "new":
-        return t("memoryList.statusNew");
-      default:
-        return stability;
-    }
-  })();
+  const rowTitle = memory.title || memory.content || t("memoryList.untitledMemory");
   const handleOpen = () => onClick?.(memory.source_id);
   const handleKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
     if (event.target !== event.currentTarget) return;
     if (event.key !== "Enter" && event.key !== " ") return;
     event.preventDefault();
     handleOpen();
+  };
+
+  const closeMenu = () => {
+    setMenuOpen(false);
+    triggerRef.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    const items = menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']");
+    items?.[menuFocus.current === "last" ? items.length - 1 : 0]?.focus();
+    const dismissOutside = (event: PointerEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside);
+    return () => document.removeEventListener("pointerdown", dismissOutside);
+  }, [menuOpen]);
+
+  const handleMenuKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeMenu();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const items = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>("[role='menuitem']") ?? []);
+    const current = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+      : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus();
   };
 
   useEffect(() => {
@@ -92,7 +114,7 @@ export default function MemoryListRow({
   return (
     <article
       aria-label={rowTitle}
-      className="memory-list-row"
+      className="memory-list-row memory-list-reading-row"
       onKeyDown={handleKeyDown}
       tabIndex={0}
       style={
@@ -110,59 +132,27 @@ export default function MemoryListRow({
           <button
             type="button"
             aria-label={t("memoryList.openMemory")}
-            className="memory-list-row-title"
+            className="memory-list-row-content"
             onClick={handleOpen}
           >
-            {rowTitle}
+            <ContentRenderer
+              content={memory.content}
+              structuredFields={memory.structured_fields}
+              variant="card"
+            />
           </button>
           {/* Archive-superseded: kept visible but muted, so say why. Opacity
               alone is overloaded here, so the row needs words too. */}
-          {memory.is_archived && (
-            <span className="memory-list-row-archived">{t("entityDetail.archived")}</span>
-          )}
-          {displayText && displayText !== rowTitle && (
-            <p className="memory-list-row-preview">
-              <ContentRenderer
-                content={displayText}
-                structuredFields={memory.structured_fields}
-                variant="card"
-              />
-            </p>
+          {(memory.domain || memory.pinned || memory.is_archived) && (
+            <div className="memory-list-row-context">
+              {memory.domain && <span>{memory.domain}</span>}
+              {memory.pinned && <span>{t("memoryList.pinned")}</span>}
+              {memory.is_archived && (
+                <span className="memory-list-row-archived">{t("entityDetail.archived")}</span>
+              )}
+            </div>
           )}
         </div>
-
-        <dl className="memory-list-row-metadata">
-          <div>
-            <dt>{t("memoryList.type")}</dt>
-            <dd>
-              <span className={`memory-facet-pill ${FACET_COLORS[facetType] ?? FACET_COLORS.fact}`}>
-                {facetType}
-              </span>
-            </dd>
-          </div>
-          <div>
-            <dt>{t("memoryList.space")}</dt>
-            <dd className="capitalize">{memory.domain ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>{t("memoryList.agent")}</dt>
-            <dd>
-              {agentLabel ? (
-                <span className="memory-chip indigo">{agentLabel}</span>
-              ) : (
-                t("memoryList.manual")
-              )}
-            </dd>
-          </div>
-          <div>
-            <dt>{t("memoryList.status")}</dt>
-            <dd>{statusLabel}</dd>
-          </div>
-          <div>
-            <dt>{t("memoryList.updated")}</dt>
-            <dd>{formatTimeAgo(memory.last_modified)}</dd>
-          </div>
-        </dl>
 
         {pendingRevision && (
           <div className="memory-list-row-update">
@@ -186,35 +176,52 @@ export default function MemoryListRow({
         )}
       </div>
 
-      <div className="memory-list-row-actions">
+      <div
+        ref={actionsRef}
+        className="memory-list-row-actions memory-list-reading-actions"
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setMenuOpen(false);
+        }}
+      >
         <button
+          ref={triggerRef}
           type="button"
-          aria-label={isConfirmed ? t("memoryList.unconfirmMemory") : t("memoryList.confirmMemory")}
-          onClick={() => onConfirm(memory.source_id, !isConfirmed)}
-        >
-          {isConfirmed ? t("memoryList.confirmed") : t("memoryList.confirm")}
-        </button>
-        {(onPin || onUnpin) && (
-          memory.pinned ? (
-            <button type="button" aria-label={t("memoryList.unpinMemory")} onClick={() => onUnpin?.(memory.source_id)}>
-              {t("memoryList.pinned")}
-            </button>
-          ) : (
-            <button type="button" aria-label={t("memoryList.pinMemory")} onClick={() => onPin?.(memory.source_id)}>
-              {t("memoryList.pin")}
-            </button>
-          )
-        )}
-        <button
-          type="button"
-          aria-label={t("memoryList.deleteMemory")}
-          onClick={() => {
-            setDeleting(true);
-            onDelete(memory.source_id);
+          className="memory-list-row-menu-trigger"
+          aria-label={t("memoryList.actions")}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          onClick={() => { menuFocus.current = "first"; setMenuOpen((open) => !open); }}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+            event.preventDefault();
+            event.stopPropagation();
+            menuFocus.current = event.key === "ArrowUp" ? "last" : "first";
+            setMenuOpen(true);
           }}
         >
-          {t("memoryList.deleteMemory")}
+          <svg aria-hidden="true" width="18" height="4" viewBox="0 0 18 4" fill="currentColor">
+            <circle cx="2" cy="2" r="1.5" /><circle cx="9" cy="2" r="1.5" /><circle cx="16" cy="2" r="1.5" />
+          </svg>
         </button>
+        {menuOpen && (
+          <div ref={menuRef} className="mem-popover-surface memory-list-row-menu" role="menu" aria-label={t("memoryList.actions")} onKeyDown={handleMenuKeyDown}>
+            <button type="button" role="menuitem" aria-label={isConfirmed ? t("memoryList.unconfirmMemory") : t("memoryList.confirmMemory")} onClick={() => { onConfirm(memory.source_id, !isConfirmed); closeMenu(); }}>
+              {isConfirmed ? t("memoryList.unconfirmMemory") : t("memoryList.confirmMemory")}
+            </button>
+            {(onPin || onUnpin) && (
+              <button type="button" role="menuitem" aria-label={memory.pinned ? t("memoryList.unpinMemory") : t("memoryList.pinMemory")} onClick={() => {
+                if (memory.pinned) onUnpin?.(memory.source_id);
+                else onPin?.(memory.source_id);
+                closeMenu();
+              }}>
+                {memory.pinned ? t("memoryList.unpinMemory") : t("memoryList.pinMemory")}
+              </button>
+            )}
+            <button type="button" role="menuitem" className="memory-list-row-menu-delete" aria-label={t("memoryList.deleteMemory")} onClick={() => { setDeleting(true); onDelete(memory.source_id); }}>
+              {t("memoryList.deleteMemory")}
+            </button>
+          </div>
+        )}
       </div>
     </article>
   );

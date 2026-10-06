@@ -70,7 +70,7 @@ describe("MemoryStream", () => {
     expect(screen.getByText("Second")).toBeInTheDocument();
   });
 
-  it("renders parent-list rows with metadata labels and keyboard activation", () => {
+  it("renders content-first parent rows with on-demand actions and keyboard activation", () => {
     const onSelectMemory = vi.fn();
     const memories = [
       makeMemory({
@@ -100,18 +100,16 @@ describe("MemoryStream", () => {
     const row = within(list).getByRole("article", { name: /Local-first decision/i });
 
     expect(row).toHaveAttribute("tabindex", "0");
-    expect(within(row).getByText("Type")).toBeVisible();
-    expect(within(row).getByText("Space")).toBeVisible();
-    expect(within(row).getByText("Agent")).toBeVisible();
-    expect(within(row).getByText("Status")).toBeVisible();
-    expect(within(row).getByText("Updated")).toBeVisible();
-    // Same presentation primitives as the detail page metadata rail
-    expect(within(row).getByText("decision")).toHaveClass("memory-facet-pill");
-    expect(within(row).getByText("Claude Code")).toHaveClass("memory-chip");
+    expect(within(row).getByText(memories[0].content)).toBeVisible();
+    expect(within(row).getByText("Wenlan")).toBeVisible();
+    expect(row.querySelector("dl")).toBeNull();
     expect(within(row).getByRole("button", { name: "Open memory" })).toBeVisible();
-    expect(within(row).getByRole("button", { name: "Unconfirm memory" })).toBeVisible();
-    expect(within(row).getByRole("button", { name: "Delete memory" })).toBeVisible();
-    expect(within(row).getByRole("button", { name: "Unpin memory" })).toBeVisible();
+    expect(within(row).queryByRole("menu")).not.toBeInTheDocument();
+    fireEvent.click(within(row).getByRole("button", { name: "Memory actions" }));
+    expect(within(row).getByRole("menuitem", { name: "Unconfirm memory" })).toBeVisible();
+    expect(within(row).getByRole("menuitem", { name: "Delete memory" })).toBeVisible();
+    expect(within(row).getByRole("menuitem", { name: "Unpin memory" })).toBeVisible();
+    fireEvent.keyDown(within(row).getByRole("menu"), { key: "Escape" });
 
     fireEvent.keyDown(row, { key: "Enter" });
     expect(onSelectMemory).toHaveBeenCalledWith("decision-1");

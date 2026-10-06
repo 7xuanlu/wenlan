@@ -1,0 +1,167 @@
+/* Content-first memory reading. All overrides stay within this detail surface. */
+.memory-detail-dossier.memory-detail-content-first {
+  width: min(100%, 848px);
+  padding: 4px 24px 48px;
+  gap: 24px;
+  font-family: var(--mem-font-body);
+}
+
+.memory-detail-content-first .memory-detail-header {
+  width: 100%;
+  margin: 0;
+}
+
+.memory-detail-content-first .memory-detail-reading {
+  width: 100%;
+  max-width: none;
+}
+
+.memory-detail-content-first .memory-detail-body-text {
+  --content-body-size: 16px;
+  --content-body-leading: 1.8;
+  --content-para-gap: 0.9em;
+  --content-h1-size: 25px;
+  --content-h2-size: 21px;
+  --content-h3-size: 18px;
+  --content-code-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.memory-detail-content-first .memory-detail-body-text .content-renderer > :first-child {
+  margin-top: 0;
+}
+
+.memory-detail-content-first .memory-detail-body-text .content-renderer > :last-child {
+  margin-bottom: 0;
+}
+
+.memory-detail-content-first .memory-detail-editor {
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.memory-detail-content-first .memory-detail-quality-warning {
+  margin-top: 18px;
+}
+
+.memory-detail-content-first .memory-detail-disclosure {
+  display: block;
+  margin-top: 12px;
+  padding-top: 0;
+  border: 0;
+  color: var(--mem-text-secondary);
+  font-size: 14px;
+}
+
+.memory-detail-content-first .memory-detail-reading > .memory-detail-disclosure:first-of-type {
+  margin-top: 28px;
+}
+
+.memory-detail-content-first .memory-detail-disclosure[open] {
+  margin-bottom: 20px;
+}
+
+.memory-detail-content-first .memory-detail-disclosure > summary {
+  display: list-item;
+  width: fit-content;
+  max-width: 100%;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--mem-text-secondary);
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+.memory-detail-content-first .memory-detail-disclosure > summary::marker {
+  color: var(--mem-text-tertiary);
+  font-size: 11px;
+}
+
+.memory-detail-content-first .memory-detail-disclosure > summary:hover {
+  color: var(--mem-text);
+}
+
+.memory-detail-content-first .memory-detail-disclosure > summary:focus-visible,
+.memory-detail-content-first .memory-detail-action-menu button:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 3px;
+}
+
+.memory-detail-content-first .memory-detail-disclosure-body {
+  padding-top: 16px;
+}
+
+.memory-detail-content-first .memory-detail-source-quote {
+  margin-top: 0;
+}
+
+.memory-detail-content-first .memory-detail-connections .memory-detail-disclosure-body {
+  display: grid;
+  gap: 20px;
+}
+
+.memory-detail-content-first .memory-detail-information .memory-detail-eyebrow {
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.memory-detail-content-first .memory-detail-information .memory-detail-strip {
+  margin-top: 14px;
+}
+
+.memory-detail-content-first .memory-detail-action-menu-anchor {
+  position: relative;
+}
+
+.memory-detail-content-first .memory-detail-action-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  display: grid;
+  width: 190px;
+  max-width: calc(100vw - 32px);
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.memory-detail-content-first .memory-detail-action-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 4px;
+  padding: 9px 8px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.memory-detail-content-first .memory-detail-action-menu button:hover,
+.memory-detail-content-first .memory-detail-action-menu button:focus {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.memory-detail-content-first .memory-detail-action-menu .memory-detail-delete {
+  color: var(--mem-accent-red, #c44);
+}
+
+@media (max-width: 640px) {
+  .memory-detail-dossier.memory-detail-content-first {
+    padding-inline: 16px;
+    gap: 20px;
+  }
+
+  .memory-detail-content-first .memory-detail-editor-actions {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+}

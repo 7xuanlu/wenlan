@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useId } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -30,6 +30,7 @@ import {
 import TagEditor from "../TagEditor";
 import ContentRenderer from "./ContentRenderer";
 import { DisclosureButton, PinIcon, RailPanelTitle } from "./MemoryDetailPrimitives";
+import "./memoryDetailReading.css";
 
 interface MemoryDetailProps {
   sourceId: string;
@@ -48,7 +49,7 @@ interface MemoryDetailStatusProps {
 
 function MemoryDetailStatus({ ariaLabel, body, onBack, title, backLabel }: MemoryDetailStatusProps) {
   return (
-    <main className="memory-detail-dossier" aria-label={ariaLabel}>
+    <main className="memory-detail-dossier memory-detail-content-first" aria-label={ariaLabel}>
       <header className="memory-detail-header">
         <button
           type="button"
@@ -142,6 +143,10 @@ export default function MemoryDetail({
   const [versionHistoryExpanded, setVersionHistoryExpanded] = useState(false);
   const [relatedEntitiesExpanded, setRelatedEntitiesExpanded] = useState(false);
   const [relatedMemoriesExpanded, setRelatedMemoriesExpanded] = useState(false);
+  const [actionsOpen, setActionsOpen] = useState(false);
+  const actionsId = useId();
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const actionsTriggerRef = useRef<HTMLButtonElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const spaceDropdownRef = useRef<HTMLDivElement>(null);
@@ -273,6 +278,53 @@ export default function MemoryDetail({
     },
   });
 
+  // Only disclosure state resets on navigation; editing drafts keep their existing lifecycle.
+  useEffect(() => {
+    setActionsOpen(false);
+    setSourceExpanded(false);
+    setRevisionHistoryExpanded(false);
+    setVersionHistoryExpanded(false);
+    setRelatedEntitiesExpanded(false);
+    setRelatedMemoriesExpanded(false);
+    setExpandedVersion(null);
+    setReclassifyOpen(false);
+    setSpacePickerOpen(false);
+  }, [sourceId]);
+
+  useEffect(() => {
+    if (!actionsOpen) return;
+    actionsRef.current?.querySelector<HTMLButtonElement>("[role^='menuitem']")?.focus();
+    const closeOutside = (event: MouseEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) setActionsOpen(false);
+    };
+    document.addEventListener("mousedown", closeOutside);
+    return () => document.removeEventListener("mousedown", closeOutside);
+  }, [actionsOpen]);
+
+  const closeActions = () => {
+    setActionsOpen(false);
+    actionsTriggerRef.current?.focus();
+  };
+
+  const handleActionsKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeActions();
+      return;
+    }
+    const items = Array.from(actionsRef.current?.querySelectorAll<HTMLButtonElement>("[role^='menuitem']") ?? []);
+    const index = items.indexOf(document.activeElement as HTMLButtonElement);
+    let next = index;
+    if (event.key === "ArrowDown") next = (index + 1) % items.length;
+    else if (event.key === "ArrowUp") next = (index - 1 + items.length) % items.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = items.length - 1;
+    else return;
+    event.preventDefault();
+    items[next]?.focus();
+  };
+
   // Focus textarea on edit
   useEffect(() => {
     if (editing && textareaRef.current) {
@@ -382,12 +434,6 @@ export default function MemoryDetail({
   const title = displayTitle(memory.content, memory.title, t("memoryDetail.untitledMemory"));
   const structuredEntries = parseStructuredEntries(memory.structured_fields);
   const hasLegacyVersionHistory = !hasDaemonRevisionHistory && Boolean(memory.supersedes) && versionChain.length > 0;
-  // Hero type scales with content length so short memories read as a statement
-  // and long ones as an article body (keeps left/right visual balance).
-  // Display serif holds up for ~4 lines max; past ~280 chars it reads as a
-  // bloated headline, so longer content drops to body text with a lede.
-  const contentLength = memory.content.trim().length;
-  const heroScale = contentLength <= 160 ? "is-xl" : contentLength <= 280 ? "is-lg" : "is-body";
   const sourceText = memory.source_text?.trim() ?? "";
   const hasSourceExcerpt = sourceText.length > 0 && sourceText !== memory.content.trim();
   const sourceClipped = sourceText.length > 360;
@@ -395,8 +441,7 @@ export default function MemoryDetail({
   const hasConnections = relatedEntities.length > 0 || relatedMemories.length > 0;
 
   return (
-    <main className="memory-detail-dossier" aria-label={t("memoryDetail.dossierLabel")}>
-      {/* Topbar: back + state toggles + edit + delete */}
+    <main className="memory-detail-dossier memory-detail-content-first" aria-label={t("memoryDetail.dossierLabel")}>
       <header className="memory-detail-header">
         <button
           type="button"
@@ -407,10 +452,327 @@ export default function MemoryDetail({
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
+        <div className="memory-detail-actions">
+          {/* Copy as context — recap only */}
+          {memory.is_recap && (
+            <button
+              onClick={async () => {
+                const space = memory.domain ? `**Space:** ${memory.domain}` : "";
+                const time = `**Time:** ${absoluteDate(memory.last_modified)}`;
+                const agent = memory.source_agent ? `**Generated by:** ${memory.source_agent}` : "";
+                const meta = [space, time, agent].filter(Boolean).join("\n");
+                const contentSection = `### Content\n${memory.content}`;
+                const text = [
+                  "## Activity Recap",
+                  meta,
+                  "",
+                  contentSection,
+                ].join("\n");
+                await clipboardWrite(text);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              }}
+              className={`memory-detail-text-button ${copied ? "success" : "accent"}`}
+              style={copied ? undefined : { color: "var(--mem-accent-indigo)" }}
+              title={t("memoryDetail.copyContextTitle")}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+              {copied ? t("memoryDetail.copied") : t("memoryDetail.copyAsContext")}
+            </button>
+          )}
+
+          {/* Edit */}
+          {!editing && memory.memory_type !== "recap" && (
+            <button
+              onClick={() => { setEditContent(memory.content); setEditing(true); }}
+              className="memory-detail-text-button"
+              aria-label={t("memoryDetail.editMemory")}
+            >
+              {t("memoryDetail.edit")}
+            </button>
+          )}
+
+          <div
+            className="memory-detail-action-menu-anchor"
+            ref={actionsRef}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActionsOpen(false);
+            }}
+          >
+            <button
+              ref={actionsTriggerRef}
+              type="button"
+              className="memory-detail-icon-button"
+              aria-label={t("memoryDetail.actions")}
+              aria-haspopup="menu"
+              aria-controls={actionsOpen ? actionsId : undefined}
+              aria-expanded={actionsOpen}
+              onClick={() => setActionsOpen(!actionsOpen)}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  setActionsOpen(true);
+                }
+              }}
+            >
+              <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
+                <circle cx="2" cy="2" r="1.5" /><circle cx="8" cy="2" r="1.5" /><circle cx="14" cy="2" r="1.5" />
+              </svg>
+            </button>
+            {actionsOpen && (
+              <div id={actionsId} className="memory-detail-action-menu" role="menu" aria-label={t("memoryDetail.actions")} onKeyDown={handleActionsKeyDown}>
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  tabIndex={-1}
+                  aria-checked={isConfirmed}
+                  aria-label={t("memoryDetail.confirmedState", { state: isConfirmed ? t("memoryDetail.yes") : t("memoryDetail.no") })}
+                  onClick={() => { confirmMutation.mutate(!isConfirmed); closeActions(); }}
+                >
+                  <span className={`memory-detail-state-dot ${isConfirmed ? "is-on" : ""}`} />
+                  {t("memoryDetail.confirmed")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  tabIndex={-1}
+                  aria-checked={memory.pinned}
+                  aria-label={t("memoryDetail.pinnedState", { state: memory.pinned ? t("memoryDetail.yes") : t("memoryDetail.no") })}
+                  title={memory.pinned ? t("memoryDetail.unpin") : t("memoryDetail.pin")}
+                  onClick={() => { pinMutation.mutate(); closeActions(); }}
+                >
+                  <PinIcon filled={memory.pinned} size={12} />
+                  {t("memoryDetail.pinned")}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  className="memory-detail-delete"
+                  aria-label={t("memoryDetail.deleteMemory")}
+                  onClick={() => {
+                    closeActions();
+                    if (window.confirm(t("memoryDetail.deleteConfirm"))) deleteMutation.mutate();
+                  }}
+                >
+                  {t("memoryDetail.deleteMemory")}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
       </header>
 
-      {/* Dateline row: provenance left, record actions right — one full-frame header line */}
-      <div className="memory-detail-eyebrow-row">
+      <section className="memory-detail-reading" aria-label={t("memoryDetail.readingLabel")}>
+        <h2 className="sr-only">{title}</h2>
+
+        {/* The captured content is the primary reading surface. */}
+        {editing ? (
+          <div className="memory-detail-editing-surface">
+            <span className="memory-detail-editing-label">
+              {t("memoryDetail.editing")}
+            </span>
+            <textarea
+              ref={textareaRef}
+              value={editContent}
+              onChange={(e) => setEditContent(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="memory-detail-editor"
+              rows={Math.max(3, editContent.split("\n").length)}
+            />
+            <div className="memory-detail-editor-actions">
+              <button
+                onClick={handleSave}
+                className="memory-detail-text-button primary"
+              >
+                {t("memoryDetail.save")}
+              </button>
+              <button
+                onClick={() => { setEditContent(memory.content); setEditing(false); }}
+                className="memory-detail-text-button"
+              >
+                {t("memoryDetail.cancel")}
+              </button>
+              <span className="memory-detail-shortcut">
+                {t("memoryDetail.saveShortcut")}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div className="memory-detail-body-text">
+            <ContentRenderer
+              content={memory.content}
+              structuredFields={memory.structured_fields}
+              variant="detail"
+            />
+          </div>
+        )}
+
+      {memory.quality === "low" && (
+        <div className="memory-detail-quality-warning">
+          <span className="memory-chip warning">{t("memoryDetail.lowQuality")}</span>
+        </div>
+      )}
+
+      {/* Pending revision */}
+      {pendingRevision && (
+        <div className="memory-detail-pending">
+          <div className="memory-detail-pending-title">
+            {pendingRevision.source_agent
+              ? t("memoryDetail.proposedUpdateFrom", { agent: pendingRevision.source_agent })
+              : t("memoryDetail.proposedUpdate")}
+          </div>
+          <p className="memory-detail-pending-copy">
+            {pendingRevision.content}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleAcceptRevision}
+              className="memory-detail-text-button primary"
+            >
+              {t("memoryDetail.accept")}
+            </button>
+            <button
+              onClick={handleDismissRevision}
+              className="memory-detail-text-button"
+            >
+              {t("memoryDetail.dismiss")}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Source excerpt: the captured text behind this memory */}
+      {hasSourceExcerpt && (
+        <details key={`source-${sourceId}`} className="memory-detail-disclosure memory-detail-source">
+          <summary>{t("memoryDetail.sourceTitle")}</summary>
+          <div className="memory-detail-disclosure-body">
+          <blockquote className="memory-detail-source-quote">
+            {visibleSourceText}
+          </blockquote>
+          {sourceClipped && (
+            <DisclosureButton
+              ariaLabel={sourceExpanded ? t("memoryDetail.showLess") : t("memoryDetail.showFullSource")}
+              onClick={() => setSourceExpanded(!sourceExpanded)}
+            >
+              {sourceExpanded ? t("memoryDetail.showLessCompact") : t("memoryDetail.showFullSource")}
+            </DisclosureButton>
+          )}
+          </div>
+        </details>
+      )}
+
+      {/* Connections are available below the reading content. */}
+      {hasConnections && (
+        <details key={`connections-${sourceId}`} className="memory-detail-disclosure memory-detail-connections">
+          <summary>{t("memoryDetail.connections")}</summary>
+          <div className="memory-detail-disclosure-body">
+
+          {/* Related / Source memories */}
+          {relatedMemories.length > 0 && (
+            <section className="memory-detail-rail-section">
+              <div className="memory-detail-panel-heading">
+                <RailPanelTitle>
+                  {memory.is_recap ? t("memoryDetail.sourceMemories") : t("memoryDetail.relatedMemories")}
+                </RailPanelTitle>
+                {relatedMemories.length > visibleRelatedMemories.length && (
+                  <DisclosureButton
+                    ariaLabel={t("memoryDetail.showAll", { count: relatedMemories.length })}
+                    count={relatedMemories.length}
+                    onClick={() => setRelatedMemoriesExpanded(true)}
+                  >
+                    {t("memoryDetail.showAllCompact")}
+                  </DisclosureButton>
+                )}
+                {relatedMemoriesExpanded && relatedMemories.length > 3 && (
+                  <DisclosureButton
+                    ariaLabel={t("memoryDetail.showLess")}
+                    onClick={() => setRelatedMemoriesExpanded(false)}
+                  >
+                    {t("memoryDetail.showLessCompact")}
+                  </DisclosureButton>
+                )}
+              </div>
+              <div className="memory-detail-related-grid">
+                {visibleRelatedMemories.map((r) => {
+                  const rFacet = r.memory_type ?? null;
+                  const rColor = rFacet ? FACET_COLORS[rFacet] : null;
+                  return (
+                    <button
+                      key={'id' in r ? r.id : r.source_id}
+                      onClick={() => onNavigateMemory(r.source_id)}
+                      className="memory-detail-related-card"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className="memory-detail-related-copy line-clamp-2">
+                          {r.content.length > 160 ? r.content.substring(0, 160) + "\u2026" : r.content}
+                        </p>
+                        <div className="memory-detail-related-meta">
+                          {rFacet && rColor && (
+                            <span className={`memory-detail-related-facet ${rColor}`}>
+                              {rFacet}
+                            </span>
+                          )}
+                          <span>{formatTimeAgo(r.last_modified)}</span>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* Related entities */}
+          {relatedEntities.length > 0 && (
+            <section className="memory-detail-rail-section">
+              <div className="memory-detail-panel-heading">
+                <RailPanelTitle>{t("memoryDetail.relatedEntities")}</RailPanelTitle>
+                {relatedEntities.length > visibleRelatedEntities.length && (
+                  <DisclosureButton
+                    ariaLabel={t("memoryDetail.showAll", { count: relatedEntities.length })}
+                    count={relatedEntities.length}
+                    onClick={() => setRelatedEntitiesExpanded(true)}
+                  >
+                    {t("memoryDetail.showAllCompact")}
+                  </DisclosureButton>
+                )}
+                {relatedEntitiesExpanded && relatedEntities.length > 4 && (
+                  <DisclosureButton
+                    ariaLabel={t("memoryDetail.showLess")}
+                    onClick={() => setRelatedEntitiesExpanded(false)}
+                  >
+                    {t("memoryDetail.showLessCompact")}
+                  </DisclosureButton>
+                )}
+              </div>
+              <div className="memory-detail-entity-chip-list">
+                {visibleRelatedEntities.map((entity) => (
+                  <button
+                    key={entity.id}
+                    onClick={() => onNavigateEntity(entity.id)}
+                    className="memory-detail-entity-chip"
+                  >
+                    <span className="memory-detail-entity-name">
+                      {entity.name}
+                    </span>
+                    <span className="memory-detail-entity-type">
+                      {entity.entity_type}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+          </div>
+        </details>
+      )}
+      <details key={`information-${sourceId}`} className="memory-detail-disclosure memory-detail-information">
+        <summary>{t("memoryDetail.information")}</summary>
+        <div className="memory-detail-disclosure-body">
         <div className="memory-detail-eyebrow">
           <div className="relative" ref={dropdownRef}>
             <button
@@ -499,135 +861,8 @@ export default function MemoryDetail({
             {formatTimeAgo(memory.last_modified)}
           </time>
         </div>
-
-        <div className="memory-detail-actions">
-          {/* Copy as context — recap only */}
-          {memory.is_recap && (
-            <button
-              onClick={async () => {
-                const space = memory.domain ? `**Space:** ${memory.domain}` : "";
-                const time = `**Time:** ${absoluteDate(memory.last_modified)}`;
-                const agent = memory.source_agent ? `**Generated by:** ${memory.source_agent}` : "";
-                const meta = [space, time, agent].filter(Boolean).join("\n");
-                const contentSection = `### Content\n${memory.content}`;
-                const text = [
-                  "## Activity Recap",
-                  meta,
-                  "",
-                  contentSection,
-                ].join("\n");
-                await clipboardWrite(text);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 2000);
-              }}
-              className={`memory-detail-text-button ${copied ? "success" : "accent"}`}
-              style={copied ? undefined : { color: "var(--mem-accent-indigo)" }}
-              title={t("memoryDetail.copyContextTitle")}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-              </svg>
-              {copied ? t("memoryDetail.copied") : t("memoryDetail.copyAsContext")}
-            </button>
-          )}
-
-          {/* Confirmed toggle */}
-          <button
-            onClick={() => confirmMutation.mutate(!isConfirmed)}
-            className={`memory-detail-toggle ${isConfirmed ? "is-on" : ""}`}
-            aria-label={t("memoryDetail.confirmedState", { state: isConfirmed ? t("memoryDetail.yes") : t("memoryDetail.no") })}
-          >
-            <span className={`memory-detail-state-dot ${isConfirmed ? "is-on" : ""}`} />
-            {t("memoryDetail.confirmed")}
-          </button>
-
-          {/* Pin toggle */}
-          <button
-            onClick={() => pinMutation.mutate()}
-            className={`memory-detail-toggle ${memory.pinned ? "is-on" : ""}`}
-            aria-label={t("memoryDetail.pinnedState", { state: memory.pinned ? t("memoryDetail.yes") : t("memoryDetail.no") })}
-            title={memory.pinned ? t("memoryDetail.unpin") : t("memoryDetail.pin")}
-          >
-            <span className={`memory-detail-state-icon ${memory.pinned ? "is-on" : ""}`}>
-              <PinIcon filled={memory.pinned} size={12} />
-            </span>
-            {t("memoryDetail.pinned")}
-          </button>
-
-          {/* Edit */}
-          {!editing && memory.memory_type !== "recap" && (
-            <button
-              onClick={() => { setEditContent(memory.content); setEditing(true); }}
-              className="memory-detail-text-button"
-              aria-label={t("memoryDetail.editMemory")}
-            >
-              {t("memoryDetail.edit")}
-            </button>
-          )}
-
-          {/* Delete */}
-          <button
-            onClick={() => { if (window.confirm(t("memoryDetail.deleteConfirm"))) deleteMutation.mutate(); }}
-            className="memory-detail-icon-button memory-detail-delete"
-            aria-label={t("memoryDetail.deleteMemory")}
-            title={t("memoryDetail.deleteMemory")}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      <div className="memory-detail-grid">
-      <section className="memory-detail-reading" aria-label={t("memoryDetail.readingLabel")}>
-        <h2 className="sr-only">{title}</h2>
-
-        {/* The hero IS the memory — no card, no truncation */}
-        {editing ? (
-          <div className="memory-detail-editing-surface">
-            <span className="memory-detail-editing-label">
-              {t("memoryDetail.editing")}
-            </span>
-            <textarea
-              ref={textareaRef}
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="memory-detail-editor"
-              rows={Math.max(3, editContent.split("\n").length)}
-            />
-            <div className="memory-detail-editor-actions">
-              <button
-                onClick={handleSave}
-                className="memory-detail-text-button primary"
-              >
-                {t("memoryDetail.save")}
-              </button>
-              <button
-                onClick={() => { setEditContent(memory.content); setEditing(false); }}
-                className="memory-detail-text-button"
-              >
-                {t("memoryDetail.cancel")}
-              </button>
-              <span className="memory-detail-shortcut">
-                {t("memoryDetail.saveShortcut")}
-              </span>
-            </div>
-          </div>
-        ) : (
-          <div className={`memory-detail-hero-text ${heroScale}`}>
-            <ContentRenderer
-              content={memory.content}
-              structuredFields={memory.structured_fields}
-              variant="detail"
-            />
-          </div>
-        )}
-
-        {/* Dossier strip: entity · quality · enrichment */}
-        {(memory.entity_id || memory.quality === "low" || !!enrichmentStatus) && (
+        {/* Linked topic and enrichment diagnostics stay with record information. */}
+        {(memory.entity_id || !!enrichmentStatus?.summary.trim()) && (
         <div className="memory-detail-strip">
           {memory.entity_id && (
             <span className="memory-detail-strip-item">
@@ -643,13 +878,7 @@ export default function MemoryDetail({
             </span>
           )}
 
-          {memory.quality && memory.quality === "low" && (
-            <span className="memory-chip warning">
-              {t("memoryDetail.lowQuality")}
-            </span>
-          )}
-
-          {enrichmentStatus && (
+          {enrichmentStatus?.summary.trim() && (
             <span className="memory-detail-strip-item">
               <span className="memory-detail-strip-label">{t("memoryDetail.enrichment")}</span>
               <span
@@ -704,52 +933,6 @@ export default function MemoryDetail({
               </div>
             ))}
           </div>
-        </section>
-      )}
-
-      {/* Pending revision */}
-      {pendingRevision && (
-        <div className="memory-detail-pending">
-          <div className="memory-detail-pending-title">
-            {pendingRevision.source_agent
-              ? t("memoryDetail.proposedUpdateFrom", { agent: pendingRevision.source_agent })
-              : t("memoryDetail.proposedUpdate")}
-          </div>
-          <p className="memory-detail-pending-copy">
-            {pendingRevision.content}
-          </p>
-          <div className="flex gap-2">
-            <button
-              onClick={handleAcceptRevision}
-              className="memory-detail-text-button primary"
-            >
-              {t("memoryDetail.accept")}
-            </button>
-            <button
-              onClick={handleDismissRevision}
-              className="memory-detail-text-button"
-            >
-              {t("memoryDetail.dismiss")}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Source excerpt: the captured text behind this memory */}
-      {hasSourceExcerpt && (
-        <section className="memory-detail-source">
-          <h3 className="memory-detail-subsection">{t("memoryDetail.sourceTitle")}</h3>
-          <blockquote className="memory-detail-source-quote">
-            {visibleSourceText}
-          </blockquote>
-          {sourceClipped && (
-            <DisclosureButton
-              ariaLabel={sourceExpanded ? t("memoryDetail.showLess") : t("memoryDetail.showFullSource")}
-              onClick={() => setSourceExpanded(!sourceExpanded)}
-            >
-              {sourceExpanded ? t("memoryDetail.showLessCompact") : t("memoryDetail.showFullSource")}
-            </DisclosureButton>
-          )}
         </section>
       )}
 
@@ -914,113 +1097,10 @@ export default function MemoryDetail({
 
         </div>
       )}
+        </div>
+      </details>
 
       </section>
-
-      {/* Marginalia rail: connections only */}
-      {hasConnections && (
-        <aside className="memory-detail-rail" aria-label={t("memoryDetail.contextLabel")}>
-          <h3 className="memory-detail-rail-heading">{t("memoryDetail.connections")}</h3>
-
-          {/* Related / Source memories */}
-          {relatedMemories.length > 0 && (
-            <section className="memory-detail-rail-section">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>
-                  {memory.is_recap ? t("memoryDetail.sourceMemories") : t("memoryDetail.relatedMemories")}
-                </RailPanelTitle>
-                {relatedMemories.length > visibleRelatedMemories.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: relatedMemories.length })}
-                    count={relatedMemories.length}
-                    onClick={() => setRelatedMemoriesExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {relatedMemoriesExpanded && relatedMemories.length > 3 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setRelatedMemoriesExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-related-grid">
-                {visibleRelatedMemories.map((r) => {
-                  const rFacet = r.memory_type ?? null;
-                  const rColor = rFacet ? FACET_COLORS[rFacet] : null;
-                  return (
-                    <button
-                      key={'id' in r ? r.id : r.source_id}
-                      onClick={() => onNavigateMemory(r.source_id)}
-                      className="memory-detail-related-card"
-                    >
-                      <div className="flex-1 min-w-0">
-                        <p className="memory-detail-related-copy line-clamp-2">
-                          {r.content.length > 160 ? r.content.substring(0, 160) + "\u2026" : r.content}
-                        </p>
-                        <div className="memory-detail-related-meta">
-                          {rFacet && rColor && (
-                            <span className={`memory-detail-related-facet ${rColor}`}>
-                              {rFacet}
-                            </span>
-                          )}
-                          <span>{formatTimeAgo(r.last_modified)}</span>
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Related entities */}
-          {relatedEntities.length > 0 && (
-            <section className="memory-detail-rail-section">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>{t("memoryDetail.relatedEntities")}</RailPanelTitle>
-                {relatedEntities.length > visibleRelatedEntities.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: relatedEntities.length })}
-                    count={relatedEntities.length}
-                    onClick={() => setRelatedEntitiesExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {relatedEntitiesExpanded && relatedEntities.length > 4 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setRelatedEntitiesExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-entity-chip-list">
-                {visibleRelatedEntities.map((entity) => (
-                  <button
-                    key={entity.id}
-                    onClick={() => onNavigateEntity(entity.id)}
-                    className="memory-detail-entity-chip"
-                  >
-                    <span className="memory-detail-entity-name">
-                      {entity.name}
-                    </span>
-                    <span className="memory-detail-entity-type">
-                      {entity.entity_type}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-        </aside>
-      )}
-      </div>
     </main>
   );
 }
