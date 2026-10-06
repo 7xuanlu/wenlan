@@ -204,6 +204,36 @@ describe("PageDraftEditor", () => {
     expect(onBack).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["More", "Account"])("lets the %s sidebar popup consume Escape without leaving the draft or closing the drawer", async (name) => {
+    const closeDrawer = vi.fn(() => true);
+    const { onBack } = renderEditor({ onEscapeBeforeLeave: closeDrawer });
+    await userEvent.type(await screen.findByRole("textbox", { name: "Title" }), "Still editing");
+    const popup = document.createElement("div");
+    popup.dataset.sidebarEscapeScope = "true";
+    const option = document.createElement("button");
+    option.textContent = name;
+    popup.append(option);
+    document.body.append(popup);
+    const closePopup = vi.fn((event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      delete popup.dataset.sidebarEscapeScope;
+    });
+    popup.addEventListener("keydown", closePopup);
+    try {
+      option.focus();
+      fireEvent.keyDown(option, { key: "Escape" });
+      expect(closePopup).toHaveBeenCalledTimes(1);
+      expect(popup).not.toHaveAttribute("data-sidebar-escape-scope");
+      expect(closeDrawer).not.toHaveBeenCalled();
+      expect(onBack).not.toHaveBeenCalled();
+      expect(createPageDraft).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Still editing");
+    } finally {
+      popup.remove();
+    }
+  });
+
   it("locks Publish while a parent leave autosave is in flight", async () => {
     let resolveCreate!: (value: Page) => void;
     vi.mocked(createPageDraft).mockReturnValue(new Promise((resolve) => {

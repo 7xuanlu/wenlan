@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { collectBrowserErrors } from "./tauriMock";
-import { returnToPageReading } from "./helpers/pageReading";
+import type { Page as KnowledgePage } from "../src/lib/tauri";
 
 async function openWiki(page: Page): Promise<void> {
   await page
@@ -13,10 +14,31 @@ async function openWiki(page: Page): Promise<void> {
 
 async function openFixtureArchitecture(page: Page): Promise<void> {
   await openWiki(page);
-  await page.getByRole("button", { name: "Open Fixture architecture" }).click();
+  await page.getByRole("region", { name: "Wiki", exact: true })
+    .getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: "Fixture architecture" }),
   ).toBeVisible();
+}
+
+/** Read the same isolated runtime that answers the Review UI's IPC calls. */
+async function storedReviewPage(page: Page, id: string): Promise<KnowledgePage | null> {
+  return page.evaluate(async (pageId) => {
+    const modulePath = "/review/tauri-core.ts";
+    const { invoke } = await import(modulePath);
+    return invoke("get_page", { id: pageId });
+  }, id);
+}
+
+async function closeWritingView(page: Page): Promise<void> {
+  const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
+  await expect(editor).toBeVisible();
+  await expect(editor).toBeEditable();
+  // The editor owns the first Escape and flushes before returning to reading.
+  // Main's next Escape is the navigation gesture back to Wiki.
+  await editor.press("Escape");
+  await expect(editor).toHaveCount(0);
+  await expect(page.locator(".page-detail")).toBeVisible();
 }
 
 async function installRejectedCommandAudit(page: Page): Promise<void> {
@@ -50,10 +72,10 @@ test("keeps every enabled primary destination inside the Review command contract
   await navigation.getByRole("button", { name: "Graph", exact: true }).click();
   await expect(page.getByTestId("atlas-view")).toBeVisible();
   // Same fixture and same count line as graph-rendering.visual.spec: pages
-  // lead, and the entity count is over what is drawn (the three connected ones).
+  // lead, and the topic count is over what is drawn (the three connected ones).
   await expect(page.getByText(/^7 pages · 3 entities(?: · \d+ regions?)?$/)).toBeVisible();
 
-  await navigation.getByRole("button", { name: "Memories", exact: true }).click();
+  await openPrimaryDestination(page, "Memories");
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();
   const firstMemory = page.getByRole("article").first();
   await firstMemory.getByRole("button", { name: "Unpin memory" }).click();
@@ -61,13 +83,19 @@ test("keeps every enabled primary destination inside the Review command contract
   await firstMemory.getByRole("button", { name: "Unconfirm memory" }).click();
   await expect(firstMemory.getByRole("button", { name: "Confirm memory" })).toBeVisible();
 
-  await navigation.getByRole("button", { name: "Sources", exact: true }).click();
+  await openPrimaryDestination(page, "Sources");
+  await expect(page.getByRole("heading", { level: 1, name: "Sources", exact: true })).toBeVisible();
   await expect(
-    page.getByRole("heading", { level: 2, name: "Bring your sources together" }),
+    page.getByRole("heading", { level: 2, name: "Bring your sources together", exact: true }),
   ).toBeVisible();
+  await expect(page.getByRole("group", { name: "Filter sources", exact: true })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "Search sources", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "More", exact: true })).toHaveAttribute("aria-current", "page");
 
-  await navigation.getByRole("button", { name: "Home", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Today in Wenlan" })).toBeVisible();
+  await openPrimaryDestination(page, "Wiki");
+  await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
+  await expect(navigation.getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "More", exact: true })).not.toHaveAttribute("aria-current");
 
   await page.waitForTimeout(250);
   expect(await rejectedCommands(page)).toEqual([]);
@@ -77,6 +105,7 @@ test("keeps every enabled primary destination inside the Review command contract
 
 test("proves Review identity and exercises Wiki Page mutations", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
+  await installRejectedCommandAudit(page);
   await page.goto("/");
 
   const fixtureNotice = page.locator('[data-review-environment="fixture-only"]');
@@ -85,15 +114,28 @@ test("proves Review identity and exercises Wiki Page mutations", async ({ page }
   await expect(fixtureNotice).toContainText("Fixture data · resets on relaunch");
 
   await openFixtureArchitecture(page);
-  const editor = page.getByRole("textbox", { name: "Page editor" });
+  const initialPage = await storedReviewPage(page, "page-architecture");
+  expect(initialPage).not.toBeNull();
+  const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
   await expect(editor).toBeVisible();
-  await editor.fill("# Fixture architecture\n\nEdited through the Review-flavor lane.");
-  await returnToPageReading(page);
+  await expect(editor).toBeEditable();
+  const editedSource = "# Fixture architecture\n\nEdited through the Review-flavor lane.";
+  await editor.fill(editedSource);
+  await expect.poll(async () => (await storedReviewPage(page, "page-architecture"))?.content).toBe(editedSource);
+  const savedPage = await storedReviewPage(page, "page-architecture");
+  expect(savedPage?.version).toBeGreaterThan(initialPage!.version);
+  expect(savedPage?.user_edited).toBe(true);
+  await expect(page.locator('.page-detail [role="status"]')).toHaveText("Saved");
+
+  // Reopening uses persisted fixture content rather than the original editor DOM.
+  await openFixtureArchitecture(page);
+  await closeWritingView(page);
   await expect(page.getByText("Edited through the Review-flavor lane.")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Re-distill page" }).click();
   await expect(page.getByText("Page re-distilled.", { exact: true })).toBeVisible();
+  await expect.poll(async () => (await storedReviewPage(page, "page-architecture"))?.last_compiled).toBe("2026-07-10T12:33:00Z");
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Page actions" }).click();
@@ -102,7 +144,9 @@ test("proves Review identity and exercises Wiki Page mutations", async ({ page }
   await expect(
     page.getByRole("button", { name: "Open Fixture architecture" }),
   ).toHaveCount(0);
+  expect(await storedReviewPage(page, "page-architecture")).toBeNull();
 
+  expect(await rejectedCommands(page)).toEqual([]);
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });
@@ -134,17 +178,22 @@ test("creates and publishes a Page draft through the Review runtime", async ({ p
   expect(browserErrors.consoleErrors).toEqual([]);
 });
 
-test("marks a page reviewed through the backend-minted presence path", async ({ page }) => {
-  // The command contract is the point. `review_page` and
-  // `page_review_supported` were both new, and an unregistered command fails
-  // only at runtime, on this screen — so driving the real gesture through the
-  // Review surface is what proves they were registered and answered.
+test("marks a stored page reviewed through the Review presence contract", async ({ page }) => {
+  // Review answers page_review_supported and review_page through its isolated
+  // fixture runtime. This exercises the app gesture and registered command
+  // contract; a real daemon's minted presence proof is a separate live lane.
   const browserErrors = collectBrowserErrors(page);
   await installRejectedCommandAudit(page);
   await page.goto("/");
   await openFixtureArchitecture(page);
 
-  await returnToPageReading(page);
+  // All reading actions are absent while writing. Escape flushes the editor
+  // and returns to the stored text before the review action is reachable.
+  await expect(page.getByRole("textbox", { name: "Page editor", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Page actions", exact: true })).toHaveCount(0);
+  await closeWritingView(page);
+
+  await expect(page.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Page actions", exact: true }).click();
   const review = page.getByRole("menuitem", { name: "Mark page reviewed", exact: true });
   await expect(review).toBeEnabled();

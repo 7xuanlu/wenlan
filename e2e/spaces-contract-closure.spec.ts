@@ -26,7 +26,7 @@ async function expectNoIndexLabel(page: Page): Promise<void> {
   expect(accessibilitySnapshot).not.toMatch(/\bIndex\b|索引/iu);
 }
 
-test("opens Home Recent by stable id, prunes missing history, and preserves selection through rename", async ({ page }) => {
+test("opens Spaces by stable id, prunes missing history, and preserves selection through rename", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   const recentHistory = JSON.stringify({
     version: 1,
@@ -43,16 +43,17 @@ test("opens Home Recent by stable id, prunes missing history, and preserves sele
   await page.goto("/");
 
   await expectNoIndexLabel(page);
-  const recent = page.getByRole("navigation", { name: "Recent spaces" });
-  await recent.getByRole("button", { name: "Wenlan", exact: true }).click();
+  await openSpaces(page);
+  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await page.getByTestId("space-row-space-wenlan").getByRole("button", { name: "Wenlan", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
-  await expect(recent.getByRole("button", { name: "Wenlan", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(recent.getByRole("button", { name: "Wenlan", exact: true })).not.toHaveAttribute("aria-pressed");
+  await expect(navigation.getByRole("button", { name: "Spaces", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(navigation.getByRole("button", { name: "Spaces", exact: true })).not.toHaveAttribute("aria-pressed");
   await expect.poll(() => page.evaluate((key) => localStorage.getItem(key), RECENT_SPACES_KEY)).not.toContain("space-missing");
   await expectNoIndexLabel(page);
 
   await page.keyboard.press("Escape");
-  await expect(page.getByLabel("Home overview")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces", exact: true })).toBeVisible();
   await openSpaces(page);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
   await wenlanRow.getByRole("button", { name: "Actions for Wenlan" }).click();
@@ -65,9 +66,9 @@ test("opens Home Recent by stable id, prunes missing history, and preserves sele
 
   await wenlanRow.getByRole("button", { name: "Wenlan Core", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan Core" })).toBeVisible();
-  const renamedRecent = page.getByRole("navigation", { name: "Recent spaces" }).getByRole("button", { name: "Wenlan Core" });
-  await expect(renamedRecent).toHaveAttribute("aria-current", "page");
-  await expect(renamedRecent).not.toHaveAttribute("aria-pressed");
+  const selectedDestination = navigation.getByRole("button", { name: "Spaces", exact: true });
+  await expect(selectedDestination).toHaveAttribute("aria-current", "page");
+  await expect(selectedDestination).not.toHaveAttribute("aria-pressed");
   await expectNoIndexLabel(page);
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);

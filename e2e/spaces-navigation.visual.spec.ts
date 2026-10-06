@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import { openSpaceEntity } from "./helpers/spaceEntity";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { renderedContrast } from "./helpers/renderedContrast";
-import { returnToPageReading } from "./helpers/pageReading";
 
-const evidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/screenshots",
+const evidenceRoot = process.env.WENLAN_UI_EVIDENCE_DIR || path.join(
+  process.env.REPO_DATA_ROOT || path.join(homedir(), ".local", "share", "repo-data"),
+  "wenlan", "ui", "spaces-navigation",
 );
+const evidenceDir = path.join(evidenceRoot, "screenshots");
 const fixtureNow = 1_783_728_000_000;
 
 async function settle(page: Page): Promise<void> {
@@ -26,8 +28,16 @@ async function settle(page: Page): Promise<void> {
   await expect(page.locator("main")).toBeVisible();
   const sidebar = page.locator('aside[aria-label="Primary navigation"]');
   if (await sidebar.getAttribute("aria-hidden") === "false") {
-    await expect(sidebar).toHaveCSS("width", "240px");
-    await expect(sidebar.locator(":scope > div")).toHaveCSS("opacity", "1");
+    const overlay = await page.evaluate(() => window.matchMedia("(max-width: 899px)").matches);
+    const panel = sidebar.locator(".notes-workspace-panel");
+    const expanded = await panel.isVisible();
+    await expect(sidebar).toHaveCSS("width", overlay || expanded ? "264px" : "48px");
+    await expect(sidebar.locator(".notes-icon-rail")).toHaveCSS("width", "48px");
+    await expect(sidebar.locator(".notes-icon-rail")).toHaveCSS("opacity", "1");
+    if (expanded) {
+      await expect(panel).toHaveCSS("width", "216px");
+      await expect(panel).toHaveCSS("opacity", "1");
+    }
   }
 }
 
@@ -36,10 +46,9 @@ async function settle(page: Page): Promise<void> {
 async function assertRedesignedSurface(page: Page, name: string): Promise<boolean> {
   const spaces = name.startsWith("spaces-");
   const spaceDetail = name.startsWith("space-");
-  const wikiReferences = name.startsWith("home-");
   const entityPage = name.startsWith("entity-");
   const wikiLibrary = name.startsWith("pages-");
-  if (!spaces && !spaceDetail && !wikiReferences && !entityPage && !wikiLibrary) return false;
+  if (!spaces && !spaceDetail && !entityPage && !wikiLibrary) return false;
   const viewport = page.viewportSize()!;
   const overflow = await page.evaluate(() => ({
     page: document.documentElement.scrollWidth - window.innerWidth,
@@ -52,6 +61,10 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     const cards = page.getByTestId("wiki-cards").locator('[data-testid^="wiki-card-"]');
     await expect(cards).toHaveCount(6);
     await expect(cards.first()).toContainText("Fixture architecture summary");
+    await expect(cards.first().getByRole("button", { name: "Open Fixture architecture", exact: true })).toBeVisible();
+    await expect(page.locator(".wiki-overview")).not.toContainText("[[");
+    const titleFonts = await cards.locator(".asset-card-title").evaluateAll((nodes) => nodes.map((node) => Number.parseFloat(getComputedStyle(node).fontSize)));
+    for (const font of titleFonts) expect(font, "Wiki page titles must remain readable").toBeGreaterThanOrEqual(14);
     const controls = page.locator(".wiki-filters select, .wiki-new-page-action");
     await expect(controls).toHaveCount(4);
     const controlBounds = await controls.evaluateAll((nodes) => nodes.map((node) => {
@@ -66,9 +79,11 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     }
     const cardBounds = await cards.evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, width: box.width, scrollWidth: node.scrollWidth };
+      return { left: box.left, right: box.right, width: box.width, height: box.height, scrollWidth: node.scrollWidth };
     }));
     for (const box of cardBounds) {
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.height).toBeGreaterThanOrEqual(44);
       expect(box.left).toBeGreaterThanOrEqual(0);
       expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
       expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
@@ -76,17 +91,36 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     const contrast = await renderedContrast(page, [
       { selector: ".wiki-overview h1", label: "Wiki title", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".wiki-filters select", label: "Wiki filter controls", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".wiki-overview .asset-card-title", label: "Wiki page title", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
   } else if (entityPage) {
     // The readability update intentionally changes these pixels. Preserve
     // content, legibility, contrast and responsive containment as live contracts
     // while keeping the complete light/dark captures as review artifacts.
-    const detail = page.locator(".page-detail");
+    const detail = page.locator(".entity-detail-dossier");
+    await expect(detail).toBeVisible();
     await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
-    await expect(detail.locator(".page-detail-prose")).toContainText("Deterministic content for the integrated Wenlan journey.");
-    await expect(detail.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();
-    const bounds = await detail.locator("h1, .page-detail-prose").evaluateAll((nodes) => nodes.map((node) => {
+    await expect(detail.locator(".page-detail-dateline")).toContainText("person · Wenlan");
+    const context = detail.getByRole("complementary", { name: "Entity context", exact: true });
+    await expect(context).toBeVisible();
+    await expect(context.getByText("person", { exact: true })).toBeVisible();
+    await expect(context.getByText("Wenlan", { exact: true })).toBeVisible();
+    await expect(context).toContainText("research-agent");
+    await expect(detail.locator(".entity-obs-content")).toHaveText("Wrote the first published algorithm");
+    await expect(detail.locator(".entity-relation-row")).toHaveCount(2);
+    await expect(detail.getByRole("button", { name: "Add note", exact: true })).toBeVisible();
+    await expect(detail.getByRole("button", { name: "Full screen", exact: true })).toBeVisible();
+    const typography = await detail.locator(".page-detail-dateline").evaluate((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      width: node.getBoundingClientRect().width,
+      scrollWidth: node.scrollWidth,
+    }));
+    expect(typography.fontSize, "topic metadata must remain readable").toBeGreaterThanOrEqual(13);
+    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
+    const boundedSurfaces = detail.locator("h1, .entity-detail-reading, .page-detail-dateline, .page-detail-rail");
+    await expect(boundedSurfaces).toHaveCount(4);
+    const bounds = await boundedSurfaces.evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
       return { left: box.left, right: box.right, width: box.width };
     }));
@@ -96,35 +130,11 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
       expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
     }
     const contrast = await renderedContrast(page, [
-      { selector: ".page-detail-title", label: "Entity page title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".entity-detail-dossier .page-detail-title", label: "Topic title", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".entity-detail-dossier .page-detail-dateline", label: "Topic metadata", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".entity-detail-dossier .entity-obs-content", label: "Topic observation", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
-
-    await detail.getByRole("button", { name: "Page info", exact: true }).click();
-    const info = page.getByRole("dialog", { name: "Page info", exact: true });
-    await expect(info).toBeVisible();
-    const dateline = info.locator(".page-detail-dateline");
-    await expect(dateline).toContainText("from 1 memory");
-    await expect(info.getByTestId("page-info-source-row")).toHaveCount(1);
-    const typography = await dateline.evaluate((node) => ({
-      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
-      width: node.getBoundingClientRect().width,
-      scrollWidth: node.scrollWidth,
-    }));
-    expect(typography.fontSize, "source metadata must remain readable").toBeGreaterThanOrEqual(13);
-    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
-    const metadataBounds = await dateline.boundingBox();
-    expect(metadataBounds).not.toBeNull();
-    expect(metadataBounds!.width).toBeGreaterThan(0);
-    expect(metadataBounds!.x).toBeGreaterThanOrEqual(0);
-    expect(metadataBounds!.x + metadataBounds!.width).toBeLessThanOrEqual(viewport.width + 1);
-    const metadataContrast = await renderedContrast(page, [
-      { selector: ".page-info-drawer .page-detail-dateline", label: "Source metadata", foregroundProperty: "color", minimum: 4.5 },
-    ]);
-    for (const result of metadataContrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
-    await info.getByRole("button", { name: "Close", exact: true }).click();
-    await expect(info).toHaveCount(0);
-    await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
   } else if (spaceDetail) {
     const dossier = page.locator(".space-dossier");
     await expect(dossier.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
@@ -194,29 +204,6 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
       { selector: ".spaces-suggestions > summary", label: "Suggestions disclosure", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
-  } else {
-    const home = page.getByTestId("wiki-home");
-    await expect(home).toBeVisible();
-    await expect(home).toContainText("Fixture architecture summary");
-    await expect(home).not.toContainText("[[");
-    const pages = home.getByTestId("wiki-page-list").getByRole("button");
-    await expect(pages).toHaveCount(6);
-    await expect(pages.first()).toHaveAccessibleName("Open Fixture architecture");
-    const rows = await pages.evaluateAll((nodes) => nodes.map((node) => {
-      const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height };
-    }));
-    for (let index = 0; index < rows.length; index++) {
-      expect(rows[index].left).toBeGreaterThanOrEqual(0);
-      expect(rows[index].right).toBeLessThanOrEqual(viewport.width);
-      expect(rows[index].height).toBeGreaterThanOrEqual(44);
-      if (index) expect(rows[index].top).toBeGreaterThanOrEqual(rows[index - 1].bottom - 1);
-    }
-    const contrast = await renderedContrast(page, [
-      { selector: '[data-testid="wiki-home"] h1', label: "Home title", foregroundProperty: "color", minimum: 4.5 },
-      { selector: '[data-testid="wiki-page-list"] button p', label: "Page title", foregroundProperty: "color", minimum: 4.5 },
-    ]);
-    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
   }
   return true;
 }
@@ -269,10 +256,7 @@ async function openWiki(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
 }
 
-async function captureFiveSurfaces(page: Page, label: string): Promise<void> {
-  await openSidebar(page);
-  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Home", exact: true }).click();
-  await capture(page, `home-${label}`);
+async function captureFourSurfaces(page: Page, label: string): Promise<void> {
   await openWiki(page);
   await capture(page, `pages-${label}`);
   await openSpaces(page);
@@ -280,12 +264,8 @@ async function captureFiveSurfaces(page: Page, label: string): Promise<void> {
   await page.getByTestId("space-row-space-wenlan").getByRole("button", { name: "Wenlan", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await capture(page, `space-${label}`);
-  await page
-    .getByRole("region", { name: "Recently refined" })
-    .getByRole("button", { name: /^Ada Lovelace/ })
-    .click();
+  await openSpaceEntity(page, "Ada Lovelace");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
-  await returnToPageReading(page);
   await capture(page, `entity-${label}`);
 }
 
@@ -306,9 +286,9 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
     { width: 375, height: 812, label: "375x812" },
   ] as const) {
     await page.setViewportSize(viewport);
-    await captureFiveSurfaces(page, viewport.label);
+    await captureFourSurfaces(page, viewport.label);
     await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
-    await captureFiveSurfaces(page, `${viewport.label}-dark`);
+    await captureFourSurfaces(page, `${viewport.label}-dark`);
     await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
   }
 
@@ -346,7 +326,7 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   await test.info().attach("spaces-mobile-keyboard-focus", {
     path: path.join(evidenceDir, targetedCapture), contentType: "image/png",
   });
-  await writeFile(path.join(process.cwd(), ".omo/evidence/task-7-spaces-navigation-redesign/mobile-inventory-focus.json"), `${JSON.stringify({
+  await writeFile(path.join(evidenceRoot, "mobile-inventory-focus.json"), `${JSON.stringify({
     focusOutline,
     labelsAndValues: metadataFields,
     screenshot: path.join(evidenceDir, targetedCapture),
@@ -355,9 +335,8 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
 
   await page.setViewportSize({ width: 1586, height: 992 });
   await openSidebar(page);
-  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Home", exact: true }).click();
-  await openSidebar(page);
-  await capture(page, "home-native-1586x992");
+  await openWiki(page);
+  await capture(page, "pages-native-1586x992");
   await page.setViewportSize({ width: 1635, height: 962 });
   await openSpaces(page);
   await capture(page, "spaces-native-1635x962");

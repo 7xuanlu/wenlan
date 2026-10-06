@@ -44,15 +44,6 @@ vi.mock("../../lib/tauri", async (importOriginal) => ({
 vi.mock("./ActivityFeed", () => ({ default: () => <div /> }));
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
 vi.mock("./MemoryStream", () => ({ default: () => <div /> }));
-vi.mock("./HomePage", () => ({
-  default: ({ onSelectPage }: { onSelectPage: (id: string) => void }) => (
-    <div data-testid="home-page">
-      <button type="button" onClick={() => onSelectPage("page-two")}>
-        Open second page
-      </button>
-    </div>
-  ),
-}));
 vi.mock("./AtlasView", () => ({ default: () => <div /> }));
 vi.mock("./MemorySearchResult", () => ({ default: () => <div /> }));
 vi.mock("./MemoryDetail", () => ({
@@ -427,7 +418,7 @@ describe("Main published PageDetail navigation guards", () => {
     confirmSpy.mockReturnValue(true);
     await user.click(screen.getByRole("button", { name: "PageDetail back" }));
     expect(confirmSpy).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
   });
 
   it("confirms before dirty header search and sidebar navigation", async () => {

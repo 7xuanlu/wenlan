@@ -11,6 +11,7 @@
 // on one surface and reads the computed opacity of both — after checking that
 // the entry animation really targets the faded element or its wrapper, since
 // the guard proves nothing if the animation quietly stops running.
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { installTauriMock } from "./tauriMock";
 import type { MemoryItem } from "../src/lib/tauri";
@@ -96,7 +97,7 @@ async function expectMuted(archived: Locator, neighbour: Locator): Promise<void>
 
 test("list row on the Memories page", async ({ page }) => {
   await openApp(page);
-  await page.getByRole("button", { name: "Memories" }).click();
+  await openPrimaryDestination(page, "Memories");
   const list = page.getByRole("region", { name: "Memory list" });
   const archived = list.getByRole("article", { name: ARCHIVED_TITLE, exact: true });
   const neighbour = list.getByRole("article", { name: NEIGHBOUR_TITLE, exact: true });

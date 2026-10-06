@@ -169,6 +169,9 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
     useEffect(() => {
       const handleEscape = (event: KeyboardEvent) => {
         if (event.key !== "Escape") return;
+        // Let an open sidebar popup consume Escape before draft navigation or
+        // the narrow drawer's close guard sees it.
+        if (event.target instanceof Element && event.target.closest("[data-sidebar-escape-scope]")) return;
         event.preventDefault();
         event.stopPropagation();
         if (onEscapeBeforeLeave?.()) return;

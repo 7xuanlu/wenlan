@@ -56,20 +56,20 @@ test("Wiki desktop light matches the approved inventory and its controls work", 
   await expect(page.getByText("Browse by type", { exact: true })).toHaveCount(0);
   await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
 
-  await expect(page.getByRole("button", { name: /Open Nash Su/ })).not.toBeVisible();
-  await expect(page.getByRole("button", { name: /Open Grace Hopper/ })).not.toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Wenlan product principles" })).toBeVisible();
-  await page.getByLabel("Space", { exact: true }).selectOption("Research");
-  await expect(page.getByRole("button", { name: "Open July research recap" })).toBeVisible();
-  await page.getByLabel("Space", { exact: true }).selectOption("all");
-  await page.getByLabel("Sort", { exact: true }).selectOption("recent");
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Nash Su/ })).not.toBeVisible();
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Grace Hopper/ })).not.toBeVisible();
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true })).toBeVisible();
+  await page.locator(".wiki-overview").getByLabel("Space", { exact: true }).selectOption("Research");
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open July research recap", exact: true })).toBeVisible();
+  await page.locator(".wiki-overview").getByLabel("Space", { exact: true }).selectOption("all");
+  await page.locator(".wiki-overview").getByLabel("Sort", { exact: true }).selectOption("recent");
 
   await page.screenshot({ path: `${evidenceDirectory}/wiki-light-1487x1058.png`, fullPage: true });
 
   await expect(page.getByRole("button", { name: /^Next/ })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Previous" })).toBeDisabled();
 
-  const firstPageLink = page.getByRole("button", { name: "Open Wenlan product principles" });
+  const firstPageLink = page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true });
   await firstPageLink.hover();
   await page.screenshot({ path: `${evidenceDirectory}/wiki-light-link-hover-mid-1487x1058.png`, fullPage: true });
   await page.waitForTimeout(175);
@@ -89,8 +89,8 @@ test("Wiki renders in dark mode", async ({ page }) => {
 test("Wiki keeps Traditional Chinese controls precise at tablet and mobile widths", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
   const tabletErrors = await openWiki(page, "zh-Hant", "light", "rows");
-  await expect(page.getByLabel("空間", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("排序", { exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview").getByLabel("空間", { exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview").getByLabel("排序", { exact: true })).toBeVisible();
   await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-768x900.png`, fullPage: true });
   expect(tabletErrors.pageErrors).toEqual([]);
   expect(tabletErrors.consoleErrors).toEqual([]);
@@ -174,8 +174,8 @@ test("Wiki cards lens stays inside the viewport at every width", async ({ contex
 
     await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-${theme}-${width}x${height}.png`, fullPage: true });
 
-    await expect(page.getByRole("button", { name: "Open Wenlan product principles" })).toBeVisible();
-    await page.getByRole("button", { name: "Open Wenlan product principles" }).click();
+    await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true })).toBeVisible();
+    await page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Wenlan product principles" })).toBeVisible();
 
     expect(browserErrors.pageErrors).toEqual([]);

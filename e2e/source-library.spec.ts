@@ -187,3 +187,71 @@ test("a concurrent first save preserves the winning excerpt until explicit repla
   expect(state.errors.pageErrors).toEqual([]);
   expect(state.errors.consoleErrors).toEqual([]);
 });
+
+
+test("navigation destinations keep one primary workspace and restore note context", async ({ page }) => {
+  const state = await setup(page);
+  const sidebar = page.locator(".notes-workspace-sidebar");
+  await expect(sidebar).toHaveCSS("width", "48px");
+  await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator(".notes-list-panel")).toBeHidden();
+  await page.getByRole("button", { name: "連結", exact: true }).click();
+  await page.getByRole("searchbox", { name: "搜尋來源", exact: true }).fill("知識");
+  await capture(page, "navigation-sources-light.png");
+
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  const notes = page.locator(".notes-list-panel");
+  await notes.getByRole("searchbox").fill("History");
+  await notes.getByRole("button", { name: /History semantics/ }).click();
+  const editor = page.locator(".cm-content[contenteditable=true]");
+  await expect(editor).toBeVisible();
+  await editor.evaluate(element => {
+    const view = (element as any).cmTile.root.view;
+    view.dispatch({ selection: { anchor: 300, head: 315 } });
+  });
+  const main = page.locator("main");
+  await main.evaluate(element => { element.scrollTop = 600; });
+  await expect.poll(() => main.evaluate(element => element.scrollTop)).toBe(600);
+  await openPrimaryDestination(page, "來源", "更多");
+  await expect(page.getByRole("searchbox", { name: "搜尋來源", exact: true })).toHaveValue("知識");
+  await expect(page.getByRole("button", { name: "連結", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(sidebar).toHaveCSS("width", "48px");
+
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(editor).toBeVisible();
+  await expect(notes.getByRole("searchbox")).toHaveValue("History");
+  await expect.poll(() => editor.evaluate(element => {
+    const selection = (element as any).cmTile.root.view.state.selection.main;
+    return { anchor: selection.anchor, head: selection.head };
+  })).toEqual({ anchor: 300, head: 315 });
+  await expect.poll(() => main.evaluate(element => element.scrollTop)).toBe(600);
+  await capture(page, "navigation-note-restored-light.png");
+
+  await page.getByRole("button", { name: "空間", exact: true }).click();
+  await expect(page.locator(".notes-list-panel")).toBeHidden();
+  await expect(sidebar).toHaveCSS("width", "48px");
+  await capture(page, "navigation-spaces-light.png");
+  await openPrimaryDestination(page, "來源", "更多");
+  await expect(page.getByRole("searchbox", { name: "搜尋來源", exact: true })).toHaveValue("知識");
+  // The toggle remains usable, and explicit expansion keeps the note filter.
+  await page.locator("[data-sidebar-toggle]").click();
+  await expect(notes.getByRole("searchbox")).toHaveValue("History");
+  await expect(sidebar).toHaveCSS("width", "264px");
+  expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
+});
+
+
+test("the Notes entry reopens a newly saved draft after browsing sources", async ({ page }) => {
+  const state = await setup(page);
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await page.locator(".notes-list-panel").getByRole("button", { name: "新增筆記", exact: true }).click();
+  await page.locator(".page-draft-title").fill("A note to return to");
+  await page.locator(".page-draft-content").fill("Keep this draft when I look at sources.");
+  // Leave before the debounce: navigation must flush and remember the assigned id.
+  await openPrimaryDestination(page, "來源", "更多");
+  await expect(page.getByRole("heading", { name: "來源", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(page.locator(".page-draft-title")).toHaveValue("A note to return to");
+  await expect(page.locator(".page-draft-content")).toHaveValue("Keep this draft when I look at sources.");
+  expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
+});

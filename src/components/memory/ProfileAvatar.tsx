@@ -9,6 +9,7 @@ interface ProfileAvatarProps {
   fontSize: number;
   className?: string;
   style?: CSSProperties;
+  tone?: "warm" | "muted";
 }
 
 function initialsFor(displayName: string): string {
@@ -30,6 +31,7 @@ export default function ProfileAvatar({
   fontSize,
   className,
   style,
+  tone = "warm",
 }: ProfileAvatarProps) {
   const [failedPath, setFailedPath] = useState<string | null>(null);
 
@@ -62,13 +64,13 @@ export default function ProfileAvatar({
       className={className}
       style={{
         ...baseStyle,
-        background: "linear-gradient(135deg, var(--mem-accent-warm), var(--mem-accent-amber))",
+        background: tone === "muted" ? "var(--mem-hover-strong)" : "linear-gradient(135deg, var(--mem-accent-warm), var(--mem-accent-amber))",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         fontFamily: "var(--mem-font-heading)",
         fontSize,
-        color: "white",
+        color: tone === "muted" ? "var(--mem-text-secondary)" : "white",
         fontWeight: 500,
       }}
       aria-label={displayName ? `${displayName} initials` : "Profile initials"}

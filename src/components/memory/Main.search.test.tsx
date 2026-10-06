@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ComponentProps } from "react";
@@ -8,6 +8,7 @@ import { i18n } from "../../i18n";
 import { RECENT_PAGES_STORAGE_KEY } from "../../lib/recentPages";
 import { RECENT_SPACES_STORAGE_KEY } from "../../lib/recentSpaces";
 import type { Page, SearchResult, Space } from "../../lib/tauri";
+import { createPageDraft, getPage, updatePageDraft } from "../../lib/tauri";
 import { clearPendingPairingCode } from "../../lib/pairingLink";
 import Main from "./Main";
 
@@ -27,6 +28,7 @@ const draftFlushMock = vi.hoisted(
 const draftIdentityMock = vi.hoisted(
   () => vi.fn<() => { readonly draftId: string | null; readonly version: number | null }>(),
 );
+const realDraftEditor = vi.hoisted(() => ({ enabled: false }));
 const setSearchQueryMock = vi.hoisted(() => vi.fn());
 const takeRemotePairingLinkMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
 const useSearchMock = vi.hoisted(() => vi.fn(() => ({
@@ -48,6 +50,7 @@ vi.mock("../../hooks/useSearch", () => ({
 }));
 
 vi.mock("../../lib/tauri", () => ({
+  shouldShowWizard: vi.fn().mockResolvedValue(true),
   listMemoriesRich: vi.fn().mockResolvedValue([]),
   getMemoryStats: vi.fn().mockResolvedValue({ total: 0, new_today: 0, confirmed: 0, domains: [] }),
   searchEntities: vi.fn().mockResolvedValue([]),
@@ -60,21 +63,16 @@ vi.mock("../../lib/tauri", () => ({
   // Never settles, so the toolbar Activity button stays the plain navigation
   // button these routing tests click.
   getActivity: vi.fn(() => new Promise(() => {})),
+  createPageDraft: vi.fn(),
+  discardPageDraft: vi.fn(),
+  getPage: vi.fn(),
+  publishPageDraft: vi.fn(),
+  updatePageDraft: vi.fn(),
 }));
 
 vi.mock("./ActivityFeed", () => ({ default: () => <div data-testid="activity-feed" /> }));
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
 vi.mock("./MemoryStream", () => ({ default: () => <div /> }));
-vi.mock("./HomePage", () => ({
-  default: (props: { onNavigateGraph?: () => void; onStartFirstUse?: () => void }) => (
-    <div data-testid="home-page">
-      <button type="button" onClick={() => props.onNavigateGraph?.()}>
-        Open graph view
-      </button>
-      <button type="button" onClick={props.onStartFirstUse}>Start first use</button>
-    </div>
-  ),
-}));
 vi.mock("./AtlasView", () => ({
   default: (props: {
     onBack?: () => void;
@@ -134,10 +132,11 @@ vi.mock("./PageDetail", () => ({
 }));
 vi.mock("./DistillReviewPanel", () => ({ default: () => <div /> }));
 vi.mock("./SettingsPage", () => ({
-  default: (props: { onSetupAgent?: () => void; section?: string; onBack?: () => void }) => (
+  default: (props: { onSetupAgent?: () => void; onImport?: () => void; section?: string; onBack?: () => void }) => (
     <div data-testid="settings-page" data-section={props.section}>
       <button type="button" onClick={props.onSetupAgent}>Connect agent</button>
       <button type="button" onClick={props.onBack}>Settings back</button>
+      <button type="button" onClick={props.onImport}>Settings import</button>
     </div>
   ),
 }));
@@ -150,9 +149,12 @@ vi.mock("./Sidebar", () => ({
     currentSpaceId?: string | null;
     open?: boolean;
     onEntityClick: (entityId: string) => void;
+    onCreatePage?: () => void;
+    onSelectDraft?: (draftId: string, space: string | null) => void;
     onNavigateLog?: () => void;
     onNavigateGraph?: () => void;
     onNavigatePages?: () => void;
+    onNavigateSettings?: () => void;
     onNavigateSpaces?: (create: boolean) => void;
     onRequestClose?: () => void;
     onSelectPage?: (page: Page) => void;
@@ -172,7 +174,11 @@ vi.mock("./Sidebar", () => ({
       </button>
       <button type="button" onClick={props.onNavigateLog}>Open memories</button>
       <button type="button" onClick={props.onNavigatePages}>Open wiki</button>
+      <button type="button" onClick={props.onNavigateSettings}>Open settings</button>
       <button type="button" onClick={props.onNavigateGraph}>Open graph</button>
+      <button type="button" onClick={props.onCreatePage}>New sidebar note</button>
+      <button type="button" onClick={() => props.onSelectDraft?.("draft-a", null)}>Select draft A</button>
+      <button type="button" onClick={() => props.onSelectDraft?.("draft-b", null)}>Select draft B</button>
       <button type="button" onClick={() => props.onNavigateSpaces?.(false)}>Open spaces</button>
       <button type="button" onClick={() => props.onNavigateSpaces?.(true)}>Create space</button>
       <button type="button" onClick={() => props.onSelectPage?.({ id: "page-1", status: "active", title: "Recent page" } as Page)}>
@@ -216,6 +222,7 @@ vi.mock("./pages/PagesOverview", () => ({
 }));
 vi.mock("./pages/PageDraftEditor", async () => {
   const React = await import("react");
+  const actual = await vi.importActual<typeof import("./pages/PageDraftEditor")>("./pages/PageDraftEditor");
   return {
     PageDraftEditor: React.forwardRef((props: {
       draftId?: string;
@@ -225,6 +232,7 @@ vi.mock("./pages/PageDraftEditor", async () => {
       onPublished: (pageId: string) => void;
       space: string | null;
     }, ref) => {
+      if (realDraftEditor.enabled) return <actual.PageDraftEditor {...props} ref={ref as React.Ref<import("./pages/PageDraftEditor").PageDraftEditorHandle>} />;
       const requestBack = () => draftRequestBackMock(props.onBack);
       React.useImperativeHandle(ref, () => ({
         flush: draftFlushMock,
@@ -338,6 +346,14 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
   ),
 }));
 
+function draftPage(id: string, title: string, content: string): Page {
+  return {
+    id, title, content, summary: null, entity_id: null, domain: null, space: null,
+    source_memory_ids: [], version: 1, status: "draft", creation_kind: "authored",
+    review_status: "unconfirmed", created_at: "", last_compiled: "", last_modified: "",
+  };
+}
+
 function space(id: string, name: string): Space {
   return {
     id,
@@ -383,6 +399,7 @@ function renderMain(props: ComponentProps<typeof Main> = {}) {
   );
   return {
     ...view,
+    queryClient,
     rerenderMain: (nextProps: ComponentProps<typeof Main> = {}) =>
       view.rerender(
         <QueryClientProvider client={queryClient}>
@@ -402,6 +419,10 @@ function deferred<T>() {
 
 describe("Main search", () => {
   beforeEach(async () => {
+    realDraftEditor.enabled = false;
+    vi.mocked(createPageDraft).mockReset();
+    vi.mocked(getPage).mockReset();
+    vi.mocked(updatePageDraft).mockReset();
     eventListeners.clear();
     importCompletion.imported = 1;
     listSpacesMock.mockReset();
@@ -435,80 +456,36 @@ describe("Main search", () => {
 
   it("opens Connections when a pairing link arrives while the app is open", async () => {
     renderMain();
-    expect(screen.getByTestId("home-page")).toBeVisible();
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
     takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
     await act(async () => { eventListeners.get("remote-pairing-link")?.(); });
     expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
   });
 
-  it("returns an onboarding import to real knowledge, then back to Home", async () => {
+  it("completes a Settings import in Memories and returns to Wiki", async () => {
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Start first use" }));
-    await user.click(screen.getByRole("button", { name: "Bring memories" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
+    await user.click(screen.getByRole("button", { name: "Settings import" }));
     expect(screen.getByTestId("import-view")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Finish import" }));
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-batch-id", "import-batch-1");
-    await user.click(screen.getByRole("button", { name: "Leave first use" }));
-    expect(screen.getByTestId("home-page")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Memories" })).toBeVisible();
+    expect(screen.getByRole("complementary")).toHaveAttribute("data-active", "memories");
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
   });
 
-  it.each(["ChatGPT sample", "unspecified tool"])("routes %s to web-capable agent settings and back", async (client) => {
+  it("cancels a Settings import back to its settings context", async () => {
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Start first use" }));
-    await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
-    expect(screen.getByTestId("settings-page")).toHaveAttribute("data-section", "agents");
-    expect(screen.queryByTestId("client-setup-wizard")).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Settings back" }));
-    expect(screen.getByTestId("first-use-guide")).toBeVisible();
-  });
-
-  it.each(["Codex sample", "Claude sample"])(
-    "keeps %s on local client setup",
-    async (client) => {
-      const user = userEvent.setup();
-      renderMain();
-      await user.click(screen.getByRole("button", { name: "Start first use" }));
-      await user.click(screen.getByRole("button", { name: `Connect ${client}` }));
-      expect(screen.getByTestId("client-setup-wizard")).toBeVisible();
-      expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
-    },
-  );
-
-  it("cancelling an onboarding import returns without claiming knowledge was formed", async () => {
-    const user = userEvent.setup();
-    renderMain();
-    await user.click(screen.getByRole("button", { name: "Start first use" }));
-    await user.click(screen.getByRole("button", { name: "Bring memories" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
+    await user.click(screen.getByRole("button", { name: "Settings import" }));
     await user.click(screen.getByRole("button", { name: "Cancel import" }));
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "guide");
-  });
-
-  it("returns an all-skipped onboarding import to the generic live guide", async () => {
-    importCompletion.imported = 0;
-    const user = userEvent.setup();
-    renderMain();
-    await user.click(screen.getByRole("button", { name: "Start first use" }));
-    await user.click(screen.getByRole("button", { name: "Bring memories" }));
-    await user.click(screen.getByRole("button", { name: "Finish import" }));
-
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-batch-id", "none");
-    await user.click(screen.getByRole("button", { name: "Leave first use" }));
-    expect(screen.getByTestId("home-page")).toBeVisible();
-  });
-
-  it("returns from a knowledge result to the onboarding library view", async () => {
-    const user = userEvent.setup();
-    renderMain();
-    await user.click(screen.getByRole("button", { name: "Start first use" }));
-    await user.click(screen.getByRole("button", { name: "Open knowledge result" }));
-    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "library-page");
-    await user.click(screen.getByRole("button", { name: "Page back" }));
-    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "live");
+    expect(screen.getByTestId("settings-page")).toHaveAttribute("data-section", "general");
+    expect(screen.queryByRole("heading", { name: "Memories" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Settings back" }));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
   });
 
   it("keeps recaps reachable from the Memories screen", async () => {
@@ -540,18 +517,18 @@ describe("Main search", () => {
     expect(localStorage.getItem("wenlan-sidebar-collapsed")).toBe("false");
   });
 
-  it("continues the expanded desktop sidebar divider through the header", async () => {
+  it("keeps the top bar uninterrupted when the sidebar toggles", async () => {
     const user = userEvent.setup();
     renderMain();
 
-    expect(document.querySelector('[data-sidebar-header-divider="true"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-sidebar-header-divider="true"]')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Toggle sidebar" }));
     expect(document.querySelector('[data-sidebar-header-divider="true"]')).not.toBeInTheDocument();
   });
 
   it("routes Spaces and create intent to one overview with focused creation", async () => {
-    // Given the Home view
+    // Given the Wiki view
     const user = userEvent.setup();
     renderMain();
 
@@ -565,7 +542,7 @@ describe("Main search", () => {
   });
 
   it("uses parent replacement for Spaces and Escape for pushed history", async () => {
-    // Given a recent Space opened from Home
+    // Given a recent Space opened from Wiki
     const user = userEvent.setup();
     renderMain();
     await user.click(screen.getByRole("button", { name: "Open recent space" }));
@@ -573,8 +550,8 @@ describe("Main search", () => {
     // When Escape is pressed
     fireEvent.keyDown(window, { key: "Escape" });
 
-    // Then pushed history returns Home
-    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    // Then pushed history returns Wiki
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
 
     // Given the Space is opened again and its parent is used
     await user.click(screen.getByRole("button", { name: "Open recent space" }));
@@ -604,7 +581,7 @@ describe("Main search", () => {
   });
 
   it("uses the first narrow Escape only for the drawer and the next Escape for Space history", async () => {
-    // Given a Space opened from Home with the 899px drawer open
+    // Given a Space opened from Wiki with the 899px drawer open
     stubResponsiveViewport(true);
     const user = userEvent.setup();
     renderMain();
@@ -624,8 +601,8 @@ describe("Main search", () => {
     // When Escape is pressed again after the drawer has closed
     fireEvent.keyDown(window, { key: "Escape" });
 
-    // Then the pushed history returns Home
-    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    // Then the pushed history returns Wiki
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
   });
 
   it("returns focus when 899px overlay content becomes a collapsed 900px desktop sidebar", async () => {
@@ -818,6 +795,125 @@ describe("Main search", () => {
 
     await user.click(screen.getByRole("button", { name: "Page back" }));
     expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
+  });
+
+  it("saves sidebar New note into a distinct draft without changing the old note", async () => {
+    realDraftEditor.enabled = true;
+    const saved: Page[] = [];
+    vi.mocked(createPageDraft).mockImplementation(async (request) => {
+      const draft = draftPage(request.clientDraftId, request.title, request.content);
+      saved.push(draft);
+      return draft;
+    });
+    const user = userEvent.setup();
+    const { rerenderMain } = renderMain();
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.type(await screen.findByRole("textbox", { name: "Title" }), "Original");
+    await user.type(screen.getByRole("textbox", { name: "Content" }), "Keep this body");
+    rerenderMain();
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Original");
+
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(""));
+    expect(saved).toHaveLength(1);
+    await user.type(screen.getByRole("textbox", { name: "Title" }), "Second");
+    await user.type(screen.getByRole("textbox", { name: "Content" }), "Separate body");
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
+    await screen.findByTestId("atlas-view");
+
+    expect(saved).toHaveLength(2);
+    expect(saved[0]).toMatchObject({ title: "Original", content: "Keep this body" });
+    expect(saved[1]).toMatchObject({ title: "Second", content: "Separate body" });
+    expect(saved[0].id).not.toBe(saved[1].id);
+    expect(updatePageDraft).not.toHaveBeenCalled();
+  });
+
+  it("starts a distinct session even when both old and new drafts have no persisted id", async () => {
+    realDraftEditor.enabled = true;
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    const oldTitle = await screen.findByRole("textbox", { name: "Title" });
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).not.toBe(oldTitle));
+    expect(createPageDraft).not.toHaveBeenCalled();
+  });
+
+  it("preserves the mounted session and persisted identity through ordinary saves and rerenders", async () => {
+    realDraftEditor.enabled = true;
+    vi.mocked(createPageDraft).mockImplementation(async (request) => draftPage(request.clientDraftId, request.title, request.content));
+    vi.mocked(updatePageDraft).mockImplementation(async (request) => draftPage(request.id, request.title, request.content));
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const props = { onRegisterQuitGuard: (guard: (() => Promise<boolean>) | null) => { quitGuard = guard; } };
+    const user = userEvent.setup();
+    const { rerenderMain } = renderMain(props);
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    const title = await screen.findByRole("textbox", { name: "Title" });
+    await user.type(title, "Stable note");
+    await act(async () => { expect(await quitGuard!()).toBe(true); });
+    rerenderMain(props);
+    expect(screen.getByRole("textbox", { name: "Title" })).toBe(title);
+    expect(title).toHaveValue("Stable note");
+    await user.type(screen.getByRole("textbox", { name: "Content" }), "More content");
+    await act(async () => { expect(await quitGuard!()).toBe(true); });
+    expect(createPageDraft).toHaveBeenCalledTimes(1);
+    expect(updatePageDraft).toHaveBeenCalledWith(expect.objectContaining({
+      id: vi.mocked(createPageDraft).mock.calls[0][0].clientDraftId,
+      title: "Stable note", content: "More content",
+    }));
+  });
+
+  it("remounts an existing draft A to cached draft B instead of retaining A's autosave identity", async () => {
+    realDraftEditor.enabled = true;
+    vi.mocked(getPage).mockImplementation(async (id) => id === "draft-a"
+      ? draftPage("draft-a", "A title", "A body")
+      : draftPage("draft-b", "B title", "B body"));
+    vi.mocked(updatePageDraft).mockImplementation(async (request) => draftPage(request.id, request.title, request.content));
+    const user = userEvent.setup();
+    const { queryClient } = renderMain();
+    queryClient.setQueryData(["page-draft", "draft-b"], draftPage("draft-b", "B title", "B body"));
+    await user.click(screen.getByRole("button", { name: "Select draft A" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("A title"));
+    await user.click(screen.getByRole("button", { name: "Select draft B" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("B title"));
+    await user.type(screen.getByRole("textbox", { name: "Content" }), " changed");
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
+    await screen.findByTestId("atlas-view");
+    expect(updatePageDraft).toHaveBeenCalledWith(expect.objectContaining({ id: "draft-b", content: "B body changed" }));
+    expect(updatePageDraft).not.toHaveBeenCalledWith(expect.objectContaining({ id: "draft-a" }));
+  });
+
+  it("keeps the same editor and content when New note cannot flush", async () => {
+    realDraftEditor.enabled = true;
+    vi.mocked(createPageDraft).mockRejectedValue(new Error("offline"));
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    const oldTitle = await screen.findByRole("textbox", { name: "Title" });
+    await user.type(oldTitle, "Unsaved original");
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
+    expect(oldTitle).toHaveValue("Unsaved original");
+  });
+
+  it("waits for an in-flight New note flush before allocating the next editor session", async () => {
+    realDraftEditor.enabled = true;
+    const saving = deferred<Page>();
+    vi.mocked(createPageDraft).mockReturnValue(saving.promise);
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    const oldTitle = await screen.findByRole("textbox", { name: "Title" });
+    await user.type(oldTitle, "Pending original");
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
+    expect(oldTitle).toHaveValue("Pending original");
+    expect(createPageDraft).toHaveBeenCalledTimes(1);
+    await act(async () => saving.resolve(draftPage("draft-original", "Pending original", "")));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(""));
+    expect(screen.getByRole("textbox", { name: "Title" })).not.toBe(oldTitle);
   });
 
   it("keeps the editor mounted until a sidebar destination passes the draft flush gate", async () => {
@@ -1263,17 +1359,17 @@ describe("Main search", () => {
     expect(searchInput).toHaveFocus();
   });
 
-  it("renders AtlasView as the Graph view — back returns home, node clicks open the entity", async () => {
+  it("renders AtlasView as the Graph view — back returns Wiki, node clicks open the entity", async () => {
     const user = userEvent.setup();
     renderMain();
 
-    await user.click(screen.getByRole("button", { name: "Open graph view" }));
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
     expect(screen.getByTestId("atlas-view")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Atlas back" }));
-    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Open graph view" }));
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
     await user.click(screen.getByRole("button", { name: "Atlas node" }));
     expect(screen.getByTestId("entity-detail")).toBeInTheDocument();
   });
@@ -1282,7 +1378,7 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
 
-    await user.click(screen.getByRole("button", { name: "Open graph view" }));
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
     await user.click(screen.getByRole("button", { name: "Atlas memory node" }));
 
     expect(await screen.findByTestId("memory-detail")).toBeInTheDocument();
@@ -1292,7 +1388,7 @@ describe("Main search", () => {
   it("opens memory detail when initialMemoryId arrives after mount", async () => {
     const view = renderMain();
 
-    expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
 
     view.rerenderMain({ initialMemoryId: "memory-1" });
 

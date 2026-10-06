@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
-// The home page has to fit the window the app opens at. That size is not a
+// Wiki has to fit the window the app opens at. That size is not a
 // guess: app/tauri.conf.json's main window is 1280x720 with the sidebar
 // expanded, so this file measures geometry at exactly that viewport.
 //
@@ -21,9 +21,9 @@ const DEFAULT_WINDOW = { width: 1280, height: 720 } as const;
 
 /**
  * A library on first run: nothing has been captured, distilled or proposed yet,
- * so the home page renders its empty state and the rail renders "all caught
- * up". Overriding only `pages` on the populated fixture would leave 205
- * memories and a pending review queue behind it, which is a different layout.
+ * so Wiki renders its empty state. Overriding only `pages` on the
+ * populated fixture would leave 205 memories and a pending review queue behind
+ * it, which is a different layout.
  */
 function createFirstRunFixture(): SpacesNavigationFixture {
   const populated = createSpacesNavigationFixture();
@@ -43,7 +43,7 @@ function createFirstRunFixture(): SpacesNavigationFixture {
   };
 }
 
-async function openHome(page: BrowserPage, fixture: SpacesNavigationFixture) {
+async function openWiki(page: BrowserPage, fixture: SpacesNavigationFixture) {
   const browserErrors = collectBrowserErrors(page);
   await installTauriMock(page, {
     fixture,
@@ -52,14 +52,11 @@ async function openHome(page: BrowserPage, fixture: SpacesNavigationFixture) {
     rawActions: [],
   });
   await page.goto("/");
-  await expect(page.getByTestId("wiki-home")).toBeVisible();
-  // The rail appears off a ResizeObserver measurement of the container, so the
-  // two-column layout lands one frame after the first paint.
-  await expect(page.getByTestId("wiki-content-grid")).toBeVisible();
-  await page.waitForFunction(() => {
-    const grid = document.querySelector('[data-testid="wiki-content-grid"]');
-    return !!grid && getComputedStyle(grid).gridTemplateColumns.split(" ").length === 2;
-  }, undefined, { timeout: 10_000 });
+  await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview")).toBeVisible();
+  if (fixture.pages.length > 0) await expect(page.locator(".wiki-filters")).toBeVisible();
+  else await expect(page.locator(".wiki-filters")).toHaveCount(0);
+  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
   return browserErrors;
 }
 
@@ -99,9 +96,9 @@ const LIBRARIES: readonly (readonly [string, () => SpacesNavigationFixture])[] =
 ];
 
 for (const [label, makeFixture] of LIBRARIES) {
-  test(`home fits the default window with ${label}`, async ({ page }) => {
+  test(`Wiki fits the default window with ${label}`, async ({ page }) => {
     await page.setViewportSize({ ...DEFAULT_WINDOW });
-    const browserErrors = await openHome(page, makeFixture());
+    const browserErrors = await openWiki(page, makeFixture());
 
     const { documentOverflow, past } = await horizontalOverflow(page);
     expect(past, "no element may extend past the right edge of the default window").toEqual([]);
@@ -112,35 +109,42 @@ for (const [label, makeFixture] of LIBRARIES) {
   });
 }
 
-// The ghost row is the empty state's placeholder for pages that do not exist
-// yet. It used to be three fixed 280px cards in a scroll strip with no visible
-// scrollbar (864px of content), so at this window size the second card was cut
-// in half at the column edge and the third was gone.
-test("the empty state's ghost cards fit the content column", async ({ page }) => {
+test("empty notes can start writing without AI setup", async ({ page }) => {
   await page.setViewportSize({ ...DEFAULT_WINDOW });
-  await openHome(page, createFirstRunFixture());
+  await openWiki(page, createFirstRunFixture());
+  await expect(page.locator("[data-ghost-card]")).toHaveCount(0);
+  await expect(page.locator(".wiki-overview").getByText("No pages yet", { exact: true })).toBeVisible();
+  await page.locator(".wiki-overview").getByRole("button", { name: "New page", exact: true }).click();
+  await expect(page.getByRole("textbox", { name: "Content", exact: true })).toBeVisible();
+});
 
-  const cards = page.locator("[data-ghost-card]");
-  await expect(cards).toHaveCount(3);
+// Review is opt-in: the full review page lives in Wiki's page options,
+// with Back returning to Wiki.
+test("review opens from the default Wiki and Back returns to Wiki", async ({ page }) => {
+  await page.setViewportSize({ ...DEFAULT_WINDOW });
+  const browserErrors = await openWiki(page, createSpacesNavigationFixture());
+  await expect(page.getByTestId("wiki-page-updates")).toHaveCount(0);
+  await expect(page.getByTestId("wiki-context-rail")).toHaveCount(0);
 
-  const boxes = await cards.evaluateAll((els: readonly Element[]) =>
-    els.map((el) => {
-      const box = el.getBoundingClientRect();
-      return { right: box.right, width: box.width };
-    }),
-  );
-  for (const [index, box] of boxes.entries()) {
-    // Comfortably under the ~161px the three tracks resolve to at this
-    // viewport, and far above a card collapsed to a sliver.
-    expect(box.width, `ghost card ${index} must be a readable placeholder`).toBeGreaterThanOrEqual(96);
-    expect(box.right, `ghost card ${index} must not spill past the window`).toBeLessThanOrEqual(
-      DEFAULT_WINDOW.width,
-    );
-  }
-  // All three sit on one row, none of them clipped by a scroll container.
-  const scrolled = await cards.first().evaluate((el) => {
-    const strip = el.parentElement!;
-    return strip.scrollWidth - strip.clientWidth;
-  });
-  expect(scrolled, "the ghost row must not need horizontal scrolling").toBe(0);
+  const primaryNavigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await primaryNavigation.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "Review page changes" })).toHaveCount(0);
+  const pageOptions = page.getByRole("button", { name: "Page options", exact: true });
+  await pageOptions.focus();
+  await page.keyboard.press("Enter");
+  const reviewEntry = page.getByRole("menuitem", { name: "Review page changes" });
+  await expect(reviewEntry).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Review" })).toBeVisible();
+  // Review belongs under Wiki, so Wiki stays the active destination.
+  await expect(primaryNavigation.getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Back" }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+
+  expect(browserErrors.pageErrors).toEqual([]);
+  expect(browserErrors.consoleErrors).toEqual([]);
 });

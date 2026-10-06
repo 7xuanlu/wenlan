@@ -32,6 +32,8 @@ export interface FirstUseSampleProps {
   onBackToGuide: () => void;
   onBringData: () => void;
   onConnect: (client: SampleClient) => void;
+  backLabel?: string;
+  headerAction?: ReactNode;
 }
 
 type SamplePhase = 0 | 1 | 2 | 3;
@@ -158,7 +160,13 @@ function SampleDialog({
   );
 }
 
-export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstUseSampleProps) {
+export function FirstUseSample({
+  onBackToGuide,
+  onBringData,
+  onConnect,
+  backLabel,
+  headerAction,
+}: FirstUseSampleProps) {
   const { t, i18n } = useTranslation();
   const data = getSampleData(resolveSampleLocale(i18n.language));
   const { sources, citations, page } = data;
@@ -323,9 +331,10 @@ export function FirstUseSample({ onBackToGuide, onBringData, onConnect }: FirstU
         <div className="fug-row">
           <button type="button" className="fug-back" onClick={onBackToGuide}>
             <ArrowLeft aria-hidden="true" weight="regular" />
-            {t("firstUse.sample.back")}
+            {backLabel ?? t("firstUse.sample.back")}
           </button>
           <span className="fus-animation-label">{t("firstUse.sample.animationLabel")}</span>
+          {headerAction}
         </div>
 
         <ol className="fus-phases" aria-label={t("firstUse.sample.animationLabel")}>

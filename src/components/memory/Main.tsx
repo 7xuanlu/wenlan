@@ -24,7 +24,6 @@ import { useSearch } from "../../hooks/useSearch";
 import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
-import HomePage from "./HomePage";
 import { FirstUseGuide } from "../onboarding/FirstUseGuide";
 import AtlasView from "./AtlasView";
 import MemorySearchResult from "./MemorySearchResult";
@@ -34,7 +33,7 @@ import DistillReviewPanel from "./DistillReviewPanel";
 import SettingsPage from "./SettingsPage";
 import { ImportView } from "./ImportView";
 import { SetupWizard } from "../SetupWizard";
-import Sidebar, { SidebarHeaderDivider, SidebarToggleButton } from "./Sidebar";
+import Sidebar, { SidebarToggleButton } from "./Sidebar";
 import SettingsSidebar from "./settings/SettingsSidebar";
 import SpaceDetail from "./SpaceDetail";
 import { SpacesOverview } from "./spaces";
@@ -63,6 +62,7 @@ import { useViewScroll } from "./navigation/useViewScroll";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
+  initialView?: View;
   initialMemoryId?: string | null;
   initialPageId?: string | null;
   onBackFromDetail?: () => void;
@@ -91,6 +91,7 @@ function scrollDestinationKey(view: View): string {
 }
 
 export default function Main({
+  initialView,
   initialMemoryId,
   initialPageId,
   onBackFromDetail,
@@ -105,6 +106,7 @@ export default function Main({
   useLaunchPinFill();
   const mainContentRef = useRef<HTMLElement>(null);
   const pageDraftEditorRef = useRef<PageDraftEditorHandle>(null);
+  const nextDraftSessionRef = useRef(0);
   const pendingDraftNavigationRef = useRef<{
     readonly action: (sourceView: View) => void;
     readonly token: symbol;
@@ -139,18 +141,20 @@ export default function Main({
   const [view, setView] = useState<View>(
     initialMemoryId ? { kind: "memory", sourceId: initialMemoryId }
     : initialPageId ? { kind: "page", pageId: initialPageId }
-    : { kind: "home" },
+    : initialView ?? { kind: "pages" },
   );
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const lastNoteViewRef = useRef<View | null>(null);
+  if (view.kind === "page" || view.kind === "page-draft") lastNoteViewRef.current = view;
   const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
   const [readyEditorView, setReadyEditorView] = useState<View | null>(null);
   const [sourceLibraryState, setSourceLibraryState] = useState<SourceLibraryState>({ search: "", filter: "all" });
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
-  const [activeTab, setActiveTab] = useState<"home" | "activity">("home");
+  const [activeTab, setActiveTab] = useState<"pages" | "activity">("pages");
   // The Activity button's summary. Owned here, beside the toolbar that renders
   // it, so the toggle keeps a stable identity for the outside-click listener.
   const [activityOpen, setActivityOpen] = useState(false);
@@ -225,6 +229,9 @@ export default function Main({
             ...view,
             draftId: identity.draftId ?? undefined,
           };
+          // The intermediate setView may be batched away by navigation.
+          // Remember the saved identity before leaving so Notes reopens it.
+          lastNoteViewRef.current = sourceView;
           if (sourceView !== view) setView(sourceView);
           pending.action(sourceView);
         }
@@ -337,14 +344,18 @@ export default function Main({
     }
     afterNavigationGuards((sourceView) => {
       setViewHistory((prev) => [...prev, sourceView]);
-      setView(next);
+      // Allocate only after the current editor's save guard succeeds. Keeping
+      // this on the View carries identity through saved-id promotion and Back.
+      setView(next.kind === "page-draft" && next.sessionKey == null
+        ? { ...next, sessionKey: ++nextDraftSessionRef.current }
+        : next);
     }, onRefused);
   };
 
   const navigateHome = () => {
     afterNavigationGuards(() => {
-      setView({ kind: "home" });
-      setActiveTab("home");
+      setView({ kind: "pages" });
+      setActiveTab("pages");
       setViewHistory([]);
     });
   };
@@ -361,6 +372,14 @@ export default function Main({
       setView({ kind: "pages" });
       setViewHistory([]);
     });
+  };
+
+  const navigateNotes = () => {
+    if (activeNavigationForView(view) !== "pages" && lastNoteViewRef.current) {
+      navigateTo(lastNoteViewRef.current);
+    } else {
+      navigatePages();
+    }
   };
 
   const applyBackNavigation = () => {
@@ -449,9 +468,16 @@ export default function Main({
       return next;
     });
   };
-  const responsiveSidebar = useResponsiveSidebar(sidebarCollapsed, toggleSidebar, sidebarToggleRef);
-  const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
   const activeNavigation = activeNavigationForView(view);
+  const browseContext = activeNavigation !== null && activeNavigation !== "pages" && activeNavigation !== "home";
+  const [browseSidebarOpen, setBrowseSidebarOpen] = useState<Record<string, boolean>>({});
+  const contextSidebarCollapsed = browseContext ? !browseSidebarOpen[activeNavigation] : sidebarCollapsed;
+  const toggleContextSidebar = () => {
+    if (browseContext) setBrowseSidebarOpen((current) => ({ ...current, [activeNavigation]: !current[activeNavigation] }));
+    else toggleSidebar();
+  };
+  const responsiveSidebar = useResponsiveSidebar(contextSidebarCollapsed, toggleContextSidebar, sidebarToggleRef);
+  const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
@@ -632,15 +658,10 @@ export default function Main({
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
           paddingRight: 20,
-          background: responsiveSidebar.presentation === "desktop" && !responsiveSidebar.collapsed
-            ? "linear-gradient(to right, var(--mem-sidebar) 240px, transparent 240px)"
-            : "transparent",
+          background: "var(--mem-bg)",
         }}
         data-tauri-drag-region
       >
-        <SidebarHeaderDivider
-          visible={responsiveSidebar.presentation === "desktop" && !responsiveSidebar.collapsed}
-        />
         <SidebarToggleButton collapsed={responsiveSidebar.collapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
         {(!standardSidebarMounted || !responsiveSidebar.open) && <ReviewEnvironmentBadge compact />}
         <div className="flex-1" data-tauri-drag-region />
@@ -697,7 +718,7 @@ export default function Main({
               className="flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)] lg:w-[clamp(220px,40vw,480px)] lg:shadow-none"
               style={{
                 backgroundColor: "var(--mem-sidebar)",
-                border: "1px solid var(--mem-control-border)",
+                border: "1px solid var(--mem-border)",
               }}
             >
             <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "var(--mem-text-tertiary)" }}>
@@ -752,7 +773,7 @@ export default function Main({
           <Sidebar
             activeNavigation={activeNavigation}
             collapsed={responsiveSidebar.collapsed}
-            currentPageId={view.kind === "page" ? view.pageId : null}
+            currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
             currentSpaceId={view.kind === "space" ? view.spaceId : null}
             onEntityClick={handleEntityClick}
             onNavigateLog={() => {
@@ -761,7 +782,8 @@ export default function Main({
                 setViewHistory([]);
               });
             }}
-            onNavigatePages={navigatePages}
+            onNavigatePages={navigateNotes}
+            onCreatePage={() => navigateTo({ kind: "page-draft", space: null })}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateHome={navigateHome}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
@@ -770,6 +792,7 @@ export default function Main({
             onNavigateSettings={() => navigateTo({ kind: "settings", section: "general" })}
             onOpenAbout={() => setAboutOpen(true)}
             onRequestClose={responsiveSidebar.close}
+            onSelectDraft={(draftId, space) => navigateTo({ kind: "page-draft", draftId, space })}
             onSelectPage={(page) => navigateTo({ kind: "page", pageId: page.id })}
             onSelectSpace={(space) => navigateTo({ kind: "space", spaceId: space.id, spaceName: space.name })}
             open={responsiveSidebar.open}
@@ -928,7 +951,7 @@ export default function Main({
                     showKnowledge: true,
                     batchId: result.imported > 0 ? result.batch_id : undefined,
                   });
-                  setViewHistory([{ kind: "home" }]);
+                  setViewHistory([{ kind: "pages" }]);
                 } else {
                   setView({ kind: "stream" });
                   setViewHistory([]);
@@ -943,8 +966,9 @@ export default function Main({
               onSetupAgent={() => navigateTo({ kind: "connect-agent" })}
               onImport={() => navigateTo({ kind: "import" })}
             />
-          ) : view.kind === "pages" ? (
+          ) : (view.kind === "pages" || view.kind === "home") ? (
             <PagesOverview
+              onOpenReview={() => navigateTo({ kind: "distill-review" })}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onSelectDraft={(draftId, space) => navigateTo({
                 kind: "page-draft",
@@ -1004,6 +1028,7 @@ export default function Main({
             />
           ) : view.kind === "page-draft" ? (
             <PageDraftEditor
+              key={view.sessionKey ?? view.draftId ?? "new"}
               draftId={view.draftId}
               onBack={() => {
                 if (responsiveSidebar.presentation === "overlay" && responsiveSidebar.open) {
@@ -1071,19 +1096,6 @@ export default function Main({
                 setView({ kind: "page", pageId: id });
               }}
             />
-          ) : view.kind === "home" ? (
-            <HomePage
-              onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onNavigateLog={() => navigateTo({ kind: "stream" })}
-              onNavigateGraph={() => navigateTo({ kind: "graph" })}
-              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
-              onOpenDistillReview={() => navigateTo({ kind: "distill-review" })}
-              onStartFirstUse={() => navigateTo({ kind: "first-use" })}
-              onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
-              onOpenIntelligenceSettings={() =>
-                navigateTo({ kind: "settings", section: "intelligence" })
-              }
-            />
           ) : view.kind === "activity" ? (
             <ActivityFeed
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
@@ -1117,7 +1129,7 @@ export default function Main({
             </div>
           ) : (
             <>
-              <button onClick={() => navigateTo({ kind: "home" })} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)] mb-3" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
+              <button onClick={() => navigateTo({ kind: "pages" })} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)] mb-3" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
               </button>
               <div className="mb-3 flex items-center justify-between gap-3">

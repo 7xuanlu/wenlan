@@ -12,13 +12,14 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ActivityResponse } from "../src/lib/tauri";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 
 /** Widest supported window, the common laptop, the tablet breakpoint, and the
  *  narrowest phone the shell claims to support. The last two put the sidebar
  *  in its overlay drawer, which is a different render path. */
 const WIDTHS = [1487, 1280, 768, 375] as const;
 
-const VIEWS = ["Home", "Wiki", "Entities", "Spaces"] as const;
+const VIEWS = ["Wiki", "Topics", "Spaces", "Graph", "Sources"] as const;
 
 /**
  * A fixture with work in every asset, so the popover has three real sentences
@@ -95,10 +96,7 @@ async function openSidebar(page: Page): Promise<void> {
 
 async function goToView(page: Page, view: string): Promise<void> {
   await openSidebar(page);
-  await page
-    .getByRole("navigation", { name: "Primary navigation" })
-    .getByRole("button", { name: view, exact: true })
-    .click();
+  await openPrimaryDestination(page, view);
 }
 
 for (const width of WIDTHS) {

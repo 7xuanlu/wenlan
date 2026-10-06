@@ -21,7 +21,10 @@ for (const locale of supportedAppLocales) {
     const mock = await installTauriMock(page, { locale, rawActions: [], fixture });
     await page.setViewportSize(locale === "en" ? { width: 1280, height: 900 } : { width: 1000, height: 800 });
     await page.goto("/");
-    await page.getByText(copy.review.kindLintRepair, { exact: true }).click();
+    await page.getByRole("button", { name: copy.pages.overview.options, exact: true }).click();
+    await page.getByRole("menuitem", { name: copy.home.reviewPageChanges, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: copy.review.title })).toBeVisible();
+    await page.getByRole("button", { name: copy.review.openItem.replace("{{title}}", copy.review.kindLintRepair), exact: true }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog.getByLabel(copy.sourceRepair.relationFrom)).toBeVisible();
     await expect(dialog.getByText("Ada Lovelace · Charles Babbage", { exact: true })).toBeVisible();

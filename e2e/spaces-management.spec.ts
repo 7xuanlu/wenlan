@@ -119,13 +119,20 @@ test("recovers from corrupt recent-space storage on reload", async ({ page }) =>
     localStorage: { "wenlan:recent-spaces:v1": "{corrupt", "wenlan-spaces-view-mode": "rows" },
   });
 
-  // When Home reloads.
+  // When the Wiki workspace reloads.
   await page.goto("/");
   await page.reload();
 
   // Then invalid history is treated as no visits, so Recents is omitted without browser errors.
-  await expect(page.getByLabel("Home overview")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true }).click();
+  await page.getByTestId("space-row-space-wenlan").getByRole("button", { name: "Wenlan", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
+  const history = await page.evaluate(() => JSON.parse(localStorage.getItem("wenlan:recent-spaces:v1")!));
+  expect(history.version).toBe(1);
+  expect(history.entries).toHaveLength(1);
+  expect(history.entries[0]).toMatchObject({ id: "space-wenlan", name: "Wenlan" });
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });

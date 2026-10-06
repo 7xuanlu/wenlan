@@ -52,7 +52,7 @@ export default function SettingsPage({
       {section === "sources" && <SourcesSection onImport={onImport} />}
       {section === "agents" && <AgentsSection onSetupAgent={onSetupAgent} currentSpace={currentSpace} />}
       {section === "intelligence" && <IntelligenceSection delay={0} />}
-      {section === "diagnostics" && <DiagnosticsSection />}
+      {section === "diagnostics" && <DiagnosticsSection onSetupAgent={onSetupAgent} />}
 
       {/* ── Privacy note — persistent footer on all groups. This is the only
           place this claim appears in the UI; keep it truthful and singular. */}

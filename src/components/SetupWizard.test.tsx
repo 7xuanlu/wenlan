@@ -68,8 +68,8 @@ vi.mock("../lib/tauri", () => ({
   testExternalLlm: vi.fn().mockResolvedValue({ response: "pong" }),
   listExternalModels: vi.fn().mockResolvedValue([]),
   getExternalLlmKeyConfigured: vi.fn().mockResolvedValue(false),
-  getBackgroundAiEnabled: vi.fn().mockResolvedValue(false),
   getResolvedRouting: vi.fn().mockResolvedValue(null),
+  getBackgroundAiEnabled: vi.fn().mockResolvedValue(false),
   setSourcePin: vi.fn().mockResolvedValue(undefined),
   detectObsidianVaults: vi.fn().mockResolvedValue([]),
   addSource: vi.fn().mockResolvedValue({
@@ -140,8 +140,8 @@ import {
   getOnDeviceModel,
   downloadOnDeviceModel,
   onDeviceModelDownloadBytes,
-  getBackgroundAiEnabled,
   getResolvedRouting,
+  getBackgroundAiEnabled,
   setSourcePin,
   detectObsidianVaults,
   addSource,
@@ -258,21 +258,16 @@ describe("SetupWizard", () => {
     (listPendingImports as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   });
 
-  it("renders Welcome step by default", () => {
+  it("starts with notes and an optional example, without setup questions", () => {
     renderWizard();
     expect(screen.getByText("Welcome to Wenlan")).toBeInTheDocument();
-    const tagline = screen.getByText("A living knowledge base your AI tools build as they work.");
-    expect(tagline).toBeInTheDocument();
-    // Wiki-pages-first: the welcome step must say what Wenlan produces
-    // (source-cited pages), not just gesture at "understanding".
-    const body = screen.getByText(
-      "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
-    );
-    expect(body).toBeInTheDocument();
-    expect(screen.getByText("Your memories live on this machine.")).toBeInTheDocument();
-    // R3 typography ladder: on-scale size only, never an off-scale 15px.
-    expect(tagline).toHaveStyle({ fontSize: "var(--mem-text-lg)" });
-    expect(body).toHaveStyle({ fontSize: "var(--mem-text-lg)" });
+    expect(screen.getByRole("button", { name: "Open notes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try an example" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.queryByTestId("wizard-action-bar")).not.toBeInTheDocument();
+    expect(detectMcpClients).not.toHaveBeenCalled();
+    expect(getWireState).not.toHaveBeenCalled();
+    expect(downloadOnDeviceModel).not.toHaveBeenCalled();
   });
 
   // The wizard window is `titleBarStyle: "Overlay"` on macOS: no top bar of its
@@ -333,18 +328,20 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(screen.getByText("欢迎使用文澜")).toBeInTheDocument();
-    expect(screen.getByText("你的记忆保存在这台设备上。")).toBeInTheDocument();
+    expect(screen.getByText("不用先设置模型或导入资料。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开笔记" })).toBeInTheDocument();
   });
 
-  it('advances from Welcome to intelligence choice on "Get started" click', () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
-    expect(screen.getByText("Choose how Wenlan thinks")).toBeInTheDocument();
+  it("opens notes directly without entering intelligence setup", async () => {
+    const { onComplete } = renderWizard();
+    fireEvent.click(screen.getByRole("button", { name: "Open notes" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText("Choose how Wenlan thinks")).not.toBeInTheDocument();
+    expect(setSourcePin).not.toHaveBeenCalled();
   });
 
   it("lets users save an API key from the intelligence step", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Cloud model"));
 
     fireEvent.change(screen.getByPlaceholderText("sk-ant-api03-..."), {
@@ -358,8 +355,7 @@ describe("SetupWizard", () => {
   });
 
   it("intelligence step offers device, cloud, and local server", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
 
     // The on-device tile is selected by default, so its pane's <h3> shares
     // the tile's exact text — query at the role level to hit the tiles only.
@@ -369,8 +365,7 @@ describe("SetupWizard", () => {
   });
 
   it("recommends on-device — the same tile that's selected by default, not cloud", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
 
     const deviceButton = screen.getByRole("button", { name: /On-device model/ });
     const cloudButton = screen.getByRole("button", { name: "Cloud model" });
@@ -381,8 +376,7 @@ describe("SetupWizard", () => {
   });
 
   it("cloud pane offers only the Anthropic key card — no dead cloud-vendor picker (§5.2 honesty fix)", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Cloud model"));
 
     expect(screen.getByPlaceholderText("sk-ant-api03-...")).toBeInTheDocument();
@@ -395,8 +389,7 @@ describe("SetupWizard", () => {
   });
 
   it("local pane offers the local-server card scoped to keyless presets", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Your own local server"));
 
     expect(await screen.findByRole("heading", { name: "Your own local server" })).toBeInTheDocument();
@@ -409,8 +402,7 @@ describe("SetupWizard", () => {
   });
 
   it("import step offers chat history and vault side by side", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Continue"));
 
     expect(screen.getByText("Bring what you already know")).toBeInTheDocument();
@@ -423,8 +415,7 @@ describe("SetupWizard", () => {
   });
 
   it("routes chat history to the ZIP flow and keeps wizard actions in the StepShell", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Continue"));
 
     fireEvent.click(screen.getByText("Import chat history"));
@@ -922,8 +913,7 @@ describe("SetupWizard", () => {
       },
     ]);
 
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     // Step 2: keep the default on-device model pick so a model row exists.
     await waitFor(() =>
       expect(screen.getByTestId("on-device-model-deferred-note")).toBeInTheDocument(),
@@ -1005,9 +995,7 @@ describe("SetupWizard", () => {
   });
 
   it("renders skip-path Done copy without a back button", async () => {
-    renderWizard();
-
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     // Skip every choosing step: no model, no import, no tools.
     fireEvent.click(screen.getByText("Skip"));
 
@@ -1077,8 +1065,7 @@ describe("SetupWizard", () => {
   // of it — so it is visible by construction regardless of content height,
   // instead of relying on the tallest step happening to fit in 720px.
   it("StepShell: the primary CTA lives outside the scrollable content, never inside it", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     // "local-server variant" — one of the taller intelligence-choice panes.
     fireEvent.click(screen.getByText("Your own local server"));
     await screen.findByRole("heading", { name: "Your own local server" });
@@ -1267,8 +1254,7 @@ describe("SetupWizard", () => {
   });
 
   it("intelligence choice tiles signal selection via aria-pressed, not color alone", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
 
     const deviceButton = screen.getByRole("button", { name: /On-device model/ });
     const cloudButton = screen.getByRole("button", { name: "Cloud model" });
@@ -1405,13 +1391,7 @@ describe("SetupWizard", () => {
     ).not.toBeInTheDocument();
   });
 
-  // With background AI opted in, the full first-onboarding run wires, and the render
-  // site `wireRouting={!initialStep}` is the load-bearing link the DoneStep-
-  // direct tests can't cover (they pass the prop explicitly). Drive
-  // welcome→done end-to-end with a configured pool and prove the pins land +
-  // the summary renders. Mutation-proof: force `wireRouting={false}` at the
-  // render site (which kills the feature in production) → exactly this fails.
-  it.each([false, true])("full onboarding run (welcome→done) respects background AI consent=%s", async (enabled) => {
+  it.each([false, true])("opening notes does not wire providers with background AI consent=%s", async (enabled) => {
     (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(enabled);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
       everyday: { source: "basic", model: null, mode: "auto", pin: null },
@@ -1422,52 +1402,20 @@ describe("SetupWizard", () => {
         on_device: { selected: "qwen3-4b-instruct-2507", loaded: true },
       },
     });
-
-    renderWizard(); // no initialStep → full run → wireRouting=true
-
-    // welcome → intelligence (default device model, committed on Continue)
-    fireEvent.click(screen.getByText("Get started"));
-    await waitFor(() =>
-      expect(screen.getByTestId("on-device-model-deferred-note")).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByText("Continue"));
-    // intelligence → import → connect → setting-up (skip the optional steps)
-    await waitFor(() => expect(screen.getByText("Bring what you already know")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Skip"));
-    await waitFor(() => expect(screen.getByText("Connect your AI tools")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("Skip"));
-    // setting-up → done
-    await waitFor(() =>
-      expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running"),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    // Both download completion and Done consult consent before filling pins.
-    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalled());
-    if (!enabled) {
-      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/);
-      expect(getResolvedRouting).not.toHaveBeenCalled();
-      expect(setSourcePin).not.toHaveBeenCalled();
-      expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
-      return;
-    }
-    await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
-    expect(
-      await screen.findByText(
-        "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
-      ),
-    ).toBeInTheDocument();
-    // Exclusivity: a wired routing shows the summary, never the no-model line.
-    expect(
-      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
-    ).not.toBeInTheDocument();
+    const { onComplete } = renderWizard();
+    fireEvent.click(screen.getByRole("button", { name: "Open notes" }));
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
+    expect(getResolvedRouting).not.toHaveBeenCalled();
+    expect(setSourcePin).not.toHaveBeenCalled();
+    expect(downloadOnDeviceModel).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
   });
 
   // ── Round 2: steps 2-4 collect only; step 5 does + proves everything ────
 
   it("intelligence step 2 records the on-device model choice but does not download it — only step 5 does", async () => {
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
 
     // Default device mode, default model — no explicit interaction needed.
     // Wait for proof the catalog resolved and the choice was already
@@ -1518,8 +1466,7 @@ describe("SetupWizard", () => {
       }],
     });
 
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     // Wait for the catalog query to resolve and populate a real model id
     // before committing — clicking Continue before this settles would carry
     // a null pick, same as if the user had skipped.
@@ -1987,8 +1934,7 @@ describe("SetupWizard", () => {
       errors: 0,
     });
 
-    renderWizard();
-    fireEvent.click(screen.getByText("Get started"));
+    renderWizard({ initialStep: "intelligence-choice" });
     fireEvent.click(screen.getByText("Skip")); // skip intelligence — isolate the import row
     await waitFor(() => expect(screen.getByText("Work Notes")).toBeInTheDocument());
     fireEvent.click(screen.getByText("Work Notes"));
@@ -2462,11 +2408,10 @@ describe("SetupWizard", () => {
       screen.getByRole("heading", { name: "Could not reach the background service" }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Welcome to Wenlan")).not.toBeInTheDocument();
-    // The body stays. Someone seeing this screen may genuinely be new, and
-    // dropping the only sentence that says what Wenlan is helps nobody.
+    // Recovery still describes the notes-first experience without AI setup questions.
     expect(
       screen.getByText(
-        "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
+        "Start with a note. Connect your AI tools when you need them.",
       ),
     ).toBeInTheDocument();
   });
@@ -2476,13 +2421,24 @@ describe("SetupWizard", () => {
 
     expect(
       await screen.findByText(
-        "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
+        "Start with a note. Connect your AI tools when you need them.",
       ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Welcome to Wenlan" }),
     ).toBeInTheDocument();
     expect(screen.queryByTestId("welcome-connection-problem")).not.toBeInTheDocument();
+  });
+
+  it("routes a startup connection problem directly to service checks, without AI choices", async () => {
+    renderWizard({ daemonGateErrored: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
+    await waitFor(() => expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running"));
+    expect(screen.queryByText("Choose how Wenlan thinks")).not.toBeInTheDocument();
+    expect(downloadOnDeviceModel).not.toHaveBeenCalled();
+    expect(detectMcpClients).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.getByRole("button", { name: "Check connection" })).toBeInTheDocument();
   });
 
   it("carries the connection problem onto the daemon row while it is still down", async () => {
@@ -2810,8 +2766,8 @@ describe("displayedStatuses", () => {
 });
 
 // ── Onboarding routing wiring ───────────────────────────────────────────
-// With background AI opted in, first-onboarding writes explicit per-job pins
-// so the defaults are visible, not silent. Pure derivation is unit-tested; the effect (feature-detect →
+// First-onboarding writes explicit per-job pins so the defaults are visible,
+// not silent. Pure derivation is unit-tested; the effect (feature-detect →
 // write → summary) is tested through the rendered Done step.
 
 describe("deriveOnboardingPins", () => {
@@ -2863,7 +2819,7 @@ describe("deriveOnboardingPins", () => {
   });
 });
 
-// The consent-gated wiring effect lives in DoneStep and only runs on the full first-onboarding
+// The wiring effect lives in DoneStep and only runs on the full first-onboarding
 // run (wireRouting), which the wizard reaches from `welcome` with no initialStep.
 // The test architecture jumps to steps via initialStep (→ wireRouting=false), so
 // the write/feature-detect cases render DoneStep directly with wireRouting=true;

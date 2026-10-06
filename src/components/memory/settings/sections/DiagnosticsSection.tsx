@@ -8,7 +8,6 @@ import {
   getWireState,
   removeLegacyMcpEntry,
   removeRawMcpEntry,
-  setSetupCompleted,
   startDaemonSidecar,
   type ActivityAssetStatus,
   type ActivityResponse,
@@ -38,7 +37,7 @@ import {
   type KnownActivityStep,
 } from "../../../../lib/activitySentence";
 import { ASSET_ORDER } from "../../activity/ActivitySummaryPopover";
-import { Button, Card, ConfirmActionButton, SectionHeader, Skeleton, StatusChip, type ProbeState } from "../primitives";
+import { Button, Card, SectionHeader, Skeleton, StatusChip, type ProbeState } from "../primitives";
 
 /** A daemon from before `/api/activity` answers it with a plain 404. */
 function isOldDaemonError(error: unknown): boolean {
@@ -252,14 +251,18 @@ function WiringSkeleton() {
   );
 }
 
-function WiringRows({ wire, onRetry }: { wire: WireState; onRetry: () => void }) {
+function WiringRows({ wire, onRetry, onSetupAgent }: {
+  wire: WireState;
+  onRetry: () => void;
+  onSetupAgent?: () => void;
+}) {
   return (
     <>
       <div className="px-5 py-4">
         <DaemonStatus daemon={wire.daemon} onRetry={onRetry} />
       </div>
       <div className="px-5 py-4">
-        <McpBinaryStatus mcpBinary={wire.mcp_binary} />
+        <McpBinaryStatus mcpBinary={wire.mcp_binary} onSetupAgent={onSetupAgent} />
       </div>
       <div className="px-5 py-4">
         <ClientsWiring clients={wire.clients} />
@@ -379,17 +382,19 @@ function DaemonSidecarStatus({ daemon }: { daemon: DaemonWire }) {
   );
 }
 
-function McpBinaryStatus({ mcpBinary }: { mcpBinary: BinaryWire }) {
+function McpBinaryStatus({ mcpBinary, onSetupAgent }: {
+  mcpBinary: BinaryWire;
+  onSetupAgent?: () => void;
+}) {
   const { t } = useTranslation();
-  const queryClient = useQueryClient();
   // The candidates list is a probe order — most paths are SUPPOSED to be
   // missing as long as one is found. Only flag red (down) when the binary
   // exists nowhere; otherwise a missing candidate is idle, not an alarm.
   const anyFound = mcpBinary.candidates.some((candidate) => candidate.state.kind === "file");
   // A candidate the OS would not answer about is NOT evidence the binary is
-  // absent, so it must not trigger the "reinstall via setup" advice: the
-  // install may be perfectly fine behind a permission problem, and reinstalling
-  // is not the fix for that. Only a fully measured search offers the button.
+  // absent, so it must not trigger missing-binary setup advice: the install
+  // may be perfectly fine behind a permission problem. Only a fully measured
+  // search offers the button.
   // ...and neither is an input that could not be determined: its candidate
   // paths were never built, so the search did not cover them and their absence
   // from the list below is not evidence of anything.
@@ -466,24 +471,17 @@ function McpBinaryStatus({ mcpBinary }: { mcpBinary: BinaryWire }) {
           </div>
         ))}
       </div>
-      {/* No candidate exists anywhere — the one actionable fix is to re-run
-          setup, which reinstalls the binary. Mirrors General's re-run row:
-          setup completion is cleared and the wizard is re-armed; data is
-          preserved, so the confirm is a light guard, not a danger gate. */}
-      {!anyFound && !searchIncomplete && (
+      {/* Tool setup is an optional in-app route. Opening it leaves the
+          first-launch completion flag intact and makes no reinstall claim. */}
+      {!anyFound && !searchIncomplete && onSetupAgent && (
         <div className="mt-3">
-          <ConfirmActionButton
+          <Button
             variant="secondary"
             size="sm"
-            confirmLabel={t("settings.agents.confirm")}
-            cancelLabel={t("settings.agents.cancel")}
-            onConfirm={async () => {
-              await setSetupCompleted(false);
-              queryClient.invalidateQueries({ queryKey: ["shouldShowWizard"] });
-            }}
+            onClick={onSetupAgent}
           >
             {t("settings.diagnostics.wiring.reinstallViaSetup")}
-          </ConfirmActionButton>
+          </Button>
         </div>
       )}
     </>
@@ -1021,7 +1019,7 @@ function DiagnosticsError({ error, onRetry }: { error: unknown; onRetry: () => v
   );
 }
 
-export default function DiagnosticsSection() {
+export default function DiagnosticsSection({ onSetupAgent }: { onSetupAgent?: () => void }) {
   const { t } = useTranslation();
   const wireQuery = useQuery({
     queryKey: ["wireState"],
@@ -1046,7 +1044,7 @@ export default function DiagnosticsSection() {
         <Card padding="rows">
           {wireQuery.isLoading && <WiringSkeleton />}
           {wireQuery.isError && <WiringError onRetry={() => wireQuery.refetch()} />}
-          {wireQuery.data && <WiringRows wire={wireQuery.data} onRetry={() => wireQuery.refetch()} />}
+          {wireQuery.data && <WiringRows wire={wireQuery.data} onRetry={() => wireQuery.refetch()} onSetupAgent={onSetupAgent} />}
         </Card>
       </section>
 

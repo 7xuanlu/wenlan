@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openSpaceEntity } from "./helpers/spaceEntity";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { pngDimensions } from "./helpers/png";
 
-const evidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/space-mark",
+const evidenceRoot = process.env.WENLAN_UI_EVIDENCE_DIR || path.join(
+  process.env.REPO_DATA_ROOT || path.join(homedir(), ".local", "share", "repo-data"),
+  "wenlan", "ui", "spaces-navigation",
 );
-const screenshotEvidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/screenshots",
-);
+const evidenceDir = path.join(evidenceRoot, "space-mark");
+const screenshotEvidenceDir = path.join(evidenceRoot, "screenshots");
+const accessibilityEvidenceDir = path.join(evidenceRoot, "accessibility");
 const markSelector = "[data-space-mark='self-contained-world']";
 
 async function settle(page: Page): Promise<void> {
@@ -47,7 +48,7 @@ async function markState(mark: Locator) {
       indigoToken: style.getPropertyValue("--mem-accent-indigo").trim(),
       path: pathNode?.getAttribute("d"),
       paths: Array.from(node.querySelectorAll("path"), (path) => path.getAttribute("d")),
-      strokeWidth: pathNode?.getAttribute("stroke-width"),
+      strokeWidth: pathNode ? getComputedStyle(pathNode).strokeWidth : null,
       tertiaryToken: style.getPropertyValue("--mem-text-tertiary").trim(),
       viewBox: node.getAttribute("viewBox"),
     };
@@ -56,11 +57,12 @@ async function markState(mark: Locator) {
 
 test("renders the Planet Space mark across light, dark, mobile, focus, and physical DPR2 states", async ({ browser, page }) => {
   test.setTimeout(90_000);
-  await mkdir(evidenceDir, { recursive: true });
+  await Promise.all([evidenceDir, screenshotEvidenceDir, accessibilityEvidenceDir].map((directory) => mkdir(directory, { recursive: true })));
   const browserErrors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
+  await openPrimaryDestination(page, "Wiki");
   await settle(page);
 
   const screenshots: string[] = [];
@@ -76,18 +78,18 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   const lightDefault = await markState(defaultMark);
   expect(lightDefault).toMatchObject({
     ariaHidden: "true",
-    color: "rgb(93, 104, 122)",
+    color: "rgb(88, 97, 116)",
     indigoToken: "#5E58C8",
     paths: [
       "M18.816 13.58c2.292 2.138 3.546 4 3.092 4.9c-.745 1.46 -5.783 -.259 -11.255 -3.838c-5.47 -3.579 -9.304 -7.664 -8.56 -9.123c.464 -.91 2.926 -.444 5.803 .805",
       "M5 12a7 7 0 1 0 14 0a7 7 0 1 0 -14 0",
     ],
-    strokeWidth: "2",
+    strokeWidth: "1.5px",
     tertiaryToken: "#5D687A",
     viewBox: "0 0 24 24",
   });
-  expect(lightDefault.box).toMatchObject({ height: 14, width: 14 });
-  screenshots.push(await capture(page, "space-mark-home-default-light-1280x900"));
+  expect(lightDefault.box).toMatchObject({ height: 18, width: 18 });
+  screenshots.push(await capture(page, "space-mark-wiki-default-light-1280x900"));
 
   await defaultButton.click();
   await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
@@ -96,7 +98,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   await expect(selectedButton).toHaveAttribute("aria-current", "page");
   await expect(selectedButton).toHaveAccessibleName("Spaces");
   const lightSelected = await markState(selectedMark);
-  expect(lightSelected.color).toBe("rgb(94, 88, 200)");
+  expect(lightSelected.color).toBe("rgb(26, 26, 46)");
   screenshots.push(await capture(page, "space-mark-spaces-selected-light-1280x900"));
 
   await page.setViewportSize({ width: 375, height: 812 });
@@ -108,27 +110,31 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
-  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Home", exact: true }).click();
+  await openPrimaryDestination(page, "Wiki");
   const darkDefault = await markState(spacesButton(page).locator(markSelector));
   expect(darkDefault).toMatchObject({
-    color: "rgb(150, 155, 173)",
+    color: "rgb(201, 200, 209)",
     indigoToken: "#A9AEF2",
     tertiaryToken: "#969BAD",
   });
-  screenshots.push(await capture(page, "space-mark-home-default-dark-1280x900"));
+  screenshots.push(await capture(page, "space-mark-wiki-default-dark-1280x900"));
   await spacesButton(page).click();
   const darkSelected = await markState(spacesButton(page).locator(markSelector));
-  expect(darkSelected.color).toBe("rgb(169, 174, 242)");
+  expect(darkSelected.color).toBe("rgb(241, 239, 232)");
   screenshots.push(await capture(page, "space-mark-spaces-selected-dark-1280x900"));
 
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "light"));
-  const homeButton = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Home", exact: true });
-  await homeButton.focus();
+  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await navigation.getByRole("button", { name: "Wiki", exact: true }).focus();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true })).toBeFocused();
+  await expect(spacesButton(page)).toBeFocused();
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Entities", exact: true })).toBeFocused();
+  await expect(navigation.getByRole("button", { name: "Graph", exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
+  await expect(navigation.getByRole("button", { name: "More", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(navigation.getByRole("button", { name: "Graph", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
   await expect(spacesButton(page)).toBeFocused();
   await expect(spacesButton(page)).toHaveAttribute("aria-current", "page");
   const focusStyle = await spacesButton(page).evaluate((node) => {
@@ -163,18 +169,18 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   const dpr2DefaultMark = spacesButton(dpr2Page).locator(markSelector);
   const dpr2DefaultPath = path.join(evidenceDir, "space-mark-default-light-dpr2.png");
   await dpr2DefaultMark.screenshot({ path: dpr2DefaultPath });
-  expect(await pngDimensions(dpr2DefaultPath)).toEqual({ width: 28, height: 30 });
+  expect(await pngDimensions(dpr2DefaultPath)).toEqual({ width: 36, height: 36 });
   screenshots.push(dpr2DefaultPath);
   await spacesButton(dpr2Page).click();
   const dpr2SelectedMark = spacesButton(dpr2Page).locator(markSelector);
   const dpr2SelectedPath = path.join(evidenceDir, "space-mark-selected-light-dpr2.png");
   await dpr2SelectedMark.screenshot({ path: dpr2SelectedPath });
-  expect(await pngDimensions(dpr2SelectedPath)).toEqual({ width: 28, height: 30 });
+  expect(await pngDimensions(dpr2SelectedPath)).toEqual({ width: 36, height: 36 });
   screenshots.push(dpr2SelectedPath);
   expect(await markState(dpr2SelectedMark)).toMatchObject({
     ariaHidden: "true",
-    box: { height: 14, width: 14 },
-    color: "rgb(94, 88, 200)",
+    box: { height: 18, width: 18 },
+    color: "rgb(26, 26, 46)",
     viewBox: "0 0 24 24",
   });
   expect(dpr2Errors.pageErrors).toEqual([]);
@@ -190,10 +196,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   await zhHantPage.getByRole("button", { name: "Wenlan", exact: true }).click();
   await settle(zhHantPage);
   await zhHantPage.screenshot({
-    path: path.join(
-      process.cwd(),
-      ".omo/evidence/task-7-spaces-navigation-redesign/accessibility/space-zh-Hant-baseline-1280x900.png",
-    ),
+    path: path.join(accessibilityEvidenceDir, "space-zh-Hant-baseline-1280x900.png"),
     fullPage: false,
   });
   expect(zhHantErrors.pageErrors).toEqual([]);

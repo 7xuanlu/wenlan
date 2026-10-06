@@ -12,7 +12,13 @@ export type View =
   | { readonly kind: "import"; readonly fromFirstUse?: boolean }
   | { readonly kind: "memory"; readonly sourceId: string }
   | { readonly kind: "page"; readonly pageId: string; readonly mode?: "read" | "edit" }
-  | { readonly kind: "page-draft"; readonly draftId?: string; readonly space: string | null }
+  | {
+    readonly kind: "page-draft";
+    readonly draftId?: string;
+    readonly space: string | null;
+    /** Stable across autosaves and history; distinct for each new draft intent. */
+    readonly sessionKey?: number;
+  }
   | { readonly kind: "pages" }
   | { readonly kind: "recaps" }
   | { readonly kind: "settings"; readonly section?: SettingsSection }
@@ -31,19 +37,19 @@ export function activeNavigationForView(view: View): GlobalNavigation | null {
   switch (view.kind) {
     case "home":
     case "first-use":
-      return "home";
+      return "pages";
     case "activity":
-    case "distill-review":
     case "memory":
     case "recaps":
     case "stream":
       return "memories";
-    case "entity":
+    case "distill-review":
     case "page":
     case "page-draft":
     case "pages":
       return "pages";
     case "entities":
+    case "entity":
       return "entities";
     case "space":
     case "spaces":
