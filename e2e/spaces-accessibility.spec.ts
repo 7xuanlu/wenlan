@@ -414,7 +414,7 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   const linkedMemory = page.locator(".memory-detail-related-card").first();
   await tabTo(page, linkedMemory);
   await assertFocusOutline(page);
-  const back = page.locator(".memory-detail-back");
+  const back = page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true });
   await tabTo(page, back);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
@@ -456,7 +456,7 @@ test("records the durable keyboard focus sequence and representative captures", 
   await tabTo(page, spaceRow);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
-  const spacesBack = page.locator(".space-dossier-parent");
+  const spacesBack = page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true });
   await tabTo(page, spacesBack);
   sequence.push(await focusedElementEvidence(page, "Space dossier back to Spaces"));
   await page.screenshot({ path: path.join(screenshotEvidenceDir, "focus-space-back-to-spaces.png"), fullPage: false });
@@ -493,7 +493,7 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   await openSpaceEntity(page, "Ada Lovelace", "zh-Hant");
   await settleZoomLayout(page);
   const baselineEntityHeading = await physicalTextMetric(page.getByRole("heading", { level: 1, name: "Ada Lovelace" }));
-  await page.locator(".memory-detail-back").click();
+  await page.getByRole("group", { name: "歷史導覽", exact: true }).getByRole("button", { name: "返回", exact: true }).click();
   await expect(spaceHeading).toBeVisible();
 
   const zoomContext = await browser.newContext({

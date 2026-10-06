@@ -608,3 +608,32 @@
     transition: none;
   }
 }
+
+/* The Page owns its article and right-pane geometry inside the main scroll host. */
+.memory-main-content.memory-main-content--page { padding: 0; }
+
+.workspace-history-navigation {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+.workspace-history-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  width: 32px;
+}
+.workspace-history-button:hover:enabled { background: var(--mem-hover); color: var(--mem-text); }
+.workspace-history-button:disabled { color: var(--mem-text-tertiary); cursor: default; opacity: 0.45; }
+.workspace-history-button:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+@media (max-width: 639px) {
+  .memory-workspace-header { --workspace-header-right-padding: 12px; gap: 4px; }
+}

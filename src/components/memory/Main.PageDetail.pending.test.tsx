@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Main from "./Main";
+import { i18n } from "../../i18n";
 import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
 const flushHarness = vi.hoisted(() => ({ enabled: false, flush: vi.fn<() => Promise<boolean>>() }));
@@ -189,6 +190,51 @@ describe("Main published PageDetail navigation guards", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     clearPendingPairingCode();
+  });
+
+  it("records a guarded root exit from an initial Page and restores it with Forward", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    flushHarness.flush.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+    await act(async () => settle(true));
+    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+  });
+
+  it("keeps Back and Forward stacks intact when a published Page cannot save", async () => {
+    flushHarness.enabled = true;
+    flushHarness.flush.mockResolvedValue(false);
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+    flushHarness.flush.mockResolvedValue(true);
+    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    flushHarness.flush.mockResolvedValue(false);
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeEnabled();
+  });
+
+  it("lets the latest destination supersede global Back while a Page save waits", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    flushHarness.flush.mockReturnValue(saving);
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    await act(async () => settle(true));
+    expect(screen.getByText("Second page")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
   });
 
   it("waits for automatic saving before sidebar navigation without a discard prompt", async () => {

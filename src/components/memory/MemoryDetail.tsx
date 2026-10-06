@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useState, useRef, useEffect, useId } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -51,7 +52,7 @@ function MemoryDetailStatus({ ariaLabel, body, onBack, title, backLabel }: Memor
   return (
     <main className="memory-detail-dossier memory-detail-content-first" aria-label={ariaLabel}>
       <header className="memory-detail-header">
-        <button
+        <WorkspaceBackButton
           type="button"
           onClick={onBack}
           className="memory-detail-back"
@@ -59,7 +60,7 @@ function MemoryDetailStatus({ ariaLabel, body, onBack, title, backLabel }: Memor
           title={backLabel}
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        </WorkspaceBackButton>
       </header>
       <section className="memory-detail-status-card" aria-live="polite">
         <h2 className="memory-detail-status-title">{title}</h2>
@@ -443,7 +444,7 @@ export default function MemoryDetail({
   return (
     <main className="memory-detail-dossier memory-detail-content-first" aria-label={t("memoryDetail.dossierLabel")}>
       <header className="memory-detail-header">
-        <button
+        <WorkspaceBackButton
           type="button"
           onClick={onBack}
           className="memory-detail-back"
@@ -451,7 +452,7 @@ export default function MemoryDetail({
           title={t("memoryDetail.backToMemories")}
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
+        </WorkspaceBackButton>
         <div className="memory-detail-actions">
           {/* Copy as context — recap only */}
           {memory.is_recap && (

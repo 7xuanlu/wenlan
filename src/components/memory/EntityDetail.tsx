@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -294,7 +295,7 @@ function EntityDetailContent({
 
 function BackButton({ onBack, label }: { readonly onBack: () => void; readonly label: string }) {
   return (
-    <button
+    <WorkspaceBackButton
       type="button"
       onClick={onBack}
       className="memory-detail-back"
@@ -312,7 +313,7 @@ function BackButton({ onBack, label }: { readonly onBack: () => void; readonly l
       >
         <path d="M19 12H5M12 19l-7-7 7-7" />
       </svg>
-    </button>
+    </WorkspaceBackButton>
   );
 }
 

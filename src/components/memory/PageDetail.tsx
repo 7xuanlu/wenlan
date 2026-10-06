@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
+import { ArrowLeft, FileText, SidebarSimple, TreeStructure } from "@phosphor-icons/react";
 import {
   getPage,
   getPageLinks,
@@ -1273,13 +1275,13 @@ export default function PageDetail({
         >
           Page not found
         </span>
-        <button
+        <WorkspaceBackButton
           onClick={requestBack}
           className="transition-colors text-sm"
           style={{ color: "var(--mem-text-secondary)" }}
         >
           Back
-        </button>
+        </WorkspaceBackButton>
       </div>
     );
   }
@@ -1389,574 +1391,645 @@ export default function PageDetail({
 
   return (
     <div className="page-detail" onKeyDown={handlePageDetailKeyDown}>
-      {/* Back + Header */}
-      <div>
-        <div className="page-detail-top-row">
-        <button
-          aria-label={t("main.back")}
-          onClick={requestBack}
-          className="mem-icon-action -ml-1.5"
-          style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0, marginBottom: "12px" }}
-          type="button"
-        >
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </button>
-
+      <div className="page-detail-top-row">
+        <div>
+          <WorkspaceBackButton
+            aria-label={t("main.back")}
+            className="mem-icon-action"
+            onClick={requestBack}
+            type="button"
+          >
+            <ArrowLeft aria-hidden="true" size={16} />
+          </WorkspaceBackButton>
+        </div>
         <div className="page-detail-view-controls">
+          <button
+            type="button"
+            className="page-detail-canvas-toggle"
+            aria-label={showCanvas ? t("pageCanvas.closeCanvas") : t("pageCanvas.tabNote")}
+            aria-pressed={!showCanvas}
+            disabled={canvasSwitchPending}
+            onClick={() => { if (showCanvas) void requestToggleCanvas(); }}
+          >
+            <FileText aria-hidden="true" size={14} />
+            <span>{t("pageCanvas.tabNote")}</span>
+          </button>
           <button
             type="button"
             className="page-detail-canvas-toggle"
             aria-pressed={showCanvas}
             disabled={canvasSwitchPending}
-            onClick={() => void requestToggleCanvas()}
+            onClick={() => { if (!showCanvas) void requestToggleCanvas(); }}
           >
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="1.5" y="9" width="7" height="6" rx="1.5" />
-              <rect x="15.5" y="2.5" width="7" height="6" rx="1.5" />
-              <rect x="15.5" y="15.5" width="7" height="6" rx="1.5" />
-              <path d="M8.5 12h3.5V5.5h3.5" />
-              <path d="M12 12v6.5h3.5" />
-            </svg>
-            <span>{showCanvas ? t("pageCanvas.closeCanvas") : t("pageCanvas.tabCanvas")}</span>
+            <TreeStructure aria-hidden="true" size={14} />
+            <span>{t("pageCanvas.tabCanvas")}</span>
           </button>
+        </div>
         <div className="page-detail-info-slot">
-        {!showCanvas && <button
-          type="button"
-          className="mem-icon-action"
-          aria-label={t("pageInfo.label")}
-          title={t("pageInfo.label")}
-          aria-expanded={infoOpen}
-          aria-haspopup="dialog"
-          onClick={() => setInfoOpen(true)}
-        >
-          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".75" fill="currentColor" stroke="none"/></svg>
-        </button>}
+          {!showCanvas && <button
+            type="button"
+            className="mem-icon-action"
+            aria-label={t("pageInfo.label")}
+            title={t("pageInfo.label")}
+            aria-expanded={infoOpen}
+            aria-haspopup="dialog"
+            onClick={() => setInfoOpen(true)}
+          >
+            <SidebarSimple aria-hidden="true" size={18} />
+          </button>}
         </div>
-        </div>
-        </div>
+      </div>
 
-        <div className="page-detail-heading-row flex items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <h1
-              className={
-                hideOuterTitleWhileEditing ? "sr-only" : "page-detail-title"
-              }
-            >
-              {page.title}
-            </h1>
-          </div>
-
-          {!editing && (
-            <div className="page-detail-header-actions">
-              <button
-                type="button"
-                className="page-detail-primary-action"
-                onClick={() => void beginEditing()}
+      <div className="page-detail-document">
+        <div className={hideOuterTitleWhileEditing ? "page-detail-heading-block--writing" : undefined}>
+          <div className="page-detail-heading-row flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <h1
+                className={
+                  hideOuterTitleWhileEditing ? "sr-only" : "page-detail-title"
+                }
               >
-                {t("pageDetail.editPage")}
-              </button>
-              <div className="page-detail-icon-actions">
+                {page.title}
+              </h1>
+            </div>
+
+            {!editing && (
+              <div className="page-detail-header-actions">
                 <button
-                  aria-label={t("pageDetail.editPage")}
+                  type="button"
+                  className="page-detail-primary-action"
                   onClick={() => void beginEditing()}
-                  className="mem-icon-action"
-                  title={t("pageDetail.editPage")}
-                  type="button"
                 >
-                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-                    <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                  </svg>
+                  {t("pageDetail.editPage")}
                 </button>
-                <button
-                  onClick={handleRedistillClick}
-                  disabled={redistillMutation.isPending}
-                  aria-busy={redistillMutation.isPending}
-                  className="mem-icon-action"
-                  aria-label={
-                    redistillMutation.isPending
-                      ? t("pageDetail.redistillingPage")
-                      : t("pageDetail.redistillPage")
-                  }
-                  title={
-                    redistillMutation.isPending
-                      ? t("pageDetail.redistillingPage")
-                      : t("pageDetail.redistillPage")
-                  }
-                  type="button"
-                >
-                  <svg
-                    aria-hidden="true"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    className={redistillMutation.isPending ? "animate-spin motion-reduce:animate-none" : undefined}
+                <div className="page-detail-icon-actions">
+                  <button
+                    aria-label={t("pageDetail.editPage")}
+                    onClick={() => void beginEditing()}
+                    className="mem-icon-action"
+                    title={t("pageDetail.editPage")}
+                    type="button"
                   >
-                    <path d="M21 12a9 9 0 11-2.64-6.36" />
-                    <path d="M21 3v6h-6" />
-                  </svg>
-                </button>
-            <button
-              onClick={copyAsContext}
-              disabled={copying}
-              className={`mem-icon-action ${copied ? "text-emerald-400" : ""}`}
-              title={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
-              aria-label={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
-              type="button"
-            >
-              {copied ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="20 6 9 17 4 12" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                </svg>
-              )}
-            </button>
-            {/* Export button: 0 sources = disabled, 1 = direct, 2+ = popover */}
-            <div className="relative">
-              {obsidianSources.length === 0 ? (
-                <button
-                  disabled
-                  className="mem-icon-action"
-                  title={t("pageDetail.exportUnavailable")}
-                  aria-label={t("pageDetail.exportUnavailable")}
-                  type="button"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </button>
-              ) : (
-                <button
-                  ref={exportMenuTriggerRef}
-                  aria-expanded={obsidianSources.length >= 2 ? exportMenuOpen : undefined}
-                  aria-haspopup={obsidianSources.length >= 2 ? "menu" : undefined}
-                  onKeyDown={(event) => {
-                    if (obsidianSources.length >= 2) {
-                      handleMenuTriggerKeyDown(event, openExportMenu);
-                    }
-                  }}
-                  onClick={() => {
-                    if (obsidianSources.length === 1) {
-                      handleExportToVault(obsidianSources[0].path);
-                    } else if (exportMenuOpen) {
-                      setExportMenuOpen(false);
-                    } else {
-                      openExportMenu("first");
-                    }
-                  }}
-                  disabled={exporting}
-                  className={`mem-icon-action ${exported ? "text-emerald-400" : ""}`}
-                  title={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
-                  aria-label={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
-                  type="button"
-                >
-                  {exported ? (
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <polyline points="20 6 9 17 4 12" />
+                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                     </svg>
-                  ) : (
+                  </button>
+                  <button
+                    onClick={handleRedistillClick}
+                    disabled={redistillMutation.isPending}
+                    aria-busy={redistillMutation.isPending}
+                    className="mem-icon-action"
+                    aria-label={
+                      redistillMutation.isPending
+                        ? t("pageDetail.redistillingPage")
+                        : t("pageDetail.redistillPage")
+                    }
+                    title={
+                      redistillMutation.isPending
+                        ? t("pageDetail.redistillingPage")
+                        : t("pageDetail.redistillPage")
+                    }
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className={redistillMutation.isPending ? "animate-spin motion-reduce:animate-none" : undefined}
+                    >
+                      <path d="M21 12a9 9 0 11-2.64-6.36" />
+                      <path d="M21 3v6h-6" />
+                    </svg>
+                  </button>
+              <button
+                onClick={copyAsContext}
+                disabled={copying}
+                className={`mem-icon-action ${copied ? "text-emerald-400" : ""}`}
+                title={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
+                aria-label={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
+                type="button"
+              >
+                {copied ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+                  </svg>
+                )}
+              </button>
+              {/* Export button: 0 sources = disabled, 1 = direct, 2+ = popover */}
+              <div className="relative">
+                {obsidianSources.length === 0 ? (
+                  <button
+                    disabled
+                    className="mem-icon-action"
+                    title={t("pageDetail.exportUnavailable")}
+                    aria-label={t("pageDetail.exportUnavailable")}
+                    type="button"
+                  >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                       <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
                       <polyline points="7 10 12 15 17 10" />
                       <line x1="12" y1="15" x2="12" y2="3" />
                     </svg>
-                  )}
-                </button>
-              )}
-              {exportMenuOpen && obsidianSources.length >= 2 && (
-                <div
-                  className="mem-popover-surface page-detail-export-menu absolute right-0 top-full mt-1 z-50"
-                  onKeyDown={(event) => {
-                    handleMenuKeyDown(
-                      event,
-                      exportMenuRef.current,
-                      () => setExportMenuOpen(false),
-                      exportMenuTriggerRef.current,
-                    );
-                  }}
-                  ref={exportMenuRef}
-                  role="menu"
-                >
-                  {obsidianSources.map((s) => (
-                    <button
-                      key={s.id}
-                      onClick={() => handleExportToVault(s.path)}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {folderName(s.path)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            </div>
-            <div className="page-detail-actions-anchor" ref={actionMenuRef}>
-              <button
-                ref={actionMenuTriggerRef}
-                type="button"
-                className="mem-icon-action page-detail-actions-menu-trigger"
-                aria-expanded={actionMenuOpen}
-                aria-haspopup="menu"
-                aria-label={t("pageDetail.actions")}
-                title={t("pageDetail.actions")}
-                onKeyDown={(event) => handleMenuTriggerKeyDown(event, openActionMenu)}
-                onClick={() => {
-                  if (actionMenuOpen) {
-                    setActionMenuOpen(false);
-                  } else {
-                    openActionMenu("first");
-                  }
-                }}
-              >
-                <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
-                  <circle cx="2" cy="2" r="1.5" />
-                  <circle cx="8" cy="2" r="1.5" />
-                  <circle cx="14" cy="2" r="1.5" />
-                </svg>
-              </button>
-              {actionMenuOpen ? (
-                <div
-                  aria-label={t("pageDetail.actions")}
-                  className="mem-popover-surface page-detail-actions-menu"
-                  onKeyDown={(event) => {
-                    handleMenuKeyDown(
-                      event,
-                      actionMenuListRef.current,
-                      () => setActionMenuOpen(false),
-                      actionMenuTriggerRef.current,
-                    );
-                  }}
-                  ref={actionMenuListRef}
-                  role="menu"
-                >
-                  {!editing ? (
-                    <button
-                      className="page-detail-mobile-menu-item"
-                      disabled={redistillMutation.isPending}
-                      onClick={() => {
-                        setActionMenuOpen(false);
-                        handleRedistillClick();
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {redistillMutation.isPending
-                        ? t("pageDetail.redistillingPage")
-                        : t("pageDetail.redistillPage")}
-                    </button>
-                  ) : null}
+                  </button>
+                ) : (
                   <button
-                    className="page-detail-mobile-menu-item"
-                    disabled={copying}
-                    onClick={() => {
-                      setActionMenuOpen(false);
-                      void copyAsContext();
+                    ref={exportMenuTriggerRef}
+                    aria-expanded={obsidianSources.length >= 2 ? exportMenuOpen : undefined}
+                    aria-haspopup={obsidianSources.length >= 2 ? "menu" : undefined}
+                    onKeyDown={(event) => {
+                      if (obsidianSources.length >= 2) {
+                        handleMenuTriggerKeyDown(event, openExportMenu);
+                      }
                     }}
-                    role="menuitem"
+                    onClick={() => {
+                      if (obsidianSources.length === 1) {
+                        handleExportToVault(obsidianSources[0].path);
+                      } else if (exportMenuOpen) {
+                        setExportMenuOpen(false);
+                      } else {
+                        openExportMenu("first");
+                      }
+                    }}
+                    disabled={exporting}
+                    className={`mem-icon-action ${exported ? "text-emerald-400" : ""}`}
+                    title={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
+                    aria-label={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
                     type="button"
                   >
-                    {copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
+                    {exported ? (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <polyline points="20 6 9 17 4 12" />
+                      </svg>
+                    ) : (
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                        <polyline points="7 10 12 15 17 10" />
+                        <line x1="12" y1="15" x2="12" y2="3" />
+                      </svg>
+                    )}
                   </button>
-                  {obsidianSources.length === 0 ? (
-                    <button
-                      className="page-detail-mobile-menu-item"
-                      disabled
-                      role="menuitem"
-                      type="button"
-                    >
-                      {t("pageDetail.exportToObsidian")}
-                    </button>
-                  ) : (
-                    obsidianSources.map((source) => (
+                )}
+                {exportMenuOpen && obsidianSources.length >= 2 && (
+                  <div
+                    className="mem-popover-surface page-detail-export-menu absolute right-0 top-full mt-1 z-50"
+                    onKeyDown={(event) => {
+                      handleMenuKeyDown(
+                        event,
+                        exportMenuRef.current,
+                        () => setExportMenuOpen(false),
+                        exportMenuTriggerRef.current,
+                      );
+                    }}
+                    ref={exportMenuRef}
+                    role="menu"
+                  >
+                    {obsidianSources.map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => handleExportToVault(s.path)}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {folderName(s.path)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
+              <div className="page-detail-actions-anchor" ref={actionMenuRef}>
+                <button
+                  ref={actionMenuTriggerRef}
+                  type="button"
+                  className="mem-icon-action page-detail-actions-menu-trigger"
+                  aria-expanded={actionMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label={t("pageDetail.actions")}
+                  title={t("pageDetail.actions")}
+                  onKeyDown={(event) => handleMenuTriggerKeyDown(event, openActionMenu)}
+                  onClick={() => {
+                    if (actionMenuOpen) {
+                      setActionMenuOpen(false);
+                    } else {
+                      openActionMenu("first");
+                    }
+                  }}
+                >
+                  <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
+                    <circle cx="2" cy="2" r="1.5" />
+                    <circle cx="8" cy="2" r="1.5" />
+                    <circle cx="14" cy="2" r="1.5" />
+                  </svg>
+                </button>
+                {actionMenuOpen ? (
+                  <div
+                    aria-label={t("pageDetail.actions")}
+                    className="mem-popover-surface page-detail-actions-menu"
+                    onKeyDown={(event) => {
+                      handleMenuKeyDown(
+                        event,
+                        actionMenuListRef.current,
+                        () => setActionMenuOpen(false),
+                        actionMenuTriggerRef.current,
+                      );
+                    }}
+                    ref={actionMenuListRef}
+                    role="menu"
+                  >
+                    {!editing ? (
                       <button
                         className="page-detail-mobile-menu-item"
-                        disabled={exporting}
-                        key={source.id}
+                        disabled={redistillMutation.isPending}
                         onClick={() => {
                           setActionMenuOpen(false);
-                          void handleExportToVault(source.path);
+                          handleRedistillClick();
                         }}
                         role="menuitem"
                         type="button"
                       >
-                        {obsidianSources.length === 1
-                          ? t("pageDetail.exportToObsidian")
-                          : t("pageDetail.exportToVault", { vault: folderName(source.path) })}
+                        {redistillMutation.isPending
+                          ? t("pageDetail.redistillingPage")
+                          : t("pageDetail.redistillPage")}
                       </button>
-                    ))
-                  )}
-                  {/* Lives in the overflow menu at every width, like Delete,
-                      rather than mirroring an icon-row button — this is a
-                      low-frequency action that writes a durable record, and
-                      the icon row is already full of things you reach for
-                      constantly.
-
-                      Visible but disabled before the daemon's truth cutover is
-                      live, following the page editor's daemon-floor gate
-                      rather than the hide-it convention used for provider
-                      presets: this is an editorial action on the page in front
-                      of you, and a control that silently disappears reads as a
-                      feature that was taken away. The title says why.
-
-                      Gone while editing, matching Canvas and Re-distill: the
-                      mark attests the stored text, which is not what an open
-                      editor is showing. (M5 App PR, D2/D7.) */}
-                  {!editing ? (
+                    ) : null}
                     <button
-                      disabled={!reviewSupported || reviewMutation.isPending}
+                      className="page-detail-mobile-menu-item"
+                      disabled={copying}
                       onClick={() => {
                         setActionMenuOpen(false);
-                        reviewMutation.mutate({ id: pageId, content: page.content });
+                        void copyAsContext();
                       }}
                       role="menuitem"
-                      title={
-                        reviewSupported
-                          ? t("pageDetail.markPageReviewed")
-                          : reviewUnavailableReason
-                      }
                       type="button"
                     >
-                      {t("pageDetail.markPageReviewed")}
+                      {copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
                     </button>
-                  ) : null}
-                  <button
-                    className="page-detail-menu-danger"
-                    disabled={
-                      deleteMutation.isPending ||
-                      saveState.phase === "pending"
+                    {obsidianSources.length === 0 ? (
+                      <button
+                        className="page-detail-mobile-menu-item"
+                        disabled
+                        role="menuitem"
+                        type="button"
+                      >
+                        {t("pageDetail.exportToObsidian")}
+                      </button>
+                    ) : (
+                      obsidianSources.map((source) => (
+                        <button
+                          className="page-detail-mobile-menu-item"
+                          disabled={exporting}
+                          key={source.id}
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            void handleExportToVault(source.path);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          {obsidianSources.length === 1
+                            ? t("pageDetail.exportToObsidian")
+                            : t("pageDetail.exportToVault", { vault: folderName(source.path) })}
+                        </button>
+                      ))
+                    )}
+                    {/* Lives in the overflow menu at every width, like Delete,
+                        rather than mirroring an icon-row button — this is a
+                        low-frequency action that writes a durable record, and
+                        the icon row is already full of things you reach for
+                        constantly.
+
+                        Visible but disabled before the daemon's truth cutover is
+                        live, following the page editor's daemon-floor gate
+                        rather than the hide-it convention used for provider
+                        presets: this is an editorial action on the page in front
+                        of you, and a control that silently disappears reads as a
+                        feature that was taken away. The title says why.
+
+                        Gone while editing, matching Canvas and Re-distill: the
+                        mark attests the stored text, which is not what an open
+                        editor is showing. (M5 App PR, D2/D7.) */}
+                    {!editing ? (
+                      <button
+                        disabled={!reviewSupported || reviewMutation.isPending}
+                        onClick={() => {
+                          setActionMenuOpen(false);
+                          reviewMutation.mutate({ id: pageId, content: page.content });
+                        }}
+                        role="menuitem"
+                        title={
+                          reviewSupported
+                            ? t("pageDetail.markPageReviewed")
+                            : reviewUnavailableReason
+                        }
+                        type="button"
+                      >
+                        {t("pageDetail.markPageReviewed")}
+                      </button>
+                    ) : null}
+                    <button
+                      className="page-detail-menu-danger"
+                      disabled={
+                        deleteMutation.isPending ||
+                        saveState.phase === "pending"
+                      }
+                      onClick={requestDelete}
+                      role="menuitem"
+                      type="button"
+                    >
+                      {t("pageDetail.deletePage")}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+            )}
+          </div>
+        </div>
+
+        {showAttachedPageNotice && (
+          <div
+            aria-label={t("pages.composer.attachedNotice", { title: page.title })}
+            aria-live="polite"
+            className="page-detail-attached-notice"
+            role="status"
+          >
+            <span>{t("pages.composer.attachedNotice", { title: page.title })}</span>
+            <button onClick={onDismissAttachedPageNotice} type="button">
+              {t("pages.composer.dismissNotice")}
+            </button>
+          </div>
+        )}
+
+        {redistillNotice && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg px-3 py-2"
+            style={{
+              backgroundColor:
+                redistillNotice.kind === "error"
+                  ? "rgba(239, 68, 68, 0.08)"
+                  : redistillNotice.kind === "warning"
+                    ? "rgba(245, 158, 11, 0.08)"
+                    : "rgba(16, 185, 129, 0.08)",
+              border: "1px solid var(--mem-border)",
+              color:
+                redistillNotice.kind === "error"
+                  ? "#ef4444"
+                  : redistillNotice.kind === "warning"
+                    ? "var(--mem-accent-amber)"
+                    : "var(--mem-text-secondary)",
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "12px",
+              lineHeight: "1.5",
+            }}
+          >
+            {redistillNotice.message}
+          </div>
+        )}
+
+        {reviewNotice && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-lg px-3 py-2"
+            data-testid="page-review-notice"
+            style={{
+              backgroundColor:
+                reviewNotice.kind === "error"
+                  ? "rgba(239, 68, 68, 0.08)"
+                  : reviewNotice.kind === "warning"
+                    ? "rgba(245, 158, 11, 0.08)"
+                    : "rgba(16, 185, 129, 0.08)",
+              border: "1px solid var(--mem-border)",
+              color:
+                reviewNotice.kind === "error"
+                  ? "#ef4444"
+                  : reviewNotice.kind === "warning"
+                    ? "var(--mem-accent-amber)"
+                    : "var(--mem-text-secondary)",
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "12px",
+              lineHeight: "1.5",
+            }}
+          >
+            {reviewNotice.message}
+            {reviewNotice.offerReload && (
+              <button
+                className="ml-2 underline"
+                onClick={() => {
+                  // Clear only once the reload has actually landed. Dropping the
+                  // warning first and firing the refetch into the void leaves the
+                  // worst state on screen: the same stale text, no warning, and a
+                  // Review action that looks ready to approve content the daemon
+                  // has already refused once.
+                  void (async () => {
+                    const reloaded = await refetchPage();
+                    if (reloaded.isError) {
+                      setReviewNotice({
+                        kind: "error",
+                        message: t("pageDetail.reviewReloadFailed"),
+                        offerReload: true,
+                      });
+                      return;
                     }
-                    onClick={requestDelete}
-                    role="menuitem"
-                    type="button"
-                  >
-                    {t("pageDetail.deletePage")}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          )}
-        </div>
-      </div>
-
-      {showAttachedPageNotice && (
-        <div
-          aria-label={t("pages.composer.attachedNotice", { title: page.title })}
-          aria-live="polite"
-          className="page-detail-attached-notice"
-          role="status"
-        >
-          <span>{t("pages.composer.attachedNotice", { title: page.title })}</span>
-          <button onClick={onDismissAttachedPageNotice} type="button">
-            {t("pages.composer.dismissNotice")}
-          </button>
-        </div>
-      )}
-
-      {redistillNotice && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg px-3 py-2"
-          style={{
-            backgroundColor:
-              redistillNotice.kind === "error"
-                ? "rgba(239, 68, 68, 0.08)"
-                : redistillNotice.kind === "warning"
-                  ? "rgba(245, 158, 11, 0.08)"
-                  : "rgba(16, 185, 129, 0.08)",
-            border: "1px solid var(--mem-border)",
-            color:
-              redistillNotice.kind === "error"
-                ? "#ef4444"
-                : redistillNotice.kind === "warning"
-                  ? "var(--mem-accent-amber)"
-                  : "var(--mem-text-secondary)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            lineHeight: "1.5",
-          }}
-        >
-          {redistillNotice.message}
-        </div>
-      )}
-
-      {reviewNotice && (
-        <div
-          role="status"
-          aria-live="polite"
-          className="rounded-lg px-3 py-2"
-          data-testid="page-review-notice"
-          style={{
-            backgroundColor:
-              reviewNotice.kind === "error"
-                ? "rgba(239, 68, 68, 0.08)"
-                : reviewNotice.kind === "warning"
-                  ? "rgba(245, 158, 11, 0.08)"
-                  : "rgba(16, 185, 129, 0.08)",
-            border: "1px solid var(--mem-border)",
-            color:
-              reviewNotice.kind === "error"
-                ? "#ef4444"
-                : reviewNotice.kind === "warning"
-                  ? "var(--mem-accent-amber)"
-                  : "var(--mem-text-secondary)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            lineHeight: "1.5",
-          }}
-        >
-          {reviewNotice.message}
-          {reviewNotice.offerReload && (
-            <button
-              className="ml-2 underline"
-              onClick={() => {
-                // Clear only once the reload has actually landed. Dropping the
-                // warning first and firing the refetch into the void leaves the
-                // worst state on screen: the same stale text, no warning, and a
-                // Review action that looks ready to approve content the daemon
-                // has already refused once.
-                void (async () => {
-                  const reloaded = await refetchPage();
-                  if (reloaded.isError) {
-                    setReviewNotice({
-                      kind: "error",
-                      message: t("pageDetail.reviewReloadFailed"),
-                      offerReload: true,
-                    });
-                    return;
-                  }
-                  setReviewNotice(null);
-                })();
-              }}
-              type="button"
-            >
-              {t("pageDetail.reviewReload")}
-            </button>
-          )}
-        </div>
-      )}
-
-      {actionError && (
-        <div
-          aria-live="assertive"
-          className="page-detail-action-error"
-          role="alert"
-        >
-          {actionError}
-          {deleteGuardEntityId && onEntityClick && (
-            <button
-              onClick={() => onEntityClick(deleteGuardEntityId)}
-              style={{
-                background: "none",
-                border: "none",
-                color: "inherit",
-                cursor: "pointer",
-                font: "inherit",
-                marginLeft: 6,
-                padding: 0,
-                textDecoration: "underline",
-              }}
-              type="button"
-            >
-              {t("pageDetail.entityGuardOpen")}
-            </button>
-          )}
-        </div>
-      )}
-
-      {showCanvas ? (
-        <div>
-          <PageCanvas
-            pageId={pageId}
-            pageTitle={page.title}
-            labelOverrides={labelOverrides}
-            onMemoryClick={onMemoryClick}
-            onPageClick={onPageClick}
-            onEntityClick={onEntityClick}
-          />
-        </div>
-      ) : editing ? (
-        editGate.kind === "checking" ? (
-          <div role="status" className="page-editor-notice">
-            {t("pageDetail.editor.checking")}
-          </div>
-        ) : editGate.kind === "unsupported" ? (
-          <div className="flex flex-col gap-3">
-            <div role="alert" className="page-editor-notice">
-              {t("pageDetail.editor.upgradeRequired", {
-                floor: PAGE_EDIT_DAEMON_FLOOR,
-                version:
-                  editGate.version ??
-                  t("pageDetail.editor.unavailableVersion"),
-              })}
-            </div>
-            <button
-              type="button"
-              className="page-editor-action self-start"
-              onClick={closeEditor}
-            >
-              {t("pageDetail.editor.cancel")}
-            </button>
-          </div>
-        ) : editGate.kind === "normalize" ? (
-          <div className="flex flex-col gap-3">
-            <div role="alert" className="page-editor-notice">
-              <strong>{t("pageDetail.editor.normalizeTitle")}</strong>
-              <div>{t("pageDetail.editor.normalizeDescription")}</div>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
+                    setReviewNotice(null);
+                  })();
+                }}
                 type="button"
-                className="page-editor-action"
-                onClick={handleNormalizeAndEdit}
               >
-                {t("pageDetail.editor.normalizeAction")}
+                {t("pageDetail.reviewReload")}
               </button>
+            )}
+          </div>
+        )}
+
+        {actionError && (
+          <div
+            aria-live="assertive"
+            className="page-detail-action-error"
+            role="alert"
+          >
+            {actionError}
+            {deleteGuardEntityId && onEntityClick && (
+              <button
+                onClick={() => onEntityClick(deleteGuardEntityId)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "inherit",
+                  cursor: "pointer",
+                  font: "inherit",
+                  marginLeft: 6,
+                  padding: 0,
+                  textDecoration: "underline",
+                }}
+                type="button"
+              >
+                {t("pageDetail.entityGuardOpen")}
+              </button>
+            )}
+          </div>
+        )}
+
+        {showCanvas ? (
+          <div>
+            <PageCanvas
+              pageId={pageId}
+              pageTitle={page.title}
+              labelOverrides={labelOverrides}
+              onMemoryClick={onMemoryClick}
+              onPageClick={onPageClick}
+              onEntityClick={onEntityClick}
+            />
+          </div>
+        ) : editing ? (
+          editGate.kind === "checking" ? (
+            <div role="status" className="page-editor-notice">
+              {t("pageDetail.editor.checking")}
+            </div>
+          ) : editGate.kind === "unsupported" ? (
+            <div className="flex flex-col gap-3">
+              <div role="alert" className="page-editor-notice">
+                {t("pageDetail.editor.upgradeRequired", {
+                  floor: PAGE_EDIT_DAEMON_FLOOR,
+                  version:
+                    editGate.version ??
+                    t("pageDetail.editor.unavailableVersion"),
+                })}
+              </div>
               <button
                 type="button"
-                className="page-editor-action"
+                className="page-editor-action self-start"
                 onClick={closeEditor}
               >
                 {t("pageDetail.editor.cancel")}
               </button>
             </div>
-          </div>
-        ) : (
-          <div className="page-editor-stack flex flex-col gap-2">
-            {saveState.phase === "conflict" && (
+          ) : editGate.kind === "normalize" ? (
+            <div className="flex flex-col gap-3">
               <div role="alert" className="page-editor-notice">
-                <strong>{t("pageDetail.editor.conflictTitle")}</strong>
-                <div>{t(canonicalPage === null ? "pageDetail.editor.failure.notFound" : "pageDetail.editor.conflictBody")}</div>
-                {conflictLatest.kind === "loading" && (
-                  <div role="status">
-                    {t("pageDetail.editor.latestLoading")}
+                <strong>{t("pageDetail.editor.normalizeTitle")}</strong>
+                <div>{t("pageDetail.editor.normalizeDescription")}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className="page-editor-action"
+                  onClick={handleNormalizeAndEdit}
+                >
+                  {t("pageDetail.editor.normalizeAction")}
+                </button>
+                <button
+                  type="button"
+                  className="page-editor-action"
+                  onClick={closeEditor}
+                >
+                  {t("pageDetail.editor.cancel")}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="page-editor-stack flex flex-col gap-2">
+              {saveState.phase === "conflict" && (
+                <div role="alert" className="page-editor-notice">
+                  <strong>{t("pageDetail.editor.conflictTitle")}</strong>
+                  <div>{t(canonicalPage === null ? "pageDetail.editor.failure.notFound" : "pageDetail.editor.conflictBody")}</div>
+                  {conflictLatest.kind === "loading" && (
+                    <div role="status">
+                      {t("pageDetail.editor.latestLoading")}
+                    </div>
+                  )}
+                  {conflictLatest.kind === "error" && (
+                    <div>{t("pageDetail.editor.latestLoadFailed")}</div>
+                  )}
+                  {conflictLatest.kind === "loaded" && (
+                    <details>
+                      <summary>
+                        {t("pageDetail.editor.latestSource", {
+                          version: conflictLatest.page.version,
+                        })}
+                      </summary>
+                      <pre>{conflictLatest.page.content}</pre>
+                    </details>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className="page-editor-action"
+                      onClick={handleCopyDraft}
+                    >
+                      {t("pageDetail.editor.copyDraft")}
+                    </button>
+                    {conflictLatest.kind === "error" ? (
+                      <button
+                        type="button"
+                        className="page-editor-action"
+                        onClick={() => {
+                          if (saveStateRef.current.phase === "conflict") {
+                            void fetchConflictLatest(
+                              saveStateRef.current.pending.operationId,
+                            );
+                          }
+                        }}
+                      >
+                        {t("pageDetail.editor.retryLatest")}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="page-editor-action"
+                        onClick={handleReloadLatest}
+                        disabled={conflictLatest.kind !== "loaded"}
+                      >
+                        {t("pageDetail.editor.reloadLatest")}
+                      </button>
+                    )}
+                    {canonicalPage === null && (
+                      <button
+                        type="button"
+                        className="page-editor-action"
+                        onClick={handleDiscardDeletedDraft}
+                      >
+                        {t("pageDetail.editor.discard")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="page-editor-action"
+                      onClick={() => editorRef.current?.focus()}
+                    >
+                      {t("pageDetail.editor.keepEditing")}
+                    </button>
                   </div>
-                )}
-                {conflictLatest.kind === "error" && (
-                  <div>{t("pageDetail.editor.latestLoadFailed")}</div>
-                )}
-                {conflictLatest.kind === "loaded" && (
-                  <details>
-                    <summary>
-                      {t("pageDetail.editor.latestSource", {
-                        version: conflictLatest.page.version,
-                      })}
-                    </summary>
-                    <pre>{conflictLatest.page.content}</pre>
-                  </details>
-                )}
-                <div className="flex flex-wrap items-center gap-2">
+                </div>
+              )}
+              {saveState.phase === "retryable" && (
+                <div role="alert" className="page-editor-notice">
+                  {failureMessage(
+                    saveState.failure.outcome === "transport"
+                      ? "transport"
+                      : saveState.failure.kind,
+                  )}
+                  {saveState.failure.outcome !== "transport" &&
+                    saveState.failure.message && (
+                      <details>
+                        <summary>
+                          {t("pageDetail.editor.technicalDetails")}
+                        </summary>
+                        {saveState.failure.message}
+                      </details>
+                    )}
                   <button
                     type="button"
                     className="page-editor-action"
@@ -1964,198 +2037,133 @@ export default function PageDetail({
                   >
                     {t("pageDetail.editor.copyDraft")}
                   </button>
-                  {conflictLatest.kind === "error" ? (
-                    <button
-                      type="button"
-                      className="page-editor-action"
-                      onClick={() => {
-                        if (saveStateRef.current.phase === "conflict") {
-                          void fetchConflictLatest(
-                            saveStateRef.current.pending.operationId,
-                          );
-                        }
-                      }}
-                    >
-                      {t("pageDetail.editor.retryLatest")}
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="page-editor-action"
-                      onClick={handleReloadLatest}
-                      disabled={conflictLatest.kind !== "loaded"}
-                    >
-                      {t("pageDetail.editor.reloadLatest")}
-                    </button>
-                  )}
-                  {canonicalPage === null && (
-                    <button
-                      type="button"
-                      className="page-editor-action"
-                      onClick={handleDiscardDeletedDraft}
-                    >
-                      {t("pageDetail.editor.discard")}
-                    </button>
+                </div>
+              )}
+              {saveState.phase === "upgrade_required" && (
+                <div role="alert" className="page-editor-notice">
+                  {t("pageDetail.editor.upgradeRequired", {
+                    floor: saveState.requiredFloor,
+                    version: saveState.reportedVersion,
+                  })}
+                  <button
+                    type="button"
+                    className="page-editor-action"
+                    onClick={handleCopyDraft}
+                  >
+                    {t("pageDetail.editor.copyDraft")}
+                  </button>
+                </div>
+              )}
+              {saveState.phase === "failed" && (
+                <div role="alert" className="page-editor-notice">
+                  {failureMessage(saveState.failure.kind)}
+                  {saveState.failure.message && (
+                    <details>
+                      <summary>{t("pageDetail.editor.technicalDetails")}</summary>
+                      {saveState.failure.message}
+                    </details>
                   )}
                   <button
                     type="button"
                     className="page-editor-action"
-                    onClick={() => editorRef.current?.focus()}
+                    onClick={handleCopyDraft}
                   >
-                    {t("pageDetail.editor.keepEditing")}
+                    {t("pageDetail.editor.copyDraft")}
                   </button>
                 </div>
-              </div>
-            )}
-            {saveState.phase === "retryable" && (
-              <div role="alert" className="page-editor-notice">
-                {failureMessage(
-                  saveState.failure.outcome === "transport"
-                    ? "transport"
-                    : saveState.failure.kind,
-                )}
-                {saveState.failure.outcome !== "transport" &&
-                  saveState.failure.message && (
-                    <details>
-                      <summary>
-                        {t("pageDetail.editor.technicalDetails")}
-                      </summary>
-                      {saveState.failure.message}
-                    </details>
-                  )}
-                <button
-                  type="button"
-                  className="page-editor-action"
-                  onClick={handleCopyDraft}
-                >
-                  {t("pageDetail.editor.copyDraft")}
-                </button>
-              </div>
-            )}
-            {saveState.phase === "upgrade_required" && (
-              <div role="alert" className="page-editor-notice">
-                {t("pageDetail.editor.upgradeRequired", {
-                  floor: saveState.requiredFloor,
-                  version: saveState.reportedVersion,
-                })}
-                <button
-                  type="button"
-                  className="page-editor-action"
-                  onClick={handleCopyDraft}
-                >
-                  {t("pageDetail.editor.copyDraft")}
-                </button>
-              </div>
-            )}
-            {saveState.phase === "failed" && (
-              <div role="alert" className="page-editor-notice">
-                {failureMessage(saveState.failure.kind)}
-                {saveState.failure.message && (
-                  <details>
-                    <summary>{t("pageDetail.editor.technicalDetails")}</summary>
-                    {saveState.failure.message}
-                  </details>
-                )}
-                <button
-                  type="button"
-                  className="page-editor-action"
-                  onClick={handleCopyDraft}
-                >
-                  {t("pageDetail.editor.copyDraft")}
-                </button>
-              </div>
-            )}
-            {editValidation && (
-              <div role="alert" className="page-editor-notice">
-                {editValidation}
-              </div>
-            )}
-            {editorSessionId === editorFallbackSessionId && (
-              <div role="alert" className="page-editor-notice">
-                <strong>{t("pageDetail.editor.fallbackTitle")}</strong>
-                <div>{t("pageDetail.editor.fallbackBody")}</div>
-              </div>
-            )}
-            <div role="status" aria-live="polite" className="sr-only">
-              {saveState.phase === "pending"
-                ? t("pageDetail.editor.saving")
-                : editDirty
-                  ? t("pageDetail.editor.unsaved")
-                  : t("pageDetail.editor.saved")}
-            </div>
-            {(saveState.phase === "retryable" || saveState.phase === "failed" || saveState.phase === "upgrade_required") && (
-              <button type="button" className="page-editor-action self-start" onClick={() => void autosave.retry()}>
-                {t("pageDetail.editor.retry")}
-              </button>
-            )}
-            <p
-              id="page-markdown-editor-description"
-              className="sr-only"
-            >
-              {t(
-                editorStatus.engine === "native"
-                  ? "pageDetail.editor.autosaveDescriptionFallback"
-                  : "pageDetail.editor.autosaveDescription",
-                { modifier: editorShortcutModifier },
               )}
-            </p>
-            {editorSessionId && (
-              <MarkdownEditor
-                ref={editorRef}
-                initialDocument={editInitialDocument}
-                initialSelection={initialSelection}
-                onSelectionChange={onSelectionChange}
-                sessionId={editorSessionId}
-                disabled={false}
-                seamless
-                ariaLabel={t("pageDetail.editor.label")}
-                describedBy="page-markdown-editor-description"
-                onDocumentChange={handleDocumentChange}
-                onSave={saveDocument}
-                onCancel={requestCloseEditor}
-                onStatusChange={(status) => {
-                  if (status.ready) onEditorReady?.();
-                  handleEditorStatus(
-                    editorSessionId,
-                    editorSessionEpoch,
-                    status,
-                  );
-                }}
-                onFallback={(reason) =>
-                  handleEditorFallback(
-                    editorSessionId,
-                    editorSessionEpoch,
-                    reason,
-                  )
-                }
-              />
-            )}
-          </div>
-        )
-      ) : (
-        <div>
-          <div className="page-detail-prose" onClickCapture={handleContentClick}>
-            {ledeText && (
-              <div className="page-detail-lede">
-                {ledeMarkdown ? (
-                  <ContentRenderer
-                    content={ledeMarkdown}
-                    variant="lede"
-                    renderCitation={renderCitation}
-                  />
-                ) : (
-                  <p>{ledeText}</p>
-                )}
+              {editValidation && (
+                <div role="alert" className="page-editor-notice">
+                  {editValidation}
+                </div>
+              )}
+              {editorSessionId === editorFallbackSessionId && (
+                <div role="alert" className="page-editor-notice">
+                  <strong>{t("pageDetail.editor.fallbackTitle")}</strong>
+                  <div>{t("pageDetail.editor.fallbackBody")}</div>
+                </div>
+              )}
+              <div role="status" aria-live="polite" className="sr-only">
+                {saveState.phase === "pending"
+                  ? t("pageDetail.editor.saving")
+                  : editDirty
+                    ? t("pageDetail.editor.unsaved")
+                    : t("pageDetail.editor.saved")}
               </div>
-            )}
-            <ContentRenderer
-              content={displayContent}
-              variant="detail"
-              renderCitation={renderCitation}
-            />
+              {(saveState.phase === "retryable" || saveState.phase === "failed" || saveState.phase === "upgrade_required") && (
+                <button type="button" className="page-editor-action self-start" onClick={() => void autosave.retry()}>
+                  {t("pageDetail.editor.retry")}
+                </button>
+              )}
+              <p
+                id="page-markdown-editor-description"
+                className="sr-only"
+              >
+                {t(
+                  editorStatus.engine === "native"
+                    ? "pageDetail.editor.autosaveDescriptionFallback"
+                    : "pageDetail.editor.autosaveDescription",
+                  { modifier: editorShortcutModifier },
+                )}
+              </p>
+              {editorSessionId && (
+                <MarkdownEditor
+                  ref={editorRef}
+                  initialDocument={editInitialDocument}
+                  initialSelection={initialSelection}
+                  onSelectionChange={onSelectionChange}
+                  sessionId={editorSessionId}
+                  disabled={false}
+                  seamless
+                  ariaLabel={t("pageDetail.editor.label")}
+                  describedBy="page-markdown-editor-description"
+                  onDocumentChange={handleDocumentChange}
+                  onSave={saveDocument}
+                  onCancel={requestCloseEditor}
+                  onStatusChange={(status) => {
+                    if (status.ready) onEditorReady?.();
+                    handleEditorStatus(
+                      editorSessionId,
+                      editorSessionEpoch,
+                      status,
+                    );
+                  }}
+                  onFallback={(reason) =>
+                    handleEditorFallback(
+                      editorSessionId,
+                      editorSessionEpoch,
+                      reason,
+                    )
+                  }
+                />
+              )}
+            </div>
+          )
+        ) : (
+          <div>
+            <div className="page-detail-prose" onClickCapture={handleContentClick}>
+              {ledeText && (
+                <div className="page-detail-lede">
+                  {ledeMarkdown ? (
+                    <ContentRenderer
+                      content={ledeMarkdown}
+                      variant="lede"
+                      renderCitation={renderCitation}
+                    />
+                  ) : (
+                    <p>{ledeText}</p>
+                  )}
+                </div>
+              )}
+              <ContentRenderer
+                content={displayContent}
+                variant="detail"
+                renderCitation={renderCitation}
+              />
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       <PageInfoDrawer
         open={infoOpen && !showCanvas}

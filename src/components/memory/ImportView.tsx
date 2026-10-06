@@ -1,3 +1,4 @@
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useState, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -203,7 +204,7 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
       <div className="flex flex-col mx-auto py-4" style={{ height: "calc(100vh - 120px)", maxWidth: "672px" }}>
         {/* Header row: back + title + source pills */}
         <div className="flex items-center gap-4 mb-4 shrink-0">
-          <button
+          <WorkspaceBackButton
             onClick={onBack}
             aria-label={t("importView.back")}
             className="flex items-center gap-1 shrink-0 transition-colors duration-150"
@@ -216,7 +217,7 @@ export function ImportView({ onBack, onComplete, completeLabel, wizardMode, onPh
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M19 12H5M12 19l-7-7 7-7" />
             </svg>
-          </button>
+          </WorkspaceBackButton>
           <h1
             className="shrink-0"
             style={{

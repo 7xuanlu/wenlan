@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "../navigation/WorkspaceNavigation";
 import { useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
@@ -162,10 +163,10 @@ export function SpaceDossierHeader({
 
   return (
     <>
-      <button className="space-dossier-parent" onClick={actions.onBack} type="button">
+      <WorkspaceBackButton className="space-dossier-parent" onClick={actions.onBack} type="button">
         <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         <span>{copy.backToSpaces}</span>
-      </button>
+      </WorkspaceBackButton>
 
       {space.suggested && (
         <div className="space-dossier-suggested">

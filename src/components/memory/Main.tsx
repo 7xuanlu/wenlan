@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -59,6 +60,7 @@ import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
 import { useLaunchPinFill } from "../../lib/launchPinFill";
 import type { MarkdownEditorSelection } from "./editor/MarkdownEditor";
 import { useViewScroll } from "./navigation/useViewScroll";
+import { WorkspaceBackButton, WorkspaceNavigationProvider } from "./navigation/WorkspaceNavigation";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
@@ -87,6 +89,32 @@ function scrollDestinationKey(view: View): string {
       return `space:${view.spaceId ?? view.spaceName}`;
     default:
       return view.kind;
+  }
+}
+
+// Compare destinations rather than object identity. A fresh unsaved draft is
+// always a new intent; persisted drafts retain their session through history.
+function sameDestination(current: View, next: View): boolean {
+  if ((current.kind === "home" || current.kind === "pages")
+    && (next.kind === "home" || next.kind === "pages")) return true;
+  if (current.kind !== next.kind) return false;
+  switch (current.kind) {
+    case "page": return next.kind === "page" && current.pageId === next.pageId
+      && (current.mode ?? "edit") === (next.mode ?? "edit");
+    case "memory": return next.kind === "memory" && current.sourceId === next.sourceId;
+    case "entity": return next.kind === "entity" && current.entityId === next.entityId;
+    case "settings": return next.kind === "settings"
+      && (current.section ?? "general") === (next.section ?? "general");
+    case "space": return next.kind === "space" && (current.spaceId && next.spaceId
+      ? current.spaceId === next.spaceId : current.spaceName === next.spaceName);
+    case "spaces": return next.kind === "spaces" && !!current.create === !!next.create;
+    case "import": return next.kind === "import" && !!current.fromFirstUse === !!next.fromFirstUse;
+    case "first-use": return next.kind === "first-use"
+      && !!current.showKnowledge === !!next.showKnowledge && current.batchId === next.batchId;
+    case "page-draft": return next.kind === "page-draft" && current.space === next.space
+      && (next.sessionKey != null ? current.sessionKey === next.sessionKey
+        : !!next.draftId && current.draftId === next.draftId);
+    default: return true;
   }
 }
 
@@ -146,6 +174,35 @@ export default function Main({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const viewHistoryRef = useRef<View[]>([]);
+  const [viewForward, setViewForward] = useState<View[]>([]);
+  const viewForwardRef = useRef<View[]>([]);
+  const updateHistory = (past: View[], forward: View[]) => {
+    viewHistoryRef.current = past;
+    viewForwardRef.current = forward;
+    setViewHistory(past);
+    setViewForward(forward);
+  };
+  const dismissSearch = () => {
+    pendingDraftSearchCancelRef.current?.();
+    pendingDraftSearchCancelRef.current = null;
+    setPendingDraftSearchQuery(null);
+    if (query) setQuery("");
+    setMobileSearchOpen(false);
+  };
+  const showView = (next: View, dismissSearchOverlay = true) => {
+    if (dismissSearchOverlay) dismissSearch();
+    viewRef.current = next;
+    setView(next);
+    if (next.kind === "pages" || next.kind === "home") setActiveTab("pages");
+    else if (next.kind === "activity") setActiveTab("activity");
+  };
+  // Identity promotion and completed workflows replace the current entry.
+  // Their abandoned forward branch must not restore a superseded editor.
+  const replaceView = (next: View) => {
+    updateHistory(viewHistoryRef.current, []);
+    showView(next);
+  };
   const lastNoteViewRef = useRef<View | null>(null);
   if (view.kind === "page" || view.kind === "page-draft") lastNoteViewRef.current = view;
   const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
@@ -154,7 +211,7 @@ export default function Main({
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
-  const [activeTab, setActiveTab] = useState<"pages" | "activity">("pages");
+  const [activeTab, setActiveTab] = useState<"pages" | "activity">(view.kind === "activity" ? "activity" : "pages");
   // The Activity button's summary. Owned here, beside the toolbar that renders
   // it, so the toggle keeps a stable identity for the outside-click listener.
   const [activityOpen, setActivityOpen] = useState(false);
@@ -232,7 +289,7 @@ export default function Main({
           // The intermediate setView may be batched away by navigation.
           // Remember the saved identity before leaving so Notes reopens it.
           lastNoteViewRef.current = sourceView;
-          if (sourceView !== view) setView(sourceView);
+          if (sourceView !== view) showView(sourceView, false);
           pending.action(sourceView);
         }
       },
@@ -292,7 +349,7 @@ export default function Main({
     ) {
       return;
     }
-    const cancel = afterNavigationGuards(() => setView({ kind: "page", pageId: target }));
+    const cancel = afterNavigationGuards(() => replaceView({ kind: "page", pageId: target }));
     // An autosave changes pending state while this navigation waits. Do not
     // cancel the requested destination merely because that state changed.
     return pageFlushRef.current ? undefined : cancel;
@@ -322,8 +379,8 @@ export default function Main({
     }
     const cancel = afterNavigationGuards(() => {
       request.active = target.memoryId;
-      setViewHistory([]);
-      setView(
+      updateHistory([], []);
+      showView(
         target.memoryId
           ? { kind: "memory", sourceId: target.memoryId }
           : { kind: activeTab },
@@ -332,48 +389,27 @@ export default function Main({
     return pageFlushRef.current ? undefined : cancel;
   }, [initialMemoryId, activeTab, pageSavePending]);
 
-  // Navigate forward — pushes current view onto history stack
+  // New destinations branch from the current entry only after saving succeeds.
   const navigateTo = (next: View, onRefused?: () => void) => {
-    if (
-      view.kind === "page"
-      && next.kind === "page"
-      && view.pageId === next.pageId
-      && (view.mode ?? "edit") === (next.mode ?? "edit")
-    ) {
+    if (sameDestination(viewRef.current, next)) {
+      if (query || pendingDraftSearchQuery || mobileSearchOpen) {
+        afterNavigationGuards(dismissSearch, onRefused);
+      }
       return;
     }
     afterNavigationGuards((sourceView) => {
-      setViewHistory((prev) => [...prev, sourceView]);
-      // Allocate only after the current editor's save guard succeeds. Keeping
-      // this on the View carries identity through saved-id promotion and Back.
-      setView(next.kind === "page-draft" && next.sessionKey == null
+      updateHistory([...viewHistoryRef.current, sourceView], []);
+      // Allocate only after the current editor's save guard succeeds.
+      showView(next.kind === "page-draft" && next.sessionKey == null
         ? { ...next, sessionKey: ++nextDraftSessionRef.current }
         : next);
     }, onRefused);
   };
 
-  const navigateHome = () => {
-    afterNavigationGuards(() => {
-      setView({ kind: "pages" });
-      setActiveTab("pages");
-      setViewHistory([]);
-    });
-  };
-
-  const navigateSpaces = (create: boolean) => {
-    afterNavigationGuards(() => {
-      setView(create ? { kind: "spaces", create: true } : { kind: "spaces" });
-      setViewHistory([]);
-    });
-  };
-
-  const navigatePages = () => {
-    afterNavigationGuards(() => {
-      setView({ kind: "pages" });
-      setViewHistory([]);
-    });
-  };
-
+  const navigateHome = () => navigateTo({ kind: "pages" });
+  const navigateSpaces = (create: boolean) => navigateTo(create
+    ? { kind: "spaces", create: true } : { kind: "spaces" });
+  const navigatePages = () => navigateTo({ kind: "pages" });
   const navigateNotes = () => {
     if (activeNavigationForView(view) !== "pages" && lastNoteViewRef.current) {
       navigateTo(lastNoteViewRef.current);
@@ -382,33 +418,46 @@ export default function Main({
     }
   };
 
-  const applyBackNavigation = () => {
-    setViewHistory((prev) => {
-      if (prev.length === 0) {
-        setView({ kind: activeTab });
-        return prev;
+  const externalDetailExit = view.kind === "memory" && !!initialMemoryId
+    && !!onBackFromDetail && viewHistory.length === 0;
+  const fallbackView: View = view.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
+  const canNavigateBack = viewHistory.length > 0 || externalDetailExit || !sameDestination(view, fallbackView);
+  const applyBackNavigation = (sourceView: View) => {
+    const past = viewHistoryRef.current;
+    if (past.length === 0) {
+      if (sourceView.kind === "memory" && initialMemoryId && onBackFromDetail) {
+        onBackFromDetail();
+        return;
       }
-      const popped = prev[prev.length - 1];
-      setView(popped);
-      return prev.slice(0, -1);
+      const fallback: View = sourceView.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
+      if (sameDestination(sourceView, fallback)) return;
+      updateHistory([], [...viewForwardRef.current, sourceView]);
+      showView(fallback);
+      return;
+    }
+    updateHistory(past.slice(0, -1), [...viewForwardRef.current, sourceView]);
+    showView(past[past.length - 1]);
+  };
+  const navigateBack = () => { afterNavigationGuards(applyBackNavigation); };
+  const navigateForward = () => {
+    if (viewForwardRef.current.length === 0) return;
+    afterNavigationGuards((sourceView) => {
+      const forward = viewForwardRef.current;
+      if (!forward.length) return;
+      updateHistory([...viewHistoryRef.current, sourceView], forward.slice(0, -1));
+      showView(forward[forward.length - 1]);
     });
   };
 
-  // PageDraftEditor owns its own flush before invoking Back.
-  const navigateBack = () => {
-    afterNavigationGuards(() => applyBackNavigation());
-  };
-
-  // All published-page Back intents use the same latest-request coordinator
-  // as sidebar/search navigation. Standalone legacy editors retain their guard.
+  // Legacy standalone PageDetail confirms before calling this callback.
   const navigateBackFromPageDetail = () => {
     if (pageFlushRef.current) {
-      afterNavigationGuards(() => applyBackNavigation());
+      navigateBack();
       return;
     }
     if (pageSavePending) return;
     setPageEditDirty(false);
-    applyBackNavigation();
+    applyBackNavigation(viewRef.current);
   };
   const [sortMode, setSortMode] = useState<SortMode>("recent");
   const [stabilityFilter, setStabilityFilter] = useState<string | null>(null);
@@ -647,22 +696,31 @@ export default function Main({
   };
 
   return (
+    <WorkspaceNavigationProvider>
     <div
       className="memory-shell flex h-screen w-full flex-col"
       style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)" }}
     >
       {/* Full-width header */}
       <header
-        className="relative flex items-center gap-3 shrink-0"
+        className="memory-workspace-header relative flex items-center gap-3 shrink-0"
         style={{
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
-          paddingRight: 20,
+          paddingRight: "var(--workspace-header-right-padding, 20px)",
           background: "var(--mem-bg)",
         }}
         data-tauri-drag-region
       >
         <SidebarToggleButton collapsed={responsiveSidebar.collapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+        <div className="workspace-history-navigation" role="group" aria-label={t("main.historyNavigation")}>
+          <button type="button" aria-label={t("main.back")} title={t("main.back")}
+            className="workspace-history-button" disabled={!canNavigateBack}
+            onClick={navigateBack}><ArrowLeft size={18} aria-hidden="true" /></button>
+          <button type="button" aria-label={t("main.forward")} title={t("main.forward")}
+            className="workspace-history-button" disabled={!viewForward.length}
+            onClick={navigateForward}><ArrowRight size={18} aria-hidden="true" /></button>
+        </div>
         {(!standardSidebarMounted || !responsiveSidebar.open) && <ReviewEnvironmentBadge compact />}
         <div className="flex-1" data-tauri-drag-region />
 
@@ -688,11 +746,7 @@ export default function Main({
               expanded={activityOpen}
               onToggle={toggleActivity}
               onOpenActivity={() => {
-                afterNavigationGuards(() => {
-                  setActiveTab("activity");
-                  setView({ kind: "activity" });
-                  setViewHistory([]);
-                });
+                navigateTo({ kind: "activity" });
               }}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />
@@ -766,7 +820,7 @@ export default function Main({
           <SettingsSidebar
             collapsed={sidebarCollapsed}
             active={view.section ?? "general"}
-            onSelect={(section) => setView({ kind: "settings", section })}
+            onSelect={(section) => navigateTo({ kind: "settings", section })}
           />
         ) : view.kind === "connect-agent" ? null : (
           <Sidebar
@@ -775,12 +829,7 @@ export default function Main({
             currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
             currentSpaceId={view.kind === "space" ? view.spaceId : null}
             onEntityClick={handleEntityClick}
-            onNavigateLog={() => {
-              afterNavigationGuards(() => {
-                setView({ kind: "stream" });
-                setViewHistory([]);
-              });
-            }}
+            onNavigateLog={() => navigateTo({ kind: "stream" })}
             onNavigatePages={navigateNotes}
             onCreatePage={() => navigateTo({ kind: "page-draft", space: null })}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
@@ -802,7 +851,7 @@ export default function Main({
         )}
 
         {/* Main content */}
-        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : "memory-main-content overflow-y-auto"}`}>
+        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${view.kind === "page" && !query ? " memory-main-content--page" : ""}`}`}>
           {/* Search results overlay */}
           {query ? (
             (memoryResults.length > 0 || sourceResults.length > 0 || entityResults.length > 0 || conceptResults.length > 0) ? (
@@ -945,15 +994,14 @@ export default function Main({
               completeLabel={view.fromFirstUse ? t("firstUse.guide.seeKnowledge") : undefined}
               onComplete={(_source, result) => {
                 if (view.fromFirstUse) {
-                  setView({
+                  showView({
                     kind: "first-use",
                     showKnowledge: true,
                     batchId: result.imported > 0 ? result.batch_id : undefined,
                   });
-                  setViewHistory([{ kind: "pages" }]);
+                  updateHistory([{ kind: "pages" }], []);
                 } else {
-                  setView({ kind: "stream" });
-                  setViewHistory([]);
+                  replaceView({ kind: "stream" });
                 }
               }}
             />
@@ -985,7 +1033,7 @@ export default function Main({
             <SpacesOverview
               createIntent={view.create}
               labels={spacesOverviewLabels}
-              onCreateIntentHandled={() => setView({ kind: "spaces" })}
+              onCreateIntentHandled={() => replaceView({ kind: "spaces" })}
               onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
               onSpaceDeleted={handleSpaceDeleted}
               onSpaceRenamed={handleSpaceRenamed}
@@ -994,7 +1042,7 @@ export default function Main({
             <SpaceDetail
               copy={spaceDetailCopy}
               spaceName={view.spaceName}
-              onBack={() => setView({ kind: "spaces" })}
+              onBack={() => replaceView({ kind: "spaces" })}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onReviewAll={() => navigateTo({ kind: "distill-review" })}
               onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
@@ -1007,7 +1055,7 @@ export default function Main({
           ) : view.kind === "memory" ? (
             <MemoryDetail
               sourceId={view.sourceId}
-              onBack={initialMemoryId && onBackFromDetail && viewHistory.length === 0 ? onBackFromDetail : navigateBack}
+              onBack={navigateBack}
               onNavigateEntity={handleEntityClick}
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
@@ -1047,9 +1095,9 @@ export default function Main({
                 return false;
               }}
               onOpenExisting={(pageId) => {
-                afterPageDraftFlush(() => setView({ kind: "page", pageId }));
+                afterPageDraftFlush(() => replaceView({ kind: "page", pageId }));
               }}
-              onPublished={(pageId) => setView({ kind: "page", pageId })}
+              onPublished={(pageId) => replaceView({ kind: "page", pageId })}
               ref={pageDraftEditorRef}
               space={view.space}
             />
@@ -1087,12 +1135,12 @@ export default function Main({
                 : { kind: "settings", section: "agents" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
-                setViewHistory((previous) => [...previous, {
+                updateHistory([...viewHistoryRef.current, {
                   kind: "first-use",
                   showKnowledge: true,
                   batchId: view.batchId,
-                }]);
-                setView({ kind: "page", pageId: id });
+                }], []);
+                showView({ kind: "page", pageId: id });
               }}
             />
           ) : view.kind === "activity" ? (
@@ -1128,9 +1176,9 @@ export default function Main({
             </div>
           ) : (
             <>
-              <button onClick={() => navigateTo({ kind: "pages" })} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)] mb-3" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
+              <WorkspaceBackButton onClick={() => navigateTo({ kind: "pages" })} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)] mb-3" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-              </button>
+              </WorkspaceBackButton>
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h2 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "24px", fontWeight: 500, color: "var(--mem-text)", margin: 0 }}>{t("main.memories")}</h2>
                 <button
@@ -1167,5 +1215,6 @@ export default function Main({
       <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
       <QuickCaptureScrim />
     </div>
+    </WorkspaceNavigationProvider>
   );
 }

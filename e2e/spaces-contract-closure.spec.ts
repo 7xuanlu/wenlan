@@ -157,7 +157,7 @@ test("keeps and discards suggested Spaces through their dossier controls", async
   await page.getByTestId("space-row-space-suggested").getByRole("button", { name: "AI Workflows" }).click();
   await page.getByRole("button", { name: "Keep", exact: true }).click();
   await expect(page.getByRole("button", { name: "Keep", exact: true })).toHaveCount(0);
-  await page.locator("button.space-dossier-parent").click();
+  await page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true }).click();
 
   // Returning to the overview remounts it with the disclosure collapsed again.
   await suggestionsDisclosure.click();

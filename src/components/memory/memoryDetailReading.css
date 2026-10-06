@@ -9,6 +9,11 @@
 .memory-detail-content-first .memory-detail-header {
   width: 100%;
   margin: 0;
+  justify-content: flex-end;
+}
+
+.memory-detail-content-first .memory-detail-header:empty {
+  display: none;
 }
 
 .memory-detail-content-first .memory-detail-reading {

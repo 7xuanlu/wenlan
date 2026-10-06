@@ -38,7 +38,7 @@ test("Wiki -> Spaces -> Space -> Page -> back and Space -> Entity -> back", asyn
   await page.locator("main").getByRole("button", { name: "Open Independent research" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Independent research" })).toBeVisible();
   await expect(primaryNavigation.getByRole("button", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
-  await page.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("group", { name: "History navigation" }).getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
 
   const main = page.locator("main");
@@ -66,7 +66,7 @@ test("Wiki -> Spaces -> Space -> Page -> back and Space -> Entity -> back", asyn
 
   await page.getByRole("button", { name: /Fixture architecture/ }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
-  await page.locator("main").getByRole("button", { name: "Back", exact: true }).click();
+  await page.getByRole("group", { name: "History navigation" }).getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
 
   await openSpaceEntity(page, "Ada Lovelace");

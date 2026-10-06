@@ -1,3 +1,4 @@
+import { WorkspaceBackButton } from "../navigation/WorkspaceNavigation";
 import {
   forwardRef,
   useCallback,
@@ -340,14 +341,14 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
       <section className="page-draft-editor" aria-labelledby="page-draft-editor-heading">
         <div className="page-draft-editor-axis">
           <header className="page-draft-editor-header">
-            <button
+            <WorkspaceBackButton
               className="page-draft-back"
               disabled={locked}
               onClick={() => void requestBack()}
               type="button"
             >
               {t("pages.editor.back")}
-            </button>
+            </WorkspaceBackButton>
             <div className="page-draft-status" aria-live="polite">
               {autosave.status === "saving" && t("pages.editor.saving")}
               {autosave.status === "saved" && t("pages.editor.saved")}
@@ -482,7 +483,7 @@ export const PageDraftEditor = forwardRef<PageDraftEditorHandle, PageDraftEditor
       return (
         <div className="page-draft-load-state">
           <p>{t("pages.editor.missing")}</p>
-          <button onClick={props.onBack} type="button">{t("pages.editor.back")}</button>
+          <WorkspaceBackButton onClick={props.onBack} type="button">{t("pages.editor.back")}</WorkspaceBackButton>
         </div>
       );
     }
@@ -490,7 +491,7 @@ export const PageDraftEditor = forwardRef<PageDraftEditorHandle, PageDraftEditor
       return (
         <div className="page-draft-load-state">
           <p>{t("pages.editor.notDraft")}</p>
-          <button onClick={props.onBack} type="button">{t("pages.editor.back")}</button>
+          <WorkspaceBackButton onClick={props.onBack} type="button">{t("pages.editor.back")}</WorkspaceBackButton>
         </div>
       );
     }
