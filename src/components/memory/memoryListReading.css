@@ -1,0 +1,135 @@
+/* Captured memories read as notes; the action popover is the only boxed surface. */
+.memory-list-rows:has(.memory-list-reading-row) {
+  gap: 12px;
+}
+
+.memory-list-row.memory-list-reading-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  border: 0;
+  border-radius: 6px;
+  box-shadow: none;
+  background: transparent;
+  padding: 18px 16px;
+  transition: background-color 150ms ease;
+}
+
+.memory-list-row.memory-list-reading-row:hover,
+.memory-list-row.memory-list-reading-row:focus-within {
+  background: var(--mem-hover);
+}
+
+.memory-list-row.memory-list-reading-row:focus-within {
+  z-index: 2;
+}
+
+.memory-list-row.memory-list-reading-row:focus-visible {
+  background: var(--mem-hover);
+  outline: 2px solid color-mix(in srgb, var(--mem-accent-page) 45%, transparent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+
+.memory-list-reading-row .memory-list-row-copy {
+  gap: 9px;
+}
+
+.memory-list-reading-row .memory-list-row-content {
+  display: -webkit-box;
+  width: 100%;
+  max-width: 88ch;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mem-text);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: 15px;
+  font-weight: 400;
+  line-height: 1.7;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+.memory-list-reading-row .memory-list-row-content:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mem-accent-page) 45%, transparent);
+  outline-offset: 3px;
+}
+
+.memory-list-reading-row .memory-list-row-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-meta);
+  line-height: 1.5;
+}
+
+.memory-list-reading-row .memory-list-row-archived {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.memory-list-reading-row .memory-list-reading-actions {
+  position: relative;
+  display: block;
+  justify-self: end;
+}
+
+.memory-list-reading-row .memory-list-reading-actions .memory-list-row-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mem-text-tertiary);
+}
+
+.memory-list-reading-row .memory-list-reading-actions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mem-accent-page) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.memory-list-reading-row .memory-list-row-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 5px);
+  right: 0;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  min-width: 170px;
+  max-width: min(280px, calc(100vw - 48px));
+  padding: 5px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-detail-surface-raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+}
+
+.memory-list-reading-row .memory-list-row-menu button {
+  border: 0;
+  padding: 9px 10px;
+  font-weight: 400;
+  text-align: left;
+}
+
+.memory-list-reading-row .memory-list-row-menu .memory-list-row-menu-delete {
+  color: var(--mem-danger, #b94c47);
+}
+
+@media (max-width: 520px) {
+  .memory-list-row.memory-list-reading-row {
+    gap: 12px;
+    padding: 16px 10px;
+  }
+}

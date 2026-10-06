@@ -514,18 +514,65 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
     const view = editorViewFromTextbox(textbox);
-    act(() => replaceDocument(view, "A new autosaved body.\n"));
-    await waitFor(() => expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
-    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    // Control the 650 ms debounce so CI wall-clock load cannot decide its boundary.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      act(() => replaceDocument(view, "A new autosaved body.\n"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(649);
+      });
+      expect(tauriMocks.updatePage).not.toHaveBeenCalled();
 
-    act(() => pressKey(textbox, "z", { ctrlKey: true }));
-    expect(view.state.doc.toString()).toBe(PAGE.content);
-    await waitFor(() => expect(tauriMocks.updatePage).toHaveBeenCalledTimes(2));
-    expect(tauriMocks.updatePage.mock.calls[1][0]).toEqual(expect.objectContaining({
-      content: PAGE.content, expectedVersion: PAGE.version + 1,
-    }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(tauriMocks.updatePage).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          id: PAGE.id,
+          content: "A new autosaved body.\n",
+          expectedVersion: PAGE.version,
+        }),
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("Saved");
+      expect(client.getQueryData<typeof PAGE>(["page", PAGE.id])).toEqual(
+        expect.objectContaining({
+          content: "A new autosaved body.\n",
+          version: PAGE.version + 1,
+        }),
+      );
+      expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+
+      act(() => pressKey(textbox, "z", { ctrlKey: true }));
+      expect(view.state.doc.toString()).toBe(PAGE.content);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(649);
+      });
+      expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(tauriMocks.updatePage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          id: PAGE.id,
+          content: PAGE.content,
+          expectedVersion: PAGE.version + 1,
+        }),
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("Saved");
+      expect(client.getQueryData<typeof PAGE>(["page", PAGE.id])).toEqual(
+        expect.objectContaining({
+          content: PAGE.content,
+          version: PAGE.version + 2,
+        }),
+      );
+      expect(tauriMocks.updatePage).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("registered flush drains newer input through the confirmed canonical version", async () => {
