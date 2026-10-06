@@ -86,11 +86,12 @@ vi.mock("./lib/bootRetryPolicy", async (importOriginal) => {
 // wizard-vs-home branching, not Main's or SetupWizard's internals.
 vi.mock("./components/memory/Main", () => ({
   default: (props: {
+    initialView?: { kind: string; section?: string };
     onRegisterQuitGuard?: (guard: (() => Promise<boolean>) | null) => void;
   }) => {
     props.onRegisterQuitGuard?.(quitGuardMock);
     return (
-      <div data-testid="home-main">
+      <div data-testid="home-main" data-initial-view={props.initialView?.kind ?? "pages"} data-initial-section={props.initialView?.section}>
         <input aria-label="Draft title" />
       </div>
     );
@@ -101,7 +102,7 @@ vi.mock("./components/SetupWizard", () => ({
   // Mirrors the Done step's contract with onComplete: await it and keep the
   // wizard on a rejection (the real step shows an inline alert).
   default: (props: {
-    onComplete: () => void | Promise<void>;
+    onComplete: (destination?: "sources" | "connect-agent" | "connections") => void | Promise<void>;
     daemonGateErrored?: boolean;
   }) => (
     <div data-testid="setup-wizard" data-gate-errored={String(!!props.daemonGateErrored)}>
@@ -116,6 +117,13 @@ vi.mock("./components/SetupWizard", () => ({
       >
         Finish setup
       </button>
+      {(["sources", "connect-agent", "connections"] as const).map((destination) => (
+        <button key={destination} type="button" onClick={() => {
+          void Promise.resolve().then(() => props.onComplete(destination)).catch(() => {});
+        }}>
+          {destination}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -413,6 +421,37 @@ describe("App - first-run wizard gate", () => {
         Reflect.deleteProperty(document, "visibilityState");
       }
     }
+  });
+
+  it.each([
+    ["sources", "sources", undefined],
+    ["connect-agent", "connect-agent", undefined],
+    ["connections", "settings", "agents"],
+  ] as const)("opens the chosen %s destination only after completion saves", async (destination, kind, section) => {
+    vi.mocked(shouldShowWizard).mockResolvedValueOnce(true).mockResolvedValue(false);
+    let resolve!: () => void;
+    vi.mocked(setSetupCompleted).mockReset().mockImplementation(() => new Promise<void>((done) => { resolve = done; }));
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: destination }));
+    await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledWith(true));
+    expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
+    expect(shouldShowWizard).toHaveBeenCalledTimes(1);
+    await act(async () => resolve());
+    const main = await screen.findByTestId("home-main");
+    expect(main).toHaveAttribute("data-initial-view", kind);
+    if (section) expect(main).toHaveAttribute("data-initial-section", section);
+    vi.mocked(setSetupCompleted).mockReset().mockResolvedValue(undefined);
+  });
+
+  it("does not retain a rejected sample destination when the user then opens notes", async () => {
+    vi.mocked(shouldShowWizard).mockResolvedValueOnce(true).mockResolvedValue(false);
+    vi.mocked(setSetupCompleted).mockReset().mockRejectedValueOnce(new Error("save failed")).mockResolvedValue(undefined);
+    renderApp();
+    fireEvent.click(await screen.findByRole("button", { name: "connections" }));
+    await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId("home-main")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Finish setup" }));
+    expect(await screen.findByTestId("home-main")).toHaveAttribute("data-initial-view", "pages");
   });
 
   // A failed setSetupCompleted must leave the gate alone. Invalidating it would

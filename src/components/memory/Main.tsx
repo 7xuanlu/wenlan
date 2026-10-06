@@ -62,6 +62,7 @@ import { useViewScroll } from "./navigation/useViewScroll";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
+  initialView?: View;
   initialMemoryId?: string | null;
   initialPageId?: string | null;
   onBackFromDetail?: () => void;
@@ -90,6 +91,7 @@ function scrollDestinationKey(view: View): string {
 }
 
 export default function Main({
+  initialView,
   initialMemoryId,
   initialPageId,
   onBackFromDetail,
@@ -139,7 +141,7 @@ export default function Main({
   const [view, setView] = useState<View>(
     initialMemoryId ? { kind: "memory", sourceId: initialMemoryId }
     : initialPageId ? { kind: "page", pageId: initialPageId }
-    : { kind: "pages" },
+    : initialView ?? { kind: "pages" },
   );
   const viewRef = useRef(view);
   viewRef.current = view;
