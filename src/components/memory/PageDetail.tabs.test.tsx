@@ -127,9 +127,9 @@ describe("PageDetail canvas toggle", () => {
     renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    // Reading is the default, so it gets no control of its own.
+    // Both views remain explicit; Note is selected initially.
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    expect(screen.queryByRole("button", { name: "Read" })).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabNote") })).toHaveAttribute("aria-pressed", "true");
     expect(
       screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }).getAttribute("aria-pressed"),
     ).toBe("false");
@@ -149,11 +149,11 @@ describe("PageDetail canvas toggle", () => {
     expect(screen.queryByRole("button", { name: "Page info" })).toBeNull();
     expect(screen.queryByText("More prose here.")).toBeNull();
     expect(
-      screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }).getAttribute("aria-pressed"),
+      screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
 
-  it("goes back to reading when the same control is pressed again", async () => {
+  it("returns through Note while clicking the selected map leaves its view unchanged", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
 
@@ -161,9 +161,9 @@ describe("PageDetail canvas toggle", () => {
     await user.click(toggle);
     await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
 
-    // Without a Read tab, this control is the only way back — if it does not
-    // toggle, the canvas is a trap.
     await user.click(toggle);
+    expect(screen.getByRole("region", { name: "Canvas for libSQL Architecture" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }));
     expect(
       screen.queryByRole("region", { name: "Canvas for libSQL Architecture" }),
     ).toBeNull();
@@ -184,15 +184,16 @@ describe("PageDetail canvas toggle", () => {
     expect(screen.getAllByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toHaveLength(1);
   });
 
-  it("sits with the other page controls, not in a band of its own", async () => {
+  it("keeps the view switch above the document and Page info at the workspace edge", async () => {
     renderDetail();
     await screen.findByText("libSQL Architecture");
 
     const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
     const cluster = toggle.closest(".page-detail-view-controls");
     expect(cluster).toBeTruthy();
-    // The controls it was asked to join.
-    expect(cluster?.querySelector('[title="Page info"]')).toBeTruthy();
+    expect(toggle.closest(".page-detail-document")).toBeNull();
+    expect(cluster?.querySelector('[title="Page info"]')).toBeNull();
+    expect(toggle.closest(".page-detail-top-row")?.querySelector('[title="Page info"]')).toBeTruthy();
   });
 
   it("resolves the root node label from the page title it already loaded", async () => {

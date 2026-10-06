@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -716,7 +717,7 @@ export default function DistillReviewPanel({
       }}
     >
       <div className="flex items-center mb-5">
-        <button
+        <WorkspaceBackButton
           type="button"
           onClick={onBack}
           aria-label="Back"
@@ -732,7 +733,7 @@ export default function DistillReviewPanel({
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M19 12H5M12 19l-7-7 7-7" />
           </svg>
-        </button>
+        </WorkspaceBackButton>
       </div>
 
       <div className="flex items-start justify-between gap-4">

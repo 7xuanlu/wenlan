@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -1332,7 +1333,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
         }}
       >
         {onBack && (
-          <button
+          <WorkspaceBackButton
             type="button"
             onClick={onBack}
             className="flex items-center gap-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
@@ -1348,7 +1349,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
           >
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
             {t("main.back")}
-          </button>
+          </WorkspaceBackButton>
         )}
         <div style={{ position: "relative", flex: "0 1 300px", minWidth: 250 }}>
           <div
