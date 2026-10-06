@@ -795,7 +795,7 @@ pub async fn open_file(path: String) -> Result<(), String> {
 /// points at a local file points at one of these, because that is all that
 /// gets indexed — so this can be an allowlist rather than a denylist of
 /// everything the OS might run.
-const INDEXED_DOCUMENT_SUFFIXES: [&str; 3] = ["md", "txt", "pdf"];
+const INDEXED_DOCUMENT_SUFFIXES: [&str; 4] = ["md", "txt", "pdf", "docx"];
 
 /// `Ok(())` when `open_search_result` may hand `target` to the OS.
 ///
@@ -1069,7 +1069,7 @@ mod open_target_tests {
     #[test]
     fn an_indexed_document_is_allowed() {
         let tmp = tempfile::tempdir().unwrap();
-        for name in ["note.md", "note.txt", "note.pdf"] {
+        for name in ["note.md", "note.txt", "note.pdf", "note.docx", "note.DOCX"] {
             let path = tmp.path().join(name);
             std::fs::write(&path, "hi").unwrap();
             assert!(search_result_allowed(path.to_str().unwrap()), "{name}");

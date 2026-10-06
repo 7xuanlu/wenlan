@@ -257,6 +257,114 @@ async fn chunk_count(db: &MemoryDB, doc_source_id: &str) -> usize {
         .len()
 }
 
+#[tokio::test]
+async fn docx_preparation_preserves_source_and_unchanged_sync() {
+    use std::io::Write;
+    use wenlan_core::sources::directory::{file_to_documents, FileOutcome};
+
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = MemoryDB::new(db_dir.path(), Arc::new(NoopEmitter))
+        .await
+        .unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path();
+    let path = root.join("研究報告.DOCX");
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file(
+        "word/document.xml",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Wenlan document provenance preserves original research context and deterministic source identity.</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Evidence</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>DOCX research table remains searchable.</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#).unwrap();
+    zip.finish().unwrap();
+    let raw = match file_to_documents(SOURCE_ID, &path, Some(root)) {
+        FileOutcome::Ingested(docs) => docs,
+        outcome => panic!("valid DOCX must be ingestible: {outcome:?}"),
+    };
+    assert_eq!(raw.len(), 1);
+    assert_eq!(raw[0].title, "研究報告");
+    assert_eq!(raw[0].metadata["filename"], "研究報告.DOCX");
+    assert_eq!(raw[0].metadata["path"], "研究報告.DOCX");
+    assert_eq!(raw[0].metadata["extension"], "docx");
+    assert_eq!(raw[0].source_id, doc_id(root, &path));
+    assert_eq!(
+        raw[0].content_hash.as_deref(),
+        Some(sha256_hex(&std::fs::read(&path).unwrap()).as_str())
+    );
+    assert!(raw[0].content.contains("Evidence\tDOCX research table"));
+
+    assert_eq!(directory_sync(&db, root).await.enqueued, 1);
+    let prompts = PromptRegistry::default();
+    assert_eq!(drain_queue(&db, root, &prompts, 1).await.len(), 1);
+    let source = doc_id(root, &path);
+    let chunks = db
+        .get_memories_by_source_id("memory", &source)
+        .await
+        .unwrap();
+    assert!(!chunks.is_empty());
+    assert!(chunks
+        .iter()
+        .any(|chunk| chunk.content.contains("research table")));
+    assert_hits(
+        &db,
+        "research provenance",
+        &source,
+        "DOCX text is searchable",
+    )
+    .await;
+    let ids: HashSet<_> = chunks.iter().map(|chunk| chunk.id.clone()).collect();
+
+    let repeat = directory_sync(&db, root).await;
+    assert_eq!(repeat.enqueued, 0);
+    assert_eq!(repeat.skipped, 1);
+    assert!(drain_queue(&db, root, &prompts, 0).await.is_empty());
+    let repeated = db
+        .get_memories_by_source_id("memory", &source)
+        .await
+        .unwrap();
+    assert_eq!(ids, repeated.iter().map(|chunk| chunk.id.clone()).collect());
+    assert_eq!(
+        db.get_queue_entry(SOURCE_ID, &path.to_string_lossy())
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "waiting_for_provider"
+    );
+
+    // Re-read a changed package at the same path: retain source identity while
+    // replacing the original body rather than adding duplicate source chunks.
+    let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    zip.start_file(
+        "word/document.xml",
+        zip::write::SimpleFileOptions::default(),
+    )
+    .unwrap();
+    zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Updated findings describe sustainable infrastructure decisions with replacement evidence and traceable research context.</w:t></w:r></w:p></w:body></w:document>"#).unwrap();
+    zip.finish().unwrap();
+    assert_eq!(directory_sync(&db, root).await.enqueued, 1);
+    assert_eq!(drain_queue(&db, root, &prompts, 1).await.len(), 1);
+    let updated = db
+        .get_memories_by_source_id("memory", &source)
+        .await
+        .unwrap();
+    assert!(!updated.is_empty());
+    assert!(updated
+        .iter()
+        .any(|chunk| chunk.content.contains("Updated findings")));
+    assert!(updated
+        .iter()
+        .all(|chunk| !chunk.content.contains("research table")));
+    assert_hits(
+        &db,
+        "sustainable infrastructure",
+        &source,
+        "changed DOCX replaces searchable body",
+    )
+    .await;
+    assert_eq!(directory_sync(&db, root).await.enqueued, 0);
+}
+
 // ── the end-to-end test ──────────────────────────────────────────────────────
 
 #[tokio::test]

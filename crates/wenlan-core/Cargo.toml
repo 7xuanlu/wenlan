@@ -34,6 +34,7 @@ log = { workspace = true }
 uuid = { workspace = true }
 pdf-extract = { workspace = true }
 zip = { workspace = true }
+quick-xml = "0.41"
 
 # On-device LLM inference (phase 3b)
 hf-hub = { workspace = true }

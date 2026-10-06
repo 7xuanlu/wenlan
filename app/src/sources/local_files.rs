@@ -7,6 +7,7 @@ use async_trait::async_trait;
 use std::any::Any;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use wenlan_core::sources::docx::{read_docx_file, MAX_DOCX_SIZE};
 use wenlan_types::sources::{RawDocument, SourceStatus};
 
 const DOCUMENT_EXTENSIONS: &[&str] = &["txt", "md", "csv", "log", "pdf", "docx", "rtf"];
@@ -31,8 +32,9 @@ const SKIP_DIRS: &[&str] = &[
 
 fn max_file_size(ext: &str) -> u64 {
     match ext {
-        "pdf" | "docx" => 10_485_760, // 10 MB
-        _ => 1_048_576,               // 1 MB
+        "docx" => MAX_DOCX_SIZE,
+        "pdf" => 10_485_760, // 10 MB
+        _ => 1_048_576,      // 1 MB
     }
 }
 
@@ -131,13 +133,10 @@ impl LocalFilesSource {
                 })?;
                 extract_pdf_text(&bytes, path)?
             }
-            "docx" => {
-                let bytes = std::fs::read(path).map_err(|e| AppError::Source {
-                    source_name: "local_files".to_string(),
-                    message: format!("Failed to read {}: {}", path.display(), e),
-                })?;
-                extract_docx_text(&bytes, path)?
-            }
+            "docx" => read_docx_file(path).map_err(|e| AppError::Source {
+                source_name: "local_files".to_string(),
+                message: format!("Failed to read DOCX {}: {}", path.display(), e),
+            })?,
             "rtf" => {
                 let bytes = std::fs::read(path).map_err(|e| AppError::Source {
                     source_name: "local_files".to_string(),
@@ -223,47 +222,6 @@ fn extract_pdf_text(bytes: &[u8], path: &Path) -> Result<String, AppError> {
             Ok(String::new())
         }
     }
-}
-
-/// Extract text from a DOCX file (ZIP of XML).
-fn extract_docx_text(bytes: &[u8], path: &Path) -> Result<String, AppError> {
-    let cursor = std::io::Cursor::new(bytes);
-    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| AppError::Source {
-        source_name: "local_files".to_string(),
-        message: format!("Failed to read DOCX {}: {}", path.display(), e),
-    })?;
-
-    let mut xml = String::new();
-    {
-        let mut file = archive
-            .by_name("word/document.xml")
-            .map_err(|e| AppError::Source {
-                source_name: "local_files".to_string(),
-                message: format!("No document.xml in DOCX {}: {}", path.display(), e),
-            })?;
-        std::io::Read::read_to_string(&mut file, &mut xml).map_err(|e| AppError::Source {
-            source_name: "local_files".to_string(),
-            message: format!("Failed to read document.xml from {}: {}", path.display(), e),
-        })?;
-    }
-
-    let mut paragraphs = Vec::new();
-    for para_xml in xml.split("</w:p>") {
-        let mut para_text = String::new();
-        for segment in para_xml.split("<w:t") {
-            if let Some(gt_pos) = segment.find('>') {
-                let after_gt = &segment[gt_pos + 1..];
-                if let Some(end_pos) = after_gt.find("</w:t>") {
-                    para_text.push_str(&after_gt[..end_pos]);
-                }
-            }
-        }
-        if !para_text.is_empty() {
-            paragraphs.push(para_text);
-        }
-    }
-
-    Ok(paragraphs.join("\n"))
 }
 
 /// Extract text from an RTF file using a simple state-machine stripper.
@@ -410,5 +368,116 @@ impl DataSource for LocalFilesSource {
 
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppError, LocalFilesSource, MAX_DOCX_SIZE};
+    use std::io::Write;
+    use std::path::Path;
+
+    fn write_docx(path: &Path, body: &str) {
+        let file = std::fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, xml) in [
+            (
+                "[Content_Types].xml",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+            ),
+            (
+                "_rels/.rels",
+                r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#,
+            ),
+        ] {
+            archive
+                .start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(xml.as_bytes()).unwrap();
+        }
+        archive
+            .start_file(
+                "word/document.xml",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        write!(
+            archive,
+            r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>"#
+        )
+        .unwrap();
+        archive.finish().unwrap();
+    }
+
+    fn assert_docx_source_error(path: &Path) -> String {
+        match LocalFilesSource::read_file(path).unwrap_err() {
+            AppError::Source {
+                source_name,
+                message,
+            } => {
+                assert_eq!(source_name, "local_files");
+                assert!(message.contains(path.to_str().unwrap()), "{message}");
+                message
+            }
+            error => panic!("Expected a local-files source error, got {error}"),
+        }
+    }
+
+    #[test]
+    fn docx_text_and_source_metadata_are_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("中文筆記.DOCX");
+        write_docx(
+            &path,
+            r#"<w:p><w:r><w:t>中文 &amp; &lt;資料&gt;</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>欄一</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>欄二</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        );
+
+        assert!(LocalFilesSource::is_indexable(&path));
+        assert_eq!(
+            LocalFilesSource::scan_directory(tmp.path()),
+            vec![path.clone()]
+        );
+        let document = LocalFilesSource::read_file(&path).unwrap();
+
+        assert_eq!(document.content, "中文 & <資料>\n欄一\t欄二");
+        assert_eq!(document.source, "local_files");
+        assert_eq!(document.source_id, path.to_string_lossy());
+        assert_eq!(document.title, "中文筆記.DOCX");
+        assert_eq!(document.url, Some(format!("file://{}", path.display())));
+        assert_eq!(document.metadata.get("extension").unwrap(), "DOCX");
+        assert!(document.last_modified > 0);
+    }
+
+    #[test]
+    fn corrupt_docx_is_a_source_error_with_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("corrupt.docx");
+        std::fs::write(&path, b"not a ZIP archive").unwrap();
+
+        let message = assert_docx_source_error(&path);
+        assert!(message.contains("invalid DOCX ZIP"), "{message}");
+    }
+
+    #[test]
+    fn empty_docx_is_a_source_error_with_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("empty.docx");
+        write_docx(&path, "<w:p><w:r><w:t> </w:t></w:r></w:p>");
+
+        let message = assert_docx_source_error(&path);
+        assert!(message.contains("no extractable"), "{message}");
+    }
+
+    #[test]
+    fn oversized_docx_is_excluded_from_scan_and_direct_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("oversized.docx");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_DOCX_SIZE + 1).unwrap();
+
+        assert!(!LocalFilesSource::is_indexable(&path));
+        assert!(LocalFilesSource::scan_directory(tmp.path()).is_empty());
+        let message = assert_docx_source_error(&path);
+        assert!(message.contains("10 MiB file size"), "{message}");
     }
 }
