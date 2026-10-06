@@ -127,3 +127,22 @@ it("tabs through open disclosure actions and skips collapsed descendants", async
   await user.tab({ shift: true });
   expect(screen.getByText("Source", { exact: true })).toHaveFocus();
 });
+
+it("lets nested map editors and menus consume Escape before closing the panel", () => {
+  const close = vi.fn();
+  render(<PageInfoDrawer open variant="canvas" title="Mind map" closeLabel="Close" onClose={close}>
+    <input aria-label="Map label" onKeyDown={(event) => {
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); }
+    }} />
+    <div role="menu" onKeyDown={(event) => { if (event.key === "Escape") event.preventDefault(); }}>
+      <button role="menuitem">Map action</button>
+    </div>
+  </PageInfoDrawer>);
+  fireEvent.keyDown(screen.getByRole("textbox", { name: "Map label" }), { key: "Escape" });
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByRole("menuitem", { name: "Map action" }), { key: "Escape" });
+  expect(close).not.toHaveBeenCalled();
+  fireEvent.keyDown(screen.getByRole("button", { name: "Close" }), { key: "Escape" });
+  expect(close).toHaveBeenCalledOnce();
+  expect(screen.getByRole("dialog", { name: "Mind map" })).toHaveClass("page-info-drawer--canvas");
+});

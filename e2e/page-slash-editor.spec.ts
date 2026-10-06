@@ -144,6 +144,9 @@ async function typedMenu(page: Page, editor: Locator): Promise<Locator> {
 
 test("keyboard slash selection replaces one slash and autosaves on the confirmed CAS version", async ({ page }) => {
   const { controller, editor } = await openEditor(page);
+  // Keep the parked pointer away from the popup: pointerenter intentionally
+  // changes the active item, while this scenario exercises keyboard selection.
+  await page.mouse.move(0, 0);
   const menu = await typedMenu(page, editor);
   await expectAutosaved(page, controller, `${INITIAL_SOURCE}/`);
   expect(updateCalls(controller)).toHaveLength(1);

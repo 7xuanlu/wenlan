@@ -7,6 +7,7 @@ import "./PageInfoDrawer.css";
 interface PageInfoDrawerProps {
   open: boolean;
   docked?: boolean;
+  variant?: "info" | "canvas";
   onClose: () => void;
   title: string;
   children: ReactNode;
@@ -35,7 +36,7 @@ function focusableControls(panel: HTMLElement): HTMLElement[] {
   });
 }
 
-export default function PageInfoDrawer({ open, onClose, title, children, closeLabel, docked = false }: PageInfoDrawerProps) {
+export default function PageInfoDrawer({ open, onClose, title, children, closeLabel, docked = false, variant = "info" }: PageInfoDrawerProps) {
   const [wide, setWide] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1100px)").matches);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -58,7 +59,11 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (nonModal && !(event.target instanceof Node && panelRef.current?.contains(event.target))) return;
-      if (event.key === "Escape" && !event.isComposing) {
+      // Map node editors, context menus, and shortcut sheets get the first
+      // chance to handle Escape. A document capture listener closes the pane
+      // before those nested controls can cancel their own operation.
+      if (event.defaultPrevented || event.isComposing) return;
+      if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
         onCloseRef.current();
@@ -81,10 +86,10 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
     const containFocus = (event: FocusEvent) => {
       if (event.target instanceof Node && !panelRef.current?.contains(event.target)) closeRef.current?.focus();
     };
-    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("keydown", onKeyDown);
     if (!nonModal) document.addEventListener("focusin", containFocus);
     return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("focusin", containFocus);
       if (trigger?.isConnected && (!nonModal || document.activeElement === document.body || panelRef.current?.contains(document.activeElement))) trigger.focus();
     };
@@ -99,7 +104,7 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
       <aside
         aria-labelledby={titleId}
         aria-modal={nonModal ? undefined : true}
-        className="page-info-drawer"
+        className={`page-info-drawer${variant === "canvas" ? " page-info-drawer--canvas" : ""}`}
         ref={panelRef}
         role={nonModal ? "complementary" : "dialog"}
       >

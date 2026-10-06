@@ -1,0 +1,23 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Document tools belong to the title. No independent bar above the note. */
+.page-document-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+}
+.page-document-title-row .page-detail-title { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.page-document-tools { display: flex; flex: 0 0 auto; align-items: center; gap: 2px; }
+.page-document-tools .page-detail-actions-menu { z-index: 40; }
+.page-document-editor { position: relative; min-width: 0; }
+.page-document-editor--title > .page-document-tools { position: absolute; top: 0; right: 0; z-index: 20; }
+/* Only the first title line reserves space: the rest of the note retains its
+   full width, and the markdown title remains part of the editor's document. */
+.page-detail .page-document-editor--title .cm-content > .cm-line:first-child { padding-right: calc(2 * var(--mem-icon-action-size) + 12px); }
+.page-detail .page-document-editor--title textarea { padding-right: calc(2 * var(--mem-icon-action-size) + 12px); }
+@media (min-width: 1100px) {
+  .page-detail.document-context-host.page-document-map-open { padding-right: 520px; }
+}
+/* These actions no longer have a duplicate desktop toolbar. */
+.page-document-tools .page-detail-actions-menu .page-detail-mobile-menu-item { display: block; }

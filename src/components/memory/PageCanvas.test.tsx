@@ -287,6 +287,60 @@ describe("PageCanvas", () => {
     expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
   });
 
+  it("leaves selected nodes untouched by neighboring page menus and note shortcuts", async () => {
+    const { getPageMap, deletePageMapNode, patchPageMapNode } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (deletePageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const { user } = renderCanvas();
+    await user.click(await screen.findByRole("button", { name: "select n_sec" }));
+    const node = screen.getByTestId("react-flow").querySelector('[data-node-id="n_sec"]')!;
+    const position = { x: node.getAttribute("data-x"), y: node.getAttribute("data-y") };
+    render(<><div role="menu"><button role="menuitem">Page information</button></div><p tabIndex={0}>Readable center note</p></>);
+    const menuItem = screen.getByRole("menuitem", { name: "Page information" });
+    menuItem.focus();
+    for (const key of ["ArrowDown", "Delete", "Backspace", "F2", "Enter", "Tab", "Escape"]) {
+      expect(fireEvent.keyDown(menuItem, { key })).toBe(true);
+    }
+    const note = screen.getByText("Readable center note");
+    note.focus();
+    expect(fireEvent.keyDown(note, { key: "a", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(note, { key: "a", ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(document.body, { key: "Delete" })).toBe(true);
+    expect(node).toHaveAttribute("data-x", position.x);
+    expect(node).toHaveAttribute("data-y", position.y);
+    expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
+    expect(deletePageMapNode).not.toHaveBeenCalled();
+    expect(patchPageMapNode).not.toHaveBeenCalled();
+
+    // Blank map pointer reentry restores surface focus and the same selection.
+    fireEvent.pointerDown(screen.getByTestId("react-flow"));
+    expect(surface()).toHaveFocus();
+    await user.keyboard("{ArrowRight}");
+    expect(node).toHaveAttribute("data-x", String(Number(position.x) + 8));
+    await user.keyboard("{Delete}");
+    await waitFor(() => expect(deletePageMapNode).toHaveBeenCalledWith("p1", "n_sec", { base_revision: 7 }));
+  });
+
+  it("preserves native control focus on pointer reentry and ignores composing map keys", async () => {
+    const { getPageMap, deletePageMapNode } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    const { user } = renderCanvas();
+    await user.click(await screen.findByRole("button", { name: "select n_sec" }));
+    const control = screen.getByRole("button", { name: "Improve" });
+    control.focus();
+    fireEvent.pointerDown(control);
+    expect(control).toHaveFocus();
+    expect(fireEvent.keyDown(surface(), { key: "Delete", isComposing: true })).toBe(true);
+    expect(deletePageMapNode).not.toHaveBeenCalled();
+    fireEvent.keyDown(surface(), { key: "F2" });
+    const field = await screen.findByRole("textbox", { name: "Section name" });
+    field.focus();
+    fireEvent.pointerDown(field);
+    expect(field).toHaveFocus();
+    expect(fireEvent.keyDown(field, { key: "Delete" })).toBe(true);
+    expect(deletePageMapNode).not.toHaveBeenCalled();
+  });
+
   it("renders one node per live map node, resolving labels the daemon left null", async () => {
     const { getPageMap } = await tauri();
     (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());

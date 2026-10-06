@@ -226,14 +226,26 @@ test.describe("canvas Escape", () => {
     await onCanvas(page);
   });
 
-  test("leaves the page once the canvas has nothing left to close", async ({ page }) => {
+  test("closes the map pane before the editor and page navigation", async ({ page }) => {
     await installTauriMock(page, { locale: "en", rawActions: [] });
     await openCanvas(page);
 
     await surface(page).click({ position: { x: 8, y: 8 } });
     await page.keyboard.press("Escape");
 
-    // Escape still means "back" — it just has to wait its turn.
+    // The map is a document tool: its last Escape returns to the same note.
+    await expect(page.getByRole("region", { name: "Canvas for Fixture architecture" })).toHaveCount(0);
+    await expect(page.locator(".page-detail")).toBeVisible();
+    const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
+    await expect(editor).toBeEditable();
+    await expect(editor).toBeFocused();
+    await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toHaveCount(0);
+
+    // Writing retains its own Escape/flush layer before page navigation.
+    await editor.press("Escape");
+    await expect(editor).toHaveCount(0);
+    await expect(page.getByTestId("page-document-reading")).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
   });
 });

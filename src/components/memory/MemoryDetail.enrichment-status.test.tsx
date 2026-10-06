@@ -97,7 +97,8 @@ describe("MemoryDetail enrichment status", () => {
 
     expect(await screen.findByText("A memory")).toBeInTheDocument();
     expect(screen.queryByText(/complete/i)).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await waitFor(() => {
       expect(screen.getByText(/enrichment/i)).toBeInTheDocument();
       expect(screen.getByText(/complete/i)).toBeInTheDocument();
@@ -233,7 +234,8 @@ describe("MemoryDetail enrichment status", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Linked topic" }));
     expect(onNavigateEntity).toHaveBeenCalledWith("linked-entity");
     expect(screen.queryByRole("dialog")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await userEvent.click(screen.getByText("Similar memories", { selector: "summary" }));
     await userEvent.click(screen.getByRole("button", { name: /related context appears here/i }));
     expect(onNavigateMemory).toHaveBeenCalledWith("mem-2");
@@ -278,7 +280,8 @@ describe("MemoryDetail enrichment status", () => {
     const callbacks = { onNavigateMemory: vi.fn(), onNavigatePage: vi.fn(), onNavigateEntity: vi.fn() };
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} {...callbacks} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await userEvent.click(screen.getByRole("button", { name: label }));
     expect(callbacks[callback]).toHaveBeenCalledWith(id);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -332,7 +335,8 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await user.click(await screen.findByText("Similar memories", { selector: "summary" }));
     expect(screen.queryByText("Entity 4")).toBeNull();
     expect(tauri.listEntities).not.toHaveBeenCalled();
@@ -398,7 +402,8 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     expect(await screen.findByText(/revision history/i)).toBeVisible();
     expect(screen.getByText(/clarified wording/i)).toBeInTheDocument();
   });
@@ -474,7 +479,9 @@ describe("MemoryDetail enrichment status", () => {
 
     expect(await screen.findByText("A memory")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Memory actions" }));
+
+    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await user.click(screen.getByTitle("Edit tags"));
     await user.type(screen.getByPlaceholderText("Add a tag..."), "reviewed{enter}");
 
@@ -526,7 +533,8 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     expect(await screen.findByText(/revision history/i)).toBeVisible();
     expect(screen.getByText(/clarified wording/i)).toBeInTheDocument();
     await waitFor(() => {
@@ -544,7 +552,8 @@ describe("MemoryDetail enrichment status", () => {
 
     const content = await screen.findByText("A memory");
     expect(screen.queryByText("Source", { selector: "summary" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
     const panel = screen.getByRole("dialog", { name: "Memory context" });
     const sourceSummary = within(panel).getByText("Source", { selector: "summary" });
     const sourceDisclosure = sourceSummary.closest("details");
@@ -564,7 +573,8 @@ describe("MemoryDetail enrichment status", () => {
     vi.mocked(tauri.getEnrichmentStatus).mockResolvedValue({ source_id: "mem-1", summary: "  ", steps: [] });
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     expect(screen.queryByText("Enrichment")).toBeNull();
   });
 
@@ -646,7 +656,8 @@ describe("MemoryDetail enrichment status", () => {
     vi.mocked(tauri.updateMemory).mockResolvedValue();
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Memory actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await user.click(screen.getByRole("button", { name: /fact/i }));
     await user.click(screen.getByRole("button", { name: "Preference" }));
     await waitFor(() => expect(tauri.reclassifyMemory).toHaveBeenCalledWith("mem-1", "preference"));
@@ -689,7 +700,8 @@ describe("MemoryDetail enrichment status", () => {
     } : { ...memory, source_id: id, content: "Exact recap source" });
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={onNavigateMemory} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await userEvent.click(await screen.findByText("Source memories", { selector: "summary" }));
     expect(screen.queryByText("Similar memories")).toBeNull();
     expect(tauri.search).not.toHaveBeenCalled();
@@ -705,14 +717,16 @@ describe("MemoryDetail enrichment status", () => {
     const props = { onBack: vi.fn(), onNavigateEntity: vi.fn(), onNavigateMemory: vi.fn() };
     const { rerender } = render(<QueryClientProvider client={queryClient}><MemoryDetail sourceId="mem-1" {...props} /></QueryClientProvider>);
     expect(await screen.findByText("First memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     await userEvent.click(screen.getByText("Source", { selector: "summary" }));
     await userEvent.click(screen.getByRole("button", { name: "Show full source" }));
     rerender(<QueryClientProvider client={queryClient}><MemoryDetail sourceId="mem-2" {...props} /></QueryClientProvider>);
     expect(await screen.findByText("Second memory")).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText("Source", { selector: "summary" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
     expect(screen.getByText("Source", { selector: "summary" }).closest("details")).not.toHaveAttribute("open");
     await userEvent.click(screen.getByText("Source", { selector: "summary" }));
     expect(screen.getByRole("button", { name: "Show full source" })).toBeVisible();
