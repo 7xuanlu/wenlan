@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { openSpaceEntity } from "./helpers/spaceEntity";
+import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { renderedContrast } from "./helpers/renderedContrast";
 
@@ -101,29 +102,33 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     const detail = page.locator(".entity-detail-dossier");
     await expect(detail).toBeVisible();
     await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
-    await expect(detail.locator(".page-detail-dateline")).toContainText("person · Wenlan");
-    const context = detail.getByRole("complementary", { name: "Topic context", exact: true });
+    await expect(detail.locator(".entity-detail-seal, .page-detail-dateline")).toHaveCount(0);
+    const context = page.getByRole(viewport.width >= 1100 ? "complementary" : "dialog", { name: "Topic context", exact: true });
     await expect(context).toBeVisible();
-    await expect(context.getByText("person", { exact: true })).toBeVisible();
-    await expect(context.getByText("Wenlan", { exact: true })).toBeVisible();
-    await expect(context).toContainText("research-agent");
+    const metadata = context.locator(".memory-detail-metadata-list");
+    await expect(metadata.getByText("person", { exact: true })).toBeVisible();
+    await expect(metadata.getByText("Wenlan", { exact: true })).toBeVisible();
+    await expect(metadata).toContainText("research-agent");
     await expect(detail.locator(".entity-obs-content")).toHaveText("Wrote the first published algorithm");
-    await expect(detail.locator(".entity-relation-row")).toHaveCount(2);
+    await expect(context.locator(".entity-relation-row")).toHaveCount(2);
     await expect(detail.getByRole("button", { name: "Add note", exact: true })).toBeVisible();
-    await expect(detail.getByRole("button", { name: "Full screen", exact: true })).toBeVisible();
-    const typography = await detail.locator(".page-detail-dateline").evaluate((node) => ({
+    await expect(context.getByRole("button", { name: "Full screen", exact: true })).toBeVisible();
+    const typography = await metadata.locator(".entity-meta-mono").first().evaluate((node) => ({
       fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
       width: node.getBoundingClientRect().width,
       scrollWidth: node.scrollWidth,
     }));
     expect(typography.fontSize, "topic metadata must remain readable").toBeGreaterThanOrEqual(13);
     expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
-    const boundedSurfaces = detail.locator("h1, .entity-detail-reading, .page-detail-dateline, .page-detail-rail");
-    await expect(boundedSurfaces).toHaveCount(4);
-    const bounds = await boundedSurfaces.evaluateAll((nodes) => nodes.map((node) => {
+    const bounds = await Promise.all([
+      detail.getByRole("heading", { level: 1, name: "Ada Lovelace" }),
+      detail.locator(".entity-detail-reading"),
+      context,
+      metadata,
+    ].map((surface) => surface.evaluate((node) => {
       const box = node.getBoundingClientRect();
       return { left: box.left, right: box.right, width: box.width };
-    }));
+    })));
     for (const box of bounds) {
       expect(box.width).toBeGreaterThan(0);
       expect(box.left).toBeGreaterThanOrEqual(0);
@@ -131,7 +136,8 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     }
     const contrast = await renderedContrast(page, [
       { selector: ".entity-detail-dossier .page-detail-title", label: "Topic title", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".entity-detail-dossier .page-detail-dateline", label: "Topic metadata", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".entity-detail-dossier .page-detail-actions-menu-trigger", label: "Topic actions", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".page-info-drawer .entity-meta-mono", label: "Topic panel metadata", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".entity-detail-dossier .entity-obs-content", label: "Topic observation", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
@@ -280,7 +286,12 @@ async function captureFourSurfaces(page: Page, label: string): Promise<void> {
   await capture(page, `space-${label}`);
   await openSpaceEntity(page, "Ada Lovelace");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+  const topicContext = await openTopicContext(page);
   await capture(page, `entity-${label}`);
+  // Narrow context is modal and must close before the next primary route.
+  await topicContext.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(topicContext).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeFocused();
 }
 
 test("captures the complete responsive and native-reference matrix", async ({ page }) => {

@@ -2,6 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
+import { openTopicMenu } from "./helpers/topicTools";
 
 async function capture(page: Page, name: string) {
   if (!process.env.WENLAN_UI_EVIDENCE_DIR) return;
@@ -49,18 +50,24 @@ for (const copy of cases) test(`${copy.locale} topics browse before managing`, a
   await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "48px");
   await expect(page.getByRole("button", { name: copy.more, exact: true })).toHaveAttribute("aria-current", "page");
   expect(controller.calls().filter(call => /^(confirm_entity|archive_entities|restore_entities)_cmd$/.test(call.command))).toEqual([]);
-  await expect(page.getByRole("button", { name: copy.confirm, exact: true })).toBeVisible();
+  let menu = await openTopicMenu(page, copy.locale);
+  await expect(menu.getByRole("menuitemcheckbox", { name: copy.confirm, exact: true })).toHaveAttribute("aria-checked", "false");
+  await page.keyboard.press("Escape");
   await capture(page, `${copy.locale}-${copy.theme}-detail`);
 
   await page.getByRole("button", { name: "Wrote the first published algorithm", exact: true }).click();
   await page.getByRole("textbox", { name: copy.edit, exact: true }).fill("A revised note about Ada");
   await page.getByRole("textbox", { name: copy.edit, exact: true }).press("Enter");
   await expect(page.getByRole("button", { name: "A revised note about Ada", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: copy.confirm, exact: true }).click();
+  menu = await openTopicMenu(page, copy.locale);
+  await menu.getByRole("menuitemcheckbox", { name: copy.confirm, exact: true }).click();
   await expect.poll(() => controller.calls().filter(call => call.command === "confirm_entity_cmd").length).toBe(1);
-  await page.getByRole("button", { name: copy.archive, exact: true }).click();
-  await expect(page.getByRole("button", { name: copy.restore, exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: copy.confirm, exact: true })).toHaveCount(0);
+  menu = await openTopicMenu(page, copy.locale);
+  await menu.getByRole("menuitem", { name: copy.archive, exact: true }).click();
+  menu = await openTopicMenu(page, copy.locale);
+  await expect(menu.getByRole("menuitem", { name: copy.restore, exact: true })).toBeVisible();
+  await expect(menu.getByRole("menuitemcheckbox")).toHaveCount(0);
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "A revised note about Ada", exact: true })).toBeDisabled();
   await expect(page.getByRole("button", { name: copy.noteConfirm, exact: true })).toBeDisabled();
   await page.getByRole("button", { name: copy.back, exact: true }).click();
@@ -71,8 +78,11 @@ for (const copy of cases) test(`${copy.locale} topics browse before managing`, a
   await expect(overview.getByRole("button", { name: copy.openAda, exact: true })).toBeVisible();
   await capture(page, `${copy.locale}-${copy.theme}-archive`);
   await overview.getByRole("button", { name: copy.openAda, exact: true }).click();
-  await page.getByRole("button", { name: copy.restore, exact: true }).click();
-  await expect(page.getByRole("button", { name: copy.archive, exact: true })).toBeVisible();
+  menu = await openTopicMenu(page, copy.locale);
+  await menu.getByRole("menuitem", { name: copy.restore, exact: true }).click();
+  menu = await openTopicMenu(page, copy.locale);
+  await expect(menu.getByRole("menuitem", { name: copy.archive, exact: true })).toBeVisible();
+  await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "A revised note about Ada", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: copy.back, exact: true }).click();
   await expect(overview.getByRole("button", { name: copy.openAda, exact: true })).toBeVisible();

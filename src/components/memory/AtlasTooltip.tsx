@@ -106,7 +106,8 @@ export default function AtlasTooltip({ content, children }: AtlasTooltipProps) {
         >
           {content}
         </span>,
-        document.body,
+        // Standalone Atlas uses the body; a nested Atlas shares its modal layer.
+        anchorRef.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body,
       )}
     </span>
   );

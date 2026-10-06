@@ -2,6 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openTopicMenu } from "./helpers/topicTools";
 import type { Entity } from "../src/lib/tauri";
 
 async function openTopics(page: Page): Promise<void> {
@@ -31,9 +32,12 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
     await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
     await expect(overview.getByRole("row")).toHaveCount(2);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
-    await expect(page.getByRole("button", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Archive", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
+    let menu = await openTopicMenu(page);
+    await expect(menu.getByRole("menuitemcheckbox", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toHaveAttribute("aria-checked", String(confirmed));
+    await menu.getByRole("menuitem", { name: "Archive", exact: true }).click();
+    menu = await openTopicMenu(page);
+    await expect(menu.getByRole("menuitem", { name: "Restore", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
     await expect.poll(async () => (await storedTopics(page)).find(item => item.id === entity.id)?.status).toBe("archived");
     await page.getByRole("button", { name: "Back", exact: true }).click();
     await expect(overview.getByRole("button", { name: entity.name, exact: true })).toHaveCount(0);
@@ -55,9 +59,12 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
     await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
     await expect(overview.getByRole("row")).toHaveCount(2);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
-    await page.getByRole("button", { name: "Restore", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toBeVisible();
+    let menu = await openTopicMenu(page);
+    await menu.getByRole("menuitem", { name: "Restore", exact: true }).click();
+    menu = await openTopicMenu(page);
+    await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();
+    await expect(menu.getByRole("menuitemcheckbox", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toHaveAttribute("aria-checked", String(confirmed));
+    await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "Back", exact: true }).click();
   }
   // A detail return opens active Topics; archived remains accessible from More.

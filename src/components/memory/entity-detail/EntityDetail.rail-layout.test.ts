@@ -17,9 +17,9 @@ function declarationsFor(selector: string): string {
 
 describe("EntityDetail context rail layout", () => {
   it("stacks Details and Recall matches in one readable rail column", () => {
-    const rail = declarationsFor(".entity-detail-dossier .memory-detail-rail");
+    const rail = declarationsFor(".entity-topic-context .memory-detail-rail");
     const sections = declarationsFor(
-      ".entity-detail-dossier .memory-detail-rail > .memory-detail-rail-section",
+      ".entity-topic-context .memory-detail-rail > .memory-detail-rail-section",
     );
 
     expect(rail).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\)/);
@@ -30,15 +30,15 @@ describe("EntityDetail context rail layout", () => {
   });
 
   it("keeps compact graph names and relation labels readable inside the graph", () => {
-    const allVerbs = declarationsFor(".entity-detail-dossier .entity-graph-verb");
+    const allVerbs = declarationsFor(".entity-topic-context .entity-graph-verb");
     const nodes = declarationsFor(
-      ".entity-detail-dossier .entity-graph.is-compact .entity-graph-node",
+      ".entity-topic-context .entity-graph.is-compact .entity-graph-node",
     );
     const names = declarationsFor(
-      ".entity-detail-dossier .entity-graph.is-compact .entity-graph-node-name",
+      ".entity-topic-context .entity-graph.is-compact .entity-graph-node-name",
     );
     const verbs = declarationsFor(
-      ".entity-detail-dossier .entity-graph.is-compact .entity-graph-verb",
+      ".entity-topic-context .entity-graph.is-compact .entity-graph-verb",
     );
 
     expect(nodes).toMatch(/max-width:\s*calc\(100%\s*-\s*24px\)/);

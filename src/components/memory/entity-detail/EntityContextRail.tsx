@@ -37,7 +37,8 @@ export function EntityContextRail({ entity, locale, onMemoryClick }: EntityConte
   });
 
   return (
-    <aside
+    <div
+      role="group"
       className="memory-detail-rail page-detail-rail"
       aria-label={t("entityDetail.contextLabel")}
     >
@@ -131,6 +132,6 @@ export function EntityContextRail({ entity, locale, onMemoryClick }: EntityConte
           </div>
         </section>
       ) : null}
-    </aside>
+    </div>
   );
 }

@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { openSpaceEntity } from "./helpers/spaceEntity";
+import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 const evidenceDir = path.join(
@@ -42,9 +43,14 @@ test("captures Simplified Chinese Space and Entity dossiers at physical DPR2", a
   await page.screenshot({ path: spacePath, fullPage: false });
 
   await openSpaceEntity(page, "Ada Lovelace", "zh-Hans");
-  await expect(page.getByRole("heading", { level: 2, name: "关联" })).toBeVisible();
-  await expect(page.getByRole("heading", { level: 2, name: "关于" })).toBeVisible();
-  await expect(page.locator(".entity-detail-seal")).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "主题操作", exact: true })).toBeInViewport();
+  await expect(page.locator(".entity-detail-seal, .entity-detail-dossier .page-detail-dateline")).toHaveCount(0);
+  await expect(page.locator(".entity-detail-reading").getByRole("heading", { level: 2, name: "关于", exact: true })).toBeVisible();
+  await expect(page.locator(".entity-detail-reading .entity-graph")).toHaveCount(0);
+  const topicContext = await openTopicContext(page, "zh-Hans");
+  await expect(topicContext.getByRole("heading", { level: 2, name: "关联", exact: true })).toBeVisible();
+  await expect(topicContext.locator(".memory-detail-metadata-list")).toBeVisible();
   const entityPath = path.join(evidenceDir, "entity-zh-Hans-dpr2.png");
   await page.screenshot({ path: entityPath, fullPage: false });
 
@@ -52,7 +58,7 @@ test("captures Simplified Chinese Space and Entity dossiers at physical DPR2", a
   expect(accessibilitySnapshot).not.toMatch(/\bIndex\b|索引/iu);
   const metrics = await page.evaluate(() => ({
     devicePixelRatio,
-    entityGridColumns: getComputedStyle(document.querySelector(".page-detail-grid") ?? document.body).gridTemplateColumns.split(" ").length,
+    entityGridColumns: getComputedStyle(document.querySelector(".entity-topic-context")!).gridTemplateColumns.split(" ").length,
     innerHeight,
     innerWidth,
   }));
