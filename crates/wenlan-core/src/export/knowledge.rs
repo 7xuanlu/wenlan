@@ -4297,16 +4297,29 @@ fn write_page_atomically_nofollow(
     temporary: &str,
     bytes: &[u8],
 ) -> Result<(), WenlanError> {
+    write_page_atomically_nofollow_with_hook(directory, name, temporary, bytes, || Ok(()))
+}
+
+fn write_page_atomically_nofollow_with_hook(
+    directory: &Dir,
+    name: &str,
+    temporary: &str,
+    bytes: &[u8],
+    after_temp_write: impl FnOnce() -> std::io::Result<()>,
+) -> Result<(), WenlanError> {
     let mut options = OpenOptions::new();
     options
         .write(true)
         .create_new(true)
         .follow(FollowSymlinks::No);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt as _;
+        // A stopped process must not leave private state in a readable temp.
+        options.mode(0o600);
+    }
     let result = (|| {
-        let mut file = directory.open_with(temporary, &options)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        match directory.open_with(name, &regular_read_options()) {
+        let permissions = match directory.open_with(name, &regular_read_options()) {
             Ok(current) => {
                 let metadata = current.metadata()?;
                 if !metadata.is_file() {
@@ -4315,9 +4328,27 @@ fn write_page_atomically_nofollow(
                         "page_projection_target_invalid",
                     ));
                 }
-                file.set_permissions(metadata.permissions())?;
-                file.sync_all()?;
+                Some(metadata.permissions())
             }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        let mut file = directory.open_with(temporary, &options)?;
+        if let Some(permissions) = permissions {
+            file.set_permissions(permissions)?;
+        }
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        after_temp_write()?;
+        // Retain the existing nofollow regular-target check at installation.
+        match directory.open_with(name, &regular_read_options()) {
+            Ok(current) if !current.metadata()?.is_file() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "page_projection_target_invalid",
+                ));
+            }
+            Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
         }
@@ -7143,6 +7174,42 @@ mod tests {
                 .unwrap()
                 .any(|e| std::fs::read(e.unwrap().path()).unwrap() == old)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_projection_state_temp_keeps_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        writer.write_page_for_test(&test_concept()).unwrap();
+        let state_path = dir.path().join(".wenlan/state.json");
+        std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+        let temporary = dir.path().join(".wenlan/.private-state.tmp");
+        let result = KnowledgeProjectionWrite::with_projection_capabilities(dir.path(), |caps| {
+            write_page_atomically_nofollow_with_hook(
+                &caps.wenlan,
+                "state.json",
+                ".private-state.tmp",
+                b"private replacement metadata",
+                || {
+                    assert_eq!(
+                        std::fs::read(&temporary).unwrap(),
+                        b"private replacement metadata"
+                    );
+                    assert_eq!(
+                        std::fs::metadata(&temporary).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                    Err(std::io::Error::other("injected after private temp write"))
+                },
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        assert!(!temporary.exists());
     }
 
     #[cfg(unix)]
