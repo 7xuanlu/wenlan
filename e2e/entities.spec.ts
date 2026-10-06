@@ -1,15 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 async function openEntities(page: Page): Promise<void> {
   await page.goto("/");
-  // Narrow viewports collapse the navigation behind the sidebar toggle.
-  if ((page.viewportSize()?.width ?? 0) < 900) {
-    await page.getByTitle("Show sidebar").click();
-  }
-  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
-  await navigation.getByRole("button", { name: "Entities", exact: true }).click();
+  await openPrimaryDestination(page, "Topics");
   await expect(page.getByRole("heading", { level: 1, name: "Entities" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) < 900) await page.waitForTimeout(250);
 }

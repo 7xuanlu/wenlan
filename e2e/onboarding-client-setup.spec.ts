@@ -17,11 +17,24 @@ for (const [locale, copy] of cases) for (const width of [820, 1440]) {
       return route.abort();
     });
     await installTauriMock(page, { locale, rawActions: [] });
+    let completed = false;
+    await page.exposeBinding('__sampleFirstRunGate', (_source, command: string) => {
+      if (command === 'should_show_wizard') return !completed;
+      completed = true;
+      return null;
+    });
+    await page.addInitScript(() => {
+      const invoke = window.__wenlanTauriInvoke;
+      window.__wenlanTauriInvoke = (command, args) =>
+        ['should_show_wizard', 'set_setup_completed'].includes(command)
+          ? (window as unknown as { __sampleFirstRunGate: (command: string) => Promise<unknown> }).__sampleFirstRunGate(command)
+          : invoke(command, args);
+    });
     await page.goto('/');
-    await expect(page.getByRole('button', { name: copy.entry, exact: true })).toBeVisible();
-    await page.getByRole('button', { name: copy.entry, exact: true }).click();
-    await expect(page.getByTestId('first-use-guide')).toBeVisible();
+    await expect(page.getByTestId('notes-welcome')).toBeVisible();
     await page.getByRole('button', { name: copy.guide.tryExample, exact: true }).click();
+    await expect(page.getByTestId('first-use-sample')).toBeVisible();
+    expect(completed).toBe(false);
     await page.getByRole('button', { name: copy.sample.skipToResult, exact: true }).click();
     await page.getByRole('button', { name: copy.sample.useWithAi, exact: true }).click();
     await page.getByRole('tab', { name: 'ChatGPT', exact: true }).click();
@@ -35,7 +48,8 @@ for (const [locale, copy] of cases) for (const width of [820, 1440]) {
     await expect(page.getByRole('button', { name: `${copy.sample.copyCommand}: ${copy.sample.handoffLabel}`, exact: true })).toBeVisible();
     await page.getByRole('tab', { name: 'ChatGPT', exact: true }).click();
     await page.getByRole('button', { name: copy.sample.connectCta, exact: true }).click();
-    await expect(page.getByTestId('first-use-guide')).toHaveCount(0);
+    await expect(page.getByTestId('first-use-sample')).toHaveCount(0);
+    expect(completed).toBe(true);
     await expect(page.locator('[data-testid="setup-wizard"]')).toHaveCount(0);
     const webName = /^(Web access|网页访问|網頁存取)$/;
     await expect(page.getByRole('heading', { name: webName })).toHaveCount(1);

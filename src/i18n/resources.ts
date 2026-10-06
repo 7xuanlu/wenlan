@@ -62,6 +62,14 @@ const en = {
   },
   setup: {
     welcomeTitle: "Welcome to Wenlan",
+    notesFirst: {
+      body: "Start with a note. Connect your AI tools when you need them.",
+      hint: "No model setup or import required.",
+      open: "Open notes",
+      openFailed: "Could not open your notes. Please try again.",
+      checkConnection: "Check connection",
+      backToWelcome: "Back to welcome",
+    },
     tagline: "A living knowledge base your AI tools build as they work.",
     welcomeBody:
       "Your AI tools write what they learn into source-cited pages that refresh between sessions.",
@@ -935,10 +943,10 @@ const en = {
         "Optional usage stats are unavailable in this build or environment.",
       telemetrySaveFailed:
         "Wenlan could not persist your usage-stats setting. Check the current switch state and retry before restarting Wenlan.",
-      rerunSetup: "Re-run setup wizard",
-      rerunSetupGo: "Re-run",
+      rerunSetup: "Welcome screen",
+      rerunSetupGo: "Open",
       rerunSetupConfirm:
-        "Your data is preserved. This only replays the setup wizard.",
+        "Reopen the welcome screen. Your notes and settings stay as they are.",
       exportSection: "Export",
       exportOkfTitle: "Export pages as an OKF bundle",
       exportOkfDescription:
@@ -2264,6 +2272,14 @@ const zhHans = {
   },
   setup: {
     welcomeTitle: "欢迎使用文澜",
+    notesFirst: {
+      body: "先写笔记，需要时再接上你的 AI 工具。",
+      hint: "不用先设置模型或导入资料。",
+      open: "打开笔记",
+      openFailed: "暂时无法打开笔记，请再试一次。",
+      checkConnection: "检查连接",
+      backToWelcome: "返回欢迎页",
+    },
     tagline: "一个由你的 AI 工具在工作中不断构建的活知识库。",
     welcomeBody: "你的 AI 工具会把学到的内容写成带来源引用的页面，并在会话之间自动刷新。",
     privacyTitle: "你的记忆保存在这台设备上。",
@@ -3108,10 +3124,10 @@ const zhHans = {
       telemetryUnavailable: "此版本或环境不支持可选使用统计。",
       telemetrySaveFailed:
         "文澜无法持久保存使用统计设置。请确认开关当前状态，并在重启文澜前重试。",
-      rerunSetup: "重新运行设置向导",
-      rerunSetupGo: "重新运行",
+      rerunSetup: "欢迎画面",
+      rerunSetupGo: "打开",
       rerunSetupConfirm:
-        "你的数据会保留，这只会重新播放设置向导。",
+        "重新打开欢迎画面。你的笔记和设置保持不变。",
       exportSection: "导出",
       exportOkfTitle: "将页面导出为 OKF 包",
       exportOkfDescription:
@@ -4408,6 +4424,14 @@ const zhHant = {
   },
   setup: {
     welcomeTitle: "歡迎使用文瀾",
+    notesFirst: {
+      body: "先寫筆記，需要時再接上你的 AI 工具。",
+      hint: "不用先設定模型或匯入資料。",
+      open: "開啟筆記",
+      openFailed: "暫時無法開啟筆記，請再試一次。",
+      checkConnection: "檢查連線",
+      backToWelcome: "返回歡迎頁",
+    },
     tagline: "一個由你的 AI 工具在工作中不斷建立的活知識庫。",
     welcomeBody: "你的 AI 工具會把學到的內容寫成附來源引用的頁面，並在工作階段之間自動更新。",
     privacyTitle: "你的記憶保存在這台裝置上。",
@@ -5252,10 +5276,10 @@ const zhHant = {
       telemetryUnavailable: "此版本或環境不支援選用使用統計。",
       telemetrySaveFailed:
         "文瀾無法持久儲存使用統計設定。請確認開關目前狀態，並在重啟文瀾前重試。",
-      rerunSetup: "重新執行設定精靈",
-      rerunSetupGo: "重新執行",
+      rerunSetup: "歡迎畫面",
+      rerunSetupGo: "開啟",
       rerunSetupConfirm:
-        "你的資料會保留，這只會重新播放設定精靈。",
+        "重新開啟歡迎畫面。你的筆記和設定保持不變。",
       exportSection: "匯出",
       exportOkfTitle: "將頁面匯出為 OKF 套件",
       exportOkfDescription:

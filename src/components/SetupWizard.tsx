@@ -30,6 +30,7 @@ import {
 } from "../lib/setupErrors";
 import { fillUnsetPinsWithRetry, type SourcePin } from "../lib/routingPins";
 import { dragStripHeight } from "../lib/windowChrome";
+import { NotesWelcome, type NotesWelcomeDestination } from "./onboarding/NotesWelcome";
 import { ImportFlow } from "./ChatImport/ImportFlow";
 import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectCard";
 import { isPluginClient } from "./connect/pluginClients";
@@ -58,7 +59,7 @@ export type WizardStep =
 interface SetupWizardProps {
   // May return a promise: the Done step awaits it and, on a rejection, stays
   // put with an inline alert so the user can try again.
-  onComplete: () => void | Promise<void>;
+  onComplete: (destination?: NotesWelcomeDestination) => void | Promise<void>;
   initialStep?: WizardStep;
   // Preview-harness seams. The model and import rows of the setting-up step are
   // conditional on picks made in earlier steps, so entering at `setting-up`
@@ -240,7 +241,7 @@ function WelcomeStep({
     <StepShell
       hideDots={hideDots}
       activeStep="welcome"
-      primaryAction={{ label: t("setup.getStarted"), onClick: onNext }}
+      primaryAction={{ label: t("setup.notesFirst.checkConnection"), onClick: onNext }}
     >
     <div
       className="flex flex-col items-center text-center"
@@ -266,7 +267,7 @@ function WelcomeStep({
             lineHeight: "1.5",
           }}
         >
-          {t("setup.tagline")}
+          {t("setup.notesFirst.hint")}
         </p>
         {/* The title carries the news, because this user may well have years
             of memories and the only true thing we know is that we could not
@@ -293,7 +294,7 @@ function WelcomeStep({
             lineHeight: "1.5",
           }}
         >
-          {t("setup.welcomeBody")}
+          {t("setup.notesFirst.body")}
         </p>
       </div>
 
@@ -2504,8 +2505,8 @@ export function SetupWizard({
   const [pendingModelId, setPendingModelId] = useState<string | null>(initialPendingModelId);
   const [pendingImportPick, setPendingImportPick] = useState<VaultPick | null>(initialPendingImportPick);
   const wizardEnteredAtRef = useRef<number>(Math.floor(Date.now() / 1000));
-  // Step dots hide when entering at a specific step (unchanged semantics).
-  const hideDots = !!initialStep;
+  // Optional tool setup and service recovery are not a first-run tour.
+  const hideDots = !!initialStep || daemonGateErrored;
 
   // Stable identity, and bails out when nothing new arrived. ConnectStep's
   // already-configured effect lists `onConnected` in its deps, so a fresh
@@ -2518,12 +2519,16 @@ export function SetupWizard({
     });
   }, []);
 
+  if (step === "welcome" && !daemonGateErrored) {
+    return <NotesWelcome onComplete={onComplete} />;
+  }
+
   if (step === "welcome") {
     return (
       <WelcomeStep
-        hideDots={hideDots}
+        hideDots
         daemonGateErrored={daemonGateErrored}
-        onNext={() => setStep("intelligence-choice")}
+        onNext={() => setStep("setting-up")}
       />
     );
   }
@@ -2577,7 +2582,7 @@ export function SetupWizard({
         pendingModelId={pendingModelId}
         pendingImportPick={pendingImportPick}
         onNext={() => setStep("done")}
-        onBack={() => setStep("connect")}
+        onBack={() => setStep(daemonGateErrored ? "welcome" : "connect")}
         onConnected={handleConnectedAgents}
         wizardEnteredAt={wizardEnteredAtRef.current}
         daemonGateErrored={daemonGateErrored}
@@ -2588,7 +2593,7 @@ export function SetupWizard({
   return (
     <DoneStep
       hideDots={hideDots}
-      wireRouting={!initialStep}
+      wireRouting={!initialStep && !daemonGateErrored}
       importResult={null}
       chatImportResult={chatImportResult}
       connectedAgents={connectedAgents}
