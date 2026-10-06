@@ -122,6 +122,7 @@ fn is_indexable(path: &Path) -> bool {
     let size_limit = match ext.as_str() {
         "md" | "txt" => MAX_TEXT_SIZE,
         "pdf" => MAX_PDF_SIZE,
+        "docx" => super::docx::MAX_DOCX_SIZE,
         _ => return false,
     };
 
@@ -163,7 +164,7 @@ pub enum FileOutcome {
 ///
 /// Dispatch by extension: `.md` goes through the Obsidian note parser
 /// (frontmatter + wikilinks, safe on plain markdown); `.txt` is read and
-/// decoded (non-UTF-8 via BOM/heuristic detection); `.pdf` is text-extracted.
+/// decoded (non-UTF-8 via BOM/heuristic detection); `.pdf` and `.docx` are text-extracted.
 /// Every produced document is stamped `source="memory"`, `source_agent="folder"`,
 /// `source_id="{source_id}::{path}"`, and the file's SHA-256 `content_hash`.
 ///
@@ -187,6 +188,7 @@ pub fn file_to_documents(
     let size_limit = match ext.as_str() {
         "md" | "txt" => MAX_TEXT_SIZE,
         "pdf" => MAX_PDF_SIZE,
+        "docx" => super::docx::MAX_DOCX_SIZE,
         _ => return FileOutcome::Skipped(format!("unsupported file extension: .{ext}")),
     };
 
@@ -204,7 +206,7 @@ pub fn file_to_documents(
         ));
     }
 
-    let bytes = match fs::read(path) {
+    let bytes = match read_file_bytes(path) {
         Ok(bytes) => bytes,
         Err(err) => return FileOutcome::Error(format!("read failed: {err}")),
     };
@@ -242,10 +244,37 @@ pub fn file_to_documents(
             )],
             Err(detail) => return FileOutcome::Error(detail),
         },
+        "docx" => match super::docx::extract_docx_text(&bytes) {
+            Ok(content) => {
+                let mut doc = raw_file_document(source_id, &provenance, path, &ext, content, mtime);
+                doc.metadata.insert(
+                    "filename".into(),
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+                vec![doc]
+            }
+            Err(super::docx::DocxError::Empty) => {
+                return FileOutcome::Skipped(super::docx::DocxError::Empty.to_string())
+            }
+            Err(error) => return FileOutcome::Error(error.to_string()),
+        },
         _ => unreachable!("extension filtered by size_limit match above"),
     };
 
     finalize_file_documents(docs, &content_hash, &ext)
+}
+
+/// Read source bytes for hashing and parsing. DOCX reads stay bounded even if
+/// a file grows between a directory scan and enrichment or its sync receipt.
+pub fn read_file_bytes(path: &Path) -> std::io::Result<Vec<u8>> {
+    if file_extension(path).as_deref() == Some("docx") {
+        super::docx::read_docx_bytes(path).map_err(std::io::Error::other)
+    } else {
+        fs::read(path)
+    }
 }
 
 /// Stamp folder provenance onto every doc, then admit each through the
@@ -557,11 +586,12 @@ mod tests {
         create_file(tmp.path(), "test.md", b"# Markdown");
         create_file(tmp.path(), "test.txt", b"Text content");
         create_file(tmp.path(), "test.pdf", b"PDF");
+        create_file(tmp.path(), "test.DOCX", b"DOCX");
         create_file(tmp.path(), "test.png", b"PNG");
         create_file(tmp.path(), "test.doc", b"DOC");
 
         let results = scan_directory(tmp.path());
-        assert_eq!(results.len(), 3);
+        assert_eq!(results.len(), 4);
 
         let names: Vec<_> = results
             .iter()
@@ -570,8 +600,57 @@ mod tests {
         assert!(names.contains(&"test.md"));
         assert!(names.contains(&"test.txt"));
         assert!(names.contains(&"test.pdf"));
+        assert!(names.contains(&"test.DOCX"));
         assert!(!names.contains(&"test.png"));
         assert!(!names.contains(&"test.doc"));
+    }
+
+    #[test]
+    fn docx_failure_is_per_file_and_image_only_is_skipped() {
+        let tmp = TempDir::new().unwrap();
+        let bad = tmp.path().join("corrupt.docx");
+        create_file(tmp.path(), "corrupt.docx", b"not a zip");
+        assert!(
+            matches!(file_to_documents("folder", &bad, None), FileOutcome::Error(reason) if reason.contains("ZIP"))
+        );
+        let empty = tmp.path().join("image-only.docx");
+        let mut zip = zip::ZipWriter::new(fs::File::create(&empty).unwrap());
+        zip.start_file(
+            "word/document.xml",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:drawing/></w:r></w:p></w:body></w:document>"#).unwrap();
+        zip.finish().unwrap();
+        assert!(
+            matches!(file_to_documents("folder", &empty, None), FileOutcome::Skipped(reason) if reason.contains("OCR"))
+        );
+        create_file(
+            tmp.path(),
+            "good.txt",
+            b"This sibling remains ingestible after a corrupt DOCX file fails to parse.",
+        );
+        assert!(matches!(
+            file_to_documents("folder", &tmp.path().join("good.txt"), None),
+            FileOutcome::Ingested(_)
+        ));
+    }
+
+    #[test]
+    fn docx_hash_reads_reject_an_oversized_file() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("grown.DOCX");
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(super::super::docx::MAX_DOCX_SIZE + 1)
+            .unwrap();
+        assert!(read_file_bytes(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("10 MiB"));
+        assert!(
+            matches!(file_to_documents("folder", &path, None), FileOutcome::Skipped(reason) if reason.contains("oversized"))
+        );
     }
 
     #[test]

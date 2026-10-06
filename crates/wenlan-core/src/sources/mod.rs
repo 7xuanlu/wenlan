@@ -8,6 +8,7 @@
 //! This module owns helpers that need `tuning::ConfidenceConfig` (confidence
 //! computation, decay rates).
 pub mod directory;
+pub mod docx;
 pub mod obsidian;
 pub mod okf;
 pub mod page_watcher;

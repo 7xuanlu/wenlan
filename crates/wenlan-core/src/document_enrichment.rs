@@ -737,7 +737,7 @@ async fn complete_with_sync_receipt(
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_nanos() as i64)
             .unwrap_or(0);
-        let bytes = std::fs::read(&path).ok()?;
+        let bytes = crate::sources::directory::read_file_bytes(&path).ok()?;
         Some((mtime_ns, crate::sources::directory::sha256_hex(&bytes)))
     })
     .await

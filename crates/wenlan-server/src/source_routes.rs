@@ -595,7 +595,8 @@ pub(crate) async fn sync_directory_source(
         // The mtime fast path above keeps unchanged files out of the read/hash phase.
         let read_path = file_path.clone();
         let hash = match tokio::task::spawn_blocking(move || {
-            std::fs::read(read_path).map(|bytes| content_hash_bytes(&bytes))
+            wenlan_core::sources::directory::read_file_bytes(&read_path)
+                .map(|bytes| content_hash_bytes(&bytes))
         })
         .await
         {
