@@ -6,7 +6,7 @@
 .wiki-inventory-filename { display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mem-text-tertiary);font-size:11px; }
 .wiki-table .wiki-inventory-filename { max-width:240px; }
 .wiki-folder-lenses { display:flex;gap:4px;justify-content:flex-end;margin:0 0 18px; }
-.wiki-folder-lenses button { background:none;border:0;border-radius:5px;padding:6px 10px;font:12px var(--mem-font-body);color:var(--mem-text-secondary);cursor:pointer; }
+.wiki-folder-lenses button { background:none;border:0;border-radius:5px;padding:6px 10px;font:var(--mem-control-font-size)/1.2 var(--mem-font-body);min-height:32px;color:var(--mem-text-secondary);cursor:pointer; }
 .wiki-folder-lenses button[aria-pressed="true"] { background:var(--mem-indigo-bg);color:var(--mem-text); }
 .wiki-folder-lenses button:hover { background:var(--mem-hover); }
 .wiki-folder-lenses button:focus-visible,.wiki-child-folder:focus-visible { outline:2px solid var(--mem-accent-page);outline-offset:2px; }
