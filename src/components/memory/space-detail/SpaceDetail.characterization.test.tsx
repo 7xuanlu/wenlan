@@ -225,11 +225,11 @@ describe("SpaceDetail existing behavior", () => {
     expect(screen.queryByText("Memory one")).not.toBeInTheDocument();
 
     fireEvent.click(await screen.findByRole("button", { name: "Raw memories (1)" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Curated" }));
-    fireEvent.click(screen.getByRole("button", { name: /Oldest first/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Curated first" }));
+    fireEvent.click(screen.getByRole("button", { name: "Oldest first" }));
 
     expect(screen.getByText("Memory one")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Oldest" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Oldest first" })).toBeInTheDocument();
   });
 
   it("renders distinct loading, error, and missing-space states", async () => {

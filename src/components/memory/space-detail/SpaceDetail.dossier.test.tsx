@@ -230,7 +230,7 @@ describe("SpaceDetail editorial dossier", () => {
     fireEvent.click(within(region).getByRole("button", { name: "Raw memories (250)" }));
     expect(region).toHaveTextContent("Showing the latest 200 of 250 memories");
     expect(await within(region).findByText("Latest raw memory")).toBeInTheDocument();
-    expect(within(region).getByRole("button", { name: "Curated" })).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: "Curated first" })).toBeInTheDocument();
   }, 15_000);
 
   it("places closed supplementary sections and archive after the primary page list", async () => {
