@@ -56,6 +56,7 @@ pub fn build_router_with_shutdown(state: SharedState, shutdown: ShutdownHandle) 
     let router = outbox_routes::register(router);
     let router = community_routes::register(router);
     let router = ingest_routes::register(router);
+    let router = crate::web_fetch_routes::register(router);
     let router = activity_routes::register(router);
     let router = import_routes::register(router);
     let router = memory_routes::register_core(router);

@@ -57,6 +57,8 @@ pub mod state;
 pub mod telemetry;
 pub mod telemetry_routes;
 pub mod truth_guard;
+mod web_fetch;
+pub mod web_fetch_routes;
 pub mod websocket;
 
 #[cfg(test)]

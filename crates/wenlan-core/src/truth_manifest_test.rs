@@ -215,9 +215,10 @@ fn manifest_counts_match_the_spec() {
     // status lane added GET `/api/activity` (counts-only, not page-bearing).
     // Then 177 after the debug pipeline diagnostic route was removed
     // (Diagnostics migrated to `/api/activity`).
+    // The public webpage preview adds one main-only, non-page-bearing route.
     assert_eq!(
         HTTP_READERS.len(),
-        190,
+        191,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
@@ -228,7 +229,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        202,
+        203,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -236,7 +237,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        185,
+        186,
         "main builder entries"
     );
     assert_eq!(
@@ -412,7 +413,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        183 // all remaining handlers carry no page markers
+        184 // all remaining handlers carry no page markers
     );
 }
 
