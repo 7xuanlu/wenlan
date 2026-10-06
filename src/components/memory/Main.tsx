@@ -767,7 +767,6 @@ export default function Main({
             collapsed={sidebarCollapsed}
             active={view.section ?? "general"}
             onSelect={(section) => setView({ kind: "settings", section })}
-            onNavigateHome={navigateHome}
           />
         ) : view.kind === "connect-agent" ? null : (
           <Sidebar

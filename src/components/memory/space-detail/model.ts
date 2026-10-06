@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { Entity, Page } from "../../../lib/tauri";
 
-const RECENT_PAGE_LIMIT = 5;
-const REVIEW_PAGE_LIMIT = 3;
+export const PAGE_DISPLAY_STEP = 20;
 export const KEY_ENTITY_LIMIT = 6;
 export const PAGE_FETCH_LIMIT = 1_000;
 export const MEMORY_FETCH_LIMIT = 200;
@@ -23,11 +22,8 @@ function comparePageRecency(left: Page, right: Page): number {
   return timestampDifference || left.title.localeCompare(right.title);
 }
 
-export function recentlyRefinedPages(pages: readonly Page[]): Page[] {
-  return [...pages]
-    .filter((page) => pageTimestamp(page) !== null)
-    .sort(comparePageRecency)
-    .slice(0, RECENT_PAGE_LIMIT);
+export function sortedSpacePages(pages: readonly Page[]): Page[] {
+  return [...pages].sort(comparePageRecency);
 }
 
 export function pagesNeedingReview(pages: readonly Page[]): Page[] {
@@ -37,8 +33,7 @@ export function pagesNeedingReview(pages: readonly Page[]): Page[] {
       const leftPriority = left.stale_reason === "source_conflict" ? 0 : 1;
       const rightPriority = right.stale_reason === "source_conflict" ? 0 : 1;
       return leftPriority - rightPriority || comparePageRecency(left, right);
-    })
-    .slice(0, REVIEW_PAGE_LIMIT);
+    });
 }
 
 export function sortedKeyEntities(entities: readonly Entity[]): Entity[] {

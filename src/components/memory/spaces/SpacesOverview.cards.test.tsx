@@ -1,7 +1,6 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { formatLocaleDate } from "../../../lib/dateFormat";
 import { SpacesOverview } from "./SpacesOverview";
 import { createQueryClient, labels, makeSpace, renderOverview } from "./SpacesOverview.testUtils";
 
@@ -37,7 +36,7 @@ describe("SpacesOverview cards lens", () => {
     api.toggleSpaceStarred.mockResolvedValue(true);
   });
 
-  it("renders cards by default with the mark, star, description, counts, date, and no drag handle", async () => {
+  it("renders cards by default with the mark, star, description, page count, and no drag handle", async () => {
     // Given no stored lens preference
     window.localStorage.removeItem("wenlan-spaces-view-mode");
     const queryClient = createQueryClient();
@@ -64,11 +63,9 @@ describe("SpacesOverview cards lens", () => {
 
     expect(within(workCard).getByText("Projects and planning")).toBeInTheDocument();
     expect(within(workCard).getByTestId("space-card-pages")).toHaveTextContent("2 pages");
-    expect(within(workCard).getByTestId("space-card-memories")).toHaveTextContent("4 memories");
-    expect(within(workCard).getByTestId("space-card-entities")).toHaveTextContent("2 topics");
-    expect(within(workCard).getByTestId("space-card-updated")).toHaveTextContent(
-      formatLocaleDate(new Date(200 * 1000)).label,
-    );
+    expect(within(workCard).queryByTestId("space-card-memories")).not.toBeInTheDocument();
+    expect(within(workCard).queryByTestId("space-card-entities")).not.toBeInTheDocument();
+    expect(workCard.querySelector("time")).toBeNull();
     expect(screen.queryByRole("button", { name: labels.dragSpace("Work") })).not.toBeInTheDocument();
     expect(cards.querySelector(".spaces-drag-handle")).toBeNull();
   });
@@ -160,7 +157,7 @@ describe("SpacesOverview cards lens", () => {
     expect(screen.getByRole("button", { name: "Cards" })).toBeInTheDocument();
   });
 
-  it("omits the description and shows a dash for a space that was never updated", async () => {
+  it("omits absent descriptions and extra metadata for a space that was never updated", async () => {
     api.listSpaces.mockResolvedValue([
       makeSpace({ id: "bare", name: "Bare", description: null, updated_at: 0, memory_count: 1, entity_count: 1 }),
     ]);
@@ -168,9 +165,10 @@ describe("SpacesOverview cards lens", () => {
 
     const card = await screen.findByTestId("space-card-bare");
     expect(card.querySelector(".asset-card-context")).toBeNull();
-    expect(within(card).getByTestId("space-card-updated")).toHaveTextContent("—");
-    expect(within(card).getByTestId("space-card-memories")).toHaveTextContent("1 memory");
-    expect(within(card).getByTestId("space-card-entities")).toHaveTextContent("1 topic");
+    expect(card.querySelector("time")).toBeNull();
+    expect(within(card).queryByTestId("space-card-memories")).not.toBeInTheDocument();
+    expect(within(card).queryByTestId("space-card-entities")).not.toBeInTheDocument();
+    expect(within(card).getByTestId("space-card-pages")).toHaveTextContent("0 pages");
   });
 
   it("filters cards by name", async () => {

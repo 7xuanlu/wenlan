@@ -139,14 +139,32 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     const dossier = page.locator(".space-dossier");
     await expect(dossier.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
     await expect(dossier.locator(".space-dossier-description")).toHaveText("Editorial memory system");
-    await expect(dossier.locator(".space-dossier-metrics dd")).toHaveText(["6", "205", "7", "Jul 10, 2026"]);
-    const recent = dossier.getByRole("region", { name: "Recently refined" });
-    await expect(recent.getByRole("button")).toHaveCount(5);
+    await expect(dossier.locator(".space-dossier-metrics")).toHaveCount(0);
+    const recent = dossier.getByRole("region", { name: "Pages", exact: true });
+    await expect(recent.locator(".space-dossier-page-list > button")).toHaveCount(6);
     await expect(recent.getByRole("button").first()).toContainText("Fixture architecture");
-    await expect(recent.locator(".space-dossier-page-meta > span")).toHaveText(Array(5).fill("1 source"));
-    await expect(dossier.locator(".space-dossier-review-list > button")).toHaveCount(2);
+    await expect(recent.locator(".space-dossier-page-summary")).toHaveCount(6);
+    await expect(recent.locator(".space-dossier-page-meta, time")).toHaveCount(0);
+    await expect(dossier.locator(".space-dossier-rail")).toHaveCount(0);
+    await expect(dossier.locator(".space-dossier-disclosure")).toHaveCount(2);
+    for (const disclosure of await dossier.locator(".space-dossier-disclosure").all()) {
+      await expect(disclosure).not.toHaveAttribute("open");
+      await expect(disclosure.locator("summary")).toBeVisible();
+    }
+    await expect(dossier.getByRole("button", { name: "Review all", exact: true })).toBeHidden();
+    const topicsDisclosure = dossier.locator(".space-dossier-entities details");
+    await topicsDisclosure.locator("summary").click();
     await expect(dossier.locator(".space-dossier-entity-list > button")).toHaveCount(6);
+    await expect(dossier.locator(".space-dossier-entity-list > button").first()).toBeVisible();
+    await topicsDisclosure.locator("summary").click();
+    const reviewDisclosure = dossier.locator(".space-dossier-review details");
+    await reviewDisclosure.locator("summary").click();
+    await expect(dossier.locator(".space-dossier-review-list > button")).toHaveCount(2);
+    await expect(dossier.locator(".space-dossier-review-list small")).toHaveText(["Source conflict", "New sources waiting"]);
     await expect(dossier.getByRole("button", { name: "Review all", exact: true })).toBeVisible();
+    await reviewDisclosure.locator("summary").click();
+    await page.locator("main").evaluate((node) => { node.scrollTop = 0; });
+    await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
     const create = dossier.getByRole("button", { name: "New page", exact: true });
     await expect(create).toBeVisible();
     const control = await create.evaluate((node) => ({
@@ -155,7 +173,7 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     }));
     expect(control.fontSize, "Space creation uses the shared readable control role").toBeGreaterThanOrEqual(14);
     expect(control.height).toBeGreaterThanOrEqual(32);
-    const bounds = await dossier.locator("h1, .space-dossier-actions, .space-dossier-metrics, .space-dossier-page-list > button, .space-dossier-rail").evaluateAll((nodes) => nodes.map((node) => {
+    const bounds = await dossier.locator("h1, .space-dossier-actions, .space-dossier-page-list > button, .space-dossier-disclosure > summary").evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
       return { left: box.left, right: box.right, width: box.width, scrollWidth: node.scrollWidth };
     }));
@@ -166,13 +184,9 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
       expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
     }
     const recentBox = (await recent.boundingBox())!;
-    const railBox = (await dossier.locator(".space-dossier-rail").boundingBox())!;
-    if (viewport.width >= 900) {
-      expect(railBox.x, "desktop keeps the review rail beside the page list").toBeGreaterThan(recentBox.x + recentBox.width);
-      expect(Math.abs(railBox.y - recentBox.y)).toBeLessThanOrEqual(1);
-    } else {
-      expect(railBox.y, "narrow layouts move the review rail below the page list").toBeGreaterThan(recentBox.y + recentBox.height);
-    }
+    const secondaryBox = (await dossier.locator(".space-dossier-secondary").boundingBox())!;
+    expect(secondaryBox.y, "supplementary sections follow the page list at every width").toBeGreaterThanOrEqual(recentBox.y + recentBox.height);
+    expect(Math.abs(secondaryBox.x - recentBox.x)).toBeLessThanOrEqual(1);
     const contrast = await renderedContrast(page, [
       { selector: ".space-dossier h1", label: "Space title", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".space-dossier-new-page", label: "Space creation control", foregroundProperty: "color", minimum: 4.5 },
@@ -297,8 +311,6 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   const mobileMetadata = wenlanRow.getByTestId("space-mobile-metadata");
   const metadataFields = [
     { testId: "space-mobile-pages", label: "Pages", value: "6" },
-    { testId: "space-mobile-memories", label: "Memories", value: "205" },
-    { testId: "space-mobile-updated", label: "Updated", value: "Jul 10, 2026" },
   ] as const;
   await expect(mobileMetadata).toBeVisible();
   for (const field of metadataFields) {

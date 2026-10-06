@@ -1,7 +1,5 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
 import type { Space } from "../../../lib/tauri";
-import { formatLocaleDate } from "../../../lib/dateFormat";
 import { SpaceActionsMenu } from "./SpaceActionsMenu";
 import { SpaceEditor } from "./SpaceEditor";
 import type { SpacesOverviewLabels, SpaceEditorValue } from "./spacesTypes";
@@ -24,12 +22,8 @@ type SpaceRowProps = {
 };
 
 export function SpaceRow(props: SpaceRowProps) {
-  const { i18n } = useTranslation();
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const updated = props.space.updated_at > 0
-    ? formatLocaleDate(new Date(props.space.updated_at * 1000), i18n.language)
-    : { label: "—" };
 
   if (renaming) {
     return (
@@ -82,22 +76,10 @@ export function SpaceRow(props: SpaceRowProps) {
         {props.space.description === null ? null : <span className="spaces-row-description">{props.space.description}</span>}
       </button>
       <span className="spaces-row-pages" data-space-column="pages" data-testid="space-pages">{props.pageCount}</span>
-      <span className="spaces-row-count" data-space-column="memories" data-testid="space-memories">{props.space.memory_count}</span>
-      <time className="spaces-row-updated" data-space-column="updated" data-testid="space-updated" dateTime={updated.dateTime}>
-        {updated.label}
-      </time>
       <dl className="spaces-mobile-metadata" data-testid="space-mobile-metadata">
         <div data-testid="space-mobile-pages">
           <dt>{props.labels.pages}</dt>
           <dd>{props.pageCount}</dd>
-        </div>
-        <div data-testid="space-mobile-memories">
-          <dt>{props.labels.memories}</dt>
-          <dd>{props.space.memory_count}</dd>
-        </div>
-        <div data-testid="space-mobile-updated">
-          <dt>{props.labels.updated}</dt>
-          <dd><time dateTime={updated.dateTime}>{updated.label}</time></dd>
         </div>
       </dl>
       <div className="spaces-menu-anchor" data-space-column="menu">

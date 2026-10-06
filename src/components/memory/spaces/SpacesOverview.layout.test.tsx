@@ -19,7 +19,7 @@ vi.mock("../../../lib/tauri", () => api);
 
 const confirmed = makeSpace({ id: "work", name: "Work" });
 const suggested = makeSpace({ id: "suggested", name: "Suggested", suggested: true });
-const desktopColumns = ["drag", "name", "pages", "memories", "updated", "menu"];
+const desktopColumns = ["drag", "name", "pages", "menu"];
 
 function directColumnNames(element: HTMLElement): string[] {
   return Array.from(element.children)
@@ -42,9 +42,9 @@ describe("SpacesOverview layout contract", () => {
 
     expect(directColumnNames(header)).toEqual(desktopColumns);
     expect(directColumnNames(row)).toEqual(desktopColumns);
-    expect(header.querySelector('[data-space-column="updated"]')).not.toBeNull();
+    expect(header.querySelector('[data-space-column="updated"]')).toBeNull();
     expect(header.querySelector('[data-space-column="menu"]')).not.toBeNull();
-    expect(row.querySelector('[data-space-column="updated"]')).not.toBeNull();
+    expect(row.querySelector('[data-space-column="updated"]')).toBeNull();
     expect(row.querySelector('[data-space-column="menu"]')).not.toBeNull();
 
     const css = readFileSync(resolve("src/components/memory/spaces/spacesInventory.css"), "utf8");

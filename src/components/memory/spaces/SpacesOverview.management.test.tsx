@@ -1,7 +1,6 @@
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n";
-import { formatLocaleDate } from "../../../lib/dateFormat";
 import { createSpacesOverviewLabels } from "../navigation/copy";
 import { labels, makeSpace, renderOverview } from "./SpacesOverview.testUtils";
 
@@ -95,13 +94,11 @@ describe("SpacesOverview management", () => {
     expect(within(inventorySection).queryByRole("heading", { name: labels.confirmedHeading })).not.toBeInTheDocument();
     expect(within(inventorySection).getByLabelText(labels.filterLabel)).toBeInTheDocument();
     expect(within(inventorySection).getByRole("columnheader", { name: labels.pages })).toBeInTheDocument();
-    expect(within(inventorySection).getByRole("columnheader", { name: labels.memories })).toBeInTheDocument();
-    expect(within(inventorySection).getByRole("columnheader", { name: labels.updated })).toBeInTheDocument();
+    expect(within(inventorySection).queryByRole("columnheader", { name: labels.memories })).not.toBeInTheDocument();
+    expect(within(inventorySection).queryByRole("columnheader", { name: labels.updated })).not.toBeInTheDocument();
     expect(within(workRow).getByTestId("space-pages")).toHaveTextContent("2");
-    expect(within(workRow).getByTestId("space-memories")).toHaveTextContent("44");
-    expect(within(workRow).getByTestId("space-updated")).toHaveTextContent(
-      formatLocaleDate(new Date(1_720_569_600_000)).label,
-    );
+    expect(within(workRow).queryByTestId("space-memories")).not.toBeInTheDocument();
+    expect(within(workRow).queryByTestId("space-updated")).not.toBeInTheDocument();
   });
 
   it("omits the Suggested section when no suggestions match", async () => {
@@ -134,11 +131,11 @@ describe("SpacesOverview management", () => {
 
       // Then desktop column headers and mobile definition labels are localized
       expect(within(inventory).getByRole("columnheader", { name: pagesLabel })).toBeInTheDocument();
-      expect(within(inventory).getByRole("columnheader", { name: memoriesLabel })).toBeInTheDocument();
-      expect(within(inventory).getByRole("columnheader", { name: updatedLabel })).toBeInTheDocument();
+      expect(within(inventory).queryByRole("columnheader", { name: memoriesLabel })).not.toBeInTheDocument();
+      expect(within(inventory).queryByRole("columnheader", { name: updatedLabel })).not.toBeInTheDocument();
       expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(pagesLabel);
-      expect(within(row).getByTestId("space-mobile-memories")).toHaveTextContent(memoriesLabel);
-      expect(within(row).getByTestId("space-mobile-updated")).toHaveTextContent(updatedLabel);
+      expect(within(row).queryByTestId("space-mobile-memories")).not.toBeInTheDocument();
+      expect(within(row).queryByTestId("space-mobile-updated")).not.toBeInTheDocument();
     },
   );
 

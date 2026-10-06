@@ -22,9 +22,7 @@ type SpaceDossierHeaderProps = {
   readonly actions: SpaceIdentityActions;
   readonly copy: SpaceDetailCopy;
   readonly mutationError: boolean;
-  readonly pageCount: string;
   readonly space: Space;
-  readonly updatedLabel: string;
 };
 
 type SubmittedIdentity = {
@@ -38,9 +36,7 @@ export function SpaceDossierHeader({
   actions,
   copy,
   mutationError,
-  pageCount,
   space,
-  updatedLabel,
 }: SpaceDossierHeaderProps) {
   const { t } = useTranslation();
   const [editingIdentity, setEditingIdentity] = useState(false);
@@ -288,12 +284,6 @@ export function SpaceDossierHeader({
 
         {mutationError && <p className="space-dossier-error" role="alert">{copy.mutationError}</p>}
 
-        <dl className="space-dossier-metrics">
-          <div><dt>{copy.metrics.pages}</dt><dd>{pageCount}</dd></div>
-          <div><dt>{copy.metrics.memories}</dt><dd>{new Intl.NumberFormat().format(space.memory_count)}</dd></div>
-          <div><dt>{copy.metrics.entities}</dt><dd>{new Intl.NumberFormat().format(space.entity_count)}</dd></div>
-          <div><dt>{copy.metrics.updated}</dt><dd>{updatedLabel}</dd></div>
-        </dl>
       </header>
     </>
   );

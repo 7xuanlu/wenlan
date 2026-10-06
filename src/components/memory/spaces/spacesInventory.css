@@ -2,7 +2,6 @@
   --mem-text-tertiary: var(--mem-text-meta-aa);
 }
 
-.spaces-filter input,
 .spaces-field input,
 .spaces-field textarea {
   border: 1px solid var(--mem-control-border);
@@ -68,7 +67,7 @@
 }
 
 .spaces-rows {
-  --spaces-desktop-columns: 32px minmax(220px, 1fr) 84px 96px 128px 36px;
+  --spaces-desktop-columns: 32px minmax(220px, 1fr) 84px 36px;
 }
 
 .spaces-overview .spaces-row-edit {
@@ -86,7 +85,7 @@
 }
 
 .spaces-table-head {
-  border-bottom: 1px solid var(--mem-border);
+  border-bottom: 0;
   min-height: 38px;
   color: var(--mem-text-tertiary);
   font-family: var(--mem-font-mono);
@@ -144,7 +143,7 @@
   }
 
   .spaces-overview .spaces-rows {
-    border-top: 1px solid var(--mem-border);
+    border-top: 0;
   }
 
   .spaces-overview .spaces-row:not(.spaces-row-suggested):not(.spaces-row-edit) {
@@ -387,4 +386,18 @@
     right: auto;
     left: 0;
   }
+}
+
+/* The search field stays quiet until interaction, like the Wiki controls. */
+.spaces-filter input {
+  background: transparent;
+  border-color: var(--mem-border);
+}
+
+.spaces-filter input:hover {
+  background: var(--mem-hover);
+}
+
+.spaces-filter input:focus-visible {
+  border-color: var(--mem-accent-page);
 }
