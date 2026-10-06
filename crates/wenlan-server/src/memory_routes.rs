@@ -2160,7 +2160,13 @@ mod store_scheduler_handoff_tests {
             retrieval_cue: None,
         };
 
-        wenlan_core::config::save_config(&wenlan_core::config::Config::default()).unwrap();
+        // This case exercises an opted-in user whose provider is not ready.
+        // The off state is exercised separately below.
+        wenlan_core::config::save_config_with_background_ai(
+            &wenlan_core::config::Config::default(),
+            true,
+        )
+        .unwrap();
         let response = handle_store_memory(
             State(state.clone()),
             HeaderMap::new(),
@@ -2189,9 +2195,8 @@ mod store_scheduler_handoff_tests {
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
 
-        let mut config = wenlan_core::config::load_config();
-        config.background_ai_enabled = Some(false);
-        wenlan_core::config::save_config(&config).unwrap();
+        let config = wenlan_core::config::load_config();
+        wenlan_core::config::save_config_with_background_ai(&config, false).unwrap();
         let off = handle_store_memory(
             State(state),
             HeaderMap::new(),
@@ -2380,10 +2385,13 @@ mod store_scheduler_handoff_tests {
             retrieval_cue: None,
         };
 
-        wenlan_core::config::save_config(&wenlan_core::config::Config {
-            everyday_source: Some("external".to_string()),
-            ..wenlan_core::config::Config::default()
-        })
+        wenlan_core::config::save_config_with_background_ai(
+            &wenlan_core::config::Config {
+                everyday_source: Some("external".to_string()),
+                ..wenlan_core::config::Config::default()
+            },
+            true,
+        )
         .unwrap();
         let response = handle_store_memory(
             State(state.clone()),
@@ -2408,9 +2416,8 @@ mod store_scheduler_handoff_tests {
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
 
-        let mut config = wenlan_core::config::load_config();
-        config.background_ai_enabled = Some(false);
-        wenlan_core::config::save_config(&config).unwrap();
+        let config = wenlan_core::config::load_config();
+        wenlan_core::config::save_config_with_background_ai(&config, false).unwrap();
         let off = handle_store_memory(
             State(state),
             HeaderMap::new(),

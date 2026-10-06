@@ -68,6 +68,7 @@ vi.mock("../lib/tauri", () => ({
   testExternalLlm: vi.fn().mockResolvedValue({ response: "pong" }),
   listExternalModels: vi.fn().mockResolvedValue([]),
   getExternalLlmKeyConfigured: vi.fn().mockResolvedValue(false),
+  getBackgroundAiEnabled: vi.fn().mockResolvedValue(false),
   getResolvedRouting: vi.fn().mockResolvedValue(null),
   setSourcePin: vi.fn().mockResolvedValue(undefined),
   detectObsidianVaults: vi.fn().mockResolvedValue([]),
@@ -139,6 +140,7 @@ import {
   getOnDeviceModel,
   downloadOnDeviceModel,
   onDeviceModelDownloadBytes,
+  getBackgroundAiEnabled,
   getResolvedRouting,
   setSourcePin,
   detectObsidianVaults,
@@ -212,6 +214,7 @@ describe("SetupWizard", () => {
     // Default to LEGACY (no routing endpoint) so existing done-step tests wire
     // nothing; the onboarding-pin tests override getResolvedRouting per case.
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     (setSourcePin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (storeMemory as ReturnType<typeof vi.fn>).mockResolvedValue({ source_id: "mem_setup-check" });
     (listRecentMemories as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1348,6 +1351,7 @@ describe("SetupWizard", () => {
   // Even with a fully configured pool (which would otherwise write), the re-run
   // leaves pins alone.
   it("connect-agent re-run (initialStep=connect) never wires pins and shows no routing summary", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
       everyday: { source: "basic", model: null, mode: "auto", pin: null },
       synthesis: { source: "none", model: null, mode: "auto", pin: null },
@@ -1391,6 +1395,8 @@ describe("SetupWizard", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
+    expect(getResolvedRouting).not.toHaveBeenCalled();
     expect(setSourcePin).not.toHaveBeenCalled();
     expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
     // Re-run entry (wireRouting=false): neither the summary nor the no-model line.
@@ -1399,13 +1405,14 @@ describe("SetupWizard", () => {
     ).not.toBeInTheDocument();
   });
 
-  // The full first-onboarding run is the ONLY path that wires, and the render
+  // With background AI opted in, the full first-onboarding run wires, and the render
   // site `wireRouting={!initialStep}` is the load-bearing link the DoneStep-
   // direct tests can't cover (they pass the prop explicitly). Drive
   // welcome→done end-to-end with a configured pool and prove the pins land +
   // the summary renders. Mutation-proof: force `wireRouting={false}` at the
   // render site (which kills the feature in production) → exactly this fails.
-  it("full onboarding run (welcome→done) writes the derived pins and shows the summary", async () => {
+  it.each([false, true])("full onboarding run (welcome→done) respects background AI consent=%s", async (enabled) => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(enabled);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
       everyday: { source: "basic", model: null, mode: "auto", pin: null },
       synthesis: { source: "none", model: null, mode: "auto", pin: null },
@@ -1435,7 +1442,15 @@ describe("SetupWizard", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
-    // DoneStep's effect runs on the full run: derived pins written, summary shown.
+    // Both download completion and Done consult consent before filling pins.
+    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalled());
+    if (!enabled) {
+      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/);
+      expect(getResolvedRouting).not.toHaveBeenCalled();
+      expect(setSourcePin).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
+      return;
+    }
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
     expect(
       await screen.findByText(
@@ -1640,7 +1655,8 @@ describe("SetupWizard", () => {
     await screen.findByText("Wenlan is ready.");
   }
 
-  it("pins unset jobs when the model download resolves after the user already continued to Done", async () => {
+  it.each([false, true])("download resolves after Continue: respects current background AI consent=%s", async (enabled) => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const download = deferred();
     (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(download.promise);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
@@ -1651,15 +1667,25 @@ describe("SetupWizard", () => {
       await Promise.resolve();
     });
     expect(setSourcePin).not.toHaveBeenCalled();
+    expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
+    // Revoking consent while the transfer is pending must prevent a late fill.
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(enabled);
 
     await act(async () => {
       download.resolve();
     });
+    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalledTimes(1));
+    if (!enabled) {
+      expect(getResolvedRouting).not.toHaveBeenCalled();
+      expect(setSourcePin).not.toHaveBeenCalled();
+      return;
+    }
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true));
     expect(setSourcePin).toHaveBeenCalledTimes(1);
   });
 
-  it("still pins when the download resolves after Open Wenlan unmounted the wizard", async () => {
+  it.each([false, true])("download resolves after unmount: respects current background AI consent=%s", async (enabled) => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const download = deferred();
     (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockReturnValue(download.promise);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
@@ -1673,8 +1699,17 @@ describe("SetupWizard", () => {
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     unmount();
     expect(setSourcePin).not.toHaveBeenCalled();
+    expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
+    // Revoking consent while the transfer is pending must prevent a late fill.
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(enabled);
 
     download.resolve();
+    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalledTimes(1));
+    if (!enabled) {
+      expect(getResolvedRouting).not.toHaveBeenCalled();
+      expect(setSourcePin).not.toHaveBeenCalled();
+      return;
+    }
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "on_device", true));
   });
 
@@ -1682,6 +1717,7 @@ describe("SetupWizard", () => {
   // pinned is omitted from the write (null), so the daemon keeps whatever that
   // job holds when the write lands, including a change made after the read.
   it("fills only the unpinned job, so a pin the user changes while the fill is in flight survives", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const daemonPins: { everyday: string | null; synthesis: string | null } = {
       everyday: null,
       synthesis: "anthropic",
@@ -1706,6 +1742,7 @@ describe("SetupWizard", () => {
   });
 
   it("retries a failed pin write after the download resolves, then pins", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
     // Not mockRejectedValueOnce: an unconsumed once-queue survives
@@ -1727,6 +1764,7 @@ describe("SetupWizard", () => {
   });
 
   it("a rejected model download writes no pins", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (downloadOnDeviceModel as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("network down"));
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(loadedOnDeviceRouting());
 
@@ -1739,6 +1777,7 @@ describe("SetupWizard", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
     expect(getResolvedRouting).not.toHaveBeenCalled();
     expect(setSourcePin).not.toHaveBeenCalled();
   });
@@ -2771,8 +2810,8 @@ describe("displayedStatuses", () => {
 });
 
 // ── Onboarding routing wiring ───────────────────────────────────────────
-// First-onboarding writes explicit per-job pins so the defaults are visible,
-// not silent. Pure derivation is unit-tested; the effect (feature-detect →
+// With background AI opted in, first-onboarding writes explicit per-job pins
+// so the defaults are visible, not silent. Pure derivation is unit-tested; the effect (feature-detect →
 // write → summary) is tested through the rendered Done step.
 
 describe("deriveOnboardingPins", () => {
@@ -2824,7 +2863,7 @@ describe("deriveOnboardingPins", () => {
   });
 });
 
-// The wiring effect lives in DoneStep and only runs on the full first-onboarding
+// The consent-gated wiring effect lives in DoneStep and only runs on the full first-onboarding
 // run (wireRouting), which the wizard reaches from `welcome` with no initialStep.
 // The test architecture jumps to steps via initialStep (→ wireRouting=false), so
 // the write/feature-detect cases render DoneStep directly with wireRouting=true;
@@ -2861,6 +2900,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     vi.clearAllMocks();
     await i18n.changeLanguage("en");
     (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(false);
     (setSourcePin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     // Legacy by default; the pinned cases override per test.
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(null);
@@ -2875,7 +2915,8 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(screen.queryByText(/Pages will distill/)).not.toBeInTheDocument();
   });
 
-  it("pinned daemon: writes the derived pins and shows the wired-routing summary", async () => {
+  it.each([false, true])("pinned daemon: Done respects background AI consent=%s", async (enabled) => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(enabled);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
       routing({
         anthropic: { configured: true, everyday_model: null, synthesis_model: null },
@@ -2885,6 +2926,14 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     );
     renderDone(true);
 
+    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalledTimes(1));
+    if (!enabled) {
+      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/);
+      expect(getResolvedRouting).not.toHaveBeenCalled();
+      expect(setSourcePin).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
+      return;
+    }
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
     expect(
       await screen.findByText(
@@ -2898,6 +2947,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   });
 
   it("legacy daemon: never writes a pin and shows no routing summary", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     renderDone(true);
 
     await screen.findByText("Open Wenlan");
@@ -2916,6 +2966,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   });
 
   it("pinned daemon but nothing configured: writes no pin and shows no summary", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
       routing({
         anthropic: { configured: false, everyday_model: null, synthesis_model: null },
@@ -2942,6 +2993,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   // Done and the download's success both fill pins; both must obey the same
   // contract, so Done never replaces a pin that is already set.
   it("does not overwrite a job that is already pinned; fills the other and summarizes both", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
       everyday: { source: "anthropic", model: null, mode: "pinned", pin: "anthropic" },
       synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
@@ -2963,6 +3015,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   });
 
   it("every job already pinned (the download filled them first): writes nothing, still summarizes", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue({
       everyday: { source: "on_device", model: null, mode: "pinned", pin: "on_device" },
       synthesis: { source: "on_device", model: null, mode: "pinned", pin: "on_device" },
@@ -2986,6 +3039,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   });
 
   it("an on-device model that is not loaded yet is left to the download's own fill", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
       routing({
         anthropic: { configured: false, everyday_model: null, synthesis_model: null },
@@ -3004,6 +3058,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
   // Done fills pins through the same bounded retry as the download, so one
   // transient daemon failure does not leave both jobs unpinned.
   it("retries a transient pin write failure on Done, then pins and summarizes", async () => {
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(
       routing({
