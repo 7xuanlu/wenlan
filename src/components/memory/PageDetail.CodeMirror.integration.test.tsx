@@ -15,6 +15,7 @@ import {
 
 const tauriMocks = vi.hoisted(() => ({
   getPage: vi.fn(),
+  getKnowledgeGraph: vi.fn(),
   getPageSources: vi.fn(),
   listRegisteredSources: vi.fn(),
   getPageLinks: vi.fn(),
@@ -57,6 +58,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   tauriMocks.getPage.mockResolvedValue(PAGE);
+  tauriMocks.getKnowledgeGraph.mockResolvedValue({entities:[],relations:[],memories:[],memory_links:[],pages:[],page_links:[]});
   tauriMocks.getPageSources.mockResolvedValue([]);
   tauriMocks.listRegisteredSources.mockResolvedValue([]);
   tauriMocks.getPageLinks.mockResolvedValue({ outbound: [], inbound: [] });
@@ -389,7 +391,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     expect(
       screen.queryByRole("button", { name: "Copy as context" }),
     ).toBeNull();
-    expect(screen.queryByRole("button", { name: "Page actions" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Page actions" })).toBeVisible();
     expect(
       document.getElementById("page-markdown-editor-description"),
     ).toHaveClass("sr-only");
@@ -869,4 +871,22 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     expect(tauriMocks.updatePage).toHaveBeenCalledOnce();
   });
 
+});
+
+
+it("refreshes an open context graph after a page autosave persists new links", async () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(<QueryClientProvider client={client}><PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} /></QueryClientProvider>);
+  const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+  await userEvent.click(screen.getByRole("button", { name: "Page info" }));
+  await screen.findByText("No direct connections in the currently visible knowledge.");
+  const priorSave = tauriMocks.updatePage.getMockImplementation()!;
+  tauriMocks.updatePage.mockImplementationOnce(async (input) => {
+    const result = await priorSave(input);
+    tauriMocks.getKnowledgeGraph.mockResolvedValue({entities:[],relations:[],memories:[],memory_links:[],pages:[{id:"linked-note", title:"New linked note", space:null, creation_kind:"source", entity_id:null,last_modified:""}],page_links:[{from:{kind:"page",id:PAGE.id},to:{kind:"page",id:"linked-note"},link_type:"wikilink"}]});
+    return result;
+  });
+  act(() => replaceDocument(editorViewFromTextbox(textbox), "Body with [[New linked note]].\n"));
+  expect(await screen.findByRole("button", { name: "Open note: New linked note" })).toBeVisible();
+  expect(screen.queryByText("No direct connections in the currently visible knowledge.")).toBeNull();
 });

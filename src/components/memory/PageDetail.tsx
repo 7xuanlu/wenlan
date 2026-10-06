@@ -38,6 +38,7 @@ import ContentRenderer from "./ContentRenderer";
 import RelatedPages from "./page/RelatedPages";
 import PageInfo from "./page/PageInfo";
 import PageInfoDrawer from "./page/PageInfoDrawer";
+import KnowledgeContext from "./context/KnowledgeContext";
 import { pageReviewNotice, type PageReviewNotice } from "./page/pageReviewNotice";
 import { RailPanelTitle } from "./MemoryDetailPrimitives";
 import { processCitations, stripCitationLinks } from "../../lib/pageCitations";
@@ -519,6 +520,7 @@ export default function PageDetail({
       onCanonical: (canonical) => {
         queryClient.setQueryData(["page", canonical.id], canonical);
         void queryClient.invalidateQueries({ queryKey: ["pages"] });
+        void queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
         void queryClient.invalidateQueries({ queryKey: ["page-links", canonical.id] });
         void queryClient.invalidateQueries({ queryKey: ["page-revisions", canonical.id] });
       },
@@ -617,6 +619,7 @@ export default function PageDetail({
       // stale without immediately requesting a page that was just deleted.
       queryClient.invalidateQueries({ queryKey: ["page", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["pages"] });
+      queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       queryClient.invalidateQueries({ queryKey: ["page-links", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["page-revisions", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["page-sources", id], refetchType: "none" });
@@ -637,6 +640,7 @@ export default function PageDetail({
     onSuccess: (result, id) => {
       queryClient.invalidateQueries({ queryKey: ["page", id] });
       queryClient.invalidateQueries({ queryKey: ["pages"] });
+      queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       queryClient.invalidateQueries({ queryKey: ["page-links", id] });
       queryClient.invalidateQueries({ queryKey: ["page-revisions", id] });
       queryClient.invalidateQueries({ queryKey: ["page-sources", id] });
@@ -684,6 +688,7 @@ export default function PageDetail({
         queryClient.invalidateQueries({ queryKey: ["page", id] });
         // The wiki list renders the trust badges, so it is stale now too.
         queryClient.invalidateQueries({ queryKey: ["pages"] });
+        queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       }
       if (activePageIdRef.current !== id) return;
       setReviewNotice(pageReviewNotice(outcome, t));
@@ -1032,7 +1037,7 @@ export default function PageDetail({
         event.target.closest(
           // Navigation owns Escape while its popover or narrow drawer is open.
           // Dismissing those layers must not flush and leave the writing view.
-          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-sidebar-escape-scope], [data-sidebar-overlay="true"]',
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-sidebar-escape-scope], [data-sidebar-overlay="true"], [role="menu"]',
         )
       ) {
         return;
@@ -1390,9 +1395,9 @@ export default function PageDetail({
     editing && editGate.kind === "editor" && editHasMatchingTitle;
 
   return (
-    <div className="page-detail" onKeyDown={handlePageDetailKeyDown}>
+    <div className={`page-detail document-context-host${infoOpen && !showCanvas ? " document-context-open" : ""}`} onKeyDown={handlePageDetailKeyDown}>
       <div className="page-detail-top-row">
-        <div>
+        <div className="document-kind-label" title={t("knowledgeContext.noteHint")}>
           <WorkspaceBackButton
             aria-label={t("main.back")}
             className="mem-icon-action"
@@ -1401,6 +1406,7 @@ export default function PageDetail({
           >
             <ArrowLeft aria-hidden="true" size={16} />
           </WorkspaceBackButton>
+          <span>{t("knowledgeContext.noteKind")}</span>
         </div>
         <div className="page-detail-view-controls">
           <button
@@ -1432,11 +1438,155 @@ export default function PageDetail({
             aria-label={t("pageInfo.label")}
             title={t("pageInfo.label")}
             aria-expanded={infoOpen}
-            aria-haspopup="dialog"
             onClick={() => setInfoOpen(true)}
           >
-            <SidebarSimple aria-hidden="true" size={18} />
+            <SidebarSimple aria-hidden="true" size={18} style={{ transform: "scaleX(-1)" }} />
           </button>}
+              <div className="page-detail-actions-anchor" ref={actionMenuRef}>
+                <button
+                  ref={actionMenuTriggerRef}
+                  type="button"
+                  className="mem-icon-action page-detail-actions-menu-trigger"
+                  aria-expanded={actionMenuOpen}
+                  aria-haspopup="menu"
+                  aria-label={t("pageDetail.actions")}
+                  title={t("pageDetail.actions")}
+                  onKeyDown={(event) => handleMenuTriggerKeyDown(event, openActionMenu)}
+                  onClick={() => {
+                    if (actionMenuOpen) {
+                      setActionMenuOpen(false);
+                    } else {
+                      openActionMenu("first");
+                    }
+                  }}
+                >
+                  <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
+                    <circle cx="2" cy="2" r="1.5" />
+                    <circle cx="8" cy="2" r="1.5" />
+                    <circle cx="14" cy="2" r="1.5" />
+                  </svg>
+                </button>
+                {actionMenuOpen ? (
+                  <div
+                    aria-label={t("pageDetail.actions")}
+                    className="mem-popover-surface page-detail-actions-menu"
+                    onKeyDown={(event) => {
+                      handleMenuKeyDown(
+                        event,
+                        actionMenuListRef.current,
+                        () => setActionMenuOpen(false),
+                        actionMenuTriggerRef.current,
+                      );
+                    }}
+                    ref={actionMenuListRef}
+                    role="menu"
+                  >
+                    <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); setInfoOpen(true); }}>{t("pageInfo.label")}</button>
+                    {!editing ? (
+                      <button
+                        className="page-detail-mobile-menu-item"
+                        disabled={redistillMutation.isPending}
+                        onClick={() => {
+                          setActionMenuOpen(false);
+                          handleRedistillClick();
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {redistillMutation.isPending
+                          ? t("pageDetail.redistillingPage")
+                          : t("pageDetail.redistillPage")}
+                      </button>
+                    ) : null}
+                    <button
+                      className="page-detail-mobile-menu-item"
+                      disabled={copying || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive}
+                      onClick={() => {
+                        setActionMenuOpen(false);
+                        void copyAsContext();
+                      }}
+                      role="menuitem"
+                      type="button"
+                    >
+                      {copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
+                    </button>
+                    {obsidianSources.length === 0 ? (
+                      <button
+                        className="page-detail-mobile-menu-item"
+                        disabled
+                        role="menuitem"
+                        type="button"
+                      >
+                        {t("pageDetail.exportToObsidian")}
+                      </button>
+                    ) : (
+                      obsidianSources.map((source) => (
+                        <button
+                          className="page-detail-mobile-menu-item"
+                          disabled={exporting || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive}
+                          key={source.id}
+                          onClick={() => {
+                            setActionMenuOpen(false);
+                            void handleExportToVault(source.path);
+                          }}
+                          role="menuitem"
+                          type="button"
+                        >
+                          {obsidianSources.length === 1
+                            ? t("pageDetail.exportToObsidian")
+                            : t("pageDetail.exportToVault", { vault: folderName(source.path) })}
+                        </button>
+                      ))
+                    )}
+                    {/* Lives in the overflow menu at every width, like Delete,
+                        rather than mirroring an icon-row button — this is a
+                        low-frequency action that writes a durable record, and
+                        the icon row is already full of things you reach for
+                        constantly.
+
+                        Visible but disabled before the daemon's truth cutover is
+                        live, following the page editor's daemon-floor gate
+                        rather than the hide-it convention used for provider
+                        presets: this is an editorial action on the page in front
+                        of you, and a control that silently disappears reads as a
+                        feature that was taken away. The title says why.
+
+                        Gone while editing, matching Canvas and Re-distill: the
+                        mark attests the stored text, which is not what an open
+                        editor is showing. (M5 App PR, D2/D7.) */}
+                    {!editing ? (
+                      <button
+                        disabled={!reviewSupported || reviewMutation.isPending}
+                        onClick={() => {
+                          setActionMenuOpen(false);
+                          reviewMutation.mutate({ id: pageId, content: page.content });
+                        }}
+                        role="menuitem"
+                        title={
+                          reviewSupported
+                            ? t("pageDetail.markPageReviewed")
+                            : reviewUnavailableReason
+                        }
+                        type="button"
+                      >
+                        {t("pageDetail.markPageReviewed")}
+                      </button>
+                    ) : null}
+                    <button
+                      className="page-detail-menu-danger"
+                      disabled={
+                        editing || deleteMutation.isPending ||
+                        saveState.phase === "pending"
+                      }
+                      onClick={requestDelete}
+                      role="menuitem"
+                      type="button"
+                    >
+                      {t("pageDetail.deletePage")}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
         </div>
       </div>
 
@@ -1607,150 +1757,7 @@ export default function PageDetail({
                 )}
               </div>
               </div>
-              <div className="page-detail-actions-anchor" ref={actionMenuRef}>
-                <button
-                  ref={actionMenuTriggerRef}
-                  type="button"
-                  className="mem-icon-action page-detail-actions-menu-trigger"
-                  aria-expanded={actionMenuOpen}
-                  aria-haspopup="menu"
-                  aria-label={t("pageDetail.actions")}
-                  title={t("pageDetail.actions")}
-                  onKeyDown={(event) => handleMenuTriggerKeyDown(event, openActionMenu)}
-                  onClick={() => {
-                    if (actionMenuOpen) {
-                      setActionMenuOpen(false);
-                    } else {
-                      openActionMenu("first");
-                    }
-                  }}
-                >
-                  <svg aria-hidden="true" width="16" height="4" viewBox="0 0 16 4" fill="currentColor">
-                    <circle cx="2" cy="2" r="1.5" />
-                    <circle cx="8" cy="2" r="1.5" />
-                    <circle cx="14" cy="2" r="1.5" />
-                  </svg>
-                </button>
-                {actionMenuOpen ? (
-                  <div
-                    aria-label={t("pageDetail.actions")}
-                    className="mem-popover-surface page-detail-actions-menu"
-                    onKeyDown={(event) => {
-                      handleMenuKeyDown(
-                        event,
-                        actionMenuListRef.current,
-                        () => setActionMenuOpen(false),
-                        actionMenuTriggerRef.current,
-                      );
-                    }}
-                    ref={actionMenuListRef}
-                    role="menu"
-                  >
-                    {!editing ? (
-                      <button
-                        className="page-detail-mobile-menu-item"
-                        disabled={redistillMutation.isPending}
-                        onClick={() => {
-                          setActionMenuOpen(false);
-                          handleRedistillClick();
-                        }}
-                        role="menuitem"
-                        type="button"
-                      >
-                        {redistillMutation.isPending
-                          ? t("pageDetail.redistillingPage")
-                          : t("pageDetail.redistillPage")}
-                      </button>
-                    ) : null}
-                    <button
-                      className="page-detail-mobile-menu-item"
-                      disabled={copying}
-                      onClick={() => {
-                        setActionMenuOpen(false);
-                        void copyAsContext();
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
-                    </button>
-                    {obsidianSources.length === 0 ? (
-                      <button
-                        className="page-detail-mobile-menu-item"
-                        disabled
-                        role="menuitem"
-                        type="button"
-                      >
-                        {t("pageDetail.exportToObsidian")}
-                      </button>
-                    ) : (
-                      obsidianSources.map((source) => (
-                        <button
-                          className="page-detail-mobile-menu-item"
-                          disabled={exporting}
-                          key={source.id}
-                          onClick={() => {
-                            setActionMenuOpen(false);
-                            void handleExportToVault(source.path);
-                          }}
-                          role="menuitem"
-                          type="button"
-                        >
-                          {obsidianSources.length === 1
-                            ? t("pageDetail.exportToObsidian")
-                            : t("pageDetail.exportToVault", { vault: folderName(source.path) })}
-                        </button>
-                      ))
-                    )}
-                    {/* Lives in the overflow menu at every width, like Delete,
-                        rather than mirroring an icon-row button — this is a
-                        low-frequency action that writes a durable record, and
-                        the icon row is already full of things you reach for
-                        constantly.
 
-                        Visible but disabled before the daemon's truth cutover is
-                        live, following the page editor's daemon-floor gate
-                        rather than the hide-it convention used for provider
-                        presets: this is an editorial action on the page in front
-                        of you, and a control that silently disappears reads as a
-                        feature that was taken away. The title says why.
-
-                        Gone while editing, matching Canvas and Re-distill: the
-                        mark attests the stored text, which is not what an open
-                        editor is showing. (M5 App PR, D2/D7.) */}
-                    {!editing ? (
-                      <button
-                        disabled={!reviewSupported || reviewMutation.isPending}
-                        onClick={() => {
-                          setActionMenuOpen(false);
-                          reviewMutation.mutate({ id: pageId, content: page.content });
-                        }}
-                        role="menuitem"
-                        title={
-                          reviewSupported
-                            ? t("pageDetail.markPageReviewed")
-                            : reviewUnavailableReason
-                        }
-                        type="button"
-                      >
-                        {t("pageDetail.markPageReviewed")}
-                      </button>
-                    ) : null}
-                    <button
-                      className="page-detail-menu-danger"
-                      disabled={
-                        deleteMutation.isPending ||
-                        saveState.phase === "pending"
-                      }
-                      onClick={requestDelete}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {t("pageDetail.deletePage")}
-                    </button>
-                  </div>
-                ) : null}
-              </div>
             </div>
             )}
           </div>
@@ -2166,11 +2173,18 @@ export default function PageDetail({
       </div>
 
       <PageInfoDrawer
+        docked
         open={infoOpen && !showCanvas}
         onClose={() => setInfoOpen(false)}
         title={t("pageInfo.label")}
         closeLabel={t("common.close")}
       >
+          <p className="document-kind-description">{t("knowledgeContext.noteHint")}</p>
+          <KnowledgeContext key={pageId} kind="page" id={pageId} title={page.title}
+            onNavigateMemory={(id) => { setInfoOpen(false); onMemoryClick(id); }}
+            onNavigatePage={onPageClick ? (id) => { setInfoOpen(false); onPageClick(id); } : undefined}
+            onNavigateEntity={onEntityClick ? (id) => { setInfoOpen(false); onEntityClick(id); } : undefined}
+          />
           <div className="flex flex-wrap gap-2">
             {page.stale_reason && <span style={{ color: "var(--mem-accent-amber)" }}>
               {page.stale_reason === "source_conflict"

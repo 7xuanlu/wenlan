@@ -193,10 +193,14 @@ test("marks a stored page reviewed through the Review presence contract", async 
   await page.goto("/");
   await openFixtureArchitecture(page);
 
-  // All reading actions are absent while writing. Escape flushes the editor
-  // and returns to the stored text before the review action is reachable.
+  // Review attests stored text, so the menu omits it while writing. Escape
+  // flushes the editor before that action becomes reachable.
   await expect(page.getByRole("textbox", { name: "Page editor", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Page actions", exact: true })).toHaveCount(0);
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
+  await actions.click();
+  await expect(page.getByRole("menuitem", { name: "Mark page reviewed", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
   await closeWritingView(page);
 
   await expect(page.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();

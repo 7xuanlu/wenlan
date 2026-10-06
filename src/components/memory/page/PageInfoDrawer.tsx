@@ -1,23 +1,28 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useId, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
 import "./PageInfoDrawer.css";
 
 interface PageInfoDrawerProps {
   open: boolean;
+  docked?: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   closeLabel: string;
 }
 
-const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE = 'summary, a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 function focusableControls(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => {
     if (element.tabIndex < 0 || element.matches(":disabled") || element.closest("[hidden], [inert]")) return false;
     for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== panel; ancestor = ancestor.parentElement) {
+      if (ancestor.tagName === "DETAILS" && !ancestor.hasAttribute("open")) {
+        const summary = ancestor.querySelector(":scope > summary");
+        if (!summary?.contains(element)) return false;
+      }
       const style = getComputedStyle(ancestor);
       if (style.display === "none" || style.visibility === "hidden") return false;
     }
@@ -30,7 +35,16 @@ function focusableControls(panel: HTMLElement): HTMLElement[] {
   });
 }
 
-export default function PageInfoDrawer({ open, onClose, title, children, closeLabel }: PageInfoDrawerProps) {
+export default function PageInfoDrawer({ open, onClose, title, children, closeLabel, docked = false }: PageInfoDrawerProps) {
+  const [wide, setWide] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1100px)").matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(min-width: 1100px)");
+    const update = () => setWide(media.matches);
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, []);
+  const nonModal = docked && wide;
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -43,13 +57,14 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
     closeRef.current?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (nonModal && !(event.target instanceof Node && panelRef.current?.contains(event.target))) return;
       if (event.key === "Escape" && !event.isComposing) {
         event.preventDefault();
         event.stopPropagation();
         onCloseRef.current();
         return;
       }
-      if (event.key !== "Tab" || !panelRef.current) return;
+      if (nonModal || event.key !== "Tab" || !panelRef.current) return;
       const controls = focusableControls(panelRef.current);
       const first = controls[0];
       const last = controls[controls.length - 1];
@@ -67,26 +82,26 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
       if (event.target instanceof Node && !panelRef.current?.contains(event.target)) closeRef.current?.focus();
     };
     document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("focusin", containFocus);
+    if (!nonModal) document.addEventListener("focusin", containFocus);
     return () => {
       document.removeEventListener("keydown", onKeyDown, true);
       document.removeEventListener("focusin", containFocus);
-      if (trigger?.isConnected) trigger.focus();
+      if (trigger?.isConnected && (!nonModal || document.activeElement === document.body || panelRef.current?.contains(document.activeElement))) trigger.focus();
     };
-  }, [open]);
+  }, [open, nonModal]);
 
   if (!open) return null;
 
   return createPortal(
-    <div className="page-info-drawer-overlay" onClick={(event) => {
+    <div className={`page-info-drawer-overlay${nonModal ? " page-info-drawer-docked" : ""}`} onClick={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <aside
         aria-labelledby={titleId}
-        aria-modal="true"
+        aria-modal={nonModal ? undefined : true}
         className="page-info-drawer"
         ref={panelRef}
-        role="dialog"
+        role={nonModal ? "complementary" : "dialog"}
       >
         <header className="page-info-drawer-header">
           <h2 id={titleId}>{title}</h2>

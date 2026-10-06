@@ -305,8 +305,9 @@ export default function PageInfo({
                           : "1px solid color-mix(in srgb, var(--mem-border) 60%, transparent)",
                       cursor: "pointer",
                     }}
-                    onClick={() => onMemoryClick(locator)}
                   >
+                    <button type="button" className="page-info-source-button" onClick={() => onMemoryClick(locator)}
+                      aria-label={t("knowledgeContext.openMemory", { title: mem.title || t("knowledgeContext.untitled") })}>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
                         style={{
@@ -388,6 +389,7 @@ export default function PageInfo({
                         </span>
                       )}
                     </div>
+                    </button>
                   </li>
                 );
               })}
