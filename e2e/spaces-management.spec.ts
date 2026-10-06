@@ -82,10 +82,10 @@ test("manages Spaces, cleans MRU, and preserves data after a rejected mutation",
 
   await researchRow.getByRole("button", { name: "Research", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Research" })).toBeVisible();
-  await page.locator("button.space-dossier-parent").click();
+  await page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true }).click();
   await confirmedSpaceRow(page, "space-wenlan").getByRole("button", { name: "Wenlan", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
-  await page.locator("button.space-dossier-parent").click();
+  await page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true }).click();
 
   await openMenu(page, "space-research", "Research");
   await page.getByRole("menuitem", { name: "Rename" }).click();
