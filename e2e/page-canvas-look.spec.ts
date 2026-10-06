@@ -2,6 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { installTauriMock } from "./tauriMock";
 import { box, openCanvas, seedLargeMap } from "./helpers/pageCanvas";
+import { returnToPageReading } from "./helpers/pageReading";
 
 /**
  * The canvas's control surface in every state, both themes, photographed to
@@ -160,6 +161,7 @@ for (const theme of THEMES) {
         .getByRole("button", { name: "Wiki", exact: true })
         .click();
       await page.getByRole("button", { name: "Open Fixture architecture" }).click();
+      await returnToPageReading(page);
       await page.getByRole("button", { name: "Canvas" }).click();
       await expect(page.getByText("Loading canvas")).toBeVisible();
       await page.screenshot({ path: `shots/${theme}-7-loading.png` });
@@ -178,6 +180,7 @@ for (const theme of THEMES) {
         .getByRole("button", { name: "Wiki", exact: true })
         .click();
       await page.getByRole("button", { name: "Open Fixture architecture" }).click();
+      await returnToPageReading(page);
       await page.getByRole("button", { name: "Canvas" }).click();
       await expect(page.getByText("Could not load the canvas")).toBeVisible();
       await page.screenshot({ path: `shots/${theme}-8-error.png` });
