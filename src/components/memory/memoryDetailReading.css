@@ -1,6 +1,7 @@
 /* Content-first memory reading. All overrides stay within this detail surface. */
 .memory-detail-dossier.memory-detail-content-first {
-  width: min(100%, 848px);
+  width: 100%;
+  max-width: none;
   padding: 4px 24px 48px;
   gap: 24px;
   font-family: var(--mem-font-body);
@@ -9,7 +10,29 @@
 .memory-detail-content-first .memory-detail-header {
   width: 100%;
   margin: 0;
-  justify-content: flex-end;
+  justify-content: flex-start;
+}
+
+.memory-detail-content-first .memory-detail-kind {
+  color: var(--mem-text-tertiary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.memory-detail-content-first .memory-detail-actions {
+  margin-left: auto;
+}
+
+.memory-detail-context-content .memory-detail-information {
+  margin-top: 24px;
+}
+
+.memory-detail-context-content .memory-detail-disclosure {
+  margin-top: 24px;
+}
+
+.memory-detail-context-content .memory-detail-related-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .memory-detail-content-first .memory-detail-header:empty {
@@ -17,8 +40,9 @@
 }
 
 .memory-detail-content-first .memory-detail-reading {
-  width: 100%;
-  max-width: none;
+  width: min(100%, 800px);
+  max-width: 800px;
+  margin-inline: auto;
 }
 
 .memory-detail-content-first .memory-detail-body-text {
@@ -56,10 +80,6 @@
   border: 0;
   color: var(--mem-text-secondary);
   font-size: 14px;
-}
-
-.memory-detail-content-first .memory-detail-reading > .memory-detail-disclosure:first-of-type {
-  margin-top: 28px;
 }
 
 .memory-detail-content-first .memory-detail-disclosure[open] {

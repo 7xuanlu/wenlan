@@ -127,12 +127,12 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   const detail = page.getByRole("main", { name: "Memory dossier" });
   await expect(detail.getByText(memoryFixtures[0].content)).toBeVisible();
   await expect(detail.getByText(memoryFixtures[0].source_text!)).not.toBeVisible();
-  await detail.locator("summary").filter({ hasText: /^Source$/ }).click();
-  await expect(detail.getByText(memoryFixtures[0].source_text!)).toBeVisible();
-  await detail.locator("summary").filter({ hasText: /^Source$/ }).click();
-  await detail.locator("summary").filter({ hasText: /^Memory information$/ }).click();
-  await expect(detail.getByRole("button", { name: /decision/ })).toBeVisible();
-  await detail.locator("summary").filter({ hasText: /^Memory information$/ }).click();
+  await page.getByRole("button", { name: "Memory context", exact: true }).click();
+  const context = page.getByRole("dialog", { name: "Memory context" });
+  await context.locator("summary").filter({ hasText: /^Source$/ }).click();
+  await expect(context.getByText(memoryFixtures[0].source_text!)).toBeVisible();
+  await expect(context.getByRole("button", { name: /decision/ })).toBeVisible();
+  await context.getByRole("button", { name: "Close", exact: true }).click();
   const bodyParagraph = detail.locator(".content-renderer p").first();
   // Short memories use reading type, not a length-dependent display headline.
   await expect(bodyParagraph).toHaveCSS("font-size", "16px");
@@ -164,7 +164,7 @@ test("renders the empty parent memory list", async ({ page }) => {
   await openPrimaryDestination(page, "Memories");
 
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();
-  await expect(page.getByText("No memories yet")).toBeVisible();
+  await expect(page.getByText("No memories yet", { exact: true })).toBeVisible();
   await capture(page, "memory-list-empty");
 
   expect(pageErrors).toEqual([]);

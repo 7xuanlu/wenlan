@@ -339,6 +339,38 @@
   font-size: 10px;
 }
 
+.notes-memory-hint {
+  margin: -2px 9px 10px;
+  color: var(--mem-text-tertiary);
+  font: 11px/1.5 var(--mem-font-body);
+}
+
+.notes-memory-button {
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 3px;
+  padding-block: 9px;
+}
+
+.notes-memory-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: anywhere;
+  line-height: 1.5;
+}
+
+.notes-memory-title {
+  overflow: hidden;
+  color: var(--mem-text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notes-list-state {
   margin: 8px;
   color: var(--mem-text-tertiary);

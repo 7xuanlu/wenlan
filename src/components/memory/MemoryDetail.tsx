@@ -8,7 +8,6 @@ import {
   getEnrichmentStatus,
   getMemoryRevisions,
   getVersionChain,
-  listEntities,
   listAllTags,
   search,
   updateMemory,
@@ -28,16 +27,21 @@ import {
   type MemoryType,
   type PendingRevision,
 } from "../../lib/tauri";
+import { SidebarSimple } from "@phosphor-icons/react";
 import TagEditor from "../TagEditor";
+import PageInfoDrawer from "./page/PageInfoDrawer";
+import KnowledgeContext from "./context/KnowledgeContext";
 import ContentRenderer from "./ContentRenderer";
 import { DisclosureButton, PinIcon, RailPanelTitle } from "./MemoryDetailPrimitives";
 import "./memoryDetailReading.css";
 
 interface MemoryDetailProps {
+  onRegisterNavigationGuard?: (guard: (() => boolean) | null) => void;
   sourceId: string;
   onBack: () => void;
   onNavigateEntity: (entityId: string) => void;
   onNavigateMemory: (sourceId: string) => void;
+  onNavigatePage?: (pageId: string) => void;
 }
 
 interface MemoryDetailStatusProps {
@@ -124,10 +128,12 @@ function displayTitle(content: string, title: string | null | undefined, fallbac
 }
 
 export default function MemoryDetail({
+  onRegisterNavigationGuard,
   sourceId,
   onBack,
   onNavigateEntity,
   onNavigateMemory,
+  onNavigatePage,
 }: MemoryDetailProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -142,9 +148,9 @@ export default function MemoryDetail({
   const [sourceExpanded, setSourceExpanded] = useState(false);
   const [revisionHistoryExpanded, setRevisionHistoryExpanded] = useState(false);
   const [versionHistoryExpanded, setVersionHistoryExpanded] = useState(false);
-  const [relatedEntitiesExpanded, setRelatedEntitiesExpanded] = useState(false);
   const [relatedMemoriesExpanded, setRelatedMemoriesExpanded] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const actionsId = useId();
   const actionsRef = useRef<HTMLDivElement>(null);
   const actionsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -189,12 +195,6 @@ export default function MemoryDetail({
     retry: false,
   });
 
-  const { data: relatedEntities = [] } = useQuery({
-    queryKey: ["entities", undefined, memory?.domain],
-    queryFn: () => listEntities(undefined, memory?.domain ?? undefined),
-    enabled: !!memory?.domain,
-  });
-
   // For recaps: fetch exact source memories from structured_fields.source_ids
   // For regular memories: semantic search for related
   const recapSourceIds = memory?.is_recap ? parseSourceIds(memory.structured_fields) : [];
@@ -233,6 +233,7 @@ export default function MemoryDetail({
     queryClient.invalidateQueries({ queryKey: ["memoryDetail", sourceId] });
     queryClient.invalidateQueries({ queryKey: ["memory-revisions", sourceId] });
     queryClient.invalidateQueries({ queryKey: ["memories"] });
+    queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
     queryClient.invalidateQueries({ queryKey: ["memoryStats"] });
   };
 
@@ -240,6 +241,14 @@ export default function MemoryDetail({
     mutationFn: (content: string) => updateMemory(sourceId, content),
     onSuccess: invalidate,
   });
+
+  useEffect(() => {
+    onRegisterNavigationGuard?.(() => {
+      if (updateMutation.isPending) return false;
+      return !editing || editContent === memory?.content || confirm(t("pageDetail.editor.discardConfirm"));
+    });
+    return () => onRegisterNavigationGuard?.(null);
+  }, [onRegisterNavigationGuard, sourceId, editing, editContent, memory?.content, updateMutation.isPending, t]);
 
   const confirmMutation = useMutation({
     mutationFn: (confirmed: boolean) => updateMemory(sourceId, undefined, undefined, confirmed),
@@ -263,6 +272,7 @@ export default function MemoryDetail({
     mutationFn: () => deleteFileChunks("memory", sourceId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["memories"] });
+      queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       queryClient.invalidateQueries({ queryKey: ["memoryStats"] });
       onBack();
     },
@@ -274,6 +284,7 @@ export default function MemoryDetail({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["memoryDetail", sourceId] });
       queryClient.invalidateQueries({ queryKey: ["memories"] });
+      queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       queryClient.invalidateQueries({ queryKey: ["spaces"] });
       setSpacePickerOpen(false);
     },
@@ -285,7 +296,8 @@ export default function MemoryDetail({
     setSourceExpanded(false);
     setRevisionHistoryExpanded(false);
     setVersionHistoryExpanded(false);
-    setRelatedEntitiesExpanded(false);
+    setInfoOpen(false);
+    setEditingTags(false);
     setRelatedMemoriesExpanded(false);
     setExpandedVersion(null);
     setReclassifyOpen(false);
@@ -429,7 +441,6 @@ export default function MemoryDetail({
   const revisionEntries = memoryRevisions?.entries ?? [];
   const visibleRevisionEntries = revisionHistoryExpanded ? revisionEntries : revisionEntries.slice(0, 1);
   const visibleVersionChain = versionHistoryExpanded ? versionChain : versionChain.slice(0, 3);
-  const visibleRelatedEntities = relatedEntitiesExpanded ? relatedEntities : relatedEntities.slice(0, 4);
   const visibleRelatedMemories = relatedMemoriesExpanded ? relatedMemories : relatedMemories.slice(0, 3);
   const hasDaemonRevisionHistory = revisionEntries.length > 0;
   const title = displayTitle(memory.content, memory.title, t("memoryDetail.untitledMemory"));
@@ -439,10 +450,13 @@ export default function MemoryDetail({
   const hasSourceExcerpt = sourceText.length > 0 && sourceText !== memory.content.trim();
   const sourceClipped = sourceText.length > 360;
   const visibleSourceText = sourceExpanded || !sourceClipped ? sourceText : `${sourceText.slice(0, 360)}…`;
-  const hasConnections = relatedEntities.length > 0 || relatedMemories.length > 0;
+  const hasConnections = relatedMemories.length > 0;
+  const navigateMemory = (id: string) => { setInfoOpen(false); onNavigateMemory(id); };
+  const navigateEntity = (id: string) => { setInfoOpen(false); onNavigateEntity(id); };
+  const navigatePage = onNavigatePage ? (id: string) => { setInfoOpen(false); onNavigatePage(id); } : undefined;
 
   return (
-    <main className="memory-detail-dossier memory-detail-content-first" aria-label={t("memoryDetail.dossierLabel")}>
+    <main className={`memory-detail-dossier memory-detail-content-first document-context-host${infoOpen ? " document-context-open" : ""}`} aria-label={t("memoryDetail.dossierLabel")}>
       <header className="memory-detail-header">
         <WorkspaceBackButton
           type="button"
@@ -453,6 +467,7 @@ export default function MemoryDetail({
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </WorkspaceBackButton>
+        <span className="memory-detail-kind" title={t("knowledgeContext.memoryHint")}>{t("knowledgeContext.memoryKind")}</span>
         <div className="memory-detail-actions">
           {/* Copy as context — recap only */}
           {memory.is_recap && (
@@ -496,6 +511,18 @@ export default function MemoryDetail({
             </button>
           )}
 
+          <button
+            type="button"
+            className="memory-detail-icon-button memory-detail-context-trigger"
+            aria-label={t("knowledgeContext.memoryPanel")}
+            title={t("knowledgeContext.memoryPanel")}
+            aria-expanded={infoOpen}
+            aria-haspopup="dialog"
+            onClick={() => setInfoOpen(!infoOpen)}
+          >
+            <SidebarSimple aria-hidden="true" size={18} style={{ transform: "scaleX(-1)" }} />
+          </button>
+
           <div
             className="memory-detail-action-menu-anchor"
             ref={actionsRef}
@@ -525,6 +552,14 @@ export default function MemoryDetail({
             </button>
             {actionsOpen && (
               <div id={actionsId} className="memory-detail-action-menu" role="menu" aria-label={t("memoryDetail.actions")} onKeyDown={handleActionsKeyDown}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  tabIndex={-1}
+                  onClick={() => { closeActions(); setInfoOpen(true); }}
+                >
+                  {t("knowledgeContext.memoryPanel")}
+                </button>
                 <button
                   type="button"
                   role="menuitemcheckbox"
@@ -646,6 +681,13 @@ export default function MemoryDetail({
         </div>
       )}
 
+      </section>
+
+      <PageInfoDrawer docked open={infoOpen} onClose={() => setInfoOpen(false)} title={t("knowledgeContext.memoryPanel")} closeLabel={t("common.close")}>
+        <div className="memory-detail-content-first memory-detail-context-content">
+          <p className="knowledge-context-hint">{t("knowledgeContext.memoryHint")}</p>
+          <KnowledgeContext key={sourceId} kind="memory" id={sourceId} title={title} onNavigateMemory={navigateMemory} onNavigatePage={navigatePage} onNavigateEntity={navigateEntity} />
+
       {/* Source excerpt: the captured text behind this memory */}
       {hasSourceExcerpt && (
         <details key={`source-${sourceId}`} className="memory-detail-disclosure memory-detail-source">
@@ -666,10 +708,10 @@ export default function MemoryDetail({
         </details>
       )}
 
-      {/* Connections are available below the reading content. */}
+      {/* Exact recap sources and semantic similarity are distinct from explicit relations. */}
       {hasConnections && (
         <details key={`connections-${sourceId}`} className="memory-detail-disclosure memory-detail-connections">
-          <summary>{t("memoryDetail.connections")}</summary>
+          <summary>{memory.is_recap ? t("memoryDetail.sourceMemories") : t("knowledgeContext.similarMemories")}</summary>
           <div className="memory-detail-disclosure-body">
 
           {/* Related / Source memories */}
@@ -677,7 +719,7 @@ export default function MemoryDetail({
             <section className="memory-detail-rail-section">
               <div className="memory-detail-panel-heading">
                 <RailPanelTitle>
-                  {memory.is_recap ? t("memoryDetail.sourceMemories") : t("memoryDetail.relatedMemories")}
+                  {memory.is_recap ? t("memoryDetail.sourceMemories") : t("knowledgeContext.similarMemories")}
                 </RailPanelTitle>
                 {relatedMemories.length > visibleRelatedMemories.length && (
                   <DisclosureButton
@@ -704,7 +746,7 @@ export default function MemoryDetail({
                   return (
                     <button
                       key={'id' in r ? r.id : r.source_id}
-                      onClick={() => onNavigateMemory(r.source_id)}
+                      onClick={() => navigateMemory(r.source_id)}
                       className="memory-detail-related-card"
                     >
                       <div className="flex-1 min-w-0">
@@ -727,52 +769,11 @@ export default function MemoryDetail({
             </section>
           )}
 
-          {/* Related entities */}
-          {relatedEntities.length > 0 && (
-            <section className="memory-detail-rail-section">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>{t("memoryDetail.relatedEntities")}</RailPanelTitle>
-                {relatedEntities.length > visibleRelatedEntities.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: relatedEntities.length })}
-                    count={relatedEntities.length}
-                    onClick={() => setRelatedEntitiesExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {relatedEntitiesExpanded && relatedEntities.length > 4 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setRelatedEntitiesExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-entity-chip-list">
-                {visibleRelatedEntities.map((entity) => (
-                  <button
-                    key={entity.id}
-                    onClick={() => onNavigateEntity(entity.id)}
-                    className="memory-detail-entity-chip"
-                  >
-                    <span className="memory-detail-entity-name">
-                      {entity.name}
-                    </span>
-                    <span className="memory-detail-entity-type">
-                      {entity.entity_type}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
           </div>
         </details>
       )}
-      <details key={`information-${sourceId}`} className="memory-detail-disclosure memory-detail-information">
-        <summary>{t("memoryDetail.information")}</summary>
+      <section className="memory-detail-information">
+        <h3 className="memory-detail-subsection">{t("memoryDetail.information")}</h3>
         <div className="memory-detail-disclosure-body">
         <div className="memory-detail-eyebrow">
           <div className="relative" ref={dropdownRef}>
@@ -870,7 +871,7 @@ export default function MemoryDetail({
               <span className="memory-detail-strip-label">{t("memoryDetail.entity")}</span>
               <button
                 onClick={() => {
-                  if (memory.entity_id) onNavigateEntity(memory.entity_id);
+                  if (memory.entity_id) navigateEntity(memory.entity_id);
                 }}
                 className="memory-detail-link-button"
               >
@@ -1012,7 +1013,7 @@ export default function MemoryDetail({
                   return (
                     <button
                       key={entry.source_id}
-                      onClick={() => onNavigateMemory(entry.source_id)}
+                      onClick={() => navigateMemory(entry.source_id)}
                       className="memory-detail-context-row memory-detail-context-row-button"
                     >
                       {body}
@@ -1099,9 +1100,9 @@ export default function MemoryDetail({
         </div>
       )}
         </div>
-      </details>
-
       </section>
+        </div>
+      </PageInfoDrawer>
     </main>
   );
 }

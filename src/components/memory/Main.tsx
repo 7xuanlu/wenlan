@@ -217,6 +217,10 @@ export default function Main({
   const [activityOpen, setActivityOpen] = useState(false);
   const toggleActivity = useCallback(() => setActivityOpen((open) => !open), []);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const memoryNavigationGuardRef = useRef<(() => boolean) | null>(null);
+  const registerMemoryNavigationGuard = useCallback((guard: (() => boolean) | null) => {
+    memoryNavigationGuardRef.current = guard;
+  }, []);
   const [pageSavePending, setPageSavePending] = useState(false);
   const [pageEditDirty, setPageEditDirty] = useState(false);
   const [recentPagesRevision, setRecentPagesRevision] = useState(0);
@@ -228,6 +232,7 @@ export default function Main({
   pageEditDirtyRef.current = pageEditDirty;
 
   const canLeaveCurrentPage = () => {
+    if (viewRef.current.kind === "memory" && memoryNavigationGuardRef.current && !memoryNavigationGuardRef.current()) return false;
     if (pageSavePending) return false;
     if (
       view.kind === "page"
@@ -241,6 +246,7 @@ export default function Main({
   };
 
   const prepareForQuit = useCallback(async (): Promise<boolean> => {
+    if (viewRef.current.kind === "memory" && memoryNavigationGuardRef.current) return memoryNavigationGuardRef.current();
     if (viewRef.current.kind === "page" && pageFlushRef.current) {
       try { return await pageFlushRef.current(); } catch { return false; }
     }
@@ -518,7 +524,7 @@ export default function Main({
     });
   };
   const activeNavigation = activeNavigationForView(view);
-  const browseContext = activeNavigation !== null && activeNavigation !== "pages" && activeNavigation !== "home";
+  const browseContext = activeNavigation !== null && activeNavigation !== "pages" && activeNavigation !== "home" && activeNavigation !== "memories";
   const [browseSidebarOpen, setBrowseSidebarOpen] = useState<Record<string, boolean>>({});
   const contextSidebarCollapsed = browseContext ? !browseSidebarOpen[activeNavigation] : sidebarCollapsed;
   const toggleContextSidebar = () => {
@@ -827,6 +833,8 @@ export default function Main({
             activeNavigation={activeNavigation}
             collapsed={responsiveSidebar.collapsed}
             currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
+            currentMemoryId={view.kind === "memory" ? view.sourceId : null}
+            onSelectMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
             currentSpaceId={view.kind === "space" ? view.spaceId : null}
             onEntityClick={handleEntityClick}
             onNavigateLog={() => navigateTo({ kind: "stream" })}
@@ -851,7 +859,7 @@ export default function Main({
         )}
 
         {/* Main content */}
-        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${view.kind === "page" && !query ? " memory-main-content--page" : ""}`}`}>
+        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${(view.kind === "page" || view.kind === "memory") && !query ? " memory-main-content--page" : ""}`}`}>
           {/* Search results overlay */}
           {query ? (
             (memoryResults.length > 0 || sourceResults.length > 0 || entityResults.length > 0 || conceptResults.length > 0) ? (
@@ -1054,10 +1062,13 @@ export default function Main({
             />
           ) : view.kind === "memory" ? (
             <MemoryDetail
+              key={view.sourceId}
+              onRegisterNavigationGuard={registerMemoryNavigationGuard}
               sourceId={view.sourceId}
               onBack={navigateBack}
               onNavigateEntity={handleEntityClick}
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+              onNavigatePage={(pageId) => navigateTo({ kind: "page", pageId })}
             />
           ) : view.kind === "connect-agent" ? (
             <SetupWizard
