@@ -66,9 +66,9 @@ export function ConfirmedSpaces(props: ConfirmedSpacesProps) {
     <section className="spaces-section spaces-confirmed-section" aria-label={props.labels.confirmedHeading}>
       <div className="spaces-inventory-header">
         <label className="spaces-filter">
-          <span>{props.labels.filterLabel}</span>
           <input
             type="search"
+            aria-label={props.labels.filterLabel}
             value={props.filter}
             placeholder={props.labels.filterPlaceholder}
             onChange={(event) => props.onFilterChange(event.currentTarget.value)}
@@ -111,8 +111,6 @@ export function ConfirmedSpaces(props: ConfirmedSpacesProps) {
             <span data-space-column="drag" aria-hidden="true" />
             <span data-space-column="name" role="columnheader">{props.labels.title}</span>
             <span data-space-column="pages" role="columnheader">{props.labels.pages}</span>
-            <span data-space-column="memories" role="columnheader">{props.labels.memories}</span>
-            <span data-space-column="updated" role="columnheader">{props.labels.updated}</span>
             <span data-space-column="menu" aria-hidden="true" />
           </div>
           {props.spaces.map((space) => {

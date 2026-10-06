@@ -36,10 +36,10 @@ export function RawMemoriesSection({
           <path d="m9 18 6-6-6-6" />
         </svg>
         <span>{copy.rawMemories}</span>
-        <small>{new Intl.NumberFormat().format(totalMemoryCount)}</small>
+        {expanded && <small>{new Intl.NumberFormat().format(totalMemoryCount)}</small>}
       </button>
 
-      {isTruncated && (
+      {expanded && isTruncated && (
         <p className="space-dossier-archive-limit">
           {copy.showingLatest(MEMORY_FETCH_LIMIT, totalMemoryCount)}
         </p>

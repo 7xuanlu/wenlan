@@ -32,6 +32,11 @@ export async function getSpaceEntityButton(
     exact: true,
   });
   await expect(region).toBeVisible();
+  const disclosure = region.locator("details");
+  if (await disclosure.getAttribute("open") === null) {
+    await disclosure.locator("summary").click();
+  }
+  await expect(disclosure).toHaveAttribute("open");
 
   const entity = region.getByRole("button", {
     name: entityName,

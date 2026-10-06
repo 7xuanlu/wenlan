@@ -13,6 +13,7 @@ const indexCss = readFileSync(resolve(sourceDirectory, "index.css"), "utf8");
 const navigationCss = readFileSync(resolve(sourceDirectory, "components/memory/navigation/navigation-shell.css"), "utf8");
 const reviewBadgeCss = readFileSync(resolve(sourceDirectory, "components/memory/navigation/review-environment-badge.css"), "utf8");
 const spacesCss = readFileSync(resolve(sourceDirectory, "components/memory/spaces/spacesInventory.css"), "utf8");
+const spacesBaseCss = readFileSync(resolve(sourceDirectory, "components/memory/spaces/spaces.css"), "utf8");
 const spaceDetailCss = readFileSync(resolve(sourceDirectory, "components/memory/space-detail/space-detail.css"), "utf8");
 const spaceHeaderCss = readFileSync(resolve(sourceDirectory, "components/memory/space-detail/space-detail-header.css"), "utf8");
 const entityCss = readFileSync(resolve(sourceDirectory, "components/memory/entity-detail/EntityDetail.css"), "utf8");
@@ -182,6 +183,25 @@ describe("Spaces navigation redesign contrast", () => {
     }
   });
 
+  it("keeps the quiet space search readable with a visible keyboard focus", () => {
+    const focusOutline = ruleDeclaration(spacesBaseCss, ".spaces-overview input:focus-visible", "outline");
+    expect(focusOutline).toMatch(/^2px solid /);
+    for (const theme of ["dark", "light"] as const) {
+      const canvas = parseColor(themeToken(theme, "--mem-bg"));
+      const hover = composite(parseColor(themeToken(theme, "--mem-hover")), canvas);
+      const text = resolveDeclarationColor(theme, ruleDeclaration(spacesBaseCss, ".spaces-filter input", "color"));
+      expectContrast([
+        { label: `${theme} search text`, foreground: text, background: canvas },
+        { label: `${theme} search text on hover`, foreground: text, background: hover },
+      ], 4.5);
+      expectContrast([{
+        label: `${theme} search keyboard focus`,
+        foreground: resolveDeclarationColor(theme, focusOutline),
+        background: canvas,
+      }], 3);
+    }
+  });
+
   it("uses the scoped AA tokens only on the redesigned surfaces", () => {
     for (const [source, selector] of [
       [navigationCss, ".memory-sidebar"],
@@ -202,7 +222,7 @@ describe("Spaces navigation redesign contrast", () => {
       "var(--mem-text)",
     );
     for (const [source, selector, property] of [
-      [spacesCss, ".spaces-filter input", "border"],
+      [spacesCss, ".spaces-field input", "border"],
       [spaceHeaderCss, ".space-dossier-title-input", "border-bottom"],
       [spaceHeaderCss, ".space-dossier-description-editor", "border"],
     ] as const) {

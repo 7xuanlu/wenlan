@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useTranslation } from "react-i18next";
 import {
   confirmSpace,
   deleteSpace,
@@ -19,9 +18,6 @@ import { SPACE_DETAIL_KEY_COPY, type SpaceDetailCopy } from "./space-detail/copy
 import {
   MEMORY_FETCH_LIMIT,
   PAGE_FETCH_LIMIT,
-  formatLocalCalendarDate,
-  latestDossierUpdate,
-  pageCountLabel,
 } from "./space-detail/model";
 import "./space-detail/space-detail-header.css";
 import "./space-detail/space-detail.css";
@@ -54,7 +50,6 @@ export default function SpaceDetail({
   onSelectPage,
   spaceName,
 }: SpaceDetailProps) {
-  const { i18n } = useTranslation();
   const queryClient = useQueryClient();
   const spaceQuery = useQuery({
     queryKey: ["space", spaceName],
@@ -132,10 +127,6 @@ export default function SpaceDetail({
   const memories = memoriesQuery.data ?? [];
   const entities = entitiesQuery.data ?? [];
   const pages = pagesQuery.data ?? [];
-  const latestUpdate = latestDossierUpdate(space.updated_at, pages);
-  const updatedLabel = latestUpdate === null
-    ? copy.notUpdated
-    : formatLocalCalendarDate(latestUpdate, i18n.language);
   const mutationError = renameMutation.isError || deleteMutation.isError || confirmMutation.isError;
   const relatedLoadError = memoriesQuery.isError || entitiesQuery.isError || pagesQuery.isError;
 
@@ -154,17 +145,15 @@ export default function SpaceDetail({
         }}
         copy={copy}
         mutationError={mutationError}
-        pageCount={pageCountLabel(pages.length, i18n.language)}
         space={space}
-        updatedLabel={updatedLabel}
       />
 
       {relatedLoadError && <p className="space-dossier-error" role="alert">{copy.relatedLoadError}</p>}
 
       <SpaceDossierContent
+        key={space.id}
         copy={copy}
         entities={entities}
-        locale={i18n.language}
         navigation={{ onEntityClick, onSelectPage, ...(onReviewAll ? { onReviewAll } : {}) }}
         pages={pages}
       />

@@ -14,30 +14,33 @@ function renderSettingsSidebar(extraProps: Partial<React.ComponentProps<typeof S
       collapsed={false}
       active="general"
       onSelect={() => {}}
-      onNavigateHome={() => {}}
       {...extraProps}
     />,
   );
 }
 
 describe("SettingsSidebar", () => {
-  it("uses Home as the top return affordance instead of a Wenlan heading", async () => {
+  it("starts with settings classification without a Home entry", async () => {
     const user = userEvent.setup();
-    const onNavigateHome = vi.fn();
-    renderSettingsSidebar({ onNavigateHome });
+    const onSelect = vi.fn();
+    renderSettingsSidebar({ onSelect });
 
+    expect(screen.queryByRole("button", { name: "Home" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Wenlan" })).toBeNull();
+    const general = screen.getByRole("button", { name: "General" });
+    expect(screen.getByText("Settings").compareDocumentPosition(general) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
-    await user.click(screen.getByRole("button", { name: "Home" }));
+    await user.click(general);
 
-    expect(onNavigateHome).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith("general");
   });
 
   it("keeps the Wenlan brand in the footer", () => {
     renderSettingsSidebar();
 
     const settingsLabel = screen.getByText("Settings");
-    const brand = screen.getByRole("button", { name: "Wenlan" });
+    const brand = screen.getByText("Wenlan");
+    expect(screen.queryByRole("button", { name: "Wenlan" })).toBeNull();
 
     expect(settingsLabel.compareDocumentPosition(brand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
