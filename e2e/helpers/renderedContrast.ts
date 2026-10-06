@@ -3,7 +3,7 @@ import type { Page } from "@playwright/test";
 
 export type ContrastProbe = {
   readonly backgroundSelector?: string;
-  readonly foregroundProperty: "border-bottom-color" | "border-top-color" | "color" | "stroke";
+  readonly foregroundProperty: "border-bottom-color" | "border-top-color" | "color" | "outline-color" | "stroke";
   readonly label: string;
   readonly minimum: number;
   readonly selector: string;
