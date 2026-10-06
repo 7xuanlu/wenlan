@@ -682,8 +682,20 @@ async fn rename_page_projection_matches_post(
     let (Some(before_page), Some(current_page)) = (before_page, current_page) else {
         return Ok(false);
     };
-    let expected_current_page =
+    let mut expected_current_page =
         crate::export::knowledge::page_file_state_value(&after_page, projection_target_path);
+    // Older writers did not record a projection hash. The exact Markdown
+    // bytes have already matched above, so only an absent hash is compatible;
+    // a present but incorrect hash still makes recovery fail closed.
+    if current_page
+        .as_object()
+        .is_some_and(|page| !page.contains_key("content_sha256"))
+    {
+        expected_current_page
+            .as_object_mut()
+            .expect("PageFileState serializes as an object")
+            .remove("content_sha256");
+    }
     Ok(before_state == current_state
         && before_page.get("file")
             == Some(&serde_json::Value::String(projection_target_path.clone()))

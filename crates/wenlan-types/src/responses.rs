@@ -672,6 +672,25 @@ pub struct PageWriteResponse {
     pub gated: bool,
 }
 
+/// DB save and Markdown projection are separate completion boundaries.
+/// Existing PageWriteResponse consumers ignore these additive fields.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ManualPageWriteResponse {
+    pub ok: bool,
+    pub projection_status: PageProjectionStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub projection_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageProjectionStatus {
+    Synced,
+    Pending,
+    Hidden,
+    NotConfigured,
+}
+
 /// Page draft create, update, and publish response envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageDraftResponse {
@@ -1936,4 +1955,24 @@ pub struct PageReviewReceipt {
     pub verified_at: i64,
     pub caller_id: String,
     pub operation_id: String,
+}
+
+#[cfg(test)]
+mod manual_page_projection_compatibility_tests {
+    use super::*;
+
+    #[test]
+    fn committed_save_with_pending_projection_decodes_as_saved_for_existing_clients() {
+        let response = ManualPageWriteResponse {
+            ok: true,
+            projection_status: PageProjectionStatus::Pending,
+            projection_error: Some("external edit preserved".into()),
+        };
+        let json = serde_json::to_value(response).unwrap();
+        let old: PageWriteResponse = serde_json::from_value(json.clone()).unwrap();
+        assert!(old.ok && !old.gated);
+        assert!(old.revision_card_id.is_none());
+        let typed: ManualPageWriteResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(typed.projection_status, PageProjectionStatus::Pending);
+    }
 }

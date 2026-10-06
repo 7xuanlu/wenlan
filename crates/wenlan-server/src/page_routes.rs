@@ -1037,8 +1037,8 @@ pub async fn handle_list_orphan_links(
 ///
 /// Manual edit from the app. Goes through the one page-write gate, so a hand
 /// edit is treated like every other write: version CAS, changelog entry, and
-/// history row. This route does not re-project Markdown; the comment below
-/// documents that separate synchronization boundary.
+/// history row. Successful saves also repair Markdown from the latest DB row;
+/// projection failures never turn a committed save into a failed write.
 ///
 /// `expected_version` is optional. Sending it makes the edit a precondition
 /// (refused outright if the page moved); omitting it guards on the version the
@@ -1047,10 +1047,13 @@ pub async fn handle_update_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
     Json(req): Json<wenlan_types::requests::UpdatePageRequest>,
-) -> Result<Json<wenlan_types::responses::SuccessResponse>, ServerError> {
-    let db = {
+) -> Result<Json<wenlan_types::responses::ManualPageWriteResponse>, ServerError> {
+    let (db, page_root) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
     };
     // Preserve the route's 404 shape, but do not copy sources from this
     // advisory read. PageWrite derives them again from the exact generation
@@ -1060,12 +1063,8 @@ pub async fn handle_update_page(
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::NotFound(format!("page {id} not found")))?;
 
-    // knowledge_path=None: this route does not re-project the md, so an
-    // in-app edit leaves the vault copy stale until the next re-distill (the
-    // watcher sees the daemon ahead and skips rather than reverting, so the
-    // DB stays authoritative and nothing is lost). Projecting here needs the
-    // knowledge path to come from ServerState — reading global config inside
-    // a handler would point tests at the user's real vault. Tracked separately.
+    // Use captured server state, never global config (which would point an
+    // isolated handler at the user's vault). Core commits DB + receipt first.
     let result = wenlan_core::post_write::update_page_preserving_sources(
         &db,
         &id,
@@ -1077,7 +1076,7 @@ pub async fn handle_update_page(
             operation_id: req.operation_id,
         },
         "manual_edit",
-        None,
+        page_root.as_deref(),
     )
     .await?;
 
@@ -1090,7 +1089,35 @@ pub async fn handle_update_page(
     use wenlan_core::post_write::WriteOutcome;
     match result.outcome {
         WriteOutcome::Wrote | WriteOutcome::Unchanged => {
-            Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+            use wenlan_types::responses::{ManualPageWriteResponse, PageProjectionStatus};
+            let (projection_status, projection_error) = match page_root {
+                Some(root) => {
+                    let projected =
+                        wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(root, &db);
+                    match db.get_page(&id).await {
+                        Ok(Some(page)) => {
+                            match projected.write_page_gated(&db, &page).await {
+                                Ok(Some(_)) => (PageProjectionStatus::Synced, None),
+                                Ok(None) => (PageProjectionStatus::Hidden, None),
+                                Err(error) => {
+                                    tracing::warn!("[update_page] DB saved; projection pending for {id}: {error}");
+                                    (PageProjectionStatus::Pending, Some(error.to_string()))
+                                }
+                            }
+                        }
+                        _ => (
+                            PageProjectionStatus::Pending,
+                            Some("saved page could not be loaded for projection".into()),
+                        ),
+                    }
+                }
+                None => (PageProjectionStatus::NotConfigured, None),
+            };
+            Ok(Json(ManualPageWriteResponse {
+                ok: true,
+                projection_status,
+                projection_error,
+            }))
         }
         WriteOutcome::Refused => Err(ServerError::Conflict(format!(
             "page {id} changed while this edit was open; reload and reapply"
@@ -1114,10 +1141,9 @@ pub async fn handle_update_page(
 /// `re_distill_stale_pages`). Distinct from POST `/api/memory/{id}/update-page`
 /// (manual edit, flips `user_edited`, preserves sources).
 ///
-/// Atomicity mirrors `handle_create_page`: write md first, persist DB index
-/// second, roll back md on DB failure. Old md content is held in memory
-/// for the rollback path so a failed DB update doesn't leave a stale .md
-/// without a matching row.
+/// Commit through the canonical CAS gate before projecting. A rejected
+/// candidate never reaches the vault, so a failed gate needs no filesystem
+/// rollback that could overwrite an interleaved external edit.
 pub async fn handle_refresh_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
@@ -1164,9 +1190,12 @@ async fn handle_refresh_page_inner(
     wenlan_core::export::provenance::validate_canonical_page_content(&req.content)
         .map_err(ServerError::from)?;
 
-    let db = {
+    let (db, page_root) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
     };
 
     // Read the staleness fence before the fields it protects (same
@@ -1224,151 +1253,49 @@ async fn handle_refresh_page_inner(
         ));
     }
 
-    let knowledge_path = wenlan_core::config::load_config().knowledge_path_or_default();
-    let writer = wenlan_core::export::knowledge::KnowledgeWriter::new(knowledge_path.clone(), &db);
-
-    // Snapshot the current md content for rollback. If the file is missing
-    // we tolerate it — the page may have been created before the projection
-    // existed; the rollback then becomes a remove_page.
-    let existing_state_file = writer.page_filename(&id);
-    let existing_md_content = existing_state_file
-        .as_ref()
-        .and_then(|f| std::fs::read_to_string(knowledge_path.join(f)).ok());
-    let projection = writer.begin_projection_write();
-
-    // Build the refreshed Page for md rendering. Bump version + last_modified
-    // mirror what `update_page_content` writes to the DB row.
-    //
-    // Summary semantics: `None` keeps the existing summary. `Some(s)` where
-    // `s` is non-empty replaces it. `Some("")` clears it — empty string maps
-    // to NULL in the DB so `IS NULL` filters work (per wenlan-core's NULL
-    // semantics rule). The MCP tool description documents this; normalize
-    // here so the daemon never stores a literal empty string.
-    let now = chrono::Utc::now().to_rfc3339();
+    // Summary omitted keeps the current value; an empty string clears it.
     let summary_update: Option<Option<String>> = match &req.summary {
         Some(s) if s.is_empty() => Some(None),
         Some(s) => Some(Some(s.clone())),
         None => None,
     };
-    let refreshed_summary = match &summary_update {
-        Some(opt) => opt.clone(),
-        None => existing.summary.clone(),
-    };
-    let refreshed_page = wenlan_core::pages::Page {
-        id: existing.id.clone(),
-        title: existing.title.clone(),
-        summary: refreshed_summary.clone(),
-        content: req.content.clone(),
-        entity_id: existing.entity_id.clone(),
-        space: existing.space.clone(),
-        source_memory_ids: req.source_memory_ids.clone(),
-        version: existing.version + 1,
-        status: existing.status.clone(),
-        created_at: existing.created_at.clone(),
-        last_compiled: now.clone(),
-        last_modified: now.clone(),
-        sources_updated_count: 0,
-        stale_reason: None,
-        pending_rebuild: None,
-        refresh_blocked_reason: None,
-        user_edited: existing.user_edited,
-        relevance_score: 0.0,
-        last_edited_by: None,
-        last_edited_at: None,
-        last_delta_summary: None,
-        changelog: None,
-        creation_kind: existing.creation_kind.clone(),
-        review_status: existing.review_status.clone(),
-        workspace: existing.workspace.clone(),
-        // Content update without fresh citations resets citations to []
-        // (Global Constraints: stale claim-maps must not survive a content edit).
-        citations: Vec::new(),
-        kind: existing.kind.clone(),
-        truth: None,
-    };
-
-    // 1. md-first
-    projection
-        .write_page_gated(&db, &refreshed_page)
-        .await
-        .map_err(|e| ServerError::IngestFailed(format!("write_page: {}", e)))?;
-
     use wenlan_core::post_write::WriteOutcome;
-    let db_result: Result<wenlan_core::post_write::WriteResult, wenlan_core::error::WenlanError> =
-        async {
-            let result = wenlan_core::post_write::update_page_at_source_revision(
-                &db,
-                &id,
-                wenlan_types::requests::UpdatePageRequest {
-                    content: req.content.clone(),
-                    source_memory_ids: req.source_memory_ids.clone(),
-                    expected_version: None,
-                    caller_id: None,
-                    operation_id: None,
-                },
-                "agent_refresh",
-                false,
-                source_revision,
-                None,
-                None,
-            )
-            .await?;
-            // Carry the rest of the refresh only when the DB agrees with what the
-            // agent asked for. A Gated/Refused/Contended outcome means a human owns
-            // this prose right now — rewriting its summary or clearing its staleness
-            // would apply half of a refresh the gate just declined.
-            if matches!(
-                result.outcome,
-                WriteOutcome::Wrote | WriteOutcome::Unchanged
-            ) {
-                if let Some(opt) = &summary_update {
-                    db.update_page_summary(&id, opt.as_deref()).await?;
+    let result = wenlan_core::post_write::update_page_at_source_revision(
+        &db,
+        &id,
+        wenlan_types::requests::UpdatePageRequest {
+            content: req.content.clone(),
+            source_memory_ids: req.source_memory_ids.clone(),
+            expected_version: None,
+            caller_id: None,
+            operation_id: None,
+        },
+        "agent_refresh",
+        false,
+        source_revision,
+        page_root.as_deref(),
+        None,
+    )
+    .await?;
+    // Metadata follows the canonical result, never a rejected/staged candidate.
+    if matches!(
+        result.outcome,
+        WriteOutcome::Wrote | WriteOutcome::Unchanged
+    ) {
+        if let Some(opt) = &summary_update {
+            db.update_page_summary(&id, opt.as_deref()).await?;
+        }
+        db.clear_page_staleness(&id).await?;
+        if let Some(root) = page_root {
+            // Re-read so a concurrent human edit cannot be replaced by the
+            // original refresh snapshot. Projection failure is post-commit.
+            if let Some(page) = db.get_page(&id).await? {
+                let projection =
+                    wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(root, &db);
+                if let Err(error) = projection.write_page_gated(&db, &page).await {
+                    tracing::warn!("[page] refresh saved; projection pending for {id}: {error}");
                 }
-                db.clear_page_staleness(&id).await?;
             }
-            Ok(result)
-        }
-        .await;
-
-    // Roll back md to the snapshotted content so the two stores stay consistent.
-    // If the file existed before and we have its bytes, rewrite them; otherwise
-    // drop the projection.
-    let roll_back_md = || match (&existing_state_file, &existing_md_content) {
-        (Some(filename), Some(prev)) => {
-            std::fs::write(knowledge_path.join(filename), prev).map_err(|io| io.to_string())
-        }
-        _ => projection.remove_page(&id).map_err(|err| err.to_string()),
-    };
-
-    let result = match db_result {
-        Ok(result) => result,
-        Err(e) => {
-            if let Err(rb) = roll_back_md() {
-                tracing::warn!(
-                    "[page] PUT failed and md rollback also failed for {}: db_err={}, rollback_err={}",
-                    id,
-                    e,
-                    rb
-                );
-            }
-            return Err(ServerError::from(e));
-        }
-    };
-
-    // The md was written before the gate ran, stamped `version + 1`. If the write
-    // did not land, that stamp is a lie the page watcher will act on: it ingests
-    // any md whose `origin_version` is >= the DB version as an `fs_edit`
-    // (sources/page_watcher.rs), which would re-apply this agent content AS A
-    // HUMAN WRITE and flip `user_edited` — laundering it straight past the gate
-    // that just refused it. Restore the vault to what the DB actually holds.
-    if result.outcome != WriteOutcome::Wrote {
-        if let Err(rb) = roll_back_md() {
-            tracing::warn!(
-                "[page] PUT did not write ({:?}) and md rollback failed for {}: {}",
-                result.outcome,
-                id,
-                rb
-            );
         }
     }
 
