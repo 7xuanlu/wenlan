@@ -184,7 +184,7 @@ describe("EntityDetail characterization", () => {
 
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(defaultProps.onBack).toHaveBeenCalledOnce();
-    expect(await screen.findByText("Couldn't load this entity.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load this topic.")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByRole("heading", { name: "Ada Lovelace" })).toBeInTheDocument();
@@ -194,7 +194,7 @@ describe("EntityDetail characterization", () => {
   it("confirms the entity and an observation", async () => {
     const { user } = renderEntity();
 
-    await user.click(await screen.findByRole("button", { name: "Confirm entity" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm topic" }));
     await user.click(screen.getByRole("button", { name: "Mark note confirmed" }));
 
     await waitFor(() => {
@@ -303,7 +303,7 @@ describe("EntityDetail characterization", () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Delete entity" }));
+    await user.click(screen.getByRole("button", { name: "Delete topic" }));
     expect(deleteEntity).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /^Delete$/ }));
 

@@ -16,6 +16,7 @@ type EntityObservationsProps = {
   readonly entityName: string;
   readonly observations: readonly Observation[];
   readonly onInvalidate: () => void;
+  readonly readOnly?: boolean;
 };
 
 export function EntityObservations({
@@ -23,6 +24,7 @@ export function EntityObservations({
   entityName,
   observations: rawObservations,
   onInvalidate,
+  readOnly = false,
 }: EntityObservationsProps) {
   const { t } = useTranslation();
   const [editingObservationId, setEditingObservationId] = useState<string | null>(null);
@@ -41,15 +43,18 @@ export function EntityObservations({
     [rawObservations],
   );
   const updateMutation = useMutation({
+    mutationKey: ["entity-observations", entityId],
     mutationFn: ({ id, content }: { id: string; content: string }) =>
       updateObservation(id, content),
     onSuccess: onInvalidate,
   });
   const deleteMutation = useMutation({
+    mutationKey: ["entity-observations", entityId],
     mutationFn: (id: string) => deleteObservation(id),
     onSuccess: onInvalidate,
   });
   const addMutation = useMutation({
+    mutationKey: ["entity-observations", entityId],
     mutationFn: (content: string) => addObservation(entityId, content, "human", 1),
     onSuccess: () => {
       setNewObservation("");
@@ -58,6 +63,7 @@ export function EntityObservations({
     },
   });
   const confirmMutation = useMutation({
+    mutationKey: ["entity-observations", entityId],
     mutationFn: ({ id, confirmed }: { id: string; confirmed: boolean }) =>
       confirmObservation(id, confirmed),
     onSuccess: onInvalidate,
@@ -69,7 +75,7 @@ export function EntityObservations({
     confirmMutation.isError;
 
   const saveEdit = (id: string) => {
-    if (updateMutation.isPending) return;
+    if (readOnly || updateMutation.isPending) return;
     const trimmed = editContent.trim();
     const original = observations.find((observation) => observation.id === id)?.content;
     if (!trimmed || trimmed === original) {
@@ -89,7 +95,7 @@ export function EntityObservations({
         <h2 id="entity-about-title" className="memory-detail-section-title">
           {t("entityDetail.aboutTitle")}
         </h2>
-        {!showAddForm ? (
+        {!readOnly && !showAddForm ? (
           <button
             type="button"
             className="memory-detail-text-button"
@@ -116,7 +122,7 @@ export function EntityObservations({
                 <button
                   type="button"
                   className="memory-detail-state-button entity-obs-state"
-                  disabled={confirmMutation.isPending}
+                  disabled={readOnly || confirmMutation.isPending}
                   onClick={() =>
                     confirmMutation.mutate({
                       id: observation.id,
@@ -159,13 +165,14 @@ export function EntityObservations({
                       }
                     }}
                     autoFocus
-                    disabled={updateMutation.isPending}
+                    disabled={readOnly || updateMutation.isPending}
                     className="entity-obs-input"
                     aria-label={t("entityDetail.editNote")}
                   />
                 ) : (
                   <button
                     type="button"
+                    disabled={readOnly}
                     className={`entity-obs-content ${observation.confirmed ? "" : "is-unconfirmed"}`}
                     onClick={() => {
                       setEditingObservationId(observation.id);
@@ -183,7 +190,7 @@ export function EntityObservations({
                 {confidence ? <span className="entity-obs-confidence">{confidence}</span> : null}
                 <button
                   type="button"
-                  disabled={deleteMutation.isPending}
+                  disabled={readOnly || deleteMutation.isPending}
                   onClick={() => deleteMutation.mutate(observation.id)}
                   className="entity-obs-delete"
                   aria-label={t("entityDetail.deleteNote")}
@@ -204,13 +211,13 @@ export function EntityObservations({
               </div>
             );
           })}
-          {showAddForm ? (
+          {showAddForm && !readOnly ? (
             <div className="entity-obs-add">
               <input
                 value={newObservation}
                 onChange={(event) => setNewObservation(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && newObservation.trim() && !addMutation.isPending) {
+                  if (event.key === "Enter" && !readOnly && newObservation.trim() && !addMutation.isPending) {
                     addMutation.mutate(newObservation.trim());
                   }
                   if (event.key === "Escape") {

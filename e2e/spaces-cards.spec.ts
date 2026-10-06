@@ -45,7 +45,7 @@ test("Spaces cards lens stays inside the viewport", async ({ browser }) => {
     const first = cards.locator(".asset-card").first();
     await expect(first).toContainText("6 pages");
     await expect(first).toContainText("205 memories");
-    await expect(first).toContainText("7 entities");
+    await expect(first).toContainText("7 topics");
 
     const overflow = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,

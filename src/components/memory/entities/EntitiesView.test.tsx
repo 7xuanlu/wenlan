@@ -1,12 +1,25 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Entity, ListEntitiesRequest } from "../../../lib/tauri";
+import { toast } from "sonner";
+import {
+  archiveEntities,
+  confirmEntity,
+  deleteEntity,
+  queryEntities,
+  restoreEntities,
+  type Entity,
+} from "../../../lib/tauri";
 import { EntitiesView } from "./EntitiesView";
+import { loadActiveTopicsPage, type TopicCursor } from "./topicBrowse";
+import { DEFAULT_FILTERS, type EntityFilters } from "./entitiesViewModel";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-
+vi.mock("./topicBrowse", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./topicBrowse")>()),
+  loadActiveTopicsPage: vi.fn(),
+}));
 vi.mock("../../../lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../lib/tauri")>()),
   queryEntities: vi.fn(),
@@ -32,736 +45,361 @@ function entity(overrides: Partial<Entity> & { id: string; name: string }): Enti
   };
 }
 
-// A small in-memory stand-in for the daemon's /entities/query and
-// /entities/archive|restore routes (crates/wenlan-server/src/entity_graph_routes.rs),
-// faithful enough to exercise the view's real request-building and its
-// archive-all-matching / restore round trip end to end.
-function matchesFilter(candidate: Entity, filter: ListEntitiesRequest): boolean {
-  if (filter.status && candidate.status !== filter.status) return false;
-  if (filter.entity_type && candidate.entity_type !== filter.entity_type) return false;
-  if (typeof filter.min_memories === "number" && candidate.memory_count < filter.min_memories) return false;
-  if (typeof filter.max_memories === "number" && candidate.memory_count > filter.max_memories) return false;
-  if (filter.query && !candidate.name.toLowerCase().includes(filter.query.toLowerCase())) return false;
-  return true;
+function cursor(offset: number): TopicCursor {
+  const stream = { buffer: [], offset, total: 300, exhausted: false };
+  return { detected: stream, established: stream };
+}
+
+function page(entities: Entity[], hasMore = false, nextCursor = cursor(entities.length)) {
+  return { entities, total: entities.length, cursor: nextCursor, hasMore };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 let fixture: Entity[];
 
-function seedFixture(): Entity[] {
-  return [
-    entity({ id: "ada", name: "Ada Lovelace", entity_type: "person", status: "detected", memory_count: 0 }),
-    entity({ id: "babbage", name: "Charles Babbage", entity_type: "person", status: "detected", memory_count: 2 }),
-    entity({
-      id: "engine",
-      name: "Analytical Engine",
-      entity_type: "concept",
-      status: "established",
-      memory_count: 5,
-      established_by: "auto:memories",
-      confirmed: true,
-    }),
-    entity({
-      id: "countess",
-      name: "Countess of Lovelace",
-      entity_type: "person",
-      status: "archived",
-      memory_count: 1,
-      confirmed: true,
-      established_by: "manual",
-    }),
-  ];
-}
-
-beforeEach(async () => {
-  fixture = seedFixture();
-  // Pin the pre-existing row tests to the rows lens; the cards tests below
-  // manage the key themselves (clear it for the cards default).
+beforeEach(() => {
+  vi.resetAllMocks();
   window.localStorage.setItem("wenlan-entities-view-mode", "rows");
-  const tauri = await import("../../../lib/tauri");
-
-  vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
-    const all = fixture.filter((candidate) => matchesFilter(candidate, filter));
-    const offset = filter.offset ?? 0;
-    const limit = filter.limit ?? 100;
-    return { entities: all.slice(offset, offset + limit), total: all.length };
-  });
-
-  vi.mocked(tauri.archiveEntities).mockImplementation(async (req) => {
-    const eligible = fixture.filter((candidate) => candidate.status !== "archived");
-    const selected = req.ids
-      ? eligible.filter((candidate) => req.ids?.includes(candidate.id))
-      : eligible.filter((candidate) => matchesFilter(candidate, req.filter ?? {}));
-    if (!req.dry_run) {
-      const ids = new Set(selected.map((candidate) => candidate.id));
-      fixture = fixture.map((candidate) =>
-        ids.has(candidate.id) ? { ...candidate, status: "archived" } : candidate,
-      );
-    }
-    return { count: selected.length, entity_ids: selected.map((candidate) => candidate.id), dry_run: req.dry_run };
-  });
-
-  vi.mocked(tauri.restoreEntities).mockImplementation(async (req) => {
-    const eligible = fixture.filter((candidate) => candidate.status === "archived");
-    const selected = req.ids
-      ? eligible.filter((candidate) => req.ids?.includes(candidate.id))
-      : eligible.filter((candidate) => matchesFilter(candidate, req.filter ?? {}));
-    if (!req.dry_run) {
-      const ids = new Set(selected.map((candidate) => candidate.id));
-      fixture = fixture.map((candidate) =>
-        ids.has(candidate.id)
-          ? { ...candidate, status: candidate.confirmed ? "established" : "detected" }
-          : candidate,
-      );
-    }
-    return { count: selected.length, entity_ids: selected.map((candidate) => candidate.id), dry_run: req.dry_run };
-  });
-
-  vi.mocked(tauri.confirmEntity).mockImplementation(async (id, confirmed) => {
-    fixture = fixture.map((candidate) =>
-      candidate.id === id
-        ? { ...candidate, confirmed, status: confirmed ? "established" : candidate.status, established_by: confirmed ? "manual" : candidate.established_by }
-        : candidate,
+  fixture = [
+    entity({ id: "ada", name: "Ada Lovelace", entity_type: "person", space: "History" }),
+    entity({ id: "engine", name: "Analytical Engine", status: "established", confirmed: true, memory_count: 5 }),
+    entity({ id: "countess", name: "Countess of Lovelace", entity_type: "person", status: "archived" }),
+  ];
+  vi.mocked(loadActiveTopicsPage).mockImplementation(async (filters: EntityFilters, nextCursor?: TopicCursor) => {
+    const all = fixture.filter((candidate) =>
+      candidate.status !== "archived"
+      && (filters.type === "all" || candidate.entity_type === filters.type)
+      && candidate.name.toLowerCase().includes(filters.query.trim().toLowerCase()),
     );
+    const offset = nextCursor?.detected.offset ?? 0;
+    return { entities: all.slice(offset, offset + 100), total: all.length, cursor: cursor(offset + 100), hasMore: offset + 100 < all.length };
   });
-
-  vi.mocked(tauri.deleteEntity).mockImplementation(async (id) => {
-    fixture = fixture.filter((candidate) => candidate.id !== id);
+  vi.mocked(queryEntities).mockImplementation(async (filter) => {
+    const all = fixture.filter((candidate) =>
+      candidate.status === filter.status
+      && (!filter.entity_type || candidate.entity_type === filter.entity_type)
+      && (!filter.query || candidate.name.toLowerCase().includes(filter.query.toLowerCase())),
+    );
+    const offset = filter.offset ?? 0;
+    return { entities: all.slice(offset, offset + (filter.limit ?? 100)), total: all.length };
   });
 });
 
-afterEach(() => {
-  cleanup();
-  vi.clearAllMocks();
-});
+afterEach(() => cleanup());
 
-function renderView(onEntityClick = vi.fn()) {
+function renderView() {
+  const onEntityClick = vi.fn();
   return { onEntityClick, user: userEvent.setup(), ...render(<EntitiesView onEntityClick={onEntityClick} />) };
 }
 
-async function openTab(user: ReturnType<typeof userEvent.setup>, name: RegExp) {
-  await user.click(screen.getByRole("tab", { name }));
+async function openArchived(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Topic options" }));
+  await user.click(screen.getByRole("menuitem", { name: "View archived topics" }));
 }
 
-describe("EntitiesView", () => {
-  it("opens on the Detected tab and lists its rows with tab counts", async () => {
-    renderView();
+function expectNoMutations() {
+  for (const mutation of [archiveEntities, confirmEntity, deleteEntity, restoreEntities]) {
+    expect(mutation).not.toHaveBeenCalled();
+  }
+}
 
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
-    expect(screen.getByText("Charles Babbage")).toBeInTheDocument();
-    expect(screen.queryByText("Analytical Engine")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Detected/ })).toHaveAttribute("aria-selected", "true");
-    // 1 confirmed (Engine), 2 detected (Ada, Babbage), 1 archived (Countess).
-    expect(screen.getByRole("tab", { name: /Confirmed/ })).toHaveTextContent("1");
-    expect(screen.getByRole("tab", { name: /Detected/ })).toHaveTextContent("2");
-    expect(screen.getByRole("tab", { name: /Archived/ })).toHaveTextContent("1");
+describe("EntitiesView browse", () => {
+  it("browses detected and established topics together without lifecycle controls or counts", async () => {
+    const { user, onEntityClick } = renderView();
+    await screen.findByRole("button", { name: "Ada Lovelace" });
+    expect(screen.getByRole("button", { name: "Analytical Engine" })).toBeInTheDocument();
+    expect(screen.queryByText("Countess of Lovelace")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Confirm|Archive all|Restore|Delete/ })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("columnheader").map(header => header.textContent)).toEqual(["Name", "Type"]);
+    expect(screen.queryByText(/5 memories|Confirmed by|Detected in/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Ada Lovelace" }));
+    await user.click(screen.getByRole("button", { name: "Analytical Engine" }));
+    expect(onEntityClick.mock.calls).toEqual([["ada"], ["engine"]]);
+    expect(queryEntities).not.toHaveBeenCalled();
+    expectNoMutations();
   });
 
-  it("filters the Detected tab by the Type chip", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-
-    await user.click(screen.getByRole("button", { name: "Concept" }));
-
-    expect(await screen.findByText("No detected entities match")).toBeInTheDocument();
-    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+  it("uses the same openable, quiet cards for every topic status and retains the lens through archive navigation", async () => {
+    window.localStorage.removeItem("wenlan-entities-view-mode");
+    const { user, onEntityClick } = renderView();
+    const card = await screen.findByTestId("entity-card-ada");
+    expect(within(card).getByText("Person")).toBeInTheDocument();
+    expect(within(card).getByText("History")).toBeInTheDocument();
+    expect(within(card).getAllByRole("button")).toHaveLength(1);
+    const detectedOpen = within(card).getByRole("button", { name: "Ada Lovelace" });
+    detectedOpen.focus();
+    await user.keyboard("{Enter}");
+    await user.click(within(screen.getByTestId("entity-card-engine")).getByRole("button", { name: "Analytical Engine" }));
+    await openArchived(user);
+    await user.click(within(await screen.findByTestId("entity-card-countess")).getByRole("button", { name: "Countess of Lovelace" }));
+    expect(screen.getByTestId("asset-lens-cards")).toHaveAttribute("aria-pressed", "true");
+    expect(onEntityClick.mock.calls).toEqual([["ada"], ["engine"], ["countess"]]);
+    expectNoMutations();
   });
 
-  it("confirms a selected entity from the selection bar", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-
-    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    await user.click(screen.getByRole("button", { name: "Confirm selected" }));
-
-    await screen.findByText("Charles Babbage");
-    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
-
-    await openTab(user, /Confirmed/);
-    expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
-  });
-
-  it("opens the dossier from a Confirmed row", async () => {
+  it("keeps archived topics behind options, opens their details and returns to active topics", async () => {
     const { user, onEntityClick } = renderView();
     await screen.findByText("Ada Lovelace");
-    await openTab(user, /Confirmed/);
-
-    await user.click(await screen.findByRole("button", { name: "Analytical Engine" }));
-    expect(onEntityClick).toHaveBeenCalledWith("engine");
-    expect(screen.getByText("5 memories")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "View archived topics" })).not.toBeInTheDocument();
+    await openArchived(user);
+    expect(await screen.findByRole("heading", { name: "Archived topics", level: 1 })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "Countess of Lovelace" }));
+    expect(onEntityClick).toHaveBeenCalledWith("countess");
+    expect(queryEntities).toHaveBeenLastCalledWith({ status: "archived", limit: 100, offset: 0 });
+    expect(screen.queryByRole("button", { name: /Restore|Delete|Confirm/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to topics" }));
+    await screen.findByText("Analytical Engine");
+    expect(screen.getByRole("heading", { name: "Topics", level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText("Countess of Lovelace")).not.toBeInTheDocument();
+    expectNoMutations();
   });
 
-  it("archives all matching via dry-run-then-confirm, and restores them back by their own state", async () => {
+  it("focuses the archive option and returns focus to the options button on Escape", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-
-    await user.click(screen.getByRole("button", { name: "Person" }));
-    await screen.findByText("Ada Lovelace");
-    await screen.findByText("Charles Babbage");
-
-    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Archive 2 detected entities?")).toBeInTheDocument();
-    expect(within(dialog).getByText("Filter")).toBeInTheDocument();
-    expect(within(dialog).getByText(/Person/)).toBeInTheDocument();
-    // Babbage (2 memories) is among the Person matches, so the dialog warns
-    // that archiving takes memories with it.
-    expect(within(dialog).getByText("Includes")).toBeInTheDocument();
-    expect(within(dialog).getByText("entities that already have memories")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(
-        "To keep those, set Memories to None first. Archived entities can be restored from the Archived tab.",
-      ),
-    ).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: "Archive" }));
-
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await screen.findByText("No detected entities match");
-
-    await openTab(user, /Archived/);
-    await screen.findByText("Ada Lovelace");
-    await screen.findByText("Charles Babbage");
-    await screen.findByText("Countess of Lovelace");
-
-    const selectAll = screen.getByRole("checkbox", { name: "Select all" });
-    await user.click(selectAll);
-    await user.click(screen.getByRole("button", { name: "Restore selected" }));
-
-    // Ada and Babbage were never confirmed, so they land back on Detected;
-    // the Countess was confirmed before archiving, so she returns Confirmed.
-    await openTab(user, /Detected/);
-    await screen.findByText("Ada Lovelace");
-    await screen.findByText("Charles Babbage");
-    await openTab(user, /Confirmed/);
-    await screen.findByText("Countess of Lovelace");
-  });
-
-  it("shows an Includes line when the matched entities still have memories", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await screen.findByText("Charles Babbage");
-
-    // Default Memories chip is "any"; Babbage (2 memories) matches alongside Ada (0).
-    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Includes")).toBeInTheDocument();
-    expect(within(dialog).getByText("entities that already have memories")).toBeInTheDocument();
-    expect(within(dialog).getByText("1")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(
-        "To keep those, set Memories to None first. Archived entities can be restored from the Archived tab.",
-      ),
-    ).toBeInTheDocument();
-  });
-
-  it("omits the Includes line once the Memories chip already excludes entities with memories", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-
-    await user.click(screen.getByRole("button", { name: "None" }));
-    await screen.findByText("Ada Lovelace");
-    expect(screen.queryByText("Charles Babbage")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Archive 1 detected entity?")).toBeInTheDocument();
-    expect(within(dialog).queryByText("Includes")).not.toBeInTheDocument();
-    expect(
-      within(dialog).getByText("Archived entities can be restored from the Archived tab."),
-    ).toBeInTheDocument();
-  });
-
-  it("deletes one archived entity permanently from its row, with an irreversible confirm", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-
-    // Permanent delete is per row (spec): the selection bar only restores.
-    await user.click(screen.getByRole("checkbox", { name: "Select Countess of Lovelace" }));
-    expect(screen.getByRole("button", { name: "Restore selected" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Delete permanently" })).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Delete Countess of Lovelace permanently" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete Countess of Lovelace permanently?")).toBeInTheDocument();
-    expect(within(dialog).getByText("This cannot be undone.")).toBeInTheDocument();
-    // The safe action takes focus, not the destructive one.
-    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
-
-    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
-
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(await screen.findByText("No archived entities")).toBeInTheDocument();
-    const tauri = await import("../../../lib/tauri");
-    expect(tauri.deleteEntity).toHaveBeenCalledTimes(1);
-    expect(tauri.deleteEntity).toHaveBeenCalledWith("countess");
-  });
-
-  it("keeps the confirm open on Escape while the delete is in flight", async () => {
-    const tauri = await import("../../../lib/tauri");
-    let release: () => void = () => {};
-    vi.mocked(tauri.deleteEntity).mockImplementation(
-      (id) =>
-        new Promise<void>((resolve) => {
-          release = () => {
-            fixture = fixture.filter((candidate) => candidate.id !== id);
-            resolve();
-          };
-        }),
-    );
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-    await user.click(screen.getByRole("button", { name: "Delete Countess of Lovelace permanently" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
-
+    const options = screen.getByRole("button", { name: "Topic options" });
+    await user.click(options);
+    expect(screen.getByRole("menuitem", { name: "View archived topics" })).toHaveFocus();
     await user.keyboard("{Escape}");
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-
-    release();
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
-    expect(await screen.findByText("No archived entities")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem")).not.toBeInTheDocument();
+    expect(options).toHaveFocus();
   });
 
-  it("drops a list response that arrives after the tab changed", async () => {
-    const tauri = await import("../../../lib/tauri");
-    let releaseDetected: () => void = () => {};
-    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
-      const all = fixture.filter((candidate) => matchesFilter(candidate, filter));
-      const offset = filter.offset ?? 0;
-      const limit = filter.limit ?? 100;
-      const page = { entities: all.slice(offset, offset + limit), total: all.length };
-      // The Detected LIST (not the limit-1 count probe) hangs until released.
-      if (filter.status === "detected" && limit !== 1) {
-        await new Promise<void>((resolve) => {
-          releaseDetected = resolve;
-        });
-      }
-      return page;
-    });
-
-    const { user } = renderView();
-    await screen.findByRole("tab", { name: /Archived/ });
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-
-    releaseDetected();
-    // Give the stale promise every chance to land, then assert it did not.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(screen.getByText("Countess of Lovelace")).toBeInTheDocument();
-    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
-    expect(screen.queryByText("Charles Babbage")).not.toBeInTheDocument();
-  });
-
-  it("reads back and applies the search term as typed, even before the debounce lands", async () => {
-    const tauri = await import("../../../lib/tauri");
+  it("filters both active lifecycles with familiar type chips and preserves filters in archived view", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-
-    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Ada");
-    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/"Ada"/)).toBeInTheDocument();
-    expect(within(dialog).getByText("Archive 1 detected entity?")).toBeInTheDocument();
-    const dryRuns = vi.mocked(tauri.archiveEntities).mock.calls.filter(([req]) => req.dry_run);
-    expect(dryRuns.length).toBeGreaterThan(0);
-    for (const [req] of dryRuns) expect(req.filter?.query).toBe("Ada");
-
-    await user.click(within(dialog).getByRole("button", { name: "Archive" }));
-    const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
-    expect(applied?.[0].filter?.query).toBe("Ada");
-    await openTab(user, /Archived/);
-    await screen.findByText("Ada Lovelace");
-    // Only the "Ada" match went; Babbage is still detected (the search box
-    // still says "Ada", so he is filtered out of the list, not archived).
-    expect(fixture.find((candidate) => candidate.id === "babbage")?.status).toBe("detected");
-  });
-
-  it("filters the Confirmed tab by search", async () => {
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Confirmed/);
-    await screen.findByText("Analytical Engine");
-
-    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Engine");
-
-    // The debounced search narrows the Confirmed request to the match.
-    await waitFor(() => {
-      const calls = vi.mocked(tauri.queryEntities).mock.calls;
-      const last = calls[calls.length - 1][0];
-      expect(last.status).toBe("established");
-      expect(last.query).toBe("Engine");
-    });
+    await user.click(screen.getByRole("button", { name: "Concept" }));
+    await waitFor(() => expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument());
     expect(screen.getByText("Analytical Engine")).toBeInTheDocument();
-
-    const searchbox = screen.getByRole("searchbox", { name: "Find a name" });
-    await user.clear(searchbox);
-    await user.type(searchbox, "zzz");
-    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
-  });
-
-  it("archives selected entities from the Confirmed tab", async () => {
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-
-    // Give Confirmed a second row through the real confirm flow.
-    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    await user.click(screen.getByRole("button", { name: "Confirm selected" }));
-    await openTab(user, /Confirmed/);
-    await screen.findByText("Analytical Engine");
-    await screen.findByText("Ada Lovelace");
-
-    await user.click(screen.getByRole("checkbox", { name: "Select Analytical Engine" }));
-    // Confirm makes no sense for already-confirmed rows: only archiving.
-    expect(screen.queryByRole("button", { name: "Confirm selected" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
-    await user.click(screen.getByRole("button", { name: "Archive selected" }));
-
-    const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
-    expect([...(applied?.[0].ids ?? [])].sort()).toEqual(["ada", "engine"]);
-    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
-
-    await openTab(user, /Archived/);
-    await screen.findByText("Analytical Engine");
-    await screen.findByText("Ada Lovelace");
-  });
-
-  it("archives all matching on Confirmed with the active filter read back", async () => {
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Confirmed/);
-    await screen.findByText("Analytical Engine");
-
-    await user.click(screen.getByRole("button", { name: "Concept" }));
-    await screen.findByText("Analytical Engine");
-
-    await user.click(screen.getByRole("button", { name: "Archive all matching" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Archive 1 confirmed entity?")).toBeInTheDocument();
-    expect(within(dialog).getByText(/Concept/)).toBeInTheDocument();
-    // The Engine holds 5 memories, so the dialog warns archiving takes them along.
-    expect(within(dialog).getByText("Includes")).toBeInTheDocument();
-
-    const dryRuns = vi.mocked(tauri.archiveEntities).mock.calls.filter(([req]) => req.dry_run);
-    expect(dryRuns.length).toBeGreaterThan(0);
-    for (const [req] of dryRuns) {
-      expect(req.filter?.status).toBe("established");
-      expect(req.filter?.entity_type).toBe("concept");
-    }
-
-    await user.click(within(dialog).getByRole("button", { name: "Archive" }));
-    const applied = vi.mocked(tauri.archiveEntities).mock.calls.find(([req]) => !req.dry_run);
-    expect(applied?.[0].filter?.status).toBe("established");
-    expect(applied?.[0].filter?.entity_type).toBe("concept");
-
-    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
-    await openTab(user, /Archived/);
-    await screen.findByText("Analytical Engine");
-  });
-
-  it("filters the Archived tab by search", async () => {
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-
-    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
-
-    await waitFor(() => {
-      const calls = vi.mocked(tauri.queryEntities).mock.calls;
-      const last = calls[calls.length - 1][0];
-      expect(last.status).toBe("archived");
-      expect(last.query).toBe("Countess");
-    });
-    expect(screen.getByText("Countess of Lovelace")).toBeInTheDocument();
-
-    const searchbox = screen.getByRole("searchbox", { name: "Find a name" });
-    await user.clear(searchbox);
-    await user.type(searchbox, "zzz");
-    expect(await screen.findByText("No archived entities")).toBeInTheDocument();
-  });
-
-  it("restores only what the Archived matchline counted when a filter is on", async () => {
-    fixture = [
-      ...fixture,
-      entity({
-        id: "difference",
-        name: "Difference Engine",
-        entity_type: "concept",
-        status: "archived",
-        memory_count: 0,
-      }),
-    ];
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-    await screen.findByText("Difference Engine");
-
-    await user.click(screen.getByRole("button", { name: "Concept" }));
-    expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
-
-    // The button says what it will do, and does exactly that: the person
-    // filtered out of the list must survive the restore.
-    await user.click(await screen.findByRole("button", { name: "Restore all matching" }));
-
-    const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
-    expect(applied?.[0].filter?.status).toBe("archived");
-    expect(applied?.[0].filter?.entity_type).toBe("concept");
-    expect(applied?.[0].ids).toBeUndefined();
-
-    await waitFor(() =>
-      expect(fixture.find((candidate) => candidate.id === "difference")?.status).toBe("detected"),
-    );
-    expect(fixture.find((candidate) => candidate.id === "countess")?.status).toBe("archived");
-  });
-
-  it("will not restore on a count the search box is about to change", async () => {
-    fixture = [
-      ...fixture,
-      entity({
-        id: "difference",
-        name: "Difference Engine",
-        entity_type: "concept",
-        status: "archived",
-        memory_count: 0,
-      }),
-    ];
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-
-    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
-    expect(await screen.findByText("1 archived entity matches")).toBeInTheDocument();
-
-    // Clearing the box does not reach the count for 300 ms, and the new count
-    // only lands when its request returns. Until both have happened the button
-    // is unavailable, rather than restoring everything archived while the
-    // screen still says one entity matches.
-    let releaseList: () => void = () => {};
-    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
-    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
-      if (filter.status === "archived" && filter.query === undefined && filter.limit !== 1) {
-        await new Promise<void>((resolve) => {
-          releaseList = resolve;
-        });
-      }
-      return realQuery(filter);
-    });
-
-    await user.clear(screen.getByRole("searchbox", { name: "Find a name" }));
-    expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled();
-
-    // The debounce has now moved the cleared search into the filters, but the
-    // list showing the new count is still in flight.
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Restore all" })).toBeDisabled(),
-    );
-    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
-
-    releaseList();
-
-    await screen.findByText("2 archived entities");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Restore all" })).toBeEnabled(),
-    );
-    await user.click(screen.getByRole("button", { name: "Restore all" }));
-    const applied = vi.mocked(tauri.restoreEntities).mock.calls.find(([req]) => !req.dry_run);
-    expect(applied?.[0].filter?.query).toBeUndefined();
-  });
-
-  it("will not restore on a count a failed reload left stale", async () => {
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-    await openTab(user, /Archived/);
-    await screen.findByText("Countess of Lovelace");
-
-    // The list for the typed search never arrives, so the count beside the
-    // button still describes the unfiltered tab. The button must not act on
-    // it.
-    const realQuery = vi.mocked(tauri.queryEntities).getMockImplementation()!;
-    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
-      if (filter.query !== undefined) throw new Error("list unavailable");
-      return realQuery(filter);
-    });
-
-    await user.type(screen.getByRole("searchbox", { name: "Find a name" }), "Countess");
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Restore all matching" })).toBeDisabled(),
-    );
-    expect(vi.mocked(tauri.restoreEntities)).not.toHaveBeenCalled();
-  });
-
-  it("keeps the filters but clears the selection when switching tabs", async () => {
-    const { user } = renderView();
-    await screen.findByText("Ada Lovelace");
-
+    await openArchived(user);
+    expect(await screen.findByText("No matching topics")).toBeInTheDocument();
+    expect(queryEntities).toHaveBeenLastCalledWith({ status: "archived", limit: 100, offset: 0, entity_type: "concept" });
     await user.click(screen.getByRole("button", { name: "Person" }));
-    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    expect(screen.getByRole("button", { name: "Archive selected" })).toBeInTheDocument();
-
-    await openTab(user, /Confirmed/);
-    // The Person chip persists (the Concept Engine is filtered out) while the
-    // Detected selection does not follow.
-    expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByRole("button", { name: "Archive selected" })).not.toBeInTheDocument();
-    expect(await screen.findByText("No confirmed entities yet")).toBeInTheDocument();
-
-    await openTab(user, /Detected/);
-    expect(screen.getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
-    await screen.findByText("Ada Lovelace");
-    expect(screen.queryByRole("button", { name: "Archive selected" })).not.toBeInTheDocument();
+    await screen.findByText("Countess of Lovelace");
   });
 
-  it("moves between tabs with the arrow keys", async () => {
+  it("debounces search and distinguishes a filtered no-match from an empty library", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-
-    screen.getByRole("tab", { name: /Detected/ }).focus();
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: /Archived/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tab", { name: /Archived/ })).toHaveFocus();
-    expect(await screen.findByText("Countess of Lovelace")).toBeInTheDocument();
-
-    await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("tab", { name: /Confirmed/ })).toHaveAttribute("aria-selected", "true");
-    await user.keyboard("{End}");
-    expect(screen.getByRole("tab", { name: /Archived/ })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("tabpanel", { name: /Archived/ })).toBeInTheDocument();
+    await user.type(screen.getByRole("searchbox", { name: "Search topics" }), "unmatched");
+    expect(loadActiveTopicsPage).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("No matching topics")).toBeInTheDocument();
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "unmatched", type: "all", memories: "any" }, undefined);
+    fixture = [];
+    await user.clear(screen.getByRole("searchbox", { name: "Search topics" }));
+    expect(await screen.findByText("No topics yet")).toBeInTheDocument();
   });
 
-  it("paginates the Detected tab 100 rows at a time with Load more", async () => {
-    fixture = Array.from({ length: 130 }, (_, index) =>
-      entity({ id: `d${index}`, name: `Detected Entity ${index}`, status: "detected" }),
-    );
-    const tauri = await import("../../../lib/tauri");
-    vi.mocked(tauri.queryEntities).mockImplementation(async (filter) => {
-      const all = fixture.filter((candidate) => matchesFilter(candidate, filter));
-      const offset = filter.offset ?? 0;
-      const limit = filter.limit ?? 100;
-      return { entities: all.slice(offset, offset + limit), total: all.length };
-    });
-
-    const { user } = renderView();
-    await screen.findByText("Detected Entity 0");
-    expect(screen.queryByText("Detected Entity 100")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Load more" }));
-
-    expect(await screen.findByText("Detected Entity 100")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
-    // Renders a full 100-row page twice; ~1.5s locally, timed out at the 5s
-    // default on the shared CI runner.
-  }, 20_000);
-
-  it("renders cards by default on Detected with initials, context, type, count, and the dashed variant", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
-    renderView();
-
-    expect(await screen.findByTestId("entities-cards")).toBeInTheDocument();
-    expect(screen.queryByRole("table")).not.toBeInTheDocument();
-
-    const adaCard = screen.getByTestId("entity-card-ada");
-    expect(adaCard).toHaveClass("asset-card--detected");
-    expect(within(adaCard).getByText("AL")).toBeInTheDocument();
-    expect(within(adaCard).getByText("Detected in 0 memories. Confirm to keep it.")).toBeInTheDocument();
-    expect(within(adaCard).getByText("Person")).toBeInTheDocument();
-    expect(within(adaCard).getByText("0 memories")).toBeInTheDocument();
-    // No dossier on Detected: the title is plain text, not a button.
-    expect(adaCard.querySelector(".asset-card-open")).toBeNull();
-    expect(adaCard.querySelector("span.asset-card-title")).not.toBeNull();
-  });
-
-  it("drives the selection bar from a card checkbox", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
-    const { user } = renderView();
-    await screen.findByTestId("entities-cards");
-
-    await user.click(screen.getByRole("checkbox", { name: "Select Ada Lovelace" }));
-    expect(screen.getByRole("button", { name: "Confirm selected" })).toBeInTheDocument();
-  });
-
-  it("confirms a detected entity from its card", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
-    const tauri = await import("../../../lib/tauri");
-    const { user } = renderView();
-    await screen.findByTestId("entities-cards");
-
-    const adaCard = screen.getByTestId("entity-card-ada");
-    await user.click(within(adaCard).getByRole("button", { name: "Confirm" }));
-
-    expect(tauri.confirmEntity).toHaveBeenCalledWith("ada", true);
-  });
-
-  it("opens the dossier from a Confirmed card", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
+  it("switches the lens without refetching and keeps row names keyboard accessible", async () => {
     const { user, onEntityClick } = renderView();
-    await screen.findByTestId("entities-cards");
-    await openTab(user, /Confirmed/);
-
-    const engineCard = await screen.findByTestId("entity-card-engine");
-    await user.click(within(engineCard).getByRole("button", { name: "Open Analytical Engine" }));
-    expect(onEntityClick).toHaveBeenCalledWith("engine");
-  });
-
-  it("switches to rows from the toggle and persists the preference", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
-    const { user } = renderView();
-    await screen.findByTestId("entities-cards");
-
-    await user.click(screen.getByRole("button", { name: "Rows" }));
-
-    expect(await screen.findByRole("table")).toBeInTheDocument();
-    expect(screen.queryByTestId("entities-cards")).not.toBeInTheDocument();
+    await screen.findByText("Ada Lovelace");
+    await user.click(screen.getByTestId("asset-lens-cards"));
+    expect(screen.getByTestId("entities-cards")).toBeInTheDocument();
+    await user.click(screen.getByTestId("asset-lens-rows"));
+    const name = screen.getByRole("button", { name: "Ada Lovelace" });
+    name.focus();
+    await user.keyboard(" ");
+    expect(onEntityClick).toHaveBeenCalledWith("ada");
     expect(window.localStorage.getItem("wenlan-entities-view-mode")).toBe("rows");
-    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "false");
+    expect(loadActiveTopicsPage).toHaveBeenCalledTimes(1);
   });
 
-  it("shows Restore and Delete permanently on an archived card", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
-    const { user } = renderView();
-    await screen.findByTestId("entities-cards");
-    await openTab(user, /Archived/);
-
-    const card = await screen.findByTestId("entity-card-countess");
-    expect(within(card).getByRole("button", { name: "Restore" })).toBeInTheDocument();
-    expect(within(card).getByRole("button", { name: /^Delete .* permanently$/ })).toBeInTheDocument();
-    expect(within(card).getByText(/^Archived /)).toBeInTheDocument();
-    // No dossier on Archived either: the title is plain text.
-    expect(card.querySelector(".asset-card-open")).toBeNull();
+  it("appends pages using the returned cursor, prevents duplicate load more, and retains all rows", async () => {
+    const next = deferred<ReturnType<typeof page>>();
+    const firstCursor = cursor(100);
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page([fixture[0]], true, firstCursor))
+      .mockImplementationOnce(() => next.promise);
+    renderView();
+    await screen.findByText("Ada Lovelace");
+    const more = screen.getByRole("button", { name: "Load more" });
+    fireEvent.click(more);
+    fireEvent.click(more);
+    expect(more).toBeDisabled();
+    expect(loadActiveTopicsPage).toHaveBeenCalledTimes(2);
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "", type: "all", memories: "any" }, firstCursor);
+    await act(async () => next.resolve(page([fixture[1]], false)));
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    expect(screen.getByText("Analytical Engine")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
   });
 
-  it("selects and clears every visible card from the cards toolbar select-all", async () => {
-    window.localStorage.removeItem("wenlan-entities-view-mode");
+  it("retains rows and the same cursor after a load-more failure so retry loses nothing", async () => {
+    const firstCursor = cursor(100);
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page([fixture[0]], true, firstCursor))
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(page([fixture[1]]));
     const { user } = renderView();
-    await screen.findByTestId("entities-cards");
+    await screen.findByText("Ada Lovelace");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Could not load items. Try again."));
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("Analytical Engine");
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "", type: "all", memories: "any" }, firstCursor);
+    expect(screen.getByText("Ada Lovelace")).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
-    expect(screen.getByText("2 selected")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).toBeChecked();
-    expect(screen.getByRole("checkbox", { name: "Select Charles Babbage" })).toBeChecked();
+  it("paginates archived topics with offsets and resets the active cursor when returning", async () => {
+    fixture.push(...Array.from({ length: 101 }, (_, index) => entity({ id: `archive-${index}`, name: `Archived ${index}`, status: "archived" })));
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openArchived(user);
+    await screen.findByText("Countess of Lovelace");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("Archived 100");
+    expect(queryEntities).toHaveBeenLastCalledWith({ status: "archived", limit: 100, offset: 100 });
+    expect(screen.getByText("Countess of Lovelace")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Back to topics" }));
+    await screen.findByText("Ada Lovelace");
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "", type: "all", memories: "any" }, undefined);
+  });
 
-    await user.click(screen.getByRole("checkbox", { name: "Select all" }));
-    expect(screen.queryByText("2 selected")).not.toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Select Ada Lovelace" })).not.toBeChecked();
+  it("ignores stale active responses after switching to archived topics", async () => {
+    const slow = deferred<ReturnType<typeof page>>();
+    vi.mocked(loadActiveTopicsPage).mockImplementationOnce(() => slow.promise);
+    const { user } = renderView();
+    await openArchived(user);
+    await screen.findByText("Countess of Lovelace");
+    await act(async () => slow.resolve(page([fixture[0]], true)));
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    expect(screen.getByText("Countess of Lovelace")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
+  });
+
+  it("ignores a stale search response and uses a fresh cursor for the newest search", async () => {
+    const slow = deferred<ReturnType<typeof page>>();
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page(fixture.slice(0, 2)))
+      .mockImplementationOnce(() => slow.promise)
+      .mockResolvedValueOnce(page([fixture[1]]));
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    const search = screen.getByRole("searchbox", { name: "Search topics" });
+    await user.type(search, "Ada");
+    await waitFor(() => expect(loadActiveTopicsPage).toHaveBeenCalledTimes(2));
+    await user.clear(search);
+    await user.type(search, "Engine");
+    await screen.findByText("Analytical Engine");
+    await act(async () => slow.resolve(page([fixture[0]], true)));
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    expect(screen.getByText("Analytical Engine")).toBeInTheDocument();
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "Engine", type: "all", memories: "any" }, undefined);
+  });
+
+  it("ignores stale load-more responses and failures after a type filter changes", async () => {
+    const slow = deferred<ReturnType<typeof page>>();
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page([fixture[0]], true))
+      .mockImplementationOnce(() => slow.promise)
+      .mockResolvedValueOnce(page([fixture[1]]));
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await user.click(screen.getByRole("button", { name: "Concept" }));
+    await screen.findByText("Analytical Engine");
+    await act(async () => slow.reject(new Error("old request failed")));
+    expect(screen.queryByText("Ada Lovelace")).not.toBeInTheDocument();
+    expect(screen.getByText("Analytical Engine")).toBeInTheDocument();
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a load error and retries without misreporting an empty library", async () => {
+    vi.mocked(loadActiveTopicsPage).mockRejectedValueOnce(new Error("offline"));
+    const { user } = renderView();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load items. Try again.");
+    expect(screen.queryByText("No topics yet")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Ada Lovelace");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("invalidates requests on unmount, including load-more failure notifications", async () => {
+    const slow = deferred<ReturnType<typeof page>>();
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page([fixture[0]], true))
+      .mockImplementationOnce(() => slow.promise);
+    const { user, unmount } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    unmount();
+    await act(async () => slow.reject(new Error("late failure")));
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});
+
+describe("EntitiesView duplicate response handling", () => {
+  it("renders a single freshest row for duplicate IDs in a reset response", async () => {
+    const stale = entity({ id: "crossing", name: "Stale snapshot", updated_at: 10 });
+    const detected = entity({ id: "crossing", name: "Detected snapshot", updated_at: 20 });
+    const established = entity({ id: "crossing", name: "Established snapshot", updated_at: 20, status: "established", confirmed: true });
+    vi.mocked(loadActiveTopicsPage).mockResolvedValueOnce(page([stale, established, detected, established]));
+    renderView();
+    expect(await screen.findByRole("button", { name: "Established snapshot" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Established snapshot" })).toHaveLength(1);
+    expect(screen.queryByText("Stale snapshot")).not.toBeInTheDocument();
+    expect(screen.queryByText("Detected snapshot")).not.toBeInTheDocument();
+    expectNoMutations();
+  });
+
+  it("updates an existing row and deduplicates each appended batch while retaining its cursor", async () => {
+    const old = entity({ id: "crossing", name: "Old topic", updated_at: 10 });
+    const established = entity({ id: "crossing", name: "Established latest", updated_at: 20, status: "established", confirmed: true });
+    const other = entity({ id: "other", name: "Other latest", updated_at: 30 });
+    const firstCursor = cursor(100);
+    const secondCursor = cursor(200);
+    vi.mocked(loadActiveTopicsPage)
+      .mockResolvedValueOnce(page([old], true, firstCursor))
+      .mockResolvedValueOnce(page([
+        established, { ...other, name: "Other stale", updated_at: 5 }, other, established,
+      ], true, secondCursor))
+      .mockResolvedValueOnce(page([
+        { ...old, name: "Tie detected", updated_at: 20 }, old, { ...other, updated_at: 29 },
+      ]));
+    const { user } = renderView();
+    await screen.findByText("Old topic");
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("Established latest");
+    expect(screen.getAllByRole("button", { name: "Established latest" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Other latest" })).toHaveLength(1);
+    expect(screen.queryByText("Old topic")).not.toBeInTheDocument();
+    expect(screen.queryByText("Other stale")).not.toBeInTheDocument();
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith(DEFAULT_FILTERS, firstCursor);
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Load more" })).not.toBeInTheDocument());
+    expect(screen.getAllByRole("button", { name: "Established latest" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Other latest" })).toHaveLength(1);
+    expect(screen.queryByText("Tie detected")).not.toBeInTheDocument();
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith(DEFAULT_FILTERS, secondCursor);
+    expectNoMutations();
+  });
+
+  it("deduplicates archived reset rows while paginating by raw response length", async () => {
+    const old = entity({ id: "archive", name: "Old archived", status: "archived", updated_at: 10 });
+    const fresh = { ...old, name: "Fresh archived", updated_at: 20 };
+    vi.mocked(queryEntities)
+      .mockResolvedValueOnce({ entities: [old, fresh], total: 3 })
+      .mockResolvedValueOnce({ entities: [entity({ id: "archive-next", name: "Next archived", status: "archived" })], total: 3 });
+    const { user } = renderView();
+    await screen.findByText("Ada Lovelace");
+    await openArchived(user);
+    expect(await screen.findByRole("button", { name: "Fresh archived" })).toBeInTheDocument();
+    expect(screen.queryByText("Old archived")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Load more" }));
+    await screen.findByText("Next archived");
+    expect(queryEntities).toHaveBeenLastCalledWith({ status: "archived", limit: 100, offset: 2 });
+    expect(screen.getAllByRole("button", { name: "Fresh archived" })).toHaveLength(1);
+    expectNoMutations();
   });
 });

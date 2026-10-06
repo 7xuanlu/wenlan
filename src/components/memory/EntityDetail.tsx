@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
+  archiveEntities,
   confirmEntity,
   deleteEntity,
   getEntityDetail,
+  restoreEntities,
   search,
   type EntityDetail as EntityDetailRecord,
 } from "../../lib/tauri";
@@ -31,7 +33,13 @@ interface EntityDetailProps {
   onPageClick?: (pageId: string) => void;
 }
 
-export default function EntityDetail({
+export default function EntityDetail(props: EntityDetailProps) {
+  // A topic switch must discard drafts, dialogs, and mutation errors, including
+  // switches from callers that do not already key this component.
+  return <EntityDetailContent key={props.entityId} {...props} />;
+}
+
+function EntityDetailContent({
   entityId,
   onBack,
   onEntityClick,
@@ -42,6 +50,7 @@ export default function EntityDetail({
   const queryClient = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const notesPending = useIsMutating({ mutationKey: ["entity-observations", entityId] }) > 0;
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { data: detail, isError, refetch } = useQuery({
     queryKey: ["entityDetail", entityId],
@@ -74,9 +83,28 @@ export default function EntityDetail({
     queryClient.invalidateQueries({ queryKey: ["entityDetail", entityId] });
     queryClient.invalidateQueries({ queryKey: ["entities"] });
   };
+  const invalidateEntityIndexes = () => Promise.all([
+    "entities", "space-entities", "constellation-entities", "constellation-relations",
+    "connections-entities", "searchEntities", "knowledge-graph", "constellation-cartography",
+    "pages", "searchPages", "recent-concepts", "spaces-page-counts", "sidebar-space-page-counts",
+  ].map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  const invalidateEntityLifecycle = () => Promise.all([
+    // Other topic dossiers can still contain an edge to this topic.
+    queryClient.invalidateQueries({ queryKey: ["entityDetail"] }),
+    invalidateEntityIndexes(),
+  ]);
+  const lifecycleMutation = useMutation({
+    mutationFn: (archive: boolean) => (archive ? archiveEntities : restoreEntities)({
+      ids: [entityId], dry_run: false,
+    }),
+    onSuccess: async () => {
+      setConfirmDelete(false);
+      await invalidateEntityLifecycle();
+    },
+  });
   const confirmMutation = useMutation({
     mutationFn: (confirmed: boolean) => confirmEntity(entityId, confirmed),
-    onSuccess: invalidateEntityDetail,
+    onSuccess: invalidateEntityLifecycle,
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteEntity(entityId),
@@ -92,6 +120,8 @@ export default function EntityDetail({
       onBack();
     },
   });
+  const actionsPending = notesPending || confirmMutation.isPending ||
+    deleteMutation.isPending || lifecycleMutation.isPending;
 
   if (!detail) {
     return (
@@ -120,6 +150,7 @@ export default function EntityDetail({
   }
 
   const { entity, observations, relations } = detail;
+  const archived = entity.status === "archived";
   const space = entity.space ?? entity.domain;
   const relativeTime = formatRelativeEntityTime(entity.updated_at, locale);
   const absoluteTime = formatAbsoluteTimestamp(entity.updated_at);
@@ -147,14 +178,18 @@ export default function EntityDetail({
               </div>
             </div>
             <div className="memory-detail-actions">
-              {confirmMutation.isError || deleteMutation.isError ? (
+              {confirmMutation.isError || deleteMutation.isError || lifecycleMutation.isError ? (
                 <span className="entity-error" role="alert">
                   {t("entityDetail.saveError")}
                 </span>
               ) : null}
-              <button
+              {archived ? (
+                <span className="memory-detail-chip entity-status-chip entity-status-archived">
+                  {t("entityDetail.archived")}
+                </span>
+              ) : <button
                 type="button"
-                disabled={confirmMutation.isPending}
+                disabled={actionsPending}
                 onClick={() => confirmMutation.mutate(!entity.confirmed)}
                 className={`memory-detail-chip entity-status-chip ${entity.confirmed ? "success" : "warning"}`}
                 title={
@@ -164,13 +199,21 @@ export default function EntityDetail({
                 }
               >
                 {entity.confirmed ? t("entityDetail.confirmed") : t("entityDetail.confirmEntity")}
+              </button>}
+              <button
+                type="button"
+                className="memory-detail-text-button"
+                disabled={actionsPending}
+                onClick={() => lifecycleMutation.mutate(!archived)}
+              >
+                {t(archived ? "entities.actions.restore" : "entities.actions.archive")}
               </button>
               {confirmDelete ? (
                 <>
                   <span className="entity-delete-question">{t("entityDetail.deleteQuestion")}</span>
                   <button
                     type="button"
-                    disabled={deleteMutation.isPending}
+                    disabled={actionsPending}
                     onClick={() => deleteMutation.mutate()}
                     className="entity-delete-confirm"
                   >
@@ -178,7 +221,7 @@ export default function EntityDetail({
                   </button>
                   <button
                     type="button"
-                    disabled={deleteMutation.isPending}
+                    disabled={actionsPending}
                     onClick={() => setConfirmDelete(false)}
                     className="memory-detail-text-button"
                   >
@@ -188,6 +231,7 @@ export default function EntityDetail({
               ) : (
                 <button
                   type="button"
+                  disabled={actionsPending}
                   onClick={() => setConfirmDelete(true)}
                   className="memory-detail-icon-button memory-detail-delete"
                   aria-label={t("entityDetail.deleteEntity")}
@@ -222,10 +266,12 @@ export default function EntityDetail({
             onExpand={() => setGraphOpen(true)}
           />
           <EntityObservations
+            key={`${entityId}:${archived}`}
             entityId={entityId}
             entityName={entity.name}
             observations={observations}
             onInvalidate={invalidateEntityDetail}
+            readOnly={archived || actionsPending}
           />
         </section>
         <EntityContextRail entity={entity} locale={locale} onMemoryClick={onMemoryClick} />
@@ -482,7 +528,9 @@ function EntityGraphOverlay({
                   ●
                 </i>
                 {` ${entity.entity_type} · ${
-                  entity.confirmed
+                  entity.status === "archived"
+                    ? t("entityDetail.archived")
+                    : entity.confirmed
                     ? t("focus.confirmedState")
                     : t("focus.unconfirmedState")
                 }`}

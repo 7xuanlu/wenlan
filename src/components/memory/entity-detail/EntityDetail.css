@@ -11,6 +11,12 @@
   font-family: inherit;
 }
 
+.entity-detail-dossier .entity-status-archived {
+  color: var(--mem-text-secondary);
+  background: var(--mem-surface);
+  border-color: var(--mem-border);
+}
+
 .entity-detail-reading {
   display: grid;
   min-width: 0;

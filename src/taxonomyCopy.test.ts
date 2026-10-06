@@ -95,9 +95,9 @@ describe("taxonomy and product copy", () => {
     // The former inline legend now lives in the localized entity filter.
     expect(atlas).toContain("<AtlasTypeFilters");
     expect(read("src/components/memory/AtlasTypeFilters.tsx")).toContain("atlas.entityType.${type}");
-    expect(resources.en.translation.atlas.entityType.concept).toBe("Theme");
-    expect(resources["zh-Hant"].translation.atlas.entityType.concept).toBe("主題");
-    expect(resources["zh-Hans"].translation.atlas.entityType.concept).toBe("主题");
+    expect(resources.en.translation.atlas.entityType.concept).toBe("Concept");
+    expect(resources["zh-Hant"].translation.atlas.entityType.concept).toBe("概念");
+    expect(resources["zh-Hans"].translation.atlas.entityType.concept).toBe("概念");
     // The wire key itself lives in the palette map, not the legend.
     expect(read("src/lib/graph/palette.ts")).toContain(legacyWireKey + ":");
   });
