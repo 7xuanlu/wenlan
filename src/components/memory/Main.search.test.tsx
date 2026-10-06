@@ -114,6 +114,7 @@ vi.mock("./PageDetail", () => ({
   default: (props: {
     onBack?: () => void;
     onPageLoaded?: (page: Pick<Page, "id" | "status" | "title">) => void;
+    onSavePendingChange?: (pending: boolean) => void;
     pageId: string;
   }) => (
     <div
@@ -127,6 +128,8 @@ vi.mock("./PageDetail", () => ({
         Finish loading page
       </button>
       <button onClick={props.onBack} type="button">Page back</button>
+      <button type="button" onClick={() => props.onSavePendingChange?.(true)}>Start mocked page save</button>
+      <button type="button" onClick={() => props.onSavePendingChange?.(false)}>Finish mocked page save</button>
     </div>
   ),
 }));
@@ -289,6 +292,10 @@ vi.mock("./SpaceDetail", () => ({
       <button type="button" onClick={() => props.onSpaceLoaded?.(space("space-1", props.spaceName))}>Finish loading space</button>
       <button type="button" onClick={() => props.onSpaceRenamed?.({ id: "space-1", name: "Renamed Work" })}>Rename loaded space</button>
       <button type="button" onClick={() => props.onSpaceDeleted?.("space-1")}>Delete loaded space</button>
+      <button type="button" onClick={() => {
+        props.onSpaceDeleted?.("space-1");
+        props.onBack();
+      }}>Complete Space deletion</button>
     </div>
   ),
 }));
@@ -446,6 +453,203 @@ describe("Main search", () => {
     localStorage.clear();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
+  });
+
+  it("traverses Wiki, Spaces, and Page in both directions without resetting root history", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    const back = () => screen.getByRole("button", { name: i18n.t("main.back") });
+    const forward = () => screen.getByRole("button", { name: i18n.t("main.forward") });
+    expect(back()).toBeDisabled();
+    expect(forward()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
+    expect(back()).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: "Open recent page" }));
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "page-1");
+    expect(screen.getByRole("main")).toHaveClass("memory-main-content--page");
+    await user.click(back());
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(back());
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(back()).toBeDisabled();
+    await user.click(forward());
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(forward());
+    expect(screen.getByTestId("page-detail")).toBeVisible();
+    expect(forward()).toBeDisabled();
+  });
+
+  it("keeps Activity and Memories in the shared history across sidebar roots", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Activity" }));
+    expect(screen.getByTestId("activity-feed")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Open memories" }));
+    expect(screen.getByRole("heading", { name: "Memories" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("activity-feed")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.getByRole("button", { name: i18n.t("main.back") })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByTestId("activity-feed")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByRole("heading", { name: "Memories" })).toBeVisible();
+  });
+
+  it("uses Spaces as the initial Space fallback and records both exits for Forward", async () => {
+    const user = userEvent.setup();
+    renderMain({ initialView: { kind: "space", spaceId: "space-1", spaceName: "Work" } });
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByTestId("space-detail")).toHaveAttribute("data-space-name", "Work");
+  });
+
+  it("clears Forward when a new sidebar destination branches from Back", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: "Open recent page" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Open graph" }));
+    expect(screen.getByTestId("atlas-view")).toBeVisible();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("uses the external detail exit only after local history is exhausted", async () => {
+    const user = userEvent.setup();
+    const onBackFromDetail = vi.fn();
+    renderMain({ initialMemoryId: "memory-1", onBackFromDetail });
+    await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("memory-detail")).toBeVisible();
+    expect(onBackFromDetail).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(onBackFromDetail).toHaveBeenCalledOnce();
+  });
+
+  it("keeps global Back in a draft until it saves and restores the saved identity with Forward", async () => {
+    const user = userEvent.setup();
+    const flush = deferred<boolean>();
+    draftFlushMock.mockReturnValue(flush.promise);
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("page-draft-editor")).toHaveAttribute("data-draft-id", "new");
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+    await act(async () => flush.resolve(true));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByTestId("page-draft-editor")).toHaveAttribute("data-draft-id", "draft-new");
+  });
+
+  it("clears Forward when an external memory replaces the current route", async () => {
+    const user = userEvent.setup();
+    const view = renderMain();
+    await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    view.rerenderMain({ initialMemoryId: "memory-1" });
+    expect(await screen.findByTestId("memory-detail")).toBeVisible();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("dismisses the search results and mobile overlay when Back or Forward commits", async () => {
+    useSearchMock.mockImplementation(() => {
+      const [query, setLocalQuery] = useState("");
+      return { query, debouncedQuery: query, results: [], setQuery: setLocalQuery as typeof setSearchQueryMock };
+    });
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.type(search, "architecture");
+    expect(screen.queryByTestId("spaces-overview")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(search).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.type(search, "new query");
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(search).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+  });
+
+  it("dismisses search on a same-destination sidebar intent without pushing history", async () => {
+    useSearchMock.mockImplementation(() => {
+      const [query, setLocalQuery] = useState("");
+      return { query, debouncedQuery: query, results: [], setQuery: setLocalQuery as typeof setSearchQueryMock };
+    });
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    await user.type(search, "architecture");
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
+    expect(search).toHaveValue("");
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: i18n.t("main.back") })).toBeDisabled();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("keeps the search overlay on a same-Page intent until its pending save ends", async () => {
+    const user = userEvent.setup();
+    renderMain({ initialPageId: "page-1" });
+    const searchAction = screen.getByRole("button", { name: "Search" });
+    await user.click(searchAction);
+    await user.click(screen.getByRole("button", { name: "Start mocked page save" }));
+    await user.click(screen.getByRole("button", { name: "Open recent page" }));
+    expect(searchAction).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "page-1");
+    await user.click(screen.getByRole("button", { name: "Finish mocked page save" }));
+    await user.click(screen.getByRole("button", { name: "Open recent page" }));
+    expect(searchAction).toHaveAttribute("aria-expanded", "false");
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("retains a draft's pending search and overlay when the latest Back save fails", async () => {
+    const flush = deferred<boolean>();
+    draftFlushMock.mockReturnValue(flush.promise);
+    useSearchMock.mockImplementation(() => {
+      const [query, setLocalQuery] = useState("");
+      return { query, debouncedQuery: query, results: [], setQuery: setLocalQuery as typeof setSearchQueryMock };
+    });
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    await user.type(search, "architecture");
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    await act(async () => flush.resolve(false));
+    expect(search).toHaveValue("architecture");
+    expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByTestId("page-draft-editor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("replaces a deleted Space with its parent so Back cannot reopen the deleted destination", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await user.click(screen.getByRole("button", { name: "Complete Space deletion" }));
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.queryByTestId("space-detail")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    expect(screen.queryByTestId("space-detail")).not.toBeInTheDocument();
   });
 
   it("opens Connections for a wenlan://pair link that launched the app", async () => {

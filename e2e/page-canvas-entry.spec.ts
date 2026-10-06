@@ -25,6 +25,14 @@ for (const scenario of scenarios) {
     await expect(editor).toBeEditable();
     const entry = page.getByRole("button", { name: scenario.map, exact: true });
     await expect(entry).toBeVisible();
+    // View controls belong to workspace chrome, above the document.
+    const chrome = page.locator(".page-detail-top-row");
+    const headerBox = await page.getByRole("banner").boundingBox();
+    const chromeBox = await chrome.boundingBox();
+    expect(Math.abs(chromeBox!.y - (headerBox!.y + headerBox!.height))).toBeLessThanOrEqual(1);
+    await expect(page.locator(".page-detail-document .page-detail-canvas-toggle")).toHaveCount(0);
+    const editorBox = await editor.boundingBox();
+    expect(editorBox!.y - (chromeBox!.y + chromeBox!.height)).toBeLessThan(80);
     // The name must be visible text, not only a tooltip on an unfamiliar icon.
     await expect(entry).toHaveText(scenario.map);
     const bounds = await entry.boundingBox();

@@ -2191,10 +2191,28 @@ html[data-theme="light"] {
 .page-detail {
   display: flex;
   box-sizing: border-box;
+  width: 100%;
+  flex-direction: column;
+}
+
+.page-detail-document {
+  display: flex;
+  box-sizing: border-box;
   width: min(100%, 1130px);
   margin-inline: auto;
+  padding: 24px 32px 40px;
   flex-direction: column;
   gap: 22px;
+}
+
+@media (max-width: 640px) {
+  .page-detail-document {
+    padding-inline: 16px;
+  }
+}
+
+.page-detail-heading-block--writing {
+  position: absolute;
 }
 
 .page-detail-title {
@@ -3300,30 +3318,42 @@ p.entity-error {
 /* ── Page tabs + canvas (PageDetail.tsx, PageCanvas.tsx) ───────────── */
 
 .page-detail-top-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 0 24px;
   gap: 8px;
+  background: var(--mem-bg);
 }
 
 .page-detail-view-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex: 0 0 auto;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--mem-control-radius);
+  background: var(--mem-surface);
 }
 
 .page-detail-info-slot {
   display: flex;
+  align-items: center;
+  justify-self: end;
   width: var(--mem-icon-action-size);
+  min-height: var(--mem-icon-action-size);
 }
 
 .page-detail-canvas-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: var(--mem-control-height);
-  padding: 0 6px;
+  min-height: 30px;
+  padding: 0 10px;
   border: 0;
   border-radius: var(--mem-control-radius);
   background: transparent;
@@ -3331,6 +3361,11 @@ p.entity-error {
   font: 500 var(--mem-control-font-size)/1.2 var(--mem-font-body);
   white-space: nowrap;
   cursor: pointer;
+}
+
+.page-detail-canvas-toggle[aria-pressed="true"] {
+  background: var(--mem-bg);
+  color: var(--mem-text);
 }
 
 .page-detail-canvas-toggle:hover:not(:disabled) {
@@ -3346,6 +3381,16 @@ p.entity-error {
 .page-detail-canvas-toggle:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+@media (max-width: 640px) {
+  .page-detail-top-row {
+    padding-inline: 12px;
+  }
+
+  .page-detail-canvas-toggle {
+    padding-inline: 8px;
+  }
 }
 
 .page-canvas {

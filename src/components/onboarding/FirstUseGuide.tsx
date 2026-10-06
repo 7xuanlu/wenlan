@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { WorkspaceBackButton } from "../memory/navigation/WorkspaceNavigation";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
@@ -95,10 +96,10 @@ export function FirstUseGuide({
       {view === "guide" ? (
         <div className="fug-guide">
           <div className="fug-row">
-            <button type="button" className="fug-back" onClick={onBack}>
+            <WorkspaceBackButton type="button" className="fug-back" onClick={onBack}>
               <ArrowLeft aria-hidden="true" weight="regular" />
               {t("firstUse.guide.back")}
-            </button>
+            </WorkspaceBackButton>
             <span className="fug-eyebrow">{t("firstUse.guide.eyebrow")}</span>
           </div>
           <h1 className="fug-title">{t("firstUse.guide.title")}</h1>
