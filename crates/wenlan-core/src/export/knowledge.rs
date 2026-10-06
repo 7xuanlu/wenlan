@@ -605,6 +605,66 @@ impl KnowledgeWriter {
         self.load_state().pages.get(page_id).map(|s| s.file.clone())
     }
 
+    /// Verify live flat-root Markdown filenames for an already authorized set
+    /// of page IDs. Reads state once, then only those files; never scans, creates
+    /// directories, repairs state, or guesses a filename from a title. Missing,
+    /// unsafe, unreadable, or mismatched projections are absent from the map.
+    pub fn live_page_filenames(&self, page_ids: &[&str]) -> HashMap<String, String> {
+        let mut found = HashMap::new();
+        if page_ids.is_empty() {
+            return found;
+        }
+        let Some((parent, basename)) = self.path.parent().zip(self.path.file_name()) else {
+            return found;
+        };
+        let Ok(parent) = Dir::open_ambient_dir(parent, cap_std::ambient_authority()) else {
+            return found;
+        };
+        let Ok(root) = parent.open_dir_nofollow(Path::new(basename)) else {
+            return found;
+        };
+        let Ok(control) = root.open_dir_nofollow(".wenlan") else {
+            return found;
+        };
+        // Refuse nonregular state before opening, and bound the existing
+        // capability read. This read path deliberately takes no writer lock.
+        let Ok(metadata) = control.symlink_metadata("state.json") else {
+            return found;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return found;
+        }
+        let state = self.load_state_cap(&control);
+        for &page_id in page_ids {
+            let Some(entry) = state.pages.get(page_id) else {
+                continue;
+            };
+            let name = &entry.file;
+            // Reject both separator spellings and Windows drive/stream syntax
+            // on every platform. A state entry cannot navigate out of the root.
+            if name.contains(['/', '\\', ':'])
+                || name.starts_with('.')
+                || !name.ends_with(".md")
+                || !matches!(
+                    Path::new(name).components().next(),
+                    Some(Component::Normal(_))
+                )
+            {
+                continue;
+            }
+            let Ok(metadata) = root.symlink_metadata(name) else {
+                continue;
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            if Self::read_origin_id(&root, &OsString::from(name)).as_deref() == Some(page_id) {
+                found.insert(page_id.to_string(), name.clone());
+            }
+        }
+        found
+    }
+
     pub fn remove_page(
         &self,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
@@ -969,6 +1029,9 @@ impl KnowledgeWriter {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let mut file = root.open_with(name, &options).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
         let mut head = Vec::new();
         (&mut file)
             .take(FRONTMATTER_SCAN_BYTES)
@@ -4932,6 +4995,94 @@ fn related_page_titles(content: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::pages::Page;
+
+    #[test]
+    fn live_page_filenames_verifies_only_allowed_existing_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let filename = writer.page_filename(&page.id).unwrap();
+        let state_path = dir.path().join(".wenlan/state.json");
+        let state_before = std::fs::read(&state_path).unwrap();
+        page.title = "Renamed in the database".into();
+        let found = writer.live_page_filenames(&[page.id.as_str(), "not-authorized"]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[&page.id], filename);
+        assert!(writer.live_page_filenames(&["not-authorized"]).is_empty());
+        assert_eq!(std::fs::read(&state_path).unwrap(), state_before);
+        std::fs::write(
+            dir.path().join(&filename),
+            "---\norigin_id: another-page\n---\nBody\n",
+        )
+        .unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::remove_file(dir.path().join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::create_dir(dir.path().join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+    }
+
+    #[test]
+    fn live_page_filenames_rejects_unsafe_names_and_never_initializes_a_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let writer = KnowledgeWriter::new_for_test(missing.clone());
+        assert!(writer.live_page_filenames(&["page_test"]).is_empty());
+        assert!(!missing.exists());
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let mut state = writer.load_state();
+        for filename in [
+            "../outside.md",
+            "/absolute.md",
+            "folder/nested.md",
+            "folder\\nested.md",
+            "C:stream.md",
+            ".hidden.md",
+            "not-markdown.txt",
+            "",
+        ] {
+            state.pages.get_mut(&page.id).unwrap().file = filename.into();
+            writer.save_state(&state).unwrap();
+            assert!(
+                writer.live_page_filenames(&[&page.id]).is_empty(),
+                "{filename}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_page_filenames_refuses_symlinked_files_roots_and_state() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pages");
+        let writer = KnowledgeWriter::new_for_test(root.clone());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let filename = writer.page_filename(&page.id).unwrap();
+        let external = dir.path().join("external.md");
+        std::fs::rename(root.join(&filename), &external).unwrap();
+        symlink(&external, root.join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::remove_file(root.join(&filename)).unwrap();
+        std::fs::rename(&external, root.join(&filename)).unwrap();
+
+        let alias = dir.path().join("alias");
+        symlink(&root, &alias).unwrap();
+        assert!(KnowledgeWriter::new_for_test(alias)
+            .live_page_filenames(&[&page.id])
+            .is_empty());
+        let state_path = root.join(".wenlan/state.json");
+        let external_state = dir.path().join("state.json");
+        std::fs::rename(&state_path, &external_state).unwrap();
+        symlink(&external_state, &state_path).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        assert!(!dir.path().join(".wenlan").exists());
+    }
 
     fn test_concept() -> Page {
         Page {

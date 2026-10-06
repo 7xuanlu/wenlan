@@ -16,7 +16,9 @@ use wenlan_types::requests::{
     CreateConceptRequest, CreatePageDraftRequest, ExportFormat, ExportPagesRequest,
     PageDraftVersionRequest, SearchPagesRequest, UpdatePageDraftRequest,
 };
-use wenlan_types::responses::{CreatePageResponse, PageDraftResponse};
+use wenlan_types::responses::{
+    CreatePageResponse, PageDraftResponse, PageInventoryEntry, PageInventoryResponse,
+};
 use wenlan_types::{WriteOutcome, WriteSpaceSource, WriteSpaceTarget};
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
@@ -67,7 +69,7 @@ pub async fn handle_list_pages(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     view: crate::truth_guard::TruthView,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<PageInventoryResponse>, ServerError> {
     let status = params.get("status").map(|s| s.as_str()).unwrap_or("active");
     let space = params
         .get("space")
@@ -82,9 +84,12 @@ pub async fn handle_list_pages(
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
 
-    let db = {
+    let (db, page_root) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
     };
     let scope =
         crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
@@ -99,7 +104,33 @@ pub async fn handle_list_pages(
     let pages = wenlan_core::truth_adapter::filter_pages(&db, &view.grant, pages)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "pages": pages })))
+    // Enrich only the final scoped, truth-filtered browse result. Entity shadow
+    // pages and drafts are browse records, not Markdown projection claims.
+    let page_ids: Vec<String> = pages
+        .iter()
+        .filter(|page| page.kind != "entity" && page.status != "draft")
+        .map(|page| page.id.clone())
+        .collect();
+    let filenames = if let Some(root) = page_root {
+        tokio::task::spawn_blocking(move || {
+            let ids: Vec<&str> = page_ids.iter().map(String::as_str).collect();
+            wenlan_core::export::knowledge::KnowledgeWriter::new(root, &db)
+                .live_page_filenames(&ids)
+        })
+        .await
+        .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    Ok(Json(PageInventoryResponse {
+        pages: pages
+            .into_iter()
+            .map(|page| PageInventoryEntry {
+                storage_path: filenames.get(&page.id).cloned(),
+                page,
+            })
+            .collect(),
+    }))
 }
 
 /// GET /api/pages/:id
@@ -1427,6 +1458,113 @@ fn refusal_response(refusal: wenlan_core::presence::PresenceRefusal) -> axum::re
         PresenceRefusal::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
     };
     (status, Json(serde_json::json!({ "error": refusal.code() }))).into_response()
+}
+
+#[cfg(test)]
+mod page_inventory_tests {
+    use super::*;
+    use crate::state::LintServerConfig;
+    use crate::truth_guard::TruthView;
+    use wenlan_core::db::MemoryDB;
+    use wenlan_core::pages::PageDraftPublishOutcome;
+
+    #[tokio::test]
+    async fn page_inventory_reports_live_files_after_scope_and_keeps_drafts_null() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let root = tmp.path().join("pages");
+        let visible_id = "page_00000000-0000-4000-8000-0000000000a1";
+        let other_id = "page_00000000-0000-4000-8000-0000000000a2";
+        let draft_id = "page_00000000-0000-4000-8000-0000000000a3";
+        let mut visible_filename = String::new();
+        for (id, space) in [(visible_id, None), (other_id, Some("private"))] {
+            let draft = db
+                .create_page_draft_with_id(id, id, "Body", space, space)
+                .await
+                .unwrap();
+            let PageDraftPublishOutcome::Published(page) =
+                db.publish_page_draft(id, draft.version).await.unwrap()
+            else {
+                panic!("expected publish");
+            };
+            let filename =
+                wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(root.clone(), &db)
+                    .write_page(&page)
+                    .unwrap();
+            if id == visible_id {
+                visible_filename = std::path::Path::new(&filename)
+                    .file_name()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+            }
+        }
+        db.create_page_draft_with_id(draft_id, "Draft", "Body", None, None)
+            .await
+            .unwrap();
+        // Deliberately stale state claims a draft has a file. Inventory must not
+        // turn that into a draft projection promise, even if the bytes match.
+        let state_path = root.join(".wenlan/state.json");
+        let mut projection_state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
+        let mut draft_entry = projection_state["pages"][visible_id].clone();
+        draft_entry["file"] = serde_json::json!("draft.md");
+        projection_state["pages"][draft_id] = draft_entry;
+        std::fs::write(&state_path, serde_json::to_vec(&projection_state).unwrap()).unwrap();
+        std::fs::write(
+            root.join("draft.md"),
+            format!("---\norigin_id: {draft_id}\n---\nBody\n"),
+        )
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            lint_config: LintServerConfig::new(vec![], Some(root.clone())),
+            ..Default::default()
+        }));
+        let params = HashMap::from([("space".into(), "uncategorized".into())]);
+        let Json(inventory) = handle_list_pages(
+            State(state.clone()),
+            crate::space_header::SpaceHeader(None),
+            TruthView::automatic(),
+            axum::extract::Query(params.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inventory.pages.len(), 1);
+        assert_eq!(inventory.pages[0].page.id, visible_id);
+        assert_eq!(
+            inventory.pages[0].storage_path.as_deref(),
+            Some(visible_filename.as_str())
+        );
+        std::fs::remove_file(root.join(&visible_filename)).unwrap();
+        let Json(inventory) = handle_list_pages(
+            State(state.clone()),
+            crate::space_header::SpaceHeader(None),
+            TruthView::automatic(),
+            axum::extract::Query(params.clone()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inventory.pages[0].storage_path, None);
+        let mut params = params;
+        params.insert("status".into(), "draft".into());
+        let Json(inventory) = handle_list_pages(
+            State(state),
+            crate::space_header::SpaceHeader(None),
+            TruthView::automatic(),
+            axum::extract::Query(params),
+        )
+        .await
+        .unwrap();
+        assert_eq!(inventory.pages.len(), 1);
+        assert_eq!(inventory.pages[0].page.id, draft_id);
+        assert_eq!(inventory.pages[0].storage_path, None);
+    }
 }
 
 #[cfg(test)]

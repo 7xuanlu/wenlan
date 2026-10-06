@@ -1,3 +1,4 @@
+import type { WikiInventoryScope } from "../pages/pageInventory";
 import type { SettingsSection } from "../settings/SettingsSidebar";
 
 export type View =
@@ -19,7 +20,7 @@ export type View =
     /** Stable across autosaves and history; distinct for each new draft intent. */
     readonly sessionKey?: number;
   }
-  | { readonly kind: "pages" }
+  | { readonly kind: "pages"; readonly inventoryScope?: WikiInventoryScope }
   | { readonly kind: "recaps" }
   | { readonly kind: "settings"; readonly section?: SettingsSection }
   | { readonly kind: "sources" }

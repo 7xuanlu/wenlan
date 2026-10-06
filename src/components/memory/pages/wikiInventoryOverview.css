@@ -1,0 +1,6 @@
+.wiki-inventory-breadcrumb { display:flex;align-items:center;gap:8px;margin:0 0 16px;color:var(--mem-text-tertiary);font:12px var(--mem-font-body); }
+.wiki-inventory-breadcrumb button { background:none;border:0;padding:2px 0;color:var(--mem-text-secondary);cursor:pointer; }
+.wiki-inventory-breadcrumb button:hover { color:var(--mem-accent-page); }
+.wiki-inventory-breadcrumb button:focus-visible { outline:2px solid var(--mem-accent-page);outline-offset:3px; }
+.wiki-inventory-filename { display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mem-text-tertiary);font-size:11px; }
+.wiki-table .wiki-inventory-filename { max-width:240px; }

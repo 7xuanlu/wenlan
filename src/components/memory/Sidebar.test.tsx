@@ -119,7 +119,9 @@ describe("Sidebar workspace", () => {
     const onCreatePage = vi.fn();
     renderSidebar({ onSelectPage, onSelectDraft, onCreatePage });
 
-    await user.click(await screen.findByRole("button", { name: "Open Project plan" }));
+    await user.click(await screen.findByRole("button", { name: "Expand Other notes" }));
+    await user.click(screen.getByRole("button", { name: "Open Project plan" }));
+    await user.click(screen.getByRole("button", { name: "Expand Drafts" }));
     await user.click(screen.getByRole("button", { name: "Open Rough note" }));
     await user.click(screen.getByRole("button", { name: "New note" }));
     expect(onSelectPage).toHaveBeenCalledWith(active);
@@ -158,7 +160,8 @@ describe("Sidebar workspace", () => {
       onNavigateGraph,
     });
 
-    await user.click(await screen.findByRole("button", { name: "Open One note" }));
+    await user.click(await screen.findByRole("button", { name: "Expand Other notes" }));
+    await user.click(screen.getByRole("button", { name: "Open One note" }));
     await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Graph" }));
     expect(onSelectPage).toHaveBeenCalledWith(active);

@@ -497,6 +497,24 @@ pub struct SearchPagesResponse {
     pub pages: Vec<Page>,
 }
 
+/// A browse-visible page with best-effort metadata for its live Markdown file.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageInventoryEntry {
+    #[serde(flatten)]
+    pub page: Page,
+    /// Immediate filename relative to the configured Wiki root, never an absolute
+    /// path. `None` means no matching live file was verified. Older daemons omit
+    /// this field; neither a page title nor a projection-state entry proves it.
+    #[serde(default)]
+    pub storage_path: Option<String>,
+}
+
+/// `GET /api/pages` inventory response. Search keeps `SearchPagesResponse`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageInventoryResponse {
+    pub pages: Vec<PageInventoryEntry>,
+}
+
 /// Wikilink graph centered on a single page. Outbound = labels parsed
 /// out of this page's body; `target_page_id` is `None` for orphans.
 /// Inbound = active pages whose body cites this title.
@@ -1434,6 +1452,38 @@ mod mutation_response_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_inventory_accepts_older_daemons_and_keeps_page_fields_flat() {
+        let legacy = serde_json::json!({
+            "pages": [{
+                "id": "page_inventory", "title": "A renamed title",
+                "content": "Body", "source_memory_ids": [], "version": 1,
+                "status": "active", "created_at": "now", "last_compiled": "now",
+                "last_modified": "now", "sources_updated_count": 0, "user_edited": false
+            }]
+        });
+        let mut inventory: PageInventoryResponse = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(inventory.pages[0].storage_path, None);
+        assert!(serde_json::to_value(&inventory).unwrap()["pages"][0]["storage_path"].is_null());
+        inventory.pages[0].page.truth = Some(crate::pages::PageTruth {
+            supported: false,
+            human_reviewed: true,
+        });
+        inventory.pages[0].storage_path = Some("original-name.md".into());
+        let json = serde_json::to_value(&inventory).unwrap();
+        assert_eq!(json["pages"][0]["id"], "page_inventory");
+        assert_eq!(json["pages"][0]["storage_path"], "original-name.md");
+        assert_eq!(json["pages"][0]["truth"]["supported"], false);
+        assert_eq!(json["pages"][0]["truth"]["human_reviewed"], true);
+        assert!(json["pages"][0].get("page").is_none());
+        let old_reader: SearchPagesResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(old_reader.pages[0].title, "A renamed title");
+        let old_search: SearchPagesResponse = serde_json::from_value(legacy).unwrap();
+        assert!(serde_json::to_value(old_search).unwrap()["pages"][0]
+            .get("storage_path")
+            .is_none());
+    }
 
     #[test]
     fn store_memory_response_deserializes_without_extraction_method() {

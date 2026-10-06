@@ -4433,10 +4433,10 @@ pub async fn list_pages(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<Page>, String> {
+) -> Result<Vec<responses::PageInventoryEntry>, String> {
     let client = state.read().await.client.clone();
     let path = pages_query_path(status, domain, limit, offset);
-    let resp: responses::SearchPagesResponse = client.get_json(&path).await?;
+    let resp: responses::PageInventoryResponse = client.get_json(&path).await?;
     Ok(resp.pages)
 }
 
@@ -4473,10 +4473,10 @@ pub async fn list_pages_explicit_browse(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<Page>, String> {
+) -> Result<Vec<responses::PageInventoryEntry>, String> {
     let client = state.read().await.client.clone();
     let path = pages_query_path(status, domain, limit, offset);
-    let resp: responses::SearchPagesResponse = client.get_json_explicit_browse(&path).await?;
+    let resp: responses::PageInventoryResponse = client.get_json_explicit_browse(&path).await?;
     Ok(resp.pages)
 }
 

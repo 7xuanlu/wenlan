@@ -96,7 +96,10 @@ function scrollDestinationKey(view: View): string {
 // always a new intent; persisted drafts retain their session through history.
 function sameDestination(current: View, next: View): boolean {
   if ((current.kind === "home" || current.kind === "pages")
-    && (next.kind === "home" || next.kind === "pages")) return true;
+    && (next.kind === "home" || next.kind === "pages")) {
+    return (current.kind === "pages" ? current.inventoryScope ?? "all" : "all")
+      === (next.kind === "pages" ? next.inventoryScope ?? "all" : "all");
+  }
   if (current.kind !== next.kind) return false;
   switch (current.kind) {
     case "page": return next.kind === "page" && current.pageId === next.pageId
@@ -832,6 +835,9 @@ export default function Main({
           <Sidebar
             activeNavigation={activeNavigation}
             collapsed={responsiveSidebar.collapsed}
+            inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
+            browsingPages={view.kind === "pages" || view.kind === "home"}
+            onBrowsePages={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
             currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
             currentMemoryId={view.kind === "memory" ? view.sourceId : null}
             onSelectMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
@@ -1023,6 +1029,8 @@ export default function Main({
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
             <PagesOverview
+              inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
+              onBrowseAll={() => navigateTo({ kind: "pages" })}
               onOpenReview={() => navigateTo({ kind: "distill-review" })}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onSelectDraft={(draftId, space) => navigateTo({

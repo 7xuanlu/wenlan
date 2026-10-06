@@ -25,11 +25,15 @@ import {
   pageCandidateItems,
   pageCleanupSuggestionIds,
 } from "./pageReviewSignals";
-import { classifyPage, pageSpaceContext } from "./pagePresentation";
+import { pageInventoryScope, inventoryPageFilename, collectPageInventory, type WikiInventoryScope } from "./pageInventory";
+import "./wikiInventoryOverview.css";
+import { pageSpaceContext } from "./pagePresentation";
 import "./pageActions.css";
 import { FirstPageMilestone } from "../../onboarding/FirstPageMilestone";
 
 interface PagesOverviewProps {
+  readonly inventoryScope?: WikiInventoryScope;
+  readonly onBrowseAll?: () => void;
   readonly onOpenReview?: () => void;
   readonly onCreatePage: (space: string | null) => void;
   readonly onSelectDraft: (draftId: string, space: string | null) => void;
@@ -211,6 +215,8 @@ function describeWikiPage(
 }
 
 export function PagesOverview({
+  inventoryScope = "all",
+  onBrowseAll,
   onOpenReview,
   onCreatePage,
   onSelectDraft,
@@ -237,10 +243,7 @@ export function PagesOverview({
     ...EXPLICIT_BROWSE_QUERY_POLICY,
   });
   const pages = useMemo(
-    () => Array.from(new Map([
-      ...(draftPagesQuery.data ?? []).map((page) => [page.id, page] as const),
-      ...(activePagesQuery.data ?? []).map((page) => [page.id, page] as const),
-    ]).values()).filter((page) => classifyPage(page) !== "entity"),
+    () => collectPageInventory(activePagesQuery.data ?? [], draftPagesQuery.data ?? []),
     [activePagesQuery.data, draftPagesQuery.data],
   );
   const isPending = activePagesQuery.isPending || draftPagesQuery.isPending;
@@ -278,10 +281,11 @@ export function PagesOverview({
   );
   const filteredPages = useMemo(
     () => pages
+      .filter((page) => inventoryScope === "all" || pageInventoryScope(page) === inventoryScope)
       .filter((page) => statusFilter === "all" || isUnconfirmedPage(page))
       .filter((page) => spaceFilter === "all" || pageSpaceContext(page) === spaceFilter)
       .sort((left, right) => comparePages(left, right, sort)),
-    [pages, sort, spaceFilter, statusFilter],
+    [pages, sort, spaceFilter, statusFilter, inventoryScope],
   );
   const pageCount = Math.max(1, Math.ceil(filteredPages.length / PAGE_SIZE));
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
@@ -291,7 +295,7 @@ export function PagesOverview({
 
   useEffect(() => {
     setPageIndex(0);
-  }, [sort, spaceFilter, statusFilter]);
+  }, [sort, spaceFilter, statusFilter, inventoryScope]);
 
   const handleLensChange = (next: AssetLens) => {
     setLens(next);
@@ -332,17 +336,18 @@ export function PagesOverview({
   return (
     <section aria-labelledby="pages-overview-title" className="wiki-overview mx-auto w-full max-w-[1130px] pb-16">
       <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
+      {inventoryScope !== "all" && onBrowseAll && <nav aria-label={t("pages.inventory.browse")} className="wiki-inventory-breadcrumb"><button onClick={onBrowseAll} type="button">{t("pages.overview.title")}</button><span aria-hidden="true">/</span><span>{t(`pages.inventory.${inventoryScope}`)}</span></nav>}
       <header className="wiki-overview-header">
         <div className="wiki-overview-heading">
           <div className="wiki-overview-title-row">
-            <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
+            <h1 id="pages-overview-title">{inventoryScope === "all" ? t("pages.overview.title") : t(`pages.inventory.${inventoryScope}`)}</h1>
             {!isPending && !isError && pages.length > 0 && (
               <span className="wiki-overview-count">
-                {t("pages.overview.pageCount", { count: pages.length })}
+                {t("pages.overview.pageCount", { count: filteredPages.length })}
               </span>
             )}
           </div>
-          <p>{t("pages.overview.description")}</p>
+          {inventoryScope !== "all" && <p>{t(`pages.inventory.${inventoryScope}Hint`)}</p>}
         </div>
         <div className="wiki-overview-actions">
           <button
@@ -456,7 +461,7 @@ export function PagesOverview({
                   footer={(
                     <>
                       {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
-                      {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                      {inventoryScope === "files" ? <span className="wiki-inventory-filename" title={inventoryPageFilename(page) ?? undefined}>{inventoryPageFilename(page)}</span> : view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                     </>
                   )}
                   status={(view.isDraft || view.isUnconfirmed || view.hasCleanupSuggestion || (cutoverLive && page.truth)) ? (
@@ -496,7 +501,7 @@ export function PagesOverview({
               <tr>
                 <th scope="col">{t("pages.overview.columns.page")}</th>
                 <th scope="col">{t("pages.overview.columns.space")}</th>
-                <th scope="col">{t("pages.overview.columns.updated")}</th>
+                <th scope="col">{t(inventoryScope === "files" ? "pages.inventory.filename" : "pages.overview.columns.updated")}</th>
               </tr>
             </thead>
             <tbody>
@@ -537,12 +542,12 @@ export function PagesOverview({
                         </button>
                         <div className="wiki-page-mobile-meta">
                           {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
-                          {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                          {inventoryScope === "files" ? <span className="wiki-inventory-filename" title={inventoryPageFilename(page) ?? undefined}>{inventoryPageFilename(page)}</span> : view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                         </div>
                       </div>
                     </td>
                     <td data-testid={`page-space-${page.id}`}>{view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}</td>
-                    <td>{view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}</td>
+                    <td>{inventoryScope === "files" ? <span className="wiki-inventory-filename" title={inventoryPageFilename(page) ?? undefined}>{inventoryPageFilename(page)}</span> : view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}</td>
                   </tr>
                 );
               })}

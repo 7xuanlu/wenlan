@@ -1317,6 +1317,9 @@ export interface TruthStatus {
 }
 
 export interface Page {
+  /** Live Markdown projection filename, relative to the daemon knowledge root.
+   * null means no verified file; absent on older daemon versions. */
+  storage_path?: string | null;
   id: string;
   title: string;
   summary: string | null;

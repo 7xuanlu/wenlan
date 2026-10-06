@@ -6,6 +6,19 @@ import { createSpacesNavigationFixture, type SpacesNavigationFixture } from "./s
  * unless a named scenario is requested; no daemon or personal data is read. */
 export function createReviewDecisionFixture(scenario: string): SpacesNavigationFixture {
   const original = createSpacesNavigationFixture();
+  if (scenario === "wiki-files") {
+    const filenames: Record<string, string> = {
+      "page-architecture": "fixture-architecture.md",
+      "page-errors": "deterministic-fixtures.md",
+      "page-keyboard": "weekly-recap.md",
+      "page-cjk": "CJK排版.md",
+      "page-history": "history-semantics.md",
+    };
+    return { ...original, pages: [
+      ...original.pages.map((page) => ({ ...page, storage_path: filenames[page.id] ?? null })),
+      { ...original.pages[0], id: "page-writing-draft", title: "Next experiment", content: "# Next experiment\n\nA work in progress.", status: "draft", storage_path: null },
+    ] };
+  }
   const vocabularyEntity = { ...original.entities[0], id: "entity-review-method", name: "Source triangulation", entity_type: "concept" };
   const base = scenario === "all" || scenario === "vocab_promote" ? {
     ...original,

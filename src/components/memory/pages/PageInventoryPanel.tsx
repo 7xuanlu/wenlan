@@ -1,87 +1,118 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
+import { CaretRight, FileText, Folder, MagnifyingGlass, NotePencil, Plus, Stack } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { Page } from "../../../lib/tauri";
-import { listAllActivePages, listAllDraftPages } from "./listAllPages";
+import { listAllActivePages, listAllDraftPages, listAllActivePagesExplicitBrowse, listAllDraftPagesExplicitBrowse, EXPLICIT_BROWSE_QUERY_POLICY } from "./listAllPages";
 import { pageSpaceContext } from "./pagePresentation";
+import {
+  collectPageInventory,
+  filterPageInventory,
+  inventoryPageFilename,
+  pageInventoryScope,
+  pageMatchesInventoryScope,
+  type PageCollectionScope,
+  type WikiInventoryScope,
+} from "./pageInventory";
+import "./pageInventory.css";
 
 type PageInventoryPanelProps = {
   readonly currentPageId?: string | null;
+  readonly inventoryScope?: WikiInventoryScope;
+  readonly browsing?: boolean;
+  readonly onBrowse?: (scope: WikiInventoryScope) => void;
   readonly onCreatePage?: () => void;
   readonly onOpenDraft?: (draftId: string, space: string | null) => void;
   readonly onOpenPage?: (page: Page) => void;
 };
 
-function modifiedAt(page: Page): number {
-  const value = Date.parse(page.last_modified || page.last_compiled || page.created_at);
-  return Number.isFinite(value) ? value : 0;
-}
+const collections: readonly PageCollectionScope[] = ["files", "drafts", "unfiled"];
+const collectionIcons = { files: Folder, drafts: NotePencil, unfiled: Stack };
 
 export function PageInventoryPanel({
   currentPageId = null,
+  inventoryScope = "all",
+  browsing = false,
+  onBrowse,
   onCreatePage,
   onOpenDraft,
   onOpenPage,
 }: PageInventoryPanelProps) {
   const { i18n, t } = useTranslation();
+  const inventoryId = useId();
   const [filter, setFilter] = useState("");
-  // This is an ambient workspace list. Its query keys must stay separate from
-  // Wiki's explicit-browse cache: merely mounting the sidebar is not a human
-  // truth-manifest browse and must never record one.
+  const [expanded, setExpanded] = useState<Partial<Record<PageCollectionScope, boolean>>>({});
+  // The overview is a deliberate browse: share its exact keys, data and policy.
+  // Every ambient/detail sidebar keeps separate passive reads without the marker.
   const activePages = useQuery({
-    queryKey: ["pages", "inventory", "passive", "active"],
-    queryFn: listAllActivePages,
-    staleTime: 30_000,
+    queryKey: browsing ? ["pages", "active"] : ["pages", "inventory", "passive", "active"],
+    queryFn: browsing ? listAllActivePagesExplicitBrowse : listAllActivePages,
+    ...(browsing ? EXPLICIT_BROWSE_QUERY_POLICY : { staleTime: 30_000 }),
   });
   const draftPages = useQuery({
-    queryKey: ["pages", "inventory", "passive", "draft"],
-    queryFn: listAllDraftPages,
-    staleTime: 30_000,
+    queryKey: browsing ? ["pages", "draft"] : ["pages", "inventory", "passive", "draft"],
+    queryFn: browsing ? listAllDraftPagesExplicitBrowse : listAllDraftPages,
+    ...(browsing ? EXPLICIT_BROWSE_QUERY_POLICY : { staleTime: 30_000 }),
   });
-
-  const pages = useMemo(() => {
-    const byId = new Map<string, Page>();
-    for (const page of [...(draftPages.data ?? []), ...(activePages.data ?? [])]) {
-      if (page.entity_id || page.creation_kind === "entity") continue;
-      byId.set(page.id, page);
+  const pages = useMemo(
+    () => collectPageInventory(activePages.data ?? [], draftPages.data ?? []),
+    [activePages.data, draftPages.data],
+  );
+  const selectedPage = pages.find((page) => page.id === currentPageId);
+  const selectedCollection = selectedPage ? pageInventoryScope(selectedPage) : null;
+  useEffect(() => {
+    if (!browsing && selectedCollection) {
+      setExpanded((previous) => ({ ...previous, [selectedCollection]: true }));
     }
-    return [...byId.values()].sort(
-      (left, right) => modifiedAt(right) - modifiedAt(left) || left.title.localeCompare(right.title),
-    );
-  }, [activePages.data, draftPages.data]);
-  const normalizedFilter = filter.trim().toLocaleLowerCase(i18n.language);
-  const visiblePages = normalizedFilter
-    ? pages.filter((page) => page.title.toLocaleLowerCase(i18n.language).includes(normalizedFilter))
-    : pages;
+  }, [browsing, currentPageId, selectedCollection]);
+
+  const hasFilter = !!filter.trim();
+  const visiblePages = filterPageInventory(pages, filter, i18n.language);
   const isLoading = activePages.isPending || draftPages.isPending;
   const isError = activePages.isError || draftPages.isError;
 
+  const renderPage = (page: Page) => {
+    const isDraft = page.status === "draft";
+    const title = isDraft && !page.title.trim() ? t("pages.overview.untitledDraft") : page.title;
+    const filename = !isDraft ? inventoryPageFilename(page) : null;
+    const canOpen = isDraft ? !!onOpenDraft : !!onOpenPage;
+    return (
+      <li key={page.id}>
+        <button
+          aria-current={currentPageId === page.id ? "page" : undefined}
+          aria-label={t("pages.overview.openPage", { title })}
+          className="notes-page-button notes-inventory-page"
+          data-active={currentPageId === page.id ? "true" : undefined}
+          disabled={!canOpen}
+          onClick={() => {
+            if (isDraft) onOpenDraft?.(page.id, pageSpaceContext(page) ?? null);
+            else onOpenPage?.(page);
+          }}
+          title={title}
+          type="button"
+        >
+          <FileText aria-hidden="true" size={14} weight="regular" />
+          <span className="notes-page-title">{filename ?? title}</span>
+        </button>
+      </li>
+    );
+  };
+
   return (
-    <section aria-label={t("sidebar.notes")} className="notes-list-panel">
+    <section aria-label={t("sidebar.notes")} className="notes-list-panel notes-inventory-panel">
       <div className="notes-list-header">
         <h2>{t("sidebar.notes")}</h2>
         {onCreatePage && (
-          <button
-            aria-label={t("sidebar.newNote")}
-            className="notes-list-create"
-            onClick={onCreatePage}
-            title={t("sidebar.newNote")}
-            type="button"
-          >
-            <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" viewBox="0 0 24 24" width="16"><path d="M12 4v16M4 12h16" /></svg>
+          <button aria-label={t("sidebar.newNote")} className="notes-list-create" onClick={onCreatePage} title={t("sidebar.newNote")} type="button">
+            <Plus aria-hidden="true" size={16} weight="regular" />
           </button>
         )}
       </div>
       <label className="notes-list-filter">
         <span className="sr-only">{t("sidebar.filterNotes")}</span>
-        <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" width="14"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
-        <input
-          aria-label={t("sidebar.filterNotes")}
-          onChange={(event) => setFilter(event.target.value)}
-          type="search"
-          value={filter}
-        />
+        <MagnifyingGlass aria-hidden="true" size={14} weight="regular" />
+        <input aria-label={t("sidebar.filterNotes")} onChange={(event) => setFilter(event.target.value)} type="search" value={filter} />
       </label>
       <div className="notes-list-scroll">
         {isLoading ? (
@@ -91,38 +122,74 @@ export function PageInventoryPanel({
             <p>{t("pages.overview.error")}</p>
             <button onClick={() => { void activePages.refetch(); void draftPages.refetch(); }} type="button">{t("pageDetail.retry")}</button>
           </div>
-        ) : visiblePages.length === 0 ? (
-          <p className="notes-list-state">{filter ? t("pages.overview.noMatches") : t("pages.overview.empty")}</p>
         ) : (
-          <ul className="notes-page-list">
-            {visiblePages.map((page) => {
-              const isDraft = page.status === "draft";
-              const title = isDraft && !page.title.trim()
-                ? t("pages.overview.untitledDraft")
-                : page.title;
-              const canOpen = isDraft ? !!onOpenDraft : !!onOpenPage;
-              return (
-                <li key={page.id}>
-                  <button
-                    aria-current={currentPageId === page.id ? "page" : undefined}
-                    aria-label={t("pages.overview.openPage", { title })}
-                    className="notes-page-button"
-                    data-active={currentPageId === page.id ? "true" : undefined}
-                    disabled={!canOpen}
-                    onClick={() => {
-                      if (isDraft) onOpenDraft?.(page.id, pageSpaceContext(page) ?? null);
-                      else onOpenPage?.(page);
-                    }}
-                    title={title}
-                    type="button"
-                  >
-                    <span className="notes-page-title">{title}</span>
-                    {isDraft && <span className="notes-page-status">{t("pages.overview.draft")}</span>}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          <>
+            <button
+              aria-current={browsing && inventoryScope === "all" ? "page" : undefined}
+              aria-label={t("pages.inventory.all")}
+              className="notes-inventory-scope notes-inventory-all"
+              data-active={browsing && inventoryScope === "all" ? "true" : undefined}
+              disabled={!onBrowse}
+              onClick={() => onBrowse?.("all")}
+              title={t("pages.inventory.browse")}
+              type="button"
+            >
+              <Stack aria-hidden="true" size={16} weight="regular" />
+              <span>{t("pages.inventory.all")}</span>
+              <span className="notes-inventory-count">{pages.length}</span>
+            </button>
+            <ul className="notes-inventory-collections">
+              {collections.map((scope) => {
+                const collection = pages.filter((page) => pageMatchesInventoryScope(page, scope));
+                if (scope === "files" && collection.length === 0) return null;
+                const matches = visiblePages.filter((page) => pageMatchesInventoryScope(page, scope));
+                if (hasFilter && matches.length === 0) return null;
+                const name = t(`pages.inventory.${scope}`);
+                const Icon = collectionIcons[scope];
+                const isExpanded = hasFilter || !!expanded[scope];
+                const showPages = hasFilter || (!browsing && isExpanded);
+                const listId = `${inventoryId}-${scope}`;
+                return (
+                  <li key={scope}>
+                    <div className="notes-inventory-collection-row">
+                      {(!browsing || hasFilter) && (
+                        <button
+                          aria-controls={listId}
+                          aria-expanded={showPages}
+                          aria-label={t(isExpanded ? "pages.inventory.collapse" : "pages.inventory.expand", { name })}
+                          className="notes-inventory-disclosure"
+                          disabled={hasFilter || collection.length === 0}
+                          onClick={() => setExpanded((previous) => ({ ...previous, [scope]: !previous[scope] }))}
+                          type="button"
+                        >
+                          <CaretRight aria-hidden="true" size={12} weight="regular" />
+                        </button>
+                      )}
+                      <button
+                        aria-current={browsing && inventoryScope === scope ? "page" : undefined}
+                        aria-label={name}
+                        className="notes-inventory-scope"
+                        data-active={browsing && inventoryScope === scope ? "true" : undefined}
+                        disabled={!onBrowse}
+                        onClick={() => onBrowse?.(scope)}
+                        type="button"
+                      >
+                        <Icon aria-hidden="true" size={16} weight="regular" />
+                        <span>{name}</span>
+                        <span className="notes-inventory-count">{hasFilter ? matches.length : collection.length}</span>
+                      </button>
+                    </div>
+                    <ul className="notes-page-list notes-inventory-pages" hidden={!showPages} id={listId}>
+                      {showPages && matches.map(renderPage)}
+                    </ul>
+                  </li>
+                );
+              })}
+            </ul>
+            {visiblePages.length === 0 && (
+              <p className="notes-list-state">{hasFilter ? t("pages.overview.noMatches") : t("pages.inventory.empty")}</p>
+            )}
+          </>
         )}
       </div>
     </section>

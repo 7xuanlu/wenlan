@@ -1,0 +1,107 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.notes-inventory-collections {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 5px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.notes-inventory-collection-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.notes-inventory-scope,
+.notes-inventory-disclosure {
+  display: flex;
+  align-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  cursor: pointer;
+}
+
+.notes-inventory-scope {
+  flex: 1;
+  min-width: 0;
+  min-height: 32px;
+  gap: 8px;
+  padding: 6px 8px;
+  font-size: 12px;
+  text-align: left;
+}
+
+.notes-inventory-scope > span:not(.notes-inventory-count) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notes-inventory-all {
+  width: 100%;
+}
+
+.notes-inventory-count {
+  margin-left: auto;
+  color: var(--mem-text-tertiary);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.notes-inventory-disclosure {
+  flex: 0 0 18px;
+  justify-content: center;
+  width: 18px;
+  min-height: 28px;
+  padding: 0;
+}
+
+.notes-inventory-disclosure[aria-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+
+.notes-inventory-scope > svg,
+.notes-inventory-page > svg {
+  flex: 0 0 auto;
+}
+
+.notes-inventory-scope:hover,
+.notes-inventory-disclosure:hover:not(:disabled) {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.notes-inventory-scope[data-active="true"] {
+  background: var(--mem-indigo-bg);
+  color: var(--mem-text);
+}
+
+.notes-inventory-scope:focus-visible,
+.notes-inventory-disclosure:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.notes-inventory-scope:disabled,
+.notes-inventory-disclosure:disabled {
+  cursor: default;
+}
+
+.notes-inventory-pages {
+  margin-left: 27px;
+}
+
+.notes-inventory-pages[hidden] {
+  display: none;
+}
+
+.notes-inventory-panel .notes-inventory-page {
+  justify-content: flex-start;
+  gap: 7px;
+  padding-left: 8px;
+}

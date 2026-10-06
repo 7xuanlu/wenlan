@@ -157,7 +157,7 @@ describe("PagesOverview", () => {
     const { onSelectPage } = renderOverview();
 
     expect(await screen.findByRole("heading", { name: "Wiki" })).toBeInTheDocument();
-    expect(screen.getByText("A living ledger of ideas, people, decisions, and recaps.")).toBeInTheDocument();
+    expect(screen.queryByText("A living ledger of ideas, people, decisions, and recaps.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "All pages" })).not.toBeInTheDocument();
     expect(await screen.findByText("3 pages")).toBeInTheDocument();
     for (const heading of ["Page", "Space", "Updated"]) {

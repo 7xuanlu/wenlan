@@ -53,7 +53,7 @@ for (const persisted of [false, true]) {
     await page.goto("/");
     await checkShell(page);
     if (persisted) {
-      await sidebar(page).getByRole("button", { name: "Open Original synthetic note", exact: true }).click();
+      await page.locator(".wiki-overview").getByRole("button", { name: "Open Original synthetic note · Draft", exact: true }).click();
       await expect(title(page)).toHaveValue(original.title);
     } else {
       await sidebar(page).getByRole("button", { name: "New note", exact: true }).click();

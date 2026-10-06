@@ -340,6 +340,20 @@ const en = {
     },
   },
   pages: {
+    inventory: {
+      all: "All notes",
+      files: "Note files",
+      drafts: "Drafts",
+      unfiled: "Other notes",
+      browse: "Browse notes",
+      expand: "Expand {{name}}",
+      collapse: "Collapse {{name}}",
+      empty: "No notes here yet.",
+      filename: "File",
+      filesHint: "These notes have Markdown files in your notes folder.",
+      unfiledHint: "These notes have no verified Markdown file yet.",
+      draftsHint: "Continue writing. Drafts become files when published.",
+    },
     editor: {
       heading: "Page draft",
       back: "Back",
@@ -2589,6 +2603,20 @@ const zhHans = {
     },
   },
   pages: {
+    inventory: {
+      all: "所有笔记",
+      files: "笔记文件",
+      drafts: "草稿",
+      unfiled: "其他笔记",
+      browse: "浏览笔记",
+      expand: "展开{{name}}",
+      collapse: "收起{{name}}",
+      empty: "这里还没有笔记。",
+      filename: "文件",
+      filesHint: "这些笔记对应笔记文件夹中的 Markdown 文件。",
+      unfiledHint: "这些笔记暂时没有可确认的 Markdown 文件。",
+      draftsHint: "继续写作，发布后草稿会成为文件。",
+    },
     editor: {
       heading: "页面草稿",
       back: "返回",
@@ -4797,6 +4825,20 @@ const zhHant = {
     },
   },
   pages: {
+    inventory: {
+      all: "所有筆記",
+      files: "筆記檔案",
+      drafts: "草稿",
+      unfiled: "其他筆記",
+      browse: "瀏覽筆記",
+      expand: "展開{{name}}",
+      collapse: "收起{{name}}",
+      empty: "這裡還沒有筆記。",
+      filename: "檔案",
+      filesHint: "這些筆記對應筆記資料夾中的 Markdown 檔案。",
+      unfiledHint: "這些筆記暫時沒有可確認的 Markdown 檔案。",
+      draftsHint: "繼續寫作，發佈後草稿會成為檔案。",
+    },
     editor: {
       heading: "頁面草稿",
       back: "返回",
