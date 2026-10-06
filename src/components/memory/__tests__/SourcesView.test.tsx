@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import SourcesView, { sourceCaption, isManagedSourcePath } from "../SourcesView";
+import { SourceFolderBrowser as SourcesView, sourceCaption, isManagedSourcePath } from "../SourcesView";
 import {
   listRegisteredSources,
   openFile,

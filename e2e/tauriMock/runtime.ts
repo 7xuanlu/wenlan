@@ -8,6 +8,7 @@ import type {
   ListEntitiesRequest,
   ListEntitiesResponse,
   MemoryItem,
+  IngestWebpageRequest,
   Page as KnowledgePage,
   PageReviewOutcome,
   RefinementProposalSummary,
@@ -106,6 +107,7 @@ export class TauriMockRuntime {
   private pages: KnowledgePage[];
   private entityDetails: EntityDetail[];
   private memories: MemoryItem[];
+  private readonly webpages = new Map<string, IngestWebpageRequest>();
   private readonly distillReview: DistillReviewResponse;
   private refinements: RefinementProposalSummary[];
   private readonly callsLog: MockCommandCall[] = [];
@@ -275,6 +277,13 @@ export class TauriMockRuntime {
         return this.memories.filter((memory) => ids.has(memory.source_id));
       }
       case "list_indexed_files": return this.listIndexedFiles();
+      case "ingest_webpage": return this.ingestWebpage(args);
+      case "get_chunks": {
+        if (optionalString(args, "source") !== "webpage") return baseResponse(command, args, { activityRows: this.activityRows, memoryCount: this.memories.length });
+        const sourceId = requiredString(command, args, "sourceId");
+        const webpage = this.webpages.get(sourceId);
+        return webpage ? [{ id: `webpage-${sourceId}`, content: webpage.content, chunk_index: 0, chunk_type: "text", language: null }] : [];
+      }
       case "update_memory_cmd": return this.updateMemory(args);
       case "reclassify_memory_cmd": return this.reclassifyMemory(args);
       case "set_stability_cmd": return this.setStability(args);
@@ -1044,7 +1053,7 @@ export class TauriMockRuntime {
   }
 
   private listIndexedFiles(): readonly Record<string, unknown>[] {
-    return this.memories.map((memory) => ({
+    const memories = this.memories.map((memory) => ({
       source: "review-fixture.md",
       source_id: memory.source_id,
       title: memory.title,
@@ -1060,6 +1069,23 @@ export class TauriMockRuntime {
       confirmed: memory.confirmed,
       pinned: memory.pinned,
     }));
+    return [...memories, ...Array.from(this.webpages.values(), (webpage) => ({
+      source: "webpage", source_id: webpage.url, title: webpage.title,
+      url: webpage.url, chunk_count: 1, last_modified: 1_783_728_000,
+      summary: null, processing: false,
+    }))];
+  }
+
+  private ingestWebpage(args: unknown): { chunks_created: number; document_id: string } {
+    const request = optionalValue(args, "req");
+    const url = requiredString("ingest_webpage", request, "url");
+    const title = requiredString("ingest_webpage", request, "title");
+    const content = requiredString("ingest_webpage", request, "content");
+    const createOnly = optionalValue(request, "create_only");
+    if (createOnly !== undefined && typeof createOnly !== "boolean") throw new TauriMockArgumentError("ingest_webpage", "create_only");
+    if (createOnly && this.webpages.has(url)) throw new Error("WEBPAGE_ALREADY_EXISTS");
+    this.webpages.set(url, { url, title, content });
+    return { chunks_created: 1, document_id: url };
   }
 
   private updateMemory(args: unknown): null {

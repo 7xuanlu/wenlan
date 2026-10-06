@@ -17,6 +17,8 @@ interface ContentRendererProps {
   className?: string;
   /** Render #citation:k links as inline chips (page detail). */
   renderCitation?: (occurrence: number) => React.ReactNode;
+  /** Imported source previews must not load remote images while being read. */
+  allowImages?: boolean;
 }
 
 const markdownComponents = {
@@ -225,6 +227,7 @@ export default function ContentRenderer({
   variant,
   className,
   renderCitation,
+  allowImages = true,
 }: ContentRendererProps) {
   if (variant === "card") {
     return (
@@ -276,7 +279,10 @@ export default function ContentRenderer({
 
   return (
     <div className={["content-renderer", className].filter(Boolean).join(" ")}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={allowImages ? components : {
+        ...components,
+        img: ({ alt }: { alt?: string }) => <span>{alt}</span>,
+      }}>
         {prepared}
       </ReactMarkdown>
     </div>

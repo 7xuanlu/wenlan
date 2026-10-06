@@ -36,6 +36,10 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
         ("/api/memory/by-ids", SelectionGate::BatchFiltered),
         ("/api/memory/{id}/versions", SelectionGate::SingleId404),
         ("/api/chunks/{source_id}", SelectionGate::SingleId404),
+        (
+            "/api/webpage-chunks/{source_id}",
+            SelectionGate::SingleId404,
+        ),
     ] {
         let row = route(Method::Get, path).expect("direct read row");
         assert_eq!(row.selection_gate, gate);
@@ -90,6 +94,7 @@ fn route_catalog_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/memory/{id}/revisions"),
         (Method::Get, "/api/indexed-files"),
         (Method::Get, "/api/chunks/{source_id}"),
+        (Method::Get, "/api/webpage-chunks/{source_id}"),
         (Method::Get, "/api/activities"),
         (Method::Get, "/api/tags"),
         (Method::Get, "/api/suggest-tags"),

@@ -22,6 +22,7 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Get,"/api/refinery/queue","refinement_queue",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
     row!(Get,"/api/indexed-files","indexed_files",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/chunks/{source_id}","document_chunks",HeaderOnly,UnauthenticatedLocal,MemorySpace,SingleId404,Rejected,Forbidden),
+    row!(Get,"/api/webpage-chunks/{source_id}","webpage_chunks",HeaderOnly,UnauthenticatedLocal,MemorySpace,SingleId404,Rejected,Forbidden),
     row!(Get,"/api/activities","agent_activity",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/tags","document_tag_map",HeaderOnly,UnauthenticatedLocal,MemorySpace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/suggest-tags","tag_suggestions",HeaderOnly,UnauthenticatedLocal,MemorySpace,SingleId404,Rejected,Forbidden),

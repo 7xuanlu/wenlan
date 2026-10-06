@@ -310,6 +310,7 @@ export interface IndexedFileInfo {
   source: string;
   source_id: string;
   title: string;
+  url?: string | null;
   summary?: string;
   chunk_count: number;
   last_modified: number;
@@ -439,6 +440,7 @@ export interface IngestWebpageRequest {
   title: string;
   content: string;
   metadata?: Record<string, string> | null;
+  create_only?: boolean;
 }
 
 export interface IngestResponse {

@@ -811,7 +811,30 @@ impl WenlanClient {
         &self,
         req: wenlan_types::requests::IngestWebpageRequest,
     ) -> Result<wenlan_types::responses::IngestResponse, String> {
-        self.post_json("/api/ingest/webpage", &req).await
+        if !req.create_only {
+            return self.post_json("/api/ingest/webpage", &req).await;
+        }
+        // A missing create route on an old daemon must fail closed; never
+        // retry through the legacy replacement endpoint.
+        let path = "/api/ingest/webpage/create";
+        let resp = self
+            .client
+            .post(self.url(path))
+            .json(&req)
+            .send()
+            .await
+            .map_err(|e| format!("HTTP POST {}: {}", path, e))?;
+        if resp.status() == reqwest::StatusCode::CONFLICT {
+            return Err("WEBPAGE_ALREADY_EXISTS".to_string());
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP POST {} returned {}: {}", path, status, text));
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("Parse {}: {}", path, e))
     }
 
     pub async fn distill_review(&self) -> Result<DistillReviewResponse, String> {
@@ -2983,6 +3006,7 @@ mod tests {
             title: "Example Post".to_string(),
             content: "A durable article body.".to_string(),
             metadata: Some(metadata),
+            create_only: false,
         };
 
         let resp = client.ingest_webpage(req).await.unwrap();
@@ -3002,6 +3026,94 @@ mod tests {
                 "content": "A durable article body.",
                 "metadata": {"source": "manual-url"}
             })
+        );
+    }
+
+    fn webpage_create_request(create_only: bool) -> wenlan_types::requests::IngestWebpageRequest {
+        wenlan_types::requests::IngestWebpageRequest {
+            url: "https://example.com/create".into(),
+            title: "New excerpt".into(),
+            content: "Exact supplied excerpt.".into(),
+            metadata: None,
+            create_only,
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_webpage_create_uses_atomic_route_and_maps_only_create_conflict() {
+        for create_only in [true, false] {
+            let (base_url, request) =
+                serve_response_once("409 Conflict", r#"{"error":"already exists"}"#).await;
+            let client = WenlanClient {
+                client: reqwest::Client::new(),
+                base_url,
+            };
+            let error = client
+                .ingest_webpage(webpage_create_request(create_only))
+                .await
+                .unwrap_err();
+            let request = request.await.unwrap();
+            if create_only {
+                assert_eq!(error, "WEBPAGE_ALREADY_EXISTS");
+                assert_eq!(
+                    request.lines().next().unwrap(),
+                    "POST /api/ingest/webpage/create HTTP/1.1"
+                );
+                assert_eq!(request_body(&request)["create_only"], true);
+            } else {
+                assert!(error.contains("409 Conflict"));
+                assert_ne!(error, "WEBPAGE_ALREADY_EXISTS");
+                assert_eq!(
+                    request.lines().next().unwrap(),
+                    "POST /api/ingest/webpage HTTP/1.1"
+                );
+                assert!(request_body(&request).get("create_only").is_none());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_webpage_create_404_never_retries_legacy_replacement() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let requests = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 4096];
+            let n = stream.read(&mut buf).await.unwrap();
+            let first = String::from_utf8_lossy(&buf[..n]).to_string();
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                )
+                .await
+                .unwrap();
+            drop(stream);
+            let second =
+                tokio::time::timeout(std::time::Duration::from_millis(150), listener.accept())
+                    .await;
+            assert!(
+                second.is_err(),
+                "Create must not issue a fallback write after 404"
+            );
+            first
+        });
+        let client = WenlanClient {
+            client: reqwest::Client::new(),
+            base_url,
+        };
+        let error = client
+            .ingest_webpage(webpage_create_request(true))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "HTTP POST /api/ingest/webpage/create returned 404 Not Found: "
+        );
+        let request = requests.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "POST /api/ingest/webpage/create HTTP/1.1"
         );
     }
 

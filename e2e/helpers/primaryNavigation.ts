@@ -5,7 +5,7 @@ import { expect, type Page } from "@playwright/test";
 export async function openPrimaryDestination(page: Page, name: string, moreLabel = "More") {
   await expect(page.getByRole("main")).toBeVisible();
   const navigation = page.getByRole("navigation", {
-    name: /^(Primary navigation|主要導覽|主导航)$/,
+    name: /^(Primary navigation|主要導覽|主要导航|主导航)$/,
   });
   if (!await navigation.isVisible()) {
     await page.getByRole("button", {

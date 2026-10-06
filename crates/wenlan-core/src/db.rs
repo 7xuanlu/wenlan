@@ -26308,9 +26308,18 @@ impl MemoryDB {
             operation_receipt,
             write_spaces,
             None,
+            false,
         )
         .await
         .map(|written| written.unwrap_or(0))
+    }
+
+    /// Insert new source identities atomically; existing sources remain intact.
+    /// The existence predicate is checked inside the same transaction as rows.
+    pub async fn create_documents(&self, docs: Vec<RawDocument>) -> Result<usize, WenlanError> {
+        self.upsert_documents_at_optional_page_fence(docs, None, None, None, None, None, None, true)
+            .await
+            .map(|written| written.unwrap_or(0))
     }
 
     /// Stage page-bound rows (a revision card) only while the page they were
@@ -26336,6 +26345,7 @@ impl MemoryDB {
             operation_receipt,
             None,
             Some((page_id, expected_version, fence)),
+            false,
         )
         .await
         .map(|written| written.is_some())
@@ -26353,6 +26363,7 @@ impl MemoryDB {
         operation_receipt: Option<OperationReceipt<'_>>,
         write_spaces: Option<HashMap<String, crate::space_context::ResolvedWriteSpace>>,
         page_fence: Option<(&str, i64, &PageFence)>,
+        create_only: bool,
     ) -> Result<Option<usize>, WenlanError> {
         if docs.is_empty() {
             return Ok(Some(0));
@@ -26848,6 +26859,11 @@ impl MemoryDB {
                 let total = row.get::<i64>(1).map_err(|e| {
                     WenlanError::VectorDb(format!("decode replacement row count: {e}"))
                 })?;
+                if create_only && total > 0 {
+                    return Err(WenlanError::Conflict(format!(
+                        "Source already exists: {source}/{source_id}"
+                    )));
+                }
                 let non_null_spaces = row.get::<i64>(2).map_err(|e| {
                     WenlanError::VectorDb(format!("decode replacement non-NULL space count: {e}"))
                 })?;
@@ -32833,7 +32849,7 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// List all indexed files (grouped by source_id).
+    /// List all indexed files (grouped by source kind and source_id).
     pub async fn list_indexed_files(&self) -> Result<Vec<IndexedFileInfo>, WenlanError> {
         self.list_indexed_files_scoped(&ReadScope::Global).await
     }
@@ -32846,14 +32862,14 @@ impl MemoryDB {
         let mut values = Vec::new();
         push_read_scope_filter_folded(scope, "space", &mut conditions, &mut values);
         let sql = format!(
-            "SELECT source_id, MAX(title) as title, MAX(source) as source,
+            "SELECT source_id, MAX(title) as title, source,
                     MAX(url) as url, COUNT(*) as chunk_count,
                     MAX(last_modified) as last_modified, MAX(summary) as summary,
                     MAX(memory_type), MAX(space), MAX(source_agent),
                     MAX(CAST(confidence AS REAL)), MAX(confirmed), MAX(pinned)
              FROM memories
              WHERE {}
-             GROUP BY source_id
+             GROUP BY source, source_id
              ORDER BY MAX(last_modified) DESC",
             conditions.join(" AND ")
         );
@@ -33114,6 +33130,56 @@ impl MemoryDB {
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(format!("get_chunks_scoped row: {e}")))?
+        {
+            chunks.push(MemoryDetail {
+                id: row.get::<String>(0).unwrap_or_default(),
+                content: row.get::<String>(1).unwrap_or_default(),
+                title: row.get::<String>(2).unwrap_or_default(),
+                source_id: row.get::<String>(3).unwrap_or_default(),
+                chunk_index: row.get::<i32>(4).unwrap_or(0),
+                chunk_type: row.get::<Option<String>>(5).unwrap_or(None),
+                language: row.get::<Option<String>>(6).unwrap_or(None),
+                semantic_unit: row.get::<Option<String>>(7).unwrap_or(None),
+                byte_start: row.get::<Option<i64>>(8).unwrap_or(None),
+                byte_end: row.get::<Option<i64>>(9).unwrap_or(None),
+                summary: row.get::<Option<String>>(10).unwrap_or(None),
+            });
+        }
+        Ok((!chunks.is_empty()).then_some(chunks))
+    }
+
+    /// Read a saved webpage's passages without falling back to another source kind.
+    pub async fn get_webpage_chunks_scoped(
+        &self,
+        source_id: &str,
+        scope: &ReadScope,
+    ) -> Result<Option<Vec<MemoryDetail>>, WenlanError> {
+        let mut conditions = vec![
+            "source_id = ?".to_string(),
+            "source = 'webpage'".to_string(),
+            "pending_revision = 0".to_string(),
+        ];
+        let mut values = vec![libsql::Value::Text(source_id.to_string())];
+        push_read_scope_filter_folded(scope, "space", &mut conditions, &mut values);
+        let sql = format!(
+            "SELECT id, content, title, source_id, chunk_index, chunk_type, language,
+                    semantic_unit, byte_start, byte_end, summary
+             FROM memories
+             WHERE {}
+             ORDER BY chunk_index ASC
+             LIMIT 10000",
+            conditions.join(" AND ")
+        );
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(&sql, libsql::params_from_iter(values))
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_webpage_chunks_scoped: {e}")))?;
+        let mut chunks = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("get_webpage_chunks_scoped row: {e}")))?
         {
             chunks.push(MemoryDetail {
                 id: row.get::<String>(0).unwrap_or_default(),

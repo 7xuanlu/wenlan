@@ -8,7 +8,41 @@ import {
   hantActivityStatus,
 } from "../components/memory/activityCopy";
 
+import { enSourceAccess, hansSourceAccess, hantSourceAccess } from "../components/memory/sources/sourceAccessCopy";
+
 const en = {
+  sourceAccess: enSourceAccess,
+  sourceLibrary: {
+    "title": "Sources",
+    "description": "The files, links and folders behind your knowledge.",
+    "manage": "Manage sources",
+    "add": "Add source",
+    "filterLabel": "Filter sources",
+    "filters": {
+      "all": "All",
+      "files": "Files",
+      "links": "Links",
+      "folders": "Folders"
+    },
+    "search": "Search sources",
+    "loadingFolders": "Loading folders…",
+    "loadingDocuments": "Loading documents…",
+    "folderError": "Could not load your folders.",
+    "documentError": "Could not load your documents.",
+    "retryFolders": "Retry folders",
+    "retryDocuments": "Retry documents",
+    "listLabel": "Source library",
+    "folder": "Folder",
+    "obsidian": "Obsidian vault",
+    "webExcerpt": "Web excerpt",
+    "document": "Document",
+    "emptyTitle": "Bring your sources together",
+    "emptyBody": "Add files, connect a folder or save a web excerpt to start your library.",
+    "supportedFiles": "Supported files: PDF, Markdown and TXT.",
+    "noMatches": "No matching sources",
+    "noMatchesBody": "Try another search or show all source types.",
+    "clearFilters": "Clear search and filters"
+  },
   common: {
     close: "Close",
     startingRuntime: "Starting the local runtime…",
@@ -2169,6 +2203,38 @@ const en = {
 };
 
 const zhHans = {
+  sourceAccess: hansSourceAccess,
+  sourceLibrary: {
+    "title": "来源",
+    "description": "浏览知识背后的文件、链接与文件夹。",
+    "manage": "管理来源",
+    "add": "添加来源",
+    "filterLabel": "筛选来源",
+    "filters": {
+      "all": "全部",
+      "files": "文件",
+      "links": "链接",
+      "folders": "文件夹"
+    },
+    "search": "搜索来源",
+    "loadingFolders": "正在加载文件夹…",
+    "loadingDocuments": "正在加载文档…",
+    "folderError": "无法加载文件夹。",
+    "documentError": "无法加载文档。",
+    "retryFolders": "重试文件夹",
+    "retryDocuments": "重试文档",
+    "listLabel": "来源库",
+    "folder": "文件夹",
+    "obsidian": "Obsidian 笔记库",
+    "webExcerpt": "网页摘录",
+    "document": "文档",
+    "emptyTitle": "把你的来源放在一起",
+    "emptyBody": "添加文件、连接文件夹，或保存网页摘录，开始建立来源库。",
+    "supportedFiles": "支持的文件：PDF、Markdown 和 TXT。",
+    "noMatches": "没有匹配的来源",
+    "noMatchesBody": "试试其他搜索词，或显示所有来源类型。",
+    "clearFilters": "清除搜索与筛选"
+  },
   common: {
     close: "关闭",
     startingRuntime: "正在启动本地运行时…",
@@ -4270,6 +4336,38 @@ const zhHans = {
 };
 
 const zhHant = {
+  sourceAccess: hantSourceAccess,
+  sourceLibrary: {
+    "title": "來源",
+    "description": "瀏覽知識背後的檔案、連結與資料夾。",
+    "manage": "管理來源",
+    "add": "新增來源",
+    "filterLabel": "篩選來源",
+    "filters": {
+      "all": "全部",
+      "files": "檔案",
+      "links": "連結",
+      "folders": "資料夾"
+    },
+    "search": "搜尋來源",
+    "loadingFolders": "正在載入資料夾…",
+    "loadingDocuments": "正在載入文件…",
+    "folderError": "無法載入資料夾。",
+    "documentError": "無法載入文件。",
+    "retryFolders": "重試資料夾",
+    "retryDocuments": "重試文件",
+    "listLabel": "來源庫",
+    "folder": "資料夾",
+    "obsidian": "Obsidian 筆記庫",
+    "webExcerpt": "網頁摘錄",
+    "document": "文件",
+    "emptyTitle": "把你的來源放在一起",
+    "emptyBody": "新增檔案、連接資料夾，或儲存網頁摘錄，開始建立來源庫。",
+    "supportedFiles": "支援的檔案：PDF、Markdown 與 TXT。",
+    "noMatches": "沒有符合的來源",
+    "noMatchesBody": "試試其他搜尋詞，或顯示所有來源類型。",
+    "clearFilters": "清除搜尋與篩選"
+  },
   common: {
     close: "關閉",
     startingRuntime: "正在啟動本機執行時…",

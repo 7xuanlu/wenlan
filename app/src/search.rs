@@ -231,6 +231,7 @@ mod ingest_command_tests {
             title: "Example Post".to_string(),
             content: "A durable article body.".to_string(),
             metadata: None,
+            create_only: false,
         };
         let _: Result<responses::IngestResponse, String> = ingest_webpage(state, req).await;
     }
@@ -1894,17 +1895,43 @@ pub async fn list_indexed_files(
 #[tauri::command]
 pub async fn get_chunks(
     state: tauri::State<'_, State>,
-    _source: String,
+    source: String,
     source_id: String,
 ) -> Result<Vec<MemoryDetail>, String> {
     let client = daemon_client(&state).await;
     let chunks: Vec<MemoryDetail> = client
-        .get_json(&format!(
-            "/api/chunks/{}",
-            percent_encode_path_segment(&source_id)
-        ))
+        .get_json(&chunks_request_path(&source, &source_id))
         .await?;
     Ok(chunks)
+}
+
+fn chunks_request_path(source: &str, source_id: &str) -> String {
+    let route = if source == "webpage" {
+        "webpage-chunks"
+    } else {
+        "chunks"
+    };
+    format!("/api/{route}/{}", percent_encode_path_segment(source_id))
+}
+
+#[cfg(test)]
+mod chunks_request_tests {
+    use super::chunks_request_path;
+
+    #[test]
+    fn webpage_request_encodes_url_as_one_path_segment() {
+        assert_eq!(
+            chunks_request_path("webpage", "https://example.com/post?q=a&lang=zh#part"),
+            "/api/webpage-chunks/https%3A%2F%2Fexample.com%2Fpost%3Fq%3Da%26lang%3Dzh%23part"
+        );
+    }
+
+    #[test]
+    fn legacy_sources_keep_the_queryless_path() {
+        for source in ["memory", "file", "obsidian"] {
+            assert_eq!(chunks_request_path(source, "a/b"), "/api/chunks/a%2Fb");
+        }
+    }
 }
 
 #[tauri::command]

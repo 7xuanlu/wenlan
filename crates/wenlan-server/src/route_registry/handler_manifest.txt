@@ -8,6 +8,7 @@ main|get|/api/ambient/status|wenlan_server::ambient_routes::handle_ambient_statu
 main|get|/api/briefing|wenlan_server::briefing_routes::handle_get_briefing
 main|get|/api/capture-stats|wenlan_server::memory_detail_routes::handle_capture_stats
 main|get|/api/chunks/{source_id}|wenlan_server::indexed_files_routes::handle_get_chunks
+main|get|/api/webpage-chunks/{source_id}|wenlan_server::indexed_files_routes::handle_get_webpage_chunks
 main|get|/api/communities|wenlan_server::community_routes::handle_list_communities
 main|get|/api/communities/members|wenlan_server::community_routes::handle_list_community_members
 main|get|/api/config|wenlan_server::config_routes::handle_get_config
@@ -81,6 +82,7 @@ main|post|/api/import/memories|wenlan_server::import_routes::handle_import_memor
 main|post|/api/ingest/memory|wenlan_server::ingest_routes::handle_ingest_memory
 main|post|/api/ingest/text|wenlan_server::ingest_routes::handle_ingest_text
 main|post|/api/ingest/webpage|wenlan_server::ingest_routes::handle_ingest_webpage
+main|post|/api/ingest/webpage/create|wenlan_server::ingest_routes::handle_create_webpage
 main|post|/api/lint|wenlan_server::lint_routes::handle_lint_submission
 main|post|/api/llm/test|wenlan_server::routes::handle_test_llm
 main|post|/api/memory/confirm/{source_id}|wenlan_server::memory_routes::handle_confirm_memory

@@ -379,7 +379,7 @@ const NON_SENSITIVE_PATHS: &[&str] = &[
     "/api/health", "/api/status", "/api/lint", "/api/repairs/plan", "/api/repairs/plan-current", "/api/repairs/plan/entries", "/api/repairs/prepare", "/api/repairs/prepare-current", "/api/repairs/recovery/{review_id}", "/api/repairs/apply", "/api/repairs/verify", "/api/llm/test", "/api/shutdown", "/api/telemetry",
     "/api/ambient/status", "/api/ambient/sweep",
     "/api/steep", "/api/distill", "/api/distill/{page_id}",
-    "/api/ingest/text", "/api/ingest/webpage", "/api/ingest/memory", "/api/documents/{source}/{source_id}",
+    "/api/ingest/text", "/api/ingest/webpage", "/api/ingest/webpage/create", "/api/ingest/memory", "/api/documents/{source}/{source_id}",
     // Fetches external public text, never reads the user's source store.
     "/api/webpage/fetch",
     "/api/import/memories", "/api/import/chat-export", "/api/memory/store", "/api/memory/confirm/{source_id}",

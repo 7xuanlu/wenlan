@@ -37,7 +37,7 @@ describe("AddSourceDialog", () => {
     render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
       wrapper,
     });
-    const submitBtn = screen.getByRole("button", { name: /add source/i });
+    const submitBtn = screen.getByRole("button", { name: "Connect folder" });
     expect(submitBtn).toBeDisabled();
   });
 
@@ -45,7 +45,7 @@ describe("AddSourceDialog", () => {
     render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
       wrapper,
     });
-    fireEvent.keyDown(window, { key: "Escape" });
+    fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -62,7 +62,7 @@ describe("AddSourceDialog", () => {
       wrapper,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
 
     await waitFor(() => {
       expect(screen.getByText(/Obsidian vault/)).toBeInTheDocument();
@@ -85,7 +85,7 @@ describe("AddSourceDialog", () => {
       wrapper,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
 
     await waitFor(() => {
       expect(screen.getByText(/4 supported files/)).toBeInTheDocument();
@@ -104,12 +104,12 @@ describe("AddSourceDialog", () => {
       wrapper,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
 
     await waitFor(() => {
       expect(screen.getByText(/No notes found/)).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /add source/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Connect folder" })).toBeEnabled();
   });
 
   it("registers an obsidian vault as obsidian and a plain folder as directory", async () => {
@@ -135,11 +135,11 @@ describe("AddSourceDialog", () => {
       <AddSourceDialog onClose={onClose} onSuccess={onSuccess} />,
       { wrapper },
     );
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
     await waitFor(() => {
       expect(screen.getByText(/1 supported file/)).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect folder" }));
     await waitFor(() => {
       expect(tauri.addSource).toHaveBeenCalledWith("directory", "/Users/test/papers");
     });
@@ -156,11 +156,11 @@ describe("AddSourceDialog", () => {
     render(<AddSourceDialog onClose={onClose} onSuccess={onSuccess} />, {
       wrapper,
     });
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
     await waitFor(() => {
       expect(screen.getByText(/Obsidian vault/)).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect folder" }));
     await waitFor(() => {
       expect(tauri.addSource).toHaveBeenCalledWith("obsidian", "/Users/test/vault");
     });
@@ -197,11 +197,11 @@ describe("AddSourceDialog", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /browse/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Choose folder…" }));
     await waitFor(() => {
       expect(screen.getByText(/1 supported file/)).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Connect folder" }));
 
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalled();

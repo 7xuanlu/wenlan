@@ -16,6 +16,74 @@ fn activity_memory(source_id: &str, space: &str) -> RawDocument {
 }
 
 #[tokio::test]
+async fn webpage_chunks_are_exact_kind_scoped_and_ordered() {
+    let (db, _temp) = test_db().await;
+    let conn = db.conn.lock().await;
+    for (id, source, space, index, pending) in [
+        ("memory-collision", "memory", "work", 0, 0),
+        ("file-collision", "file", "work", 0, 0),
+        ("web-second", "webpage", "work", 1, 0),
+        ("web-first", "webpage", "work", 0, 0),
+        ("web-other-space", "webpage", "personal", 0, 0),
+        ("web-pending", "webpage", "work", 2, 1),
+    ] {
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, chunk_index,
+                last_modified, chunk_type, space, pending_revision)
+             VALUES (?1, ?1, ?2, 'shared', 'Saved excerpt', ?3, 1, 'text', ?4, ?5)",
+            libsql::params![id, source, index, space, pending],
+        )
+        .await
+        .unwrap();
+    }
+    drop(conn);
+    let chunks = db
+        .get_webpage_chunks_scoped("shared", &ReadScope::Space("work".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        chunks
+            .iter()
+            .map(|chunk| chunk.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["web-first", "web-second"]
+    );
+    assert!(db
+        .get_webpage_chunks_scoped("shared", &ReadScope::Uncategorized)
+        .await
+        .unwrap()
+        .is_none());
+    assert!(db
+        .get_webpage_chunks_scoped("missing", &ReadScope::Global)
+        .await
+        .unwrap()
+        .is_none());
+    let legacy = db
+        .get_chunks_scoped("shared", &ReadScope::Space("work".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(legacy.len(), 1);
+    assert_eq!(legacy[0].id, "memory-collision");
+}
+
+#[tokio::test]
+async fn webpage_chunks_propagate_database_failures() {
+    let (db, _temp) = test_db().await;
+    db.conn
+        .lock()
+        .await
+        .execute_batch("DROP TABLE memories;")
+        .await
+        .unwrap();
+    assert!(db
+        .get_webpage_chunks_scoped("missing", &ReadScope::Global)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
 async fn scoped_chunks_propagate_database_failures() {
     let (db, _temp) = test_db().await;
     let conn = db.conn.lock().await;
@@ -270,4 +338,78 @@ async fn filtered_file_scopes_partition_unfiled_and_named_spaces() {
         assert_eq!(uncategorized[0].source_id, "unfiled-scoped");
         assert_eq!(uncategorized[0].space, None);
     }
+}
+
+#[tokio::test]
+async fn indexed_inventory_keeps_cross_kind_metadata_within_read_scope() {
+    let (db, _temp) = test_db().await;
+    let conn = db.conn.lock().await;
+    for (id, source, title, summary, url, space) in [
+        (
+            "agent-collision",
+            "memory",
+            "ZZ Agent note",
+            "ZZ Agent summary",
+            "https://z.example/private",
+            "work",
+        ),
+        (
+            "web-collision",
+            "webpage",
+            "AA Saved article",
+            "AA Web summary",
+            "https://a.example/article",
+            "work",
+        ),
+        (
+            "personal-web",
+            "webpage",
+            "Personal article",
+            "Personal summary",
+            "https://personal.example",
+            "personal",
+        ),
+    ] {
+        conn.execute(
+            "INSERT INTO memories (id, content, source, source_id, title, summary, url,
+                chunk_index, last_modified, chunk_type, space)
+             VALUES (?1, ?1, ?2, 'shared-url', ?3, ?4, ?5, 0, 1, 'text', ?6)",
+            libsql::params![id, source, title, summary, url, space],
+        )
+        .await
+        .unwrap();
+    }
+    drop(conn);
+    let files = db
+        .list_indexed_files_scoped(&ReadScope::Space("work".into()))
+        .await
+        .unwrap();
+    assert_eq!(files.len(), 2);
+    let web = files.iter().find(|file| file.source == "webpage").unwrap();
+    assert_eq!(web.source_id, "shared-url");
+    assert_eq!(web.title, "AA Saved article");
+    assert_eq!(web.summary.as_deref(), Some("AA Web summary"));
+    assert_eq!(web.url.as_deref(), Some("https://a.example/article"));
+    assert_eq!(web.chunk_count, 1);
+    let memory = files.iter().find(|file| file.source == "memory").unwrap();
+    assert_eq!(memory.title, "ZZ Agent note");
+    assert_eq!(memory.summary.as_deref(), Some("ZZ Agent summary"));
+    assert_eq!(memory.url.as_deref(), Some("https://z.example/private"));
+    let chunks = db
+        .get_webpage_chunks_scoped("shared-url", &ReadScope::Space("work".into()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(chunks[0].content, "web-collision");
+    let personal = db
+        .list_indexed_files_scoped(&ReadScope::Space("personal".into()))
+        .await
+        .unwrap();
+    assert_eq!(personal.len(), 1);
+    assert_eq!(personal[0].summary.as_deref(), Some("Personal summary"));
+    assert!(db
+        .list_indexed_files_scoped(&ReadScope::Uncategorized)
+        .await
+        .unwrap()
+        .is_empty());
 }

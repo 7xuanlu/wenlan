@@ -10,10 +10,15 @@ import {
   openFile,
 } from "../../../lib/tauri";
 import AddSourceDialog from "./AddSourceDialog";
+import AddWebSourceDialog from "./AddWebSourceDialog";
+import SourceDialog from "./SourceDialog";
+import { useTranslation } from "react-i18next";
 
 export default function AddSourceMenu({ onClose }: { onClose: () => void }) {
+  const { t } = useTranslation();
   const qc = useQueryClient();
   const [showFolder, setShowFolder] = useState(false);
+  const [showWeb, setShowWeb] = useState(false);
 
   const { data: version } = useQuery({ queryKey: ["daemonVersion"], queryFn: getDaemonVersion });
   // Optimistic until the version is known, so the menu never flickers a warning.
@@ -30,7 +35,7 @@ export default function AddSourceMenu({ onClose }: { onClose: () => void }) {
       const name = picked.split("/").pop() ?? "file";
       await uploadSourceFile(picked);
       // Toast idiom: eyebrow (title) / heading + body (description).
-      toast("Added", { description: `${name} is on the shelf. Indexing in the background.` });
+      toast(t("sourceAccess.added"), { description: t("sourceAccess.addedBody", { name }) });
       return name;
     },
     onSuccess: (name) => {
@@ -46,7 +51,7 @@ export default function AddSourceMenu({ onClose }: { onClose: () => void }) {
     onError: (e) => {
       // Without this the button silently reverts to "Add files" and the user
       // never learns the upload failed (daemon down / IO error / bad file).
-      toast("Couldn't add file", { description: String(e) });
+      toast(t("sourceAccess.addFailed"), { description: String(e) });
     },
   });
 
@@ -54,36 +59,13 @@ export default function AddSourceMenu({ onClose }: { onClose: () => void }) {
     return <AddSourceDialog onClose={onClose} onSuccess={onClose} />;
   }
 
-  const item = "w-full text-left rounded-md px-3 py-2 text-sm hover:bg-[var(--mem-hover)]";
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div
-        className="w-[22rem] rounded-lg bg-[var(--mem-surface)] p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h3 className="text-sm font-medium text-[var(--mem-text)] mb-2" style={{ fontFamily: "var(--mem-font-heading)" }}>
-          Add a source
-        </h3>
-        {!ready && (
-          <div className="mb-3 rounded-md p-3 text-xs" style={{ background: "var(--mem-hover)", color: "var(--mem-text-secondary)" }}>
-            <p className="mb-2">Your daemon needs an update to index files.</p>
-            <button className="underline" style={{ color: "var(--mem-accent-indigo)" }} onClick={() => openFile("https://wenlan.app")}>
-              Update Wenlan
-            </button>
-          </div>
-        )}
-        <button className={item} style={{ color: "var(--mem-text)" }} onClick={() => setShowFolder(true)}>
-          Add a folder
-        </button>
-        <button
-          className={item}
-          style={{ color: "var(--mem-text)" }}
-          disabled={upload.isPending}
-          onClick={() => upload.mutate()}
-        >
-          {upload.isPending ? "Adding…" : "Add files"}
-        </button>
-      </div>
-    </div>
-  );
+  if (showWeb) return <AddWebSourceDialog onClose={onClose} />;
+  return <SourceDialog title={t("sourceAccess.addTitle")} onClose={onClose}>
+    {!ready && <div role="status"><p>{t("sourceAccess.upgrade")}</p><button className="page-editor-action" type="button" onClick={() => openFile("https://wenlan.app")}>{t("sourceAccess.update")}</button></div>}
+    <button type="button" className="source-add-option" disabled={upload.isPending} onClick={() => upload.mutate()}>
+      <strong>{t(upload.isPending ? "sourceAccess.adding" : "sourceAccess.files")}</strong><span>{t("sourceAccess.filesHint")}</span>
+    </button>
+    <button type="button" className="source-add-option" onClick={() => setShowFolder(true)}><strong>{t("sourceAccess.folder")}</strong><span>{t("sourceAccess.folderHint")}</span></button>
+    <button type="button" className="source-add-option" onClick={() => setShowWeb(true)}><strong>{t("sourceAccess.web")}</strong><span>{t("sourceAccess.webHint")}</span></button>
+  </SourceDialog>;
 }

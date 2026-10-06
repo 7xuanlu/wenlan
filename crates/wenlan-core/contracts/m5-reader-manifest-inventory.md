@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 191 registered `(method, path, handler)` triples
+## HTTP — all 193 registered `(method, path, handler)` triples
 
-70 page-bearing, 121 not.
+71 page-bearing, 122 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -557,6 +557,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `DELETE` | `/api/chunks/time-range` | main | no | not_applicable | `none` | — | no prose fields |
 | `PUT` | `/api/chunks/{id}/update` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/chunks/{source_id}` | main | yes | automatic | `none` | `handle_get_chunks` | MemoryDetail.title/content via revision card |
+| `GET` | `/api/webpage-chunks/{source_id}` | main | yes | automatic | `none` | `handle_get_webpage_chunks` | MemoryDetail.title/content from exact-kind scoped saved webpage passages |
 | `GET` | `/api/communities` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/communities/members` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/config` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
@@ -583,6 +584,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/ingest/text` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/ingest/webpage` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/webpage/fetch` | main | no | not_applicable | `none` | handle_fetch_webpage | untrusted external website text only; no stored Page/Memory reads |
+| `POST` | `/api/ingest/webpage/create` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/knowledge/count` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/knowledge/path` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/lint` | main + repair | yes | automatic | `none` | `handle_lint` | LintAgentRecord.excerpt, LintAgentRecord.source_excerpt, LintCheck |
