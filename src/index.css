@@ -3299,24 +3299,53 @@ p.entity-error {
 
 /* ── Page tabs + canvas (PageDetail.tsx, PageCanvas.tsx) ───────────── */
 
-/* A view switch, not an action — so it sits at the head of the icon cluster
-   with a hairline between it and the things that actually change the page. */
+.page-detail-top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.page-detail-view-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.page-detail-info-slot {
+  display: flex;
+  width: var(--mem-icon-action-size);
+}
+
 .page-detail-canvas-toggle {
-  margin-right: 2px;
-  padding-right: 6px;
-  border-right: 1px solid var(--mem-border);
-  border-radius: 6px 0 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--mem-control-height);
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--mem-control-radius);
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 500 var(--mem-control-font-size)/1.2 var(--mem-font-body);
+  white-space: nowrap;
+  cursor: pointer;
 }
 
-/* Held down while the canvas is up: the only control here with a persistent
-   state, so it is the only one that stays lit. */
-.page-detail-canvas-toggle.is-active {
-  background-color: color-mix(in srgb, var(--mem-accent-page) 16%, transparent);
-  color: var(--mem-accent-page);
+.page-detail-canvas-toggle:hover:not(:disabled) {
+  background: var(--mem-hover);
+  color: var(--mem-text);
 }
 
-.page-detail-canvas-toggle.is-active:hover {
-  background-color: color-mix(in srgb, var(--mem-accent-page) 26%, transparent);
+.page-detail-canvas-toggle:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.page-detail-canvas-toggle:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .page-canvas {

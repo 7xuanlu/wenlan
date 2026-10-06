@@ -274,6 +274,19 @@ beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
 describe("PageCanvas", () => {
+  it.each(["Enter", " ", "Tab"])("leaves %s to a focused page control", async (key) => {
+    const { getPageMap } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    renderCanvas();
+    await screen.findByText("Page One");
+    render(<button type="button">Back to note</button>);
+    const control = screen.getByRole("button", { name: "Back to note" });
+    control.focus();
+
+    expect(fireEvent.keyDown(control, { key })).toBe(true);
+    expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
+  });
+
   it("renders one node per live map node, resolving labels the daemon left null", async () => {
     const { getPageMap } = await tauri();
     (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());

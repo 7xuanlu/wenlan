@@ -4,6 +4,7 @@ import { render, screen, cleanup } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PageDetail from "./PageDetail";
+import { i18n } from "../../i18n";
 
 // Same reasoning as PageCanvas.test.tsx: React Flow needs real dimensions.
 // These tests only care that the canvas tab mounts, so the node state hook is
@@ -130,7 +131,7 @@ describe("PageDetail canvas toggle", () => {
     expect(screen.queryAllByRole("tab")).toHaveLength(0);
     expect(screen.queryByRole("button", { name: "Read" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Canvas" }).getAttribute("aria-pressed"),
+      screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }).getAttribute("aria-pressed"),
     ).toBe("false");
     expect(screen.getByRole("button", { name: "Page info" })).toBeTruthy();
   });
@@ -139,7 +140,7 @@ describe("PageDetail canvas toggle", () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
 
     expect(
       await screen.findByRole("region", { name: "Canvas for libSQL Architecture" }),
@@ -148,7 +149,7 @@ describe("PageDetail canvas toggle", () => {
     expect(screen.queryByRole("button", { name: "Page info" })).toBeNull();
     expect(screen.queryByText("More prose here.")).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Canvas" }).getAttribute("aria-pressed"),
+      screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }).getAttribute("aria-pressed"),
     ).toBe("true");
   });
 
@@ -156,7 +157,7 @@ describe("PageDetail canvas toggle", () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    const toggle = screen.getByRole("button", { name: "Canvas" });
+    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
     await user.click(toggle);
     await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
 
@@ -170,38 +171,34 @@ describe("PageDetail canvas toggle", () => {
     expect(toggle.getAttribute("aria-pressed")).toBe("false");
   });
 
-  it("keeps a door to the canvas in the actions menu, which is the whole toolbar on a narrow window", async () => {
+  it("keeps the text entry outside the toolbar hidden on narrow windows", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    // Under 600px the icon row is display:none and this menu is all that is
-    // left, so an icon-only control is no control at all there.
+    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
+    expect(toggle.closest(".page-detail-top-row")).toBeTruthy();
+    expect(toggle.closest(".page-detail-header-actions")).toBeNull();
+    expect(toggle.querySelector("span")?.textContent).toBe(i18n.t("pageCanvas.tabCanvas"));
     await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Canvas" }));
-    await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
-
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Close canvas" }));
-    expect(
-      screen.queryByRole("region", { name: "Canvas for libSQL Architecture" }),
-    ).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeNull();
+    expect(screen.getAllByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toHaveLength(1);
   });
 
   it("sits with the other page controls, not in a band of its own", async () => {
     renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    const toggle = screen.getByRole("button", { name: "Canvas" });
-    const cluster = toggle.closest(".page-detail-icon-actions");
+    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
+    const cluster = toggle.closest(".page-detail-view-controls");
     expect(cluster).toBeTruthy();
     // The controls it was asked to join.
-    expect(cluster?.querySelector('[title="Edit page"]')).toBeTruthy();
+    expect(cluster?.querySelector('[title="Page info"]')).toBeTruthy();
   });
 
   it("resolves the root node label from the page title it already loaded", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
 
     // Both nodes arrive with label: null — the daemon stores refs, the client
     // renders the backing objects PageDetail already has in hand.
@@ -210,15 +207,15 @@ describe("PageDetail canvas toggle", () => {
     expect(screen.getByText("libSQL stores vectors")).toBeTruthy();
   });
 
-  it("hides the canvas control while editing so nobody types into an unseen page", async () => {
+  it("retains the canvas entry while the ordinary toolbar is hidden for editing", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
 
-    await user.click(screen.getByRole("button", { name: "Canvas" }));
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
     await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
 
     await user.click(screen.getByTitle("Edit page"));
-    expect(screen.queryByRole("button", { name: "Canvas" })).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
     // Edit mode engaged: the whole header actions row goes with it. Asserted
     // through the row rather than through a field, because what the editor
     // itself resolves to is the editor's business — under this env's daemon
