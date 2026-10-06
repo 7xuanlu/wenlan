@@ -139,7 +139,7 @@ const RUNTIME_WORKER_ORDER: &[&str] = &[
     "LLM_READINESS_HOOK.set(",
     "let db_for_reconcile = db_arc.clone()",
     "let shared_for_reconcile = shared.clone()",
-    "let truth_provider = {",
+    "let truth_provider = if wenlan_core::config::load_config().background_ai_enabled() {",
     "state.llm.clone()",
     "enqueue_stale_derivation_jobs(",
     "reconcile_supported_pages(startup::SUPPORT_RECONCILE_BATCH)",
@@ -181,7 +181,7 @@ const RUNTIME_REGISTER_SNAPSHOT_ORDER: &[&str] = &[
     "state.maintenance_coordinator.clone()",
     "state.shutdown.clone()",
     "let mut reconcile_shutdown = shutdown_for_reconcile.subscribe()",
-    "let truth_provider = {",
+    "let truth_provider = if wenlan_core::config::load_config().background_ai_enabled() {",
     "shared_for_reconcile.read().await",
     "state.llm.clone()",
 ];
@@ -759,15 +759,28 @@ fn runtime_carried_value_violations(source: &str, owner: &str) -> Vec<String> {
     {
         violations.extend(exact_token_count_violations(&code, scope, 1, owner));
     }
-    violations.extend(runtime_recompute_violations(&code, owner));
+    // Consent is intentionally live at snapshot and again before inference.
+    // All other configuration remains carried from startup. Pin the second
+    // read's purpose as well as the first read in RUNTIME_WORKER_ORDER.
+    violations.extend(exact_token_count_violations(
+        &code,
+        ".filter(|_| wenlan_core::config::load_config().background_ai_enabled())",
+        1,
+        owner,
+    ));
+    violations.extend(runtime_recompute_violations(&code, owner, 2));
     violations
 }
 
-fn runtime_recompute_violations(source: &str, owner: &str) -> Vec<String> {
+fn runtime_recompute_violations(
+    source: &str,
+    owner: &str,
+    consent_read_count: usize,
+) -> Vec<String> {
     let code = mask_rust_non_code(source);
-    let mut violations = Vec::new();
+    let mut violations =
+        exact_identifier_count_violations(&code, "load_config", consent_read_count, owner);
     for path in [
-        "load_config",
         "resolve_fastembed_cache_dir",
         "daemon_fastembed_cache_dir",
         "reranker_mode_resolved",
@@ -1529,6 +1542,7 @@ fn structure_violations_with_children(
         violations.extend(runtime_recompute_violations(
             &run_daemon,
             "run_daemon runtime facade",
+            0,
         ));
     } else {
         match suffix_after_unique(&run_daemon, "let shared: SharedState", "run_daemon") {
@@ -2107,7 +2121,9 @@ fn truth_promotion_runtime_resnapshots_once_per_shutdown_aware_turn() {
 
     let loop_start = worker.find("loop {").expect("truth-maintenance loop");
     let snapshot_start = worker
-        .find("let truth_provider = {")
+        .find(
+            "let truth_provider = if wenlan_core::config::load_config().background_ai_enabled() {",
+        )
         .expect("per-turn provider snapshot");
     let promotion_start = worker
         .find("run_page_linked_truth_promotion_turn(")
@@ -2313,6 +2329,35 @@ fn reviewer_mutations_reject_value_ownership_and_shared_read_drift() {
         .any(|violation| violation.contains("exactly 3 times")),
         "runtime registration must reject fewer than three shared-state reads"
     );
+}
+
+#[test]
+fn runtime_consent_reads_are_bounded_and_cannot_be_bypassed() {
+    let root = repo_root();
+    let runtime = read_source(&root, MAIN_RUNTIME_CHILD);
+    assert!(runtime_carried_value_violations(&runtime, MAIN_RUNTIME_CHILD).is_empty());
+    for (needle, replacement) in [
+        (
+            "let truth_provider = if wenlan_core::config::load_config().background_ai_enabled() {",
+            "let truth_provider = if true {",
+        ),
+        (
+            ".filter(|_| wenlan_core::config::load_config().background_ai_enabled())",
+            ".filter(|_| true)",
+        ),
+        (
+            "let mut backlog_complete = false;",
+            "let mut backlog_complete = false; let extra = wenlan_core::config::load_config();",
+        ),
+    ] {
+        let mutated = runtime.replacen(needle, replacement, 1);
+        assert_ne!(mutated, runtime, "consent mutation must change the source");
+        let violations = runtime_carried_value_violations(&mutated, MAIN_RUNTIME_CHILD);
+        assert!(
+            !violations.is_empty(),
+            "consent bypass or additional configuration read must be rejected: {needle}"
+        );
+    }
 }
 
 #[test]

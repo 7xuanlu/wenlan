@@ -63,7 +63,11 @@ pub(crate) async fn force_ambient_sweep(
 
     let mut phases = Vec::with_capacity(AmbientJob::ALL.len());
     for job in AmbientJob::ALL {
-        if !availability.supports(job) {
+        let background_ai_enabled = wenlan_core::config::load_config().background_ai_enabled();
+        if !availability.supports(job)
+            || (!background_ai_enabled
+                && !matches!(job, AmbientJob::Document | AmbientJob::EntityIdleArchive))
+        {
             phases.push(AmbientJobSweepResult {
                 job: job.as_key(),
                 attempted: false,
@@ -80,7 +84,11 @@ pub(crate) async fn force_ambient_sweep(
             llm,
             api_llm,
             external_llm,
-            everyday_pin,
+            if background_ai_enabled {
+                everyday_pin
+            } else {
+                None
+            },
             prompts,
             refinery,
             distillation,

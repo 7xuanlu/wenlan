@@ -525,6 +525,16 @@ export async function setSourcePin(
   return invoke("set_source_pin", args);
 }
 
+/** Explicit automatic-AI preference. An older daemon without the field keeps
+ * its legacy behavior; the daemon distinguishes that from a new Off install. */
+export async function getBackgroundAiEnabled(): Promise<boolean> {
+  return invoke("get_background_ai_enabled");
+}
+
+export async function setBackgroundAiEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_background_ai_enabled", { enabled });
+}
+
 export interface SystemInfo {
   total_ram_gb: number;
   available_ram_gb: number;
@@ -648,6 +658,7 @@ export async function getCaptureStats(): Promise<CaptureStats> {
 // read. activitySentence.ts narrows each one to the words this build knows.
 export type ActivityState =
   | "up_to_date"
+  | "off"
   | "organizing"
   | "waiting_for_idle"
   | "blocked"
@@ -1794,11 +1805,9 @@ export interface StoreMemoryResponse {
   source_id: string;
   warnings?: string[];
   /**
-   * Background-enrichment state. `"pending"` when the daemon will classify
-   * and extract structured fields asynchronously; `"not_needed"` when no
-   * LLM is available. Components that display the stored memory should
-   * invalidate their query on this value to pick up enriched fields when
-   * they land (target window is ~2s post-store).
+   * Background-enrichment state. `"pending"` when the daemon will enrich
+   * asynchronously, `"paused"` when a selected model cannot run, and `"off"`
+   * when background AI organization is disabled.
    */
   enrichment?: "pending" | "not_needed" | string;
   /**

@@ -8,6 +8,31 @@ import { DEFAULTS, HANDLERS, liveInvoke } from "./live-invoke";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TAURI_TS_PATH = resolve(__dirname, "../../src/lib/tauri.ts");
 
+describe("live background AI preference", () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it.each([false, true, undefined])("reads modern or legacy consent: %s", async (enabled) => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ background_ai_enabled: enabled })));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("get_background_ai_enabled")).resolves.toBe(enabled ?? true);
+    expect(fetch).toHaveBeenCalledWith("/daemon/api/config", expect.objectContaining({ method: "GET" }));
+  });
+
+  it.each([false, true])("writes only explicit consent and checks acknowledgment: %s", async (enabled) => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ background_ai_enabled: enabled })));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("set_background_ai_enabled", { enabled })).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith("/daemon/api/config", expect.objectContaining({ method: "PUT", body: JSON.stringify({ background_ai_enabled: enabled }) }));
+  });
+
+  it("rejects a legacy daemon that ignored consent instead of reporting success", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("set_background_ai_enabled", { enabled: false })).rejects.toThrow("does not support");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+});
+
 /** Every command name passed to invoke(...) in src/lib/tauri.ts — both the
  *  plain `invoke("name", ...)` form and the generic-typed `invoke<T>("name")`
  *  form. */

@@ -87,6 +87,10 @@ pub struct Config {
     /// Absent disables model-backed background work for this job class.
     #[serde(default)]
     pub synthesis_source: Option<String>,
+    /// Explicit background-AI preference. Missing in an existing config keeps
+    /// its previous routing behavior; a new config is initialized to Off.
+    #[serde(default)]
+    pub background_ai_enabled: Option<bool>,
     /// Gates ONLY the proactive Page-Map suggestion phase in the refinery
     /// scheduler (`Phase::PageMaps`). The explicit `POST /api/pages/{id}/map/improve`
     /// route is NEVER gated by this flag.
@@ -109,6 +113,10 @@ fn slug_from_path(path: &std::path::Path) -> String {
 }
 
 impl Config {
+    pub fn background_ai_enabled(&self) -> bool {
+        self.background_ai_enabled.unwrap_or(true)
+    }
+
     /// Migrate legacy `watch_paths` entries into `sources` vec.
     /// Idempotent — only converts paths not already represented in `sources`.
     pub fn migrate(&mut self) {
@@ -269,13 +277,21 @@ pub fn load_config() -> Config {
                         path.display()
                     );
                 }
-                Config::default()
+                new_install_config()
             }
         },
-        Err(_) => Config::default(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => new_install_config(),
+        Err(_) => new_install_config(),
     };
     config.migrate();
     config
+}
+
+fn new_install_config() -> Config {
+    Config {
+        background_ai_enabled: Some(false),
+        ..Config::default()
+    }
 }
 
 /// True when the config holds any credential — used to tighten file perms.
@@ -284,28 +300,139 @@ fn stores_secret(config: &Config) -> bool {
     config.anthropic_api_key.is_some() || config.external_llm_api_key.is_some()
 }
 
+/// Save ordinary settings without changing the latest persisted AI consent.
+/// A source/key/model operation may hold a snapshot across an await; it must
+/// never undo a later explicit On/Off decision.
 pub fn save_config(config: &Config) -> Result<(), WenlanError> {
-    let path = config_path();
+    save_config_inner(&config_path(), config, None).map(|_| ())
+}
+
+/// Persist an explicit user decision together with its settings. Returns the
+/// committed snapshot, including the preference used by subsequent workers.
+pub fn save_config_with_background_ai(
+    config: &Config,
+    enabled: bool,
+) -> Result<Config, WenlanError> {
+    save_config_inner(&config_path(), config, Some(enabled))
+}
+
+fn save_config_inner(
+    path: &std::path::Path,
+    config: &Config,
+    consent: Option<bool>,
+) -> Result<Config, WenlanError> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(config)?;
-    std::fs::write(&path, &json)?;
-
-    // Restrict file permissions when any credential is present (user-only read/write)
+    // A separate, stable inode serializes daemon and CLI writers even though
+    // config.json itself is replaced atomically below. Closing releases it.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("lock"))?;
+    fs2::FileExt::lock_exclusive(&lock)?;
+    let current = match std::fs::read_to_string(path) {
+        Ok(contents) => Some(serde_json::from_str::<Config>(&contents)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let mut saved = config.clone();
+    saved.background_ai_enabled = match consent {
+        Some(enabled) => Some(enabled),
+        None => current
+            .map(|cfg| cfg.background_ai_enabled)
+            .unwrap_or(config.background_ai_enabled.or(Some(false))),
+    };
+    let mut temporary = tempfile::NamedTempFile::new_in(
+        path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
+    // Set private permissions before any credential bytes reach disk.
     #[cfg(unix)]
-    if stores_secret(config) {
+    if stores_secret(&saved) {
         use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perms).ok();
+        temporary
+            .as_file()
+            .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
-
-    Ok(())
+    temporary.write_all(serde_json::to_string_pretty(&saved)?.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(saved)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_install_is_off_but_old_config_keeps_legacy_behavior() {
+        assert_eq!(new_install_config().background_ai_enabled, Some(false));
+        assert!(!new_install_config().background_ai_enabled());
+        let legacy: Config = serde_json::from_str(r#"{"everyday_source":"anthropic"}"#).unwrap();
+        assert_eq!(legacy.background_ai_enabled, None);
+        assert!(legacy.background_ai_enabled());
+        let opted_out: Config = serde_json::from_str(r#"{"background_ai_enabled":false}"#).unwrap();
+        assert!(!opted_out.background_ai_enabled());
+    }
+
+    #[test]
+    fn stale_settings_save_cannot_undo_explicit_background_ai_decision() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        for enabled in [true, false] {
+            let old = save_config_inner(&path, &Config::default(), Some(!enabled)).unwrap();
+            let mut delayed_settings = old.clone();
+            delayed_settings.clipboard_enabled = true;
+            delayed_settings.anthropic_api_key = Some("test-only-key".into());
+            save_config_inner(&path, &old, Some(enabled)).unwrap();
+            let committed = save_config_inner(&path, &delayed_settings, None).unwrap();
+            let disk: Config = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(committed.background_ai_enabled, Some(enabled));
+            assert_eq!(disk.background_ai_enabled, Some(enabled));
+            assert!(disk.clipboard_enabled);
+        }
+    }
+
+    #[test]
+    fn ordinary_save_preserves_legacy_consent_but_new_file_starts_off() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        assert!(!save_config_inner(&path, &Config::default(), None)
+            .unwrap()
+            .background_ai_enabled());
+        std::fs::write(&path, r#"{"everyday_source":"anthropic"}"#).unwrap();
+        let saved = save_config_inner(&path, &Config::default(), None).unwrap();
+        assert_eq!(saved.background_ai_enabled, None);
+        assert!(saved.background_ai_enabled());
+    }
+
+    #[test]
+    fn malformed_config_is_not_overwritten_by_settings_or_consent_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(&path, "{broken").unwrap();
+        for consent in [None, Some(true), Some(false)] {
+            assert!(save_config_inner(&path, &Config::default(), consent).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+        }
+    }
+
+    #[test]
+    fn unreadable_or_malformed_config_keeps_background_ai_off() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_var("WENLAN_DATA_DIR", Some(temp.path()), || {
+            let path = config_path();
+            std::fs::write(&path, "{broken").unwrap();
+            assert!(!load_config().background_ai_enabled());
+            std::fs::remove_file(&path).unwrap();
+            std::fs::create_dir(&path).unwrap();
+            assert!(!load_config().background_ai_enabled());
+        });
+    }
 
     /// A test binary may never resolve the developer's real `config.json`.
     /// ~25 test call sites reach `save_config`, which writes `Config::default()`

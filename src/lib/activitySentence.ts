@@ -61,6 +61,7 @@ function has<K extends string>(table: Readonly<Record<K, unknown>>, word: string
 
 const STATE_WORDS: Readonly<Record<KnownActivityState, true>> = {
   up_to_date: true,
+  off: true,
   organizing: true,
   waiting_for_idle: true,
   blocked: true,
@@ -193,6 +194,9 @@ export function assetSentence(
   asset: KnownActivityAsset,
 ): Phrase {
   const kind = asset.kind;
+  if (activity.state === "off") {
+    return { key: `activityStatus.assetOff.${kind}` };
+  }
   const route = routeFor(activity, kind);
 
   if (asset.blocked > 0) {
@@ -259,6 +263,7 @@ function entitySentence(asset: KnownActivityAsset): Phrase {
  * is available) is not listed: its rows carry their own cause.
  */
 export function blockedCauses(activity: ActivityResponse): Phrase[] {
+  if (activity.state === "off") return [];
   const jobs = new Set<ActivityRouteJob>();
   // An asset this build cannot name is skipped: its governing model is
   // unknown here, and a guessed cause would send the user to the wrong fix.

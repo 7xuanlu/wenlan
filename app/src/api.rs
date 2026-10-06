@@ -1519,6 +1519,24 @@ impl WenlanClient {
         self.put_json("/api/config", &body).await
     }
 
+    pub async fn background_ai_enabled(&self) -> Result<bool, String> {
+        Ok(self
+            .get_config()
+            .await?
+            .background_ai_enabled
+            .unwrap_or(true))
+    }
+
+    pub async fn set_background_ai_enabled(&self, enabled: bool) -> Result<(), String> {
+        let mut req = empty_update();
+        req.background_ai_enabled = Some(enabled);
+        let updated = self.update_config(req).await?;
+        if updated.background_ai_enabled != Some(enabled) {
+            return Err("The daemon does not support the background AI setting yet".into());
+        }
+        Ok(())
+    }
+
     /// GET /api/setup/status — return daemon-owned setup/model/key state.
     ///
     /// Bounded by [`HEALTH_TIMEOUT`], not the ingest-sized [`REQUEST_TIMEOUT`]:
@@ -1734,6 +1752,7 @@ fn empty_update() -> wenlan_types::requests::UpdateConfigRequest {
         external_llm_model: None,
         everyday_source: None,
         synthesis_source: None,
+        background_ai_enabled: None,
         page_map_auto_suggest: None,
         only_if_unset: None,
         // Tri-state (Option<Option<_>>): outer None = omit from JSON =

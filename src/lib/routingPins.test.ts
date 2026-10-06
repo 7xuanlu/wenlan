@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getResolvedRouting: vi.fn(),
+  getBackgroundAiEnabled: vi.fn(),
   setSourcePin: vi.fn(),
 }));
 vi.mock("./tauri", async (importOriginal) => {
@@ -44,6 +45,8 @@ function routing(
 }
 
 const onDevice = { on_device: { selected: "qwen3-4b", loaded: true } };
+
+beforeEach(() => mocks.getBackgroundAiEnabled.mockResolvedValue(true));
 
 describe("pinsToFill", () => {
   it("chooses the on-device model for both jobs when nothing is pinned", () => {
@@ -112,6 +115,14 @@ describe("fillUnsetPins", () => {
     // The fill's pins came from a read, so the write must be the atomic one:
     // a pin the user chose since that read has to win.
     expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", null, true);
+  });
+
+  it("does not fill model pins while background AI is explicitly off", async () => {
+    mocks.getBackgroundAiEnabled.mockResolvedValue(false);
+    mocks.getResolvedRouting.mockResolvedValue(routing({ pool: onDevice }));
+    await expect(fillUnsetPins()).resolves.toBeNull();
+    expect(mocks.getResolvedRouting).not.toHaveBeenCalled();
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
   });
 
   it("asks the daemon to keep a pin set between the read and the write", async () => {

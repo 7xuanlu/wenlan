@@ -33,7 +33,7 @@ export function useActivity(): UseQueryResult<ActivityResponse> {
       // yet is more likely to be mid-import than idle, and guessing idle would
       // leave a fresh install looking frozen for a minute.
       if (data === undefined) return ACTIVITY_BUSY_POLL_MS;
-      return data.state === "up_to_date"
+      return data.state === "up_to_date" || data.state === "off"
         ? ACTIVITY_IDLE_POLL_MS
         : ACTIVITY_BUSY_POLL_MS;
     },

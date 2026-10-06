@@ -1667,6 +1667,8 @@ pub fn run() {
             // Setup wizard commands
             search::get_setup_completed,
             search::set_setup_completed,
+            search::get_background_ai_enabled,
+            search::set_background_ai_enabled,
             search::should_show_wizard,
             search::detect_mcp_clients_cmd,
             search::write_mcp_config,

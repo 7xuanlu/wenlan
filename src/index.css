@@ -3803,7 +3803,7 @@ p.entity-error {
 .content-renderer a.content-page-link:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
 
 /* Toolbar Activity button. It carries the background state, so it is the one
-   entry into activity on every view. The clock hands sweep only while
+   entry into activity on every view. The pulse fades gently only while
    steeping work can run, so the one moving thing on the page always means
    "work is in flight"; steeping held until the computer is quiet stays still.
    Blocked is amber and STILL: nothing is lost when work is waiting,
@@ -3816,12 +3816,11 @@ p.entity-error {
   color: var(--mem-text-secondary);
   cursor: pointer;
   display: flex;
-  font-family: var(--mem-font-body);
-  font-size: 12px;
-  gap: 8px;
-  padding: 6px 8px;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   transition: background-color 150ms ease, color 150ms ease;
-  white-space: nowrap;
 }
 .mem-activity-status:hover,
 .mem-activity-status[aria-expanded="true"] { background: var(--mem-hover-strong); }
@@ -3829,19 +3828,17 @@ p.entity-error {
 .mem-activity-status:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 1px; }
 /* The icon carries state, never a number: the assets count different things
    (memories, entities, pages), so no single figure is true for all three.
-   State is told by FORM as well as color, so it survives color blindness:
-   Steeping sweeps the clock hands (work moving, nothing to do). Waiting for a
-   quiet moment keeps the same indigo with the hands still. Blocked turns
-   them into "!" (it needs you). Up to date is the plain clock. */
+   The pulse stays neutral when AI is off or work is up to date. Only active
+   work gently fades; waiting remains still. Real blocked work uses a distinct
+   warning shape as well as amber, without extra badges. */
 .mem-activity-status-icon { flex-shrink: 0; transition: color 150ms ease; }
 .mem-activity-status-icon[data-icon-state="organizing"],
 .mem-activity-status-icon[data-icon-state="waiting_for_idle"] { color: var(--mem-accent-indigo); }
 .mem-activity-status-icon[data-icon-state="blocked"] { color: var(--mem-accent-amber); }
-.mem-activity-hands { transform-box: view-box; transform-origin: 50% 50%; }
-@keyframes mem-activity-hands-sweep { to { transform: rotate(360deg); } }
-.mem-activity-hands-sweep { animation: mem-activity-hands-sweep 6s linear infinite; }
+@keyframes mem-activity-pulse { 50% { opacity: 0.5; } }
+.mem-activity-pulse-running { animation: mem-activity-pulse 2.4s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .mem-activity-hands-sweep { animation: none; }
+  .mem-activity-pulse-running { animation: none; }
 }
 
 /* The summary drops down from the button, right-aligned to it, since the

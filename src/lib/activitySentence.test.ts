@@ -79,7 +79,7 @@ function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
 
 describe("knownState", () => {
   it("passes every state this build has words for through unchanged", () => {
-    for (const state of ["up_to_date", "organizing", "waiting_for_idle", "blocked"] as const) {
+    for (const state of ["up_to_date", "off", "organizing", "waiting_for_idle", "blocked"] as const) {
       expect(knownState(activity({ state }))).toBe(state);
     }
   });
@@ -105,6 +105,18 @@ describe("governingJob / routeFor", () => {
 });
 
 describe("blockedCauses", () => {
+  it("does not present a missing model as a fault when background AI is off", () => {
+    const a = activity({
+      state: "off",
+      everyday: route("everyday", "none", false),
+      assets: [asset("memories", { total: 5, blocked: 5 })],
+    });
+    expect(blockedCauses(a)).toEqual([]);
+    expect(assetSentence(a, asset("memories", { total: 5, blocked: 5 }))).toEqual({
+      key: "activityStatus.assetOff.memories",
+    });
+  });
+
   it("lists each missing model once, in job order", () => {
     const a = activity({
       everyday: route("everyday", "none", false),

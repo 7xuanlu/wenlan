@@ -28,6 +28,7 @@ export const enActivityStatus = {
   // ── Tier 0, the toolbar Activity button ────────────────────────────────
   state: {
     up_to_date: "Up to date",
+    off: "Off",
     organizing: "Steeping",
     // Steeping that cannot run yet (ActivityState waiting_for_idle).
     waiting_for_idle: "Waiting for a quiet moment",
@@ -41,6 +42,7 @@ export const enActivityStatus = {
   // ── Tier 1, the summary popover ───────────────────────────────────────
   headline: {
     up_to_date: "Everything you have given Wenlan has steeped.",
+    off: "Background AI organization is off. Your notes remain available.",
     organizing: "Wenlan is steeping what you have given it.",
     // Pairs with lastActivity: an old time under this line is expected, so it
     // must not claim anything is running. It names every reason the scheduler
@@ -53,6 +55,11 @@ export const enActivityStatus = {
     memories: "Memories",
     entities: "Entities",
     pages: "Pages",
+  },
+  assetOff: {
+    memories: "Your notes remain available.",
+    entities: "Entity detection is off.",
+    pages: "Automatic page writing is off.",
   },
   assetDone: {
     memories_one: "{{count}} stored, summarized and linked",
@@ -207,6 +214,7 @@ export const enActivityStatus = {
 export const hansActivityStatus = {
   state: {
     up_to_date: "已就绪",
+    off: "已关闭",
     organizing: "沉淀中",
     // Not 暂停: that word is Blocked in this locale.
     waiting_for_idle: "等电脑空闲",
@@ -216,6 +224,7 @@ export const hansActivityStatus = {
   buttonLabel: "活动，{{state}}",
   headline: {
     up_to_date: "你交给文澜的内容都已沉淀完毕。",
+    off: "后台 AI 整理已关闭，笔记仍可正常使用。",
     organizing: "文澜正在沉淀你交给它的内容。",
     waiting_for_idle: "文澜会在电脑空闲时继续沉淀。你使用电脑，或电脑忙碌、内存不足、温度过高时，它会先等一等。",
     blocked: "部分沉淀工作在等你处理。",
@@ -224,6 +233,11 @@ export const hansActivityStatus = {
     memories: "记忆",
     entities: "实体",
     pages: "页面",
+  },
+  assetOff: {
+    memories: "笔记仍可正常使用。",
+    entities: "实体识别已关闭。",
+    pages: "自动写页面已关闭。",
   },
   assetDone: {
     memories_one: "已存 {{count}} 条，全部已生成摘要并建立关联",
@@ -344,6 +358,7 @@ export const hansActivityStatus = {
 export const hantActivityStatus = {
   state: {
     up_to_date: "已就緒",
+    off: "已關閉",
     organizing: "沉澱中",
     // Not 暫停: that word is Blocked in this locale.
     waiting_for_idle: "等電腦閒置",
@@ -353,6 +368,7 @@ export const hantActivityStatus = {
   buttonLabel: "活動，{{state}}",
   headline: {
     up_to_date: "你交給文瀾的內容都已沉澱完畢。",
+    off: "背景 AI 整理已關閉，筆記仍可正常使用。",
     organizing: "文瀾正在沉澱你交給它的內容。",
     waiting_for_idle: "文瀾會在電腦閒置時繼續沉澱。你使用電腦，或電腦忙碌、記憶體不足、溫度過高時，它會先等一等。",
     blocked: "部分沉澱工作在等你處理。",
@@ -361,6 +377,11 @@ export const hantActivityStatus = {
     memories: "記憶",
     entities: "實體",
     pages: "頁面",
+  },
+  assetOff: {
+    memories: "筆記仍可正常使用。",
+    entities: "實體辨識已關閉。",
+    pages: "自動撰寫頁面已關閉。",
   },
   assetDone: {
     memories_one: "已存 {{count}} 則，全部已產生摘要並建立關聯",

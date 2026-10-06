@@ -1019,6 +1019,19 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
       ...(a?.everydaySource != null ? { everyday_source: a.everydaySource } : {}),
       ...(a?.synthesisSource != null ? { synthesis_source: a.synthesisSource } : {}),
     }).then(() => undefined),
+  get_background_ai_enabled: async () => {
+    const value = (await get("/api/config")).background_ai_enabled;
+    if (value == null) return true; // Legacy daemon behavior matches Tauri.
+    if (typeof value !== "boolean") throw new Error("Invalid background AI setting");
+    return value;
+  },
+  set_background_ai_enabled: async (a) => {
+    if (typeof a?.enabled !== "boolean") throw new Error("Invalid background AI setting");
+    const updated = await put("/api/config", { background_ai_enabled: a.enabled });
+    if (updated?.background_ai_enabled !== a.enabled) {
+      throw new Error("The daemon does not support the background AI setting yet");
+    }
+  },
 };
 
 // App-local commands (no daemon route) → static defaults that route the UI

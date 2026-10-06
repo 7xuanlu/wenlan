@@ -119,6 +119,7 @@ export class TauriMockRuntime {
   >();
   private firstWriteRemoteMutationPending: boolean;
   private pageSequence: number;
+  private backgroundAiEnabled = false;
 
   constructor(
     private readonly fixture: SpacesNavigationFixture,
@@ -167,6 +168,15 @@ export class TauriMockRuntime {
     const configured = this.failures.get(command)?.shift();
     if (configured) throw new ConfiguredTauriFailureError(command, configured);
     if (command.startsWith("plugin:")) return null;
+    if (command === "get_background_ai_enabled") return this.backgroundAiEnabled;
+    if (command === "set_background_ai_enabled") {
+      this.backgroundAiEnabled = requiredBoolean(command, args, "enabled");
+      return null;
+    }
+    if (command === "get_activity") {
+      const activity = baseResponse(command, args, { activityRows: this.activityRows, memoryCount: this.memories.length }) as Record<string, unknown>;
+      return { ...activity, state: this.backgroundAiEnabled ? activity.state : "off" };
+    }
     const delay = this.delays[command];
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 

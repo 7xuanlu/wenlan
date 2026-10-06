@@ -372,8 +372,7 @@ async fn handle_store_memory_inner(
         .title
         .unwrap_or_else(|| truncate_for_title(&req.content));
 
-    // Phase 1: Agent gating + resolve the same hard-pinned background route
-    // the scheduler will use. A loaded slot is capability, not consent.
+    // Phase 1: Agent gating. A loaded model slot is capability, not consent.
     //
     // Resolve the agent name via `extract_agent_name` (header-canonical)
     // before gating. Previously this read `req.source_agent` (body-only),
@@ -382,13 +381,10 @@ async fn handle_store_memory_inner(
     // and gating entirely (got `None → "full"` auto-trust).
     //
     // Prompts, classify/extract LLM calls, and classification writebacks all
-    // moved to the ambient scheduler — the sync path only needs
-    // to know whether automatic enrichment is authorized and currently
-    // available so it can return a truthful response state.
+    // moved to the ambient scheduler. Resolve the automatic route just before
+    // responding, after the store awaits, so a recent Off cannot be reported
+    // as promised background work.
     let resolved_agent = extract_agent_name(&headers, req.source_agent.as_deref());
-    let runtime_config = wenlan_core::config::load_config();
-    let everyday_pin =
-        wenlan_core::refinery::EverydaySource::parse(runtime_config.everyday_source.as_deref());
     let (db, api_llm, external_llm, local_llm) = {
         let s = state.read().await;
         (
@@ -408,14 +404,6 @@ async fn handle_store_memory_inner(
             .await
             .map_err(ServerError::from)?
     };
-    let ambient_route_mode = wenlan_core::refinery::resolve_everyday(
-        everyday_pin,
-        api_llm.as_ref(),
-        external_llm.as_ref(),
-        local_llm.as_ref(),
-    )
-    .mode;
-
     // Placeholder classification. The ambient classification lane may replace
     // these via `db.apply_enrichment(...)` and `db.set_document_tags(...)`
     // after the quiet/cooldown gates admit the memory.
@@ -936,25 +924,42 @@ async fn handle_store_memory_inner(
     // Build caller-facing status from the effective hard-pin route. Recall is
     // available immediately in every state; only a healthy explicit pin may
     // promise that automatic enrichment will eventually run.
-    let (enrichment, hint) = match ambient_route_mode {
-        wenlan_core::refinery::RouteMode::Pinned => (
-            "pending".to_string(),
-            "Stored. Recall is available now; Wenlan will quietly enrich \
+    let runtime_config = wenlan_core::config::load_config();
+    let (enrichment, hint) = if !runtime_config.background_ai_enabled() {
+        (
+            "off".to_string(),
+            "Stored. Recall is available now; background AI organization is off.".to_string(),
+        )
+    } else {
+        let everyday_pin =
+            wenlan_core::refinery::EverydaySource::parse(runtime_config.everyday_source.as_deref());
+        let ambient_route_mode = wenlan_core::refinery::resolve_everyday(
+            everyday_pin,
+            api_llm.as_ref(),
+            external_llm.as_ref(),
+            local_llm.as_ref(),
+        )
+        .mode;
+        match ambient_route_mode {
+            wenlan_core::refinery::RouteMode::Pinned => (
+                "pending".to_string(),
+                "Stored. Recall is available now; Wenlan will quietly enrich \
              classification and page links in the background."
-                .to_string(),
-        ),
-        wenlan_core::refinery::RouteMode::Unconfigured => (
-            "paused".to_string(),
-            "Stored. Recall is available now; background enrichment is paused \
+                    .to_string(),
+            ),
+            wenlan_core::refinery::RouteMode::Unconfigured => (
+                "paused".to_string(),
+                "Stored. Recall is available now; background enrichment is paused \
              until you choose a model source."
-                .to_string(),
-        ),
-        wenlan_core::refinery::RouteMode::PinnedUnavailable => (
-            "paused".to_string(),
-            "Stored. Recall is available now; background enrichment is paused \
+                    .to_string(),
+            ),
+            wenlan_core::refinery::RouteMode::PinnedUnavailable => (
+                "paused".to_string(),
+                "Stored. Recall is available now; background enrichment is paused \
              because the selected model source is unavailable."
-                .to_string(),
-        ),
+                    .to_string(),
+            ),
+        }
     };
 
     Ok(Json(StoreMemoryResponse {
@@ -2155,12 +2160,18 @@ mod store_scheduler_handoff_tests {
             retrieval_cue: None,
         };
 
-        wenlan_core::config::save_config(&wenlan_core::config::Config::default()).unwrap();
+        // This case exercises an opted-in user whose provider is not ready.
+        // The off state is exercised separately below.
+        wenlan_core::config::save_config_with_background_ai(
+            &wenlan_core::config::Config::default(),
+            true,
+        )
+        .unwrap();
         let response = handle_store_memory(
-            State(state),
+            State(state.clone()),
             HeaderMap::new(),
             crate::space_header::SpaceHeader(None),
-            Json(req),
+            Json(req.clone()),
         )
         .await
         .unwrap();
@@ -2182,6 +2193,24 @@ mod store_scheduler_handoff_tests {
             .is_err(),
             "the HTTP store path must never forward an enrichment inference"
         );
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+
+        let config = wenlan_core::config::load_config();
+        wenlan_core::config::save_config_with_background_ai(&config, false).unwrap();
+        let off = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(StoreMemoryRequest {
+                content: "A new note works without any model or background AI.".to_string(),
+                ..req
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(off.0.enrichment, "off");
+        assert!(off.0.hint.contains("background AI organization is off"));
+        assert!(!off.0.hint.contains("choose a model"));
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
     }
 
@@ -2356,16 +2385,19 @@ mod store_scheduler_handoff_tests {
             retrieval_cue: None,
         };
 
-        wenlan_core::config::save_config(&wenlan_core::config::Config {
-            everyday_source: Some("external".to_string()),
-            ..wenlan_core::config::Config::default()
-        })
+        wenlan_core::config::save_config_with_background_ai(
+            &wenlan_core::config::Config {
+                everyday_source: Some("external".to_string()),
+                ..wenlan_core::config::Config::default()
+            },
+            true,
+        )
         .unwrap();
         let response = handle_store_memory(
-            State(state),
+            State(state.clone()),
             HeaderMap::new(),
             crate::space_header::SpaceHeader(None),
-            Json(req),
+            Json(req.clone()),
         )
         .await
         .unwrap();
@@ -2383,6 +2415,31 @@ mod store_scheduler_handoff_tests {
             "the request path must not spend the authorized provider call"
         );
         assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+
+        let config = wenlan_core::config::load_config();
+        wenlan_core::config::save_config_with_background_ai(&config, false).unwrap();
+        let off = handle_store_memory(
+            State(state),
+            HeaderMap::new(),
+            crate::space_header::SpaceHeader(None),
+            Json(StoreMemoryRequest {
+                content: "The configured provider stays saved while automatic work is off."
+                    .to_string(),
+                ..req
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(off.0.enrichment, "off");
+        assert!(off.0.hint.contains("background AI organization is off"));
+        assert!(!off.0.hint.contains("quietly enrich"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            wenlan_core::config::load_config()
+                .everyday_source
+                .as_deref(),
+            Some("external")
+        );
     }
 }
 

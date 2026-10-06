@@ -26,6 +26,7 @@ import { liveInvoke } from "./live-invoke";
 import { invokeRemoteFixture } from "./remote-access";
 
 let graphObsSeq = 0;
+let fixtureBackgroundAiEnabled = false;
 type PreviewPageUpdateRequest = {
   readonly id: string;
   readonly content: string;
@@ -42,6 +43,13 @@ export async function invoke(
 ): Promise<unknown> {
   if (!(window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__) {
     return liveInvoke(cmd, args);
+  }
+  // Fixture previews must never toggle the maintainer's background service.
+  if (cmd === "get_background_ai_enabled") return fixtureBackgroundAiEnabled;
+  if (cmd === "set_background_ai_enabled") {
+    if (typeof args?.enabled !== "boolean") throw new Error("Invalid background AI setting");
+    fixtureBackgroundAiEnabled = args.enabled;
+    return;
   }
   if (new URLSearchParams(window.location.search).get("mode") === "remote-access") {
     return invokeRemoteFixture(cmd, args);

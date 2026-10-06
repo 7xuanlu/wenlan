@@ -115,26 +115,28 @@ function AssetRow({
       >
         {t(phrase.key, phrase.params)}
       </p>
-      <div
-        aria-hidden="true"
-        style={{
-          backgroundColor: "var(--mem-border)",
-          borderRadius: "2px",
-          height: "3px",
-          marginLeft: "15px",
-          overflow: "hidden",
-        }}
-      >
+      {activity.state !== "off" && (
         <div
-          data-testid={`activity-asset-bar-${asset.kind}`}
-          data-fraction={fraction}
+          aria-hidden="true"
           style={{
-            backgroundColor: ASSET_COLOR[asset.kind],
-            height: "100%",
-            width: `${Math.round(fraction * 100)}%`,
+            backgroundColor: "var(--mem-border)",
+            borderRadius: "2px",
+            height: "3px",
+            marginLeft: "15px",
+            overflow: "hidden",
           }}
-        />
-      </div>
+        >
+          <div
+            data-testid={`activity-asset-bar-${asset.kind}`}
+            data-fraction={fraction}
+            style={{
+              backgroundColor: ASSET_COLOR[asset.kind],
+              height: "100%",
+              width: `${Math.round(fraction * 100)}%`,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -251,7 +253,7 @@ export default function ActivitySummaryPopover({
       </div>
 
       {/* No trust line at all when a lane is unknown: see trustSentence. */}
-      {trustText !== undefined && (
+      {state !== "off" && trustText !== undefined && (
         <p
           data-testid="activity-summary-trust"
           style={{

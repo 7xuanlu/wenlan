@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { getResolvedRouting, setSourcePin, type ResolvedRouting } from "./tauri";
+import { getBackgroundAiEnabled, getResolvedRouting, setSourcePin, type ResolvedRouting } from "./tauri";
 
 /** A source a job can be pinned to. */
 export type SourcePin = "anthropic" | "external" | "on_device";
@@ -102,6 +102,7 @@ export interface PinFill {
  *  and keeps the user's pin. On a daemon that predates that flag the field is
  *  ignored and this window is unguarded, as it was before. */
 export async function fillUnsetPins(): Promise<PinFill | null> {
+  if (!(await getBackgroundAiEnabled())) return null;
   const routing = await getResolvedRouting();
   if (!routing) return null;
   const written = pinsToFill(routing);

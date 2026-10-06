@@ -76,6 +76,7 @@ tracing = "0.1"
 dirs = "6"
 async-trait = "0.1"
 tempfile = "3"
+fs2 = { workspace = true }
 open = "5"
 
 # Workspace crates

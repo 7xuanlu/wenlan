@@ -52,6 +52,7 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
             .unwrap_or(false),
         everyday_source: cfg.everyday_source.clone(),
         synthesis_source: cfg.synthesis_source.clone(),
+        background_ai_enabled: Some(cfg.background_ai_enabled()),
         page_map_auto_suggest: cfg.page_map_auto_suggest,
     }
 }
@@ -71,7 +72,8 @@ fn config_to_response(cfg: &config::Config) -> ConfigResponse {
 /// Scope: this serializes PUT /api/config against itself, which is the race the
 /// pin fill is exposed to, because the user's own pin write is the same route.
 /// The other handlers in this file that load-modify-save config (the Anthropic
-/// key routes and the on-device download) do not take it and still race a PUT.
+/// key routes and the on-device download) do not take it. Core config saves
+/// independently preserve current AI consent under a cross-process file lock.
 static CONFIG_WRITE_LOCK: LazyLock<std::sync::Mutex<()>> =
     LazyLock::new(|| std::sync::Mutex::new(()));
 
@@ -154,20 +156,27 @@ pub async fn handle_update_config(
         let only_if_unset = req.only_if_unset.unwrap_or(false);
         if let Some(v) = req.everyday_source {
             let pin = validate_everyday_source(&v)?;
-            if !(only_if_unset && cfg.everyday_source.is_some()) {
+            if !(only_if_unset && (cfg.everyday_source.is_some() || !cfg.background_ai_enabled())) {
                 cfg.everyday_source = pin;
             }
         }
         if let Some(v) = req.synthesis_source {
             let pin = validate_synthesis_source(&v)?;
-            if !(only_if_unset && cfg.synthesis_source.is_some()) {
+            if !(only_if_unset && (cfg.synthesis_source.is_some() || !cfg.background_ai_enabled()))
+            {
                 cfg.synthesis_source = pin;
             }
         }
         if let Some(v) = req.page_map_auto_suggest {
             cfg.page_map_auto_suggest = v;
         }
-        config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+        if let Some(enabled) = req.background_ai_enabled {
+            cfg = config::save_config_with_background_ai(&cfg, enabled)
+                .map_err(|e| ServerError::Internal(e.to_string()))?;
+        } else {
+            config::save_config(&cfg).map_err(|e| ServerError::Internal(e.to_string()))?;
+            cfg = config::load_config();
+        }
         cfg
     };
     if external_touched {
@@ -1324,6 +1333,7 @@ mod config_model_fields_tests {
         assert_eq!(body["synthesis_model"], Value::Null);
         assert_eq!(body["external_llm_endpoint"], Value::Null);
         assert_eq!(body["external_llm_model"], Value::Null);
+        assert_eq!(body["background_ai_enabled"], false);
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -1503,6 +1513,110 @@ mod external_llm_lifecycle_tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn background_ai_toggle_persists_without_clearing_pins_or_autofilling_while_off() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let app =
+            crate::router::build_router(std::sync::Arc::new(RwLock::new(ServerState::default())));
+        assert_eq!(get_config(&app).await["background_ai_enabled"], false);
+
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "background_ai_enabled": true,
+                "everyday_source": "on_device"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["background_ai_enabled"], true);
+        assert_eq!(body["everyday_source"], "on_device");
+
+        let (status, body) =
+            put_config(&app, serde_json::json!({"background_ai_enabled": false})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert!(!config::load_config().background_ai_enabled());
+
+        let (status, body) = put_config(
+            &app,
+            serde_json::json!({
+                "synthesis_source": "anthropic", "only_if_unset": true
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["synthesis_source"], Value::Null);
+
+        let (status, body) =
+            put_config(&app, serde_json::json!({"background_ai_enabled": true})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["background_ai_enabled"], true);
+        assert_eq!(body["everyday_source"], "on_device");
+        assert!(config::load_config().background_ai_enabled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn background_ai_off_survives_delayed_source_or_provider_config_save() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        let app =
+            crate::router::build_router(std::sync::Arc::new(RwLock::new(ServerState::default())));
+        let (status, _) = put_config(
+            &app,
+            serde_json::json!({
+                "background_ai_enabled": true, "everyday_source": "on_device"
+            }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        // The source/key handlers load this snapshot before asynchronous work.
+        let mut delayed = config::load_config();
+        let (status, body) =
+            put_config(&app, serde_json::json!({"background_ai_enabled": false})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["background_ai_enabled"], false);
+        delayed.anthropic_api_key = Some("test-only-key".into());
+        config::save_config(&delayed).unwrap();
+        assert_eq!(get_config(&app).await["background_ai_enabled"], false);
+        assert_eq!(get_config(&app).await["everyday_source"], "on_device");
+        assert_eq!(
+            config::load_config().anthropic_api_key.as_deref(),
+            Some("test-only-key")
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn background_ai_legacy_config_exposes_effective_preference_to_clients() {
+        let _lock = crate::TEST_DATA_DIR_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
+        let _env = DataDirGuard::new();
+        std::fs::write(
+            _env._tmp.path().join("config.json"),
+            r#"{"everyday_source":"on_device"}"#,
+        )
+        .unwrap();
+        let app =
+            crate::router::build_router(std::sync::Arc::new(RwLock::new(ServerState::default())));
+        let response = get_config(&app).await;
+        assert_eq!(response["background_ai_enabled"], true);
+        assert!(config::load_config().background_ai_enabled.is_none());
+        let (status, response) =
+            put_config(&app, serde_json::json!({"background_ai_enabled":false})).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response["background_ai_enabled"], false);
+        assert_eq!(response["everyday_source"], "on_device");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn external_key_lifecycle_and_hot_swap() {
         let _lock = crate::TEST_DATA_DIR_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -1619,6 +1733,12 @@ mod external_llm_lifecycle_tests {
         let _env = DataDirGuard::new();
         let state = std::sync::Arc::new(RwLock::new(ServerState::default()));
         let app = crate::router::build_router(state);
+
+        // Pin autofill is meaningful only after explicit AI consent. A new
+        // installation stays Off; the separate Off regression checks no fill.
+        let (status, _) =
+            put_config(&app, serde_json::json!({"background_ai_enabled": true})).await;
+        assert_eq!(status, StatusCode::OK);
 
         // Blank pins: the flagged write fills both, like a plain write would.
         let (status, body) = put_config(

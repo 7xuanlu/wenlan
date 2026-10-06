@@ -45,7 +45,8 @@ pub struct StoreMemoryResponse {
     pub extraction_method: String,
     /// Enrichment state for the memory. `"pending"` when the quiet/cooldown-
     /// gated ambient scheduler has authorized derived work remaining;
-    /// `"paused"` when no source is pinned or the pinned source is unavailable.
+    /// `"paused"` when no source is pinned or the pinned source is unavailable;
+    /// `"off"` when the user disabled background AI organization.
     /// `"not_needed"` remains accepted as a legacy wire value from older
     /// daemons. Machine-readable — Tauri app uses this to drive
     /// polling / live-update UI, MCP callers can choose to relay state.
@@ -611,6 +612,9 @@ pub struct ConfigResponse {
     /// `"external"`, or absent/null when unpinned.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub synthesis_source: Option<String>,
+    /// Missing on an older daemon means legacy behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background_ai_enabled: Option<bool>,
     /// Whether the proactive Page-Map suggestion phase is enabled. Default true.
     #[serde(default)]
     pub page_map_auto_suggest: bool,

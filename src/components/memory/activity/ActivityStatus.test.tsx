@@ -100,16 +100,25 @@ describe("ActivityStatus", () => {
     expect(onToggle).not.toHaveBeenCalled();
   });
 
-  it("stays quiet when up to date: the plain clock, the state in the name", async () => {
+  it("stays quiet when up to date: a static pulse, the state in the name", async () => {
     getActivityMock.mockResolvedValue(activity());
     renderStatus();
 
     const button = await loadedTrigger();
     expect(button).toHaveAttribute("data-state", "up_to_date");
     expect(button).toHaveAccessibleName("Activity, Up to date");
-    expect(button).toHaveAttribute("title", "Up to date");
+    expect(button).toHaveAttribute("title", "Activity, Up to date");
     expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
     expect(button.querySelector(".mem-activity-status-badge, .mem-activity-dot")).toBeNull();
+  });
+
+  it("shows an explicit Off state without a warning icon", async () => {
+    getActivityMock.mockResolvedValue(activity({ state: "off" }));
+    renderStatus();
+
+    const button = await loadedTrigger();
+    expect(button).toHaveAccessibleName("Activity, Off");
+    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
   });
 
   it("marks itself as the current page on the Activity view", async () => {
@@ -135,7 +144,7 @@ describe("ActivityStatus", () => {
       const { unmount } = renderStatus();
       const button = await loadedTrigger();
       expect(button).toHaveAttribute("data-state", state);
-      expect(button.textContent).toBe("Activity");
+      expect(button.textContent).toBe("");
       unmount();
     }
   });
@@ -163,12 +172,13 @@ describe("ActivityStatus", () => {
     );
   });
 
-  it("sweeps the clock hands only while steeping, and shows ! when blocked", async () => {
+  it("animates the pulse only while steeping, and changes shape when blocked", async () => {
     getActivityMock.mockResolvedValue(activity({ state: "organizing" }));
     const { unmount } = renderStatus();
     const steeping = await screen.findByTestId("activity-status-icon");
     await waitFor(() => expect(steeping).toHaveAttribute("data-icon-state", "organizing"));
-    expect(steeping.querySelector(".mem-activity-hands-sweep")).not.toBeNull();
+    expect(steeping).toHaveClass("mem-activity-pulse-running");
+    expect(steeping).toHaveAttribute("data-icon-kind", "pulse");
     unmount();
 
     getActivityMock.mockResolvedValue(
@@ -179,13 +189,11 @@ describe("ActivityStatus", () => {
       expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-state", "blocked");
     });
     const blocked = screen.getByTestId("activity-status-icon");
-    // Blocked is told by shape, not color alone: the hands become "!", and it
-    // does not move, because waiting work is not an alarm.
-    expect(blocked.querySelector(".mem-activity-hands")).toBeNull();
-    expect(blocked.querySelector(".mem-activity-hands-sweep")).toBeNull();
+    expect(blocked).toHaveAttribute("data-icon-kind", "attention");
+    expect(blocked).not.toHaveClass("mem-activity-pulse-running");
   });
 
-  it("stills the hands while steeping waits for a quiet moment", async () => {
+  it("keeps the pulse still while waiting for a quiet moment", async () => {
     getActivityMock.mockResolvedValue(activity({ state: "waiting_for_idle" }));
     renderStatus();
 
@@ -194,12 +202,12 @@ describe("ActivityStatus", () => {
       expect(button).toHaveAccessibleName("Activity, Waiting for a quiet moment"),
     );
     expect(button).toHaveAttribute("data-state", "waiting_for_idle");
-    expect(button).toHaveAttribute("title", "Waiting for a quiet moment");
+    expect(button).toHaveAttribute("title", "Activity, Waiting for a quiet moment");
     const icon = screen.getByTestId("activity-status-icon");
-    // The hands are drawn but still; index.css tints this state indigo.
+    // Waiting keeps the pulse still; index.css tints it indigo.
     expect(icon).toHaveAttribute("data-icon-state", "waiting_for_idle");
-    expect(icon.querySelector(".mem-activity-hands")).not.toBeNull();
-    expect(icon.querySelector(".mem-activity-hands-sweep")).toBeNull();
+    expect(icon).toHaveAttribute("data-icon-kind", "pulse");
+    expect(icon).not.toHaveClass("mem-activity-pulse-running");
   });
 
   it("keeps a plain icon but still opens the summary for a state from a newer daemon", async () => {
@@ -213,7 +221,7 @@ describe("ActivityStatus", () => {
     await waitFor(() => expect(button).toHaveAttribute("aria-haspopup", "dialog"));
     expect(button).toHaveAccessibleName("Activity");
     expect(button).not.toHaveAttribute("data-state");
-    expect(button).not.toHaveAttribute("title");
+    expect(button).toHaveAttribute("title", "Activity");
     expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
 
     await userEvent.click(button);

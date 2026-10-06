@@ -40,14 +40,6 @@ pub async fn handle_ambient_sweep(
             s.ambient_run_lock.clone(),
         )
     };
-    // Routing consent and the knowledge root are read fresh from config, same
-    // as the passive scheduler tick and `handle_sync_source` — neither is
-    // cached in `ServerState`.
-    let runtime_config = wenlan_core::config::load_config();
-    let everyday_pin =
-        wenlan_core::refinery::EverydaySource::parse(runtime_config.everyday_source.as_deref());
-    let knowledge_path = runtime_config.knowledge_path_or_default();
-
     // Hold the ambient-run lock for the whole lap so this force-sweep and
     // the passive scheduler's own ambient tick can never execute jobs at the
     // same time (doubled LLM contention, possible double-claiming of the
@@ -59,6 +51,15 @@ pub async fn handle_ambient_sweep(
     // guard across `.await` is fine — the repo's no-guard-across-await
     // invariant is specific to `RwLock`.
     let _ambient_run_guard = ambient_run_lock.lock().await;
+
+    // Read after acquiring the run lock: an Off saved while waiting must win.
+    let runtime_config = wenlan_core::config::load_config();
+    let everyday_pin = if runtime_config.background_ai_enabled() {
+        wenlan_core::refinery::EverydaySource::parse(runtime_config.everyday_source.as_deref())
+    } else {
+        None
+    };
+    let knowledge_path = runtime_config.knowledge_path_or_default();
 
     let report = crate::scheduler::force_ambient_sweep(
         &db,

@@ -116,16 +116,16 @@ for (const width of WIDTHS) {
       await expect(button).toBeVisible();
       await expect(button).toHaveAttribute("data-state", "organizing");
       // State, never a number: the assets count different things, so the
-      // icon sweeps while steeping and the word lives in the name.
-      await expect(button).toHaveText("Activity");
+      // pulse animates while steeping and the word lives in the name.
+      await expect(button).toHaveText("");
       await expect(button).toHaveAccessibleName("Activity, Steeping");
       await expect(page.getByTestId("activity-status-icon")).toHaveAttribute(
         "data-icon-state",
         "organizing",
       );
       await expect(
-        page.getByTestId("activity-status-icon").locator(".mem-activity-hands-sweep"),
-      ).toHaveCount(1);
+        page.getByTestId("activity-status-icon"),
+      ).toHaveClass(/mem-activity-pulse-running/);
 
       // The status lives in the top toolbar, fully on screen, and there is
       // exactly one of it: no second copy left behind in a sidebar.
@@ -319,7 +319,7 @@ test("a missing model leads the popover, in units that match each row", async ({
 
   const trigger = page.getByTestId("activity-status");
   await expect(trigger).toHaveAttribute("data-state", "blocked");
-  await expect(trigger).toHaveText("Activity");
+  await expect(trigger).toHaveText("");
   await expect(page.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-state", "blocked");
 
   await trigger.click();
@@ -357,7 +357,7 @@ test("a missing model leads the popover, in units that match each row", async ({
   expect(errors.consoleErrors).toEqual([]);
 });
 
-test("steeping held for a quiet moment stills the clock and says so", async ({ page }) => {
+test("steeping held for a quiet moment keeps the pulse still and says so", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
@@ -367,12 +367,11 @@ test("steeping held for a quiet moment stills the clock and says so", async ({ p
   const trigger = page.getByTestId("activity-status");
   await expect(trigger).toHaveAttribute("data-state", "waiting_for_idle");
   await expect(trigger).toHaveAccessibleName("Activity, Waiting for a quiet moment");
-  // Motion means work is running. The clock keeps Steeping's indigo, but its
-  // hands do not move beside a "Last activity" from long ago.
+  // Only active work animates; waiting keeps the same indigo pulse still.
   const icon = page.getByTestId("activity-status-icon");
   await expect(icon).toHaveAttribute("data-icon-state", "waiting_for_idle");
-  await expect(icon.locator(".mem-activity-hands")).toHaveCount(1);
-  await expect(icon.locator(".mem-activity-hands-sweep")).toHaveCount(0);
+  await expect(icon).toHaveAttribute("data-icon-kind", "pulse");
+  await expect(icon).not.toHaveClass(/mem-activity-pulse-running/);
   // Same indigo as Steeping, resolved in the icon's own scope: an untinted icon
   // would read as Up to date. Polled, because the icon eases into its color.
   await expect
