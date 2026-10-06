@@ -4308,12 +4308,15 @@ fn write_page_atomically_nofollow(
         file.sync_all()?;
         match directory.open_with(name, &regular_read_options()) {
             Ok(current) => {
-                if !current.metadata()?.is_file() {
+                let metadata = current.metadata()?;
+                if !metadata.is_file() {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
                         "page_projection_target_invalid",
                     ));
                 }
+                file.set_permissions(metadata.permissions())?;
+                file.sync_all()?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e),
@@ -7139,6 +7142,26 @@ mod tests {
             std::fs::read_dir(dir.path().join(".wenlan/projection-recovery"))
                 .unwrap()
                 .any(|e| std::fs::read(e.unwrap().path()).unwrap() == old)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn projection_state_replacement_preserves_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let state_path = dir.path().join(".wenlan/state.json");
+        std::fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        page.version += 1;
+        page.content = "updated canonical prose".into();
+        writer.write_page_for_test(&page).unwrap();
+        assert_eq!(
+            std::fs::metadata(state_path).unwrap().permissions().mode() & 0o777,
+            0o600
         );
     }
 
