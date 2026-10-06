@@ -73,7 +73,7 @@ test("keeps every enabled primary destination inside the Review command contract
   await expect(page.getByTestId("atlas-view")).toBeVisible();
   // Same fixture and same count line as graph-rendering.visual.spec: pages
   // lead, and the topic count is over what is drawn (the three connected ones).
-  await expect(page.getByText(/^7 pages · 3 entities(?: · \d+ regions?)?$/)).toBeVisible();
+  await expect(page.getByText(/^7 pages · 3 topics(?: · \d+ regions?)?$/)).toBeVisible();
 
   await openPrimaryDestination(page, "Memories");
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();

@@ -102,7 +102,7 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(detail).toBeVisible();
     await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
     await expect(detail.locator(".page-detail-dateline")).toContainText("person · Wenlan");
-    const context = detail.getByRole("complementary", { name: "Entity context", exact: true });
+    const context = detail.getByRole("complementary", { name: "Topic context", exact: true });
     await expect(context).toBeVisible();
     await expect(context.getByText("person", { exact: true })).toBeVisible();
     await expect(context.getByText("Wenlan", { exact: true })).toBeVisible();

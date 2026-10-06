@@ -135,7 +135,7 @@ describe("EntityDetail mutation errors", () => {
     await user.type(screen.getByRole("textbox", { name: "Edit note" }), "{Escape}");
 
     // When an independent entity deletion subsequently fails.
-    await user.click(screen.getByRole("button", { name: "Delete entity" }));
+    await user.click(screen.getByRole("button", { name: "Delete topic" }));
     await user.click(screen.getByRole("button", { name: /^Delete$/ }));
 
     // Then the parent deletion is the only current error owner.
@@ -198,7 +198,7 @@ describe("EntityDetail mutation errors", () => {
     const { onBack, user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Delete entity" }));
+    await user.click(screen.getByRole("button", { name: "Delete topic" }));
     await user.click(screen.getByRole("button", { name: /^Delete$/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
@@ -213,7 +213,7 @@ describe("EntityDetail mutation errors", () => {
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Delete entity" }));
+    await user.click(screen.getByRole("button", { name: "Delete topic" }));
     await user.click(screen.getByRole("button", { name: /^Delete$/ }));
 
     await waitFor(() => expect(deleteEntity).toHaveBeenCalledWith("entity-ada"));

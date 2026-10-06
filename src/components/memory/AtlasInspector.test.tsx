@@ -40,11 +40,11 @@ describe("AtlasInspector", () => {
     renderInspector();
     const summary = screen.getByRole("navigation", { name: "Connections" });
     expect(within(summary).getByRole("button", { name: "Wiki pages 1" })).toBeInTheDocument();
-    expect(within(summary).getByRole("button", { name: "Entities 1" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Topics 1" })).toBeInTheDocument();
     expect(within(summary).getByRole("button", { name: "Memories 1" })).toBeInTheDocument();
     const sections = screen.getAllByRole("region");
     expect(sections.map((section) => within(section).getByRole("heading").textContent?.replace(/\s+\d+$/, ""))).toEqual([
-      "Wiki pages", "Entities", "Memories",
+      "Wiki pages", "Topics", "Memories",
     ]);
     expect(within(sections[0]).getByText("documents")).toBeInTheDocument();
     expect(within(sections[1]).getByText("inspired")).toBeInTheDocument();
@@ -66,7 +66,7 @@ describe("AtlasInspector", () => {
   it("reveals twelve more rows per group", async () => {
     const many = Array.from({ length: 25 }, (_, index) => node(`entity-${index}`, "entity", `Person ${index}`, "person"));
     const { user } = renderInspector({ neighbors: many });
-    const entitySection = screen.getByRole("region", { name: /Entities/ });
+    const entitySection = screen.getByRole("region", { name: /Topics/ });
     expect(within(entitySection).getAllByRole("button")).toHaveLength(13);
     await user.click(within(entitySection).getByRole("button", { name: "Show more" }));
     expect(within(entitySection).getAllByRole("button")).toHaveLength(25);

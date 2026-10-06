@@ -78,7 +78,7 @@ describe("PageDetail entity-guard delete error", () => {
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent("This page belongs to the entity 'Ada Lovelace'");
 
-      const link = screen.getByRole("button", { name: "Open the entity" });
+      const link = screen.getByRole("button", { name: "Open the topic" });
       await user.click(link);
       expect(onEntityClick).toHaveBeenCalledWith("entity-ada");
     } finally {
@@ -99,7 +99,7 @@ describe("PageDetail entity-guard delete error", () => {
 
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent("Could not delete this page. Try again.");
-      expect(screen.queryByRole("button", { name: "Open the entity" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Open the topic" })).toBeNull();
     } finally {
       confirmSpy.mockRestore();
     }

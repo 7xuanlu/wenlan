@@ -488,14 +488,14 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    for (const label of ["Wiki pages", "Entities", "Memories"]) {
+    for (const label of ["Wiki pages", "Topics", "Memories"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
     expect(screen.getByRole("group", { name: "Show in graph" })).toBeInTheDocument();
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     // Alice, Bob and Carol form one community of three, so the toolbar count
     // line reports the entities and the single region (artifact format).
-    expect(screen.getByText("3 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("3 topics · 1 region")).toBeInTheDocument();
   });
 
   it("shows layer and camera explanations on focus without adding chrome", async () => {
@@ -679,14 +679,14 @@ describe("AtlasView", () => {
     const positions = instance.graph.nodes().map((id: string) => [id, instance.graph.getNodeAttribute(id, "x"), instance.graph.getNodeAttribute(id, "y")]);
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
     expect(await screen.findByRole("heading", { name: "Alice" })).toBeInTheDocument();
-    const typesTrigger = screen.getByRole("button", { name: "Filter entity types" });
+    const typesTrigger = screen.getByRole("button", { name: "Filter topic types" });
     fireEvent.click(typesTrigger);
-    fireEvent.keyDown(screen.getByRole("dialog", { name: "Entity types" }), { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Entity types" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Topic types" }), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Topic types" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Alice" })).toBeInTheDocument();
     expect(typesTrigger).toHaveFocus();
     fireEvent.click(typesTrigger);
-    fireEvent.click(screen.getByRole("button", { name: "Theme" }));
+    fireEvent.click(screen.getByRole("button", { name: "Concept" }));
     expect(screen.queryByRole("heading", { name: "Alice" })).not.toBeInTheDocument();
     expect(screen.getByText("No nodes match these type filters.")).toBeInTheDocument();
     expect(instance.settings.nodeReducer!("e1", instance.graph.getNodeAttributes("e1")).hidden).toBe(true);
@@ -707,11 +707,11 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" }));
     expect(await screen.findByRole("button", { name: "Bob" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Filter entity types" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter topic types" }));
     fireEvent.click(screen.getByRole("button", { name: "Person" }));
     expect(screen.queryByRole("button", { name: "Bob" })).not.toBeInTheDocument();
-    fireEvent.focus(screen.getByRole("combobox", { name: "Jump to an entity" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Jump to an entity" }), { target: { value: "Bob" } });
+    fireEvent.focus(screen.getByRole("combobox", { name: "Jump to a topic" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Jump to a topic" }), { target: { value: "Bob" } });
     expect(screen.queryByRole("option", { name: "Bob" })).not.toBeInTheDocument();
     expect(screen.getByText("No matches")).toBeInTheDocument();
   });
@@ -961,7 +961,7 @@ describe("AtlasView", () => {
     // The count line describes what is drawn; the sixth entity is
     // unconnected, so it is reported by the chip beside it rather than
     // counted here.
-    expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("5 topics · 1 region")).toBeInTheDocument();
   });
 
   it("hides a component below MIN_COMPONENT_SIZE and folds it into the small-groups chip", async () => {
@@ -1020,7 +1020,7 @@ describe("AtlasView", () => {
     fireEvent.focus(displayControl("Show small groups"));
     expect(screen.getByRole("tooltip")).toHaveTextContent("2 nodes in small groups hidden");
     fireEvent.blur(displayControl("Show small groups"));
-    expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("5 topics · 1 region")).toBeInTheDocument();
   });
 
   /** A five-node star (the core) plus a two-node group that MIN_COMPONENT_SIZE
@@ -1245,11 +1245,11 @@ describe("AtlasView", () => {
 
     // The small star is its own community in the full model, but while its
     // nodes are hidden nothing draws or names it — so it must not be counted.
-    expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("5 topics · 1 region")).toBeInTheDocument();
 
     fireEvent.click(displayControl("Show small groups"));
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
-    expect(screen.getByText("9 entities · 2 regions")).toBeInTheDocument();
+    expect(screen.getByText("9 topics · 2 regions")).toBeInTheDocument();
   });
 
   it("starts hidden when the stored small-groups choice is malformed", async () => {
@@ -1424,7 +1424,7 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    expect(screen.getByText("6 entities · 2 regions")).toBeInTheDocument();
+    expect(screen.getByText("6 topics · 2 regions")).toBeInTheDocument();
   });
 
   it("reveals a hidden isolate from search before flying the camera to it", async () => {
@@ -1580,13 +1580,13 @@ describe("AtlasView", () => {
     ).toEqual(["All spaces", "personal", "wenlan-dev"]);
     // Only the wenlan-dev star is connected, so the count line reads 5 either
     // way; the scoping is visible in the graph itself and in the hidden chip.
-    expect(screen.getByText("5 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("5 topics · 1 region")).toBeInTheDocument();
     fireEvent.focus(displayControl("Show small groups"));
     expect(screen.getByRole("tooltip")).toHaveTextContent("1 node in small groups hidden");
     fireEvent.blur(displayControl("Show small groups"));
 
     fireEvent.click(screen.getByRole("option", { name: "wenlan-dev" }));
-    expect(await screen.findByText("5 entities · 1 region")).toBeInTheDocument();
+    expect(await screen.findByText("5 topics · 1 region")).toBeInTheDocument();
     expect(screen.queryByText("1 node in small groups hidden")).not.toBeInTheDocument();
 
     fireEvent.click(select);
@@ -2249,7 +2249,7 @@ describe("AtlasView", () => {
     expect(graph.getNodeAttribute("mem:m1", "size")).toBeLessThan(
       graph.getNodeAttribute("e1", "size") as number,
     );
-    expect(screen.getByText("3 entities · 1 memory · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("3 topics · 1 memory · 1 region")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Memories" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -2364,7 +2364,7 @@ describe("AtlasView", () => {
     // the two pages that cite it are joined directly instead.
     expect(graph.hasNode("mem:m1")).toBe(false);
     expect(graph.hasEdge("page:p1", "page:p2")).toBe(true);
-    expect(screen.getByText("2 pages · 3 entities · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("2 pages · 3 topics · 1 region")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Wiki pages" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -2375,7 +2375,7 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
     const pages = displayControl("Wiki pages");
-    const entities = displayControl("Entities");
+    const entities = displayControl("Topics");
     const memories = displayControl("Memories");
     expect(pages).toHaveAttribute("aria-pressed", "true");
     expect(entities).toHaveAttribute("aria-pressed", "true");
@@ -2396,9 +2396,9 @@ describe("AtlasView", () => {
     const rebuilt = capturedSigmaInstances[capturedSigmaInstances.length - 1];
     expect(rebuilt.camera.setState.mock.calls.some(([state]: [{ x?: number; y?: number }]) =>
       Number.isFinite(state.x) && Number.isFinite(state.y))).toBe(true);
-    expect(screen.getByText("2 pages · 3 entities · 1 memory · 1 region")).toBeInTheDocument();
+    expect(screen.getByText("2 pages · 3 topics · 1 memory · 1 region")).toBeInTheDocument();
 
-    fireEvent.click(displayControl("Entities"));
+    fireEvent.click(displayControl("Topics"));
     await waitFor(() => {
       const graph = capturedSigmaInstances[capturedSigmaInstances.length - 1].graph;
       expect(graph.hasNode("e1")).toBe(false);
@@ -2412,7 +2412,7 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    fireEvent.click(displayControl("Entities"));
+    fireEvent.click(displayControl("Topics"));
     const pages = displayControl("Wiki pages");
     // Pages are now the only lit layer: the chip stays pressed and stops
     // taking clicks, because an empty map is not a view.

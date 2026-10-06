@@ -188,7 +188,6 @@ test("a concurrent first save preserves the winning excerpt until explicit repla
   expect(state.errors.consoleErrors).toEqual([]);
 });
 
-
 test("navigation destinations keep one primary workspace and restore note context", async ({ page }) => {
   const state = await setup(page);
   const sidebar = page.locator(".notes-workspace-sidebar");
@@ -237,6 +236,32 @@ test("navigation destinations keep one primary workspace and restore note contex
   await page.locator("[data-sidebar-toggle]").click();
   await expect(notes.getByRole("searchbox")).toHaveValue("History");
   await expect(sidebar).toHaveCSS("width", "264px");
+  expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
+});
+
+
+test("occasional people and topics stay in More on a narrow dark workspace", async ({ page }) => {
+  const state = await setup(page, false, true);
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator("[data-sidebar-toggle]").click();
+  const nav = page.getByRole("navigation", { name: "主要導覽", exact: true });
+  await expect(nav.getByRole("button", { name: "來源", exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("button", { name: "圖譜", exact: true })).toBeVisible();
+  await expect(nav.getByRole("button", { name: "空間", exact: true })).toBeVisible();
+  await expect(nav.getByRole("button", { name: "主題", exact: true })).toHaveCount(0);
+  await nav.getByRole("button", { name: "更多", exact: true }).click();
+  await expect(nav.getByRole("button", { name: "主題", exact: true })).toBeVisible();
+  await capture(page, "navigation-more-dark-narrow.png");
+  await nav.getByRole("button", { name: "主題", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "主題", exact: true })).toBeVisible();
+  await expect(page.getByText("瀏覽筆記中提到的人物、組織、地點與主題。", { exact: true })).toBeVisible();
+  await expect(page.getByText("Ada Lovelace", { exact: true })).toBeVisible();
+  await capture(page, "people-topics-dark-narrow.png");
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "48px");
+  await expect(nav.getByRole("button", { name: "Wiki", exact: true })).toBeVisible();
+  await capture(page, "people-topics-dark.png");
   expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
 });
 

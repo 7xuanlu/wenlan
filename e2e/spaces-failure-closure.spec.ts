@@ -89,7 +89,7 @@ test("turns a non-Error Spaces rejection into a recoverable inline failure", asy
   expect(errors.consoleErrors).toEqual([]);
 });
 
-test("retries Entity load, retains a failed observation draft, and retries two-step deletion", async ({ page }) => {
+test("retries Topic load, retains a failed observation draft, and retries two-step deletion", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
@@ -97,7 +97,7 @@ test("retries Entity load, retains a failed observation draft, and retries two-s
 
   controller.failNext("get_entity_detail_cmd", "entity offline");
   await openSpaceEntity(page, "Ada Lovelace");
-  await expect(page.getByText("Couldn't load this entity.")).toBeVisible();
+  await expect(page.getByText("Couldn't load this topic.")).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
 
@@ -111,7 +111,7 @@ test("retries Entity load, retains a failed observation draft, and retries two-s
   await page.getByRole("textbox", { name: "Edit note" }).press("Escape");
 
   controller.failNext("delete_entity_cmd", "delete failed");
-  await page.getByRole("button", { name: "Delete entity" }).click();
+  await page.getByRole("button", { name: "Delete topic" }).click();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Couldn't save. Try again.");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
