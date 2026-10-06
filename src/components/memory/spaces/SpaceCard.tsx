@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Space } from "../../../lib/tauri";
-import { formatLocaleDate } from "../../../lib/dateFormat";
 import { AssetCard } from "../assets/AssetCard";
 import { SpaceMark } from "../navigation/SpaceMark";
 import { SpaceActionsMenu } from "./SpaceActionsMenu";
@@ -25,12 +24,9 @@ type SpaceCardProps = {
 };
 
 export function SpaceCard(props: SpaceCardProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const updated = props.space.updated_at > 0
-    ? formatLocaleDate(new Date(props.space.updated_at * 1000), i18n.language)
-    : { label: "—" };
 
   if (renaming) {
     return (
@@ -61,10 +57,7 @@ export function SpaceCard(props: SpaceCardProps) {
         <>
           <span className="space-card-counts">
             <span data-testid="space-card-pages">{t("spaces.overview.card.pages", { count: props.pageCount })}</span>
-            <span data-testid="space-card-memories">{t("spaces.overview.card.memories", { count: props.space.memory_count })}</span>
-            <span data-testid="space-card-entities">{t("spaces.overview.card.entities", { count: props.space.entity_count })}</span>
           </span>
-          <time data-testid="space-card-updated" dateTime={updated.dateTime}>{updated.label}</time>
         </>
       )}
       onOpen={() => props.onSelect(props.space.name)}

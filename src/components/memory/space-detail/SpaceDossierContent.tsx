@@ -1,14 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Entity, Page } from "../../../lib/tauri";
 import type { SpaceDetailCopy } from "./copy";
 import {
   KEY_ENTITY_LIMIT,
-  formatLocalCalendarDate,
+  PAGE_DISPLAY_STEP,
+  PAGE_FETCH_LIMIT,
+  pageCountLabel,
   pagesNeedingReview,
-  recentlyRefinedPages,
   reviewReasonName,
   sortedKeyEntities,
+  sortedSpacePages,
 } from "./model";
 
 type SpaceDossierNavigation = {
@@ -20,7 +23,6 @@ type SpaceDossierNavigation = {
 type SpaceDossierContentProps = {
   readonly copy: SpaceDetailCopy;
   readonly entities: readonly Entity[];
-  readonly locale: string;
   readonly navigation: SpaceDossierNavigation;
   readonly pages: readonly Page[];
 };
@@ -33,93 +35,90 @@ function PageIcon() {
   );
 }
 
-export function SpaceDossierContent({
-  copy,
-  entities,
-  locale,
-  navigation,
-  pages,
-}: SpaceDossierContentProps) {
+export function SpaceDossierContent({ copy, entities, navigation, pages }: SpaceDossierContentProps) {
+  const { t, i18n } = useTranslation();
+  const [visiblePageCount, setVisiblePageCount] = useState(PAGE_DISPLAY_STEP);
   const [showAllEntities, setShowAllEntities] = useState(false);
-  const recentPages = recentlyRefinedPages(pages);
-  const reviewPages = pagesNeedingReview(pages);
-  const keyEntities = sortedKeyEntities(entities);
-  const visibleEntities = showAllEntities
-    ? keyEntities
-    : keyEntities.slice(0, KEY_ENTITY_LIMIT);
+  const sortedPages = useMemo(() => sortedSpacePages(pages), [pages]);
+  const reviewPages = useMemo(() => pagesNeedingReview(pages), [pages]);
+  const keyEntities = useMemo(() => sortedKeyEntities(entities), [entities]);
+  const visiblePages = sortedPages.slice(0, visiblePageCount);
+  const visibleEntities = showAllEntities ? keyEntities : keyEntities.slice(0, KEY_ENTITY_LIMIT);
 
   return (
-    <div className="space-dossier-grid">
-      <section aria-label={copy.recentlyRefined} className="space-dossier-recent">
-        <h2>{copy.recentlyRefined}</h2>
-        {recentPages.length === 0 ? (
+    <div className="space-dossier-content">
+      <section aria-label={copy.metrics.pages} className="space-dossier-pages">
+        <h2>{copy.metrics.pages}</h2>
+        {sortedPages.length === 0 ? (
           <p className="space-dossier-empty">{copy.noPages}</p>
         ) : (
           <div className="space-dossier-page-list">
-            {recentPages.map((page) => {
-              const timestamp = Date.parse(page.last_modified);
-              return (
-                <button key={page.id} onClick={() => navigation.onSelectPage(page.id)} type="button">
-                  <PageIcon />
-                  <span className="space-dossier-page-title">{page.title}</span>
-                  <span className="space-dossier-page-meta">
-                    <span>{copy.sourceCount(page.source_memory_ids.length)}</span>
-                    <time dateTime={page.last_modified}>{formatLocalCalendarDate(timestamp, locale)}</time>
-                  </span>
-                </button>
-              );
-            })}
+            {visiblePages.map((page) => (
+              <button key={page.id} onClick={() => navigation.onSelectPage(page.id)} type="button">
+                <PageIcon />
+                <span className="space-dossier-page-text">
+                  <span className="space-dossier-page-title">{page.title}</span>{" "}
+                  {page.summary?.trim() && <span className="space-dossier-page-summary">{page.summary}</span>}
+                </span>
+              </button>
+            ))}
           </div>
+        )}
+        {visiblePageCount < sortedPages.length && (
+          <button className="space-dossier-text-action" onClick={() => setVisiblePageCount((current) => current + PAGE_DISPLAY_STEP)} type="button">
+            {t("spaceDetail.showMore")}
+          </button>
+        )}
+        {pages.length >= PAGE_FETCH_LIMIT && (
+          <p className="space-dossier-empty" role="status">
+            {t("spaceDetail.pageLimit", { count: pageCountLabel(pages.length, i18n.language), limit: new Intl.NumberFormat(i18n.language).format(PAGE_FETCH_LIMIT) })}
+          </p>
         )}
       </section>
 
-      <aside className="space-dossier-rail">
-        <section aria-label={copy.needsReview} className="space-dossier-review">
-          <h2>{copy.needsReview}</h2>
-          {reviewPages.length === 0 ? (
-            <p className="space-dossier-empty">{copy.noReview}</p>
-          ) : (
-            <div className="space-dossier-review-list">
-              {reviewPages.map((page) => (
-                <button key={page.id} onClick={() => navigation.onSelectPage(page.id)} type="button">
-                  <PageIcon />
-                  <span>{page.title}</span>
-                  <small>{copy.reasons[reviewReasonName(page)]}</small>
-                </button>
-              ))}
-            </div>
-          )}
-          <button
-            className="space-dossier-text-action space-dossier-text-action-review"
-            onClick={navigation.onReviewAll}
-            type="button"
-          >
-            {copy.reviewAll}
-          </button>
+      <div className="space-dossier-secondary">
+        <section aria-label={copy.keyEntities} className="space-dossier-entities">
+          <details className="space-dossier-disclosure">
+            <summary>{copy.keyEntities}</summary>
+            {visibleEntities.length === 0 ? (
+              <p className="space-dossier-empty">{copy.noEntities}</p>
+            ) : (
+              <div className="space-dossier-entity-list">
+                {visibleEntities.map((entity) => (
+                  <button key={entity.id} onClick={() => navigation.onEntityClick(entity.id)} type="button">{entity.name}</button>
+                ))}
+              </div>
+            )}
+            {keyEntities.length > KEY_ENTITY_LIMIT && (
+              <button className="space-dossier-text-action" onClick={() => setShowAllEntities((current) => !current)} type="button">
+                {showAllEntities ? copy.showLess : copy.viewAllEntities(keyEntities.length)}
+              </button>
+            )}
+          </details>
         </section>
 
-        <section aria-label={copy.keyEntities} className="space-dossier-entities">
-          <h2>{copy.keyEntities}</h2>
-          {visibleEntities.length === 0 ? (
-            <p className="space-dossier-empty">{copy.noEntities}</p>
-          ) : (
-            <div className="space-dossier-entity-list">
-              {visibleEntities.map((entity) => (
-                <button key={entity.id} onClick={() => navigation.onEntityClick(entity.id)} type="button">
-                  {entity.name}
-                </button>
-              ))}
-            </div>
-          )}
-          {keyEntities.length > KEY_ENTITY_LIMIT && (
-            <button className="space-dossier-text-action" onClick={() => setShowAllEntities((current) => !current)} type="button">
-              {showAllEntities
-                ? copy.showLess
-                : copy.viewAllEntities(keyEntities.length)}
-            </button>
-          )}
+        <section aria-label={copy.needsReview} className="space-dossier-review">
+          <details className="space-dossier-disclosure">
+            <summary>{copy.needsReview}</summary>
+            {reviewPages.length === 0 ? (
+              <p className="space-dossier-empty">{copy.noReview}</p>
+            ) : (
+              <div className="space-dossier-review-list">
+                {reviewPages.map((page) => (
+                  <button key={page.id} onClick={() => navigation.onSelectPage(page.id)} type="button">
+                    <PageIcon />
+                    <span>{page.title}</span>
+                    <small>{copy.reasons[reviewReasonName(page)]}</small>
+                  </button>
+                ))}
+              </div>
+            )}
+            {navigation.onReviewAll && (
+              <button className="space-dossier-text-action space-dossier-text-action-review" onClick={navigation.onReviewAll} type="button">{copy.reviewAll}</button>
+            )}
+          </details>
         </section>
-      </aside>
+      </div>
     </div>
   );
 }

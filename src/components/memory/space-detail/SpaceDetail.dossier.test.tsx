@@ -84,42 +84,38 @@ describe("SpaceDetail editorial dossier", () => {
     expect(screen.queryByRole("dialog", { name: "New page" })).not.toBeInTheDocument();
   });
 
-  it("loads the full active page cap and renders exact quiet metrics", async () => {
-    const pages = Array.from({ length: 1_000 }, (_, index) =>
+  it("loads the active page cap with a notice and starts with 20 pages", async () => {
+    vi.mocked(listPages).mockResolvedValue(Array.from({ length: 1_000 }, (_, index) =>
       makePage(`p${index}`, `Page ${String(index).padStart(4, "0")}`, "2026-07-09T20:00:00Z"),
-    );
-    vi.mocked(listPages).mockResolvedValue(pages);
+    ));
     renderDetail();
-
-    expect(await screen.findByRole("heading", { level: 1, name: "Wenlan" })).toBeInTheDocument();
+    await screen.findByRole("heading", { level: 1, name: "Wenlan" });
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    expect(screen.getByText("1,000+")).toBeInTheDocument();
-    expect(screen.getAllByText("250")).not.toHaveLength(0);
-    expect(screen.getByText("8")).toBeInTheDocument();
-    expect(screen.getAllByText("Jul 9, 2026")).not.toHaveLength(0);
+    expect(screen.getByRole("status")).toHaveTextContent("1,000+ pages in this space. Only the first 1,000 are loaded here.");
+    const region = screen.getByRole("region", { name: "Pages" });
+    expect(region.querySelectorAll(".space-dossier-page-list > button")).toHaveLength(20);
+    fireEvent.click(within(region).getByRole("button", { name: "Show more" }));
+    expect(region.querySelectorAll(".space-dossier-page-list > button")).toHaveLength(40);
+    expect(document.querySelector(".space-dossier-metrics")).toBeNull();
     expect(listPages).toHaveBeenCalledWith("active", "Wenlan", 1_000);
-
-    const css = readFileSync(resolve("src/components/memory/space-detail/space-detail-header.css"), "utf8");
-    expect(css).toMatch(/\.space-dossier-metrics dd\s*\{[^}]*font:\s*15px var\(--mem-font-mono\)[^}]*font-variant-numeric:\s*tabular-nums/s);
-    expect(css).toMatch(/\.space-dossier-metrics dt\s*\{[^}]*font:\s*11px var\(--mem-font-mono\)/s);
   });
 
-  it("puts each quiet metric label before its value", async () => {
-    renderDetail();
-
-    await screen.findByRole("heading", { level: 1, name: "Wenlan" });
-    const metrics = document.querySelector(".space-dossier-metrics");
-    expect(metrics).not.toBeNull();
-    expect(
-      Array.from(metrics?.children ?? []).map((metric) =>
-        Array.from(metric.children).map((child) => child.tagName),
-      ),
-    ).toEqual([
-      ["DT", "DD"],
-      ["DT", "DD"],
-      ["DT", "DD"],
-      ["DT", "DD"],
-    ]);
+  it("makes every loaded page reachable through modest show-more steps", async () => {
+    vi.mocked(listPages).mockResolvedValue(Array.from({ length: 45 }, (_, index) =>
+      makePage(`p${index}`, `Page ${String(index).padStart(2, "0")}`, index === 44 ? "" : "2026-07-09T20:00:00Z"),
+    ));
+    const onSelectPage = vi.fn();
+    renderDetail({ onSelectPage });
+    const region = await screen.findByRole("region", { name: "Pages" });
+    expect(region.querySelectorAll(".space-dossier-page-list > button")).toHaveLength(20);
+    fireEvent.click(within(region).getByRole("button", { name: "Show more" }));
+    expect(region.querySelectorAll(".space-dossier-page-list > button")).toHaveLength(40);
+    fireEvent.click(within(region).getByRole("button", { name: "Show more" }));
+    expect(region.querySelectorAll(".space-dossier-page-list > button")).toHaveLength(45);
+    expect(within(region).queryByRole("button", { name: "Show more" })).not.toBeInTheDocument();
+    fireEvent.click(within(region).getByRole("button", { name: "Page 44 Page 44 summary" }));
+    expect(onSelectPage).toHaveBeenCalledWith("p44");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("uses compact tonal actions for a suggested Space", async () => {
@@ -137,7 +133,7 @@ describe("SpaceDetail editorial dossier", () => {
     expect(css).toMatch(/\.space-dossier-suggestion-keep:hover\s*\{[^}]*background:\s*var\(--mem-indigo-bg\)/s);
   });
 
-  it("orders and caps recently refined pages with a stable title tie-break", async () => {
+  it("sorts all pages with a stable title tie-break and keeps undated pages", async () => {
     vi.mocked(listPages).mockResolvedValue([
       makePage("old", "Old", "2026-07-01T00:00:00Z"),
       makePage("b", "Beta", "2026-07-10T00:00:00Z"),
@@ -150,20 +146,22 @@ describe("SpaceDetail editorial dossier", () => {
     const onSelectPage = vi.fn();
     renderDetail({ onSelectPage });
 
-    const region = await screen.findByRole("region", { name: "Recently refined" });
+    const region = await screen.findByRole("region", { name: "Pages" });
     const rows = within(region).getAllByRole("button");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Alpha"), expect.stringContaining("Beta"),
       expect.stringContaining("Charlie"), expect.stringContaining("Delta"),
-      expect.stringContaining("Echo"),
+      expect.stringContaining("Echo"), expect.stringContaining("Old"), expect.stringContaining("Invalid"),
     ]);
-    expect(region).not.toHaveTextContent("Invalid");
+    expect(region).toHaveTextContent("Invalid summary");
+    expect(region.querySelector("time")).toBeNull();
+    expect(region).not.toHaveTextContent("source");
     expect(document.body).not.toHaveTextContent("NaN");
     fireEvent.click(rows[0]);
     expect(onSelectPage).toHaveBeenCalledWith("a");
   });
 
-  it("prioritizes three review pages and opens the global review queue", async () => {
+  it("keeps review closed by default, then shows genuine reasons and opens the review queue", async () => {
     vi.mocked(listPages).mockResolvedValue([
       makePage("u1", "Updated first", "2026-07-10T00:00:00Z", "source_updated"),
       makePage("c1", "Conflict old", "2026-07-01T00:00:00Z", "source_conflict"),
@@ -175,12 +173,17 @@ describe("SpaceDetail editorial dossier", () => {
     renderDetail({ onReviewAll });
 
     const region = await screen.findByRole("region", { name: "Needs review" });
+    expect(region.querySelector("details")).not.toHaveAttribute("open");
+    for (const button of within(region).getAllByRole("button")) expect(button).not.toBeVisible();
+    fireEvent.click(within(region).getByText("Needs review", { selector: "summary" }));
     const rows = within(region).getAllByRole("button");
     expect(rows.slice(0, 3).map((row) => row.textContent)).toEqual([
       expect.stringContaining("Conflict new"), expect.stringContaining("Conflict old"),
       expect.stringContaining("Updated first"),
     ]);
     expect(region).not.toHaveTextContent("Blank");
+    expect(within(region).getAllByText("Source conflict")).toHaveLength(2);
+    expect(within(region).getAllByText("New sources waiting")).toHaveLength(2);
     const reviewAll = within(region).getByRole("button", { name: "Review all" });
     expect(reviewAll).toHaveClass("space-dossier-text-action", "space-dossier-text-action-review");
     fireEvent.click(reviewAll);
@@ -203,6 +206,8 @@ describe("SpaceDetail editorial dossier", () => {
     renderDetail();
 
     const region = await screen.findByRole("region", { name: "Key entities" });
+    expect(region.querySelector("details")).not.toHaveAttribute("open");
+    fireEvent.click(within(region).getByText("Key entities", { selector: "summary" }));
     expect(within(region).queryByRole("button", { name: "Foxtrot" })).not.toBeInTheDocument();
     const viewAll = within(region).getByRole("button", { name: "View all 8" });
     expect(viewAll).toHaveClass("space-dossier-text-action");
@@ -219,22 +224,33 @@ describe("SpaceDetail editorial dossier", () => {
     renderDetail();
 
     const region = await screen.findByRole("region", { name: "Raw memories" });
-    expect(region).toHaveTextContent("Showing the latest 200 of 250 memories");
+    expect(region).not.toHaveTextContent("Showing the latest 200 of 250 memories");
+    expect(region.querySelector("small")).toBeNull();
     expect(within(region).queryByText("Latest raw memory")).not.toBeInTheDocument();
     fireEvent.click(within(region).getByRole("button", { name: "Raw memories (250)" }));
+    expect(region).toHaveTextContent("Showing the latest 200 of 250 memories");
     expect(await within(region).findByText("Latest raw memory")).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: "Curated" })).toBeInTheDocument();
   }, 15_000);
 
-  it("places the archive after the two-column dossier content", async () => {
+  it("places closed supplementary sections and archive after the primary page list", async () => {
     renderDetail();
-    const recent = await screen.findByRole("region", { name: "Recently refined" });
+    const recent = await screen.findByRole("region", { name: "Pages" });
     const review = screen.getByRole("region", { name: "Needs review" });
     const entities = screen.getByRole("region", { name: "Key entities" });
     const archive = screen.getByRole("region", { name: "Raw memories" });
-    expect(recent.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(review.compareDocumentPosition(entities) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(entities.compareDocumentPosition(archive) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(document.querySelector(".space-dossier-grid")).toBeInTheDocument();
+    expect(recent.compareDocumentPosition(entities) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(entities.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(review.compareDocumentPosition(archive) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(entities.querySelector("details")).not.toHaveAttribute("open");
+    expect(review.querySelector("details")).not.toHaveAttribute("open");
+    expect(document.querySelector(".space-dossier-rail")).toBeNull();
   });
+  it("omits the review action when no callback is available", async () => {
+    renderDetail({ onReviewAll: undefined });
+    const region = await screen.findByRole("region", { name: "Needs review" });
+    fireEvent.click(within(region).getByText("Needs review", { selector: "summary" }));
+    expect(within(region).queryByRole("button", { name: "Review all" })).not.toBeInTheDocument();
+  });
+
 });

@@ -198,7 +198,7 @@ test("has no page-level horizontal overflow across all responsive surfaces", asy
     await openSpaces(page);
     await assertNoPageOverflow(page);
     await spaceOverviewButton(page).click();
-    await expect(page.locator(".space-dossier-grid")).toBeVisible();
+    await expect(page.locator(".space-dossier-content")).toBeVisible();
     await assertNoPageOverflow(page);
     await openSpaceEntity(page, "Ada Lovelace");
     await expect(page.locator(".entity-detail-dossier")).toBeVisible();
@@ -224,7 +224,7 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await expect(suggestionPopover).toBeVisible();
   const suggested = page.getByTestId("space-row-space-suggested");
   await expect(suggested).toBeVisible();
-  const count = page.getByTestId("space-row-space-wenlan").locator(".spaces-row-count");
+  const count = page.getByTestId("space-row-space-wenlan").locator(".spaces-row-pages");
   expect((await suggested.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(2);
   // Suggestion cards are constrained by the disclosure popover: the row stays
   // inside the popover and the popover stays inside the viewport.
@@ -247,7 +247,8 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   const mobileMetadata = page.getByTestId("space-row-space-wenlan").getByTestId("space-mobile-metadata");
   await expect(mobileMetadata).toBeVisible();
   await expect(mobileMetadata.getByText("Pages", { exact: true })).toBeVisible();
-  await expect(mobileMetadata.getByText("Memories", { exact: true })).toBeVisible();
+  await expect(mobileMetadata.getByText("Memories", { exact: true })).toHaveCount(0);
+  await expect(mobileMetadata.getByText("Updated", { exact: true })).toHaveCount(0);
   await expect(page.locator("main")).toHaveCSS("padding-left", "32px");
   await page.setViewportSize({ width: 639, height: 900 });
   await expect(page.locator("main")).toHaveCSS("padding-left", "20px");
@@ -255,8 +256,9 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await page.setViewportSize({ width: 900, height: 900 });
   await expect(page.locator("main")).toHaveCSS("padding-left", "72px");
   await spaceOverviewButton(page).click();
-  const dossierGrid = page.locator(".space-dossier-grid");
-  expect((await dossierGrid.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(2);
+  const dossierGrid = page.locator(".space-dossier-content");
+  await expect(dossierGrid).toHaveCSS("display", "flex");
+  await expect(dossierGrid).toHaveCSS("flex-direction", "column");
   await page.setViewportSize({ width: 899, height: 900 });
   await openSidebar(page);
   const primaryNavigation = page.getByRole("navigation", { name: "Primary navigation" });
@@ -266,7 +268,7 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
   await expect(primaryNavigation.getByRole("button", { name: "Spaces", exact: true })).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
-  expect((await dossierGrid.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
+  await expect(dossierGrid).toHaveCSS("flex-direction", "column");
   await assertNoPageOverflow(page);
   await page.keyboard.press("Escape");
   await expect(page.locator("aside.memory-sidebar")).toHaveAttribute("aria-hidden", "true");
@@ -281,16 +283,21 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
   for (const theme of ["light", "dark"] as const) {
     await page.evaluate((value) => document.documentElement.setAttribute("data-theme", value), theme);
     await openSpaces(page);
+    await page.getByLabel("Filter spaces").focus();
+    results.push(...await renderedContrast(page, [
+      { label: `${theme} spaces search focus`, selector: ".spaces-filter input", foregroundProperty: "outline-color", minimum: 3 },
+    ]));
     await page.getByRole("button", { name: "Actions for Wenlan" }).click();
     results.push(...await renderedContrast(page, [
-      { label: `${theme} spaces metadata`, selector: ".spaces-row-updated", foregroundProperty: "color", minimum: 4.5 },
-      { label: `${theme} spaces filter boundary`, selector: ".spaces-filter input", foregroundProperty: "border-top-color", minimum: 3 },
+      { label: `${theme} spaces page count`, selector: ".spaces-row-pages", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} spaces search text`, selector: ".spaces-filter input", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} spaces menu boundary`, selector: ".spaces-menu", foregroundProperty: "border-top-color", minimum: 3 },
       { label: `${theme} filled New Space text`, selector: ".spaces-new-action", foregroundProperty: "color", minimum: 4.5 },
     ]));
     await page.keyboard.press("Escape");
 
     await spaceOverviewButton(page).click();
+    await page.locator(".space-dossier-entities summary").click();
     await page.getByRole("button", { name: "Edit space" }).click();
     results.push(...await renderedContrast(page, [
       { label: `${theme} space title editor boundary`, selector: ".space-dossier-title-input", foregroundProperty: "border-bottom-color", minimum: 3 },
@@ -516,7 +523,7 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   await expect(zoomSpaceHeadingLocator).toHaveCount(1);
   await assertNotClipped(zoomSpaceHeadingLocator);
   const zoomSpaceHeading = await physicalTextMetric(zoomSpaceHeadingLocator);
-  expect((await zoomPage.locator(".space-dossier-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
+  await expect(zoomPage.locator(".space-dossier-content")).toHaveCSS("flex-direction", "column");
   await assertNoPageOverflow(zoomPage);
   const spaceZoomPath = path.join(evidenceDir, "space-zh-Hant-zoom-200.png");
   await zoomPage.screenshot({ path: spaceZoomPath, fullPage: false });

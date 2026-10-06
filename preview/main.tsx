@@ -280,7 +280,6 @@ function Harness() {
             collapsed={false}
             active={section}
             onSelect={setSection}
-            onNavigateHome={() => console.log("[preview] onNavigateHome")}
           />
           <div style={{ flex: 1, overflowY: "auto", padding: "24px 16px" }}>
             <SettingsPage

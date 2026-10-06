@@ -122,7 +122,7 @@ describe("SpaceDetail context header", () => {
     );
 
     // Wait for component to load
-    await screen.findByText("Memories");
+    await screen.findByRole("heading", { name: "Origin" });
     // Context section should not exist
     expect(screen.queryByText("Context")).not.toBeInTheDocument();
   });
@@ -155,7 +155,7 @@ describe("SpaceDetail context header", () => {
     expect(mockUpdateSpace).toHaveBeenCalledTimes(1);
   });
 
-  it("shows memory count", async () => {
+  it("keeps memory counts out of the header", async () => {
     renderWithQuery(
       <SpaceDetail
         spaceName="Origin"
@@ -166,12 +166,12 @@ describe("SpaceDetail context header", () => {
       />,
     );
 
-    expect(
-      await screen.findByText("Memories"),
-    ).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Origin" });
+    expect(document.querySelector(".space-dossier-metrics")).toBeNull();
+    expect(screen.getByRole("button", { name: "Raw memories (47)" })).not.toHaveTextContent("47");
   });
 
-  it("shows entity count when present", async () => {
+  it("keeps topic counts out of the header", async () => {
     renderWithQuery(
       <SpaceDetail
         spaceName="Origin"
@@ -182,9 +182,9 @@ describe("SpaceDetail context header", () => {
       />,
     );
 
-    expect(
-      await screen.findByText("Entities"),
-    ).toBeInTheDocument();
+    await screen.findByRole("heading", { name: "Origin" });
+    expect(screen.queryByText("Entities")).not.toBeInTheDocument();
+    expect(document.querySelector(".space-dossier-metrics")).toBeNull();
   });
 
   it("keeps expanded memories in the embedded stream presentation", async () => {

@@ -214,6 +214,7 @@ describe("SpaceDetail existing behavior", () => {
     const onEntityClick = vi.fn();
     renderDetail({ onEntityClick });
 
+    fireEvent.click(await screen.findByText("Key entities"));
     fireEvent.click(await screen.findByRole("button", { name: "Lucian" }));
 
     expect(onEntityClick).toHaveBeenCalledWith("e1");

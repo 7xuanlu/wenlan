@@ -111,14 +111,12 @@ interface SettingsSidebarProps {
   collapsed: boolean;
   active: SettingsSection;
   onSelect: (section: SettingsSection) => void;
-  onNavigateHome: () => void;
 }
 
 export default function SettingsSidebar({
   collapsed,
   active,
   onSelect,
-  onNavigateHome,
 }: SettingsSidebarProps) {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>("");
@@ -143,36 +141,8 @@ export default function SettingsSidebar({
           pointerEvents: collapsed ? "none" : "auto",
         }}
       >
-        <div className="px-2 pt-3 pb-3">
-          <button
-            onClick={onNavigateHome}
-            className="flex items-center gap-3 px-3 py-2 rounded-md transition-colors duration-150 text-left hover:bg-[var(--mem-hover)] w-full"
-            style={{
-              border: "none",
-              background: "transparent",
-              color: "var(--mem-text-secondary)",
-              cursor: "pointer",
-            }}
-          >
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--mem-text-tertiary)" }}>
-              <path d="M3 10.5L12 3l9 7.5" />
-              <path d="M5 9.5V21h14V9.5" />
-              <path d="M9.5 21v-6h5v6" />
-            </svg>
-            <span
-              style={{
-                fontFamily: "var(--mem-font-body)",
-                fontSize: "var(--mem-text-base)",
-                fontWeight: 400,
-              }}
-            >
-              {t("settings.home")}
-            </span>
-          </button>
-        </div>
-
         {/* Section caption */}
-        <div className="px-4 pb-2">
+        <div className="px-4 pt-4 pb-2">
           <span
             style={{
               fontFamily: "var(--mem-font-mono)",
@@ -254,24 +224,17 @@ export default function SettingsSidebar({
           style={{ borderTop: "1px solid var(--mem-border)" }}
         >
           <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={onNavigateHome}
-              className="rounded-sm transition-colors duration-150 hover:text-[var(--mem-text-secondary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--mem-accent-sage)]"
+            <span
               style={{
-                border: "none",
-                background: "transparent",
                 color: "var(--mem-text-tertiary)",
-                cursor: "pointer",
                 fontFamily: "var(--mem-font-body)",
                 fontSize: "var(--mem-text-xs)",
                 fontWeight: 600,
                 lineHeight: 1,
-                padding: 0,
               }}
             >
               Wenlan
-            </button>
+            </span>
             {appVersion && (
               <span
                 style={{

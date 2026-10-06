@@ -97,7 +97,6 @@ function renderSettingsScreen() {
           collapsed={false}
           active="general"
           onSelect={() => {}}
-          onNavigateHome={() => {}}
         />
         <SettingsPage section="general" onBack={() => {}} onImport={() => {}} />
       </div>

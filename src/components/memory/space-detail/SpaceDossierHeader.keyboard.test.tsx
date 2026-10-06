@@ -33,9 +33,7 @@ function renderHeader(mutationError = false) {
       actions={actions}
       copy={SPACE_DETAIL_TEST_COPY}
       mutationError={mutationError}
-      pageCount="4"
       space={space}
-      updatedLabel="Jul 10, 2026"
     />,
   );
   return {
@@ -46,9 +44,7 @@ function renderHeader(mutationError = false) {
         actions={actions}
         copy={SPACE_DETAIL_TEST_COPY}
         mutationError={nextMutationError}
-        pageCount="4"
         space={space}
-        updatedLabel="Jul 10, 2026"
       />,
     ),
   };

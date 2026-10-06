@@ -11,7 +11,7 @@
   justify-content: space-between;
   gap: 16px;
   padding-bottom: 24px;
-  border-bottom: 1px solid var(--mem-border);
+  border-bottom: 0;
 }
 
 .spaces-overview h1 {
@@ -74,7 +74,7 @@
   gap: 12px;
   margin-top: 20px;
   padding: 16px 0 20px;
-  border-bottom: 1px solid var(--mem-border);
+  border-bottom: 0;
 }
 
 .spaces-editor-actions,
@@ -139,7 +139,7 @@
 }
 
 .spaces-rows {
-  border-top: 1px solid var(--mem-border);
+  border-top: 0;
 }
 
 .spaces-row {
@@ -148,7 +148,7 @@
   grid-template-columns: 24px minmax(0, 1fr) 56px 40px;
   align-items: center;
   min-height: 64px;
-  border-bottom: 1px solid var(--mem-border);
+  border-bottom: 0;
 }
 
 .spaces-row-suggested {
