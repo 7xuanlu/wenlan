@@ -56,11 +56,11 @@ describe("AtlasTypeFilters", () => {
     const user = userEvent.setup();
     render(<StatefulFilter />);
 
-    const trigger = screen.getByRole("button", { name: "Filter entity types" });
-    expect(trigger).toHaveTextContent("Filter entities");
+    const trigger = screen.getByRole("button", { name: "Filter topic types" });
+    expect(trigger).toHaveTextContent("Filter topics");
     await user.click(trigger);
 
-    const panel = screen.getByRole("dialog", { name: "Entity types" });
+    const panel = screen.getByRole("dialog", { name: "Topic types" });
     expect(panel).toHaveTextContent("Showing 3 of 3 types");
     expect(within(panel).getByRole("button", { name: "Theme" })).toBeVisible();
     expect(panel.textContent).not.toMatch(/[✓✔]/);
@@ -71,33 +71,33 @@ describe("AtlasTypeFilters", () => {
   it("toggles immediately while the panel stays open and reports filtered counts", async () => {
     const user = userEvent.setup();
     render(<StatefulFilter />);
-    const trigger = screen.getByRole("button", { name: "Filter entity types" });
+    const trigger = screen.getByRole("button", { name: "Filter topic types" });
     await user.click(trigger);
 
-    const panel = screen.getByRole("dialog", { name: "Entity types" });
+    const panel = screen.getByRole("dialog", { name: "Topic types" });
     const person = within(panel).getByRole("button", { name: "Person" });
     await user.click(person);
 
-    expect(screen.getByRole("dialog", { name: "Entity types" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Topic types" })).toBeInTheDocument();
     expect(person).toHaveAttribute("aria-pressed", "false");
     expect(panel).toHaveTextContent("Showing 2 of 3 types");
-    expect(trigger).toHaveTextContent("Filter entities 2/3");
+    expect(trigger).toHaveTextContent("Filter topics 2/3");
     expect(within(panel).getByRole("button", { name: "Restore all" })).not.toBeDisabled();
   });
 
   it("restores all types without closing the dialog", async () => {
     const user = userEvent.setup();
     render(<StatefulFilter initialExcluded={["person"]} />);
-    const trigger = screen.getByRole("button", { name: "Filter entity types" });
+    const trigger = screen.getByRole("button", { name: "Filter topic types" });
     await user.click(trigger);
-    const panel = screen.getByRole("dialog", { name: "Entity types" });
+    const panel = screen.getByRole("dialog", { name: "Topic types" });
 
     expect(panel).toHaveTextContent("Showing 2 of 3 types");
     await user.click(within(panel).getByRole("button", { name: "Restore all" }));
 
-    expect(screen.getByRole("dialog", { name: "Entity types" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Topic types" })).toBeInTheDocument();
     expect(panel).toHaveTextContent("Showing 3 of 3 types");
-    expect(trigger).toHaveTextContent("Filter entities");
+    expect(trigger).toHaveTextContent("Filter topics");
     expect(within(panel).getByRole("button", { name: "Restore all" })).toBeDisabled();
     expect(within(panel).getByRole("button", { name: "Person" })).toHaveAttribute("aria-pressed", "true");
     expect(panel).toHaveFocus();
@@ -106,16 +106,16 @@ describe("AtlasTypeFilters", () => {
   it("dismisses on outside pointer or focus and restores focus on Escape", async () => {
     const user = userEvent.setup();
     render(<StatefulFilter />);
-    const trigger = screen.getByRole("button", { name: "Filter entity types" });
+    const trigger = screen.getByRole("button", { name: "Filter topic types" });
     const outside = screen.getByTestId("outside");
 
     await user.click(trigger);
     fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("dialog", { name: "Entity types" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Topic types" })).not.toBeInTheDocument();
 
     await user.click(trigger);
     fireEvent.focus(outside);
-    expect(screen.queryByRole("dialog", { name: "Entity types" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Topic types" })).not.toBeInTheDocument();
 
     const graphEscape = vi.fn();
     document.addEventListener("keydown", graphEscape);
@@ -124,7 +124,7 @@ describe("AtlasTypeFilters", () => {
     document.removeEventListener("keydown", graphEscape);
 
     expect(graphEscape).not.toHaveBeenCalled();
-    expect(screen.queryByRole("dialog", { name: "Entity types" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Topic types" })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 });

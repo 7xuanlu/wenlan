@@ -286,7 +286,7 @@ describe("MemoryDetail enrichment status", () => {
       { wrapper },
     );
 
-    const relatedEntitiesHeading = await screen.findByRole("heading", { name: /related entities/i });
+    const relatedEntitiesHeading = await screen.findByRole("heading", { name: /related topics/i });
     const relatedEntitiesPanel = relatedEntitiesHeading.closest("section");
     expect(relatedEntitiesPanel).not.toBeNull();
     if (!relatedEntitiesPanel) throw new Error("Missing related entities panel");

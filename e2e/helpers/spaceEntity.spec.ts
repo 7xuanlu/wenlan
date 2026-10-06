@@ -4,7 +4,7 @@ import { getSpaceEntityButton } from "./spaceEntity";
 
 test("returns the entity when it and View all are both visible", async ({ page }) => {
   await page.setContent(`
-    <section aria-label="Key entities" role="region">
+    <section aria-label="Key topics" role="region">
       <button>Ada Lovelace</button>
       <button>View all 2</button>
     </section>

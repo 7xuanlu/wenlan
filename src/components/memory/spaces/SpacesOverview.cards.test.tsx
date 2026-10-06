@@ -65,7 +65,7 @@ describe("SpacesOverview cards lens", () => {
     expect(within(workCard).getByText("Projects and planning")).toBeInTheDocument();
     expect(within(workCard).getByTestId("space-card-pages")).toHaveTextContent("2 pages");
     expect(within(workCard).getByTestId("space-card-memories")).toHaveTextContent("4 memories");
-    expect(within(workCard).getByTestId("space-card-entities")).toHaveTextContent("2 entities");
+    expect(within(workCard).getByTestId("space-card-entities")).toHaveTextContent("2 topics");
     expect(within(workCard).getByTestId("space-card-updated")).toHaveTextContent(
       formatLocaleDate(new Date(200 * 1000)).label,
     );
@@ -170,7 +170,7 @@ describe("SpacesOverview cards lens", () => {
     expect(card.querySelector(".asset-card-context")).toBeNull();
     expect(within(card).getByTestId("space-card-updated")).toHaveTextContent("—");
     expect(within(card).getByTestId("space-card-memories")).toHaveTextContent("1 memory");
-    expect(within(card).getByTestId("space-card-entities")).toHaveTextContent("1 entity");
+    expect(within(card).getByTestId("space-card-entities")).toHaveTextContent("1 topic");
   });
 
   it("filters cards by name", async () => {

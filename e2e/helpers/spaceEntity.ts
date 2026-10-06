@@ -8,15 +8,15 @@ const labels: Record<
   { readonly keyEntities: string; readonly viewAllEntities: RegExp }
 > = {
   en: {
-    keyEntities: "Key entities",
+    keyEntities: "Key topics",
     viewAllEntities: /^View all \d+$/,
   },
   "zh-Hans": {
-    keyEntities: "关键实体",
+    keyEntities: "主要主题",
     viewAllEntities: /^查看全部 \d+ 个$/,
   },
   "zh-Hant": {
-    keyEntities: "關鍵實體",
+    keyEntities: "主要主題",
     viewAllEntities: /^檢視全部 \d+ 個$/,
   },
 };

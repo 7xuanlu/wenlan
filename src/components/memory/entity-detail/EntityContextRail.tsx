@@ -53,8 +53,8 @@ export function EntityContextRail({ entity, locale, onMemoryClick }: EntityConte
             </MetadataRow>
           ) : null}
           <MetadataRow label={t("entityDetail.statusLabel")}>
-            <span className={`memory-detail-chip ${entity.confirmed ? "success" : "warning"}`}>
-              {entity.confirmed ? t("entityDetail.confirmed") : t("entityDetail.unconfirmed")}
+            <span className={`memory-detail-chip ${entity.status === "archived" ? "entity-status-archived" : entity.confirmed ? "success" : "warning"}`}>
+              {entity.status === "archived" ? t("entityDetail.archived") : entity.confirmed ? t("entityDetail.confirmed") : t("entityDetail.unconfirmed")}
             </span>
           </MetadataRow>
           {confidence ? (

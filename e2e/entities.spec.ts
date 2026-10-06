@@ -1,109 +1,81 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
-import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import type { Entity } from "../src/lib/tauri";
 
-async function openEntities(page: Page): Promise<void> {
+async function openTopics(page: Page): Promise<void> {
   await page.goto("/");
+  if ((page.viewportSize()?.width ?? 0) < 900) await page.getByTitle("Show sidebar").click();
   await openPrimaryDestination(page, "Topics");
-  await expect(page.getByRole("heading", { level: 1, name: "Entities" })).toBeVisible();
-  if ((page.viewportSize()?.width ?? 0) < 900) await page.waitForTimeout(250);
+  await expect(page.getByRole("heading", { level: 1, name: "Topics" })).toBeVisible();
 }
 
-test("archives every detected entity matching the current filter, then restores it back to Detected", async ({ page }) => {
+async function storedTopics(page: Page): Promise<Entity[]> {
+  return page.evaluate(async () => await window.__wenlanTauriInvoke("list_entities_cmd", {}) as Entity[]);
+}
+
+for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "confirmed" : "detected"} topics from detail and restores their original lifecycle`, async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, {
-    locale: "en",
-    rawActions: [],
-    localStorage: { "wenlan-entities-view-mode": "rows" },
-  });
-  await openEntities(page);
+  const controller = await installTauriMock(page, { locale: "en", rawActions: [], localStorage: { "wenlan-entities-view-mode": "rows" } });
+  await openTopics(page);
+  const original = await storedTopics(page);
+  const matching = original.filter(entity => entity.confirmed === confirmed);
+  expect(matching).toHaveLength(confirmed ? 6 : 1);
+  const others = original.filter(entity => entity.confirmed !== confirmed);
+  const overview = page.locator(".entities-view");
 
-  // The fixture ships exactly one detected entity (Ada Lovelace, never
-  // confirmed) alongside six already-confirmed ones, so Detected starts at
-  // one row and no filter needs to be set for "all matching" to mean "all".
-  await expect(page.getByRole("tab", { name: "Detected" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Ada Lovelace", exact: true })).toBeVisible();
+  // Lifecycle belongs to detail. Each exact-name filter keeps unrelated topics
+  // out of the current action, and persisted state proves they remain untouched.
+  for (const entity of matching) {
+    await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
+    await expect(overview.getByRole("row")).toHaveCount(2);
+    await overview.getByRole("button", { name: entity.name, exact: true }).click();
+    await expect(page.getByRole("button", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Archive", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Restore", exact: true })).toBeVisible();
+    await expect.poll(async () => (await storedTopics(page)).find(item => item.id === entity.id)?.status).toBe("archived");
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await expect(overview.getByRole("button", { name: entity.name, exact: true })).toHaveCount(0);
+  }
+  const archived = await storedTopics(page);
+  expect(archived.filter(entity => others.some(other => other.id === entity.id))).toEqual(others);
+  expect(archived.filter(entity => matching.some(match => match.id === entity.id)).map(entity => ({ ...entity, status: original.find(item => item.id === entity.id)!.status }))).toEqual(matching);
 
-  await page.getByRole("button", { name: "Archive all matching" }).click();
-
-  const archiveDialog = page.getByRole("dialog");
-  await expect(archiveDialog.getByText("Archive 1 detected entity?")).toBeVisible();
-  await expect(archiveDialog.getByText("Filter", { exact: true })).toBeVisible();
-  await expect(archiveDialog.getByText("Any, any number of memories")).toBeVisible();
-  await expect(
-    archiveDialog.getByText("Archived entities can be restored from the Archived tab."),
-  ).toBeVisible();
-
-  await archiveDialog.getByRole("button", { name: "Archive", exact: true }).click();
-
-  await expect(archiveDialog).toHaveCount(0);
-  await expect(page.getByText("No detected entities match")).toBeVisible();
-
-  await page.getByRole("tab", { name: "Archived" }).click();
-  await expect(page.getByRole("cell", { name: "Ada Lovelace", exact: true })).toBeVisible();
-
-  await page.getByRole("row", { name: /Ada Lovelace/ }).getByRole("button", { name: "Restore" }).click();
-
-  // Ada was never confirmed before archiving, so she comes back Detected, not
-  // Confirmed -- the exact inverse of the archive, not a reset to a fixed
-  // state (crates/wenlan-core/src/db.rs: restore only flips `pages.status`).
-  await expect(page.getByText("No archived entities")).toBeVisible();
-  await page.getByRole("tab", { name: "Detected" }).click();
-  await expect(page.getByRole("cell", { name: "Ada Lovelace", exact: true })).toBeVisible();
-
+  await overview.getByRole("searchbox", { name: "Search topics" }).fill("");
+  await overview.getByRole("button", { name: "Topic options" }).click();
+  await page.getByRole("menuitem", { name: "View archived topics" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Archived topics" })).toBeVisible();
+  await expect(overview.getByRole("row")).toHaveCount(matching.length + 1);
+  for (const [index, entity] of matching.entries()) {
+    if (index > 0) {
+      await overview.getByRole("button", { name: "Topic options" }).click();
+      await page.getByRole("menuitem", { name: "View archived topics" }).click();
+    }
+    await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
+    await expect(overview.getByRole("row")).toHaveCount(2);
+    await overview.getByRole("button", { name: entity.name, exact: true }).click();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Archive", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Back", exact: true }).click();
+  }
+  // A detail return opens active Topics; archived remains accessible from More.
+  await overview.getByRole("searchbox", { name: "Search topics" }).fill("");
+  await overview.getByRole("button", { name: "Topic options" }).click();
+  await page.getByRole("menuitem", { name: "View archived topics" }).click();
+  await expect(page.getByText("No archived items", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Back to topics" }).click();
+  await expect(overview.getByRole("row")).toHaveCount(original.length + 1);
+  expect(await storedTopics(page)).toEqual(original);
+  for (const command of ["archive_entities_cmd", "restore_entities_cmd"]) {
+    expect(controller.calls().filter(call => call.command === command).map(call => call.args)).toEqual(matching.map(entity => ({ req: { ids: [entity.id], dry_run: false } })));
+  }
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });
 
-test("archives every confirmed entity matching the current filter, then restores them all back to Confirmed", async ({ page }) => {
-  const browserErrors = collectBrowserErrors(page);
-  await installTauriMock(page, {
-    locale: "en",
-    rawActions: [],
-    localStorage: { "wenlan-entities-view-mode": "rows" },
-  });
-  await openEntities(page);
-
-  // The fixture ships six confirmed entities (Babbage plus five),
-  // so Confirmed starts at six rows with the default unfiltered view.
-  await page.getByRole("tab", { name: "Confirmed" }).click();
-  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "Archive all matching" }).click();
-
-  const archiveDialog = page.getByRole("dialog");
-  await expect(archiveDialog.getByText("Archive 6 confirmed entities?")).toBeVisible();
-  await expect(archiveDialog.getByText("Filter", { exact: true })).toBeVisible();
-  await expect(archiveDialog.getByText("Any, any number of memories")).toBeVisible();
-  // Every confirmed fixture row already has a memory, so the dialog warns
-  // that archiving takes memories with it.
-  await expect(archiveDialog.getByText("Includes", { exact: true })).toBeVisible();
-  await expect(
-    archiveDialog.getByText("To keep those, set Memories to None first. Archived entities can be restored from the Archived tab."),
-  ).toBeVisible();
-
-  await archiveDialog.getByRole("button", { name: "Archive", exact: true }).click();
-
-  await expect(archiveDialog).toHaveCount(0);
-  await expect(page.getByText("No confirmed entities yet")).toBeVisible();
-
-  await page.getByRole("tab", { name: "Archived" }).click();
-  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
-
-  await page.getByRole("button", { name: "Restore all" }).click();
-
-  // All six were confirmed before archiving, so they all come back
-  // Confirmed -- the exact inverse of the archive.
-  await expect(page.getByText("No archived entities")).toBeVisible();
-  await page.getByRole("tab", { name: "Confirmed" }).click();
-  await expect(page.getByRole("cell", { name: "Charles Babbage", exact: true })).toBeVisible();
-
-  expect(browserErrors.pageErrors).toEqual([]);
-  expect(browserErrors.consoleErrors).toEqual([]);
-});
-
-test("Entities cards lens stays inside the viewport", async ({ context }) => {
+test("Topics cards lens stays inside the viewport", async ({ context }) => {
   const sizes = [
     [1487, 1058],
     [1280, 900],
@@ -117,25 +89,24 @@ test("Entities cards lens stays inside the viewport", async ({ context }) => {
     const browserErrors = collectBrowserErrors(page);
     // No view-mode seed: entities open in the cards lens by default.
     await installTauriMock(page, { locale: "en", rawActions: [] });
-    await openEntities(page);
+    await openTopics(page);
 
     await expect(page.getByTestId("entities-cards")).toBeVisible();
-    // The fixture ships exactly one detected entity (Ada Lovelace).
-    await expect(page.locator(".asset-card")).toHaveCount(1);
-    await expect(page.locator(".asset-card.asset-card--detected")).toHaveCount(1);
+    // The browser combines one detected and six confirmed topics.
+    await expect(page.locator(".asset-card")).toHaveCount(7);
+    await expect(page.locator(".asset-card.asset-card--detected")).toHaveCount(0);
 
     const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     expect(fitsViewport).toBe(true);
     const cardBoxes = await Promise.all((await page.locator(".asset-card").all()).map((card) => card.boundingBox()));
-    expect(cardBoxes).toHaveLength(1);
+    expect(cardBoxes).toHaveLength(7);
     for (const box of cardBoxes) {
       expect(box).not.toBeNull();
       expect(box!.x).toBeGreaterThanOrEqual(0);
       expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     }
 
-    await page.getByRole("tab", { name: "Confirmed" }).click();
-    await page.getByRole("button", { name: "Open Charles Babbage" }).click();
+    await page.getByRole("button", { name: "Charles Babbage", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Charles Babbage" })).toBeVisible();
 
     await page.screenshot({ path: `.omo/evidence/entities-cards/entities-cards-light-${width}x${height}.png`, fullPage: true });
