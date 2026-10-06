@@ -91,3 +91,39 @@ describe("PageInfoDrawer", () => {
     document.documentElement.scrollTop = 0;
   });
 });
+
+
+it("keeps wide docked context nonmodal without capturing editor focus or Escape", async () => {
+  const original = window.matchMedia;
+  window.matchMedia = vi.fn().mockReturnValue({matches:true,addEventListener:vi.fn(),removeEventListener:vi.fn()});
+  try {
+    const close = vi.fn();
+    render(<><button>Editor target</button><PageInfoDrawer docked open onClose={close} title="Context" closeLabel="Close"><button>Source</button></PageInfoDrawer></>);
+    const panel = screen.getByRole("complementary",{name:"Context"});
+    expect(panel).not.toHaveAttribute("aria-modal");
+    const editor = screen.getByRole("button",{name:"Editor target"});
+    editor.focus(); expect(editor).toHaveFocus();
+    fireEvent.keyDown(editor,{key:"Escape"});expect(close).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByRole("button",{name:"Source"}),{key:"Escape"});expect(close).toHaveBeenCalledOnce();
+  } finally { window.matchMedia = original; }
+});
+
+
+it("tabs through open disclosure actions and skips collapsed descendants", async () => {
+  const user = userEvent.setup();
+  // jsdom does not expose the native summary tab stop; browser coverage uses real summaries.
+  render(<PageInfoDrawer open title="Context" closeLabel="Close" onClose={vi.fn()}>
+    <details open><summary tabIndex={0}>Local graph</summary><button>Open linked note</button></details>
+    <details><summary tabIndex={0}>Source</summary><button>Hidden source action</button></details>
+  </PageInfoDrawer>);
+  await user.tab();
+  expect(screen.getByText("Local graph")).toHaveFocus();
+  await user.tab();
+  expect(screen.getByRole("button", { name: "Open linked note" })).toHaveFocus();
+  await user.tab();
+  expect(screen.getByText("Source", { exact: true })).toHaveFocus();
+  await user.tab();
+  expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+  await user.tab({ shift: true });
+  expect(screen.getByText("Source", { exact: true })).toHaveFocus();
+});

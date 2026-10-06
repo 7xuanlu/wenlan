@@ -23,6 +23,7 @@ vi.mock("./PageCanvas", () => ({
 }));
 
 vi.mock("../../lib/tauri", () => ({
+  getKnowledgeGraph: vi.fn().mockResolvedValue({entities:[],relations:[],memories:[],memory_links:[],pages:[],page_links:[]}),
   // Fails closed, which is what an older or unreachable daemon looks like:
   // the review action stays disabled unless a test opts in.
   pageReviewSupported: vi.fn().mockResolvedValue("daemon_unsupported"),
@@ -445,7 +446,7 @@ describe("PageDetail", () => {
     expect(within(menu).getByRole("menuitem", { name: "Delete page" })).toBeInTheDocument();
 
     // The view switch stays in the header; the first overflow action receives focus.
-    expect(within(menu).getByRole("menuitem", { name: "Re-distill page" })).toHaveFocus();
+    expect(within(menu).getByRole("menuitem", { name: "Page info" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "Page actions" })).toBeNull();
     expect(trigger).toHaveFocus();
@@ -920,7 +921,7 @@ describe("PageDetail", () => {
       await screen.findByText("libSQL Architecture");
 
       await user.click(screen.getByRole("button", { name: "Page actions" }));
-      expect(screen.getByRole("menuitem", { name: "Delete page" })).toHaveFocus();
+      expect(screen.getByRole("menuitem", { name: "Page info" })).toHaveFocus();
     } finally {
       rectsSpy.mockRestore();
     }
@@ -1301,7 +1302,7 @@ describe("PageDetail", () => {
     const row = screen
       .getByText("libSQL stores vectors")
       .closest('[data-testid="page-info-source-row"]')!;
-    await user.click(row);
+    await user.click(within(row as HTMLElement).getByRole("button"));
     expect(defaultProps.onMemoryClick).toHaveBeenCalledWith("mem_1");
   });
 

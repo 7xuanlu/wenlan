@@ -11,6 +11,40 @@ import {
 import { enSourceAccess, hansSourceAccess, hantSourceAccess } from "../components/memory/sources/sourceAccessCopy";
 
 const en = {
+  knowledgeContext: {
+    "noteKind": "Wiki note",
+    "memoryKind": "Memory",
+    "noteHint": "A page you write or organize from saved knowledge.",
+    "memoryHint": "A piece of knowledge saved from a conversation, a source, or a capture.",
+    "memoryPanel": "Memory context",
+    "memoryList": "Recent memories",
+    "filterMemories": "Filter recent memories",
+    "recentMemories": "Recent memories",
+    "openMemory": "Open memory: {{title}}",
+    "noMemories": "No memories yet.",
+    "noMatches": "No matching memories.",
+    "loadingMemories": "Loading memories…",
+    "memoryLoadError": "Could not load memories.",
+    "similarMemories": "Similar memories",
+    "loadingLinks": "Loading connections…",
+    "linksError": "Could not load connections.",
+    "noLinks": "No direct connections in the currently visible knowledge.",
+    "localGraph": "Local graph",
+    "graphHint": "Direct connections only. Select a node to open it.",
+    "usedIn": "Used as a source in",
+    "sources": "Source memories",
+    "topics": "Topics",
+    "linkedPages": "Linked pages",
+    "linkedFrom": "Links to this page",
+    "showAll": "Show all",
+    "untitled": "Untitled",
+    "openRelated": "Open {{kind}}: {{title}}",
+    "kind": {
+        "page": "note",
+        "memory": "memory",
+        "entity": "topic"
+    }
+},
   sourceAccess: enSourceAccess,
   sourceLibrary: {
     "title": "Sources",
@@ -2242,6 +2276,40 @@ const en = {
 };
 
 const zhHans = {
+  knowledgeContext: {
+    "noteKind": "Wiki 笔记",
+    "memoryKind": "记忆",
+    "noteHint": "你撰写或由已保存知识整理成的页面。",
+    "memoryHint": "从对话、来源或手动捕捉中保存的知识片段。",
+    "memoryPanel": "记忆脉络",
+    "memoryList": "最近记忆",
+    "filterMemories": "筛选最近记忆",
+    "recentMemories": "最近记忆",
+    "openMemory": "打开记忆：{{title}}",
+    "noMemories": "还没有记忆。",
+    "noMatches": "没有符合的记忆。",
+    "loadingMemories": "正在载入记忆…",
+    "memoryLoadError": "无法载入记忆。",
+    "similarMemories": "相似记忆",
+    "loadingLinks": "正在载入关联…",
+    "linksError": "无法载入关联。",
+    "noLinks": "目前可见的知识中没有直接关联。",
+    "localGraph": "局部图谱",
+    "graphHint": "只显示直接关联。点击节点即可打开。",
+    "usedIn": "作为这些页面的来源",
+    "sources": "来源记忆",
+    "topics": "主题",
+    "linkedPages": "链接到的页面",
+    "linkedFrom": "链接到此页",
+    "showAll": "显示全部",
+    "untitled": "未命名",
+    "openRelated": "打开{{kind}}：{{title}}",
+    "kind": {
+        "page": "笔记",
+        "memory": "记忆",
+        "entity": "主题"
+    }
+},
   sourceAccess: hansSourceAccess,
   sourceLibrary: {
     "title": "来源",
@@ -4414,6 +4482,40 @@ const zhHans = {
 };
 
 const zhHant = {
+  knowledgeContext: {
+    "noteKind": "Wiki 筆記",
+    "memoryKind": "記憶",
+    "noteHint": "你撰寫或由已保存知識整理成的頁面。",
+    "memoryHint": "從對話、來源或手動捕捉中保存的知識片段。",
+    "memoryPanel": "記憶脈絡",
+    "memoryList": "最近記憶",
+    "filterMemories": "篩選最近記憶",
+    "recentMemories": "最近記憶",
+    "openMemory": "開啟記憶：{{title}}",
+    "noMemories": "還沒有記憶。",
+    "noMatches": "沒有符合的記憶。",
+    "loadingMemories": "正在載入記憶…",
+    "memoryLoadError": "無法載入記憶。",
+    "similarMemories": "相似記憶",
+    "loadingLinks": "正在載入關聯…",
+    "linksError": "無法載入關聯。",
+    "noLinks": "目前可見的知識中沒有直接關聯。",
+    "localGraph": "局部圖譜",
+    "graphHint": "只顯示直接關聯。點擊節點即可開啟。",
+    "usedIn": "作為這些頁面的來源",
+    "sources": "來源記憶",
+    "topics": "主題",
+    "linkedPages": "連結到的頁面",
+    "linkedFrom": "連結到此頁",
+    "showAll": "顯示全部",
+    "untitled": "未命名",
+    "openRelated": "開啟{{kind}}：{{title}}",
+    "kind": {
+        "page": "筆記",
+        "memory": "記憶",
+        "entity": "主題"
+    }
+},
   sourceAccess: hantSourceAccess,
   sourceLibrary: {
     "title": "來源",

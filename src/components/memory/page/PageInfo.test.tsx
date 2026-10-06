@@ -168,7 +168,7 @@ describe("PageInfo", () => {
     await user.click(screen.getByText(/Page info/i));
     const row = screen.getByTestId("page-info-source-row");
     expect(within(row).getByText("unverified")).toBeInTheDocument();
-    await user.click(row);
+    await user.click(within(row).getByRole("button"));
     expect(onMemoryClick).toHaveBeenCalledWith("mem-a");
   });
 

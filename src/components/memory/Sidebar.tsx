@@ -7,6 +7,7 @@ import IdentityCard from "./IdentityCard";
 import { PrimaryNavigation } from "./navigation/PrimaryNavigation";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import type { GlobalNavigation } from "./navigation/viewState";
+import { MemoryInventoryPanel } from "./navigation/MemoryInventoryPanel";
 import { PageInventoryPanel } from "./pages/PageInventoryPanel";
 import "./navigation/notes-sidebar.css";
 
@@ -14,6 +15,7 @@ interface SidebarProps {
   readonly activeNavigation?: GlobalNavigation | null;
   readonly collapsed: boolean;
   readonly currentPageId?: string | null;
+  readonly currentMemoryId?: string | null;
   readonly currentSpaceId?: string | null;
   readonly onCreatePage?: () => void;
   readonly onEntityClick: (entityId: string) => void;
@@ -29,6 +31,7 @@ interface SidebarProps {
   readonly onRequestClose?: () => void;
   readonly onSelectDraft?: (draftId: string, space: string | null) => void;
   readonly onSelectPage?: (page: Page) => void;
+  readonly onSelectMemory?: (sourceId: string) => void;
   readonly onSelectSpace: (space: Space) => void;
   readonly open?: boolean;
   readonly presentation?: "desktop" | "overlay";
@@ -59,6 +62,7 @@ export default function Sidebar({
   activeNavigation = null,
   collapsed,
   currentPageId = null,
+  currentMemoryId = null,
   onCreatePage,
   onEntityClick,
   onNavigateEntities,
@@ -72,6 +76,7 @@ export default function Sidebar({
   onRequestClose,
   onSelectDraft,
   onSelectPage,
+  onSelectMemory,
   open = !collapsed,
   presentation = "desktop",
 }: SidebarProps) {
@@ -177,12 +182,19 @@ export default function Sidebar({
           </div>
         </div>
           <div className="notes-workspace-panel" hidden={!listVisible} inert={!listVisible} style={{ display: listVisible ? undefined : "none" }}>
-            <PageInventoryPanel
-              currentPageId={currentPageId}
-              onCreatePage={closeAfterNavigation(onCreatePage, closeOverlay)}
-              onOpenDraft={closeAfterNavigation(onSelectDraft, closeOverlay)}
-              onOpenPage={closeAfterNavigation(onSelectPage, closeOverlay)}
-            />
+            {activeNavigation === "memories" && listVisible ? (
+              <MemoryInventoryPanel
+                currentMemoryId={currentMemoryId}
+                onOpenMemory={closeAfterNavigation(onSelectMemory, closeOverlay)}
+              />
+            ) : (
+              <PageInventoryPanel
+                currentPageId={currentPageId}
+                onCreatePage={closeAfterNavigation(onCreatePage, closeOverlay)}
+                onOpenDraft={closeAfterNavigation(onSelectDraft, closeOverlay)}
+                onOpenPage={closeAfterNavigation(onSelectPage, closeOverlay)}
+              />
+            )}
             <div className="notes-workspace-footer">
               <ReviewEnvironmentBadge />
             </div>

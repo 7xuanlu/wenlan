@@ -71,3 +71,7 @@
   overscroll-behavior: contain;
   padding: 4px 20px 24px;
 }
+
+/* Wide workspaces keep content and its context usable side by side. */
+.page-info-drawer-docked { background: transparent; pointer-events: none; }
+.page-info-drawer-docked .page-info-drawer { pointer-events: auto; border-left: 0; box-shadow: none; }
