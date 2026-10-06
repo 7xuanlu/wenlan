@@ -15,9 +15,54 @@
 .wiki-overview-header {
   align-items: flex-start;
   display: flex;
+  flex-wrap: wrap;
   gap: 32px;
   justify-content: space-between;
   padding-bottom: 8px;
+}
+
+.wiki-overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.wiki-options-anchor {
+  position: relative;
+}
+
+.wiki-options-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 4px;
+}
+
+.wiki-review-action {
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-control);
+  padding: 8px 12px;
+  width: 100%;
+  text-align: left;
+}
+
+.wiki-review-action:hover {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.wiki-review-action:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 4px;
 }
 
 .wiki-overview-title-row {
@@ -102,12 +147,11 @@
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 18px 34px;
+  gap: 10px 24px;
   padding: 10px 0 22px;
 }
 
 .wiki-candidate-lane {
-  border-bottom: 1px solid color-mix(in srgb, var(--mem-border) 72%, transparent);
   padding: 17px 0 6px;
 }
 
@@ -194,8 +238,10 @@
   color: var(--mem-text-secondary);
   display: flex;
   font-family: var(--mem-font-body);
-  font-size: 12px;
-  gap: 11px;
+  font-size: var(--mem-control-font-size);
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
   position: relative;
 }
 
@@ -206,7 +252,7 @@
   height: 6px;
   pointer-events: none;
   position: absolute;
-  right: 13px;
+  right: 10px;
   top: 50%;
   transform: translateY(-70%) rotate(45deg);
   width: 6px;
@@ -214,22 +260,29 @@
 
 .wiki-filters select {
   appearance: none;
-  background: var(--mem-surface);
-  border: 1px solid var(--mem-control-border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--mem-control-radius);
   color: var(--mem-text-secondary);
   cursor: pointer;
-  font-family: var(--mem-font-body);
-  font-size: var(--mem-control-font-size);
+  font-family: inherit;
+  font-size: inherit;
   font-weight: 400;
-  min-height: var(--mem-control-height);
-  min-width: 142px;
-  padding: 0 32px 0 11px;
-  transition: border-color 150ms ease, color 150ms ease;
+  min-height: 32px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0 26px 0 6px;
+  text-overflow: ellipsis;
+  transition: background-color 150ms ease, color 150ms ease;
 }
 
 .wiki-filters select:hover {
-  border-color: var(--mem-text-tertiary);
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.wiki-filters option {
+  background: var(--mem-surface);
   color: var(--mem-text);
 }
 
@@ -243,6 +296,7 @@
 @media (forced-colors: active) {
   .wiki-filters select {
     appearance: auto;
+    border-color: ButtonText;
   }
 
   .wiki-filters label::after {
@@ -265,13 +319,12 @@
 
 .wiki-table {
   border-collapse: collapse;
-  min-width: 680px;
+  min-width: 0;
   table-layout: fixed;
   width: 100%;
 }
 
 .wiki-table th {
-  border-bottom: 1px solid var(--mem-border);
   font-weight: 600;
   letter-spacing: 0.045em;
   padding: 10px 0;
@@ -284,7 +337,6 @@
 .wiki-table th:last-child { text-align: right; width: 18%; }
 
 .wiki-table td {
-  border-bottom: 1px solid color-mix(in srgb, var(--mem-border) 76%, transparent);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
   font-size: 12px;
@@ -470,8 +522,6 @@
 
 .wiki-state,
 .wiki-empty-state {
-  border-bottom: 1px solid var(--mem-border);
-  border-top: 1px solid var(--mem-border);
   color: var(--mem-text-secondary);
   font-family: var(--mem-font-body);
   font-size: 13px;
@@ -498,24 +548,7 @@
   }
 
   .wiki-filters {
-    align-items: stretch;
-    display: grid;
-    gap: 10px;
-  }
-
-  .wiki-filters label {
-    display: grid;
-    grid-template-columns: 54px minmax(0, 1fr);
-  }
-
-  .wiki-filters select {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .wiki-filters-side {
-    justify-content: flex-end;
-    margin-left: 0;
+    gap: 8px 16px;
   }
 
   .wiki-candidate-link {

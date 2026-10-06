@@ -1,291 +1,259 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PrimaryNavigation } from "./PrimaryNavigation";
+import { NAVIGATION_DESTINATION_ORDER, NAVIGATION_PREFERENCE_KEY, writeNavigationPreferences } from "./navigationPreferences";
+import type { GlobalNavigation } from "./viewState";
 
 const labels = {
-  entities: "Entities",
+  backToMore: "Back to More",
+  customizationHint: "Choose what stays in the sidebar.",
+  customize: "Customize navigation",
+  resetNavigation: "Reset defaults",
+  entities: "Topics",
   graph: "Graph",
-  home: "Home",
   memories: "Memories",
+  more: "More",
   navigation: "Primary navigation",
   pages: "Wiki",
   sources: "Sources",
   spaces: "Spaces",
 } as const;
 
-const preservedIconGeometry = {
-  Graph: "M7 6h10M6 8l5 8M18 8l-5 8",
-  Home: "M3 10.5L12 3l9 7.5M5 9.5V21h14V9.5M9.5 21v-6h5v6",
-} as const;
-
-function renderNavigation(active: "home" | "spaces" | null = null) {
+function renderNavigation(active: GlobalNavigation | null = null) {
   const callbacks = {
-    entities: vi.fn(),
-    graph: vi.fn(),
-    home: vi.fn(),
-    memories: vi.fn(),
-    pages: vi.fn(),
-    sources: vi.fn(),
-    spaces: vi.fn(),
+    entities: vi.fn(), graph: vi.fn(), memories: vi.fn(),
+    pages: vi.fn(), sources: vi.fn(), spaces: vi.fn(),
   };
-  const view = render(
-    <PrimaryNavigation
-      active={active}
-      labels={labels}
-      onNavigateEntities={callbacks.entities}
-      onNavigateGraph={callbacks.graph}
-      onNavigateHome={callbacks.home}
-      onNavigateLog={callbacks.memories}
-      onNavigatePages={callbacks.pages}
-      onNavigateSources={callbacks.sources}
-      onNavigateSpaces={callbacks.spaces}
-    />,
-  );
-  return { callbacks, ...view };
+  const props = {
+    active, labels,
+    onNavigateEntities: callbacks.entities,
+    onNavigateGraph: callbacks.graph,
+    onNavigateLog: callbacks.memories,
+    onNavigatePages: callbacks.pages,
+    onNavigateSources: callbacks.sources,
+    onNavigateSpaces: callbacks.spaces,
+  };
+  return { callbacks, props, ...render(<PrimaryNavigation {...props} />) };
 }
 
+function railLabels() {
+  return screen.getAllByRole("button").filter((button) => button.classList.contains("notes-rail-button")).map((button) => button.getAttribute("aria-label"));
+}
+
+async function openCustomize(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "More" }));
+  await user.click(screen.getByRole("button", { name: "Customize navigation" }));
+  return screen.getByRole("group", { name: "Customize navigation" });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  vi.restoreAllMocks();
+});
+
 describe("PrimaryNavigation", () => {
-  it("uses a stable navigation label instead of naming the landmark after Home", () => {
-    renderNavigation();
-
+  it("defaults to Wiki, Spaces, Graph and More in that order with working named destinations", async () => {
+    const user = userEvent.setup();
+    const { callbacks } = renderNavigation("pages");
     expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
-    expect(screen.queryByRole("navigation", { name: "Home" })).not.toBeInTheDocument();
+    expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "More"]);
+    const wiki = screen.getByRole("button", { name: "Wiki", current: "page" });
+    expect(wiki).toHaveAttribute("title", "Wiki");
+    expect(wiki.querySelector('[data-navigation-icon="wiki-page"]')).toHaveAttribute("aria-hidden", "true");
+    await user.click(wiki);
+    await user.click(screen.getByRole("button", { name: "Spaces" }));
+    await user.click(screen.getByRole("button", { name: "Graph" }));
+    expect(callbacks.pages).toHaveBeenCalledOnce();
+    expect(callbacks.spaces).toHaveBeenCalledExactlyOnceWith(false);
+    expect(callbacks.graph).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Sources" })).not.toBeInTheDocument();
   });
 
-  it("keeps Wiki first-class and places Recent Pages then Recent Spaces after every primary destination", () => {
-    render(
-      <PrimaryNavigation
-        active={null}
-        labels={labels}
-        onNavigateEntities={() => {}}
-        onNavigateGraph={() => {}}
-        onNavigateHome={() => {}}
-        onNavigateLog={() => {}}
-        onNavigatePages={() => {}}
-        onNavigateSources={() => {}}
-        onNavigateSpaces={() => {}}
-        recentPagesSection={<div>Recent pages</div>}
-        recentSpacesSection={<div>Recent spaces</div>}
-      />,
-    );
-
-    const destinations = ["Home", "Wiki", "Entities", "Spaces", "Graph", "Memories", "Sources"].map((name) => screen.getByRole("button", { name }));
-    for (const [index, destination] of destinations.entries()) {
-      const next = destinations[index + 1];
-      if (next) expect(destination.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    }
-    const recentPages = screen.getByText("Recent pages");
-    const recentSpaces = screen.getByText("Recent spaces");
-    expect(destinations[6]?.compareDocumentPosition(recentPages) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(recentPages.compareDocumentPosition(recentSpaces) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(recentPages.closest("nav")).not.toBe(destinations[0]?.closest("nav"));
-  });
-
-  it("does not expose a suggestion count in primary navigation", () => {
-    renderNavigation();
-
-    expect(screen.getByRole("button", { name: "Spaces" })).toHaveTextContent(/^Spaces$/);
-    expect(screen.queryByText(/^\d+$/)).not.toBeInTheDocument();
-  });
-
-  it("keeps space creation inside the Spaces page instead of duplicating it in navigation", () => {
-    renderNavigation();
-
-    expect(screen.queryByRole("button", { name: "New space" })).not.toBeInTheDocument();
-  });
-
-  it("renders the selected self-contained-world Planet mark instead of map or folder geometry", () => {
-    // Given the Spaces destination is available in the primary navigation
-    renderNavigation();
-
-    // When its decorative icon is inspected
-    const spaces = screen.getByRole("button", { name: "Spaces" });
-    const mark = spaces.querySelector<SVGSVGElement>("[data-space-mark='self-contained-world']");
-
-    // Then the official Tabler Planet geometry is present and the rejected metaphors are absent
-    expect(mark).not.toBeNull();
-    expect(Array.from(mark?.querySelectorAll("path") ?? [], (path) => path.getAttribute("d"))).toEqual([
-      "M18.816 13.58c2.292 2.138 3.546 4 3.092 4.9c-.745 1.46 -5.783 -.259 -11.255 -3.838c-5.47 -3.579 -9.304 -7.664 -8.56 -9.123c.464 -.91 2.926 -.444 5.803 .805",
-      "M5 12a7 7 0 1 0 14 0a7 7 0 1 0 -14 0",
-    ]);
-    expect(mark?.querySelector("path")).toHaveAttribute("stroke-width", "2");
-    expect(spaces.querySelector('path[d="M3 7l6 -3l6 3l6 -3v13l-6 3l-6 -3l-6 3v-13"]')).toBeNull();
-    expect(spaces.querySelector('path[d="M4 5.5h6l2 2h8v11H4z"]')).toBeNull();
-  });
-
-  it("keeps the mark decorative while the selected button exposes its name and page state", () => {
-    // Given Spaces is the selected global destination
-    renderNavigation("spaces");
-
-    // When assistive semantics are inspected
-    const spaces = screen.getByRole("button", { name: "Spaces", current: "page" });
-    const mark = spaces.querySelector<SVGSVGElement>("[data-space-mark='self-contained-world']");
-
-    // Then the button owns navigation semantics and the SVG stays decorative
-    expect(spaces).toHaveAccessibleName("Spaces");
-    expect(spaces).toHaveAttribute("aria-current", "page");
-    expect(mark).toHaveAttribute("aria-hidden", "true");
-  });
-
-  it("uses the exact 14px navigation footprint and documented state tokens", () => {
-    // Given Spaces first renders as a default destination
-    const { rerender } = renderNavigation();
-    const defaultMark = screen.getByRole("button", { name: "Spaces" }).querySelector<SVGSVGElement>("[data-space-mark='self-contained-world']");
-
-    // When the destination changes to selected
-    expect(defaultMark).toHaveAttribute("height", "14");
-    expect(defaultMark).toHaveAttribute("width", "14");
-    expect(defaultMark).toHaveAttribute("viewBox", "0 0 24 24");
-    expect(defaultMark).toHaveStyle({ color: "var(--mem-text-tertiary)" });
-    rerender(
-      <PrimaryNavigation
-        active="spaces"
-        labels={labels}
-        onNavigateSpaces={() => {}}
-      />,
-    );
-
-    // Then selected identity maps to indigo without changing geometry
-    const selectedMark = screen.getByRole("button", { name: "Spaces" }).querySelector<SVGSVGElement>("[data-space-mark='self-contained-world']");
-    expect(selectedMark).toHaveAttribute("height", "14");
-    expect(selectedMark).toHaveAttribute("width", "14");
-    expect(selectedMark).toHaveAttribute("viewBox", "0 0 24 24");
-    expect(selectedMark).toHaveStyle({ color: "var(--mem-accent-indigo)" });
-  });
-
-  it("gives the selected row a quiet full-width wash, outer rail, breathing room, and distinct focus treatment", () => {
-    renderNavigation("spaces");
-
-    const selected = screen.getByRole("button", { name: "Spaces", current: "page" });
-    const rail = selected.querySelector('[data-primary-navigation-active-marker="true"]');
-
-    expect(selected).toHaveStyle({
-      backgroundColor: "var(--mem-indigo-bg)",
-      fontWeight: "500",
-    });
-    expect(selected.className).toContain("px-3");
-    expect(selected.className).toContain("focus-visible:outline-2");
-    expect(selected.className).toContain("focus-visible:outline-offset-2");
-    expect(selected.className).toContain("focus-visible:outline-[var(--mem-accent-page)]");
-    expect(selected.className).not.toContain("focus-visible:ring-");
-    expect(rail?.className).toContain("left-0");
-    expect(rail?.className).not.toContain("-left-");
-    expect(rail?.className).toContain("w-0.5");
-  });
-
-  it("uses the canonical layered Page glyph for the Wiki destination", () => {
-    // Given Wiki is the browse-all destination for every Page presentation type
-    renderNavigation();
-
-    // When its decorative navigation mark is inspected
-    const mark = screen
-      .getByRole("button", { name: "Wiki" })
-      .querySelector<SVGSVGElement>('[data-navigation-icon="wiki-page"]');
-
-    // Then it reuses the Page-family geometry instead of the topic subtype document
-    expect(mark).not.toBeNull();
-    expect(mark?.querySelector("path")).toHaveAttribute(
-      "d",
-      "M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5",
-    );
-    expect(mark?.querySelector("path")).toHaveAttribute("stroke-width", "1.8");
-    expect(mark).toHaveAttribute("height", "14");
-    expect(mark).toHaveAttribute("width", "14");
-    expect(mark?.querySelector('path[d="M6 3h8l4 4v14H6zM14 3v5h5M9 12h6M9 16h6"]')).toBeNull();
-  });
-
-  it("uses the approved intake tray for Sources without import-arrow semantics", () => {
-    // Given the Sources destination is available in primary navigation
-    renderNavigation();
-
-    // When its decorative mark is inspected
-    const mark = screen
-      .getByRole("button", { name: "Sources" })
-      .querySelector<SVGSVGElement>('[data-navigation-icon="sources-intake-tray"]');
-
-    // Then three plain input strokes enter a shallow tray with no arrowhead geometry
-    expect(mark).not.toBeNull();
-    expect(Array.from(mark?.querySelectorAll("path") ?? [], (path) => path.getAttribute("d"))).toEqual([
-      "M7 4v6M12 4v6M17 4v6",
-      "M5 13l1.5 5h11l1.5-5",
-    ]);
-    expect(mark?.querySelector("polygon, polyline")).toBeNull();
-    expect(mark).toHaveAttribute("aria-hidden", "true");
-    expect(mark).toHaveAttribute("height", "14");
-    expect(mark).toHaveAttribute("width", "14");
-  });
-
-  it("preserves the unaffected icon geometry and keeps Wiki, Memories, and Graph visually distinct", () => {
-    // Given the redesigned primary navigation
-    renderNavigation();
-
-    // When every unaffected destination icon is inspected
-    for (const [name, geometry] of Object.entries(preservedIconGeometry)) {
-      const icon = screen.getByRole("button", { name }).querySelector("svg");
-
-      // Then its original path remains byte-for-byte unchanged
-      expect(icon).not.toBeNull();
-      expect(icon?.querySelector("path")?.getAttribute("d")).toBe(geometry);
-    }
-
-    const wiki = screen.getByRole("button", { name: "Wiki" }).querySelector("svg");
-    const memories = screen.getByRole("button", { name: "Memories" }).querySelector("svg");
-    const graph = screen.getByRole("button", { name: "Graph" }).querySelector("svg");
-    expect(wiki).toHaveAttribute("data-navigation-icon", "wiki-page");
-    expect(memories).toHaveAttribute("data-navigation-icon", "brain");
-    expect(graph).toHaveAttribute("data-navigation-icon", "graph");
-    expect(wiki?.innerHTML).not.toBe(memories?.innerHTML);
-    expect(memories?.innerHTML).not.toBe(graph?.innerHTML);
-  });
-
-  it("uses the exact official Tabler Brain geometry selected for Memories", () => {
-    renderNavigation();
-
-    const mark = screen
-      .getByRole("button", { name: "Memories" })
-      .querySelector<SVGSVGElement>('[data-navigation-icon="brain"]');
-
-    expect(mark).not.toBeNull();
-    expect(Array.from(mark?.querySelectorAll("path") ?? [], (path) => path.getAttribute("d"))).toEqual([
-      "M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8",
-      "M8.5 13a3.5 3.5 0 0 1 3.5 3.5v1a3.5 3.5 0 0 1 -7 0v-1.8",
-      "M17.5 16a3.5 3.5 0 0 0 0 -7h-.5",
-      "M19 9.3v-2.8a3.5 3.5 0 0 0 -7 0",
-      "M6.5 16a3.5 3.5 0 0 1 0 -7h.5",
-      "M5 9.3v-2.8a3.5 3.5 0 0 1 7 0v10",
-    ]);
-    expect(mark).toHaveAttribute("height", "14");
-    expect(mark).toHaveAttribute("viewBox", "0 0 24 24");
-    expect(mark).toHaveAttribute("width", "14");
-    for (const path of mark?.querySelectorAll("path") ?? []) {
-      expect(path).toHaveAttribute("stroke-width", "1.8");
-      expect(path).toHaveAttribute("stroke-linecap", "round");
-      expect(path).toHaveAttribute("stroke-linejoin", "round");
+  it("lists every unpinned route once in More and keeps Customize reachable", async () => {
+    const user = userEvent.setup();
+    const { callbacks } = renderNavigation("entities");
+    const more = screen.getByRole("button", { name: "More" });
+    expect(more).toHaveAttribute("aria-current", "page");
+    await user.click(more);
+    const disclosure = screen.getByRole("group", { name: "More" });
+    expect(within(disclosure).getAllByRole("button").map((button) => button.textContent)).toEqual(["Sources", "Memories", "Topics", "Customize navigation"]);
+    expect(more).not.toHaveAttribute("aria-current");
+    expect(screen.getByRole("button", { name: "Topics", current: "page" })).toBeInTheDocument();
+    for (const [label, callback] of [
+      ["Sources", callbacks.sources], ["Memories", callbacks.memories],
+      ["Topics", callbacks.entities],
+    ] as const) {
+      if (more.getAttribute("aria-expanded") === "false") await user.click(more);
+      await user.click(screen.getByRole("button", { name: label }));
+      expect(callback).toHaveBeenCalledOnce();
+      expect(more).toHaveAttribute("aria-expanded", "false");
     }
   });
 
-  it("preserves the existing navigation callbacks", async () => {
-    // Given every global destination is wired
+  it("offers six content destinations without a legacy Home pin or customization control", async () => {
+    localStorage.setItem(NAVIGATION_PREFERENCE_KEY, JSON.stringify({ version: 1, visible: ["home", "sources"] }));
+    const user = userEvent.setup();
+    renderNavigation("sources");
+    expect(railLabels()).toEqual(["Sources", "More"]);
+    await user.click(screen.getByRole("button", { name: "More" }));
+    expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "More" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Wiki", "Spaces", "Graph", "Memories", "Topics", "Customize navigation"]);
+    await user.click(screen.getByRole("button", { name: "Customize navigation" }));
+    const customization = screen.getByRole("group", { name: "Customize navigation" });
+    expect(within(customization).getAllByRole("checkbox")).toHaveLength(6);
+    expect(within(customization).queryByRole("checkbox", { name: "Home" })).not.toBeInTheDocument();
+    await user.click(within(customization).getByRole("checkbox", { name: "Wiki" }));
+    expect(JSON.parse(localStorage.getItem(NAVIGATION_PREFERENCE_KEY)!).visible).toEqual(["pages", "sources"]);
+  });
+
+  it("applies pinning immediately in canonical order, persists on remount and keeps unpinned navigation reachable", async () => {
+    const user = userEvent.setup();
+    const view = renderNavigation("sources");
+    const customize = await openCustomize(user);
+    const sources = within(customize).getByRole("checkbox", { name: "Sources" });
+    expect(sources).not.toBeChecked();
+    await user.click(sources);
+    await user.click(within(customize).getByText("Memories", { selector: "span" }));
+    expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "Sources", "Memories", "More"]);
+    expect(customize).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sources", current: "page" })).toBeInTheDocument();
+    await user.click(within(customize).getByRole("checkbox", { name: "Wiki" }));
+    expect(railLabels()).toEqual(["Spaces", "Graph", "Sources", "Memories", "More"]);
+    expect(view.callbacks.sources).not.toHaveBeenCalled();
+    view.unmount();
+    const remounted = renderNavigation("sources");
+    expect(railLabels()).toEqual(["Spaces", "Graph", "Sources", "Memories", "More"]);
+    await user.click(screen.getByRole("button", { name: "Sources" }));
+    expect(remounted.callbacks.sources).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "More" }));
+    await user.click(screen.getByRole("button", { name: "Wiki" }));
+    expect(remounted.callbacks.pages).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("group")).not.toBeInTheDocument();
+  });
+
+  it("allows all destinations to be hidden, then reset restores defaults without closing customization", async () => {
+    const user = userEvent.setup();
+    renderNavigation("pages");
+    const customize = await openCustomize(user);
+    expect(within(customize).getAllByRole("checkbox").map((checkbox) => checkbox.closest("label")?.textContent)).toEqual(["Wiki", "Spaces", "Graph", "Sources", "Memories", "Topics"]);
+    expect(within(customize).queryByRole("checkbox", { name: "Settings" })).not.toBeInTheDocument();
+    for (const checkbox of within(customize).getAllByRole("checkbox")) {
+      if ((checkbox as HTMLInputElement).checked) await user.click(checkbox);
+    }
+    expect(railLabels()).toEqual(["More"]);
+    expect(JSON.parse(localStorage.getItem(NAVIGATION_PREFERENCE_KEY)!)).toEqual({ version: 1, visible: [] });
+    await user.click(screen.getByRole("button", { name: "Back to More" }));
+    expect(screen.getByRole("button", { name: "Customize navigation" })).toHaveFocus();
+    expect(within(screen.getByRole("group", { name: "More" })).getAllByRole("button")).toHaveLength(7);
+    await user.click(screen.getByRole("button", { name: "Customize navigation" }));
+    await user.click(screen.getByRole("button", { name: "Reset defaults" }));
+    expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "More"]);
+    expect(screen.getByRole("group", { name: "Customize navigation" })).toBeInTheDocument();
+  });
+
+  it("recovers malformed persistence and retains More when a saved empty preference remounts", () => {
+    localStorage.setItem(NAVIGATION_PREFERENCE_KEY, '{"version":1,"visible":["old-route"]}');
+    const view = renderNavigation();
+    expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "More"]);
+    view.unmount();
+    writeNavigationPreferences([]);
+    renderNavigation("pages");
+    expect(railLabels()).toEqual(["More"]);
+    expect(screen.getByRole("button", { name: "More", current: "page" })).toBeInTheDocument();
+  });
+
+  it("has exactly one active marker in rail, More, hidden list and customization as visibility changes", async () => {
+    const user = userEvent.setup();
+    const { container } = renderNavigation("pages");
+    const marker = () => container.querySelectorAll('[data-primary-navigation-active-marker="true"]');
+    expect(marker()).toHaveLength(1);
+    const customize = await openCustomize(user);
+    expect(marker()).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Wiki", current: "page" })).toBeInTheDocument();
+    const checkbox = within(customize).getByRole("checkbox", { name: "Wiki" });
+    await user.click(checkbox);
+    expect(checkbox).toHaveFocus();
+    expect(checkbox.closest("label")).toHaveAttribute("aria-current", "page");
+    expect(marker()).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "More" })).not.toHaveAttribute("aria-current");
+    await user.click(screen.getByRole("button", { name: "Back to More" }));
+    expect(screen.getByRole("button", { name: "Wiki", current: "page" })).toHaveClass("notes-more-item");
+    expect(marker()).toHaveLength(1);
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "More", current: "page" })).toBeInTheDocument();
+    expect(marker()).toHaveLength(1);
+  });
+
+  it("supports keyboard toggles and Escape returns focus to More without navigation", async () => {
     const user = userEvent.setup();
     const { callbacks } = renderNavigation();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Wiki" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Spaces" })).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(callbacks.spaces).toHaveBeenCalledExactlyOnceWith(false);
+    await openCustomize(user);
+    expect(screen.getByRole("button", { name: "Back to More" })).toHaveFocus();
+    const sources = screen.getByRole("checkbox", { name: "Sources" });
+    sources.focus();
+    await user.keyboard(" ");
+    expect(sources).toBeChecked();
+    expect(sources).toHaveFocus();
+    await user.keyboard("{Escape}");
+    const more = screen.getByRole("button", { name: "More" });
+    expect(more).toHaveFocus();
+    expect(more).toHaveAttribute("aria-expanded", "false");
+    expect(callbacks.sources).not.toHaveBeenCalled();
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("group", { name: "More" })).toBeInTheDocument();
+  });
 
-    // When each destination is chosen once
-    await user.click(screen.getByRole("button", { name: "Home" }));
-    await user.click(screen.getByRole("button", { name: "Memories" }));
-    await user.click(screen.getByRole("button", { name: "Wiki" }));
-    await user.click(screen.getByRole("button", { name: "Entities" }));
-    await user.click(screen.getByRole("button", { name: "Graph" }));
-    await user.click(screen.getByRole("button", { name: "Sources" }));
-    await user.click(screen.getByRole("button", { name: "Spaces" }));
+  it("omits unwired routes from both lists and controls while preserving saved choices", async () => {
+    const user = userEvent.setup();
+    writeNavigationPreferences(NAVIGATION_DESTINATION_ORDER);
+    const { rerender } = render(<PrimaryNavigation active={null} labels={labels} onNavigateSpaces={() => {}} />);
+    expect(railLabels()).toEqual(["Spaces", "More"]);
+    const customize = await openCustomize(user);
+    expect(within(customize).getAllByRole("checkbox")).toHaveLength(1);
+    await user.click(screen.getByRole("checkbox", { name: "Spaces" }));
+    expect(JSON.parse(localStorage.getItem(NAVIGATION_PREFERENCE_KEY)!).visible).toEqual(NAVIGATION_DESTINATION_ORDER.filter((key) => key !== "spaces"));
+    rerender(<PrimaryNavigation active={null} labels={labels} onNavigatePages={() => {}} onNavigateSpaces={() => {}} />);
+    expect(railLabels()).toEqual(["Wiki", "More"]);
+    await user.click(screen.getByRole("button", { name: "Back to More" }));
+    expect(within(screen.getByRole("group", { name: "More" })).getAllByRole("button").map((button) => button.textContent)).toEqual(["Spaces", "Customize navigation"]);
+  });
 
-    // Then each existing callback receives its original invocation
-    expect(callbacks.home).toHaveBeenCalledTimes(1);
-    expect(callbacks.memories).toHaveBeenCalledTimes(1);
-    expect(callbacks.pages).toHaveBeenCalledTimes(1);
-    expect(callbacks.entities).toHaveBeenCalledTimes(1);
-    expect(callbacks.graph).toHaveBeenCalledTimes(1);
-    expect(callbacks.sources).toHaveBeenCalledTimes(1);
-    expect(callbacks.spaces).toHaveBeenCalledWith(false);
+  it("keeps customization usable when preference storage is unavailable", async () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => { throw new Error("disabled"); });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("disabled"); });
+    const user = userEvent.setup();
+    renderNavigation();
+    const customize = await openCustomize(user);
+    await user.click(within(customize).getByRole("checkbox", { name: "Sources" }));
+    expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "Sources", "More"]);
+    expect(customize).toBeInTheDocument();
+  });
+
+  it("clamps a late More anchor inside a narrow viewport and updates after resize", async () => {
+    const user = userEvent.setup();
+    writeNavigationPreferences(NAVIGATION_DESTINATION_ORDER);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains("notes-more-anchor")
+        ? { left: 5, right: 41, top: 338, bottom: 374, width: 36, height: 36, x: 5, y: 338, toJSON: () => ({}) }
+        : { left: 48, right: 312, top: 338, bottom: 638, width: 264, height: 300, x: 48, y: 338, toJSON: () => ({}) };
+    });
+    vi.stubGlobal("innerWidth", 375);
+    vi.stubGlobal("innerHeight", 400);
+    renderNavigation();
+    await user.click(screen.getByRole("button", { name: "More" }));
+    const panel = screen.getByRole("group", { name: "More" });
+    expect(panel).toHaveStyle({ left: "43px", top: "-246px", maxHeight: "384px" });
+    vi.stubGlobal("innerWidth", 280);
+    vi.stubGlobal("innerHeight", 280);
+    fireEvent(window, new Event("resize"));
+    expect(panel).toHaveStyle({ left: "3px", top: "-330px", maxHeight: "264px" });
+    vi.unstubAllGlobals();
   });
 });

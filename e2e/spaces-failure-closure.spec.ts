@@ -32,7 +32,7 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
 
   await page.getByTitle("Show sidebar").click();
-  await page.getByRole("navigation", { name: "Recent spaces" }).getByRole("button", { name: "Wenlan" }).focus();
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true }).focus();
   await page.keyboard.press("Escape");
   const primarySidebar = page.locator('aside[aria-label="Primary navigation"]');
   await expect(primarySidebar).toHaveAttribute("aria-hidden", "true");
@@ -43,10 +43,13 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
 
   await page.getByRole("button", { name: "Wenlan", exact: true }).click();
   await page.getByTitle("Show sidebar").click();
-  const recentWenlan = page.getByRole("navigation", { name: "Recent spaces" }).getByRole("button", { name: "Wenlan" });
-  await recentWenlan.focus();
+  const drawerDestination = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true });
+  await drawerDestination.focus();
   await page.setViewportSize({ width: 900, height: 900 });
-  await expect(primarySidebar).toHaveAttribute("aria-hidden", "true");
+  // Desktop collapse retains the accessible icon rail; the notes panel closes.
+  await expect(primarySidebar).toHaveAttribute("aria-hidden", "false");
+  await expect(primarySidebar).toHaveCSS("width", "48px");
+  await expect(primarySidebar.locator(".notes-workspace-panel")).toBeHidden();
   await expect.poll(() => page.evaluate(() => document.querySelector('aside[aria-label="Primary navigation"]')?.contains(document.activeElement))).toBe(false);
   await expect(page.getByTitle("Show sidebar")).toBeFocused();
   expect(await page.evaluate(() => localStorage.getItem("wenlan-sidebar-collapsed"))).toBe("true");

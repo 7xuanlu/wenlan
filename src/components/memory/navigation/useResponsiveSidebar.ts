@@ -53,6 +53,9 @@ export function useResponsiveSidebar(
     if (!isNarrow || !drawerOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // An open nested navigation popover dismisses itself first. Keep capture
+      // for the drawer so background editors do not also handle this Escape.
+      if (event.target instanceof Element && event.target.closest("[data-sidebar-escape-scope]")) return;
       event.preventDefault();
       event.stopImmediatePropagation();
       close();

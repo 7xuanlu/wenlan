@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { DotsThree } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -26,8 +27,10 @@ import {
 } from "./pageReviewSignals";
 import { classifyPage, pageSpaceContext } from "./pagePresentation";
 import "./pageActions.css";
+import { FirstPageMilestone } from "../../onboarding/FirstPageMilestone";
 
 interface PagesOverviewProps {
+  readonly onOpenReview?: () => void;
   readonly onCreatePage: (space: string | null) => void;
   readonly onSelectDraft: (draftId: string, space: string | null) => void;
   readonly onSelectPage: (pageId: string) => void;
@@ -45,6 +48,67 @@ function isUnconfirmedPage(page: Page): boolean {
 }
 
 const PAGE_SIZE = 12;
+
+function PageOptions({ onOpenReview }: { readonly onOpenReview: () => void }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const reviewRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    reviewRef.current?.focus();
+    const closeOutside = (event: PointerEvent) => {
+      if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [open]);
+
+  return (
+    <div
+      className="wiki-options-anchor"
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || !open) return;
+        event.preventDefault();
+        event.stopPropagation();
+        setOpen(false);
+        triggerRef.current?.focus();
+      }}
+      ref={anchorRef}
+    >
+      <button
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label={t("pages.overview.options")}
+        className="mem-icon-action"
+        onClick={() => setOpen((current) => !current)}
+        ref={triggerRef}
+        title={t("pages.overview.options")}
+        type="button"
+      >
+        <DotsThree aria-hidden="true" size={20} />
+      </button>
+      {open && (
+        <div aria-label={t("pages.overview.options")} className="mem-popover-surface wiki-options-menu" role="menu">
+          <button
+            className="wiki-review-action"
+            onClick={() => { setOpen(false); onOpenReview(); }}
+            ref={reviewRef}
+            role="menuitem"
+            type="button"
+          >
+            {t("home.reviewPageChanges")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function modifiedAt(page: Page): number {
   const value = Date.parse(page.last_modified || page.last_compiled || page.created_at);
@@ -147,6 +211,7 @@ function describeWikiPage(
 }
 
 export function PagesOverview({
+  onOpenReview,
   onCreatePage,
   onSelectDraft,
   onSelectPage,
@@ -266,6 +331,7 @@ export function PagesOverview({
 
   return (
     <section aria-labelledby="pages-overview-title" className="wiki-overview mx-auto w-full max-w-[1130px] pb-16">
+      <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
       <header className="wiki-overview-header">
         <div className="wiki-overview-heading">
           <div className="wiki-overview-title-row">
@@ -278,13 +344,16 @@ export function PagesOverview({
           </div>
           <p>{t("pages.overview.description")}</p>
         </div>
-        <button
-          className="page-create-action wiki-new-page-action"
-          onClick={() => onCreatePage(null)}
-          type="button"
-        >
-          {t("pages.overview.newPage")}
-        </button>
+        <div className="wiki-overview-actions">
+          <button
+            className="page-create-action wiki-new-page-action"
+            onClick={() => onCreatePage(null)}
+            type="button"
+          >
+            {t("pages.overview.newPage")}
+          </button>
+          {onOpenReview && <PageOptions onOpenReview={onOpenReview} />}
+        </div>
       </header>
 
       {visibleCandidateItems.length > 0 && (
@@ -333,9 +402,9 @@ export function PagesOverview({
         </section>
       )}
 
-      <div className="wiki-filters" aria-label={t("pages.overview.filtersLabel")}>
+      {pages.length > 0 && <div className="wiki-filters" aria-label={t("pages.overview.filtersLabel")}>
         <label>
-          <span>{t("pages.overview.reviewStatusLabel")}</span>
+          <span className="sr-only">{t("pages.overview.reviewStatusLabel")}</span>
           <select
             aria-label={t("pages.overview.reviewStatusLabel")}
             onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
@@ -346,14 +415,14 @@ export function PagesOverview({
           </select>
         </label>
         <label>
-          <span>{t("pages.overview.spaceLabel")}</span>
+          <span className="sr-only">{t("pages.overview.spaceLabel")}</span>
           <select aria-label={t("pages.overview.spaceLabel")} onChange={(event) => setSpaceFilter(event.target.value)} value={spaceFilter}>
             <option value="all">{t("pages.overview.spaceAll")}</option>
             {spaces.map((space) => <option key={space} value={space}>{space}</option>)}
           </select>
         </label>
         <label>
-          <span>{t("pages.overview.sortLabel")}</span>
+          <span className="sr-only">{t("pages.overview.sortLabel")}</span>
           <select aria-label={t("pages.overview.sortLabel")} onChange={(event) => setSort(event.target.value as PageSort)} value={sort}>
             <option value="recent">{t("pages.overview.sortRecent")}</option>
             <option value="title">{t("pages.overview.sortTitle")}</option>
@@ -362,7 +431,7 @@ export function PagesOverview({
         <span className="wiki-filters-side">
           <AssetLensToggle onChange={handleLensChange} value={lens} />
         </span>
-      </div>
+      </div>}
 
       {isPending ? (
         <p className="wiki-state">{t("pages.overview.loading")}</p>

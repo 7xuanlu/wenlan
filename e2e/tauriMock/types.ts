@@ -35,6 +35,8 @@ export type TauriMockPageScenario = {
 };
 
 export type InstallTauriMockOptions = {
+  /** Opt-in for preference persistence journeys across a real browser reload. */
+  readonly preserveLocalStorage?: boolean;
   readonly locale: AppLocale;
   readonly rawActions: readonly string[];
   readonly memories?: readonly MemoryItem[];

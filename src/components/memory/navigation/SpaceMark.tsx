@@ -1,15 +1,16 @@
 type SpaceMarkProps = {
   readonly active: boolean;
+  readonly inheritColor?: boolean;
 };
 
-export function SpaceMark({ active }: SpaceMarkProps) {
+export function SpaceMark({ active, inheritColor = false }: SpaceMarkProps) {
   return (
     <svg
       aria-hidden="true"
       data-space-mark="self-contained-world"
       focusable="false"
       height="14"
-      style={{ color: active ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)" }}
+      style={{ color: inheritColor ? "inherit" : active ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)" }}
       viewBox="0 0 24 24"
       width="14"
     >

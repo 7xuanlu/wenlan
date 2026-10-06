@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { writeFile } from "node:fs/promises";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { expect, test, type Page } from "@playwright/test";
 import { installTauriMock } from "./tauriMock";
 import type { MemoryItem } from "../src/lib/tauri";
@@ -90,7 +91,7 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   await installTauriMock(page, { locale: "en", rawActions: [], memories: memoryFixtures });
   await page.goto("/");
 
-  await page.getByRole("button", { name: "Memories" }).click();
+  await openPrimaryDestination(page, "Memories");
 
   const list = page.getByRole("region", { name: "Memory list" });
   await expect(list).toBeVisible();
@@ -144,7 +145,7 @@ test("renders the empty parent memory list", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
   await page.goto("/");
-  await page.getByRole("button", { name: "Memories" }).click();
+  await openPrimaryDestination(page, "Memories");
 
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();
   await expect(page.getByText("No memories yet")).toBeVisible();

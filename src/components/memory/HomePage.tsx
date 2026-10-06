@@ -5,31 +5,17 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import {
   getActiveImportBatches,
-  getMemoryStats,
-  getResolvedRouting,
-  listEntities,
-  type MemoryStats,
   type Page,
 } from "../../lib/tauri";
 import { ImportDetailPanel, ImportStatusPill } from "./ImportPhases";
 import { isKnowledgePage, listAllActivePages } from "./pages/listAllPages";
-import { useReviewQueue, reviewItemId, type ReviewItem } from "./useReviewQueue";
-import ReviewDialog, {
-  reviewKindLabel,
-  useReviewItemSummary,
-} from "./ReviewDialog";
-import { GhostPagesRow } from "../onboarding/GhostPagesRow";
-import { useMilestones } from "../onboarding/useMilestones";
-import { FirstPageModal } from "../onboarding/FirstPageModal";
-import { useProviderConfigured } from "../intelligence/useProviderConfigured";
+import { FirstPageMilestone } from "../onboarding/FirstPageMilestone";
 import "./homeEmptyState.css";
 
 interface HomePageProps {
-  onNavigateMemory: (sourceId: string) => void;
-  onNavigateLog: () => void;
   onNavigateGraph: () => void;
   onSelectPage?: (pageId: string) => void;
-  onOpenDistillReview?: () => void;
+  /** Kept for existing first-use routing; Home no longer displays its entry. */
   onStartFirstUse?: () => void;
   /**
    * Starts the same new-page draft flow the Wiki overview's New page action
@@ -44,16 +30,9 @@ interface HomePageProps {
   onOpenIntelligenceSettings: () => void;
 }
 
-const FIRST_CONCEPT_SHOWN_KEY = "onboarding:firstConceptShownCount";
-const MAX_MODAL_SHOWS = 3;
-
 export default function HomePage({
-  onNavigateMemory,
-  onNavigateLog: _onNavigateLog,
   onNavigateGraph: _onNavigateGraph,
   onSelectPage,
-  onOpenDistillReview,
-  onStartFirstUse,
   onCreatePage,
   onOpenIntelligenceSettings,
 }: HomePageProps) {
@@ -67,16 +46,10 @@ export default function HomePage({
     refetchInterval: 10_000,
   });
 
-  const { data: stats } = useQuery({
-    queryKey: ["memoryStats"],
-    queryFn: getMemoryStats,
-    refetchInterval: 10_000,
-  });
-
   // The daemon's browse list carries an entity "shadow" page for every entity
   // by contract. Those belong in Wiki browse but are not pages anyone wrote or
-  // Wenlan distilled, so filtering once here keeps the empty-state switch, the
-  // home page list, and the rail's Pages metric all counting the same thing.
+  // Wenlan distilled, so filtering once here keeps the empty-state switch and
+  // the home page list counting the same thing.
   const knowledgePages = useMemo(
     () => recentConcepts.filter(isKnowledgePage),
     [recentConcepts],
@@ -90,52 +63,12 @@ export default function HomePage({
     [knowledgePages],
   );
 
-  const { milestones, acknowledge } = useMilestones();
-
-  const firstConceptMs = milestones.find(
-    (m) => m.id === "first-concept" && m.acknowledged_at == null,
-  );
-  const firstConceptData = firstConceptMs?.payload as
-    | { page_id?: string; title?: string }
-    | undefined;
-  const firstConcept = firstConceptData?.page_id
-    ? recentConcepts.find((c) => c.id === firstConceptData.page_id)
-    : null;
-
-  // Track whether we've incremented shown_count for the current first-concept
-  // modal instance, so StrictMode double-invokes don't double-count.
-  const incrementedOnMountRef = useRef(false);
-  useEffect(() => {
-    if (!firstConcept || !firstConceptMs) return;
-    if (incrementedOnMountRef.current) return;
-    incrementedOnMountRef.current = true;
-    const current = parseInt(
-      localStorage.getItem(FIRST_CONCEPT_SHOWN_KEY) || "0",
-      10,
-    );
-    const next = current + 1;
-    localStorage.setItem(FIRST_CONCEPT_SHOWN_KEY, String(next));
-    if (next > MAX_MODAL_SHOWS) {
-      acknowledge("first-concept");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [firstConcept?.id, firstConceptMs?.id]);
-
-  const firstConceptShownCount = parseInt(
-    localStorage.getItem(FIRST_CONCEPT_SHOWN_KEY) || "0",
-    10,
-  );
-  const shouldShowFirstConceptModal =
-    !!firstConcept &&
-    !!firstConceptMs &&
-    firstConceptShownCount <= MAX_MODAL_SHOWS;
-
   // The "recent-concepts" query has never resolved right after onboarding
   // (HomePage isn't mounted during the wizard), so its default `[]` would
   // otherwise be read as "no pages" and flash the empty state before the real
   // page list arrives. Once the first attempt has answered, keep the rest of
-  // Home mounted during background refetches so an open review dialog survives
-  // an ambient page-list failure.
+  // Home mounted during background refetches to avoid replacing the page list
+  // with the empty state during an ambient page-list failure.
   if (recentConceptsLoading && !recentConceptsFetched) {
     return null;
   }
@@ -143,32 +76,14 @@ export default function HomePage({
   return (
     <>
       <WikiHome
-        allPages={recentConcepts}
         knowledgePages={knowledgePages}
         pages={recentlyRefinedPages}
-        stats={stats}
         onSelectPage={onSelectPage}
-        onOpenDistillReview={onOpenDistillReview}
-        onStartFirstUse={onStartFirstUse}
-        onOpenMemory={onNavigateMemory}
         onCreatePage={onCreatePage}
         onOpenIntelligenceSettings={onOpenIntelligenceSettings}
       />
 
-      {shouldShowFirstConceptModal && firstConcept && (
-        <FirstPageModal
-          page={firstConcept}
-          onOpen={(id) => {
-            localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);
-            acknowledge("first-concept");
-            onSelectPage?.(id);
-          }}
-          onDismiss={() => {
-            localStorage.removeItem(FIRST_CONCEPT_SHOWN_KEY);
-            acknowledge("first-concept");
-          }}
-        />
-      )}
+      <FirstPageMilestone pages={recentConcepts} onSelectPage={onSelectPage} />
     </>
   );
 }
@@ -176,21 +91,6 @@ export default function HomePage({
 
 function formatSourceCount(t: TFunction, count: number): string {
   return t("home.counts.source", { count });
-}
-
-function updatedTodayCount(pages: Page[]): number {
-  return pages.filter((page) => {
-    const ms = Date.parse(page.last_modified);
-    return !Number.isNaN(ms) && Math.floor((Date.now() - ms) / 86_400_000) <= 0;
-  }).length;
-}
-
-function latestPageUpdate(t: TFunction, pages: Page[]): string {
-  const latest = pages.reduce<string | null>((current, page) => {
-    if (!current) return page.last_modified;
-    return Date.parse(page.last_modified) > Date.parse(current) ? page.last_modified : current;
-  }, null);
-  return latest ? relativePageDate(t, latest) : t("home.relative.noUpdates");
 }
 
 function relativePageDate(t: TFunction, value: string): string {
@@ -235,42 +135,20 @@ function useElementMinWidth<T extends HTMLElement>(minWidth: number) {
 }
 
 function WikiHome({
-  allPages,
   knowledgePages,
   pages,
-  stats,
   onSelectPage,
-  onOpenDistillReview,
-  onStartFirstUse,
-  onOpenMemory,
   onCreatePage,
   onOpenIntelligenceSettings,
 }: {
-  /** Every active page the daemon browses, entity shadow pages included. */
-  allPages: Page[];
-  /** `allPages` minus entity shadow pages — what a person calls "my pages". */
+  /** Active pages minus entity shadow pages — what a person calls "my pages". */
   knowledgePages: Page[];
   pages: Page[];
-  stats?: MemoryStats;
   onSelectPage?: (pageId: string) => void;
-  onOpenDistillReview?: () => void;
-  onStartFirstUse?: () => void;
-  onOpenMemory?: (sourceId: string) => void;
   onCreatePage: (space: string | null) => void;
   onOpenIntelligenceSettings: () => void;
 }) {
   const [containerRef, isWideLayout] = useElementMinWidth<HTMLDivElement>(820);
-  const { t } = useTranslation();
-  const {
-    items: reviewItems,
-    isLoading: reviewLoading,
-    error: reviewError,
-    decisionsTruncated,
-    resolve,
-    isResolving,
-    refetch: refetchReviewQueue,
-  } = useReviewQueue();
-  const [openReviewId, setOpenReviewId] = useState<string | null>(null);
   const [importDetailOpen, setImportDetailOpen] = useState(false);
   // Background import phases, if any. Asked here — not higher — because this
   // is the only surface whose copy branches on the answer, and the command
@@ -288,11 +166,6 @@ function WikiHome({
   useEffect(() => {
     if (!hasActiveImports) setImportDetailOpen(false);
   }, [hasActiveImports]);
-  // New-memory captures are inflow, not decisions — they're unconfirmed but
-  // already live (recalled, feeding pages), so they stay out of the rail AND
-  // out of the dialog the rail opens: its "n of total" header must walk the
-  // same list the badge counted, or "1 of 33" sits beside a badge that says 5.
-  const decisionItems = reviewItems.filter((item) => item.kind !== "capture");
   return (
     <div
       data-testid="wiki-home"
@@ -314,23 +187,7 @@ function WikiHome({
         className="wiki-daily-desk"
       >
         <TodayHeader
-          pages={allPages}
-          statusPill={
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />
-              {knowledgePages.length > 0 && onStartFirstUse && (
-                <button type="button" className="home-empty-action" onClick={onStartFirstUse}
-                  style={{ ...EMPTY_ACTION_STYLE, background: "none", border: "none", color: "var(--mem-text-secondary)", fontSize: "var(--mem-text-meta)", padding: "4px 0" }}>
-                  {t("firstUse.entry")}
-                </button>
-              )}
-            </div>
-          }
-        />
-
-        <HomeContextRail
-          knowledgePages={knowledgePages}
-          stats={stats}
+          statusPill={<ImportStatusPill batches={importBatches} onOpen={() => setImportDetailOpen(true)} />}
         />
       </section>
 
@@ -345,7 +202,7 @@ function WikiHome({
         style={{
           display: "grid",
           gap: isWideLayout ? 28 : 24,
-          gridTemplateColumns: isWideLayout ? "minmax(0, 1fr) minmax(320px, 360px)" : "minmax(0, 1fr)",
+          gridTemplateColumns: "minmax(0, 1fr)",
           gridColumn: "1 / -1",
           alignItems: "start",
           minWidth: 0,
@@ -353,7 +210,6 @@ function WikiHome({
       >
         {knowledgePages.length === 0 ? (
           <HomeEmptyState
-            onStartFirstUse={onStartFirstUse}
             onCreatePage={onCreatePage}
             onOpenIntelligenceSettings={onOpenIntelligenceSettings}
           />
@@ -364,32 +220,9 @@ function WikiHome({
             isWideLayout={isWideLayout}
           />
         )}
-        <NeedsReviewRail
-          items={decisionItems}
-          isLoading={reviewLoading}
-          error={reviewError}
-          onRetry={refetchReviewQueue}
-          isTruncated={decisionsTruncated}
-          onOpenItem={setOpenReviewId}
-          onOpenDistillReview={onOpenDistillReview}
-          leadsColumn={!isWideLayout && decisionItems.length > 0}
-        />
       </div>
       )}
 
-      {/* No retrieval list here. Agents reading from the library are the
-          Activity view's subject, and home is the library's own surface: pages,
-          what needs review, what changed. */}
-
-      <ReviewDialog
-        items={decisionItems}
-        openId={openReviewId}
-        onOpenChange={setOpenReviewId}
-        onResolve={resolve}
-        isResolving={isResolving}
-        onOpenMemory={onOpenMemory}
-        onOpenPage={onSelectPage}
-      />
     </div>
   );
 }
@@ -435,7 +268,7 @@ function SectionHeading({
   );
 }
 
-function TodayHeader({ pages, statusPill }: { pages: Page[]; statusPill?: React.ReactNode }) {
+function TodayHeader({ statusPill }: { statusPill?: React.ReactNode }) {
   const { t } = useTranslation();
   return (
     <section data-testid="wiki-today-heading" className="wiki-today-heading">
@@ -443,22 +276,7 @@ function TodayHeader({ pages, statusPill }: { pages: Page[]; statusPill?: React.
         title={t("home.todayInWenlan")}
         level={1}
         size="page"
-        action={
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-            {statusPill}
-            <span
-              data-testid="wiki-context-latest"
-              style={{
-                fontFamily: "var(--mem-font-mono)",
-                fontSize: "var(--mem-text-meta)",
-                color: "var(--mem-text-tertiary)",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {latestPageUpdate(t, pages)}
-            </span>
-          </span>
-        }
+        action={statusPill}
       />
     </section>
   );
@@ -472,171 +290,39 @@ const EMPTY_ACTION_STYLE: React.CSSProperties = {
   cursor: "pointer",
 };
 
-/**
- * What the page list says when the library has no pages yet.
- *
- * Page synthesis is LLM-gated: distill and the refinery no-op without a
- * provider, so a library with no local model and no API key will never grow a
- * page on its own. The variants keep that honest — without a provider the copy
- * names the precondition and offers the setting that removes it, and only with
- * one is the deadline promise allowed.
- *
- * A configured provider is necessary and not sufficient. Background synthesis
- * runs through the per-job source pins, and an everyday job with no pin
- * resolves to no provider at all, so a user who quit during the model download
- * can have a loaded model and still never see a page. That state gets its own
- * copy: the deadline promise is replaced by what actually unblocks it, and the
- * same Settings action is offered.
- *
- * A pin whose source is not loadable right now is a third state, and it is not
- * the same sentence. That user did choose a model, so telling them to choose
- * one reads as if their choice never registered. They are told their choice is
- * unavailable instead, with the same way into Settings.
- *
- * Until the provider queries answer, neither claim is made: the lead, the
- * ghost preview and "Write a page" are true in every state, so they render
- * immediately and the provider-dependent sentence and button appear once the
- * answer is actually known.
- *
- * The provider read lives here, not in `HomePage`, because this is the only
- * screen on the home surface whose copy depends on the answer. Asked one level
- * up it fired for every library, including the ones that already have pages and
- * never render this component — three IPC calls per home mount whose result was
- * discarded, and, in the fixture-only Review flavor, three commands outside the
- * Review command contract (`review/commandCapabilities.ts`), which fails closed
- * on anything it does not list.
- */
+/** Notes are usable immediately; AI setup is an optional next step. */
 function HomeEmptyState({
-  onStartFirstUse,
   onCreatePage,
   onOpenIntelligenceSettings,
 }: {
-  onStartFirstUse?: () => void;
   onCreatePage: (space: string | null) => void;
   onOpenIntelligenceSettings: () => void;
 }) {
   const { t } = useTranslation();
-  const { configured: providerConfigured, isResolved: providerResolved } =
-    useProviderConfigured();
-  const needsProvider = providerResolved && !providerConfigured;
-  // A configured provider is not enough for a page to compile: background work
-  // routes through the per-job source pins, and an unpinned everyday job
-  // resolves to nothing that can synthesize. The same query key Settings uses,
-  // so the two surfaces share one cache and cannot disagree.
-  const routing = useQuery({ queryKey: ["resolvedRouting"], queryFn: getResolvedRouting });
-  // A daemon that predates the routing endpoint answers null: it has no pins to
-  // read, and its promise is as true as it was before, so it keeps the old copy.
-  const everydayMode =
-    routing.isSuccess && routing.data != null ? routing.data.everyday.mode : null;
-  // Three states, because two of them block pages for different reasons and a
-  // user who already chose a model must not be told to choose one. "pinned" is
-  // the only mode that can compile; "pinned_unavailable" means their choice is
-  // made but not loadable right now; anything else means no choice is recorded.
-  // An unrecognized mode from a newer daemon falls in with the unpinned case,
-  // so a mode we cannot read never earns the deadline promise.
-  const routingPinUnavailable = everydayMode === "pinned_unavailable";
-  const routingUnpinned =
-    everydayMode !== null && everydayMode !== "pinned" && !routingPinUnavailable;
-  // Neither claim is made until the answer behind it is known. The precondition
-  // copy needs only the provider answer; the deadline promise and its two
-  // alternatives need the routing answer too.
-  const showProviderSentence = providerResolved && (!providerConfigured || routing.isSuccess);
-  const needsRouting = providerResolved && providerConfigured && routingUnpinned;
-  const pinUnavailable = providerResolved && providerConfigured && routingPinUnavailable;
   return (
     <section data-testid="wiki-page-empty" aria-labelledby="wiki-page-empty-title">
-      <h2
-        id="wiki-page-empty-title"
-        style={{
-          fontFamily: "var(--mem-font-heading)",
-          fontSize: 16,
-          fontWeight: 500,
-          color: "var(--mem-text)",
-          lineHeight: 1.3,
-          margin: "0 0 6px",
-        }}
-      >
+      <h2 id="wiki-page-empty-title" style={{
+        fontFamily: "var(--mem-font-heading)", fontSize: 18, fontWeight: 500,
+        color: "var(--mem-text)", lineHeight: 1.4, margin: "0 0 10px",
+      }}>
         {t("home.empty.noPages")}
       </h2>
-      {showProviderSentence && (
-        <p
-          style={{
-            fontFamily: "var(--mem-font-body)",
-            fontSize: 14,
-            color: "var(--mem-text-secondary)",
-            lineHeight: 1.6,
-            margin: "0 0 14px",
-            maxWidth: "62ch",
-          }}
-        >
-          {!providerConfigured
-            ? t("home.empty.needsProvider")
-            : routingPinUnavailable
-              ? t("home.empty.pinUnavailable")
-              : routingUnpinned
-                ? t("home.empty.needsRouting")
-                : t("home.empty.compiling")}
-        </p>
-      )}
-
-      <div
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 10,
-          margin: showProviderSentence ? "0 0 24px" : "14px 0 24px",
-        }}
-      >
-        {onStartFirstUse && (
-          <button
-            type="button"
-            className="home-empty-action"
-            onClick={onStartFirstUse}
-            style={{
-              ...EMPTY_ACTION_STYLE,
-              border: "1px solid var(--mem-accent-indigo)",
-              background: "var(--mem-indigo-bg)",
-              color: "var(--mem-accent-indigo)",
-            }}
-          >
-            {t("firstUse.entry")}
-          </button>
-        )}
-        {(needsProvider || needsRouting || pinUnavailable) && (
-          <button
-            type="button"
-            className="home-empty-action"
-            onClick={onOpenIntelligenceSettings}
-            style={{
-              ...EMPTY_ACTION_STYLE,
-              border: "1px solid var(--mem-accent-indigo)",
-              background: "var(--mem-indigo-bg)",
-              color: "var(--mem-accent-indigo)",
-            }}
-          >
-            {pinUnavailable
-              ? t("home.empty.openSettings")
-              : needsRouting
-                ? t("home.empty.chooseModel")
-                : t("home.empty.turnOnModel")}
-          </button>
-        )}
-        <button
-          type="button"
-          className="home-empty-action"
-          onClick={() => onCreatePage(null)}
-          style={{
-            ...EMPTY_ACTION_STYLE,
-            border: "1px solid var(--mem-border)",
-            background: "var(--mem-surface)",
-            color: "var(--mem-text)",
-          }}
-        >
+      <p style={{ fontFamily: "var(--mem-font-body)", fontSize: 14,
+        color: "var(--mem-text-secondary)", lineHeight: 1.6, margin: "0 0 20px" }}>
+        {t("home.empty.notesFirst")}
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}>
+        <button type="button" className="home-empty-action" onClick={() => onCreatePage(null)}
+          style={{ ...EMPTY_ACTION_STYLE, border: "1px solid var(--mem-border)",
+            background: "var(--mem-surface)", color: "var(--mem-text)" }}>
           {t("home.empty.writePage")}
         </button>
+        <button type="button" className="home-empty-action" onClick={onOpenIntelligenceSettings}
+          style={{ ...EMPTY_ACTION_STYLE, padding: "7px 0", border: "none",
+            background: "none", color: "var(--mem-text-secondary)" }}>
+          {t("home.empty.aiOptional")}
+        </button>
       </div>
-
-      <GhostPagesRow />
     </section>
   );
 }
@@ -758,484 +444,6 @@ function PageList({
         ))}
       </div>
     </div>
-  );
-}
-
-function HomeContextRail({
-  knowledgePages,
-  stats,
-}: {
-  /**
-   * Already filtered by the caller. The browse list includes entity shadow
-   * pages by daemon contract; entities have their own metric below, so the
-   * Pages number and its updated-today chip count knowledge pages only — and
-   * they are filtered in exactly one place so this total can never disagree
-   * with the empty-state switch that reads the same list.
-   */
-  knowledgePages: Page[];
-  /** Aggregate memory counts; undefined while the stats query is loading. */
-  stats?: MemoryStats;
-}) {
-  const { t } = useTranslation();
-  // Same cache key/shape as AtlasView's entity fetch — shared cache,
-  // no double-fetch.
-  const entitiesQuery = useQuery({
-    queryKey: ["constellation-entities"],
-    queryFn: () => listEntities(),
-    staleTime: 60_000,
-  });
-  const pagesUpdatedToday = updatedTodayCount(knowledgePages);
-
-  return (
-    <div
-      data-testid="wiki-context-rail"
-      className="wiki-context-rail"
-    >
-      <section
-        data-testid="wiki-index-summary"
-        className="wiki-index-bar"
-        aria-label={t("home.overview")}
-      >
-        <div
-          data-testid="wiki-index-strip"
-          className="wiki-index-strip"
-        >
-          <ContextMetric
-            testId="pages"
-            label={t("home.pages")}
-            total={String(knowledgePages.length)}
-            deltas={
-              pagesUpdatedToday > 0
-                ? [
-                    {
-                      text: t("home.deltaUpdated", { value: String(pagesUpdatedToday) }),
-                      tone: "indigo",
-                      testId: "wiki-context-updated-today",
-                    },
-                  ]
-                : []
-            }
-          />
-          <ContextMetric
-            testId="memories"
-            label={t("home.memories")}
-            total={stats ? String(stats.total) : "—"}
-            deltas={
-              stats && stats.new_today > 0
-                ? [
-                    {
-                      text: t("home.deltaToday", { value: String(stats.new_today) }),
-                      tone: "sage" as const,
-                      testId: "wiki-context-memories-delta",
-                    },
-                  ]
-                : []
-            }
-          />
-          <ContextMetric
-            testId="entities"
-            label={t("home.entities")}
-            total={entitiesQuery.data ? String(entitiesQuery.data.length) : "—"}
-            deltas={[]}
-          />
-        </div>
-      </section>
-    </div>
-  );
-}
-
-interface ContextDelta {
-  /** Rendered text, already localized, e.g. "+18 today". */
-  text: string;
-  tone: "sage" | "indigo" | "warm-pill";
-  testId?: string;
-}
-
-function ContextMetric({
-  testId,
-  label,
-  total,
-  deltas,
-}: {
-  testId: string;
-  label: string;
-  /** Pre-formatted total; "—" while loading. */
-  total: string;
-  deltas: ContextDelta[];
-}) {
-  return (
-    <div data-testid={`wiki-context-${testId}-cell`}>
-      <p
-        style={{
-          fontFamily: "var(--mem-font-mono)",
-          fontSize: "var(--mem-text-meta)",
-          fontWeight: 600,
-          color: "var(--mem-text-tertiary)",
-          letterSpacing: "0.04em",
-          lineHeight: 1.25,
-          margin: "0 0 5px",
-          textTransform: "uppercase",
-        }}
-      >
-        {label}
-      </p>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-        <span
-          data-testid={`wiki-context-${testId}`}
-          style={{
-            fontFamily: "var(--mem-font-heading)",
-            fontSize: 26,
-            fontWeight: 500,
-            lineHeight: 1.1,
-            color: "var(--mem-text)",
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {total}
-        </span>
-        {deltas.map((delta, index) => (
-          <span
-            key={delta.testId ?? index}
-            data-testid={delta.testId}
-            style={
-              delta.tone === "warm-pill"
-                ? {
-                    fontFamily: "var(--mem-font-mono)",
-                    fontSize: "var(--mem-text-meta)",
-                    fontVariantNumeric: "tabular-nums",
-                    borderRadius: 5,
-                    padding: "2px 8px",
-                    color: "var(--mem-accent-warm)",
-                    backgroundColor: "color-mix(in srgb, var(--mem-accent-warm) 15%, transparent)",
-                    whiteSpace: "nowrap",
-                  }
-                : {
-                    fontFamily: "var(--mem-font-mono)",
-                    fontSize: "var(--mem-text-meta)",
-                    fontVariantNumeric: "tabular-nums",
-                    color: delta.tone === "sage" ? "var(--mem-accent-sage)" : "var(--mem-accent-indigo)",
-                    whiteSpace: "nowrap",
-                  }
-            }
-          >
-            {delta.text}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NeedsReviewRail({
-  items,
-  isLoading,
-  error,
-  onRetry,
-  isTruncated = false,
-  onOpenItem,
-  onOpenDistillReview,
-  leadsColumn = false,
-}: {
-  items: ReviewItem[];
-  isLoading: boolean;
-  /** Set when the queue fetch failed — an empty `items` then means "unknown", not "caught up". */
-  error?: unknown;
-  onRetry?: () => void;
-  /** A source hit its fetch cap — show the count as "N+", never as exact. */
-  isTruncated?: boolean;
-  onOpenItem: (id: string) => void;
-  onOpenDistillReview?: () => void;
-  /** Single-column layout: surface the rail above the page list when it has items. */
-  leadsColumn?: boolean;
-}) {
-  const { t } = useTranslation();
-  return (
-    <section
-      data-testid="wiki-page-updates"
-      style={leadsColumn ? { order: -1 } : undefined}
-    >
-      <h2
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "var(--mem-text-meta)",
-          fontWeight: 500,
-          letterSpacing: "0.08em",
-          textTransform: "uppercase",
-          color: "var(--mem-text-tertiary)",
-          margin: "0 0 8px",
-        }}
-      >
-        {t("home.pageUpdates")}
-        {items.length > 0 && (
-          <span
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontVariantNumeric: "tabular-nums",
-              fontSize: "var(--mem-text-meta)",
-              fontWeight: 400,
-              letterSpacing: 0,
-              color: "var(--mem-accent-indigo)",
-              backgroundColor: "var(--mem-indigo-bg)",
-              borderRadius: 999,
-              padding: "1px 8px",
-            }}
-          >
-            {isTruncated ? `${items.length}+` : items.length}
-          </span>
-        )}
-      </h2>
-      <div
-        style={{
-          border: "1px solid var(--mem-border)",
-          borderRadius: 10,
-          padding: "11px 13px 8px",
-          // Raised via border + ink-toned shadow, not a fill tint. Light stays
-          // canvas-white (no smudge on the white home); dark lifts by fill
-          // (--mem-home-card) where the shadow barely reads. Indigo identity
-          // lives in the heading + count pill, not the fill.
-          backgroundColor: "var(--mem-home-card)",
-          boxShadow:
-            "0 1px 2px rgba(26, 26, 46, 0.05), 0 4px 12px rgba(26, 26, 46, 0.06)",
-        }}
-      >
-        <div data-testid="worth-a-glance" style={{ display: "grid" }}>
-          {items.length === 0 ? (
-            error ? (
-              <p
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 7,
-                  fontFamily: "var(--mem-font-body)",
-                  fontSize: "var(--mem-text-control)",
-                  color: "var(--mem-text-secondary)",
-                  lineHeight: 1.5,
-                  margin: "4px 0 6px",
-                }}
-              >
-                {t("review.loadFailed")}
-                {onRetry && (
-                  <button
-                    type="button"
-                    onClick={onRetry}
-                    style={{
-                      border: "none",
-                      background: "none",
-                      padding: 0,
-                      color: "var(--mem-accent-indigo)",
-                      fontFamily: "inherit",
-                      fontSize: "inherit",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {t("review.retry")}
-                  </button>
-                )}
-              </p>
-            ) : (
-              !isLoading && (
-                <p
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 7,
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "var(--mem-text-description)",
-                    color: "var(--mem-accent-sage)",
-                    lineHeight: 1.5,
-                    margin: "4px 0 6px",
-                  }}
-                >
-                  ✓ {t("review.allCaughtUp")}
-                </p>
-              )
-            )
-          ) : (
-            <>
-              {items.slice(0, 3).map((item, itemIndex, shown) => (
-                <ReviewRailItem
-                  key={reviewItemId(item)}
-                  item={item}
-                  onOpenItem={onOpenItem}
-                  isLast={itemIndex === shown.length - 1}
-                />
-              ))}
-              {error && (
-                <p
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "var(--mem-text-meta)",
-                    color: "var(--mem-text-tertiary)",
-                    lineHeight: 1.4,
-                    margin: "6px 0 0",
-                  }}
-                >
-                  {t("review.loadPartial")}
-                </p>
-              )}
-            </>
-          )}
-        </div>
-
-        {onOpenDistillReview && (
-          <button
-            type="button"
-            onClick={onOpenDistillReview}
-            style={{
-              display: "block",
-              width: "100%",
-              marginTop: 2,
-              padding: "7px 2px",
-              textAlign: "left",
-              border: "0",
-              backgroundColor: "transparent",
-              color: "var(--mem-accent-indigo)",
-              cursor: "pointer",
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "var(--mem-text-meta)",
-            }}
-          >
-            {items.length > 0
-              ? `${t("review.reviewAll")} →`
-              : t("home.reviewPageChanges")}
-          </button>
-        )}
-      </div>
-    </section>
-  );
-}
-
-function reviewItemAge(ms: number, locale: string): string {
-  const diff = (Date.now() - ms) / 1000;
-  const relative = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
-  if (diff < 60) return relative.format(0, "second");
-  if (diff < 3600) return relative.format(-Math.floor(diff / 60), "minute");
-  if (diff < 86400) return relative.format(-Math.floor(diff / 3600), "hour");
-  if (diff < 604800) return relative.format(-Math.floor(diff / 86400), "day");
-  return new Date(ms).toLocaleDateString(locale);
-}
-
-/** Mockup kind-dot palette: revision indigo, page-level the page accent,
- * capture warm, memory merges + suggestions amber, conflicts danger. Green
- * (sage) is reserved for success/added semantics, never a pending-review dot. */
-function reviewDotColor(item: ReviewItem): string {
-  if (item.kind === "revision") return "var(--mem-accent-indigo)";
-  if (item.kind === "capture") return "var(--mem-accent-warm)";
-  // Distill discovery never reaches the home rail; colors kept for totality.
-  if (item.kind === "stale_page") return "var(--mem-accent-page)";
-  if (item.kind === "page_candidate") return "var(--mem-accent-warm)";
-  if (item.kind === "topic") return "var(--mem-accent-amber)";
-  switch (item.action) {
-    case "page_merge":
-    case "page_keep_or_archive":
-      return "var(--mem-accent-page)";
-    case "detect_contradiction":
-    case "relation_conflict":
-      return "var(--mem-status-danger-text)";
-    default:
-      // suggest_entity and other refinements fold into amber.
-      return "var(--mem-accent-amber)";
-  }
-}
-
-function ReviewRailItem({
-  item,
-  onOpenItem,
-  isLast = false,
-}: {
-  item: ReviewItem;
-  onOpenItem: (id: string) => void;
-  isLast?: boolean;
-}) {
-  const { t, i18n } = useTranslation();
-  const kind = reviewKindLabel(t, item);
-  // Same rich titles as the review-page cards — a rail row never reads as
-  // just its kind label when the names its ids point at can be fetched.
-  const { title, reason } = useReviewItemSummary(item);
-  const isSourceRepair = item.kind === "refinement" && item.action === "lint_repair_review";
-  // Bare confidence "%" read as an unlabeled number on this terse rail — the
-  // dialog carries the precise, labeled metric (overlap / confidence) instead.
-  const intent = isSourceRepair && reason ? reason
-    : item.kind === "revision" ? t("review.intentRevision")
-    : item.kind === "refinement" && item.action === "page_keep_or_archive" ? t("review.intentArchive")
-    : item.kind === "refinement" && (item.action === "page_merge" || item.action === "entity_merge") ? t("review.intentMerge") : kind;
-  const meta = [
-    intent,
-    item.timestampMs != null ? reviewItemAge(item.timestampMs, i18n.language) : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  return (
-    <button
-      type="button"
-      aria-label={t("review.openItem", { title })}
-      onClick={() => onOpenItem(reviewItemId(item))}
-      style={{
-        display: "grid",
-        gap: 3,
-        width: "100%",
-        textAlign: "left",
-        border: "0",
-        borderBottom: isLast
-          ? "none"
-          : "1px solid color-mix(in srgb, var(--mem-border) 68%, transparent)",
-        borderRadius: 6,
-        padding: "8px 2px 9px",
-        backgroundColor: "transparent",
-        color: "inherit",
-        cursor: "pointer",
-      }}
-    >
-      <span
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 7,
-          minWidth: 0,
-        }}
-      >
-        <span
-          aria-hidden="true"
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: "50%",
-            flex: "none",
-            backgroundColor: reviewDotColor(item),
-          }}
-        />
-        <span
-          style={{
-            overflow: "hidden",
-            display: "-webkit-box",
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: "vertical",
-            overflowWrap: "anywhere",
-            fontFamily: "var(--mem-font-heading)",
-            fontSize: "var(--mem-text-card-title)",
-            fontWeight: 500,
-            color: "var(--mem-text)",
-            lineHeight: 1.4,
-          }}
-        >
-          {title}
-        </span>
-      </span>
-      <span
-        style={{
-          fontFamily: "var(--mem-font-body)",
-          fontSize: isSourceRepair ? "var(--mem-text-description)" : "var(--mem-text-meta)",
-          color: "var(--mem-text-secondary)",
-          lineHeight: 1.35,
-          paddingLeft: 14,
-        }}
-      >
-        {meta}
-      </span>
-    </button>
   );
 }
 

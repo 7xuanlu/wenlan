@@ -55,7 +55,8 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
     expect(actions).toMatch(/min-height:\s*var\(--mem-control-height\);/);
     expect(actions).toMatch(/border-radius:\s*var\(--mem-control-radius\);/);
     expect(draft).toMatch(/font:\s*400 var\(--mem-control-font-size\)\/1 var\(--mem-font-body\);/);
-    expect(navigation).toMatch(/\.wiki-filters select\s*\{[^}]*min-height:\s*var\(--mem-control-height\);/s);
+    // Wiki's compact inline filters use the approved 32px height.
+    expect(navigation).toMatch(/\.wiki-filters select\s*\{[^}]*min-height:\s*32px;/s);
     expect(spaces).toMatch(/\.spaces-filter input,[\s\S]*?height:\s*var\(--mem-control-height\);/);
     expect(dossier).toMatch(/\.space-dossier-description-editor\s*\{[^}]*border-radius:\s*var\(--mem-control-radius\);/s);
     expect(spaces).toMatch(

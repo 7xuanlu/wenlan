@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { returnToPageReading } from "./helpers/pageReading";
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
-import { returnToPageReading } from "./helpers/pageReading";
 
 async function openFixturePage(page: Page): Promise<void> {
   await page.goto("/");
   const navigation = page.getByRole("navigation", { name: "Primary navigation" });
   await navigation.getByRole("button", { name: "Wiki", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Fixture architecture" }).click();
+  await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
   await returnToPageReading(page);
 }

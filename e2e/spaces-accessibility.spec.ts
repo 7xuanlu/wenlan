@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { getSpaceEntityButton, openSpaceEntity } from "./helpers/spaceEntity";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { renderedContrast, type ContrastResult } from "./helpers/renderedContrast";
 import { pngDimensions } from "./helpers/png";
 
-const evidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/accessibility",
+const evidenceRoot = process.env.WENLAN_UI_EVIDENCE_DIR || path.join(
+  process.env.REPO_DATA_ROOT || path.join(homedir(), ".local", "share", "repo-data"),
+  "wenlan", "ui", "spaces-navigation",
 );
-const screenshotEvidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/screenshots",
-);
+const evidenceDir = path.join(evidenceRoot, "accessibility");
+const screenshotEvidenceDir = path.join(evidenceRoot, "screenshots");
+
+test.beforeAll(async () => {
+  await Promise.all([evidenceDir, screenshotEvidenceDir].map((directory) => mkdir(directory, { recursive: true })));
+});
 
 type PhysicalTextMetric = {
   readonly cssBox: { readonly height: number; readonly width: number; readonly x: number; readonly y: number };
@@ -189,7 +193,7 @@ test("has no page-level horizontal overflow across all responsive surfaces", asy
   ] as const) {
     await page.setViewportSize(viewport);
     await openSidebar(page);
-    await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Home", exact: true }).click();
+    await openPrimaryDestination(page, "Wiki");
     await assertNoPageOverflow(page);
     await openSpaces(page);
     await assertNoPageOverflow(page);
@@ -255,7 +259,13 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   expect((await dossierGrid.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(2);
   await page.setViewportSize({ width: 899, height: 900 });
   await openSidebar(page);
-  await expect(page.getByRole("navigation", { name: "Recent spaces" })).toBeVisible();
+  const primaryNavigation = page.getByRole("navigation", { name: "Primary navigation" });
+  for (const name of ["Wiki", "Spaces", "Graph", "More"]) {
+    await expect(primaryNavigation.getByRole("button", { name, exact: true })).toBeVisible();
+  }
+  await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(primaryNavigation.getByRole("button", { name: "Spaces", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
   expect((await dossierGrid.evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
   await assertNoPageOverflow(page);
   await page.keyboard.press("Escape");
@@ -315,7 +325,8 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
   await page.keyboard.press("Enter");
   const aside = page.locator("aside");
   await expect(aside).toHaveAttribute("aria-hidden", "false");
-  await expect.poll(() => page.evaluate(() => document.querySelector("aside")?.contains(document.activeElement))).toBe(true);
+  const wiki = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true });
+  await expect(wiki).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(aside).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTitle("Show sidebar")).toBeFocused();
@@ -327,7 +338,9 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
 
   await page.keyboard.press("Enter");
   const spaces = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true });
-  await tabTo(page, spaces, 24);
+  await expect(wiki).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(spaces).toBeFocused();
   await assertFocusOutline(page);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();

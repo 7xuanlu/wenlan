@@ -32,14 +32,14 @@ vi.mock("../../../../lib/tauri", () => ({
   startDaemonSidecar: vi.fn(),
 }));
 
-function renderDiagnostics() {
+function renderDiagnostics(onSetupAgent?: () => void) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   }
-  return render(<DiagnosticsSection />, { wrapper: Wrapper });
+  return render(<DiagnosticsSection onSetupAgent={onSetupAgent} />, { wrapper: Wrapper });
 }
 
 const wireFixture: WireState = {
@@ -707,18 +707,17 @@ describe("DiagnosticsSection", () => {
       );
     });
 
-    it("does not offer the reinstall-via-setup action while an MCP binary candidate still exists", async () => {
-      // Default fixture: the installed candidate exists — nothing to reinstall.
-      renderDiagnostics();
+    it("does not offer tool setup while an MCP binary candidate still exists", async () => {
+      renderDiagnostics(vi.fn());
 
       // Resolve the wiring rows first, then assert absence (an absence assertion
       // made before the rows render would pass vacuously).
       await screen.findByText("Wenlan runtime");
       await screen.findByText("MCP server binary");
-      expect(screen.queryByText("Run setup again")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Open tool setup" })).not.toBeInTheDocument();
     });
 
-    it("with every MCP binary candidate missing, reinstall clears setup and re-arms the wizard", async () => {
+    it("with every MCP binary candidate missing, opens tool setup once without resetting onboarding", async () => {
       vi.mocked(getWireState).mockResolvedValue({
         ...wireFixture,
         mcp_binary: {
@@ -738,14 +737,33 @@ describe("DiagnosticsSection", () => {
         },
       });
 
+      const onSetupAgent = vi.fn();
+      renderDiagnostics(onSetupAgent);
+
+      fireEvent.click(await screen.findByRole("button", { name: "Open tool setup" }));
+
+      expect(onSetupAgent).toHaveBeenCalledTimes(1);
+      expect(setSetupCompleted).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    });
+
+    it("with missing MCP binary candidates and no setup callback, offers no unavailable action", async () => {
+      vi.mocked(getWireState).mockResolvedValue({
+        ...wireFixture,
+        mcp_binary: {
+          ...wireFixture.mcp_binary,
+          candidates: wireFixture.mcp_binary.candidates.map((candidate) => ({
+            ...candidate,
+            state: { kind: "absent" },
+          })),
+        },
+      });
+
       renderDiagnostics();
 
-      fireEvent.click(await screen.findByText("Run setup again"));
-      // ConfirmActionButton arms an inline two-step confirm. By role: the
-      // background work card also names its Confirm step.
-      fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
-
-      await waitFor(() => expect(setSetupCompleted).toHaveBeenCalledWith(false));
+      await screen.findByText("MCP server binary");
+      expect(screen.queryByRole("button", { name: "Open tool setup" })).not.toBeInTheDocument();
+      expect(setSetupCompleted).not.toHaveBeenCalled();
     });
 
     // Round 4, defect F, on the UI. `candidate.exists` was a boolean that read
@@ -753,7 +771,7 @@ describe("DiagnosticsSection", () => {
     // rendered both as "Missing" — then offered "Run setup again" as the fix.
     // Reinstalling is not the fix for a permission problem, and calling an
     // unread path missing is the shipped conflation, rendered.
-    it("shows an unreadable candidate as unreadable, and does not advise reinstalling", async () => {
+    it("shows an unreadable candidate as unreadable, and does not offer missing-binary tool setup", async () => {
       vi.mocked(getWireState).mockResolvedValue({
         ...wireFixture,
         mcp_binary: {
@@ -781,14 +799,14 @@ describe("DiagnosticsSection", () => {
         },
       });
 
-      renderDiagnostics();
+      renderDiagnostics(vi.fn());
 
       expect(await screen.findByText("Unreadable")).toBeInTheDocument();
       expect(screen.getByText("Missing")).toBeInTheDocument();
       expect(
         screen.getByText("Could not determine the wenlan-mcp binary: nothing was written."),
       ).toBeInTheDocument();
-      expect(screen.queryByText("Run setup again")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Open tool setup" })).not.toBeInTheDocument();
     });
 
     // C1.4 on the UI. An input that could not be determined produces NO
@@ -797,7 +815,7 @@ describe("DiagnosticsSection", () => {
     // reason for it. Worse, the short list reads as a completed search and
     // re-offers "Run setup again", which reinstalls a binary that may well be
     // sitting exactly where it should.
-    it("shows an input that could not be determined, and does not advise reinstalling", async () => {
+    it("shows an input that could not be determined, and does not offer missing-binary tool setup", async () => {
       vi.mocked(getWireState).mockResolvedValue({
         ...wireFixture,
         mcp_binary: {
@@ -818,14 +836,14 @@ describe("DiagnosticsSection", () => {
         },
       });
 
-      renderDiagnostics();
+      renderDiagnostics(vi.fn());
 
       expect(await screen.findByText("Not checked")).toBeInTheDocument();
       expect(
         screen.getByText(/the home directory could not be determined/),
       ).toBeInTheDocument();
       expect(screen.getByText(/installed and cargo/)).toBeInTheDocument();
-      expect(screen.queryByText("Run setup again")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Open tool setup" })).not.toBeInTheDocument();
     });
 
     // C1.7. These three fields reached `DaemonWire` and stopped there:

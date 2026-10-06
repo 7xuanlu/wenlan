@@ -18,6 +18,8 @@ vi.mock("../../../lib/tauri", async (importOriginal) => ({
   distillReview: vi.fn(),
   listPagesExplicitBrowse: vi.fn(),
   listRefinements: vi.fn(),
+  listOnboardingMilestones: vi.fn().mockResolvedValue([]),
+  getTruthStatus: vi.fn().mockResolvedValue(null),
   listSpaces: vi.fn(),
 }));
 
@@ -41,6 +43,7 @@ function page(overrides: Partial<Page>): Page {
 }
 
 function renderOverview({
+  onOpenReview = vi.fn(),
   onCreatePage = vi.fn(),
   onSelectDraft = vi.fn(),
   onSelectPage = vi.fn(),
@@ -56,6 +59,7 @@ function renderOverview({
     ...render(
       <QueryClientProvider client={queryClient}>
         <PagesOverview
+          onOpenReview={onOpenReview}
           onCreatePage={onCreatePage}
           onSelectDraft={onSelectDraft}
           onSelectPage={onSelectPage}
@@ -199,7 +203,7 @@ describe("PagesOverview", () => {
     renderOverview();
 
     const statusFilter = await screen.findByRole("combobox", { name: "State" });
-    expect(screen.getByText("Needs review")).toBeInTheDocument();
+    expect(screen.getByText("Needs review", { selector: "span" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New page candidates" })).not.toBeInTheDocument();
 
     await user.selectOptions(statusFilter, "unconfirmed");
@@ -396,12 +400,23 @@ describe("PagesOverview", () => {
     }
   });
 
-  it("never starts a distill review when Wiki mounts", async () => {
-    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([page({ title: "Quiet Wiki mount" })]);
-    renderOverview();
-
-    expect(await screen.findByRole("button", { name: "Open Quiet Wiki mount" })).toBeInTheDocument();
+  it("keeps Review opt-in behind page options, with keyboard dismissal", async () => {
+    const user = userEvent.setup();
+    const onOpenReview = vi.fn();
+    renderOverview({ onOpenReview });
+    const options = await screen.findByRole("button", { name: "Page options" });
+    expect(screen.queryByRole("button", { name: "Review page changes" })).not.toBeInTheDocument();
+    await user.click(options);
+    expect(screen.getByRole("menuitem", { name: "Review page changes" })).toHaveFocus();
+    expect(onOpenReview).not.toHaveBeenCalled();
     expect(distillReview).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    expect(options).toHaveFocus();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    await user.keyboard("{Enter}");
+    expect(onOpenReview).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("filters by Space, sorts by title, and paginates twelve rows at a time", async () => {
@@ -437,8 +452,8 @@ describe("PagesOverview", () => {
 
     expect(await screen.findByText("No pages yet")).toBeInTheDocument();
     expect(screen.queryByText("Create a space")).not.toBeInTheDocument();
-    // The lens preference stays changeable even with zero pages.
-    expect(screen.getByRole("group", { name: "View" })).toBeInTheDocument();
+    expect(screen.getByText("Write your first note. Add AI help when you need it.")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "View" })).not.toBeInTheDocument();
   });
 
   it("renders cards by default with title, summary, space chip, and time", async () => {
