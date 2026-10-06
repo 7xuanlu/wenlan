@@ -17,6 +17,7 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
     router
         .route("/api/ingest/text", post(handle_ingest_text))
         .route("/api/ingest/webpage", post(handle_ingest_webpage))
+        .route("/api/ingest/webpage/create", post(handle_create_webpage))
         .route("/api/ingest/memory", post(handle_ingest_memory))
         .route(
             "/api/documents/{source}/{source_id}",
@@ -132,8 +133,24 @@ pub async fn handle_ingest_webpage(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestWebpageRequest>,
 ) -> Result<Json<IngestResponse>, ServerError> {
+    handle_webpage_with_telemetry(state, req, false).await
+}
+
+/// POST /api/ingest/webpage/create — create only, never replace an existing excerpt.
+pub async fn handle_create_webpage(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    Json(req): Json<IngestWebpageRequest>,
+) -> Result<Json<IngestResponse>, ServerError> {
+    handle_webpage_with_telemetry(state, req, true).await
+}
+
+async fn handle_webpage_with_telemetry(
+    state: Arc<RwLock<ServerState>>,
+    req: IngestWebpageRequest,
+    create_only: bool,
+) -> Result<Json<IngestResponse>, ServerError> {
     let telemetry = { state.read().await.telemetry.clone() };
-    let result = handle_ingest_webpage_inner(State(state), Json(req)).await;
+    let result = handle_ingest_webpage_inner(State(state), Json(req), create_only).await;
     telemetry.record(if result.is_ok() {
         TelemetryEvent::SaveSuccess
     } else {
@@ -145,6 +162,7 @@ pub async fn handle_ingest_webpage(
 async fn handle_ingest_webpage_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Json(req): Json<IngestWebpageRequest>,
+    create_only: bool,
 ) -> Result<Json<IngestResponse>, ServerError> {
     let document_id = req.url.clone();
 
@@ -186,10 +204,15 @@ async fn handle_ingest_webpage_inner(
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let chunks_created = db
-        .upsert_documents(vec![doc])
-        .await
-        .map_err(|e| ServerError::IngestFailed(e.to_string()))?;
+    let chunks_created = if create_only {
+        db.create_documents(vec![doc]).await
+    } else {
+        db.upsert_documents(vec![doc]).await
+    }
+    .map_err(|e| match e {
+        wenlan_core::WenlanError::Conflict(message) => ServerError::Conflict(message),
+        other => ServerError::IngestFailed(other.to_string()),
+    })?;
 
     Ok(Json(IngestResponse {
         chunks_created,
@@ -368,5 +391,82 @@ mod content_length_gate_tests {
             result,
             Err(ServerError::ValidationError(ref m)) if m == "Memory content must be at least 10 characters"
         ));
+    }
+}
+
+#[cfg(test)]
+mod webpage_create_tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn concurrent_webpage_create_preserves_winner_and_explicit_replace_still_works() {
+        let temp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(temp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+        let url = "https://example.com/concurrent-create";
+        let request = |path: &str, content: &str| {
+            Request::builder()
+            .method("POST").uri(path).header("content-type", "application/json")
+            .body(Body::from(serde_json::json!({ "url": url, "title": "Concurrent excerpt", "content": content }).to_string()))
+            .unwrap()
+        };
+        let first = "First writer document must remain intact when it wins.";
+        let second = "Second writer document must remain intact when it wins.";
+        let (one, two) = tokio::join!(
+            app.clone()
+                .oneshot(request("/api/ingest/webpage/create", first)),
+            app.clone()
+                .oneshot(request("/api/ingest/webpage/create", second)),
+        );
+        let one = one.unwrap();
+        let two = two.unwrap();
+        let winner = match (one.status(), two.status()) {
+            (StatusCode::OK, StatusCode::CONFLICT) => first,
+            (StatusCode::CONFLICT, StatusCode::OK) => second,
+            statuses => panic!("Expected exactly one create and one conflict: {statuses:?}"),
+        };
+        let chunks = db
+            .get_webpage_chunks_scoped(url, &wenlan_core::read_scope::ReadScope::Global)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content.as_str())
+                .collect::<Vec<_>>(),
+            vec![winner]
+        );
+        let replacement = "Deliberately replaced after the user confirmed the existing excerpt.";
+        let response = app
+            .oneshot(request("/api/ingest/webpage", replacement))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let chunks = db
+            .get_webpage_chunks_scoped(url, &wenlan_core::read_scope::ReadScope::Global)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            chunks
+                .iter()
+                .map(|chunk| chunk.content.as_str())
+                .collect::<Vec<_>>(),
+            vec![replacement]
+        );
     }
 }

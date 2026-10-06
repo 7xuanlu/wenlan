@@ -26,11 +26,12 @@ function wrap(ui: React.ReactNode) {
 describe("AddSourceMenu", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("shows both entry points on a current daemon", async () => {
+  it("shows file, folder and web excerpt entry points on a current daemon", async () => {
     mocks.getDaemonVersion.mockResolvedValue("0.11.0");
     render(wrap(<AddSourceMenu onClose={() => {}} />));
-    await screen.findByText("Add a folder");
+    await screen.findByText("Connect a folder");
     expect(screen.getByText("Add files")).toBeInTheDocument();
+    expect(screen.getByText("Add a web excerpt")).toBeInTheDocument();
     expect(screen.queryByText("Your daemon needs an update to index files.")).toBeNull();
   });
 

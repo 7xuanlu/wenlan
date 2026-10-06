@@ -63,7 +63,7 @@ test("keeps every enabled primary destination inside the Review command contract
 
   await navigation.getByRole("button", { name: "Sources", exact: true }).click();
   await expect(
-    page.getByRole("heading", { level: 2, name: "Nothing on the shelf yet" }),
+    page.getByRole("heading", { level: 2, name: "Bring your sources together" }),
   ).toBeVisible();
 
   await navigation.getByRole("button", { name: "Home", exact: true }).click();

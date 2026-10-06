@@ -50,6 +50,10 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
         ("/api/memory/{id}/versions", SelectionGate::SingleId404),
         ("/api/chunks/{source_id}", SelectionGate::SingleId404),
         (
+            "/api/webpage-chunks/{source_id}",
+            SelectionGate::SingleId404,
+        ),
+        (
             "/api/memory/pending-revision/{source_id}",
             SelectionGate::SingleId404,
         ),
@@ -107,6 +111,7 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/memory/{id}/revisions"),
         (Method::Get, "/api/indexed-files"),
         (Method::Get, "/api/chunks/{source_id}"),
+        (Method::Get, "/api/webpage-chunks/{source_id}"),
         (Method::Get, "/api/activities"),
         (Method::Get, "/api/tags"),
         (Method::Get, "/api/suggest-tags"),
@@ -156,8 +161,8 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         .map(|row| (row.method, row.path))
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(rows.len(), 65);
-    assert_eq!(keys.len(), 65, "duplicate sensitive route key");
+    assert_eq!(rows.len(), 66);
+    assert_eq!(keys.len(), 66, "duplicate sensitive route key");
     assert_eq!(global, GLOBAL.iter().copied().collect());
     assert_eq!(scoped, SCOPED.iter().copied().collect());
     assert_eq!(

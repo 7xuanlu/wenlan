@@ -18,6 +18,10 @@ import { folderName } from "../../lib/dateFormat";
 import AddSourceMenu from "./sources/AddSourceMenu";
 import ContentRenderer from "./ContentRenderer";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
+import SourceLibrary, { type SourceLibraryState } from "./sources/SourceLibrary";
+import SourceDocumentPreview from "./sources/SourceDocumentPreview";
+import "./sources/source-access.css";
 
 // The daemon's directory-ingest filter (wenlan-core sources/directory.rs).
 // Files with these extensions feed the wiki; everything else is shown but dimmed.
@@ -86,9 +90,29 @@ type SourcesNode =
 interface SourcesViewProps {
   /** Settings › Sources, for remove and advanced source management. */
   onManageSources: () => void;
+  libraryState?: SourceLibraryState;
+  onLibraryStateChange?: (state: SourceLibraryState) => void;
 }
 
-export default function SourcesView({ onManageSources }: SourcesViewProps) {
+export default function SourcesView({ onManageSources, libraryState, onLibraryStateChange }: SourcesViewProps) {
+  const { t } = useTranslation();
+  const [adding, setAdding] = useState(false);
+  const [folder, setFolder] = useState<string | null>(null);
+  const [document, setDocument] = useState<IndexedFileInfo | null>(null);
+  return <>
+    <div hidden={folder !== null} style={{ height: "100%" }}>
+      <SourceLibrary onAdd={() => setAdding(true)} onManageSources={onManageSources} onBrowseFolder={setFolder} onOpenDocument={setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
+    </div>
+    {folder !== null && <div className="source-folder-workspace">
+      <button type="button" className="page-editor-action source-folder-back" onClick={() => setFolder(null)}>{t("sourceAccess.back")}</button>
+      <SourceFolderBrowser onManageSources={onManageSources} initialSourceId={folder} />
+    </div>}
+    {adding && <AddSourceMenu onClose={() => setAdding(false)} />}
+    {document && <SourceDocumentPreview key={`${document.source}:${document.source_id}`} file={document} onClose={() => setDocument(null)} />}
+  </>;
+}
+
+export function SourceFolderBrowser({ onManageSources, initialSourceId }: SourcesViewProps & { initialSourceId?: string }) {
   const [adding, setAdding] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<SourcesNode | null>(null);
@@ -172,7 +196,7 @@ export default function SourcesView({ onManageSources }: SourcesViewProps) {
   useEffect(() => {
     if (rootNodes.length === 0) return;
     if (selectedPath === null) {
-      selectNode(rootNodes[0]);
+      selectNode(rootNodes.find((node) => node.source.id === initialSourceId) ?? rootNodes[0]);
       return;
     }
     // The selected source may have been removed — fall back to root rather
@@ -181,7 +205,7 @@ export default function SourcesView({ onManageSources }: SourcesViewProps) {
       selectNode(rootNodes[0]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootNodes, selectedPath, selectedNode, sources]);
+  }, [rootNodes, selectedPath, selectedNode, sources, initialSourceId]);
 
   // Re-derive the selected node's source from the live list on every render so
   // sync status / memory counts stay fresh across refetches without resetting

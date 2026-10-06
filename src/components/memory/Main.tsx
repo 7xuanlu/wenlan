@@ -45,6 +45,7 @@ import {
   type PageDraftEditorHandle,
 } from "./pages/PageDraftEditor";
 import SourcesView from "./SourcesView";
+import type { SourceLibraryState } from "./sources/SourceLibrary";
 import { RecapsList } from "./RecapsList";
 import AboutWenlanDialog from "./AboutWenlanDialog";
 import { readPreference, writePreference } from "../../lib/preferenceStorage";
@@ -145,6 +146,7 @@ export default function Main({
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
   const [readyEditorView, setReadyEditorView] = useState<View | null>(null);
+  const [sourceLibraryState, setSourceLibraryState] = useState<SourceLibraryState>({ search: "", filter: "all" });
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
@@ -1096,6 +1098,8 @@ export default function Main({
             />
           ) : view.kind === "sources" ? (
             <SourcesView
+              libraryState={sourceLibraryState}
+              onLibraryStateChange={setSourceLibraryState}
               onManageSources={() => navigateTo({ kind: "settings", section: "sources" })}
             />
           ) : view.kind === "graph" ? (

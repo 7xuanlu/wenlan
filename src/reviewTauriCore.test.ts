@@ -19,6 +19,16 @@ describe("Review fixture IPC", () => {
     expect(await runtime.invoke("get_entity_detail_cmd", { entityId: "entity-babbage" })).toMatchObject({ entity: { entity_type: "person" } });
     expect(await runtime.invoke("list_refinements")).toEqual({ proposals: [] });
   });
+  it("models create-only webpage conflicts without replacing the saved source", async () => {
+    const runtime = new TauriMockRuntime(createReviewDecisionFixture("vocab_promote"));
+    const req = { url: "https://example.com/new-excerpt", title: "First excerpt", content: "Winner source.", create_only: true };
+    await runtime.invoke("ingest_webpage", { req });
+    await expect(runtime.invoke("ingest_webpage", { req: { ...req, title: "Losing excerpt", content: "Losing source." } })).rejects.toThrow("WEBPAGE_ALREADY_EXISTS");
+    expect(await runtime.invoke("get_chunks", { source: "webpage", sourceId: req.url })).toMatchObject([{ content: "Winner source." }]);
+    expect(await runtime.invoke("list_indexed_files")).toContainEqual(expect.objectContaining({ source: "webpage", source_id: req.url, title: "First excerpt", url: req.url }));
+    await runtime.invoke("ingest_webpage", { req: { ...req, content: "Explicitly replaced source.", create_only: false } });
+    expect(await runtime.invoke("get_chunks", { source: "webpage", sourceId: req.url })).toMatchObject([{ content: "Explicitly replaced source." }]);
+  });
   beforeEach(() => {
     resetReviewRuntime();
   });

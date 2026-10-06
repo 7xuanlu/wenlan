@@ -569,6 +569,12 @@ pub struct IngestWebpageRequest {
     pub title: String,
     pub content: String,
     pub metadata: Option<HashMap<String, String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub create_only: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Fetch public text for preview. Saving remains a separate ingestion action.
@@ -1009,6 +1015,21 @@ mod on_device_model_request_test {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn webpage_create_only_is_opt_in_and_legacy_serialization_is_unchanged() {
+        let mut request: IngestWebpageRequest = serde_json::from_str(
+            r#"{"url":"https://example.com","title":"Example","content":"Excerpt"}"#,
+        )
+        .unwrap();
+        assert!(!request.create_only);
+        assert!(serde_json::to_value(&request)
+            .unwrap()
+            .get("create_only")
+            .is_none());
+        request.create_only = true;
+        assert_eq!(serde_json::to_value(&request).unwrap()["create_only"], true);
+    }
 
     #[test]
     fn update_config_request_external_key_tristate() {
