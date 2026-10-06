@@ -62,6 +62,7 @@ import type { MarkdownEditorSelection } from "./editor/MarkdownEditor";
 import { useViewScroll } from "./navigation/useViewScroll";
 import { WorkspaceBackButton, WorkspaceNavigationProvider } from "./navigation/WorkspaceNavigation";
 import "./navigation/navigation-shell.css";
+import { inventoryFolderPath } from "./pages/pageInventory";
 
 interface MainProps {
   initialView?: View;
@@ -96,7 +97,10 @@ function scrollDestinationKey(view: View): string {
 // always a new intent; persisted drafts retain their session through history.
 function sameDestination(current: View, next: View): boolean {
   if ((current.kind === "home" || current.kind === "pages")
-    && (next.kind === "home" || next.kind === "pages")) return true;
+    && (next.kind === "home" || next.kind === "pages")) {
+    return (current.kind === "pages" ? current.inventoryScope ?? "all" : "all")
+      === (next.kind === "pages" ? next.inventoryScope ?? "all" : "all");
+  }
   if (current.kind !== next.kind) return false;
   switch (current.kind) {
     case "page": return next.kind === "page" && current.pageId === next.pageId
@@ -832,6 +836,9 @@ export default function Main({
           <Sidebar
             activeNavigation={activeNavigation}
             collapsed={responsiveSidebar.collapsed}
+            inventoryScope={view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined}
+            browsingPages={view.kind === "pages" || view.kind === "home"}
+            onBrowsePages={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
             currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
             currentMemoryId={view.kind === "memory" ? view.sourceId : null}
             onSelectMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
@@ -839,7 +846,7 @@ export default function Main({
             onEntityClick={handleEntityClick}
             onNavigateLog={() => navigateTo({ kind: "stream" })}
             onNavigatePages={navigateNotes}
-            onCreatePage={() => navigateTo({ kind: "page-draft", space: null })}
+            onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateHome={navigateHome}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
@@ -848,8 +855,8 @@ export default function Main({
             onNavigateSettings={() => navigateTo({ kind: "settings", section: "general" })}
             onOpenAbout={() => setAboutOpen(true)}
             onRequestClose={responsiveSidebar.close}
-            onSelectDraft={(draftId, space) => navigateTo({ kind: "page-draft", draftId, space })}
-            onSelectPage={(page) => navigateTo({ kind: "page", pageId: page.id })}
+            onSelectDraft={(draftId, space) => navigateTo({ kind: "page-draft", draftId, space, inventoryScope: view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined })}
+            onSelectPage={(page) => navigateTo({ kind: "page", pageId: page.id, inventoryScope: view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined })}
             onSelectSpace={(space) => navigateTo({ kind: "space", spaceId: space.id, spaceName: space.name })}
             open={responsiveSidebar.open}
             presentation={responsiveSidebar.presentation}
@@ -1023,14 +1030,18 @@ export default function Main({
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
             <PagesOverview
+              inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
+              onBrowseAll={() => navigateTo({ kind: "pages" })}
+              onBrowseFolder={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
               onOpenReview={() => navigateTo({ kind: "distill-review" })}
-              onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
+              onCreatePage={(space, folderPath) => navigateTo({ kind: "page-draft", space, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
               onSelectDraft={(draftId, space) => navigateTo({
                 kind: "page-draft",
                 draftId,
                 space,
+                inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined,
               })}
-              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
+              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
               onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
             />
           ) : view.kind === "entities" ? (
@@ -1108,13 +1119,16 @@ export default function Main({
               onOpenExisting={(pageId) => {
                 afterPageDraftFlush(() => replaceView({ kind: "page", pageId }));
               }}
-              onPublished={(pageId) => replaceView({ kind: "page", pageId })}
+              onPublished={(pageId, projectionIssue) => replaceView({ kind: "page", pageId, inventoryScope: view.inventoryScope, projectionIssue })}
               ref={pageDraftEditorRef}
+              folderPath={view.folderPath ?? (view.inventoryScope ? inventoryFolderPath(view.inventoryScope) ?? undefined : undefined)}
               space={view.space}
             />
           ) : view.kind === "page" ? (
             <PageDetail
               pageId={view.pageId}
+              projectionIssue={view.projectionIssue}
+              onProjectionResolved={() => replaceView({ ...view, projectionIssue: undefined })}
               initialSelection={pageSelectionsRef.current.get(view.pageId)}
               onSelectionChange={(selection) => pageSelectionsRef.current.set(view.pageId, selection)}
               onEditorReady={() => setReadyEditorView(view)}

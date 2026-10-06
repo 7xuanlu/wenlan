@@ -15,6 +15,14 @@ use std::io::{Read as _, Write as _};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+#[path = "knowledge_folders.rs"]
+mod folders;
+pub use folders::{
+    create_knowledge_folder, knowledge_edit_targets, knowledge_markdown_paths,
+    list_knowledge_folders, move_projected_page, read_knowledge_markdown,
+    validate_knowledge_folder_path, KnowledgeFolderEntry,
+};
+
 const KNOWLEDGE_STATE_SCHEMA_V2: u32 = 2;
 static PROJECTION_WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 static PROJECTION_STATE_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -41,6 +49,7 @@ mod projection_invariant_test;
 struct KnowledgeState {
     #[serde(default = "default_schema_v2")]
     schema_version: u32,
+    #[serde(deserialize_with = "folders::deserialize_pages")]
     pages: HashMap<String, PageFileState>,
 }
 
@@ -133,6 +142,7 @@ fn is_write_page_temp_file(name: &str) -> bool {
 /// next minor release.
 #[derive(Debug, Default, Deserialize)]
 struct LegacyKnowledgeStateV1 {
+    #[serde(deserialize_with = "folders::deserialize_pages")]
     concepts: HashMap<String, PageFileState>,
 }
 
@@ -290,6 +300,40 @@ impl KnowledgeWriter {
         self.write_page_with_regenerate_index(guard, page, true)
     }
 
+    /// Place a new projection directly in a folder. Existing mapping always wins.
+    pub fn write_page_in_folder(
+        &self,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+        initial_folder: Option<&str>,
+    ) -> Result<String, WenlanError> {
+        self.validate_guard(guard)?;
+        if let Some(folder) = initial_folder {
+            validate_knowledge_folder_path(folder)?;
+        }
+        create_projection_root_nofollow(&self.path)?;
+        KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
+            self.write_page_with_lock_held_and_folder(capabilities, guard, page, initial_folder)
+        })
+    }
+
+    fn write_page_with_lock_held_and_folder(
+        &self,
+        capabilities: &ProjectionCapabilities,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+        initial_folder: Option<&str>,
+    ) -> Result<String, WenlanError> {
+        self.write_page_with_lock_held_and_hook_in_folder(
+            capabilities,
+            guard,
+            page,
+            || Ok(()),
+            true,
+            initial_folder,
+        )
+    }
+
     /// [`Self::write_page`], with the `index.md` regeneration made optional.
     ///
     /// `reconcile` rewrites potentially many behind pages in one pass and
@@ -337,11 +381,62 @@ impl KnowledgeWriter {
     where
         F: FnOnce() -> Result<(), WenlanError>,
     {
+        self.write_page_with_lock_held_and_hook_in_folder(
+            capabilities,
+            guard,
+            page,
+            after_target_write,
+            regenerate_index,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn write_page_with_lock_held_and_hook_in_folder<F>(
+        &self,
+        capabilities: &ProjectionCapabilities,
+        guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
+        page: &Page,
+        after_target_write: F,
+        regenerate_index: bool,
+        initial_folder: Option<&str>,
+    ) -> Result<String, WenlanError>
+    where
+        F: FnOnce() -> Result<(), WenlanError>,
+    {
         self.validate_guard(guard)?;
-        let mut state = self.load_state_cap(&capabilities.wenlan);
+        let mut state = folders::read_state_strict(&capabilities.wenlan)?;
+        let mapped = state.pages.get(&page.id).map(|entry| entry.file.as_str());
+        let claimants = folders::origin_paths(&capabilities.root, &page.id)?;
+        if claimants.len() > 1
+            || claimants
+                .first()
+                .is_some_and(|path| mapped.is_some_and(|mapped| mapped != path))
+        {
+            return Err(WenlanError::Conflict(
+                "page_projection_identity_ambiguous".into(),
+            ));
+        }
+        let folder = match mapped {
+            Some(path) => path.rsplit_once('/').map_or("", |(folder, _)| folder),
+            None => initial_folder.unwrap_or(""),
+        };
+        let directory = if mapped.is_some() {
+            folders::open_existing_folder(&capabilities.root, folder)?
+        } else {
+            folders::open_folder(&capabilities.root, folder)?
+        };
         let filename =
-            self.unique_filename_cap(&capabilities.root, &page.id, &page.title, &state)?;
+            self.unique_filename_in_folder(&directory, &page.id, &page.title, &state, folder)?;
+        let leaving_reserved = mapped
+            .is_some_and(|path| is_reserved_okf_filename(path.rsplit('/').next().unwrap_or(path)));
+        if !leaving_reserved && claimants.first().is_some_and(|path| path != &filename) {
+            return Err(WenlanError::Conflict(
+                "page_projection_identity_ambiguous".into(),
+            ));
+        }
         let file_path = self.path.join(&filename);
+        let (target_directory, target_name) = folders::page_parent(&capabilities.root, &filename)?;
 
         let content = render_markdown(page);
         // Write to a temp file in the same capability directory, then rename
@@ -371,8 +466,8 @@ impl KnowledgeWriter {
         } else {
             // Explicit repair operations carry their own captured-byte guards.
             write_page_atomically_nofollow(
-                &capabilities.root,
-                &filename,
+                &target_directory,
+                &target_name,
                 &temp_filename,
                 content.as_bytes(),
             )?;
@@ -411,7 +506,9 @@ impl KnowledgeWriter {
             .pages
             .get(&page.id)
             .map(|entry| entry.file.clone())
-            .filter(|old| is_reserved_okf_filename(old) && *old != filename);
+            .filter(|old| {
+                is_reserved_okf_filename(old.rsplit('/').next().unwrap_or(old)) && *old != filename
+            });
         state.pages.insert(
             page.id.clone(),
             PageFileState {
@@ -434,7 +531,7 @@ impl KnowledgeWriter {
         // it: the entry that just moved is the one link in `index.md` that is
         // now wrong, and the repair path has no later pass that would fix it.
         if relocated_off_reserved || (self.write_provenance && regenerate_index) {
-            if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+            if let Err(e) = Self::regenerate_index_cap(capabilities, &state) {
                 log::warn!("[knowledge] index.md regeneration failed: {e}");
             }
         }
@@ -466,7 +563,10 @@ impl KnowledgeWriter {
             ..ReconcileStats::default()
         };
 
-        let state = self.load_state();
+        let state =
+            KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
+                folders::read_state_strict(&capabilities.wenlan)
+            })?;
         for page in pages {
             let Some(entry) = state.pages.get(&page.id) else {
                 continue;
@@ -489,8 +589,8 @@ impl KnowledgeWriter {
         if self.write_provenance {
             if let Err(e) =
                 KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-                    let state = self.load_state_cap(&capabilities.wenlan);
-                    self.regenerate_index_cap(capabilities, &state)
+                    let state = folders::read_state_strict(&capabilities.wenlan)?;
+                    Self::regenerate_index_cap(capabilities, &state)
                 })
             {
                 log::warn!("[reconcile] index.md regeneration failed: {e}");
@@ -503,7 +603,15 @@ impl KnowledgeWriter {
     /// older than the DB's. Unreadable counts as behind: the repair attempt
     /// will surface the real error rather than silently skipping the page.
     fn projection_is_behind(&self, filename: &str, page: &Page) -> bool {
-        let Ok(raw) = std::fs::read_to_string(self.path.join(filename)) else {
+        let raw = (|| {
+            let root = folders::read_root(&self.path)?;
+            let (directory, name) = folders::page_parent(&root, filename)?;
+            let mut budget = RepairReadBudget::new();
+            let bytes = read_regular_nofollow(&directory, OsStr::new(&name), &mut budget)?;
+            String::from_utf8(bytes)
+                .map_err(|_| WenlanError::Conflict("page_projection_target_invalid".into()))
+        })();
+        let Ok(raw) = raw else {
             return true;
         };
         let (fm, body) = crate::sources::obsidian::extract_frontmatter(&raw);
@@ -527,22 +635,41 @@ impl KnowledgeWriter {
     /// rename. Safe to run unconditionally at startup: the daemon holds the
     /// port by this point, so no live writer owns any of these.
     fn sweep_temp_leftovers(&self) -> usize {
-        let Ok(entries) = std::fs::read_dir(&self.path) else {
+        let Ok(root) = folders::read_root(&self.path) else {
             return 0;
         };
-        entries
-            .flatten()
-            .filter(|e| is_write_page_temp_file(&e.file_name().to_string_lossy()))
-            .filter(|e| std::fs::remove_file(e.path()).is_ok())
-            .count()
+        let Ok((folders, _)) = folders::scan_tree(&root) else {
+            return 0;
+        };
+        std::iter::once(String::new())
+            .chain(folders.into_iter().map(|folder| folder.path))
+            .filter_map(|path| folders::open_existing_folder(&root, &path).ok())
+            .map(|directory| {
+                let Ok(entries) = directory.entries() else {
+                    return 0;
+                };
+                entries
+                    .flatten()
+                    .filter(|entry| {
+                        let name = entry.file_name();
+                        is_write_page_temp_file(&name.to_string_lossy())
+                            && directory.symlink_metadata(&name).is_ok_and(|metadata| {
+                                metadata.is_file() && !metadata.file_type().is_symlink()
+                            })
+                            && directory.remove_file(&name).is_ok()
+                    })
+                    .count()
+            })
+            .sum()
     }
 
-    fn unique_filename_cap(
+    fn unique_filename_in_folder(
         &self,
         root: &Dir,
         page_id: &str,
         title: &str,
         state: &KnowledgeState,
+        folder: &str,
     ) -> Result<String, WenlanError> {
         if let Some(existing) = state.pages.get(page_id) {
             // A page projected at a reserved name before it was reserved
@@ -558,29 +685,50 @@ impl KnowledgeWriter {
             // indefinitely. `write_page` regenerates the index whenever a
             // relocation happened, so a writer that otherwise skips the index
             // does not leave it pointing at the old name.
-            if !is_reserved_okf_filename(&existing.file) {
+            if !is_reserved_okf_filename(existing.file.rsplit('/').next().unwrap_or(&existing.file))
+            {
                 return Ok(existing.file.clone());
             }
         }
-        let base = page_stem_clear_of_reserved(slugify(title));
+        let mut base = page_stem_clear_of_reserved(slugify(title));
+        if base.is_empty() {
+            base = "note".into();
+        }
+        while base.len() > 200 {
+            base.pop();
+        }
+        if folders::validate_new_page_path(&format!("{base}.md")).is_err() {
+            base.push_str("-page");
+        }
         let mut candidate = format!("{base}.md");
         let mut n = 2;
-        let taken: std::collections::HashSet<&str> = state
+        let taken: std::collections::HashSet<String> = state
             .pages
             .iter()
             .filter(|(id, _)| id.as_str() != page_id)
-            .map(|(_, state)| state.file.as_str())
+            .map(|(_, state)| folders::collision_key(&state.file))
             .collect();
         loop {
-            let collides_state = taken.contains(candidate.as_str());
+            let relative = if folder.is_empty() {
+                candidate.clone()
+            } else {
+                format!("{folder}/{candidate}")
+            };
+            folders::validate_new_page_path(&relative)?;
+            let collides_state = taken.contains(&folders::collision_key(&relative));
+            let collides_case = match folders::ensure_case_available(root, &candidate, true) {
+                Ok(()) => false,
+                Err(WenlanError::Conflict(_)) => true,
+                Err(error) => return Err(error),
+            };
             let collides_disk = match root.symlink_metadata(&candidate) {
                 Ok(_) => true,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => return Err(WenlanError::Io(error)),
             };
-            if !collides_state {
+            if !collides_state && !collides_case {
                 if !collides_disk {
-                    return Ok(candidate);
+                    return Ok(relative);
                 }
                 // Installation may have completed before its first state
                 // entry was saved. Reuse its exact id instead of forking a
@@ -589,11 +737,14 @@ impl KnowledgeWriter {
                     && Self::read_origin_id(root, &OsString::from(&candidate)).as_deref()
                         == Some(page_id)
                 {
-                    return Ok(candidate);
+                    return Ok(relative);
                 }
             }
             candidate = format!("{base}-{n}.md");
             n += 1;
+            if n > 10_000 {
+                return Err(WenlanError::Conflict("knowledge_path_collision".into()));
+            }
         }
     }
 
@@ -605,6 +756,61 @@ impl KnowledgeWriter {
         self.load_state().pages.get(page_id).map(|s| s.file.clone())
     }
 
+    /// Verify live flat-root Markdown filenames for an already authorized set
+    /// of page IDs. Reads state once, then only those files; never scans, creates
+    /// directories, repairs state, or guesses a filename from a title. Missing,
+    /// unsafe, unreadable, or mismatched projections are absent from the map.
+    pub fn live_page_filenames(&self, page_ids: &[&str]) -> HashMap<String, String> {
+        let mut found = HashMap::new();
+        if page_ids.is_empty() {
+            return found;
+        }
+        let Some((parent, basename)) = self.path.parent().zip(self.path.file_name()) else {
+            return found;
+        };
+        let Ok(parent) = Dir::open_ambient_dir(parent, cap_std::ambient_authority()) else {
+            return found;
+        };
+        let Ok(root) = parent.open_dir_nofollow(Path::new(basename)) else {
+            return found;
+        };
+        let Ok(control) = root.open_dir_nofollow(".wenlan") else {
+            return found;
+        };
+        // Refuse nonregular state before opening, and bound the existing
+        // capability read. This read path deliberately takes no writer lock.
+        let Ok(metadata) = control.symlink_metadata("state.json") else {
+            return found;
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return found;
+        }
+        let Ok(state) = folders::read_state_strict(&control) else {
+            return found;
+        };
+        for &page_id in page_ids {
+            let Some(entry) = state.pages.get(page_id) else {
+                continue;
+            };
+            let name = &entry.file;
+            let Ok((directory, basename)) = folders::page_parent(&root, name) else {
+                continue;
+            };
+            let Ok(metadata) = directory.symlink_metadata(&basename) else {
+                continue;
+            };
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            if Self::read_origin_id(&directory, &OsString::from(basename)).as_deref()
+                == Some(page_id)
+            {
+                found.insert(page_id.to_string(), name.clone());
+            }
+        }
+        found
+    }
+
     pub fn remove_page(
         &self,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
@@ -612,7 +818,7 @@ impl KnowledgeWriter {
     ) -> Result<(), WenlanError> {
         self.validate_guard(guard)?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-            let mut state = self.load_state_cap(&capabilities.wenlan);
+            let mut state = folders::read_state_strict(&capabilities.wenlan)?;
 
             if let Some(entry) = state.pages.remove(page_id) {
                 // Delete the file *before* persisting state. If the file remove
@@ -620,9 +826,10 @@ impl KnowledgeWriter {
                 // state save fails we have at most a stale empty entry pointing
                 // at a missing file (detectable, recoverable) instead of an
                 // orphan file with no DB or state reference.
-                match capabilities.root.symlink_metadata(&entry.file) {
+                let (directory, name) = folders::page_parent(&capabilities.root, &entry.file)?;
+                match directory.symlink_metadata(&name) {
                     Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
-                        capabilities.root.remove_file(&entry.file)?;
+                        directory.remove_file(&name)?;
                     }
                     Ok(_) => {
                         return Err(WenlanError::Conflict(
@@ -641,7 +848,7 @@ impl KnowledgeWriter {
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
 
-                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                if let Err(e) = Self::regenerate_index_cap(capabilities, &state) {
                     log::warn!("[knowledge] index.md regeneration failed: {e}");
                 }
             }
@@ -875,48 +1082,6 @@ impl KnowledgeWriter {
         Ok(plan)
     }
 
-    /// Every page ID this directory actually holds a file for, with its filename.
-    ///
-    /// Recovered from `origin_id:` in the frontmatter `write_page` renders, which
-    /// makes the file self-describing and independent of `state.json`.
-    ///
-    /// Deliberately narrow, in both directions. It reads only the projection
-    /// root, never recursing -- provenance stubs live under `_sources/` and
-    /// control files under `.wenlan/`, and neither is a page. And a `.md` with no
-    /// `origin_id` is skipped, not reported and never deleted: `knowledge_path`
-    /// can point at the user's own vault, so an unattributable file is somebody
-    /// else's note, not a page this projection failed to track. Fail closed on
-    /// the decision, never on the user's data.
-    fn scan_projected_page_ids(&self) -> Result<HashMap<String, Vec<String>>, WenlanError> {
-        if !self.path.is_dir() {
-            return Ok(HashMap::new());
-        }
-        KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-            let mut found: HashMap<String, Vec<String>> = HashMap::new();
-            for entry in capabilities.root.entries()? {
-                let entry = entry?;
-                let name = entry.file_name();
-                if Path::new(&name).extension() != Some(OsStr::new("md")) {
-                    continue;
-                }
-                let Ok(metadata) = entry.metadata() else {
-                    continue;
-                };
-                if !metadata.is_file() {
-                    continue;
-                }
-                let Some(page_id) = Self::read_origin_id(&capabilities.root, &name) else {
-                    continue;
-                };
-                found
-                    .entry(page_id)
-                    .or_default()
-                    .push(name.to_string_lossy().to_string());
-            }
-            Ok(found)
-        })
-    }
-
     /// Every page this projection accounts for, with every file holding it.
     ///
     /// The union of two half-truths. `state.json` knows pages whose `.md` the
@@ -932,30 +1097,30 @@ impl KnowledgeWriter {
     /// this pass exists to close. Sorted, so the cutover digest is stable across
     /// passes; `HashMap` iteration order and directory order are both arbitrary.
     fn projected_files(&self) -> Result<HashMap<String, Vec<String>>, WenlanError> {
-        let mut found = self.scan_projected_page_ids()?;
-        for (page_id, entry) in self.load_state().pages {
-            let slot = found.entry(page_id).or_default();
-            // Only if something is really there. A dry run that promises to move
-            // a file `state.json` merely remembers is a forecast of the wrong
-            // operation, and the operator reads this list to decide.
-            //
-            // Anything, though, not just a regular file: a directory sitting on
-            // a page's projected name is not "nothing to evict", it is an
-            // obstruction, and dropping it here would turn a loud
-            // `page_projection_target_invalid` into a silent state cleanup at a
-            // disclosure boundary. `symlink_metadata` so a dangling symlink is
-            // caught the same way rather than reading as absent.
-            if !entry.file.is_empty()
-                && std::fs::symlink_metadata(self.path.join(&entry.file)).is_ok()
-            {
-                slot.push(entry.file);
+        if !self.path.exists() {
+            return Ok(HashMap::new());
+        }
+        KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
+            let mut found: HashMap<String, Vec<String>> = HashMap::new();
+            for path in folders::scan_tree(&capabilities.root)?.1 {
+                let (directory, name) = folders::page_parent(&capabilities.root, &path)?;
+                if let Some(page_id) = Self::read_origin_id(&directory, &OsString::from(name)) {
+                    found.entry(page_id).or_default().push(path);
+                }
             }
-        }
-        for files in found.values_mut() {
-            files.sort();
-            files.dedup();
-        }
-        Ok(found)
+            for (page_id, entry) in folders::read_state_strict(&capabilities.wenlan)?.pages {
+                let slot = found.entry(page_id).or_default();
+                let (directory, name) = folders::page_parent(&capabilities.root, &entry.file)?;
+                if directory.symlink_metadata(&name).is_ok() {
+                    slot.push(entry.file);
+                }
+            }
+            for files in found.values_mut() {
+                files.sort();
+                files.dedup();
+            }
+            Ok(found)
+        })
     }
 
     /// The `origin_id` in a projected file's frontmatter, if it has one.
@@ -969,6 +1134,9 @@ impl KnowledgeWriter {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
         let mut file = root.open_with(name, &options).ok()?;
+        if !file.metadata().ok()?.is_file() {
+            return None;
+        }
         let mut head = Vec::new();
         (&mut file)
             .take(FRONTMATTER_SCAN_BYTES)
@@ -1010,7 +1178,7 @@ impl KnowledgeWriter {
         self.validate_guard(guard)?;
         let projected = self.projected_files()?;
         KnowledgeProjectionWrite::with_projection_capabilities(&self.path, |capabilities| {
-            let mut state = self.load_state_cap(&capabilities.wenlan);
+            let mut state = folders::read_state_strict(&capabilities.wenlan)?;
             let mut manifest =
                 crate::export::provenance::StubManifest::load_from(&capabilities.root);
             let mut removed = 0usize;
@@ -1075,7 +1243,7 @@ impl KnowledgeWriter {
                 let _ = manifest.save_to(&capabilities.root);
                 let _ =
                     crate::export::provenance::gc_orphan_stubs_in(&capabilities.root, &manifest);
-                if let Err(e) = self.regenerate_index_cap(capabilities, &state) {
+                if let Err(e) = Self::regenerate_index_cap(capabilities, &state) {
                     log::warn!("[knowledge] index.md regeneration failed: {e}");
                 }
             }
@@ -1119,7 +1287,7 @@ impl KnowledgeWriter {
     /// because `wenlan pages` reads one directory level and `.md` files only:
     /// an archived page leaves Wenlan's own reader, which is what the cutover
     /// is about, while staying somewhere a human can find it. It also keeps
-    /// itself out of [`Self::scan_projected_page_ids`] for the same reason a
+    /// itself out of the recursive projection scan for the same reason a
     /// directory has no `.md` extension, so an archived page is not rediscovered
     /// and re-archived on the next pass.
     ///
@@ -1131,7 +1299,8 @@ impl KnowledgeWriter {
     /// carry that name into `archive/`, which is a level of the hierarchy too;
     /// [`crate::export::archive::archive_file_from`] owns that rule.
     fn archive_projected_file(root: &Dir, filename: &str) -> Result<(), WenlanError> {
-        crate::export::archive::archive_file_from(root, root, filename)
+        let (directory, name) = folders::page_parent(root, filename)?;
+        crate::export::archive::archive_file_from(root, &directory, &name)
     }
 
     fn validate_guard(
@@ -1148,67 +1317,12 @@ impl KnowledgeWriter {
     }
 
     fn load_state(&self) -> KnowledgeState {
-        let state_path = self.path.join(".wenlan/state.json");
-        let data = match std::fs::read_to_string(&state_path) {
-            Ok(d) => d,
-            Err(_) => return KnowledgeState::default(),
-        };
-        self.parse_state(&data)
-    }
-
-    fn load_state_cap(&self, wenlan: &Dir) -> KnowledgeState {
-        let mut options = OpenOptions::new();
-        options.read(true).follow(FollowSymlinks::No);
-        let mut file = match wenlan.open_with("state.json", &options) {
-            Ok(file) => file,
-            Err(_) => return KnowledgeState::default(),
-        };
-        let mut data = String::new();
-        if (&mut file)
-            .take(crate::lint::pages::fs::STATE_MAX_BYTES.saturating_add(1))
-            .read_to_string(&mut data)
-            .is_err()
-            || u64::try_from(data.len()).unwrap_or(u64::MAX)
-                > crate::lint::pages::fs::STATE_MAX_BYTES
-        {
-            return KnowledgeState::default();
-        }
-        self.parse_state(&data)
-    }
-
-    fn parse_state(&self, data: &str) -> KnowledgeState {
-        // v1 detection: has "concepts" key, no "pages" key. Migrate inline.
-        // Heuristic on raw bytes is good enough — the legacy file has at most
-        // a thousand small entries and we only enter this branch once per boot.
-        if data.contains("\"concepts\"") && !data.contains("\"pages\"") {
-            let v1: LegacyKnowledgeStateV1 = serde_json::from_str(data).unwrap_or_default();
-            log::info!(
-                "[knowledge] migrating state.json v1 -> v2 ({} entries; rewriting concept_ -> page_ id prefix)",
-                v1.concepts.len()
-            );
-            let pages: HashMap<String, PageFileState> = v1
-                .concepts
-                .into_iter()
-                .map(|(id, st)| {
-                    let new_id = if let Some(rest) = id.strip_prefix("concept_") {
-                        format!("page_{rest}")
-                    } else {
-                        id
-                    };
-                    (new_id, st)
-                })
-                .collect();
-            return KnowledgeState {
-                schema_version: KNOWLEDGE_STATE_SCHEMA_V2,
-                pages,
-            };
-        }
-
-        let mut state: KnowledgeState = serde_json::from_str(data).unwrap_or_default();
-        if state.schema_version == 0 {
-            state.schema_version = KNOWLEDGE_STATE_SCHEMA_V2;
-        }
-        state
+        (|| {
+            let root = folders::read_root(&self.path)?;
+            let control = root.open_dir_nofollow(".wenlan")?;
+            folders::read_state_strict(&control)
+        })()
+        .unwrap_or_default()
     }
 
     #[cfg(test)]
@@ -1237,7 +1351,8 @@ impl KnowledgeWriter {
     ) -> Option<(String, String, Option<String>)> {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
-        let mut file = root.open_with(filename, &options).ok()?;
+        let (directory, name) = folders::page_parent(root, filename).ok()?;
+        let mut file = directory.open_with(&name, &options).ok()?;
         let mut head = Vec::new();
         (&mut file)
             .take(INDEX_FRONTMATTER_SCAN_BYTES)
@@ -1275,7 +1390,10 @@ impl KnowledgeWriter {
     fn remove_reserved_name_copy_left_by(root: &Dir, file: &str, page_id: &str) {
         let mut options = OpenOptions::new();
         options.read(true).follow(FollowSymlinks::No);
-        let Ok(mut handle) = root.open_with(file, &options) else {
+        let Ok((directory, name)) = folders::page_parent(root, file) else {
+            return;
+        };
+        let Ok(mut handle) = directory.open_with(&name, &options) else {
             return;
         };
         if !handle.metadata().is_ok_and(|meta| meta.is_file()) {
@@ -1356,7 +1474,6 @@ impl KnowledgeWriter {
     /// frontmatter can't be read this pass is dropped from the index rather
     /// than failing the write that triggered the regeneration.
     fn regenerate_index_cap(
-        &self,
         capabilities: &ProjectionCapabilities,
         state: &KnowledgeState,
     ) -> Result<(), WenlanError> {
@@ -1497,6 +1614,23 @@ fn index_line_is_entry(line: &str) -> bool {
 /// projection index and every exported bundle.
 fn index_entry_line(title: &str, link_prefix: &str, filename: &str, description: &str) -> String {
     let title = escape_index_link_text(title);
+    let filename = filename
+        .split('/')
+        .map(|component| {
+            component
+                .as_bytes()
+                .iter()
+                .map(|byte| {
+                    if byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~') {
+                        (*byte as char).to_string()
+                    } else {
+                        format!("%{byte:02X}")
+                    }
+                })
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("/");
     if description.is_empty() {
         format!("* [{title}]({link_prefix}{filename})\n")
     } else {
@@ -1573,6 +1707,15 @@ impl KnowledgeProjectionWriteRef<'_> {
         self.writer.write_page(&self.guard, page)
     }
 
+    pub fn write_page_in_folder(
+        &self,
+        page: &Page,
+        initial_folder: Option<&str>,
+    ) -> Result<String, WenlanError> {
+        self.writer
+            .write_page_in_folder(&self.guard, page, initial_folder)
+    }
+
     /// Project a page only if an automatic reader may see it.
     ///
     /// Borrowed-writer counterpart to [`KnowledgeProjectionWrite::write_page_gated`]
@@ -1594,7 +1737,11 @@ impl KnowledgeProjectionWriteRef<'_> {
             );
             return Ok(None);
         };
-        self.write_page_permitted(&permit, page).map(Some)
+        let folder = database.page_initial_folder_path(&page.id).await?;
+        check_permit(&permit, page)?;
+        self.writer
+            .write_page_in_folder(&self.guard, page, Some(&folder))
+            .map(Some)
     }
 
     /// Project a page against a permit already in hand.
@@ -1849,7 +1996,6 @@ impl LockedProjection<'_> {
             .to_string();
         let target = Path::new(&normalized);
         if normalized != target_path
-            || target.components().count() != 1
             || target.extension().and_then(|value| value.to_str()) != Some("md")
         {
             return Err(WenlanError::Conflict("repair_target_stale".to_string()));
@@ -4218,7 +4364,9 @@ fn write_page_preserving_external_edits_with_hook(
     baseline: Option<&PageFileState>,
     after_move: impl FnOnce() -> Result<(), WenlanError>,
 ) -> Result<(), WenlanError> {
-    let root = &capabilities.root;
+    let (directory, basename) = folders::page_parent(&capabilities.root, name)?;
+    let root = &directory;
+    let name = basename.as_str();
     // Avoid archiving an unchanged file on every receipt replay. State may
     // still need repairing if the previous write stopped after installation.
     let mut budget = RepairReadBudget::new();
@@ -4647,6 +4795,7 @@ impl KnowledgeProjectionWrite {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let capabilities = ProjectionCapabilities::open(&write.writer.path)?;
+        folders::recover_move(&capabilities)?;
         Ok(OwnedRepairProjectionSession {
             write,
             capabilities,
@@ -4661,11 +4810,21 @@ impl KnowledgeProjectionWrite {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let capabilities = ProjectionCapabilities::open(path)?;
+        folders::recover_move(&capabilities)?;
         operation(&capabilities)
     }
 
     pub fn write_page(&self, page: &Page) -> Result<String, WenlanError> {
         self.writer.write_page(&self.guard, page)
+    }
+
+    pub fn write_page_in_folder(
+        &self,
+        page: &Page,
+        initial_folder: Option<&str>,
+    ) -> Result<String, WenlanError> {
+        self.writer
+            .write_page_in_folder(&self.guard, page, initial_folder)
     }
 
     /// Project a page only if an automatic reader may see it.
@@ -4697,7 +4856,11 @@ impl KnowledgeProjectionWrite {
             );
             return Ok(None);
         };
-        self.write_page_permitted(&permit, page).map(Some)
+        let folder = database.page_initial_folder_path(&page.id).await?;
+        check_permit(&permit, page)?;
+        self.writer
+            .write_page_in_folder(&self.guard, page, Some(&folder))
+            .map(Some)
     }
 
     /// Project a page against a permit already in hand.
@@ -4933,7 +5096,95 @@ mod tests {
     use super::*;
     use crate::pages::Page;
 
-    fn test_concept() -> Page {
+    #[test]
+    fn live_page_filenames_verifies_only_allowed_existing_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let filename = writer.page_filename(&page.id).unwrap();
+        let state_path = dir.path().join(".wenlan/state.json");
+        let state_before = std::fs::read(&state_path).unwrap();
+        page.title = "Renamed in the database".into();
+        let found = writer.live_page_filenames(&[page.id.as_str(), "not-authorized"]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[&page.id], filename);
+        assert!(writer.live_page_filenames(&["not-authorized"]).is_empty());
+        assert_eq!(std::fs::read(&state_path).unwrap(), state_before);
+        std::fs::write(
+            dir.path().join(&filename),
+            "---\norigin_id: another-page\n---\nBody\n",
+        )
+        .unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::remove_file(dir.path().join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::create_dir(dir.path().join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+    }
+
+    #[test]
+    fn live_page_filenames_rejects_unsafe_names_and_never_initializes_a_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing");
+        let writer = KnowledgeWriter::new_for_test(missing.clone());
+        assert!(writer.live_page_filenames(&["page_test"]).is_empty());
+        assert!(!missing.exists());
+
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let mut state = writer.load_state();
+        for filename in [
+            "../outside.md",
+            "/absolute.md",
+            "folder/nested.md",
+            "folder\\nested.md",
+            "C:stream.md",
+            ".hidden.md",
+            "not-markdown.txt",
+            "",
+        ] {
+            state.pages.get_mut(&page.id).unwrap().file = filename.into();
+            writer.save_state(&state).unwrap();
+            assert!(
+                writer.live_page_filenames(&[&page.id]).is_empty(),
+                "{filename}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn live_page_filenames_refuses_symlinked_files_roots_and_state() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("pages");
+        let writer = KnowledgeWriter::new_for_test(root.clone());
+        let page = test_concept();
+        writer.write_page_for_test(&page).unwrap();
+        let filename = writer.page_filename(&page.id).unwrap();
+        let external = dir.path().join("external.md");
+        std::fs::rename(root.join(&filename), &external).unwrap();
+        symlink(&external, root.join(&filename)).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        std::fs::remove_file(root.join(&filename)).unwrap();
+        std::fs::rename(&external, root.join(&filename)).unwrap();
+
+        let alias = dir.path().join("alias");
+        symlink(&root, &alias).unwrap();
+        assert!(KnowledgeWriter::new_for_test(alias)
+            .live_page_filenames(&[&page.id])
+            .is_empty());
+        let state_path = root.join(".wenlan/state.json");
+        let external_state = dir.path().join("state.json");
+        std::fs::rename(&state_path, &external_state).unwrap();
+        symlink(&external_state, &state_path).unwrap();
+        assert!(writer.live_page_filenames(&[&page.id]).is_empty());
+        assert!(!dir.path().join(".wenlan").exists());
+    }
+
+    pub(super) fn test_concept() -> Page {
         Page {
             id: "concept_test123".to_string(),
             title: "Rust Ownership".to_string(),

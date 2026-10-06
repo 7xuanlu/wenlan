@@ -25,7 +25,8 @@
 use crate::db::MemoryDB;
 use crate::error::WenlanError;
 use crate::sources::obsidian;
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::Path;
 
 /// Counts the watcher reports back to the scheduler tick. Useful for the
 /// daily-status feed once the UI surface lands; for now the daemon just
@@ -61,31 +62,13 @@ pub async fn sync_filesystem_edits(
     if !knowledge_path.exists() {
         return Ok(stats);
     }
-    let entries = match std::fs::read_dir(knowledge_path) {
-        Ok(e) => e,
-        Err(e) => {
-            log::warn!(
-                "[page-watcher] read_dir({}) failed: {e}",
-                knowledge_path.display()
-            );
-            return Ok(stats);
-        }
-    };
-    let knowledge_path_buf: PathBuf = knowledge_path.to_path_buf();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        // Pages live flat under knowledge_path. Subdirectories (e.g. the
-        // `.wenlan/` state dir) aren't recursed.
-        if !path.is_file() || ext != "md" {
-            continue;
-        }
+    // Recovery precedes discovery, so a pending move cannot resurrect its old path.
+    let targets = crate::export::knowledge::knowledge_edit_targets(knowledge_path)?;
+    let paths = crate::export::knowledge::knowledge_markdown_paths(knowledge_path)?;
+    for relative in paths {
+        let path = knowledge_path.join(&relative);
         stats.scanned += 1;
-        match sync_one_file(db, &path, &knowledge_path_buf).await {
+        match sync_one_file(db, &relative, knowledge_path, &targets).await {
             Ok(Outcome::Applied { page_id }) => {
                 stats.applied += 1;
                 log::info!(
@@ -125,11 +108,11 @@ enum Outcome {
 
 async fn sync_one_file(
     db: &MemoryDB,
-    path: &Path,
+    relative: &str,
     knowledge_path: &Path,
+    targets: &HashMap<String, String>,
 ) -> Result<Outcome, WenlanError> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| WenlanError::VectorDb(format!("read {}: {e}", path.display())))?;
+    let (raw, _) = crate::export::knowledge::read_knowledge_markdown(knowledge_path, relative)?;
     let (fm, body) = obsidian::extract_frontmatter(&raw);
     let page_id = match fm.get_str("origin_id") {
         Some(s) if !s.trim().is_empty() => s.trim().to_string(),
@@ -179,6 +162,11 @@ async fn sync_one_file(
             // pick the canonical file; leave it as-is until a genuine re-distill
             // re-establishes the mapping. The page row is untouched either way.
             if writer.page_filename(&existing.id).is_some() {
+                if targets.get(&page_id).map(String::as_str) != Some(relative) {
+                    return Err(WenlanError::Conflict(
+                        "page_projection_identity_ambiguous".into(),
+                    ));
+                }
                 // The permit is taken before the projection lock, not inside it,
                 // so no await happens while the lock is held. Skipping is right
                 // here — unlike the receipted repair path, this is an ambient
@@ -201,6 +189,14 @@ async fn sync_one_file(
             }
         }
         return Ok(Outcome::Unchanged);
+    }
+
+    // External moves and conflict copies are deliberately unsupported: the same
+    // Page must have exactly one claimant at its recorded path before an edit.
+    if targets.get(&page_id).map(String::as_str) != Some(relative) {
+        return Err(WenlanError::Conflict(
+            "page_projection_identity_ambiguous".into(),
+        ));
     }
 
     // The user edited prose, not the memory provenance -- sources change
@@ -345,6 +341,8 @@ mod tests {
         .await
         .unwrap();
 
+        let writer = tracked_writer(&db, knowledge_dir.path());
+        project_page(&db, &writer, &page);
         write_page_md(knowledge_dir.path(), &page, Some("user-edited body line"));
         let stats = sync_filesystem_edits(&db, knowledge_dir.path())
             .await
@@ -356,6 +354,95 @@ mod tests {
         // fs_edit must flip user_edited so refinery escalates instead of
         // overwriting on the next re-distill.
         assert!(p.user_edited);
+    }
+
+    #[tokio::test]
+    async fn nested_fs_edit_updates_the_same_page_without_recreating_a_flat_copy() {
+        let (db, _ddir) = fresh_db().await;
+        let dir = TempDir::new().unwrap();
+        let page = sample_page("page_nested", "Nested Topic", "original nested body");
+        db.insert_page(
+            &page.id,
+            &page.title,
+            None,
+            &page.content,
+            None,
+            None,
+            &["mem_seed"],
+            &page.created_at,
+        )
+        .await
+        .unwrap();
+        let writer = tracked_writer(&db, dir.path());
+        project_page(&db, &writer, &page);
+        let source = writer.page_filename(&page.id).unwrap();
+        crate::export::knowledge::create_knowledge_folder(dir.path(), "", "Research").unwrap();
+        crate::export::knowledge::create_knowledge_folder(dir.path(), "Research", "Rust").unwrap();
+        let path = crate::export::knowledge::move_projected_page(
+            dir.path(),
+            &page.id,
+            &source,
+            "Research/Rust",
+            "watcher-move",
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join(&path))
+            .unwrap()
+            .replace("original nested body", "externally edited nested body");
+        std::fs::write(dir.path().join(&path), raw).unwrap();
+        let stats = sync_filesystem_edits(&db, dir.path()).await.unwrap();
+        assert_eq!(stats.applied, 1);
+        let updated = db.get_page(&page.id).await.unwrap().unwrap();
+        assert_eq!(updated.content, "externally edited nested body");
+        assert!(updated.user_edited);
+        assert_eq!(updated.space, page.space);
+        assert_eq!(writer.page_filename(&page.id).unwrap(), path);
+        assert!(!dir.path().join(&source).exists());
+        assert_eq!(updated.source_memory_ids, page.source_memory_ids);
+    }
+
+    #[tokio::test]
+    async fn external_move_and_duplicate_claimants_cannot_update_or_duplicate_a_page() {
+        for duplicate in [false, true] {
+            let (db, _ddir) = fresh_db().await;
+            let dir = TempDir::new().unwrap();
+            let page = sample_page("page_external", "External Topic", "original body");
+            db.insert_page(
+                &page.id,
+                &page.title,
+                None,
+                &page.content,
+                None,
+                None,
+                &["mem_seed"],
+                &page.created_at,
+            )
+            .await
+            .unwrap();
+            let writer = tracked_writer(&db, dir.path());
+            project_page(&db, &writer, &page);
+            let source = writer.page_filename(&page.id).unwrap();
+            crate::export::knowledge::create_knowledge_folder(dir.path(), "", "Notes").unwrap();
+            let moved = dir.path().join("Notes/external.md");
+            if duplicate {
+                std::fs::copy(dir.path().join(&source), &moved).unwrap();
+            } else {
+                std::fs::rename(dir.path().join(&source), &moved).unwrap();
+            }
+            let raw = std::fs::read_to_string(&moved)
+                .unwrap()
+                .replace("original body", "external edit that must be preserved");
+            std::fs::write(&moved, &raw).unwrap();
+            let stats = sync_filesystem_edits(&db, dir.path()).await.unwrap();
+            assert_eq!(stats.applied, 0);
+            assert!(stats.errors > 0);
+            assert_eq!(
+                db.get_page(&page.id).await.unwrap().unwrap().content,
+                page.content
+            );
+            assert_eq!(std::fs::read_to_string(&moved).unwrap(), raw);
+            assert_eq!(dir.path().join(&source).exists(), duplicate);
+        }
     }
 
     /// Change D (2026-08-24 doc-citation-locator fix): the watcher's sync

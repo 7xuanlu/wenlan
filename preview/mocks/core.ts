@@ -22,6 +22,9 @@ import {
   GRAPH_MEMORIES,
   GRAPH_PAGES,
 } from "../fixtures";
+import { TauriMockRuntime } from "../../e2e/tauriMock/runtime";
+import { createReviewDecisionFixture } from "../../e2e/fixtures/reviewDecisions";
+const folderRuntime = new TauriMockRuntime(createReviewDecisionFixture("wiki-folders"), [], [], { projectionPendingOnce: new URLSearchParams(window.location.search).get("pending") === "1" });
 import { liveInvoke } from "./live-invoke";
 import { invokeRemoteFixture } from "./remote-access";
 
@@ -44,6 +47,7 @@ export async function invoke(
   if (!(window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__) {
     return liveInvoke(cmd, args);
   }
+  if (new URLSearchParams(window.location.search).get("mode") === "folders") return folderRuntime.invoke(cmd, args);
   // Fixture previews must never toggle the maintainer's background service.
   if (cmd === "get_background_ai_enabled") return fixtureBackgroundAiEnabled;
   if (cmd === "set_background_ai_enabled") {
@@ -55,6 +59,8 @@ export async function invoke(
     return invokeRemoteFixture(cmd, args);
   }
   switch (cmd) {
+    case "knowledge_folders_list":
+      throw new Error("Folder browsing is unavailable in this fixture");
     case "quick_capture":
       return 1;
     case "daemon_version":

@@ -58,6 +58,7 @@ fn route_contract_records_observed_scope_and_trust_semantics() {
 #[test]
 fn route_catalog_freezes_exact_global_and_scoped_keys() {
     const GLOBAL: &[(Method, &str)] = &[
+        (Method::Post, "/api/knowledge/folders"),
         (Method::Get, "/api/profile"),
         (Method::Get, "/api/agents"),
         (Method::Get, "/api/agents/{name}"),
@@ -79,6 +80,8 @@ fn route_catalog_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/snapshots"),
     ];
     const SCOPED: &[(Method, &str)] = &[
+        (Method::Get, "/api/knowledge/folders"),
+        (Method::Post, "/api/pages/{id}/move"),
         (Method::Post, "/api/search"),
         (Method::Post, "/api/context"),
         (Method::Post, "/api/brief"),

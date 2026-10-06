@@ -50,6 +50,10 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "set_background_ai_enabled",
   ],
   wikiAndPages: [
+    // Isolated in-memory folders; these never touch a native knowledge root.
+    "knowledge_folders_list",
+    "knowledge_folder_create",
+    "page_move",
     "list_pages",
     "get_page",
     "list_pages_explicit_browse",

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type {
   ArchiveEntitiesRequest,
+  KnowledgeFolder,
   DistillReviewResponse,
   Entity,
   EntityBulkResponse,
@@ -104,6 +105,8 @@ function stringArray(args: unknown, key: string): readonly string[] {
 
 export class TauriMockRuntime {
   private spaces: Space[];
+  private folders: KnowledgeFolder[];
+  private readonly folderMoveReceipts = new Map<string, {id:string;expectedStoragePath:string;folderPath:string;storage_path:string}>();
   private pages: KnowledgePage[];
   private entityDetails: EntityDetail[];
   private memories: MemoryItem[];
@@ -122,6 +125,7 @@ export class TauriMockRuntime {
   private firstWriteRemoteMutationPending: boolean;
   private pageSequence: number;
   private backgroundAiEnabled = false;
+  private projectionFailureIssued = false;
 
   constructor(
     private readonly fixture: SpacesNavigationFixture,
@@ -130,6 +134,7 @@ export class TauriMockRuntime {
     private readonly pageScenario: TauriMockPageScenario = {},
     private readonly delays: Readonly<Record<string, number>> = {},
   ) {
+    this.folders = (fixture.folders ?? []).map(folder => ({...folder}));
     this.spaces = fixture.spaces.map((space) => ({ ...space }));
     this.pages = fixture.pages.map((page) => ({ ...page }));
     this.pageSequence = this.pages.length;
@@ -183,6 +188,35 @@ export class TauriMockRuntime {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
     switch (command) {
+      case "knowledge_folders_list": return { folders: structuredClone(this.folders), truncated: false };
+      case "knowledge_folder_create": {
+        const parentPath = stringValue(command, args, "parentPath");
+        const name = requiredString(command, args, "name");
+        if (name.startsWith(".") || /[\\/:]/.test(name) || (parentPath && !this.folders.some(folder => folder.path === parentPath))) throw new Error("Invalid folder");
+        const path = parentPath ? `${parentPath}/${name}` : name;
+        if (this.folders.some(folder => folder.path === path)) throw new Error("Folder already exists");
+        this.folders.push({path,parent_path:parentPath,name}); return {path};
+      }
+      case "page_move": {
+        const id = requiredString(command, args, "id");
+        const expectedStoragePath = requiredString(command, args, "expectedStoragePath");
+        const folderPath = stringValue(command, args, "folderPath");
+        const operationId = requiredString(command, args, "operationId");
+        const receipt = this.folderMoveReceipts.get(operationId);
+        if (receipt) {
+          if (receipt.id !== id || receipt.expectedStoragePath !== expectedStoragePath || receipt.folderPath !== folderPath) throw new Error("Move operation conflict");
+          return {storage_path:receipt.storage_path};
+        }
+        const page = this.pages.find(note => note.id === id);
+        if (!page || page.storage_path !== expectedStoragePath) throw new Error("Storage path changed");
+        if (folderPath && !this.folders.some(folder => folder.path === folderPath)) throw new Error("Folder missing");
+        const filename = expectedStoragePath.split("/").slice(-1)[0];
+        const storage_path = folderPath ? `${folderPath}/${filename}` : filename;
+        if (this.pages.some(note => note.id !== id && note.storage_path === storage_path)) throw new Error("Destination exists");
+        this.pages = this.pages.map(note => note.id === id ? { ...note, storage_path } : note);
+        this.folderMoveReceipts.set(operationId,{id,expectedStoragePath,folderPath,storage_path});
+        return {storage_path};
+      }
       case "repair_resume_runtime": return undefined;
       case "repair_operation_status":
       case "repair_cancel":
@@ -224,12 +258,12 @@ export class TauriMockRuntime {
           memory: this.memories.find((memory) => memory.source_id === id) ?? null,
         }));
       }
-      case "get_page": return this.pages.find((page) => page.id === requiredString(command, args, "id")) ?? null;
+      case "get_page": return this.getPageResponse(command, args);
       // Explicit-browse variants attach a human-intent header at the HTTP
       // layer; this fixture has no HTTP layer, so they resolve identically
       // to their automatic counterparts.
       case "list_pages_explicit_browse": return this.listPages(args);
-      case "get_page_explicit_browse": return this.pages.find((page) => page.id === requiredString(command, args, "id")) ?? null;
+      case "get_page_explicit_browse": return this.getPageResponse(command, args);
       // No fixture models a live M5 truth cutover yet, so this always
       // reports "not cut over" — the same state as production before cutover.
       case "get_truth_status": return null;
@@ -376,13 +410,24 @@ export class TauriMockRuntime {
     return null;
   }
 
+  private getPageResponse(command: string, args: unknown): KnowledgePage | null {
+    const page = structuredClone(this.pages.find(page => page.id === requiredString(command, args, "id")) ?? null);
+    if (page) {
+      // Like the real GET contract: a publish outcome is session information,
+      // not a durable error inferred from a missing file on later reads.
+      delete page.projection_status;
+      delete page.projection_error;
+    }
+    return page;
+  }
+
   private listPages(args: unknown): readonly KnowledgePage[] {
     const status = optionalString(args, "status");
     const domain = optionalString(args, "domain");
     const limit = optionalValue(args, "limit");
     const offset = optionalValue(args, "offset");
     const filtered = this.pages.filter((page) => (!status || page.status === status) && (!domain || page.domain === domain || page.space === domain));
-    return filtered.slice(typeof offset === "number" ? offset : 0, typeof limit === "number" ? (typeof offset === "number" ? offset : 0) + limit : undefined);
+    return structuredClone(filtered.slice(typeof offset === "number" ? offset : 0, typeof limit === "number" ? (typeof offset === "number" ? offset : 0) + limit : undefined));
   }
 
   private createPage(args: unknown): { id: string; attached_to: string | null; warnings: string[] } {
@@ -656,6 +701,7 @@ export class TauriMockRuntime {
       source_memory_ids: [],
       version: 1,
       status: "draft",
+      folder_path: optionalString(args, "folderPath"),
       creation_kind: "authored",
       review_status: "unconfirmed",
       created_at: now,
@@ -753,6 +799,11 @@ export class TauriMockRuntime {
       publishedReplay?.status === "active"
       && publishedReplay.version === expectedVersion + 1
     ) {
+      if (publishedReplay.projection_status === "pending") {
+        const recovered = { ...publishedReplay, storage_path: `${publishedReplay.folder_path ? publishedReplay.folder_path + "/" : ""}${publishedReplay.id}.md`, projection_status: "synced", projection_error: null };
+        this.pages = this.pages.map(page => page.id === id ? recovered : page);
+        return { ...recovered };
+      }
       return { ...publishedReplay };
     }
     if (publishedReplay && publishedReplay.version !== expectedVersion) {
@@ -791,11 +842,19 @@ export class TauriMockRuntime {
       title,
       content,
       status: "active",
+      storage_path: `${page.folder_path ? page.folder_path + "/" : ""}${page.id}.md`,
+      projection_status: "synced",
       review_status: "unconfirmed",
       version: page.version + 1,
       last_compiled: "2026-07-10T12:31:00Z",
       last_modified: "2026-07-10T12:31:00Z",
     };
+    if (this.pageScenario.projectionPendingOnce && !this.projectionFailureIssued) {
+      this.projectionFailureIssued = true;
+      published.storage_path = null;
+      published.projection_status = "pending";
+      published.projection_error = "Fixture: chosen folder is unavailable";
+    }
     this.pages[index] = published;
     return { ...published };
   }

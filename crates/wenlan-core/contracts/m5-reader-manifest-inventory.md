@@ -585,6 +585,9 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/ingest/webpage` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/webpage/fetch` | main | no | not_applicable | `none` | handle_fetch_webpage | untrusted external website text only; no stored Page/Memory reads |
 | `POST` | `/api/ingest/webpage/create` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/knowledge/folders` | main | yes | automatic | `none` | `handle_list_knowledge_folders` | physical folders or authorized page ancestors |
+| `POST` | `/api/knowledge/folders` | main | no | not_applicable | `none` | — | creates a physical directory without page prose |
+| `POST` | `/api/pages/{id}/move` | main | yes | automatic | `none` | `handle_move_page` | EFFECT: moves an authorized live page projection |
 | `GET` | `/api/knowledge/count` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/knowledge/path` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/lint` | main + repair | yes | automatic | `none` | `handle_lint` | LintAgentRecord.excerpt, LintAgentRecord.source_excerpt, LintCheck |
@@ -1308,9 +1311,9 @@ carrying the authority of agreement.
 | `core/db.rs::update_memory_entity_id` | `pub` | no | **yes** | `server/entity_graph_routes.rs::handle_link_entity` | `core/db.rs::maybe_establish_entity_in_transaction` |
 | `core/db/repair_memory_cas.rs::complete_entity_extraction_repair_cas_inner` | `private` | no | no | — | `core/db.rs::maybe_establish_entity_in_transaction` |
 | `core/db/repair_verification.rs::record_repair_verification_atomic` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_on_connection` |
-| `core/db/scoped_pages.rs::get_page_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_page` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
+| `core/db/scoped_pages.rs::get_page_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_page`, `server/page_routes.rs::handle_move_page` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
 | `core/db/scoped_pages.rs::get_page_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_get_page`, `server/page_routes.rs::handle_get_page_revisions` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
-| `core/db/scoped_pages.rs::list_pages_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
+| `core/db/scoped_pages.rs::list_pages_scoped` | `pub` | no | **yes** | `server/knowledge_routes.rs::handle_list_knowledge_folders`, `server/page_routes.rs::handle_export_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
 | `core/db/scoped_pages.rs::list_pages_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_list_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
 | `core/document_enrichment.rs::refresh_okf_linkers` | `private` | no | no | — | `core/db/okf_concepts.rs::refresh_okf_concept_linkers` |
 | `core/document_enrichment.rs::run_document_enrichment_slice` | `pub` | no | **yes** | `server/scheduler/ambient.rs::run_document_enrichment_slice_tick`, `server/scheduler/ambient.rs::run_import_document_prep_slice` | `core/document_enrichment.rs::run_document_enrichment_with_request_budget` |
@@ -1363,7 +1366,7 @@ carrying the authority of agreement.
 | `core/synthesis/distill.rs::synthesize_candidate_body` | `pub(crate)` | no | no | — | `core/synthesis/distill.rs::build_page_compile_user_prompt` |
 | `core/synthesis/refinement_queue.rs::apply_refinement` | `pub` | no | no | — | `core/synthesis/refinement_queue.rs::apply_refinement_with_decision` |
 | `core/truth_adapter.rs::filter_page_refs` | `pub` | no | **yes** | `server/brief_routes.rs::handle_read_brief`, `server/entity_graph_routes.rs::handle_get_knowledge_graph`, `server/memory_routes.rs::handle_search_memory_inner`, `server/page_routes.rs::handle_get_page_links`, `server/page_routes.rs::handle_get_page_revisions`, `server/page_routes.rs::handle_get_page_sources`, `server/page_routes.rs::handle_list_orphan_links`, `server/routes.rs::handle_distill_inner`, `server/routes.rs::handle_recent_page_changes`, `server/routes.rs::handle_recent_pages`, `server/routes.rs::handle_recent_retrievals`, `server/routes.rs::handle_search_inner` | `core/db/truth_exposure.rs::page_visibility` |
-| `core/truth_adapter.rs::filter_pages` | `pub` | no | **yes** | `server/page_routes.rs::handle_list_pages`, `server/page_routes.rs::handle_search_pages`, `server/routes.rs::handle_distill_inner` | `core/truth_adapter.rs::verdicts` |
+| `core/truth_adapter.rs::filter_pages` | `pub` | no | **yes** | `server/knowledge_routes.rs::handle_list_knowledge_folders`, `server/page_routes.rs::handle_list_pages`, `server/page_routes.rs::handle_search_pages`, `server/routes.rs::handle_distill_inner` | `core/truth_adapter.rs::verdicts` |
 | `core/truth_adapter.rs::page_write_permit` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_page`, `server/page_routes.rs::handle_export_pages` | `core/db/truth_exposure.rs::page_visibility` |
 | `server/cmd_cutover.rs::run` | `pub` | yes | no | — | `core/export/knowledge.rs::plan_truth_cutover` |
 | `server/cmd_prune_junk_entities.rs::restore` | `pub` | yes | no | — | `core/db.rs::restore_entity` |

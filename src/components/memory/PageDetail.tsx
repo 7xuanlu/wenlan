@@ -63,10 +63,15 @@ import {
   type MarkdownEditorSelection,
 } from "./editor/MarkdownEditor";
 import { leadingMarkdownH1MatchesTitle } from "./editor/pageEditorPresentation";
+import { MovePageDialog } from "./pages/MovePageDialog";
+import { PageProjectionNotice } from "./pages/PageProjectionNotice";
+import { inventoryPageFilename, type PageProjectionIssue } from "./pages/pageInventory";
 import { PageAutosave } from "./editor/pageAutosave";
 
 interface PageDetailProps {
   pageId: string;
+  projectionIssue?: PageProjectionIssue;
+  onProjectionResolved?: () => void;
   /** Navigation intent: ordinary pages can start editing; review origins read. */
   initialMode?: "read" | "edit";
   initialSelection?: MarkdownEditorSelection;
@@ -203,6 +208,8 @@ function handleMenuKeyDown(
 
 export default function PageDetail({
   pageId,
+  projectionIssue,
+  onProjectionResolved,
   initialMode = "read",
   initialSelection,
   onSelectionChange,
@@ -221,6 +228,7 @@ export default function PageDetail({
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
   const [exported, setExported] = useState(false);
   const [copying, setCopying] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -1431,6 +1439,7 @@ export default function PageDetail({
                     <circle cx="14" cy="2" r="1.5" />
                   </svg>
                 </button>
+                {moveOpen && <MovePageDialog page={page} onClose={() => setMoveOpen(false)} />}
                 {actionMenuOpen ? (
                   <div
                     aria-label={t("pageDetail.actions")}
@@ -1446,6 +1455,7 @@ export default function PageDetail({
                     ref={actionMenuListRef}
                     role="menu"
                   >
+                    <button type="button" role="menuitem" disabled={!inventoryPageFilename(page) || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive} onClick={() => { closeActionMenu(); setMoveOpen(true); }}>{t("pages.folders.move")}</button>
                     <button type="button" role="menuitem" disabled={canvasSwitchPending} onClick={() => {
                       closeActionMenu();
                       void requestPageInfo();
@@ -1578,6 +1588,8 @@ export default function PageDetail({
             {documentTools}
           </div>
         )}
+
+        {projectionIssue && !inventoryPageFilename(page) && <PageProjectionNotice key={`${pageId}:${projectionIssue.expectedVersion}`} pageId={pageId} issue={projectionIssue} disabled={editDirty || saveState.phase !== "idle" || !!editorStatus?.compositionActive} onResolved={onProjectionResolved} />}
 
         {showAttachedPageNotice && (
           <div

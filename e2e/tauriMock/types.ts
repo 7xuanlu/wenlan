@@ -15,6 +15,7 @@ export type MockFailure = {
 };
 
 export type TauriMockPageScenario = {
+  readonly projectionPendingOnce?: boolean;
   readonly daemonVersion?: string;
   readonly saveDaemonVersion?: string;
   /**

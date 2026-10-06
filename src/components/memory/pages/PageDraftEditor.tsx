@@ -22,6 +22,7 @@ import {
   usePageDraftAutosave,
   type PageDraftSnapshot,
 } from "./usePageDraftAutosave";
+import type { PageProjectionIssue } from "./pageInventory";
 import "./pageActions.css";
 import "./pageDraftEditor.css";
 
@@ -36,10 +37,11 @@ export type PageDraftEditorHandle = {
 
 type PageDraftEditorProps = {
   readonly draftId?: string;
+  readonly folderPath?: string;
   readonly onBack: () => void;
   readonly onEscapeBeforeLeave?: () => boolean;
   readonly onOpenExisting: (pageId: string) => void;
-  readonly onPublished: (pageId: string) => void;
+  readonly onPublished: (pageId: string, projectionIssue?: PageProjectionIssue) => void;
   readonly space: string | null;
 };
 
@@ -84,6 +86,7 @@ type HydratedEditorProps = PageDraftEditorProps & {
 const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditorProps>(
   function HydratedPageDraftEditor({
     initialPage,
+    folderPath,
     onBack,
     onEscapeBeforeLeave,
     onOpenExisting,
@@ -123,6 +126,7 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
     }, []);
     const autosave = usePageDraftAutosave({
       draftId: initialPage?.id,
+      folderPath: initialPage?.folder_path ?? folderPath,
       initial: initialSnapshot,
       initialVersion: initialPage?.version,
       onSpaceReconciled: reconcileSpace,
@@ -231,7 +235,11 @@ const HydratedPageDraftEditor = forwardRef<PageDraftEditorHandle, HydratedEditor
         queryClient.invalidateQueries({ queryKey: ["spaces-page-counts"] }),
         queryClient.invalidateQueries({ queryKey: ["sidebar-space-page-counts"] }),
       ]);
-      onPublished(published.id);
+      if (published.projection_status === "pending" && published.projection_error) {
+        onPublished(published.id, { expectedVersion: published.version - 1 });
+      } else {
+        onPublished(published.id);
+      }
     };
 
     const publish = (): Promise<void> => {

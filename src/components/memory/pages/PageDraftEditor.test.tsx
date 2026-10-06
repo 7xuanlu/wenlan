@@ -289,6 +289,25 @@ describe("PageDraftEditor", () => {
     expect(onPublished).toHaveBeenCalledWith("draft-1");
   });
 
+  it("carries only an actual file-save error through publish navigation", async () => {
+    vi.mocked(createPageDraft).mockResolvedValue(page({ version: 1 }));
+    vi.mocked(publishPageDraft).mockResolvedValue(page({status:"active",version:2,projection_status:"pending",projection_error:"Private folder path unavailable",storage_path:null}));
+    const {onPublished}=renderEditor();
+    await userEvent.type(await screen.findByRole("textbox",{name:"Title"}),"Saved note");
+    await userEvent.type(screen.getByRole("textbox",{name:"Content"}),"Persisted body");
+    await userEvent.click(screen.getByRole("button",{name:"Publish"}));
+    await waitFor(()=>expect(onPublished).toHaveBeenCalledWith("draft-1",{expectedVersion:1}));
+  });
+  it("does not report file-save failure when files are not configured", async () => {
+    vi.mocked(createPageDraft).mockResolvedValue(page({ version: 1 }));
+    vi.mocked(publishPageDraft).mockResolvedValue(page({status:"active",version:2,projection_status:"not_configured",storage_path:null}));
+    const {onPublished}=renderEditor();
+    await userEvent.type(await screen.findByRole("textbox",{name:"Title"}),"Saved note");
+    await userEvent.type(screen.getByRole("textbox",{name:"Content"}),"Persisted body");
+    await userEvent.click(screen.getByRole("button",{name:"Publish"}));
+    await waitFor(()=>expect(onPublished).toHaveBeenCalledWith("draft-1"));
+  });
+
   it("reconciles a lost publish response when the draft is already active", async () => {
     vi.mocked(createPageDraft).mockImplementation(async (input) => page({
       id: input.clientDraftId,

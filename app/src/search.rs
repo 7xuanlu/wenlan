@@ -3562,6 +3562,7 @@ struct DraftWriteRequest {
     title: String,
     content: String,
     space: Option<String>,
+    folder_path: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -3580,6 +3581,25 @@ struct DraftVersionRequest {
 #[derive(Debug, Deserialize)]
 struct DraftPageResponse {
     page: serde_json::Value,
+    #[serde(default)]
+    folder_path: String,
+    #[serde(default)]
+    projection_status: Option<responses::PageProjectionStatus>,
+    #[serde(default)]
+    storage_path: Option<String>,
+    #[serde(default)]
+    projection_error: Option<String>,
+}
+impl DraftPageResponse {
+    fn into_page(mut self) -> serde_json::Value {
+        self.page["folder_path"] = self.folder_path.into();
+        if let Some(status) = self.projection_status {
+            self.page["projection_status"] = serde_json::json!(status);
+            self.page["storage_path"] = serde_json::json!(self.storage_path);
+            self.page["projection_error"] = serde_json::json!(self.projection_error);
+        }
+        self.page
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -3599,7 +3619,7 @@ async fn create_page_draft_response(
     request: DraftWriteRequest,
 ) -> Result<serde_json::Value, String> {
     let response: DraftPageResponse = client.post_json("/api/pages/drafts", &request).await?;
-    Ok(response.page)
+    Ok(response.into_page())
 }
 
 async fn update_page_draft_response(
@@ -3613,7 +3633,7 @@ async fn update_page_draft_response(
             &request,
         )
         .await?;
-    Ok(response.page)
+    Ok(response.into_page())
 }
 
 async fn publish_page_draft_response(
@@ -3630,7 +3650,7 @@ async fn publish_page_draft_response(
             &request,
         )
         .await?;
-    Ok(response.page)
+    Ok(response.into_page())
 }
 
 async fn discard_page_draft_response(
@@ -3661,6 +3681,7 @@ pub async fn create_page_draft(
     title: String,
     content: String,
     space: Option<String>,
+    folder_path: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let client = state.read().await.client.clone();
     create_page_draft_response(
@@ -3670,6 +3691,7 @@ pub async fn create_page_draft(
             title,
             content,
             space: normalize_draft_space(space),
+            folder_path,
         },
     )
     .await
@@ -3807,6 +3829,7 @@ mod page_draft_command_tests {
             &client,
             DraftWriteRequest {
                 draft_id: "page_client-1".to_string(),
+                folder_path: Some("Writing".into()),
                 title: "  title  ".to_string(),
                 content: "  body  \n".to_string(),
                 space: None,
@@ -3819,6 +3842,7 @@ mod page_draft_command_tests {
         assert_eq!(page["id"], "draft-1");
         assert!(request.starts_with("POST /api/pages/drafts HTTP/1.1\r\n"));
         assert!(request.contains(r#""draft_id":"page_client-1""#));
+        assert!(request.contains(r#""folder_path":"Writing""#));
         assert!(request.contains(r#""title":"  title  ""#));
         assert!(request.contains(r#""content":"  body  \n""#));
         assert!(request.contains(r#""space":null"#));
@@ -3851,7 +3875,7 @@ mod page_draft_command_tests {
     #[tokio::test]
     async fn publish_draft_posts_the_version_and_unwraps_the_page() {
         let (client, request) =
-            serve_once(r#"{"page":{"id":"draft-1","version":4,"status":"active"}}"#).await;
+            serve_once(r#"{"page":{"id":"draft-1","version":4,"status":"active"},"folder_path":"Writing","projection_status":"pending","projection_error":"Folder unavailable"}"#).await;
         let page = publish_page_draft_response(
             &client,
             "draft-1",
@@ -3864,6 +3888,9 @@ mod page_draft_command_tests {
         let request = request.await.unwrap();
 
         assert_eq!(page["status"], "active");
+        assert_eq!(page["folder_path"], "Writing");
+        assert_eq!(page["projection_status"], "pending");
+        assert_eq!(page["projection_error"], "Folder unavailable");
         assert!(request.starts_with("POST /api/pages/drafts/draft-1/publish HTTP/1.1\r\n"));
         assert!(request.contains(r#""expected_version":3"#));
     }
@@ -4433,10 +4460,10 @@ pub async fn list_pages(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<Page>, String> {
+) -> Result<Vec<responses::PageInventoryEntry>, String> {
     let client = state.read().await.client.clone();
     let path = pages_query_path(status, domain, limit, offset);
-    let resp: responses::SearchPagesResponse = client.get_json(&path).await?;
+    let resp: responses::PageInventoryResponse = client.get_json(&path).await?;
     Ok(resp.pages)
 }
 
@@ -4473,10 +4500,10 @@ pub async fn list_pages_explicit_browse(
     domain: Option<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<Page>, String> {
+) -> Result<Vec<responses::PageInventoryEntry>, String> {
     let client = state.read().await.client.clone();
     let path = pages_query_path(status, domain, limit, offset);
-    let resp: responses::SearchPagesResponse = client.get_json_explicit_browse(&path).await?;
+    let resp: responses::PageInventoryResponse = client.get_json_explicit_browse(&path).await?;
     Ok(resp.pages)
 }
 
@@ -6000,4 +6027,46 @@ mod list_external_models_tests {
             parse_models_response(&serde_json::json!({"data": [{"name": "no-id"}]})).is_empty()
         );
     }
+}
+
+#[tauri::command]
+pub async fn knowledge_folders_list(
+    state: tauri::State<'_, State>,
+) -> Result<responses::KnowledgeFoldersResponse, String> {
+    let client = state.read().await.client.clone();
+    client.get_json("/api/knowledge/folders").await
+}
+#[tauri::command]
+pub async fn knowledge_folder_create(
+    state: tauri::State<'_, State>,
+    parent_path: String,
+    name: String,
+) -> Result<responses::CreateKnowledgeFolderResponse, String> {
+    let client = state.read().await.client.clone();
+    client
+        .post_json(
+            "/api/knowledge/folders",
+            &requests::CreateKnowledgeFolderRequest { parent_path, name },
+        )
+        .await
+}
+#[tauri::command]
+pub async fn page_move(
+    state: tauri::State<'_, State>,
+    id: String,
+    expected_storage_path: String,
+    folder_path: String,
+    operation_id: String,
+) -> Result<responses::MovePageResponse, String> {
+    let client = state.read().await.client.clone();
+    client
+        .post_json(
+            &format!("/api/pages/{}/move", percent_encode_path_segment(&id)),
+            &requests::MovePageRequest {
+                expected_storage_path,
+                folder_path,
+                operation_id,
+            },
+        )
+        .await
 }

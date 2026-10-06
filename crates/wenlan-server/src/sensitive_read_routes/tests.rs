@@ -75,6 +75,7 @@ fn canonical_matrix_is_unique_and_matches_observed_handler_contracts() {
 #[test]
 fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
     const GLOBAL: &[(Method, &str)] = &[
+        (Method::Post, "/api/knowledge/folders"),
         (Method::Get, "/api/profile"),
         (Method::Get, "/api/agents"),
         (Method::Get, "/api/agents/{name}"),
@@ -96,6 +97,8 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         (Method::Get, "/api/snapshots"),
     ];
     const SCOPED: &[(Method, &str)] = &[
+        (Method::Get, "/api/knowledge/folders"),
+        (Method::Post, "/api/pages/{id}/move"),
         (Method::Post, "/api/search"),
         (Method::Post, "/api/context"),
         (Method::Post, "/api/brief"),
@@ -161,8 +164,8 @@ fn canonical_matrix_freezes_exact_global_and_scoped_keys() {
         .map(|row| (row.method, row.path))
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(rows.len(), 66);
-    assert_eq!(keys.len(), 66, "duplicate sensitive route key");
+    assert_eq!(rows.len(), 69);
+    assert_eq!(keys.len(), 69, "duplicate sensitive route key");
     assert_eq!(global, GLOBAL.iter().copied().collect());
     assert_eq!(scoped, SCOPED.iter().copied().collect());
     assert_eq!(

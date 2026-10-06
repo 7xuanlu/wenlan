@@ -6,6 +6,7 @@ const host = process.env.TAURI_DEV_HOST;
 const devPort = Number.parseInt(process.env.WENLAN_DEV_UI_PORT ?? "1420", 10);
 
 export default defineConfig(async () => ({
+  ...(process.env.WENLAN_VITE_CACHE_DIR ? { cacheDir: process.env.WENLAN_VITE_CACHE_DIR } : {}),
   plugins: [react(), tailwindcss()],
   define: {
     __WENLAN_REVIEW__: "false",

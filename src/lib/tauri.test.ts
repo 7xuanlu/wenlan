@@ -1290,3 +1290,28 @@ describe('restartDaemon', () => {
     expect(mockInvoke).toHaveBeenCalledWith("repair_resume_runtime", { request });
   });
 });
+
+describe("physical folder bridge", () => {
+  it("passes real root-relative destinations and move replay identity unchanged", async () => {
+    mockInvoke.mockResolvedValueOnce({ folders: [{ path: "Work", parent_path: "", name: "Work" }], truncated: false });
+    await expect(tauri.knowledgeFoldersList()).resolves.toMatchObject({ truncated: false });
+    mockInvoke.mockResolvedValueOnce({ path: "Work/Research" });
+    await tauri.knowledgeFolderCreate("Work", "Research");
+    mockInvoke.mockResolvedValueOnce({ storage_path: "Work/Research/real-name.md" });
+    await expect(tauri.pageMove("note", "real-name.md", "Work/Research", "move-id")).resolves.toEqual({ storage_path: "Work/Research/real-name.md" });
+    expect(mockInvoke.mock.calls).toEqual([
+      ["knowledge_folders_list"],
+      ["knowledge_folder_create", { parentPath: "Work", name: "Research" }],
+      ["page_move", { id: "note", expectedStoragePath: "real-name.md", folderPath: "Work/Research", operationId: "move-id" }],
+    ]);
+  });
+  it("retains draft folder intent and honest pending projection without passing it into updates", async () => {
+    mockInvoke.mockResolvedValue({ id: "draft", status: "draft", folder_path: "Work", storage_path: null, projection_status: "pending" });
+    const snapshot = { title: "Draft", content: "Text", space: "Personal" };
+    const draft = await tauri.createPageDraft({ clientDraftId: "draft", folderPath: "Work", ...snapshot });
+    expect(draft).toMatchObject({ folder_path: "Work", storage_path: null, projection_status: "pending" });
+    expect(mockInvoke).toHaveBeenLastCalledWith("create_page_draft", { clientDraftId: "draft", folderPath: "Work", ...snapshot });
+    await tauri.updatePageDraft({ id: "draft", expectedVersion: 1, ...snapshot });
+    expect(mockInvoke).toHaveBeenLastCalledWith("update_page_draft", { id: "draft", expectedVersion: 1, ...snapshot });
+  });
+});

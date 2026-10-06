@@ -17,6 +17,7 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Post,"/api/pages/export","page_export",HeaderOnly,UnauthenticatedLocal,PageWorkspace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/pages/orphan-links","page_links",HeaderOnly,UnauthenticatedLocal,PageWorkspace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/pages/{id}","page_detail",HeaderOnly,UnauthenticatedLocal,PageWorkspace,SingleId404,Rejected,Forbidden),
+    row!(Post,"/api/pages/{id}/move","page_storage_move",HeaderOnly,UnauthenticatedLocal,PageWorkspace,SingleId404,Rejected,Forbidden),
     row!(Post,"/api/pages/{id}/export","page_export",HeaderOnly,UnauthenticatedLocal,PageWorkspace,SingleId404,Rejected,Forbidden),
     row!(Get,"/api/pages/{id}/sources","page_sources",HeaderOnly,UnauthenticatedLocal,PageWorkspace,ParentCollectionFiltered,Rejected,Forbidden),
     row!(Get,"/api/pages/{id}/links","page_links",HeaderOnly,UnauthenticatedLocal,PageWorkspace,ParentCollectionFiltered,Rejected,Forbidden),

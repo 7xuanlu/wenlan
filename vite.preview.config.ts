@@ -18,6 +18,7 @@ const daemonTarget =
   process.env.WENLAN_PREVIEW_DAEMON ?? "http://127.0.0.1:7878";
 
 export default defineConfig({
+  ...(process.env.WENLAN_VITE_CACHE_DIR ? { cacheDir: process.env.WENLAN_VITE_CACHE_DIR } : {}),
   plugins: [react(), tailwindcss()],
   clearScreen: false,
   // `RuntimeOverlays` reads this at module scope, so without it the whole app

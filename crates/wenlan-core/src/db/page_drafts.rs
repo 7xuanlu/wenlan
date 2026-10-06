@@ -116,6 +116,7 @@ impl MemoryDB {
             .ok_or_else(|| WenlanError::NotFound(format!("Page draft {id}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn page_draft_create_request_matches_on_conn(
         conn: &libsql::Connection,
         id: &str,
@@ -123,6 +124,7 @@ impl MemoryDB {
         content: &str,
         space: Option<&str>,
         workspace: Option<&str>,
+        folder_path: &str,
     ) -> Result<bool, WenlanError> {
         let mut rows = conn
             .query(
@@ -133,8 +135,9 @@ impl MemoryDB {
                     AND content=?3
                     AND space IS ?4
                     AND workspace IS ?5
+                    AND folder_path=?6
                   LIMIT 1",
-                libsql::params![id, title, content, space, workspace],
+                libsql::params![id, title, content, space, workspace, folder_path],
             )
             .await
             .map_err(|error| {
@@ -197,7 +200,7 @@ impl MemoryDB {
         space: Option<&str>,
         workspace: Option<&str>,
     ) -> Result<Page, WenlanError> {
-        self.create_page_draft_with_id_impl(id, title, content, space, workspace, false)
+        self.create_page_draft_with_id_impl(id, title, content, space, workspace, false, "")
             .await
     }
 
@@ -209,8 +212,43 @@ impl MemoryDB {
         content: &str,
         space: Option<&str>,
     ) -> Result<Page, WenlanError> {
-        self.create_page_draft_with_id_impl(id, title, content, space, space, true)
+        self.create_page_draft_with_id_impl(id, title, content, space, space, true, "")
             .await
+    }
+
+    /// Persist first placement with the same atomic request ledger as the draft.
+    pub async fn create_page_draft_with_id_in_registered_space_and_folder(
+        &self,
+        id: &str,
+        title: &str,
+        content: &str,
+        space: Option<&str>,
+        folder_path: &str,
+    ) -> Result<Page, WenlanError> {
+        self.create_page_draft_with_id_impl(id, title, content, space, space, true, folder_path)
+            .await
+    }
+
+    /// The ledger survives publish/discard so delayed projection retries retain intent.
+    pub async fn page_initial_folder_path(&self, id: &str) -> Result<String, WenlanError> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT folder_path FROM page_draft_create_requests WHERE page_id=?1",
+                libsql::params![id],
+            )
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("load draft folder: {e}")))?;
+        match rows
+            .next()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("load draft folder row: {e}")))?
+        {
+            Some(row) => row
+                .get(0)
+                .map_err(|e| WenlanError::VectorDb(format!("load draft folder value: {e}"))),
+            None => Ok(String::new()),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -222,7 +260,9 @@ impl MemoryDB {
         space: Option<&str>,
         workspace: Option<&str>,
         validate_space: bool,
+        folder_path: &str,
     ) -> Result<Page, WenlanError> {
+        let folder_path = crate::export::knowledge::validate_knowledge_folder_path(folder_path)?;
         ensure_client_page_draft_id(id)?;
         ensure_meaningful_draft_snapshot(title, content)?;
         let requested_space = if validate_space {
@@ -253,6 +293,7 @@ impl MemoryDB {
                     content,
                     requested_space.as_deref(),
                     requested_workspace.as_deref(),
+                    &folder_path,
                 )
                 .await?
             {
@@ -314,14 +355,15 @@ impl MemoryDB {
         .map_err(|error| WenlanError::VectorDb(format!("create Page draft: {error}")))?;
         tx.execute(
             "INSERT INTO page_draft_create_requests (
-                page_id, title, content, space, workspace
-             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                page_id, title, content, space, workspace, folder_path
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             libsql::params![
                 id,
                 title,
                 content,
                 normalized_space.as_deref(),
-                normalized_workspace.as_deref()
+                normalized_workspace.as_deref(),
+                folder_path
             ],
         )
         .await

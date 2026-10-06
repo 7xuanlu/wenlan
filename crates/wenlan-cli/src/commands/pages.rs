@@ -104,19 +104,16 @@ fn match_query<'a>(pages: &'a [PageEntry], query: &str) -> QueryMatch<'a> {
     }
 }
 
-/// Read every top-level `*.md` under `dir` into a newest-first list. A missing
+/// Read every visible projected `*.md` under `dir` into a newest-first list. A missing
 /// dir yields an empty list (no pages distilled yet). The `.wenlan/` state dir
 /// holds no `*.md`, so it's skipped by the extension filter.
 fn read_pages(dir: &Path) -> Vec<PageEntry> {
     let mut entries = Vec::new();
-    let Ok(rd) = std::fs::read_dir(dir) else {
+    let Ok(paths) = wenlan_core::export::knowledge::knowledge_markdown_paths(dir) else {
         return entries;
     };
-    for e in rd.flatten() {
-        let path = e.path();
-        if path.extension().and_then(|x| x.to_str()) != Some("md") {
-            continue;
-        }
+    for relative in paths {
+        let path = dir.join(&relative);
         // OKF reserves `index.md` (the bundle index) and `log.md` (a
         // directory's update history) at every level of the hierarchy, spec
         // 3.1. Neither is a page, so neither belongs in this listing.
@@ -127,7 +124,11 @@ fn read_pages(dir: &Path) -> Vec<PageEntry> {
         {
             continue;
         }
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let Ok((content, modified)) =
+            wenlan_core::export::knowledge::read_knowledge_markdown(dir, &relative)
+        else {
+            continue;
+        };
         let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
@@ -135,10 +136,6 @@ fn read_pages(dir: &Path) -> Vec<PageEntry> {
             .to_string();
         let title = extract_title(&content, &stem);
         let page_id = extract_frontmatter_value(&content, "origin_id:");
-        let modified = e
-            .metadata()
-            .and_then(|m| m.modified())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
         entries.push(PageEntry {
             path,
             title,
@@ -508,5 +505,27 @@ mod tests {
         // missing dir -> empty, no panic
         let empty = read_pages(&tmp.path().join("does-not-exist"));
         assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn read_pages_finds_nested_notes_and_omits_archived_or_control_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        for folder in ["Research/Rust", "archive", "_sources", ".wenlan"] {
+            std::fs::create_dir_all(dir.path().join(folder)).unwrap();
+        }
+        std::fs::write(
+            dir.path().join("Research/Rust/ownership.md"),
+            "---\ntitle: Ownership\norigin_id: page_nested\n---\nBody",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("Research/log.md"), "not a Page").unwrap();
+        for control in ["archive/old.md", "_sources/mem_1.md", ".wenlan/private.md"] {
+            std::fs::write(dir.path().join(control), "private control").unwrap();
+        }
+        let pages = read_pages(dir.path());
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].title, "Ownership");
+        assert_eq!(pages[0].page_id.as_deref(), Some("page_nested"));
+        assert_eq!(pages[0].path, dir.path().join("Research/Rust/ownership.md"));
     }
 }

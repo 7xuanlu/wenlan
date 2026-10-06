@@ -340,6 +340,23 @@ const en = {
     },
   },
   pages: {
+    folders: {
+      title: "Folders", root: "Folders", rootDestination: "Top level", locationPending: "Your note is saved, but its file could not be saved in the chosen folder.", retryLocation: "Retry saving the file", retryLocationError: "The file still could not be saved. Check that the folder is available, then retry.", newFolder: "New folder", folderName: "Folder name", createIn: "Create in {{name}}", create: "Create", cancel: "Cancel", createError: "The folder couldn't be created. Try again.", unavailable: "Folder browsing is unavailable. All notes are still accessible.", searchAll: "Search all notes", view: "Note view", cards: "Cards", list: "List", empty: "This folder has no notes yet.", move: "Move to folder", destination: "Destination folder", moveError: "The note couldn't be moved. Try again.", moving: "Moving…", moveConfirm: "Move", close: "Close", currentFolder: "Current folder: {{name}}",
+    },
+    inventory: {
+      all: "All notes",
+      files: "Note files",
+      drafts: "Drafts",
+      unfiled: "Other notes",
+      browse: "Browse notes",
+      expand: "Expand {{name}}",
+      collapse: "Collapse {{name}}",
+      empty: "No notes here yet.",
+      filename: "File",
+      filesHint: "These notes have Markdown files in your notes folder.",
+      unfiledHint: "These notes have no verified Markdown file yet.",
+      draftsHint: "Continue writing. Drafts become files when published.",
+    },
     editor: {
       heading: "Page draft",
       back: "Back",
@@ -2589,6 +2606,23 @@ const zhHans = {
     },
   },
   pages: {
+    folders: {
+      title: "文件夹", root: "文件夹", rootDestination: "最外层", locationPending: "笔记已保存，但未能将文件保存到所选文件夹。", retryLocation: "重试保存文件", retryLocationError: "仍无法保存文件。请确认文件夹可用后重试。", newFolder: "新建文件夹", folderName: "文件夹名称", createIn: "创建于 {{name}}", create: "创建", cancel: "取消", createError: "未能创建文件夹，请重试。", unavailable: "暂时无法浏览文件夹。仍可访问所有笔记。", searchAll: "搜索所有笔记", view: "笔记视图", cards: "卡片", list: "列表", empty: "这个文件夹还没有笔记。", move: "移至文件夹", destination: "目标文件夹", moveError: "未能移动笔记，请重试。", moving: "正在移动…", moveConfirm: "移动", close: "关闭", currentFolder: "当前文件夹：{{name}}",
+    },
+    inventory: {
+      all: "所有笔记",
+      files: "笔记文件",
+      drafts: "草稿",
+      unfiled: "其他笔记",
+      browse: "浏览笔记",
+      expand: "展开{{name}}",
+      collapse: "收起{{name}}",
+      empty: "这里还没有笔记。",
+      filename: "文件",
+      filesHint: "这些笔记对应笔记文件夹中的 Markdown 文件。",
+      unfiledHint: "这些笔记暂时没有可确认的 Markdown 文件。",
+      draftsHint: "继续写作，发布后草稿会成为文件。",
+    },
     editor: {
       heading: "页面草稿",
       back: "返回",
@@ -4797,6 +4831,23 @@ const zhHant = {
     },
   },
   pages: {
+    folders: {
+      title: "資料夾", root: "資料夾", rootDestination: "最外層", locationPending: "筆記已儲存，但無法將檔案儲存到所選資料夾。", retryLocation: "重試儲存檔案", retryLocationError: "仍無法儲存檔案。請確認資料夾可用後重試。", newFolder: "新增資料夾", folderName: "資料夾名稱", createIn: "建立於 {{name}}", create: "建立", cancel: "取消", createError: "無法建立資料夾，請重試。", unavailable: "暫時無法瀏覽資料夾。仍可存取所有筆記。", searchAll: "搜尋所有筆記", view: "筆記檢視", cards: "卡片", list: "清單", empty: "這個資料夾還沒有筆記。", move: "移至資料夾", destination: "目標資料夾", moveError: "無法移動筆記，請重試。", moving: "移動中…", moveConfirm: "移動", close: "關閉", currentFolder: "目前資料夾：{{name}}",
+    },
+    inventory: {
+      all: "所有筆記",
+      files: "筆記檔案",
+      drafts: "草稿",
+      unfiled: "其他筆記",
+      browse: "瀏覽筆記",
+      expand: "展開{{name}}",
+      collapse: "收起{{name}}",
+      empty: "這裡還沒有筆記。",
+      filename: "檔案",
+      filesHint: "這些筆記對應筆記資料夾中的 Markdown 檔案。",
+      unfiledHint: "這些筆記暫時沒有可確認的 Markdown 檔案。",
+      draftsHint: "繼續寫作，發佈後草稿會成為檔案。",
+    },
     editor: {
       heading: "頁面草稿",
       back: "返回",

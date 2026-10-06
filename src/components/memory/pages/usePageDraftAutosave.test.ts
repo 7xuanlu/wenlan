@@ -76,6 +76,19 @@ describe("usePageDraftAutosave", () => {
     expect(result.current.draftId).toBeNull();
   });
 
+  it("passes folder destination only on creation and keeps it through later text and Space edits", async () => {
+    vi.mocked(createPageDraft).mockImplementation(async input => page({id:input.clientDraftId,title:input.title,content:input.content,version:1,folder_path:input.folderPath,space:input.space}));
+    vi.mocked(updatePageDraft).mockImplementation(async input => page({id:input.id,title:input.title,content:input.content,version:input.expectedVersion+1,folder_path:"Work/Research",space:input.space}));
+    const { result, rerender } = renderHook(({snapshot}) => usePageDraftAutosave({initial:EMPTY,snapshot,folderPath:"Work/Research"}), {initialProps:{snapshot:EMPTY},wrapper});
+    rerender({snapshot:{title:"Research",content:"",space:null}});
+    await act(async()=>{await vi.advanceTimersByTimeAsync(701);});
+    expect(createPageDraft).toHaveBeenCalledWith(expect.objectContaining({folderPath:"Work/Research"}));
+    rerender({snapshot:{title:"Research",content:"More",space:"Personal"}});
+    await act(async()=>{await result.current.flush();});
+    expect(updatePageDraft).toHaveBeenCalledWith(expect.objectContaining({space:"Personal",content:"More"}));
+    expect(updatePageDraft).toHaveBeenCalledWith(expect.not.objectContaining({folderPath:expect.anything()}));
+  });
+
   it("persists a genuine title-only draft after 700ms", async () => {
     vi.mocked(createPageDraft).mockResolvedValue(page({
       id: "draft-1",

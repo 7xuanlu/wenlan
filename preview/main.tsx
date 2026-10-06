@@ -11,6 +11,7 @@
 import { StrictMode, Suspense, lazy, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import Main from "../src/components/memory/Main";
 import PageDetail from "../src/components/memory/PageDetail";
 import QuickCapture from "../src/components/QuickCapture";
 import EntityDetail from "../src/components/memory/EntityDetail";
@@ -143,6 +144,7 @@ function Harness() {
     cursor: "pointer",
   });
 
+  if (params.get("mode") === "folders") return <Main initialView={{kind:"pages",inventoryScope:params.has("folder") ? `folder:${params.get("folder") ?? ""}` : "all"}} />;
   return (
     <div style={{ minHeight: "100vh", background: "var(--mem-bg)" }}>
       {SHOW_BAR && (
