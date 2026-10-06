@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { returnToPageReading } from "./helpers/pageReading";
 
 async function openFixturePage(page: Page): Promise<void> {
   await page.goto("/");
@@ -9,6 +10,7 @@ async function openFixturePage(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
   await page.getByRole("button", { name: "Open Fixture architecture" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
+  await returnToPageReading(page);
 }
 
 async function requestDelete(page: Page): Promise<void> {

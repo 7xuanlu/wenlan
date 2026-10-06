@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -57,6 +57,8 @@ import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
 import { useLaunchPinFill } from "../../lib/launchPinFill";
+import type { MarkdownEditorSelection } from "./editor/MarkdownEditor";
+import { useViewScroll } from "./navigation/useViewScroll";
 import "./navigation/navigation-shell.css";
 
 interface MainProps {
@@ -123,6 +125,14 @@ export default function Main({
     active: initialMemoryId ?? null,
     pending: null,
   });
+  const pageFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const pageNavigationTokenRef = useRef<symbol | null>(null);
+  const registerPageFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    pageFlushRef.current = flush;
+    // A remembered View object may be reused by Back/Notes. Readiness belongs
+    // to the mounted editor, so a departed editor cannot unlock restoration.
+    if (!flush) setReadyEditorView(null);
+  }, []);
   const pageSavePendingRef = useRef(false);
   const pageEditDirtyRef = useRef(false);
   const [view, setView] = useState<View>(
@@ -133,6 +143,8 @@ export default function Main({
   const viewRef = useRef(view);
   viewRef.current = view;
   const [viewHistory, setViewHistory] = useState<View[]>([]);
+  const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
+  const [readyEditorView, setReadyEditorView] = useState<View | null>(null);
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
@@ -166,6 +178,9 @@ export default function Main({
   };
 
   const prepareForQuit = useCallback(async (): Promise<boolean> => {
+    if (viewRef.current.kind === "page" && pageFlushRef.current) {
+      try { return await pageFlushRef.current(); } catch { return false; }
+    }
     if (pageSavePendingRef.current || pageEditDirtyRef.current) return false;
     const editor = pageDraftEditorRef.current;
     if (viewRef.current.kind !== "page-draft" || !editor) return true;
@@ -177,11 +192,8 @@ export default function Main({
     return () => onRegisterQuitGuard?.(null);
   }, [onRegisterQuitGuard, prepareForQuit]);
 
-  useLayoutEffect(() => {
-    if (!mainContentRef.current) return;
-    mainContentRef.current.scrollLeft = 0;
-    mainContentRef.current.scrollTop = 0;
-  }, [viewScrollDestination]);
+  useViewScroll(mainContentRef, viewScrollDestination,
+    view.kind !== "page" || view.mode === "read" || readyEditorView === view);
 
   const afterPageDraftFlush = (action: (sourceView: View) => void): (() => void) => {
     const editor = pageDraftEditorRef.current;
@@ -230,6 +242,25 @@ export default function Main({
     action: (sourceView: View) => void,
     onRefused?: () => void,
   ): (() => void) => {
+    const flush = view.kind === "page" ? pageFlushRef.current : null;
+    if (flush) {
+      const sourceView = view;
+      const token = Symbol("page-navigation");
+      pageNavigationTokenRef.current = token;
+      void flush().then((saved) => {
+        if (pageNavigationTokenRef.current !== token || viewRef.current !== sourceView) return;
+        pageNavigationTokenRef.current = null;
+        if (saved) action(sourceView);
+        else onRefused?.();
+      }, () => {
+        if (pageNavigationTokenRef.current !== token) return;
+        pageNavigationTokenRef.current = null;
+        onRefused?.();
+      });
+      return () => {
+        if (pageNavigationTokenRef.current === token) pageNavigationTokenRef.current = null;
+      };
+    }
     if (!canLeaveCurrentPage()) {
       onRefused?.();
       return () => {};
@@ -249,11 +280,13 @@ export default function Main({
     request.pending = null;
     if (
       (view.kind === "page" && view.pageId === target)
-      || !canLeaveCurrentPage()
     ) {
       return;
     }
-    return afterPageDraftFlush(() => setView({ kind: "page", pageId: target }));
+    const cancel = afterNavigationGuards(() => setView({ kind: "page", pageId: target }));
+    // An autosave changes pending state while this navigation waits. Do not
+    // cancel the requested destination merely because that state changed.
+    return pageFlushRef.current ? undefined : cancel;
   }, [initialPageId, pageSavePending]);
 
   useEffect(() => {
@@ -278,8 +311,7 @@ export default function Main({
       request.active = null;
       return;
     }
-    if (!canLeaveCurrentPage()) return;
-    return afterPageDraftFlush(() => {
+    const cancel = afterNavigationGuards(() => {
       request.active = target.memoryId;
       setViewHistory([]);
       setView(
@@ -288,6 +320,7 @@ export default function Main({
           : { kind: activeTab },
       );
     });
+    return pageFlushRef.current ? undefined : cancel;
   }, [initialMemoryId, activeTab, pageSavePending]);
 
   // Navigate forward — pushes current view onto history stack
@@ -296,6 +329,7 @@ export default function Main({
       view.kind === "page"
       && next.kind === "page"
       && view.pageId === next.pageId
+      && (view.mode ?? "edit") === (next.mode ?? "edit")
     ) {
       return;
     }
@@ -341,12 +375,16 @@ export default function Main({
 
   // PageDraftEditor owns its own flush before invoking Back.
   const navigateBack = () => {
-    if (!canLeaveCurrentPage()) return;
-    applyBackNavigation();
+    afterNavigationGuards(() => applyBackNavigation());
   };
 
-  // PageDetail already confirms its editor Back before invoking this callback.
+  // All published-page Back intents use the same latest-request coordinator
+  // as sidebar/search navigation. Standalone legacy editors retain their guard.
   const navigateBackFromPageDetail = () => {
+    if (pageFlushRef.current) {
+      afterNavigationGuards(() => applyBackNavigation());
+      return;
+    }
     if (pageSavePending) return;
     setPageEditDirty(false);
     applyBackNavigation();
@@ -358,13 +396,17 @@ export default function Main({
   });
   const { query, setQuery, debouncedQuery, results } = useSearch();
   const handleSearchQueryChange = (nextQuery: string) => {
-    if (!query && nextQuery && !canLeaveCurrentPage()) return;
-    if (!query && nextQuery && view.kind === "page-draft") {
+    const needsFlush = view.kind === "page-draft" || (view.kind === "page" && !!pageFlushRef.current);
+    if (!query && nextQuery && !needsFlush && !canLeaveCurrentPage()) return;
+    if (!query && nextQuery && needsFlush) {
       pendingDraftSearchCancelRef.current?.();
       setPendingDraftSearchQuery(nextQuery);
-      pendingDraftSearchCancelRef.current = afterPageDraftFlush(() => {
+      pendingDraftSearchCancelRef.current = afterNavigationGuards(() => {
         pendingDraftSearchCancelRef.current = null;
         setQuery(nextQuery);
+        setPendingDraftSearchQuery(null);
+      }, () => {
+        pendingDraftSearchCancelRef.current = null;
         setPendingDraftSearchQuery(null);
       });
       return;
@@ -383,7 +425,7 @@ export default function Main({
   }, [mobileSearchOpen, pageSavePending]);
 
   useEffect(() => {
-    if (view.kind !== "page-draft") setPendingDraftSearchQuery(null);
+    if (view.kind !== "page-draft" && view.kind !== "page") setPendingDraftSearchQuery(null);
   }, [view.kind]);
 
   const { data: entityResults = [] } = useQuery({
@@ -988,7 +1030,12 @@ export default function Main({
           ) : view.kind === "page" ? (
             <PageDetail
               pageId={view.pageId}
+              initialSelection={pageSelectionsRef.current.get(view.pageId)}
+              onSelectionChange={(selection) => pageSelectionsRef.current.set(view.pageId, selection)}
+              onEditorReady={() => setReadyEditorView(view)}
+              initialMode={view.mode ?? "edit"}
               onBack={navigateBackFromPageDetail}
+              onRegisterFlush={registerPageFlush}
               onEditDirtyChange={setPageEditDirty}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onPageLoaded={handlePageLoaded}
@@ -999,7 +1046,7 @@ export default function Main({
           ) : view.kind === "distill-review" ? (
             <DistillReviewPanel
               onBack={navigateBack}
-              onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
+              onPageClick={(id) => navigateTo({ kind: "page", pageId: id, mode: "read" })}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
           ) : view.kind === "first-use" ? (

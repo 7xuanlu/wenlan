@@ -23,6 +23,8 @@ import {
   keymap,
 } from "@codemirror/view";
 import { tags } from "@lezer/highlight";
+import { useTranslation } from "react-i18next";
+import { createSlashEditing, refreshSlashLabels, slashItems, type SlashLabels } from "./slashEditing";
 import type {
   MarkdownEditorHandle,
   MarkdownEditorProps,
@@ -46,6 +48,8 @@ export const CodeMirrorMarkdownEditor = forwardRef<
   MarkdownEditorHandle,
   CodeMirrorMarkdownEditorProps
 >(function CodeMirrorMarkdownEditor(props, ref) {
+  const { t } = useTranslation();
+  const slashLabelsRef = useRef<SlashLabels>({ label: t("slashEditing.label"), ...Object.fromEntries(slashItems.map((item) => [item.id, t(`slashEditing.${item.id}`)])) } as SlashLabels);
   const mountRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const focusRequestedRef = useRef(false);
@@ -59,6 +63,7 @@ export const CodeMirrorMarkdownEditor = forwardRef<
   const callbacksRef = useRef({
     sessionId: props.sessionId,
     onDocumentChange: props.onDocumentChange,
+    onSelectionChange: props.onSelectionChange,
     onSave: props.onSave,
     onCancel: props.onCancel,
     onConstructionFailure: props.onConstructionFailure,
@@ -127,9 +132,15 @@ export const CodeMirrorMarkdownEditor = forwardRef<
   );
 
   useLayoutEffect(() => {
+    slashLabelsRef.current = { label: t("slashEditing.label"), ...Object.fromEntries(slashItems.map((item) => [item.id, t(`slashEditing.${item.id}`)])) } as SlashLabels;
+    viewRef.current?.dispatch({ effects: refreshSlashLabels.of(null) });
+  }, [t]);
+
+  useLayoutEffect(() => {
     callbacksRef.current = {
       sessionId: props.sessionId,
       onDocumentChange: props.onDocumentChange,
+      onSelectionChange: props.onSelectionChange,
       onSave: props.onSave,
       onCancel: props.onCancel,
       onConstructionFailure: props.onConstructionFailure,
@@ -139,6 +150,7 @@ export const CodeMirrorMarkdownEditor = forwardRef<
     props.onCancel,
     props.onConstructionFailure,
     props.onDocumentChange,
+    props.onSelectionChange,
     props.onSave,
     props.onStatusChange,
     props.sessionId,
@@ -156,6 +168,10 @@ export const CodeMirrorMarkdownEditor = forwardRef<
         parent: mount,
         state: EditorState.create({
           doc: props.initialDocument,
+          selection: props.initialSelection && {
+            anchor: Math.max(0, Math.min(Math.trunc(props.initialSelection.anchor) || 0, props.initialDocument.length)),
+            head: Math.max(0, Math.min(Math.trunc(props.initialSelection.head) || 0, props.initialDocument.length)),
+          },
           extensions: [
             history(),
             drawSelection(),
@@ -185,14 +201,14 @@ export const CodeMirrorMarkdownEditor = forwardRef<
                 minHeight: "300px",
                 overflow: "hidden",
                 color: "var(--mem-text)",
-                backgroundColor: "var(--mem-detail-surface)",
-                border: "1px solid var(--mem-border)",
-                borderRadius: "var(--mem-radius-md)",
+                backgroundColor: props.seamless ? "transparent" : "var(--mem-detail-surface)",
+                border: props.seamless ? "none" : "1px solid var(--mem-border)",
+                borderRadius: props.seamless ? "0" : "var(--mem-radius-md)",
                 fontSize: "var(--mem-text-md)",
               },
               "&.cm-focused": {
                 outline: "none",
-                borderColor: "var(--mem-accent-page)",
+                borderColor: props.seamless ? "transparent" : "var(--mem-accent-page)",
               },
               ".cm-scroller": {
                 minHeight: "300px",
@@ -203,7 +219,7 @@ export const CodeMirrorMarkdownEditor = forwardRef<
               },
               ".cm-content": {
                 minHeight: "300px",
-                padding: "0.75rem",
+                padding: props.seamless ? "0" : "0.75rem",
                 caretColor: "var(--mem-accent-indigo)",
               },
               ".cm-cursor": {
@@ -214,6 +230,7 @@ export const CodeMirrorMarkdownEditor = forwardRef<
               },
             }),
             writingPresentation(),
+            createSlashEditing({ labels: () => slashLabelsRef.current, blocked: actionsBlocked }).extension,
             EditorView.domEventHandlers({
               compositionstart: (_event, currentView) => {
                 if (viewRef.current !== currentView) return false;
@@ -243,6 +260,14 @@ export const CodeMirrorMarkdownEditor = forwardRef<
               },
             }),
             keymap.of([
+              ...([ ["Mod-b", "bold"], ["Mod-i", "italic"] ] as const).map(([key, command]) => ({
+                key,
+                run: (currentView: EditorView) => {
+                  if (currentView.state.readOnly) return true;
+                  if (actionsBlocked(currentView)) return false;
+                  return runMarkdownCommand(currentView, command);
+                },
+              })),
               {
                 key: "Mod-Enter",
                 run: (currentView) => {
@@ -267,6 +292,10 @@ export const CodeMirrorMarkdownEditor = forwardRef<
             EditorView.updateListener.of((update) => {
               if (update.docChanged) {
                 callbacksRef.current.onDocumentChange(update.state.doc.toString());
+              }
+              if (update.selectionSet || update.docChanged) {
+                const { anchor, head } = update.state.selection.main;
+                callbacksRef.current.onSelectionChange?.({ anchor, head });
               }
               publishStatus(update.view);
             }),
@@ -316,6 +345,15 @@ export const CodeMirrorMarkdownEditor = forwardRef<
       data-markdown-editor-engine="codemirror"
       style={{ width: "100%", minHeight: "300px" }}
       onKeyDownCapture={(event) => {
+        if (
+          (compositionActiveRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+          && ["Enter", "Escape", "ArrowDown", "ArrowUp"].includes(event.key)
+        ) {
+          // Leave the browser's IME default intact while keeping candidate
+          // keys away from CodeMirror's ordinary Enter/Escape keymaps.
+          event.stopPropagation();
+          return;
+        }
         if (
           (event.metaKey || event.ctrlKey) &&
           event.key.toLowerCase() === "s"

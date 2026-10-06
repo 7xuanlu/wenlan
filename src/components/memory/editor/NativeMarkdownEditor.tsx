@@ -21,6 +21,7 @@ const NativeMarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEdi
     const disabledRef = useRef(props.disabled);
     const callbacksRef = useRef({
       onDocumentChange: props.onDocumentChange,
+      onSelectionChange: props.onSelectionChange,
       onSave: props.onSave,
       onCancel: props.onCancel,
       onStatusChange: props.onStatusChange,
@@ -35,6 +36,15 @@ const NativeMarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEdi
         canUndo: false,
         canRedo: false,
       });
+    };
+
+    const publishSelection = (textarea: HTMLTextAreaElement): void => {
+      const { selectionStart, selectionEnd, selectionDirection } = textarea;
+      callbacksRef.current.onSelectionChange?.(
+        selectionDirection === "backward"
+          ? { anchor: selectionEnd, head: selectionStart }
+          : { anchor: selectionStart, head: selectionEnd },
+      );
     };
 
     const requestSave = (): boolean => {
@@ -67,16 +77,29 @@ const NativeMarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEdi
     useLayoutEffect(() => {
       callbacksRef.current = {
         onDocumentChange: props.onDocumentChange,
+        onSelectionChange: props.onSelectionChange,
         onSave: props.onSave,
         onCancel: props.onCancel,
         onStatusChange: props.onStatusChange,
       };
       disabledRef.current = props.disabled;
-    }, [props.disabled, props.onCancel, props.onDocumentChange, props.onSave, props.onStatusChange]);
+    }, [props.disabled, props.onCancel, props.onDocumentChange, props.onSelectionChange, props.onSave, props.onStatusChange]);
 
     useLayoutEffect(() => {
       publishStatus(false);
-      if (textareaRef.current) resizeToDocument(textareaRef.current);
+      if (textareaRef.current) {
+        resizeToDocument(textareaRef.current);
+        if (props.initialSelection) {
+          const length = documentRef.current.length;
+          const anchor = Math.max(0, Math.min(Math.trunc(props.initialSelection.anchor) || 0, length));
+          const head = Math.max(0, Math.min(Math.trunc(props.initialSelection.head) || 0, length));
+          textareaRef.current.setSelectionRange(
+            Math.min(anchor, head),
+            Math.max(anchor, head),
+            anchor > head ? "backward" : "forward",
+          );
+        }
+      }
       // A NativeMarkdownEditorSession is keyed by sessionId, so this effect runs
       // once for the live session and cannot leak composition state forward.
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -98,11 +121,11 @@ const NativeMarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEdi
           minHeight: "300px",
           resize: "none",
           overflow: "hidden",
-          padding: "0.75rem",
+          padding: props.seamless ? "0" : "0.75rem",
           color: "var(--mem-text)",
-          background: "var(--mem-detail-surface)",
-          border: "1px solid var(--mem-border)",
-          borderRadius: "var(--mem-radius-md)",
+          background: props.seamless ? "transparent" : "var(--mem-detail-surface)",
+          border: props.seamless ? "none" : "1px solid var(--mem-border)",
+          borderRadius: props.seamless ? "0" : "var(--mem-radius-md)",
           fontFamily:
             "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
           fontSize: "var(--mem-text-md)",
@@ -113,7 +136,9 @@ const NativeMarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEdi
           documentRef.current = event.currentTarget.value;
           resizeToDocument(event.currentTarget);
           callbacksRef.current.onDocumentChange(documentRef.current);
+          publishSelection(event.currentTarget);
         }}
+        onSelect={(event) => publishSelection(event.currentTarget)}
         onCompositionStart={() => {
           composingRef.current = true;
           publishStatus(true);

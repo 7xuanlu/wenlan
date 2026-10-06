@@ -132,7 +132,7 @@ describe("PageDetail canvas toggle", () => {
     expect(
       screen.getByRole("button", { name: "Canvas" }).getAttribute("aria-pressed"),
     ).toBe("false");
-    expect(screen.getByText(/Page info/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Page info" })).toBeTruthy();
   });
 
   it("swaps the reading column and Page info for the canvas", async () => {
@@ -145,7 +145,7 @@ describe("PageDetail canvas toggle", () => {
       await screen.findByRole("region", { name: "Canvas for libSQL Architecture" }),
     ).toBeTruthy();
     // the page title stays in the header; the prose and Page info do not
-    expect(screen.queryByText(/Page info/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Page info" })).toBeNull();
     expect(screen.queryByText("More prose here.")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Canvas" }).getAttribute("aria-pressed"),

@@ -116,6 +116,12 @@ beforeAll(() => {
   installCodeMirrorDomPolyfills();
 });
 
+async function openPageInfo() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: i18n.t("pageInfo.label") }));
+  return screen.getByRole("dialog", { name: i18n.t("pageInfo.label") });
+}
+
 async function makeNextPageResolvable() {
   const { getPage } = await import("../../lib/tauri");
   const getPageMock = getPage as ReturnType<typeof vi.fn>;
@@ -168,6 +174,86 @@ describe("PageDetail", () => {
     expect(getPage).toHaveBeenCalledWith("concept_abc", "explicit");
   });
 
+  it("opens an active page for writing once through the existing editor gate", async () => {
+    const { getDaemonVersion, updatePage } = await import("../../lib/tauri");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />, client);
+
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    await waitFor(() => expect(editor).toHaveFocus());
+    expect(getDaemonVersion).toHaveBeenCalledTimes(1);
+    expect(updatePage).not.toHaveBeenCalled();
+
+    // A background page refresh must not reinitialize the live editor.
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["page", "concept_abc"] });
+    });
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(getDaemonVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a review-origin page in reading mode", async () => {
+    const { getDaemonVersion, updatePage } = await import("../../lib/tauri");
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="read" />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    expect(getDaemonVersion).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the same editor after a confirmed save and background refetch", async () => {
+    const { getDaemonVersion, getPage, updatePage } = await import("../../lib/tauri");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />, client);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    const baseline = client.getQueryData(["page", "concept_abc"]);
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...baseline as object, content: "Revised Page body", version: 4 });
+    act(() => {
+      replaceDocument(editorViewFromTextbox(editor), "Revised Page body");
+      pressKey(editor, "s", { ctrlKey: true });
+    });
+
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(updatePage).toHaveBeenCalledWith(expect.objectContaining({
+      id: "concept_abc",
+      content: "Revised Page body",
+      expectedVersion: 3,
+    }));
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ["page", "concept_abc"] });
+    });
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(getDaemonVersion).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps source text readable when the automatic editor gate cannot reach the daemon", async () => {
+    const { getDaemonVersion, updatePage } = await import("../../lib/tauri");
+    (getDaemonVersion as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("offline"));
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+
+    expect(await screen.findByText(/Page editing requires stable Wenlan daemon/)).toBeVisible();
+    expect(screen.getByText(/libSQL is the core database layer/)).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
+  it("keeps source text readable when automatic editing needs normalization", async () => {
+    const { getPage, updatePage } = await import("../../lib/tauri");
+    const source = await getPage("concept_abc");
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...source,
+      content: "First line\r\nSecond line\nThird line",
+    });
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+
+    expect(await screen.findByText(/Line-ending normalization required/)).toBeVisible();
+    expect(screen.getByText(/First line/)).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
   it("names and dismisses the destination Page when authored content attaches to it", async () => {
     const onDismissAttachedPageNotice = vi.fn();
     const { user } = renderWithQuery(
@@ -198,11 +284,14 @@ describe("PageDetail", () => {
   });
 
   it("renders meta line with distilled time", async () => {
-    const { container } = renderWithQuery(<PageDetail {...defaultProps} />);
+    renderWithQuery(<PageDetail {...defaultProps} />);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByText(/Last distilled/)).toBeNull();
+    const info = await openPageInfo();
     expect(await screen.findByText(/Last distilled/)).toBeTruthy();
     expect(await screen.findByText(/from 2 memories/)).toBeTruthy();
 
-    const dateline = container.querySelector(".page-detail-dateline");
+    const dateline = info.querySelector(".page-detail-dateline");
     const items = dateline?.querySelectorAll(".page-detail-dateline-item");
     expect(items).toHaveLength(2);
     expect(Array.from(items ?? []).map((item) => item.textContent)).toEqual([
@@ -222,11 +311,13 @@ describe("PageDetail", () => {
 
   it("renders last distilled info", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
+    await openPageInfo();
     expect(await screen.findByText(/Last distilled/)).toBeTruthy();
   });
 
   it("renders source memory count", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
+    await openPageInfo();
     expect(await screen.findByText(/from 2 memories/)).toBeTruthy();
   });
 
@@ -379,7 +470,7 @@ describe("PageDetail", () => {
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() => replaceDocument(editorViewFromTextbox(editor), "Revised Page body"));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    act(() => pressKey(editor, "s", { ctrlKey: true }));
     await waitFor(() =>
       expect(updatePage).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -532,7 +623,7 @@ describe("PageDetail", () => {
         ),
       );
       expect(updatePage).toHaveBeenCalledTimes(1);
-      expect(editor).toHaveAttribute("contenteditable", "false");
+      expect(editor).toHaveAttribute("contenteditable", "true");
     } finally {
       await act(async () => pending.resolve({ outcome: "saved" }));
     }
@@ -607,7 +698,8 @@ describe("PageDetail", () => {
   });
 
   it("keeps the editor open and retryable when saving fails", async () => {
-    const { updatePage } = await import("../../lib/tauri");
+    const { getPage, updatePage } = await import("../../lib/tauri");
+    const original = await getPage("concept_abc");
     (updatePage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("write failed"));
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
@@ -616,16 +708,18 @@ describe("PageDetail", () => {
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() => replaceDocument(editorViewFromTextbox(editor), "Revised Page body"));
-    await user.click(screen.getByRole("button", { name: "Save" }));
+    act(() => pressKey(editor, "s", { ctrlKey: true }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Wenlan could not reach the daemon. Check that it is running, then retry.",
     );
     expect(editor).toBeVisible();
 
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...original, content: "Revised Page body", version: 4 });
     await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(updatePage).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull());
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
   });
 
   it("surfaces copy failures and lets the user retry", async () => {
@@ -765,6 +859,7 @@ describe("PageDetail", () => {
       try {
         renderWithQuery(<PageDetail {...defaultProps} />);
 
+        await openPageInfo();
         expect(await screen.findByText(distilled)).toBeInTheDocument();
         expect(screen.getByText(sources)).toBeInTheDocument();
         expect(screen.getByText(stale)).toBeInTheDocument();
@@ -810,6 +905,7 @@ describe("PageDetail", () => {
       try {
         renderWithQuery(<PageDetail {...defaultProps} />);
 
+        await openPageInfo();
         expect(await screen.findByText(dateline)).toBeInTheDocument();
         expect(screen.queryByText(/Last distilled/)).toBeNull();
       } finally {
@@ -849,6 +945,7 @@ describe("PageDetail", () => {
       try {
         renderWithQuery(<PageDetail {...defaultProps} />);
 
+        await openPageInfo();
         expect(await screen.findByText(dateline)).toBeInTheDocument();
       } finally {
         nowSpy.mockRestore();
@@ -880,6 +977,7 @@ describe("PageDetail", () => {
     try {
       renderWithQuery(<PageDetail {...defaultProps} />);
 
+      await openPageInfo();
       expect(await screen.findByText("Last distilled 5m ago")).toBeInTheDocument();
       expect(screen.queryByText(/Last updated/)).toBeNull();
     } finally {
@@ -941,6 +1039,7 @@ describe("PageDetail", () => {
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
 
+    await openPageInfo();
     expect(
       await screen.findByText("update blocked: citations couldn't be verified"),
     ).toBeTruthy();
@@ -1028,7 +1127,10 @@ describe("PageDetail", () => {
   it("renders source memories section with count", async () => {
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    expect(screen.getByText(/2 sources/)).toBeInTheDocument();
+    await openPageInfo();
+    const info = screen.getByRole("dialog", { name: "Page info" });
+    expect(within(info).getByText(/from 2 memories/)).toBeInTheDocument();
+    expect(within(info).getAllByTestId("page-info-source-row")).toHaveLength(2);
   });
 
   it("uses the page-detail grammar class (matches MemoryDetail's dossier pattern)", async () => {
@@ -1046,6 +1148,7 @@ describe("PageDetail", () => {
       inbound: [],
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
+    await openPageInfo();
     expect(await screen.findByLabelText("Related pages")).toBeTruthy();
     const entityEls = await screen.findAllByText("Entity Graph");
     const cardSpan = entityEls.find((el) => el.tagName === "SPAN");
@@ -1057,8 +1160,9 @@ describe("PageDetail", () => {
     const { listPages: mockList } = await import("../../lib/tauri");
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
+    await openPageInfo();
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
     expect(mockList).not.toHaveBeenCalled();
   });
 
@@ -1080,21 +1184,22 @@ describe("PageDetail", () => {
     });
     renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("Simple Page");
+    await openPageInfo();
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
   });
 
   it("renders one evidence card per source memory after fetch", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(screen.getAllByTestId("page-info-source-row")).toHaveLength(2);
   });
 
   it("clicking an evidence card calls onMemoryClick with the right source_id", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     const row = screen
       .getByText("libSQL stores vectors")
       .closest('[data-testid="page-info-source-row"]')!;
@@ -1105,6 +1210,7 @@ describe("PageDetail", () => {
   it("uses getPageSources (join table) not listMemoriesByIds", async () => {
     const { getPageSources } = await import("../../lib/tauri");
     renderWithQuery(<PageDetail {...defaultProps} />);
+    await openPageInfo();
     await screen.findByText("libSQL stores vectors");
     expect(getPageSources).toHaveBeenCalledTimes(1);
     expect(getPageSources).toHaveBeenCalledWith("concept_abc");

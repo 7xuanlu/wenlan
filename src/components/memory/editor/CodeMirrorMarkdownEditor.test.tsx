@@ -48,6 +48,110 @@ function lastStatus(callback: ReturnType<typeof vi.fn>): MarkdownEditorStatus {
 }
 
 describe("CodeMirrorMarkdownEditor", () => {
+  it("restores directional selection and clamps it when a new session opens shorter text", () => {
+    const props = baseProps({ initialSelection: { anchor: 8, head: 2 } });
+    const { rerender } = render(<CodeMirrorMarkdownEditor {...props} />);
+    const view = editorViewFromTextbox(screen.getByRole("textbox"));
+    expect(view.state.selection.main).toMatchObject({ anchor: 8, head: 2 });
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+
+    act(() => selectRange(view, 4, 1));
+    rerender(<CodeMirrorMarkdownEditor {...props} initialSelection={{ anchor: 0, head: 0 }} />);
+    expect(view.state.selection.main).toMatchObject({ anchor: 4, head: 1 });
+    rerender(<CodeMirrorMarkdownEditor {...props} sessionId="page-1:2" initialDocument="xy"
+      initialSelection={{ anchor: 8, head: -2 }} />);
+    expect(editorViewFromTextbox(screen.getByRole("textbox")).state.selection.main)
+      .toMatchObject({ anchor: 2, head: 0 });
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+  });
+
+  it("reports selection-only changes through the latest callback without writing text", () => {
+    const firstSelection = vi.fn();
+    const latestSelection = vi.fn();
+    const props = baseProps({ onSelectionChange: firstSelection });
+    const { rerender } = render(<CodeMirrorMarkdownEditor {...props} />);
+    const view = editorViewFromTextbox(screen.getByRole("textbox"));
+    rerender(<CodeMirrorMarkdownEditor {...props} onSelectionChange={latestSelection} />);
+    act(() => selectRange(view, 7, 1));
+    expect(firstSelection).not.toHaveBeenCalled();
+    expect(latestSelection).toHaveBeenLastCalledWith({ anchor: 7, head: 1 });
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+    expect(props.onSave).not.toHaveBeenCalled();
+  });
+
+  it("reports the selection mapped into a changed document", () => {
+    const onSelectionChange = vi.fn();
+    const props = baseProps({ initialSelection: { anchor: 10, head: 10 }, onSelectionChange });
+    render(<CodeMirrorMarkdownEditor {...props} />);
+    const view = editorViewFromTextbox(screen.getByRole("textbox"));
+    act(() => replaceDocument(view, "xy"));
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ anchor: 2, head: 2 });
+    expect(props.onDocumentChange).toHaveBeenCalledExactlyOnceWith("xy");
+  });
+
+  it("keeps slash navigation and dismissal in the same writing session without canceling", () => {
+    const props = baseProps({ initialDocument: "" });
+    render(<CodeMirrorMarkdownEditor {...props} />);
+    const textbox = screen.getByRole("textbox", { name: "Page source" });
+    const view = editorViewFromTextbox(textbox);
+    act(() => {
+      view.focus();
+      view.dispatch({ changes: { from: 0, insert: "/" }, selection: { anchor: 1 }, userEvent: "input.type" });
+    });
+    expect(textbox).toHaveAttribute("aria-activedescendant", expect.stringContaining("heading1"));
+    act(() => pressKey(textbox, "ArrowDown"));
+    expect(textbox).toHaveAttribute("aria-activedescendant", expect.stringContaining("heading2"));
+    act(() => pressKey(textbox, "Escape"));
+    expect(textbox).not.toHaveAttribute("aria-activedescendant");
+    expect(view.state.doc.toString()).toBe("/");
+    expect(props.onCancel).not.toHaveBeenCalled();
+    expect(props.onDocumentChange).toHaveBeenCalledTimes(1);
+    expect(textbox).toHaveFocus();
+  });
+
+  it("closes slash before IME input and does not reopen on composition commit", async () => {
+    const props = baseProps({ initialDocument: "" });
+    render(<CodeMirrorMarkdownEditor {...props} />);
+    const textbox = screen.getByRole("textbox", { name: "Page source" });
+    const view = editorViewFromTextbox(textbox);
+    act(() => {
+      view.focus();
+      view.dispatch({ changes: { from: 0, insert: "/" }, selection: { anchor: 1 }, userEvent: "input.type" });
+      fireEvent.compositionStart(textbox);
+    });
+    expect(textbox).not.toHaveAttribute("aria-controls");
+    act(() => {
+      pressKey(textbox, "Enter", { isComposing: true, keyCode: 229 });
+      pressKey(textbox, "Escape", { isComposing: true, keyCode: 229 });
+      view.dispatch({ changes: { from: 1, insert: "中" }, selection: { anchor: 2 }, userEvent: "input.type.compose" });
+    });
+    await act(async () => { fireEvent.compositionEnd(textbox); await Promise.resolve(); });
+    expect(view.state.doc.toString()).toBe("/中");
+    expect(textbox).not.toHaveAttribute("aria-controls");
+    expect(props.onCancel).not.toHaveBeenCalled();
+    expect(props.onSave).not.toHaveBeenCalled();
+  });
+
+  it("accepts slash as exact source once and keeps readonly changes in the same editor", () => {
+    const props = baseProps({ initialDocument: "" });
+    const { rerender } = render(<CodeMirrorMarkdownEditor {...props} />);
+    const textbox = screen.getByRole("textbox", { name: "Page source" });
+    const view = editorViewFromTextbox(textbox);
+    act(() => {
+      view.focus();
+      view.dispatch({ changes: { from: 0, insert: "/" }, selection: { anchor: 1 }, userEvent: "input.type" });
+    });
+    vi.mocked(props.onDocumentChange).mockClear();
+    act(() => pressKey(textbox, "Enter"));
+    expect(props.onDocumentChange).toHaveBeenCalledExactlyOnceWith("# ");
+    act(() => { replaceDocument(view, ""); selectRange(view, 0); view.dispatch({ changes: { from: 0, insert: "/" }, selection: { anchor: 1 }, userEvent: "input.type" }); });
+    rerender(<CodeMirrorMarkdownEditor {...props} disabled />);
+    expect(editorViewFromTextbox(textbox)).toBe(view);
+    expect(textbox).not.toHaveAttribute("aria-controls");
+    act(() => pressKey(textbox, "Enter"));
+    expect(view.state.doc.toString()).toBe("/");
+  });
+
   it("constructs and destroys exactly one live view under StrictMode replay without emitting callbacks", () => {
     const destroy = vi.spyOn(EditorView.prototype, "destroy");
     const props = baseProps();

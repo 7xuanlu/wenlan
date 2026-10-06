@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors } from "./tauriMock";
+import { returnToPageReading } from "./helpers/pageReading";
 
 async function openWiki(page: Page): Promise<void> {
   await page
@@ -84,11 +85,10 @@ test("proves Review identity and exercises Wiki Page mutations", async ({ page }
   await expect(fixtureNotice).toContainText("Fixture data · resets on relaunch");
 
   await openFixtureArchitecture(page);
-  await page.locator('.mem-icon-action[aria-label="Edit page"]').click();
   const editor = page.getByRole("textbox", { name: "Page editor" });
   await expect(editor).toBeVisible();
   await editor.fill("# Fixture architecture\n\nEdited through the Review-flavor lane.");
-  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await returnToPageReading(page);
   await expect(page.getByText("Edited through the Review-flavor lane.")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
@@ -144,6 +144,7 @@ test("marks a page reviewed through the backend-minted presence path", async ({ 
   await page.goto("/");
   await openFixtureArchitecture(page);
 
+  await returnToPageReading(page);
   await page.getByRole("button", { name: "Page actions", exact: true }).click();
   const review = page.getByRole("menuitem", { name: "Mark page reviewed", exact: true });
   await expect(review).toBeEnabled();

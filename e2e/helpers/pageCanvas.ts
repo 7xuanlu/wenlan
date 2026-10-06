@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, type Locator, type Page } from "@playwright/test";
+import { returnToPageReading } from "./pageReading";
 
 /** Open the "Fixture architecture" page and switch it to Canvas view. */
 export async function openCanvas(page: Page): Promise<void> {
@@ -10,6 +11,7 @@ export async function openCanvas(page: Page): Promise<void> {
     .click();
   await page.getByRole("button", { name: "Open Fixture architecture" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
+  await returnToPageReading(page);
   await page.getByRole("button", { name: "Canvas" }).click();
   await expect(page.getByRole("region", { name: "Canvas for Fixture architecture" })).toBeVisible();
 }

@@ -131,10 +131,8 @@ describe("PageDetail citations", () => {
     const { props, user } = renderPage();
     const chip = await screen.findByRole("button", { name: /Memory 1/ });
     fireEvent.focus(chip);
-    // Scoped to the popover: PageInfo's (closed, but DOM-present) Sources row
-    // for the same memory carries the identical title text, and plain
-    // getByText/findByText don't filter on visibility — only toBeVisible()
-    // understands a closed <details>. Disambiguate by container instead.
+    // Keep the citation provenance assertion scoped to its popover rather
+    // than the separate information dialog's source list.
     const popover = await screen.findByRole("tooltip");
     expect(within(popover).getByText("Local-first decision")).toBeInTheDocument();
     await user.click(within(popover).getByRole("button", { name: /Open memory/ }));
@@ -155,7 +153,7 @@ describe("PageDetail citations", () => {
     expect(screen.getByText(/It uses libSQL\./)).toBeInTheDocument();
     expect(screen.queryByText(/\[2\]/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(
       screen.getByText("Citations cleared by edit — re-distill to restore"),
     ).toBeInTheDocument();
@@ -167,7 +165,7 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     expect(screen.queryByText(/\[1\]/)).toBeNull();
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(
       screen.getByText("Citation data mismatched — re-distill to repair"),
     ).toBeInTheDocument();

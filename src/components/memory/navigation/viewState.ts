@@ -11,7 +11,7 @@ export type View =
   | { readonly kind: "first-use"; readonly showKnowledge?: boolean; readonly batchId?: string }
   | { readonly kind: "import"; readonly fromFirstUse?: boolean }
   | { readonly kind: "memory"; readonly sourceId: string }
-  | { readonly kind: "page"; readonly pageId: string }
+  | { readonly kind: "page"; readonly pageId: string; readonly mode?: "read" | "edit" }
   | { readonly kind: "page-draft"; readonly draftId?: string; readonly space: string | null }
   | { readonly kind: "pages" }
   | { readonly kind: "recaps" }

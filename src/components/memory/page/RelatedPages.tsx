@@ -52,7 +52,7 @@ export default function RelatedPages({ outbound, onPageClick }: RelatedPagesProp
                 className="flex items-center gap-2 rounded-lg px-3 py-2"
                 style={{
                   backgroundColor: "var(--mem-surface)",
-                  border: "1px solid var(--mem-border)",
+                  border: "none",
                   opacity: 0.55,
                 }}
                 title="No page exists for this link yet"
@@ -77,7 +77,7 @@ export default function RelatedPages({ outbound, onPageClick }: RelatedPagesProp
               className="rounded-lg px-3 py-2 text-left transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)]"
               style={{
                 backgroundColor: "var(--mem-surface)",
-                border: "1px solid var(--mem-border)",
+                border: "none",
               }}
             >
               {inner}

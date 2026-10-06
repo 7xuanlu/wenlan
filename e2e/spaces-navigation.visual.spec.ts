@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { renderedContrast } from "./helpers/renderedContrast";
+import { returnToPageReading } from "./helpers/pageReading";
 
 const evidenceDir = path.join(
   process.cwd(),
@@ -83,18 +84,9 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     // while keeping the complete light/dark captures as review artifacts.
     const detail = page.locator(".page-detail");
     await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
-    await expect(detail.locator(".page-detail-dateline")).toContainText("from 1 memory");
-    await expect(detail.getByRole("group", { name: "Page info" })).toContainText("1 source");
     await expect(detail.locator(".page-detail-prose")).toContainText("Deterministic content for the integrated Wenlan journey.");
     await expect(detail.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();
-    const typography = await detail.locator(".page-detail-dateline").evaluate((node) => ({
-      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
-      width: node.getBoundingClientRect().width,
-      scrollWidth: node.scrollWidth,
-    }));
-    expect(typography.fontSize, "source metadata must remain readable").toBeGreaterThanOrEqual(13);
-    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
-    const bounds = await detail.locator("h1, .page-detail-prose, .page-detail-dateline").evaluateAll((nodes) => nodes.map((node) => {
+    const bounds = await detail.locator("h1, .page-detail-prose").evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
       return { left: box.left, right: box.right, width: box.width };
     }));
@@ -105,9 +97,34 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     }
     const contrast = await renderedContrast(page, [
       { selector: ".page-detail-title", label: "Entity page title", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".page-detail-dateline", label: "Source metadata", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+
+    await detail.getByRole("button", { name: "Page info", exact: true }).click();
+    const info = page.getByRole("dialog", { name: "Page info", exact: true });
+    await expect(info).toBeVisible();
+    const dateline = info.locator(".page-detail-dateline");
+    await expect(dateline).toContainText("from 1 memory");
+    await expect(info.getByTestId("page-info-source-row")).toHaveCount(1);
+    const typography = await dateline.evaluate((node) => ({
+      fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+      width: node.getBoundingClientRect().width,
+      scrollWidth: node.scrollWidth,
+    }));
+    expect(typography.fontSize, "source metadata must remain readable").toBeGreaterThanOrEqual(13);
+    expect(typography.scrollWidth).toBeLessThanOrEqual(typography.width + 1);
+    const metadataBounds = await dateline.boundingBox();
+    expect(metadataBounds).not.toBeNull();
+    expect(metadataBounds!.width).toBeGreaterThan(0);
+    expect(metadataBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(metadataBounds!.x + metadataBounds!.width).toBeLessThanOrEqual(viewport.width + 1);
+    const metadataContrast = await renderedContrast(page, [
+      { selector: ".page-info-drawer .page-detail-dateline", label: "Source metadata", foregroundProperty: "color", minimum: 4.5 },
+    ]);
+    for (const result of metadataContrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+    await info.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(info).toHaveCount(0);
+    await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
   } else if (spaceDetail) {
     const dossier = page.locator(".space-dossier");
     await expect(dossier.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
@@ -218,9 +235,6 @@ async function capture(page: Page, name: string): Promise<void> {
   });
   await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
   await settle(page);
-  if (name.startsWith("entity-")) {
-    await expect(page.locator(".page-detail-dateline")).toContainText("from 1 memory");
-  }
   const redesigned = await assertRedesignedSurface(page, name);
   await page.screenshot({ path: path.join(evidenceDir, `${name}.png`), fullPage: false });
   await test.info().attach(name, { path: path.join(evidenceDir, `${name}.png`), contentType: "image/png" });
@@ -271,6 +285,7 @@ async function captureFiveSurfaces(page: Page, label: string): Promise<void> {
     .getByRole("button", { name: /^Ada Lovelace/ })
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+  await returnToPageReading(page);
   await capture(page, `entity-${label}`);
 }
 

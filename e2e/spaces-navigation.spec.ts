@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test } from "@playwright/test";
 import { openSpaceEntity } from "./helpers/spaceEntity";
+import { returnToPageReading } from "./helpers/pageReading";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 test("Home -> Spaces -> Space -> Page -> back and Space -> Entity -> back", async ({ page }) => {
@@ -23,6 +24,7 @@ test("Home -> Spaces -> Space -> Page -> back and Space -> Entity -> back", asyn
   await page.getByRole("button", { name: "Open Independent research" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Independent research" })).toBeVisible();
   await expect(primaryNavigation.getByRole("button", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
+  await returnToPageReading(page);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
 
@@ -50,6 +52,7 @@ test("Home -> Spaces -> Space -> Page -> back and Space -> Entity -> back", asyn
 
   await page.getByRole("button", { name: /Fixture architecture/ }).first().click();
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
+  await returnToPageReading(page);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
 
