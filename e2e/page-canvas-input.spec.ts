@@ -40,9 +40,8 @@ test("a rubber-band drag leaves nothing behind", async ({ page }) => {
 test("select all picks the boxes, not the page text", async ({ page }) => {
   await installTauriMock(page, { locale: "en", rawActions: [] });
   await openCanvas(page);
-  // Deliberately no click into the canvas first: opening it leaves focus on the
-  // Canvas button in the page header, which is where a reader's first keystroke
-  // actually lands.
+  // Deliberately no click into the canvas first: the pane must route a reader's
+  // first keystroke to the map after the opening menu item unmounts.
   console.log(
     `focus after opening: ${await page.evaluate(
       () => `${document.activeElement?.tagName}.${document.activeElement?.className}`,
@@ -267,12 +266,16 @@ test("the zoom keys work, and the zoom buttons say what they are", async ({ page
   expect(titles[2], "the fit button does not name its key").toContain("Shift 1");
 });
 
-test("a real-sized page opens with all of it on screen", async ({ page }) => {
+test("Fit all shows every box of a real-sized page in the map pane", async ({ page }) => {
   await installTauriMock(page, { locale: "en", rawActions: [] });
   await page.goto("/");
   await seedLargeMap(page);
   await openCanvas(page);
   await page.waitForTimeout(800);
+  // The opening zoom protects label readability in a narrow docked pane.
+  // Explicit Fit all trades that floor for a view of the complete graph.
+  await page.getByRole("button", { name: "Fit all (Shift 1)", exact: true }).click();
+  await page.waitForTimeout(400);
 
   const view = await page.evaluate(() => {
     const frame = document.querySelector(".page-canvas-surface")!.getBoundingClientRect();
@@ -296,12 +299,9 @@ test("a real-sized page opens with all of it on screen", async ({ page }) => {
   console.log(
     `13-box map at ${(await scale(page)).toFixed(3)}: ${view.clipped.length} clipped ${JSON.stringify(view.clipped)}`,
   );
-  await page.locator(".page-canvas").screenshot({ path: "shots/opens-complete.png" });
-  expect(view.nodes).toBeGreaterThan(10);
-  // Circular rings made a roughly square map, which in a frame near 1.8:1 could
-  // only open small or open cut. Squashing the rings toward the frame's own shape
-  // is what lets a page this size open both readable and whole.
-  expect(view.clipped, "boxes were cut off by the frame on open").toEqual([]);
+  await page.locator(".page-canvas").screenshot({ path: "shots/fit-all-complete.png" });
+  expect(view.nodes).toBe(13);
+  expect(view.clipped, "Fit all left boxes cut off by the frame").toEqual([]);
 });
 
 test("fit all frames the map the same way however it is asked for", async ({ page }) => {
@@ -329,9 +329,8 @@ test("fit all frames the map the same way however it is asked for", async ({ pag
   const opened = await scale(page);
 
   // The key, then the button, then the key again from a nudged viewport: one
-  // command asked for three ways has to land in the same place every time. Each
-  // reached React Flow's bare defaults separately before, so opening a page and
-  // then pressing fit moved the map for no reason a reader could see.
+  // explicit command has to land in the same place every time. The initial
+  // view has a separate readability floor and is not an explicit Fit all.
   await page.locator(".react-flow__pane").click({ position: { x: 30, y: 30 } });
   await page.keyboard.press("Shift+Digit1");
   await page.waitForTimeout(400);
@@ -342,10 +341,15 @@ test("fit all frames the map the same way however it is asked for", async ({ pag
   await page.locator(".react-flow__controls-fitview").click();
   await page.waitForTimeout(400);
   const byButton = await scale(page);
-  console.log(`13 boxes: opened ${opened.toFixed(3)}, key ${byKey.toFixed(3)}, button ${byButton.toFixed(3)}`);
+  await page.keyboard.press("Minus");
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Shift+Digit1");
+  await page.waitForTimeout(400);
+  const byKeyAgain = await scale(page);
+  console.log(`13 boxes: opened ${opened.toFixed(3)}, key ${byKey.toFixed(3)}, button ${byButton.toFixed(3)}, key again ${byKeyAgain.toFixed(3)}`);
 
-  expect(byKey, "the fit key reframed a map that was already fitted").toBeCloseTo(opened, 2);
   expect(byButton, "the fit button and the fit key disagree").toBeCloseTo(byKey, 2);
+  expect(byKeyAgain, "repeated fit keys framed the same map differently").toBeCloseTo(byKey, 2);
 });
 
 test("fit all shows the whole map, however big it is", async ({ page }) => {
@@ -444,11 +448,11 @@ test("the zoom keys leave the window's own zoom alone, and work off a US layout"
   // On a German layout the key printed with a + reports code "BracketRight",
   // so matching the physical US position alone leaves those readers with no
   // zoom key at all. Playwright cannot type a layout it is not using, but the
-  // handler is an ordinary document listener, so the press itself is real.
+  // synthetic event bubbles from the map surface that owns the shortcut.
   const german = (key: string, code: string) =>
     page.evaluate(
       ([k, c]) =>
-        document.dispatchEvent(
+        document.querySelector(".page-canvas-surface")!.dispatchEvent(
           new KeyboardEvent("keydown", { key: k, code: c, bubbles: true, cancelable: true }),
         ),
       [key, code],

@@ -130,7 +130,8 @@ describe("PageDetail page links", () => {
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
 
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     const related = await screen.findByLabelText("Related pages");
     expect(within(related).getByText("Missing Link")).toBeInTheDocument();
     expect(within(related).queryByRole("button", { name: /Missing Link/ })).toBeNull();
@@ -138,7 +139,8 @@ describe("PageDetail page links", () => {
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
     expect(screen.queryByRole("dialog", { name: "Page info" })).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(screen.getByRole("button", { name: "Inbound Mention" })).toBeInTheDocument();
   });
 
@@ -148,7 +150,8 @@ describe("PageDetail page links", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />, client);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() =>
@@ -185,7 +188,8 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(screen.getAllByRole("button", { name: "Shared Mention" })).toHaveLength(2);
     expect(screen.queryByText(/source-page-a/)).toBeNull();
   });
@@ -226,15 +230,17 @@ describe("PageDetail page links", () => {
       expect(tauriMocks.getPageLinks).toHaveBeenCalledWith("page-1");
     });
     expect(tauriMocks.listPages).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Page info" })).toBeInTheDocument();
   });
 
   it("does not query orphan links and renders no Unlinked Mentions section", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(tauriMocks.listOrphanLinks).not.toHaveBeenCalled();
     expect(screen.queryByText("Unlinked Mentions")).toBeNull();
   });
@@ -258,7 +264,8 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(screen.getByText(/added backlinks/i)).toBeInTheDocument();
     expect(screen.getByText("just now")).toBeInTheDocument();
   });
@@ -269,7 +276,8 @@ describe("PageDetail page links", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     const info = screen.getByRole("dialog", { name: "Page info" });
     expect(info).toBeInTheDocument();
     expect(within(info).queryByRole("heading", { name: /revisions/i })).toBeNull();

@@ -154,7 +154,8 @@ describe("PageDetail citations", () => {
     expect(screen.getByText(/It uses libSQL\./)).toBeInTheDocument();
     expect(screen.queryByText(/\[2\]/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(
       screen.getByText("Citations cleared by edit — re-distill to restore"),
     ).toBeInTheDocument();
@@ -166,7 +167,8 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     expect(screen.queryByText(/\[1\]/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(
       screen.getByText("Citation data mismatched — re-distill to repair"),
     ).toBeInTheDocument();

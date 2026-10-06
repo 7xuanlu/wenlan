@@ -181,9 +181,11 @@ test("opens an ordinary page directly in one editable writing view", async ({ pa
   // Still announced to assistive technology, without a row above the title.
   await expect(saveStatus).toHaveCSS("position", "absolute");
   await expect(saveStatus).toHaveCSS("clip-path", "inset(50%)");
-  const pageInfo = page.getByRole("button", { name: "Page info", exact: true });
-  await expect(pageInfo).toHaveText("");
-  await expect(pageInfo.locator("svg")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Page info", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Mind map", exact: true })).toHaveCount(0);
+  const pageActions = page.getByRole("button", { name: "Page actions", exact: true });
+  await expect(pageActions).toHaveText("");
+  await expect(pageActions.locator("svg")).toHaveCount(1);
 
   for (const button of persistenceButtons(page)) await expect(button).toHaveCount(0);
   await expect(
@@ -618,10 +620,10 @@ test("gives a long document main-content scrolling without a formatting toolbar 
   await expect(page.getByRole("group", { name: "Formatting", exact: true })).toHaveCount(0);
   expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
-  const info = page.getByRole("button", { name: "Page info", exact: true });
-  await expect(info).toBeEnabled();
-  await info.focus();
-  await expect(info).toBeFocused();
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
+  await expect(actions).toBeEnabled();
+  await actions.focus();
+  await expect(actions).toBeFocused();
 
   // Scrolling and focusing a control are not edits.
   await page.waitForTimeout(QUIET_WINDOW_MS);
@@ -637,8 +639,8 @@ test("fits a 375px viewport without persistence actions, a formatting toolbar, o
 
   await expect(page.getByRole("toolbar", { name: "Formatting", exact: true })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Formatting", exact: true })).toHaveCount(0);
-  const info = page.getByRole("button", { name: "Page info", exact: true });
-  await expect(info).toBeInViewport();
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
+  await expect(actions).toBeInViewport();
 
   expect(await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
@@ -651,7 +653,7 @@ test("fits a 375px viewport without persistence actions, a formatting toolbar, o
   expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(375);
 });
 
-test("renders a borderless dark editor while page-info focus stays visible", async ({ page }) => {
+test("renders a borderless dark editor while page-actions focus stays visible", async ({ page }) => {
   await openPage(page);
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
 
@@ -680,12 +682,12 @@ test("renders a borderless dark editor while page-info focus stays visible", asy
     })).toEqual({ visibleBorders: [], transparentBackground: true });
   }
 
-  const info = page.getByRole("button", { name: "Page info", exact: true });
-  await info.focus();
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
+  await actions.focus();
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
-  await expect(info).toBeFocused();
-  expect(await info.evaluate((element) => {
+  await expect(actions).toBeFocused();
+  expect(await actions.evaluate((element) => {
     const style = window.getComputedStyle(element);
     return {
       accent: window.getComputedStyle(document.documentElement)
@@ -701,18 +703,18 @@ test("renders a borderless dark editor while page-info focus stays visible", asy
   });
 });
 
-test("uses opaque light-theme focus indicators on page info and tasks", async ({ page }) => {
+test("uses opaque light-theme focus indicators on page actions and tasks", async ({ page }) => {
   const source = "# Browser editor fixture\n\n- [ ] Keyboard task\n";
   await openPage(page, pageFixture(source));
   const editor = await openedEditor(page, source);
-  const info = page.getByRole("button", { name: "Page info", exact: true });
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
   const task = editor.locator(".cm-writing-task-checkbox");
 
-  await info.focus();
+  await actions.focus();
   await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
-  await expect(info).toBeFocused();
-  expect(await info.evaluate((element) => {
+  await expect(actions).toBeFocused();
+  expect(await actions.evaluate((element) => {
     const style = window.getComputedStyle(element);
     return {
       accent: window.getComputedStyle(document.documentElement)

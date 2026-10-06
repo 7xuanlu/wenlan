@@ -127,7 +127,8 @@ beforeAll(() => {
 
 async function openPageInfo() {
   const user = userEvent.setup();
-  await user.click(await screen.findByRole("button", { name: i18n.t("pageInfo.label") }));
+  await user.click(await screen.findByRole("button", { name: i18n.t("pageDetail.actions") }));
+  await user.click(screen.getByRole("menuitem", { name: i18n.t("pageInfo.label") }));
   return screen.getByRole("dialog", { name: i18n.t("pageInfo.label") });
 }
 
@@ -219,19 +220,55 @@ describe("PageDetail", () => {
     const baseline = client.getQueryData(["page", "concept_abc"]);
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...baseline as object, content: "Draft for the map", version: 4 });
     act(() => replaceDocument(editorViewFromTextbox(editor), "Draft for the map"));
-    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
-    expect(toggle.closest(".page-detail-top-row")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    const toggle = screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") });
+    expect(toggle.closest(".page-document-tools")).toBeTruthy();
     expect(screen.queryByTitle("Edit page")).toBeNull();
     await user.click(toggle);
 
     await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
     expect(updatePage).toHaveBeenCalledWith(expect.objectContaining({ content: "Draft for the map", expectedVersion: 3 }));
     expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }));
+    await user.click(screen.getByRole("button", { name: i18n.t("common.close") }));
     const resumed = await screen.findByRole("textbox", { name: "Page editor" });
     expect(editorViewFromTextbox(resumed).state.doc.toString()).toBe("Draft for the map");
     act(() => replaceDocument(editorViewFromTextbox(resumed), "Continue writing"));
     expect(editorViewFromTextbox(resumed).state.doc.toString()).toBe("Continue writing");
+  });
+
+  it("dismisses the title menu with Escape without leaving or saving the active draft", async () => {
+    const { updatePage } = await import("../../lib/tauri");
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Menu Escape draft"));
+    const trigger = screen.getByRole("button", { name: "Page actions" });
+    trigger.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "Page info" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu", { name: "Page actions" })).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Menu Escape draft");
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
+  it("closes page information on Escape while preserving the editor and unsaved draft", async () => {
+    const { updatePage } = await import("../../lib/tauri");
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Keep writing after information"));
+    const trigger = screen.getByRole("button", { name: "Page actions" });
+    await user.click(trigger);
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    expect(screen.getByRole("dialog", { name: "Page info" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Page info" })).toBeNull();
+    expect(trigger).toHaveFocus();
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Keep writing after information");
+    expect(updatePage).not.toHaveBeenCalled();
   });
 
   it("keeps a failed map-switch draft in the same editor", async () => {
@@ -240,12 +277,14 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     act(() => replaceDocument(editorViewFromTextbox(editor), "Keep this draft"));
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") }));
     await screen.findByRole("alert");
     expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
     expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Keep this draft");
     expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
-    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
   });
 
   it("keeps an active composition in the editor when the map is requested", async () => {
@@ -254,7 +293,8 @@ describe("PageDetail", () => {
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     act(() => replaceDocument(editorViewFromTextbox(editor), "Composing draft"));
     fireEvent.compositionStart(editor);
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") }));
     expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
     expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Composing draft");
     expect(updatePage).not.toHaveBeenCalled();
@@ -270,7 +310,8 @@ describe("PageDetail", () => {
     (updatePage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ outcome: "conflict", message: "Remote edit" });
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...original, content: "Remote document", version: 4 });
     act(() => replaceDocument(editorViewFromTextbox(editor), "Local conflicting draft"));
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") }));
     await screen.findByText("Latest source (version 4)");
     expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
     expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Local conflicting draft");
@@ -287,10 +328,15 @@ describe("PageDetail", () => {
     const { rerender, user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />, client);
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     act(() => replaceDocument(editorViewFromTextbox(editor), "Pending map draft"));
-    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    const toggle = screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") });
     await user.click(toggle);
-    expect(toggle).toBeDisabled();
-    await user.click(toggle);
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    const pendingMap = screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") });
+    expect(pendingMap).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    await user.click(pendingMap);
     expect(updatePage).toHaveBeenCalledTimes(1);
     rerender(<QueryClientProvider client={client}><PageDetail {...defaultProps} pageId="concept_next" initialMode="edit" /></QueryClientProvider>);
     const nextEditor = await screen.findByRole("textbox", { name: "Page editor" });
@@ -298,7 +344,8 @@ describe("PageDetail", () => {
     await act(async () => pending.resolve({ outcome: "saved" }));
     expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(nextEditor);
     expect(screen.queryByRole("region", { name: "Canvas for Next Page" })).toBeNull();
-    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValue(original);
   });
 
@@ -421,21 +468,22 @@ describe("PageDetail", () => {
     expect(await screen.findByText(/from 2 memories/)).toBeTruthy();
   });
 
-  it("renders copy and export buttons in header", async () => {
-    const { container } = renderWithQuery(<PageDetail {...defaultProps} />);
+  it("keeps copy and export in the title menu", async () => {
+    const { user, container } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    expect(container.querySelector('button[title="Copy as context"]')).toBeTruthy();
-    expect(container.querySelector('button[title="Export to Obsidian"]')).toBeTruthy();
+    expect(container.querySelector(".page-detail-header-actions")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: "Copy as context" })).toBeVisible();
+    expect(screen.getByRole("menuitem", { name: "Export to Obsidian" })).toBeVisible();
   });
 
-  it("offers one mobile primary action and a keyboard-safe overflow instead of bare delete", async () => {
+  it("offers one keyboard-safe title menu for all page tools", async () => {
     const { deletePage } = await import("../../lib/tauri");
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { user, container } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
 
-    const mobilePrimary = container.querySelector(".page-detail-primary-action");
-    expect(mobilePrimary).toHaveAccessibleName("Edit page");
+    expect(container.querySelector(".page-detail-primary-action")).toBeNull();
     expect(container.querySelector('button[title="Delete page"]')).toBeNull();
 
     const trigger = screen.getByRole("button", { name: "Page actions" });
@@ -445,7 +493,9 @@ describe("PageDetail", () => {
     expect(within(menu).getByRole("menuitem", { name: "Copy as context" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "Delete page" })).toBeInTheDocument();
 
-    // The view switch stays in the header; the first overflow action receives focus.
+    expect(within(menu).getByRole("menuitem", { name: "Mind map" })).toBeVisible();
+    expect(within(menu).getByRole("menuitem", { name: "Edit page" })).toBeVisible();
+    // The first menu command receives focus.
     expect(within(menu).getByRole("menuitem", { name: "Page info" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "Page actions" })).toBeNull();
@@ -565,7 +615,8 @@ describe("PageDetail", () => {
     );
 
     await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() => replaceDocument(editorViewFromTextbox(editor), "Revised Page body"));
@@ -617,7 +668,8 @@ describe("PageDetail", () => {
       level: 1,
       name: "libSQL Architecture",
     });
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -646,7 +698,8 @@ describe("PageDetail", () => {
     expect(
       screen.queryByRole("textbox", { name: "Page editor" }),
     ).toBeNull();
-    expect(screen.getByTitle("Edit page")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: "Edit page" })).toBeVisible();
     expect(
       screen.getByRole("heading", {
         level: 1,
@@ -669,13 +722,15 @@ describe("PageDetail", () => {
       level: 1,
       name: "libSQL Architecture",
     });
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     expect(await screen.findByText("Checking editor compatibility…")).toBeVisible();
 
     fireEvent.keyDown(document.body, { key: "Escape" });
 
     expect(defaultProps.onBack).not.toHaveBeenCalled();
-    expect(await screen.findByTitle("Edit page")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: "Edit page" })).toBeVisible();
     expect(
       screen.queryByText("Checking editor compatibility…"),
     ).toBeNull();
@@ -699,7 +754,8 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() => replaceDocument(editorViewFromTextbox(editor), "One serialized Page body"));
@@ -740,11 +796,13 @@ describe("PageDetail", () => {
     );
 
     await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
-    await user.click(screen.getByTitle("Re-distill page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-distill page" }));
     await waitFor(() => expect(redistillPage).toHaveBeenCalledWith("concept_abc"));
 
     // While the re-distill promise is still unresolved the button is busy.
-    expect(screen.getByRole("button", { name: "Re-distilling page" })).toHaveAttribute("aria-busy", "true");
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getByRole("menuitem", { name: "Re-distilling page" })).toBeDisabled();
 
     rerender(
       <QueryClientProvider client={queryClient}>
@@ -803,7 +861,8 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
     await waitFor(() => expect(editor).toHaveFocus());
     act(() => replaceDocument(editorViewFromTextbox(editor), "Revised Page body"));
@@ -827,14 +886,17 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Copy as context"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy as context" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not copy this page. Try again.",
     );
 
-    await user.click(screen.getByTitle("Copy as context"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Copy as context" }));
     await waitFor(() => expect(clipboardWrite).toHaveBeenCalledTimes(2));
-    expect(await screen.findByTitle("Copied!")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Copied!" })).toBeVisible();
   });
 
   it("surfaces export failures and lets the user retry", async () => {
@@ -843,14 +905,17 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Export to Obsidian"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export to Obsidian" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not export this page. Try again.",
     );
 
-    await user.click(screen.getByTitle("Export to Obsidian"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Export to Obsidian" }));
     await waitFor(() => expect(exportPageToObsidian).toHaveBeenCalledTimes(2));
-    expect(await screen.findByTitle("Exported!")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Exported!" })).toBeVisible();
   });
 
   it("keeps Page action menu keyboard events out of Main history and manages item focus", async () => {
@@ -1097,7 +1162,8 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />, queryClient);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Re-distill page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-distill page" }));
 
     expect(redistillPage).toHaveBeenCalledWith("concept_abc");
     expect(await screen.findByText(hint)).toBeTruthy();
@@ -1117,7 +1183,8 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Re-distill page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-distill page" }));
 
     expect(
       await screen.findByText(
@@ -1166,7 +1233,8 @@ describe("PageDetail", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     await screen.findByText("Edited Page");
-    await user.click(screen.getByTitle("Re-distill page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-distill page" }));
 
     expect(confirmSpy).toHaveBeenCalledWith(
       "Re-distill this edited page? The current version stays in page history for recovery.",
@@ -1187,7 +1255,8 @@ describe("PageDetail", () => {
     const { user, rerender } = renderWithQuery(<PageDetail {...defaultProps} />, queryClient);
 
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByTitle("Re-distill page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Re-distill page" }));
     expect(await screen.findByText(hint)).toBeTruthy();
 
     (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
@@ -1261,7 +1330,7 @@ describe("PageDetail", () => {
     await screen.findByText("libSQL Architecture");
     await openPageInfo();
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Page info" })).toBeInTheDocument();
     expect(mockList).not.toHaveBeenCalled();
   });
 
@@ -1285,20 +1354,22 @@ describe("PageDetail", () => {
     await screen.findByText("Simple Page");
     await openPageInfo();
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Page info" })).toBeInTheDocument();
   });
 
   it("renders one evidence card per source memory after fetch", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     expect(screen.getAllByTestId("page-info-source-row")).toHaveLength(2);
   });
 
   it("clicking an evidence card calls onMemoryClick with the right source_id", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByRole("button", { name: "Page info" }));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
     const row = screen
       .getByText("libSQL stores vectors")
       .closest('[data-testid="page-info-source-row"]')!;
