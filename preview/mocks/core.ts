@@ -25,6 +25,9 @@ import {
 import { TauriMockRuntime } from "../../e2e/tauriMock/runtime";
 import { createReviewDecisionFixture } from "../../e2e/fixtures/reviewDecisions";
 const folderRuntime = new TauriMockRuntime(createReviewDecisionFixture("wiki-folders"), [], [], { projectionPendingOnce: new URLSearchParams(window.location.search).get("pending") === "1" });
+import { createSpaceProjectFixture } from "../../e2e/fixtures/spaceProject";
+const projectState = new URLSearchParams(window.location.search).get("state");
+const projectRuntime = new TauriMockRuntime(createSpaceProjectFixture(projectState === "empty"), projectState === "error" ? [{ command: "list_indexed_files", message: "Fixture source read unavailable", times: 1 }] : [], [], {}, projectState === "loading" ? { list_indexed_files: 60_000 } : {});
 import { liveInvoke } from "./live-invoke";
 import { invokeRemoteFixture } from "./remote-access";
 
@@ -47,6 +50,7 @@ export async function invoke(
   if (!(window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__) {
     return liveInvoke(cmd, args);
   }
+  if (new URLSearchParams(window.location.search).get("mode") === "spaces") return projectRuntime.invoke(cmd, args);
   if (new URLSearchParams(window.location.search).get("mode") === "folders") return folderRuntime.invoke(cmd, args);
   // Fixture previews must never toggle the maintainer's background service.
   if (cmd === "get_background_ai_enabled") return fixtureBackgroundAiEnabled;

@@ -74,7 +74,7 @@ test("opens Spaces by stable id, prunes missing history, and preserves selection
   expect(errors.consoleErrors).toEqual([]);
 });
 
-test("keeps keyboard editor drafts after failure and preserves raw-memory ordering and delete cancellation", async ({ page }) => {
+test("keeps keyboard editor drafts after failure and keeps standalone memories absent and preserves delete cancellation", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
@@ -119,15 +119,9 @@ test("keeps keyboard editor drafts after failure and preserves raw-memory orderi
   await page.reload();
   await openSpace(page);
 
-  const rawMemories = page.getByRole("button", { name: "Raw memories (205)" });
-  await expect(rawMemories).toHaveAttribute("aria-expanded", "false");
-  await rawMemories.click();
-  await expect(rawMemories).toHaveAttribute("aria-expanded", "true");
-  await page.getByRole("button", { name: "Curated first", exact: true }).click();
-  await page.getByRole("button", { name: "Oldest first", exact: true }).click();
-  await page.getByTitle("Switch to list view").click();
-  const memoryCards = page.locator(".space-dossier-archive .group.relative.h-full");
-  await expect(memoryCards.nth(1)).toContainText("Fixture memory 199");
+  await expect(page.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
+  await expect(page.locator(".space-dossier-archive, .space-dossier-entities, .space-dossier-review")).toHaveCount(0);
 
   const deleteCallsBefore = controller.calls().filter(({ command }) => command === "delete_space").length;
   await page.getByRole("button", { name: "Actions for Wenlan" }).click();

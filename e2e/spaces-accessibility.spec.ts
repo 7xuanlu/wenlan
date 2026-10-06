@@ -302,12 +302,11 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
     await page.keyboard.press("Escape");
 
     await spaceOverviewButton(page).click();
-    await page.locator(".space-dossier-entities summary").click();
     await page.getByRole("button", { name: "Edit space" }).click();
     results.push(...await renderedContrast(page, [
       { label: `${theme} space title editor boundary`, selector: ".space-dossier-title-input", foregroundProperty: "border-bottom-color", minimum: 3 },
       { label: `${theme} description editor boundary`, selector: ".space-dossier-description-editor", foregroundProperty: "border-top-color", minimum: 3 },
-      { label: `${theme} space sage action`, selector: ".space-dossier-text-action", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} selected note tab`, selector: ".space-project-tabs [aria-selected=\"true\"]", foregroundProperty: "color", minimum: 4.5 },
     ]));
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
@@ -395,13 +394,16 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await tabTo(page, spaceRow);
   await page.keyboard.press("Enter");
   await expect(page.locator(".space-dossier")).toBeVisible();
-  const archive = page.locator(".space-dossier-archive-trigger");
-  await tabTo(page, archive);
+  const sourcesTab = page.getByRole("tab", { name: "Sources" });
+  const notesTab = page.getByRole("tab", { name: "Notes" });
+  await tabTo(page, notesTab);
   await assertFocusOutline(page);
-  await page.keyboard.press("Enter");
-  await expect(archive).toHaveAttribute("aria-expanded", "true");
-  await page.keyboard.press("Enter");
-  await expect(archive).toHaveAttribute("aria-expanded", "false");
+  await page.keyboard.press("ArrowRight");
+  await expect(sourcesTab).toBeFocused();
+  await expect(sourcesTab).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(notesTab).toBeFocused();
+  await expect(notesTab).toHaveAttribute("aria-selected", "true");
 
   const entity = await getSpaceEntityButton(page, "Ada Lovelace");
   await tabTo(page, entity);
@@ -444,6 +446,9 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await page.keyboard.press("Enter");
   await expect(topicActions).toBeFocused();
   const back = page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true });
+  await tabTo(page, back);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Topics" })).toBeVisible();
   await tabTo(page, back);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
@@ -522,7 +527,10 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   await openSpaceEntity(page, "Ada Lovelace", "zh-Hant");
   await settleZoomLayout(page);
   const baselineEntityHeading = await physicalTextMetric(page.getByRole("heading", { level: 1, name: "Ada Lovelace" }));
-  await page.getByRole("group", { name: "歷史導覽", exact: true }).getByRole("button", { name: "返回", exact: true }).click();
+  const historyBack = page.getByRole("group", { name: "歷史導覽", exact: true }).getByRole("button", { name: "返回", exact: true });
+  await historyBack.click();
+  await expect(page.getByRole("heading", { level: 1, name: "主題", exact: true })).toBeVisible();
+  await historyBack.click();
   await expect(spaceHeading).toBeVisible();
 
   const zoomContext = await browser.newContext({
@@ -643,5 +651,6 @@ test("removes non-essential transitions under reduced motion", async ({ page }) 
   await expect(newSpace).not.toHaveClass(/spaces-primary-action/);
   await expect(newSpace).toHaveCSS("transition-duration", "0s");
   await spaceOverviewButton(page).click();
-  await expect(page.locator(".space-dossier-archive-trigger svg")).toHaveCSS("transition-duration", "0s");
+  await expect(page.locator(".space-dossier-archive-trigger")).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Notes" })).toHaveCSS("transition-duration", "0s");
 });

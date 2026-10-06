@@ -5,18 +5,14 @@ import {
   confirmSpace,
   deleteSpace,
   getSpace,
-  listEntities,
-  listMemoriesRich,
   listPages,
   updateSpace,
   type Space,
 } from "../../lib/tauri";
-import { RawMemoriesSection } from "./space-detail/RawMemoriesSection";
-import { SpaceDossierContent } from "./space-detail/SpaceDossierContent";
+import { SpaceProjectContent } from "./space-detail/SpaceProjectContent";
 import { SpaceDossierHeader } from "./space-detail/SpaceDossierHeader";
 import { SPACE_DETAIL_KEY_COPY, type SpaceDetailCopy } from "./space-detail/copy";
 import {
-  MEMORY_FETCH_LIMIT,
   PAGE_FETCH_LIMIT,
 } from "./space-detail/model";
 import "./space-detail/space-detail-header.css";
@@ -26,13 +22,11 @@ import "./pages/pageActions.css";
 export type SpaceDetailProps = {
   readonly copy?: SpaceDetailCopy;
   readonly onBack: () => void;
-  readonly onEntityClick: (entityId: string) => void;
   readonly onSpaceDeleted?: (spaceId: string) => void;
   readonly onSpaceLoaded?: (space: Space) => void;
   readonly onSpaceRenamed?: (space: Pick<Space, "id" | "name">) => void;
   readonly onReviewAll?: () => void;
   readonly onCreatePage?: (space: string) => void;
-  readonly onSelectMemory: (sourceId: string) => void;
   readonly onSelectPage: (pageId: string) => void;
   readonly spaceName: string;
 };
@@ -40,13 +34,11 @@ export type SpaceDetailProps = {
 export default function SpaceDetail({
   copy = SPACE_DETAIL_KEY_COPY,
   onBack,
-  onEntityClick,
   onSpaceDeleted,
   onSpaceLoaded,
   onSpaceRenamed,
   onReviewAll,
   onCreatePage,
-  onSelectMemory,
   onSelectPage,
   spaceName,
 }: SpaceDetailProps) {
@@ -55,16 +47,6 @@ export default function SpaceDetail({
     queryKey: ["space", spaceName],
     queryFn: () => getSpace(spaceName),
     refetchInterval: 5_000,
-  });
-  const memoriesQuery = useQuery({
-    queryKey: ["space-memories", spaceName],
-    queryFn: () => listMemoriesRich(spaceName, undefined, undefined, MEMORY_FETCH_LIMIT),
-    refetchInterval: 5_000,
-  });
-  const entitiesQuery = useQuery({
-    queryKey: ["space-entities", spaceName],
-    queryFn: () => listEntities(undefined, spaceName),
-    refetchInterval: 10_000,
   });
   const pagesQuery = useQuery({
     queryKey: ["space-pages", spaceName],
@@ -124,19 +106,18 @@ export default function SpaceDetail({
   }
 
   const space = spaceQuery.data;
-  const memories = memoriesQuery.data ?? [];
-  const entities = entitiesQuery.data ?? [];
   const pages = pagesQuery.data ?? [];
   const mutationError = renameMutation.isError || deleteMutation.isError || confirmMutation.isError;
-  const relatedLoadError = memoriesQuery.isError || entitiesQuery.isError || pagesQuery.isError;
 
   return (
     <article className="space-dossier">
       <SpaceDossierHeader
+        key={space.id}
         actions={{
           onBack,
           onDelete: () => deleteMutation.mutate(),
           onKeep: () => confirmMutation.mutate(),
+          onReviewAll,
           onCreatePage: () => onCreatePage?.(space.name),
           onSaveIdentity: ({ name, description }) => renameMutation.mutate({
             newName: name,
@@ -148,20 +129,16 @@ export default function SpaceDetail({
         space={space}
       />
 
-      {relatedLoadError && <p className="space-dossier-error" role="alert">{copy.relatedLoadError}</p>}
-
-      <SpaceDossierContent
-        key={space.id}
+      <SpaceProjectContent
+        key={`${space.id}:${space.name}`}
         copy={copy}
-        entities={entities}
-        navigation={{ onEntityClick, onSelectPage, ...(onReviewAll ? { onReviewAll } : {}) }}
+        spaceId={space.id}
+        spaceName={space.name}
         pages={pages}
-      />
-      <RawMemoriesSection
-        copy={copy}
-        memories={memories}
-        onSelectMemory={onSelectMemory}
-        totalMemoryCount={space.memory_count}
+        pagesPending={pagesQuery.isPending}
+        pagesError={pagesQuery.isError}
+        onRetryPages={() => void pagesQuery.refetch()}
+        onSelectPage={onSelectPage}
       />
     </article>
   );

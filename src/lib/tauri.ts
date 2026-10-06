@@ -324,8 +324,10 @@ export interface IndexedFileInfo {
   pinned?: boolean;
 }
 
-export async function listIndexedFiles(): Promise<IndexedFileInfo[]> {
-  const files = await invoke<IndexedFileInfo[]>("list_indexed_files");
+export async function listIndexedFiles(space?: string): Promise<IndexedFileInfo[]> {
+  const files = space === undefined
+    ? await invoke<IndexedFileInfo[]>("list_indexed_files")
+    : await invoke<IndexedFileInfo[]>("list_indexed_files", { space });
   return withDomainArray(files);
 }
 
@@ -411,8 +413,8 @@ export interface ChunkDetail {
   language: string | null;
 }
 
-export async function getChunks(source: string, sourceId: string): Promise<ChunkDetail[]> {
-  return invoke("get_chunks", { source, sourceId });
+export async function getChunks(source: string, sourceId: string, space?: string): Promise<ChunkDetail[]> {
+  return invoke("get_chunks", space === undefined ? { source, sourceId } : { source, sourceId, space });
 }
 
 export async function updateChunk(id: string, content: string): Promise<void> {

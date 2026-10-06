@@ -3,7 +3,8 @@ use crate::error::ServerError;
 use crate::route_registry::{delete, get, post, put, TrackedRouter};
 use crate::state::{ServerState, SharedState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
+    http::{HeaderMap, HeaderValue},
     response::Json,
 };
 use std::sync::Arc;
@@ -29,42 +30,105 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
 // Batch 2 — Indexed files / chunks
 // =====================================================================
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SourceReadQuery {
+    space: Option<String>,
+}
+
+// Query values support canonical Unicode names. A conflicting selector must
+// not override the scope bound by a present header.
+fn source_read_selector<'a>(
+    query: Option<&'a str>,
+    header: Option<&str>,
+) -> Result<Option<&'a str>, ServerError> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    let query = query.trim();
+    if query.is_empty() {
+        return Err(ServerError::ValidationError(
+            "Space query must not be blank".into(),
+        ));
+    }
+    if header.is_some_and(|header| header.trim() != query) {
+        return Err(ServerError::ValidationError(
+            "Space query conflicts with Space header".into(),
+        ));
+    }
+    Ok(Some(query))
+}
+
+// RFC 3986 unreserved encoding matches the app's scope acknowledgement check.
+// A paired client rejects responses from older daemons that ignore the query.
+fn source_scope_headers(selector: Option<&str>) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Some(selector) = selector {
+        let encoded: String = selector
+            .bytes()
+            .flat_map(|byte| match byte {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                    vec![byte as char]
+                }
+                _ => format!("%{byte:02X}").chars().collect(),
+            })
+            .collect();
+        headers.insert(
+            "x-wenlan-source-scope",
+            HeaderValue::from_str(&encoded).expect("percent encoded scope is ASCII"),
+        );
+    }
+    headers
+}
+
 /// GET /api/indexed-files
 pub async fn handle_list_indexed_files(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
-) -> Result<Json<wenlan_types::responses::IndexedFilesResponse>, ServerError> {
+    Query(query): Query<SourceReadQuery>,
+) -> Result<
+    (
+        HeaderMap,
+        Json<wenlan_types::responses::IndexedFilesResponse>,
+    ),
+    ServerError,
+> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let selector = source_read_selector(query.space.as_deref(), header_space.as_deref())?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, selector, header_space.as_deref()).await?;
     let files = db
         .list_indexed_files_scoped(&scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?;
-    Ok(Json(wenlan_types::responses::IndexedFilesResponse {
-        files,
-    }))
+    Ok((
+        source_scope_headers(selector),
+        Json(wenlan_types::responses::IndexedFilesResponse { files }),
+    ))
 }
 
 /// GET /api/chunks/{source_id}
 pub async fn handle_get_chunks(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Query(query): Query<SourceReadQuery>,
     Path(source_id): Path<String>,
-) -> Result<Json<Vec<wenlan_core::db::MemoryDetail>>, ServerError> {
+) -> Result<(HeaderMap, Json<Vec<wenlan_core::db::MemoryDetail>>), ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let selector = source_read_selector(query.space.as_deref(), header_space.as_deref())?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, selector, header_space.as_deref()).await?;
     let chunks = db
         .get_chunks_scoped(&source_id, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::NotFound("memory not found".to_string()))?;
-    Ok(Json(chunks))
+    Ok((source_scope_headers(selector), Json(chunks)))
 }
 
 /// GET /api/webpage-chunks/{source_id}. Exact kind prevents document collisions;
@@ -72,19 +136,22 @@ pub async fn handle_get_chunks(
 pub async fn handle_get_webpage_chunks(
     State(state): State<Arc<RwLock<ServerState>>>,
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Query(query): Query<SourceReadQuery>,
     Path(source_id): Path<String>,
-) -> Result<Json<Vec<wenlan_core::db::MemoryDetail>>, ServerError> {
+) -> Result<(HeaderMap, Json<Vec<wenlan_core::db::MemoryDetail>>), ServerError> {
     let db = {
         let s = state.read().await;
         s.db.clone().ok_or(ServerError::DbNotInitialized)?
     };
-    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let selector = source_read_selector(query.space.as_deref(), header_space.as_deref())?;
+    let scope =
+        crate::read_scope::effective_read_scope(&db, selector, header_space.as_deref()).await?;
     let chunks = db
         .get_webpage_chunks_scoped(&source_id, &scope)
         .await
         .map_err(|e| ServerError::Internal(e.to_string()))?
         .ok_or_else(|| ServerError::NotFound("webpage not found".to_string()))?;
-    Ok(Json(chunks))
+    Ok((source_scope_headers(selector), Json(chunks)))
 }
 
 /// PUT /api/chunks/{id}/update
@@ -260,6 +327,175 @@ mod webpage_chunk_tests {
                 let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
                 let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(value[0]["content"], content);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod source_scope_query_tests {
+    use axum::{
+        body::{to_bytes, Body},
+        http::{Request, StatusCode},
+    };
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn source_query_scopes_before_aggregation_and_chunk_selection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        for space in ["專案 & R+D", "work"] {
+            db.create_space(space, None, false).await.unwrap();
+        }
+        // Preserve rows from an existing document whose chunks belong to
+        // different Spaces; a global aggregate followed by UI filtering leaks.
+        let fixture = libsql::Builder::new_local(tmp.path().join("origin_memory.db"))
+            .build()
+            .await
+            .unwrap();
+        let conn = fixture.connect().unwrap();
+        for (id, source, title, space) in [
+            ("project-memory", "memory", "Project memory", "專案 & R+D"),
+            ("work-memory", "memory", "Work memory", "work"),
+            ("project-web", "webpage", "Project web", "專案 & R+D"),
+            ("work-web", "webpage", "Work web", "work"),
+        ] {
+            conn.execute(
+                "INSERT INTO memories (id,content,source,source_id,title,chunk_index,last_modified,chunk_type,space)
+                 VALUES (?1,?1,?2,'shared',?3,0,1,'text',?4)",
+                libsql::params![id,source,title,space],
+            ).await.unwrap();
+        }
+        drop(conn);
+        let state = Arc::new(RwLock::new(crate::state::ServerState {
+            db: Some(db),
+            ..Default::default()
+        }));
+        let app = crate::router::build_router(state);
+        for path in [
+            "/api/indexed-files",
+            "/api/chunks/shared",
+            "/api/webpage-chunks/shared",
+        ] {
+            for (query, header, status, expected_owner) in [
+                (
+                    Some("space=%E5%B0%88%E6%A1%88+%26+R%2BD"),
+                    None,
+                    StatusCode::OK,
+                    Some("project"),
+                ),
+                (Some("space=work"), None, StatusCode::OK, Some("work")),
+                (None, Some("work"), StatusCode::OK, Some("work")),
+                (
+                    Some("space=%20work%20"),
+                    Some(" work "),
+                    StatusCode::OK,
+                    Some("work"),
+                ),
+                (None, None, StatusCode::OK, None),
+                (Some("space="), None, StatusCode::UNPROCESSABLE_ENTITY, None),
+                (
+                    Some("space=+%20"),
+                    Some("work"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    None,
+                ),
+                (
+                    Some("space=missing"),
+                    None,
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    None,
+                ),
+                (
+                    Some("space=%E5%B0%88%E6%A1%88+%26+R%2BD"),
+                    Some("work"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    None,
+                ),
+                (
+                    Some("space=work"),
+                    Some("missing"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    None,
+                ),
+            ] {
+                let uri = query.map_or_else(|| path.to_string(), |query| format!("{path}?{query}"));
+                let mut request = Request::builder().uri(&uri);
+                if let Some(header) = header {
+                    request = request.header("x-wenlan-space", header);
+                }
+                let response = app
+                    .clone()
+                    .oneshot(request.body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), status, "{uri} header {header:?}");
+                let expected_ack = if status == StatusCode::OK && query.is_some() {
+                    match expected_owner {
+                        Some("project") => Some("%E5%B0%88%E6%A1%88%20%26%20R%2BD"),
+                        Some("work") => Some("work"),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("x-wenlan-source-scope")
+                        .and_then(|value| value.to_str().ok()),
+                    expected_ack,
+                    "{uri}"
+                );
+                let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+                let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                if status != StatusCode::OK {
+                    assert!(!String::from_utf8_lossy(&body).contains("Project memory"));
+                    assert!(!String::from_utf8_lossy(&body).contains("Work memory"));
+                    continue;
+                }
+                if path == "/api/indexed-files" {
+                    let files = value["files"].as_array().unwrap();
+                    assert_eq!(files.len(), 2);
+                    for file in files {
+                        let count = if expected_owner.is_some() { 1 } else { 2 };
+                        assert_eq!(file["chunk_count"], count, "{uri}");
+                        if let Some(owner) = expected_owner {
+                            let title_prefix = if owner == "project" {
+                                "Project"
+                            } else {
+                                "Work"
+                            };
+                            assert!(
+                                file["title"].as_str().unwrap().starts_with(title_prefix),
+                                "{value}"
+                            );
+                            let name = if owner == "project" {
+                                "專案 & R+D"
+                            } else {
+                                "work"
+                            };
+                            assert_eq!(file["space"], name);
+                        }
+                    }
+                } else {
+                    let chunks = value.as_array().unwrap();
+                    assert_eq!(chunks.len(), if expected_owner.is_some() { 1 } else { 2 });
+                    let kind = if path.contains("webpage") {
+                        "web"
+                    } else {
+                        "memory"
+                    };
+                    if let Some(owner) = expected_owner {
+                        assert_eq!(chunks[0]["content"], format!("{owner}-{kind}"));
+                    }
+                }
             }
         }
     }

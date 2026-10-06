@@ -16,7 +16,7 @@ vi.mock("../../../lib/tauri", () => ({
   updateMemory: vi.fn(), updateSpace: vi.fn(),
 }));
 
-import type { Entity, MemoryItem, Page, Space } from "../../../lib/tauri";
+import type { MemoryItem, Page, Space } from "../../../lib/tauri";
 import { getSpace, listEntities, listMemoriesRich, listPages, listSpaces } from "../../../lib/tauri";
 import SpaceDetail from "../SpaceDetail";
 import { SPACE_DETAIL_TEST_COPY } from "./testTranslation";
@@ -33,15 +33,6 @@ function makePage(id: string, title: string, lastModified: string, staleReason?:
     domain: "Wenlan", source_memory_ids: [`m-${id}`], version: 1, status: "active",
     created_at: "2026-07-01T00:00:00Z", last_compiled: lastModified,
     last_modified: lastModified, ...(staleReason ? { stale_reason: staleReason } : {}),
-  };
-}
-
-function makeEntity(id: string, name: string, confirmed: boolean, confidence: number, updatedAt: number): Entity {
-  return {
-    id, name, entity_type: "topic", domain: "Wenlan", source_agent: "codex",
-    confidence, confirmed, created_at: 1_700_000_000, updated_at: updatedAt,
-    memory_count: confirmed ? 1 : 0, status: confirmed ? "established" : "detected",
-    established_by: confirmed ? "manual" : null,
   };
 }
 
@@ -161,96 +152,24 @@ describe("SpaceDetail editorial dossier", () => {
     expect(onSelectPage).toHaveBeenCalledWith("a");
   });
 
-  it("keeps review closed by default, then shows genuine reasons and opens the review queue", async () => {
-    vi.mocked(listPages).mockResolvedValue([
-      makePage("u1", "Updated first", "2026-07-10T00:00:00Z", "source_updated"),
-      makePage("c1", "Conflict old", "2026-07-01T00:00:00Z", "source_conflict"),
-      makePage("c2", "Conflict new", "2026-07-09T00:00:00Z", "source_conflict"),
-      makePage("u2", "Updated second", "2026-07-08T00:00:00Z", "source_updated"),
-      makePage("blank", "Blank", "2026-07-11T00:00:00Z", "   "),
-    ]);
+  it("keeps review in overflow and does not read standalone memories or topics", async () => {
     const onReviewAll = vi.fn();
     renderDetail({ onReviewAll });
-
-    const region = await screen.findByRole("region", { name: "Needs review" });
-    expect(region.querySelector("details")).not.toHaveAttribute("open");
-    for (const button of within(region).getAllByRole("button")) expect(button).not.toBeVisible();
-    fireEvent.click(within(region).getByText("Needs review", { selector: "summary" }));
-    const rows = within(region).getAllByRole("button");
-    expect(rows.slice(0, 3).map((row) => row.textContent)).toEqual([
-      expect.stringContaining("Conflict new"), expect.stringContaining("Conflict old"),
-      expect.stringContaining("Updated first"),
-    ]);
-    expect(region).not.toHaveTextContent("Blank");
-    expect(within(region).getAllByText("Source conflict")).toHaveLength(2);
-    expect(within(region).getAllByText("New sources waiting")).toHaveLength(2);
-    const reviewAll = within(region).getByRole("button", { name: "Review all" });
-    expect(reviewAll).toHaveClass("space-dossier-text-action", "space-dossier-text-action-review");
-    fireEvent.click(reviewAll);
-    expect(onReviewAll).toHaveBeenCalledTimes(1);
-
-    const css = readFileSync(resolve("src/components/memory/space-detail/space-detail.css"), "utf8");
-    expect(css).toMatch(
-      /\.space-dossier-text-action-review\s*\{[^}]*color:\s*var\(--mem-accent-indigo\)/s,
-    );
-  });
-
-  it("caps sorted key entities at six and expands in place", async () => {
-    vi.mocked(listEntities).mockResolvedValue([
-      makeEntity("u", "Unconfirmed", false, 1, 9_999),
-      makeEntity("z", "Zulu", true, 0.9, 1_000), makeEntity("a", "Alpha", true, 0.9, 1_000),
-      makeEntity("b", "Beta", true, 0.8, 3_000), makeEntity("c", "Charlie", true, 0.8, 2_000),
-      makeEntity("d", "Delta", true, 0.7, 4_000), makeEntity("e", "Echo", true, 0.6, 5_000),
-      makeEntity("f", "Foxtrot", true, 0.5, 6_000),
-    ]);
-    renderDetail();
-
-    const region = await screen.findByRole("region", { name: "Key entities" });
-    expect(region.querySelector("details")).not.toHaveAttribute("open");
-    fireEvent.click(within(region).getByText("Key entities", { selector: "summary" }));
-    expect(within(region).queryByRole("button", { name: "Foxtrot" })).not.toBeInTheDocument();
-    const viewAll = within(region).getByRole("button", { name: "View all 8" });
-    expect(viewAll).toHaveClass("space-dossier-text-action");
-    expect(viewAll).not.toHaveClass("space-dossier-text-action-review");
-    fireEvent.click(viewAll);
-    expect(within(region).getByRole("button", { name: "Foxtrot" })).toBeInTheDocument();
-    expect(within(region).getAllByRole("button").slice(0, 3).map((row) => row.textContent)).toEqual(["Alpha", "Zulu", "Beta"]);
-  });
-
-  it("keeps the raw archive collapsed and discloses a 200-of-N limit", async () => {
-    vi.mocked(listMemoriesRich).mockResolvedValue(Array.from({ length: 200 }, (_, index) => ({
-      ...memory, source_id: `m${index}`, title: index === 0 ? memory.title : `Memory ${index}`,
-    })));
-    renderDetail();
-
-    const region = await screen.findByRole("region", { name: "Raw memories" });
-    expect(region).not.toHaveTextContent("Showing the latest 200 of 250 memories");
-    expect(region.querySelector("small")).toBeNull();
-    expect(within(region).queryByText("Latest raw memory")).not.toBeInTheDocument();
-    fireEvent.click(within(region).getByRole("button", { name: "Raw memories (250)" }));
-    expect(region).toHaveTextContent("Showing the latest 200 of 250 memories");
-    expect(await within(region).findByText("Latest raw memory")).toBeInTheDocument();
-    expect(within(region).getByRole("button", { name: "Curated first" })).toBeInTheDocument();
-  }, 15_000);
-
-  it("places closed supplementary sections and archive after the primary page list", async () => {
-    renderDetail();
-    const recent = await screen.findByRole("region", { name: "Pages" });
-    const review = screen.getByRole("region", { name: "Needs review" });
-    const entities = screen.getByRole("region", { name: "Key entities" });
-    const archive = screen.getByRole("region", { name: "Raw memories" });
-    expect(recent.compareDocumentPosition(entities) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(entities.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(review.compareDocumentPosition(archive) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(entities.querySelector("details")).not.toHaveAttribute("open");
-    expect(review.querySelector("details")).not.toHaveAttribute("open");
-    expect(document.querySelector(".space-dossier-rail")).toBeNull();
+    await screen.findByRole("tab", { name: "Notes" });
+    expect(screen.queryByRole("region", { name: "Key entities" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Raw memories" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Needs review" })).not.toBeInTheDocument();
+    expect(listEntities).not.toHaveBeenCalled();
+    expect(listMemoriesRich).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Actions for Wenlan" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Review page changes" }));
+    expect(onReviewAll).toHaveBeenCalledExactlyOnceWith();
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
   it("omits the review action when no callback is available", async () => {
     renderDetail({ onReviewAll: undefined });
-    const region = await screen.findByRole("region", { name: "Needs review" });
-    fireEvent.click(within(region).getByText("Needs review", { selector: "summary" }));
-    expect(within(region).queryByRole("button", { name: "Review all" })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Actions for Wenlan" }));
+    expect(screen.queryByRole("menuitem", { name: "Review page changes" })).not.toBeInTheDocument();
   });
 
 });

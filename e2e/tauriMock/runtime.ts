@@ -310,9 +310,13 @@ export class TauriMockRuntime {
         const ids = new Set(stringArray(args, "ids"));
         return this.memories.filter((memory) => ids.has(memory.source_id));
       }
-      case "list_indexed_files": return this.listIndexedFiles();
+      case "list_indexed_files": return this.listIndexedFiles().filter(file => !optionalString(args, "space") || file.space === optionalString(args, "space") || file.domain === optionalString(args, "space"));
       case "ingest_webpage": return this.ingestWebpage(args);
       case "get_chunks": {
+        const scope = optionalString(args, "space");
+        const document = this.fixture.documents?.find(({ file }) => file.source === optionalString(args, "source") && file.source_id === optionalString(args, "sourceId") && (!scope || file.space === scope || file.domain === scope));
+        if (document) return [{ id: `${document.file.source}:${document.file.source_id}`, content: document.content, chunk_index: 0, chunk_type: "text", language: null }];
+        if (scope && this.fixture.documents) return [];
         if (optionalString(args, "source") !== "webpage") return baseResponse(command, args, { activityRows: this.activityRows, memoryCount: this.memories.length });
         const sourceId = requiredString(command, args, "sourceId");
         const webpage = this.webpages.get(sourceId);
@@ -1128,7 +1132,7 @@ export class TauriMockRuntime {
       confirmed: memory.confirmed,
       pinned: memory.pinned,
     }));
-    return [...memories, ...Array.from(this.webpages.values(), (webpage) => ({
+    return [...memories, ...(this.fixture.documents ?? []).map(document => ({ ...document.file })), ...Array.from(this.webpages.values(), (webpage) => ({
       source: "webpage", source_id: webpage.url, title: webpage.title,
       url: webpage.url, chunk_count: 1, last_modified: 1_783_728_000,
       summary: null, processing: false,
