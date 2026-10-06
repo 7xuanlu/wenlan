@@ -123,7 +123,7 @@ test("keeps keyboard editor drafts after failure and preserves raw-memory orderi
   await expect(rawMemories).toHaveAttribute("aria-expanded", "false");
   await rawMemories.click();
   await expect(rawMemories).toHaveAttribute("aria-expanded", "true");
-  await page.getByRole("button", { name: "Curated", exact: true }).click();
+  await page.getByRole("button", { name: "Curated first", exact: true }).click();
   await page.getByRole("button", { name: "Oldest first", exact: true }).click();
   await page.getByTitle("Switch to list view").click();
   const memoryCards = page.locator(".space-dossier-archive .group.relative.h-full");
