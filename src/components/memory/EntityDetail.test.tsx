@@ -161,10 +161,12 @@ describe("EntityDetail characterization", () => {
   });
 
   it("loads the entity record with identity, metadata, observations, relations, and linked memories", async () => {
-    renderEntity();
+    const { user } = renderEntity();
 
     expect(await screen.findByRole("heading", { name: "Ada Lovelace" })).toBeInTheDocument();
     expect(getEntityDetail).toHaveBeenCalledWith("entity-ada");
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
     expect(screen.getAllByText("person").length).toBeGreaterThan(0);
     expect(screen.getAllByText("History of Computing").length).toBeGreaterThan(0);
     expect(screen.getByText("research-agent")).toBeInTheDocument();
@@ -194,7 +196,8 @@ describe("EntityDetail characterization", () => {
   it("confirms the entity and an observation", async () => {
     const { user } = renderEntity();
 
-    await user.click(await screen.findByRole("button", { name: "Confirm topic" }));
+    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitemcheckbox", { name: "Confirm topic" }));
     await user.click(screen.getByRole("button", { name: "Mark note confirmed" }));
 
     await waitFor(() => {
@@ -239,6 +242,8 @@ describe("EntityDetail characterization", () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
     const charlesControls = screen.getAllByRole("button", { name: /Charles Babbage/ });
     expect(charlesControls).toHaveLength(2);
     await user.click(charlesControls[0]);
@@ -258,18 +263,33 @@ describe("EntityDetail characterization", () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
 
     expect(screen.getByRole("dialog", { name: "Full screen" })).toBeInTheDocument();
     expect(screen.getByTestId("focus-graph")).toBeInTheDocument();
+    const graphDialog = screen.getByRole("dialog", { name: "Full screen" });
+    const graphClose = within(graphDialog).getByRole("button", { name: "Close" });
+    expect(graphClose).toHaveFocus();
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(graphDialog).toContainElement(document.activeElement as HTMLElement);
+    expect(graphClose).not.toHaveFocus();
+    await user.keyboard("{Tab}");
+    expect(graphClose).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Full screen" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Topic context" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveFocus();
+    expect(defaultProps.onBack).not.toHaveBeenCalled();
   });
 
   it("switches the overlay to Atlas with the current entity focused", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
     const dialog = screen.getByRole("dialog", { name: "Full screen" });
 
@@ -287,6 +307,8 @@ describe("EntityDetail characterization", () => {
   it("routes a memory node in the Atlas overlay to the memory, closing the overlay", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
     const dialog = screen.getByRole("dialog", { name: "Full screen" });
     await user.click(within(dialog).getByRole("button", { name: "Atlas" }));
@@ -303,7 +325,8 @@ describe("EntityDetail characterization", () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Delete topic" }));
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete topic" }));
     expect(deleteEntity).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: /^Delete$/ }));
 

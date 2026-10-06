@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { getSpaceEntityButton, openSpaceEntity } from "./helpers/spaceEntity";
+import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { renderedContrast, type ContrastResult } from "./helpers/renderedContrast";
 import { pngDimensions } from "./helpers/png";
@@ -203,6 +204,10 @@ test("has no page-level horizontal overflow across all responsive surfaces", asy
     await openSpaceEntity(page, "Ada Lovelace");
     await expect(page.locator(".entity-detail-dossier")).toBeVisible();
     await assertNoPageOverflow(page);
+    const topicContext = await openTopicContext(page);
+    await assertNoPageOverflow(page);
+    await topicContext.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeFocused();
   }
 
   expect(browserErrors.pageErrors).toEqual([]);
@@ -307,9 +312,12 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
     await openSpaceEntity(page, "Ada Lovelace");
-    await expect(page.locator(".entity-detail-seal")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeVisible();
+    await openTopicContext(page);
     results.push(...await renderedContrast(page, [
-      { label: `${theme} entity seal text`, selector: ".entity-detail-seal", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} topic title`, selector: ".entity-detail-dossier .page-detail-title", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} topic actions`, selector: ".entity-detail-dossier .page-detail-actions-menu-trigger", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} topic panel metadata`, selector: ".entity-topic-context .entity-meta-mono", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} graph node text`, selector: ".entity-graph-node-name", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} relationship text`, selector: ".entity-relation-name", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} relationship edge`, selector: ".entity-graph-edges line", backgroundSelector: ".entity-graph", foregroundProperty: "stroke", minimum: 3 },
@@ -399,21 +407,42 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await tabTo(page, entity);
   await page.keyboard.press("Enter");
   await expect(page.locator(".entity-detail-dossier")).toBeVisible();
+  const topicActions = page.getByRole("button", { name: "Topic actions", exact: true });
+  await tabTo(page, topicActions);
+  await assertFocusOutline(page);
+  await page.keyboard.press("Enter");
+  const contextItem = page.getByRole("menuitem", { name: "Topic context", exact: true });
+  await tabTo(page, contextItem, 8);
+  await page.keyboard.press("Enter");
+  const topicContext = page.getByRole("complementary", { name: "Topic context", exact: true });
+  await expect(topicContext).toBeVisible();
   const graphNode = page.locator(".entity-graph-node").first();
   await tabTo(page, graphNode);
   await assertFocusOutline(page);
   const ledgerRow = page.locator(".entity-relation-row").first();
   await tabTo(page, ledgerRow, 12);
   await assertFocusOutline(page);
+  const contextClose = topicContext.getByRole("button", { name: "Close", exact: true });
+  await tabTo(page, contextClose);
+  await page.keyboard.press("Enter");
+  await expect(topicActions).toBeFocused();
   const addNote = page.getByRole("button", { name: "Add note" });
   await tabTo(page, addNote, 24);
   await page.keyboard.press("Enter");
   await expect(page.getByPlaceholder("New note about Ada Lovelace…")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
+  await tabTo(page, topicActions);
+  await page.keyboard.press("Enter");
+  await tabTo(page, contextItem, 8);
+  await page.keyboard.press("Enter");
+  await expect(topicContext).toBeVisible();
   const linkedMemory = page.locator(".memory-detail-related-card").first();
   await tabTo(page, linkedMemory);
   await assertFocusOutline(page);
+  await tabTo(page, contextClose);
+  await page.keyboard.press("Enter");
+  await expect(topicActions).toBeFocused();
   const back = page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true });
   await tabTo(page, back);
   await page.keyboard.press("Enter");
@@ -532,19 +561,25 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
 
   await openSpaceEntity(zoomPage, "Ada Lovelace", "zh-Hant");
   await settleZoomLayout(zoomPage);
-  const connections = zoomPage.getByRole("heading", { name: "關聯" });
-  const about = zoomPage.getByRole("heading", { name: "關於" });
-  expect(await connections.evaluate((left, right) => Boolean(left.compareDocumentPosition(right as Node) & Node.DOCUMENT_POSITION_FOLLOWING), await about.elementHandle())).toBe(true);
-  await expect(zoomPage.getByRole("group", { name: "Ada Lovelace 的關聯圖" })).toBeVisible();
-  await expect(zoomPage.getByRole("group", { name: "關聯", exact: true })).toBeVisible();
-  await expect(zoomPage.locator(".entity-detail-seal")).toBeVisible();
   const entityHeading = zoomPage.getByRole("heading", { level: 1, name: "Ada Lovelace" });
   await expect(entityHeading).toHaveCount(1);
   await assertNotClipped(entityHeading);
-  await assertNotClipped(connections);
-  await assertNotClipped(about);
   const zoomEntityHeading = await physicalTextMetric(entityHeading);
-  expect((await zoomPage.locator(".page-detail-grid").evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
+  await expect(zoomPage.getByRole("button", { name: "主題操作", exact: true })).toBeInViewport();
+  // About belongs to primary reading; Connections is requested in the pane.
+  const about = zoomPage.locator(".entity-detail-reading").getByRole("heading", { name: "關於", exact: true });
+  await expect(about).toBeVisible();
+  await assertNotClipped(about);
+  await expect(zoomPage.locator(".entity-detail-reading .entity-graph")).toHaveCount(0);
+  const topicContext = await openTopicContext(zoomPage, "zh-Hant");
+  const connections = topicContext.getByRole("heading", { name: "關聯", exact: true });
+  await expect(connections).toBeVisible();
+  await expect(topicContext.locator(".memory-detail-metadata-list")).toBeVisible();
+  await expect(zoomPage.getByRole("group", { name: "Ada Lovelace 的關聯圖" })).toBeVisible();
+  await expect(zoomPage.getByRole("group", { name: "關聯", exact: true })).toBeVisible();
+  await expect(zoomPage.locator(".entity-detail-seal")).toHaveCount(0);
+  await assertNotClipped(connections);
+  expect((await zoomPage.locator(".entity-topic-context").evaluate((node) => getComputedStyle(node).gridTemplateColumns)).split(" ")).toHaveLength(1);
   await assertNoPageOverflow(zoomPage);
   const entityZoomPath = path.join(evidenceDir, "entity-zh-Hant-zoom-200.png");
   await zoomPage.screenshot({ path: entityZoomPath, fullPage: false });

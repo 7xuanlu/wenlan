@@ -1341,6 +1341,8 @@ const en = {
   },
   entityDetail: {
     dossierLabel: "Topic details",
+    actionsLabel: "Topic actions",
+    contextTitle: "Topic context",
     back: "Back",
     readingLabel: "Topic record",
     contextLabel: "Topic context",
@@ -3569,6 +3571,8 @@ const zhHans = {
   },
   entityDetail: {
     dossierLabel: "主题详情",
+    actionsLabel: "主题操作",
+    contextTitle: "主题脉络",
     back: "返回",
     readingLabel: "主题记录",
     contextLabel: "主题背景",
@@ -5775,6 +5779,8 @@ const zhHant = {
   },
   entityDetail: {
     dossierLabel: "主題詳情",
+    actionsLabel: "主題操作",
+    contextTitle: "主題脈絡",
     back: "返回",
     readingLabel: "主題記錄",
     contextLabel: "主題背景",

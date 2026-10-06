@@ -86,9 +86,12 @@ export default function AtlasTypeFilters({
   }, [open, total]);
 
   useEffect(() => {
-    if (!open) return;
-    panelRef.current?.focus({ preventScroll: true });
+    // Browsers reject focus while the positioning pass still hides the panel.
+    if (open && positioned) panelRef.current?.focus({ preventScroll: true });
+  }, [open, positioned]);
 
+  useEffect(() => {
+    if (!open) return;
     const dismissPointer = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && (rootRef.current?.contains(target) || panelRef.current?.contains(target))) return;
@@ -213,7 +216,8 @@ export default function AtlasTypeFilters({
             {types.map(renderType)}
           </div>
         </div>,
-        document.body,
+        // Keep nested Atlas controls in the owning modal's stacking and focus scope.
+        rootRef.current?.closest<HTMLElement>('[role="dialog"]') ?? document.body,
       )}
     </div>
   );
