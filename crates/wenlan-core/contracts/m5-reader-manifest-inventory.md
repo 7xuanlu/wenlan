@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 183 registered `(method, path, handler)` triples
+## HTTP — all 191 registered `(method, path, handler)` triples
 
-65 page-bearing, 118 not.
+70 page-bearing, 121 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -582,6 +582,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/ingest/memory` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/ingest/text` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/ingest/webpage` | main | no | not_applicable | `none` | — | no prose fields |
+| `POST` | `/api/webpage/fetch` | main | no | not_applicable | `none` | handle_fetch_webpage | untrusted external website text only; no stored Page/Memory reads |
 | `GET` | `/api/knowledge/count` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/knowledge/path` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/lint` | main + repair | yes | automatic | `none` | `handle_lint` | LintAgentRecord.excerpt, LintAgentRecord.source_excerpt, LintCheck |

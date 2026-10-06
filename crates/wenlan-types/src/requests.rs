@@ -571,6 +571,13 @@ pub struct IngestWebpageRequest {
     pub metadata: Option<HashMap<String, String>>,
 }
 
+/// Fetch public text for preview. Saving remains a separate ingestion action.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FetchWebpageRequest {
+    pub url: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IngestMemoryRequest {
     pub source: String,

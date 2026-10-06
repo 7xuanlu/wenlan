@@ -784,6 +784,28 @@ pub struct IngestResponse {
     pub document_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WebpageExtraction {
+    HtmlSemantic,
+    HtmlBody,
+    PlainText,
+}
+
+/// Untrusted external text, not a saved source or an instruction to an agent.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FetchWebpageResponse {
+    /// Exact trimmed input, including its fragment. Use as the ingestion URL.
+    pub url: String,
+    /// Validated final HTTP request URL, normalized and without a fragment.
+    pub final_url: String,
+    pub title: String,
+    pub content: String,
+    pub content_type: String,
+    pub extraction: WebpageExtraction,
+    pub untrusted: bool,
+}
+
 // Note: ingest's `DELETE /api/documents/{source}/{source_id}` reuses the
 // `DeleteResponse { deleted: bool }` defined above — same wire format.
 
