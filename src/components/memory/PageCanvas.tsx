@@ -1111,6 +1111,15 @@ function PageCanvasInner({
       // Typing a box's name is not a canvas shortcut.
       if (target && (target.tagName === "INPUT" || target.isContentEditable)) return;
 
+      // Controls outside the nodes keep their native activation and focus keys.
+      // In particular, Enter on "Back to note" must not create a sibling box.
+      // Node buttons still use Enter/Tab for direct map manipulation.
+      if (
+        (e.key === "Enter" || e.key === " " || e.key === "Tab") &&
+        target?.closest('button, a[href], [role="button"], [role="menuitem"]') &&
+        !target.closest(".react-flow__node")
+      ) return;
+
       // Escape and select-all stay available on a read-only map: neither writes.
       //
       // It unwinds one layer at a time — the menu, then the shortcut sheet, then

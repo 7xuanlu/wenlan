@@ -267,12 +267,19 @@ export default function PageDetail({
     message: string;
   } | null>(null);
   const [reviewNotice, setReviewNotice] = useState<PageReviewNotice | null>(null);
-  // Reading is what a page is for, so it needs no control of its own — only
-  // leaving for the canvas does. A two-tab row spent a whole band of the page
-  // telling you that you were doing the obvious thing.
   const [canvasOpen, setCanvasOpen] = useState(false);
-  // Editing happens in the reading column, so edit mode pins the view: nobody
-  // gets to type into a page they cannot see.
+  const [canvasSwitchPending, setCanvasSwitchPending] = useState(false);
+  const canvasSwitchAttemptRef = useRef(0);
+  const canvasSwitchPendingRef = useRef(false);
+  const canvasReturnToEditorRef = useRef(false);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      canvasSwitchAttemptRef.current += 1;
+    };
+  }, []);
   const showCanvas = canvasOpen && !editing;
   const editorRef = useRef<MarkdownEditorHandle>(null);
   const editDocumentRef = useRef("");
@@ -444,6 +451,11 @@ export default function PageDetail({
     setActionErrorMessage(null);
     setCopied(false);
     setExported(false);
+    setCanvasOpen(false);
+    setCanvasSwitchPending(false);
+    canvasSwitchPendingRef.current = false;
+    canvasReturnToEditorRef.current = false;
+    canvasSwitchAttemptRef.current += 1;
     setEditing(false);
     setEditGate({ kind: "closed" });
     setEditBaseline(null);
@@ -745,6 +757,9 @@ export default function PageDetail({
   );
 
   const closeEditor = () => {
+    canvasSwitchAttemptRef.current += 1;
+    canvasSwitchPendingRef.current = false;
+    setCanvasSwitchPending(false);
     autosave.reset(null);
     editorPageRef.current = null;
     activeEditorSessionRef.current = null;
@@ -831,6 +846,8 @@ export default function PageDetail({
 
   const beginEditing = async (automatic = false) => {
     if (!page) return;
+    setCanvasOpen(false);
+    canvasReturnToEditorRef.current = false;
     const originPageId = page.id;
     const beginEditAttempt = ++beginEditAttemptRef.current;
     const isActiveBeginEdit = () =>
@@ -957,6 +974,45 @@ export default function PageDetail({
     const originPageId = pageId;
     if (!await flushEditor() || activePageIdRef.current !== originPageId) return;
     closeEditor();
+  };
+
+  const requestToggleCanvas = async () => {
+    if (canvasSwitchPendingRef.current) return;
+    if (showCanvas) {
+      const returnToEditor = canvasReturnToEditorRef.current;
+      canvasReturnToEditorRef.current = false;
+      setCanvasOpen(false);
+      if (returnToEditor) void beginEditing();
+      return;
+    }
+    if (!editing) {
+      canvasReturnToEditorRef.current = false;
+      setCanvasOpen(true);
+      return;
+    }
+
+    const originPageId = pageId;
+    const originSession = activeEditorSessionRef.current;
+    const originBeginAttempt = beginEditAttemptRef.current;
+    const attempt = ++canvasSwitchAttemptRef.current;
+    canvasSwitchPendingRef.current = true;
+    setCanvasSwitchPending(true);
+    const isCurrentAttempt = () =>
+      mountedRef.current && activePageIdRef.current === originPageId &&
+      canvasSwitchAttemptRef.current === attempt &&
+      activeEditorSessionRef.current === originSession &&
+      beginEditAttemptRef.current === originBeginAttempt;
+    try {
+      if (!await flushEditor() || !isCurrentAttempt()) return;
+      closeEditor();
+      canvasReturnToEditorRef.current = true;
+      setCanvasOpen(true);
+    } finally {
+      if (mountedRef.current && canvasSwitchAttemptRef.current === attempt) {
+        canvasSwitchPendingRef.current = false;
+        setCanvasSwitchPending(false);
+      }
+    }
   };
 
   useEffect(() => {
@@ -1335,7 +1391,7 @@ export default function PageDetail({
     <div className="page-detail" onKeyDown={handlePageDetailKeyDown}>
       {/* Back + Header */}
       <div>
-        <div className="flex items-start justify-between">
+        <div className="page-detail-top-row">
         <button
           aria-label={t("main.back")}
           onClick={requestBack}
@@ -1346,6 +1402,24 @@ export default function PageDetail({
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
 
+        <div className="page-detail-view-controls">
+          <button
+            type="button"
+            className="page-detail-canvas-toggle"
+            aria-pressed={showCanvas}
+            disabled={canvasSwitchPending}
+            onClick={() => void requestToggleCanvas()}
+          >
+            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="1.5" y="9" width="7" height="6" rx="1.5" />
+              <rect x="15.5" y="2.5" width="7" height="6" rx="1.5" />
+              <rect x="15.5" y="15.5" width="7" height="6" rx="1.5" />
+              <path d="M8.5 12h3.5V5.5h3.5" />
+              <path d="M12 12v6.5h3.5" />
+            </svg>
+            <span>{showCanvas ? t("pageCanvas.closeCanvas") : t("pageCanvas.tabCanvas")}</span>
+          </button>
+        <div className="page-detail-info-slot">
         {!showCanvas && <button
           type="button"
           className="mem-icon-action"
@@ -1357,6 +1431,8 @@ export default function PageDetail({
         >
           <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".75" fill="currentColor" stroke="none"/></svg>
         </button>}
+        </div>
+        </div>
         </div>
 
         <div className="page-detail-heading-row flex items-start justify-between gap-4">
@@ -1380,30 +1456,6 @@ export default function PageDetail({
                 {t("pageDetail.editPage")}
               </button>
               <div className="page-detail-icon-actions">
-                <button
-                  aria-label={t("pageCanvas.tabCanvas")}
-                  aria-pressed={showCanvas}
-                  onClick={() => setCanvasOpen((open) => !open)}
-                  className={`mem-icon-action page-detail-canvas-toggle${
-                    showCanvas ? " is-active" : ""
-                  }`}
-                  title={t("pageCanvas.tabCanvas")}
-                  type="button"
-                >
-                  {/* Boxes on a spine. Three dots joined by two diverging lines
-                      is the share glyph — the same drawing Lucide ships as
-                      share-2 — and on a page toolbar next to Copy and Export it
-                      reads as Share, not as a map. Rectangles say "boxes", which
-                      is what the canvas draws, and the sidebar's Graph keeps the
-                      round nodes. */}
-                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="1.5" y="9" width="7" height="6" rx="1.5" />
-                    <rect x="15.5" y="2.5" width="7" height="6" rx="1.5" />
-                    <rect x="15.5" y="15.5" width="7" height="6" rx="1.5" />
-                    <path d="M8.5 12h3.5V5.5h3.5" />
-                    <path d="M12 12v6.5h3.5" />
-                  </svg>
-                </button>
                 <button
                   aria-label={t("pageDetail.editPage")}
                   onClick={() => void beginEditing()}
@@ -1587,25 +1639,6 @@ export default function PageDetail({
                   ref={actionMenuListRef}
                   role="menu"
                 >
-                  {/* Below 600px the icon row is hidden and this menu is the
-                      whole toolbar, so the canvas needs a door here too — it
-                      was reachable by icon only, which is no door at all on a
-                      narrow window. */}
-                  {!editing ? (
-                    <button
-                      className="page-detail-mobile-menu-item"
-                      onClick={() => {
-                        setActionMenuOpen(false);
-                        setCanvasOpen((open) => !open);
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {showCanvas
-                        ? t("pageCanvas.closeCanvas")
-                        : t("pageCanvas.tabCanvas")}
-                    </button>
-                  ) : null}
                   {!editing ? (
                     <button
                       className="page-detail-mobile-menu-item"

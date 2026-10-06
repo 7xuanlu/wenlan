@@ -14,6 +14,14 @@ import {
   replaceDocument,
 } from "./editor/editorTestUtils";
 
+// Map rendering is exercised in PageDetail.tabs.test.tsx; these tests exercise
+// the real editor and its autosave boundary when changing views.
+vi.mock("./PageCanvas", () => ({
+  default: ({ pageTitle }: { pageTitle: string }) => (
+    <section aria-label={`Canvas for ${pageTitle}`} />
+  ),
+}));
+
 vi.mock("../../lib/tauri", () => ({
   // Fails closed, which is what an older or unreachable daemon looks like:
   // the review action stays disabled unless a test opts in.
@@ -202,6 +210,97 @@ describe("PageDetail", () => {
     expect(updatePage).not.toHaveBeenCalled();
   });
 
+  it("saves a writing draft before opening the map and resumes writing on return", async () => {
+    const { getPage, updatePage } = await import("../../lib/tauri");
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />, client);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    const baseline = client.getQueryData(["page", "concept_abc"]);
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...baseline as object, content: "Draft for the map", version: 4 });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Draft for the map"));
+    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
+    expect(toggle.closest(".page-detail-top-row")).toBeTruthy();
+    expect(screen.queryByTitle("Edit page")).toBeNull();
+    await user.click(toggle);
+
+    await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
+    expect(updatePage).toHaveBeenCalledWith(expect.objectContaining({ content: "Draft for the map", expectedVersion: 3 }));
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }));
+    const resumed = await screen.findByRole("textbox", { name: "Page editor" });
+    expect(editorViewFromTextbox(resumed).state.doc.toString()).toBe("Draft for the map");
+    act(() => replaceDocument(editorViewFromTextbox(resumed), "Continue writing"));
+    expect(editorViewFromTextbox(resumed).state.doc.toString()).toBe("Continue writing");
+  });
+
+  it("keeps a failed map-switch draft in the same editor", async () => {
+    const { updatePage } = await import("../../lib/tauri");
+    (updatePage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("write failed"));
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Keep this draft"));
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await screen.findByRole("alert");
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Keep this draft");
+    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
+  });
+
+  it("keeps an active composition in the editor when the map is requested", async () => {
+    const { updatePage } = await import("../../lib/tauri");
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Composing draft"));
+    fireEvent.compositionStart(editor);
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Composing draft");
+    expect(updatePage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+    fireEvent.compositionEnd(editor);
+  });
+
+  it("keeps a conflicting map-switch draft in the editor", async () => {
+    const { getPage, updatePage } = await import("../../lib/tauri");
+    const original = await getPage("concept_abc");
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    (updatePage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ outcome: "conflict", message: "Remote edit" });
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ...original, content: "Remote document", version: 4 });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Local conflicting draft"));
+    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await screen.findByText("Latest source (version 4)");
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Local conflicting draft");
+    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+  });
+
+  it("disables a pending map switch and ignores its save after navigating away", async () => {
+    const { getPage, updatePage } = await import("../../lib/tauri");
+    const original = await getPage("concept_abc");
+    const pending = deferred<{ outcome: "saved" }>();
+    (updatePage as ReturnType<typeof vi.fn>).mockReturnValueOnce(pending.promise);
+    await makeNextPageResolvable();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender, user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />, client);
+    const editor = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(editor), "Pending map draft"));
+    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
+    await user.click(toggle);
+    expect(toggle).toBeDisabled();
+    await user.click(toggle);
+    expect(updatePage).toHaveBeenCalledTimes(1);
+    rerender(<QueryClientProvider client={client}><PageDetail {...defaultProps} pageId="concept_next" initialMode="edit" /></QueryClientProvider>);
+    const nextEditor = await screen.findByRole("textbox", { name: "Page editor" });
+    await waitFor(() => expect(editorViewFromTextbox(nextEditor).state.doc.toString()).toBe("Next page content."));
+    await act(async () => pending.resolve({ outcome: "saved" }));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(nextEditor);
+    expect(screen.queryByRole("region", { name: "Canvas for Next Page" })).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeEnabled();
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValue(original);
+  });
+
   it("keeps the same editor after a confirmed save and background refetch", async () => {
     const { getDaemonVersion, getPage, updatePage } = await import("../../lib/tauri");
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -345,9 +444,8 @@ describe("PageDetail", () => {
     expect(within(menu).getByRole("menuitem", { name: "Copy as context" })).toBeInTheDocument();
     expect(within(menu).getByRole("menuitem", { name: "Delete page" })).toBeInTheDocument();
 
-    // Opening the menu focuses its first item, which is Canvas: the menu
-    // mirrors the icon row it stands in for, and Canvas leads there too.
-    expect(within(menu).getByRole("menuitem", { name: "Canvas" })).toHaveFocus();
+    // The view switch stays in the header; the first overflow action receives focus.
+    expect(within(menu).getByRole("menuitem", { name: "Re-distill page" })).toHaveFocus();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu", { name: "Page actions" })).toBeNull();
     expect(trigger).toHaveFocus();
