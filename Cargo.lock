@@ -9139,6 +9139,7 @@ dependencies = [
  "chrono",
  "cocoa",
  "dirs 6.0.0",
+ "fs2",
  "futures-util",
  "getrandom 0.2.17",
  "hmac",

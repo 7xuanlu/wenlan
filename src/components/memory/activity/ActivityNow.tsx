@@ -190,7 +190,7 @@ function AssetBlock({
         >
           {t(`activityStatus.asset.${asset.kind}`)}
         </span>
-        {asset.steps.length > 0 && (
+        {activity.state !== "off" && asset.steps.length > 0 && (
           <button
             type="button"
             className="mem-activity-steps-toggle"
@@ -214,7 +214,7 @@ function AssetBlock({
       >
         {t(phrase.key, phrase.params)}
       </p>
-      {open && (
+      {activity.state !== "off" && open && (
         <div
           data-testid={`activity-steps-${asset.kind}`}
           style={{ display: "grid", gap: "5px", paddingTop: "3px" }}
@@ -359,7 +359,7 @@ function NowBody({
         >
           {/* A route on a lane this build cannot name is left out: its
               sentence would need a word for where the work runs. */}
-          {ROUTE_JOBS.flatMap((job) => {
+          {state !== "off" && ROUTE_JOBS.flatMap((job) => {
             const route = activity[job];
             const lane = knownLane(route.lane);
             if (lane === undefined) return [];
@@ -387,7 +387,7 @@ function NowBody({
           )}
         </p>
         {/* No trust line at all when a lane is unknown: see trustSentence. */}
-        {trustText !== undefined && (
+        {state !== "off" && trustText !== undefined && (
           <p
             data-testid="activity-now-trust"
             style={{

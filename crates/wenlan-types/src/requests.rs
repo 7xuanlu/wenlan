@@ -658,6 +658,10 @@ pub struct UpdateConfigRequest {
     /// `""` = clear; validated by the config route.
     #[serde(default)]
     pub synthesis_source: Option<String>,
+    /// Omitted preserves the current preference; present explicitly toggles
+    /// automatic generative work without removing models or routing pins.
+    #[serde(default)]
+    pub background_ai_enabled: Option<bool>,
     /// Gates the proactive Page-Map suggestion phase in the scheduler. Omitted =
     /// preserve stored value; present = set. Never gates the explicit improve route.
     #[serde(default)]

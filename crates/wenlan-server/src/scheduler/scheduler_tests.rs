@@ -2602,6 +2602,54 @@ async fn force_ambient_sweep_runs_document_and_reports_unsupported_phases_as_not
 }
 
 #[tokio::test]
+async fn background_ai_off_parks_forced_inference_even_with_a_pinned_provider() {
+    let _lock = crate::TEST_DATA_DIR_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    let _env = DataDirGuard::new();
+    let mut config = wenlan_core::config::load_config();
+    config.background_ai_enabled = Some(false);
+    config.everyday_source = Some("on_device".to_string());
+    wenlan_core::config::save_config(&config).unwrap();
+
+    let (db, _db_dir) = new_test_db().await;
+    let provider: Arc<dyn wenlan_core::llm_provider::LlmProvider> = Arc::new(PanicTestProvider);
+    let report = force_ambient_sweep(
+        &db,
+        Some(&provider),
+        None,
+        None,
+        Some(wenlan_core::refinery::EverydaySource::OnDevice),
+        &wenlan_core::prompts::PromptRegistry::default(),
+        &wenlan_core::tuning::RefineryConfig::default(),
+        &wenlan_core::tuning::DistillationConfig::default(),
+        None,
+    )
+    .await;
+
+    for phase in &report.phases {
+        if phase.job == "document" || phase.job == "entity_idle_archive" {
+            assert!(
+                phase.attempted,
+                "deterministic {} stays available",
+                phase.job
+            );
+        } else {
+            assert!(!phase.attempted, "{} must stay parked while Off", phase.job);
+        }
+        assert_eq!(phase.llm_calls, 0);
+        assert!(!phase.panicked);
+    }
+    assert_eq!(
+        wenlan_core::config::load_config()
+            .everyday_source
+            .as_deref(),
+        Some("on_device")
+    );
+}
+
+#[tokio::test]
 async fn ambient_status_reports_pending_queue_and_gate_snapshot() {
     let _lock = crate::TEST_DATA_DIR_LOCK
         .get_or_init(|| tokio::sync::Mutex::new(()))

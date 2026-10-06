@@ -547,7 +547,7 @@ fn configure_basic_memory() -> anyhow::Result<()> {
     cfg.anthropic_api_key = None;
     cfg.everyday_source = None;
     cfg.synthesis_source = None;
-    config::save_config(&cfg)?;
+    config::save_config_with_background_ai(&cfg, false)?;
     Ok(())
 }
 
@@ -563,6 +563,11 @@ async fn configure_enrichment(
     synthesis: EnrichmentSource,
     yes: bool,
 ) -> anyhow::Result<()> {
+    let current = get_json("/api/config").await?;
+    anyhow::ensure!(
+        supports_background_consent(&current),
+        "the running Wenlan daemon does not support explicit background consent; upgrade it before enabling enrichment"
+    );
     let routing = get_json("/api/config/routing").await.map_err(|err| {
         anyhow::anyhow!(
             "the running Wenlan runtime does not support background consent status: {err}"
@@ -606,28 +611,33 @@ async fn configure_enrichment(
         let answer =
             prompt_line("Write these two hard pins and enable background enrichment? [y/N]: ")?;
         if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
-            println!("Background enrichment remains off.");
+            println!("Background enrichment settings were not changed.");
             return Ok(());
         }
     }
 
     let body = serde_json::json!({
+        "background_ai_enabled": true,
         "everyday_source": everyday.as_pin(),
         "synthesis_source": synthesis.as_pin(),
     });
     put_json("/api/config", &body).await?;
+    let saved = get_json("/api/config").await?;
+    anyhow::ensure!(
+        saved["background_ai_enabled"].as_bool() == Some(true)
+            && saved["everyday_source"].as_str() == Some(everyday.as_pin())
+            && saved["synthesis_source"].as_str() == Some(synthesis.as_pin()),
+        "the running Wenlan daemon did not verify the requested background consent and pins; check status before relying on this change"
+    );
     println!("Background enrichment consent saved.");
     print_enrichment_status().await;
     Ok(())
 }
 
 async fn disable_enrichment() -> anyhow::Result<()> {
-    let body = serde_json::json!({
-        "everyday_source": "",
-        "synthesis_source": "",
-    });
-    match put_json("/api/config", &body).await {
-        Ok(_) => {
+    match get_json("/api/config").await {
+        Ok(current) => {
+            disable_running_enrichment(&current).await?;
             println!("Background enrichment disabled. Providers and downloaded models were kept.");
         }
         Err(err)
@@ -636,18 +646,56 @@ async fn disable_enrichment() -> anyhow::Result<()> {
                 .is_some_and(reqwest::Error::is_connect) =>
         {
             let mut cfg = config::load_config();
+            // The unreachable daemon may predate the global consent flag.
             cfg.everyday_source = None;
             cfg.synthesis_source = None;
-            config::save_config(&cfg)?;
+            config::save_config_with_background_ai(&cfg, false)?;
             println!(
-                "Background enrichment disabled in local config. Restart Wenlan if an older daemon is running."
+                "Background enrichment disabled in local config. Saved source choices were cleared for older-daemon safety. Restart Wenlan if an older daemon is running."
             );
         }
         Err(err) => {
             return Err(anyhow::anyhow!(
-                "the running Wenlan daemon rejected the disable request; no local pins were changed: {err}"
+                "the running Wenlan daemon could not verify enrichment is disabled; no local config was changed: {err}"
             ));
         }
+    }
+    Ok(())
+}
+
+fn supports_background_consent(cfg: &serde_json::Value) -> bool {
+    // Null is the current API's legacy preference: it preserves the historical
+    // enabled default until the user explicitly changes consent.
+    cfg.get("background_ai_enabled")
+        .is_some_and(|value| value.is_boolean() || value.is_null())
+}
+
+async fn disable_running_enrichment(current: &serde_json::Value) -> anyhow::Result<()> {
+    if supports_background_consent(current) {
+        put_json(
+            "/api/config",
+            &serde_json::json!({"background_ai_enabled": false}),
+        )
+        .await?;
+        let saved = get_json("/api/config").await?;
+        anyhow::ensure!(
+            saved["background_ai_enabled"].as_bool() == Some(false),
+            "daemon did not persist background_ai_enabled=false"
+        );
+    } else {
+        // Older daemons gate enrichment with the hard pins. Keep their safe
+        // disable path, then verify routing rather than trust an ignored field.
+        put_json(
+            "/api/config",
+            &serde_json::json!({"everyday_source": "", "synthesis_source": ""}),
+        )
+        .await?;
+        let routing = get_json("/api/config/routing").await?;
+        anyhow::ensure!(
+            routing["everyday"]["mode"].as_str() == Some("unconfigured")
+                && routing["synthesis"]["mode"].as_str() == Some("unconfigured"),
+            "legacy daemon still reports active background routes after clearing pins"
+        );
     }
     Ok(())
 }
@@ -671,21 +719,25 @@ fn require_configured_source(
 }
 
 pub async fn print_enrichment_status() {
-    match get_json("/api/config/routing").await {
-        Ok(routing) => {
-            println!("Background enrichment:");
-            print_job_route("Everyday organization", &routing["everyday"]);
-            print_job_route("Page synthesis", &routing["synthesis"]);
+    match get_json("/api/config").await {
+        Ok(cfg) if cfg["background_ai_enabled"].as_bool() == Some(false) => {
+            println!("Background enrichment: off");
+            println!("  Model-backed background work is disabled; saved source choices are kept.");
         }
-        Err(err) => {
-            let cfg = config::load_config();
-            if cfg.everyday_source.is_some() || cfg.synthesis_source.is_some() {
-                println!("Background enrichment: status unavailable ({err})");
-                println!("  Pins exist on disk, but the running daemon could not verify them.");
-            } else {
-                println!("Background enrichment: off (effective status unavailable: {err})");
+        Ok(cfg) if supports_background_consent(&cfg) => {
+            match get_json("/api/config/routing").await {
+                Ok(routing) => {
+                    println!("Background enrichment:");
+                    print_job_route("Everyday organization", &routing["everyday"]);
+                    print_job_route("Page synthesis", &routing["synthesis"]);
+                }
+                Err(err) => println!("Background enrichment: status unavailable ({err})"),
             }
         }
+        Ok(_) => println!(
+            "Background enrichment: status unavailable (daemon does not expose the background consent preference)"
+        ),
+        Err(err) => println!("Background enrichment: status unavailable ({err})"),
     }
 }
 

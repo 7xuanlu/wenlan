@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "../../../../i18n";
@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   downloadOnDeviceModel: vi.fn(),
   getResolvedRouting: vi.fn(),
   setSourcePin: vi.fn(),
+  getBackgroundAiEnabled: vi.fn(),
+  setBackgroundAiEnabled: vi.fn(),
 }));
 vi.mock("../../../../lib/tauri", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../lib/tauri")>();
@@ -92,6 +94,43 @@ describe("IntelligenceSection", () => {
     // Default to LEGACY mode — the live 0.13.2 daemon has no routing endpoint.
     mocks.getResolvedRouting.mockResolvedValue(null);
     mocks.setSourcePin.mockResolvedValue(undefined);
+    mocks.getBackgroundAiEnabled.mockResolvedValue(false);
+    mocks.setBackgroundAiEnabled.mockResolvedValue(undefined);
+  });
+
+  it("lets a note-only install opt into background AI without choosing a model", async () => {
+    mocks.setBackgroundAiEnabled.mockImplementation(async (enabled: boolean) => {
+      mocks.getBackgroundAiEnabled.mockResolvedValue(enabled);
+    });
+    renderSection();
+
+    const toggle = await screen.findByRole("checkbox", { name: "Background AI organization" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+    await userEvent.click(toggle);
+    expect(mocks.setBackgroundAiEnabled).toHaveBeenCalledWith(true);
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
+  });
+
+  it("fills unset jobs when AI is enabled after providers were set up while Off", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting({
+      everyday: { source: "basic", model: null, mode: "unconfigured", pin: null },
+      synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
+    }));
+    mocks.setBackgroundAiEnabled.mockImplementation(async (enabled: boolean) => {
+      mocks.getBackgroundAiEnabled.mockResolvedValue(enabled);
+    });
+    const qc = renderSection();
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    const toggle = await screen.findByRole("checkbox", { name: "Background AI organization" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+
+    await userEvent.click(toggle);
+
+    await waitFor(() => expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["activity"] });
   });
 
   it("shows the connection-only cloud row meta (provider + masked key), not per-job models", async () => {

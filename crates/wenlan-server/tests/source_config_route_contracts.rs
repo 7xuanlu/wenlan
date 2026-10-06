@@ -183,6 +183,7 @@ fn update_config_request(
         external_llm_api_key: None,
         everyday_source: everyday_source.map(str::to_string),
         synthesis_source: None,
+        background_ai_enabled: None,
         page_map_auto_suggest: None,
         only_if_unset: None,
     }

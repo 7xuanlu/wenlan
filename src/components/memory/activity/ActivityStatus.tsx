@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useRef } from "react";
 import type { KeyboardEvent } from "react";
+import { Pulse, WarningCircle } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import { knownState, type KnownActivityState } from "../../../lib/activitySentence";
 import { useActivity } from "../../../lib/useActivity";
@@ -84,11 +85,10 @@ export default function ActivityStatus({
   const loaded = activity !== undefined;
   const state = activity === undefined ? undefined : knownState(activity);
   const stateWord = state === undefined ? undefined : t(`activityStatus.state.${state}`);
-  const quiet = state === undefined || state === "up_to_date";
-  // Motion means work is running now. Waiting for a quiet moment keeps the
-  // indigo clock but stills its hands, so it never sweeps beside a "Last
-  // activity" from hours ago.
-  const sweep = state === "organizing";
+  const buttonLabel = stateWord === undefined ? label : t("activityStatus.buttonLabel", { state: stateWord });
+  const quiet = state === undefined || state === "up_to_date" || state === "off";
+  // Only active work animates; waiting and AI-off stay still.
+  const running = state === "organizing";
 
   return (
     <div
@@ -104,15 +104,12 @@ export default function ActivityStatus({
         aria-current={current ? "page" : undefined}
         aria-haspopup={loaded ? "dialog" : undefined}
         aria-expanded={loaded ? expanded : undefined}
-        aria-label={
-          stateWord === undefined ? undefined : t("activityStatus.buttonLabel", { state: stateWord })
-        }
-        title={stateWord}
+        aria-label={buttonLabel}
+        title={buttonLabel}
         onClick={loaded ? onToggle : onOpenActivity}
         className="mem-activity-status"
       >
-        <ActivityIcon state={quiet ? undefined : state} sweep={sweep} />
-        <span>{label}</span>
+        <ActivityIcon state={quiet ? undefined : state} running={running} />
       </button>
       {loaded && expanded && (
         <ActivitySummaryPopover
@@ -126,49 +123,21 @@ export default function ActivityStatus({
   );
 }
 
-/**
- * The icon is the state, so the button has one mark rather than an icon and a
- * dot beside it. Up to date is the plain clock. Steeping tints it indigo, and
- * its hands sweep only while work can run: time passing while work steeps.
- * Waiting for a quiet moment keeps the indigo with the hands still.
- * Blocked tints it amber and turns the hands into "!", so it is told by shape
- * as well as color, and it stays still: waiting work is not an alarm.
- */
-function ActivityIcon({
-  state,
-  sweep,
-}: {
+/** A pulse denotes activity; a distinct warning shape is reserved for a real block. */
+function ActivityIcon({ state, running }: {
   readonly state?: KnownActivityState;
-  readonly sweep: boolean;
+  readonly running: boolean;
 }) {
+  const Icon = state === "blocked" ? WarningCircle : Pulse;
   return (
-    <svg
+    <Icon
       aria-hidden="true"
-      className="mem-activity-status-icon"
+      className={`mem-activity-status-icon${running ? " mem-activity-pulse-running" : ""}`}
       data-testid="activity-status-icon"
       data-icon-state={state}
-      fill="none"
-      height="16"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.8"
-      viewBox="0 0 24 24"
-      width="16"
-    >
-      <path d="M3 12a9 9 0 109-9 9.75 9.75 0 00-6.74 2.74L3 8M3 3v5h5" />
-      {state === "blocked" ? (
-        <path d="M12 7.5v5M12 16.5h.01" />
-      ) : (
-        <path
-          className={
-            sweep
-              ? "mem-activity-hands mem-activity-hands-sweep"
-              : "mem-activity-hands"
-          }
-          d="M12 7v5l3 2"
-        />
-      )}
-    </svg>
+      data-icon-kind={state === "blocked" ? "attention" : "pulse"}
+      size={18}
+      weight="regular"
+    />
   );
 }

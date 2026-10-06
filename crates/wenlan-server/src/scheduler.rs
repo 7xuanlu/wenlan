@@ -1340,12 +1340,21 @@ pub fn spawn_scheduler(
             // pins authorize no background inference; deterministic work stays
             // available and pinned-but-missing providers never cross sources.
             let runtime_config = wenlan_core::config::load_config();
-            let everyday_pin = wenlan_core::refinery::EverydaySource::parse(
-                runtime_config.everyday_source.as_deref(),
-            );
-            let synthesis_pin = wenlan_core::refinery::SynthesisSource::parse(
-                runtime_config.synthesis_source.as_deref(),
-            );
+            let background_ai_enabled = runtime_config.background_ai_enabled();
+            let everyday_pin = background_ai_enabled
+                .then(|| {
+                    wenlan_core::refinery::EverydaySource::parse(
+                        runtime_config.everyday_source.as_deref(),
+                    )
+                })
+                .flatten();
+            let synthesis_pin = background_ai_enabled
+                .then(|| {
+                    wenlan_core::refinery::SynthesisSource::parse(
+                        runtime_config.synthesis_source.as_deref(),
+                    )
+                })
+                .flatten();
             if crate::lifecycle::shutdown_requested(&shutdown) {
                 break;
             }
@@ -1598,6 +1607,12 @@ pub fn spawn_scheduler(
                                             report.elapsed.as_millis(),
                                         );
                                         }
+                                    } else if !wenlan_core::config::load_config()
+                                        .background_ai_enabled()
+                                    {
+                                        tracing::debug!(
+                                            "[scheduler] import priority inference deferred: background AI off"
+                                        );
                                     } else if let Some(phase) = current.synthesis_phase {
                                         let shared_calls =
                                             Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1746,7 +1761,9 @@ pub fn spawn_scheduler(
                 }
             }
 
-            let selected_automatic = if !import_work_ran
+            let selected_automatic = if background_ai_enabled
+                && wenlan_core::config::load_config().background_ai_enabled()
+                && !import_work_ran
                 && automatic_heavy_turn_allowed(
                     background_heavy_resource_admitted(
                         resource_status,
@@ -1825,6 +1842,9 @@ pub fn spawn_scheduler(
                         tracing::info!(
                             "[scheduler] Maintenance stage={stage} — deferred automatic turn"
                         );
+                        if !wenlan_core::config::load_config().background_ai_enabled() {
+                            continue;
+                        }
                         let outcome = fire_maintenance_stage_safe(
                             db.as_ref(),
                             maintenance_llm.as_ref(),
@@ -1888,6 +1908,9 @@ pub fn spawn_scheduler(
                             );
                         } else {
                             tracing::info!("[scheduler] {label} phase={phase}");
+                        }
+                        if !wenlan_core::config::load_config().background_ai_enabled() {
+                            continue;
                         }
                         let outcome = fire_steep_phase_safe(
                             &db,
@@ -2071,6 +2094,13 @@ pub fn spawn_scheduler(
                         // whole lap's elapsed time.
                         let mut lap_consumed_thermal_turn = false;
                         for job in ambient_schedule.drain_due(ambient_now, availability) {
+                            // A toggle can land during this lap. Do not start
+                            // another inference job after an explicit Off.
+                            if !matches!(job, AmbientJob::Document | AmbientJob::EntityIdleArchive)
+                                && !wenlan_core::config::load_config().background_ai_enabled()
+                            {
+                                continue;
+                            }
                             // Availability/selection is intentionally cheap,
                             // but may still race with shutdown. Do not start
                             // another ambient item after the stop signal
@@ -2094,7 +2124,11 @@ pub fn spawn_scheduler(
                                 llm.as_ref(),
                                 api_llm.as_ref(),
                                 external_llm.as_ref(),
-                                everyday_pin,
+                                if wenlan_core::config::load_config().background_ai_enabled() {
+                                    everyday_pin
+                                } else {
+                                    None
+                                },
                                 &prompts,
                                 &refinery_cfg,
                                 &distillation_cfg,

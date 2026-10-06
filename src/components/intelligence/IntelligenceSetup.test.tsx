@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   getSystemInfo: vi.fn(),
   downloadOnDeviceModel: vi.fn(),
   getResolvedRouting: vi.fn(),
+  getBackgroundAiEnabled: vi.fn(),
   setSourcePin: vi.fn(),
 }));
 vi.mock("../../lib/tauri", async (importOriginal) => {
@@ -108,6 +109,7 @@ describe("OnDeviceModelCard", () => {
   });
 
   beforeEach(() => {
+    mocks.getBackgroundAiEnabled.mockResolvedValue(true);
     mocks.getOnDeviceModel.mockResolvedValue({
       loaded: null,
       selected: "qwen3-4b-instruct-2507",

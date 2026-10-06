@@ -51,7 +51,11 @@ pub async fn handle_activity(
         .active_import_batches(DEFAULT_ACTIVE_IMPORT_BATCH_LIMIT)
         .await?;
     let mut response = compose_activity(counts, &batches, &everyday, &synthesis);
-    response.state = held_until_idle(response.state, work_can_run);
+    response.state = if cfg.background_ai_enabled() {
+        held_until_idle(response.state, work_can_run)
+    } else {
+        ActivityState::Off
+    };
     Ok(Json(response))
 }
 

@@ -139,44 +139,55 @@ pub fn load_config() -> Config {
 }
 
 pub fn save_config(config: &Config) -> Result<(), AppError> {
-    let path = config_path();
+    save_config_at(&config_path(), config)
+}
+
+fn save_config_at(path: &std::path::Path, config: &Config) -> Result<(), AppError> {
+    use std::io::Write;
+
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let value = merge_with_existing_json(&path, serde_json::to_value(config)?);
-    let json = serde_json::to_string_pretty(&value)?;
-    std::fs::write(&path, &json)?;
-
-    // Restrict file permissions when API key is present (user-only read/write)
-    #[cfg(unix)]
-    if config.anthropic_api_key.is_some() {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&path, perms).ok();
-    }
-
+    // Share the daemon/CLI lock before reading any daemon-owned JSON fields.
+    // Otherwise a successful AI Off could race this compatibility save.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(path.with_extension("lock"))?;
+    fs2::FileExt::lock_exclusive(&lock)?;
+    let value = merge_with_existing_json(path, serde_json::to_value(config)?)?;
+    // NamedTempFile creates a private file; write credentials only there and
+    // replace the complete document, never expose partial JSON to workers.
+    let mut temporary = tempfile::NamedTempFile::new_in(
+        path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
+    temporary.write_all(serde_json::to_string_pretty(&value)?.as_bytes())?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 
-fn merge_with_existing_json(path: &std::path::Path, next: Value) -> Value {
+fn merge_with_existing_json(path: &std::path::Path, next: Value) -> Result<Value, AppError> {
     let Value::Object(next) = next else {
-        return next;
+        return Ok(next);
     };
 
-    let mut merged = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| serde_json::from_str::<Value>(&contents).ok())
-        .and_then(|value| match value {
-            Value::Object(map) => Some(map),
-            _ => None,
-        })
-        .unwrap_or_default();
+    let mut merged = match std::fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str::<serde_json::Map<String, Value>>(&contents)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            // Creating config before the daemon starts is still a new install.
+            serde_json::Map::from_iter([("background_ai_enabled".into(), Value::Bool(false))])
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     for (key, value) in next {
         merged.insert(key, value);
     }
 
-    Value::Object(merged)
+    Ok(Value::Object(merged))
 }
 
 #[cfg(test)]
@@ -186,6 +197,64 @@ mod tests {
     use crate::test_env::EnvGuard;
 
     const CONFIG_ENV_KEYS: &[&str] = &["HOME", "WENLAN_DATA_DIR", "ORIGIN_DATA_DIR"];
+
+    #[test]
+    fn compatibility_save_waits_for_daemon_consent_write() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        std::fs::write(&path, r#"{"background_ai_enabled":true}"#).unwrap();
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path.with_extension("lock"))
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&lock).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let app_path = path.clone();
+        let writer = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            let result = save_config_at(
+                &app_path,
+                &Config {
+                    setup_completed: true,
+                    ..Config::default()
+                },
+            );
+            done_tx.send(result).unwrap();
+        });
+        started_rx.recv().unwrap();
+        assert!(matches!(
+            done_rx.recv_timeout(std::time::Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        // Simulate the daemon's completed Off write under the shared lock.
+        std::fs::write(&path, r#"{"background_ai_enabled":false,"future_flag":42}"#).unwrap();
+        drop(lock);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        writer.join().unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["background_ai_enabled"], false);
+        assert_eq!(saved["future_flag"], 42);
+        assert_eq!(saved["setup_completed"], true);
+    }
+
+    #[test]
+    fn compatibility_save_creates_off_and_preserves_malformed_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.json");
+        save_config_at(&path, &Config::default()).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["background_ai_enabled"], false);
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(save_config_at(&path, &Config::default()).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{broken");
+    }
 
     #[test]
     #[serial_test::serial]

@@ -8,6 +8,20 @@ vi.mock("./live-invoke", () => ({
   liveInvoke: vi.fn(async () => ({ deleted: true })),
 }));
 
+describe("fixture background AI preference", () => {
+  it("keeps enable and disable entirely inside the fixture", async () => {
+    vi.mocked(liveInvoke).mockClear();
+    (window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__ = true;
+    await invoke("set_background_ai_enabled", { enabled: false });
+    await expect(invoke("get_background_ai_enabled")).resolves.toBe(false);
+    await invoke("set_background_ai_enabled", { enabled: true });
+    await expect(invoke("get_background_ai_enabled")).resolves.toBe(true);
+    await invoke("set_background_ai_enabled", { enabled: false });
+    await expect(invoke("get_background_ai_enabled")).resolves.toBe(false);
+    expect(liveInvoke).not.toHaveBeenCalled();
+  });
+});
+
 // The wizard's runtime row used to store a REAL memory in the maintainer's own
 // daemon (store_memory fell through to liveInvoke, which proxied it) and then
 // delete it. When this fixture owned every `delete_memory`, that delete was

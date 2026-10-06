@@ -249,6 +249,21 @@ pub async fn get_setup_completed(state: tauri::State<'_, State>) -> Result<bool,
 }
 
 #[tauri::command]
+pub async fn get_background_ai_enabled(state: tauri::State<'_, State>) -> Result<bool, String> {
+    let client = { state.read().await.client.clone() };
+    client.background_ai_enabled().await
+}
+
+#[tauri::command]
+pub async fn set_background_ai_enabled(
+    state: tauri::State<'_, State>,
+    enabled: bool,
+) -> Result<(), String> {
+    let client = { state.read().await.client.clone() };
+    client.set_background_ai_enabled(enabled).await
+}
+
+#[tauri::command]
 pub async fn set_setup_completed(
     state: tauri::State<'_, State>,
     completed: bool,

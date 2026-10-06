@@ -122,6 +122,26 @@ describe("effectiveLayout", () => {
 });
 
 describe("ActivityNow", () => {
+  it("keeps opted-out work quiet without showing pending model steps", async () => {
+    renderNow(activity({
+      state: "off",
+      everyday: route("everyday", "none", null),
+      synthesis: route("synthesis", "none", null),
+      assets: [asset("memories", {
+        total: 5,
+        blocked: 5,
+        steps: [step("summarize", { total: 5, job: "everyday" })],
+      })],
+    }));
+
+    expect(await screen.findByTestId("activity-now-headline")).toHaveTextContent(
+      "Background AI organization is off. Your notes remain available.",
+    );
+    expect(screen.queryByTestId("activity-now-causes")).toBeNull();
+    expect(screen.queryByTestId("activity-steps-toggle-memories")).toBeNull();
+    expect(screen.getByTestId("activity-now-models")).not.toHaveTextContent("no model");
+  });
+
   it("defaults to the rail", async () => {
     renderNow();
     expect(await screen.findByTestId("activity-now")).toHaveAttribute(

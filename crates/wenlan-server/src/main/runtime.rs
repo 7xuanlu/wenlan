@@ -327,9 +327,11 @@ pub(super) async fn register_optional_runtime_workers(
                 // The on-device model may finish loading after this worker has
                 // started. Re-snapshot every turn and end the read guard before
                 // any database or inference await.
-                let truth_provider = {
+                let truth_provider = if wenlan_core::config::load_config().background_ai_enabled() {
                     let state = shared_for_reconcile.read().await;
                     state.llm.clone()
+                } else {
+                    None
                 };
                 let work = async {
                     let _maintenance_guard = maintenance_for_reconcile.begin_background().await;
@@ -346,7 +348,9 @@ pub(super) async fn register_optional_runtime_workers(
                     let pass = db_for_reconcile
                         .reconcile_supported_pages(startup::SUPPORT_RECONCILE_BATCH)
                         .await?;
-                    let promotion = if let Some(provider) = truth_provider {
+                    let promotion = if let Some(provider) = truth_provider
+                        .filter(|_| wenlan_core::config::load_config().background_ai_enabled())
+                    {
                         // Dropping this future on shutdown prevents the worker
                         // from making any later writes. The durable lease is
                         // intentionally left for a later process to reclaim.

@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum ActivityState {
     UpToDate,
+    /// Background AI was explicitly turned off; stored notes remain usable.
+    Off,
     /// Work is waiting and can run now.
     Organizing,
     /// Work is waiting but cannot run yet: the scheduler's latest resource
@@ -204,6 +206,7 @@ mod tests {
         );
         for (state, label) in [
             (ActivityState::UpToDate, "up_to_date"),
+            (ActivityState::Off, "off"),
             (ActivityState::Organizing, "organizing"),
             (ActivityState::WaitingForIdle, "waiting_for_idle"),
             (ActivityState::Blocked, "blocked"),

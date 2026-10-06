@@ -86,7 +86,10 @@ fn routing(mode_everyday: &str, mode_synthesis: &str) -> String {
 
 #[test]
 fn status_uses_canonical_ready_paused_off_vocabulary() {
-    let (base, requests) = spawn_stub(vec![response(&routing("pinned", "pinned_unavailable"))]);
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":true}"#),
+        response(&routing("pinned", "pinned_unavailable")),
+    ]);
 
     cli(&base)
         .args(["enrichment", "status"])
@@ -99,6 +102,7 @@ fn status_uses_canonical_ready_paused_off_vocabulary() {
             "Page synthesis: paused (exact source unavailable; no fallback) [on_device]",
         ));
 
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests
         .recv()
         .unwrap()
@@ -108,8 +112,13 @@ fn status_uses_canonical_ready_paused_off_vocabulary() {
 #[test]
 fn configure_discloses_and_writes_the_exact_confirmed_mapping() {
     let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":false}"#),
         response(&routing("unconfigured", "unconfigured")),
         response("{}"),
+        response(
+            r#"{"background_ai_enabled":true,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+        ),
+        response(r#"{"background_ai_enabled":true}"#),
         response(&routing("pinned", "pinned")),
     ]);
 
@@ -131,14 +140,18 @@ fn configure_discloses_and_writes_the_exact_confirmed_mapping() {
             "Anthropic receives relevant memory content",
         ));
 
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests
         .recv()
         .unwrap()
         .starts_with("GET /api/config/routing "));
     let put = requests.recv().unwrap();
     assert!(put.starts_with("PUT /api/config "), "{put}");
+    assert!(put.contains(r#""background_ai_enabled":true"#), "{put}");
     assert!(put.contains(r#""everyday_source":"anthropic""#), "{put}");
     assert!(put.contains(r#""synthesis_source":"on_device""#), "{put}");
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests
         .recv()
         .unwrap()
@@ -146,8 +159,16 @@ fn configure_discloses_and_writes_the_exact_confirmed_mapping() {
 }
 
 #[test]
-fn disable_clears_both_pins_without_removing_providers() {
-    let (base, requests) = spawn_stub(vec![response("{}")]);
+fn disable_preserves_both_pins_without_removing_providers() {
+    let (base, requests) = spawn_stub(vec![
+        response(
+            r#"{"background_ai_enabled":true,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+        ),
+        response("{}"),
+        response(
+            r#"{"background_ai_enabled":false,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+        ),
+    ]);
 
     cli(&base)
         .args(["enrichment", "disable"])
@@ -157,10 +178,13 @@ fn disable_clears_both_pins_without_removing_providers() {
             "Providers and downloaded models were kept",
         ));
 
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     let put = requests.recv().unwrap();
     assert!(put.starts_with("PUT /api/config "), "{put}");
-    assert!(put.contains(r#""everyday_source":"""#), "{put}");
-    assert!(put.contains(r#""synthesis_source":"""#), "{put}");
+    assert!(put.contains(r#""background_ai_enabled":false"#), "{put}");
+    assert!(!put.contains("everyday_source"), "{put}");
+    assert!(!put.contains("synthesis_source"), "{put}");
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
 }
 
 #[test]
@@ -172,10 +196,10 @@ fn disable_surfaces_live_daemon_rejection_without_overwriting_disk() {
         r#"{"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
     )
     .expect("seed pinned config");
-    let (base, requests) = spawn_stub(vec![response_with_status(
-        "500 Internal Server Error",
-        r#"{"error":"write rejected"}"#,
-    )]);
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":true}"#),
+        response_with_status("500 Internal Server Error", r#"{"error":"write rejected"}"#),
+    ]);
 
     cli(&base)
         .env("WENLAN_DATA_DIR", data.path())
@@ -184,6 +208,7 @@ fn disable_surfaces_live_daemon_rejection_without_overwriting_disk() {
         .failure()
         .stderr(predicate::str::contains("HTTP 500"));
 
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests.recv().unwrap().starts_with("PUT /api/config "));
     let config = std::fs::read_to_string(config_path).expect("config remains readable");
     assert!(
@@ -197,7 +222,7 @@ fn disable_surfaces_live_daemon_rejection_without_overwriting_disk() {
 }
 
 #[test]
-fn disable_clears_local_pins_only_when_daemon_is_unreachable() {
+fn disable_clears_local_pins_and_explicitly_opts_out_when_daemon_is_unreachable() {
     let data = tempfile::tempdir().expect("consent data dir");
     let config_path = data.path().join("config.json");
     std::fs::write(
@@ -224,4 +249,242 @@ fn disable_clears_local_pins_only_when_daemon_is_unreachable() {
     .expect("saved config json");
     assert!(config["everyday_source"].is_null(), "{config}");
     assert!(config["synthesis_source"].is_null(), "{config}");
+    assert_eq!(config["background_ai_enabled"], false, "{config}");
+}
+
+#[test]
+fn status_reports_off_with_preserved_ready_pins() {
+    let (base, requests) = spawn_stub(vec![response(
+        r#"{"background_ai_enabled":false,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+    )]);
+    cli(&base)
+        .args(["enrichment", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Background enrichment: off"))
+        .stdout(predicate::str::contains("ready").not());
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+}
+
+#[test]
+fn status_does_not_claim_off_or_ready_when_consent_is_unknown() {
+    for reply in [
+        response("{}"),
+        response_with_status("500 Internal Server Error", "{}"),
+    ] {
+        let (base, requests) = spawn_stub(vec![reply]);
+        cli(&base)
+            .args(["enrichment", "status"])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(
+                "Background enrichment: status unavailable",
+            ))
+            .stdout(predicate::str::contains("Background enrichment: off").not())
+            .stdout(predicate::str::contains("ready").not());
+        assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    }
+}
+
+#[test]
+fn status_preserves_legacy_enabled_preference_exposed_as_null() {
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":null}"#),
+        response(&routing("pinned", "unconfigured")),
+    ]);
+    cli(&base)
+        .args(["enrichment", "status"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Everyday organization: ready [anthropic]",
+        ))
+        .stdout(predicate::str::contains("Page synthesis: off"));
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/config/routing "));
+}
+
+#[test]
+fn configure_rejects_older_daemon_before_writing_pins() {
+    let (base, requests) = spawn_stub(vec![response("{}")]);
+    cli(&base)
+        .args([
+            "enrichment",
+            "configure",
+            "--everyday",
+            "anthropic",
+            "--synthesis",
+            "on-device",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not support explicit background consent",
+        ))
+        .stdout(predicate::str::contains("consent saved").not());
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+}
+
+#[test]
+fn configure_does_not_claim_success_when_consent_write_is_ignored() {
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":false}"#),
+        response(&routing("unconfigured", "unconfigured")),
+        response("{}"),
+        response(
+            r#"{"background_ai_enabled":false,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+        ),
+    ]);
+    cli(&base)
+        .args([
+            "enrichment",
+            "configure",
+            "--everyday",
+            "anthropic",
+            "--synthesis",
+            "on-device",
+            "--yes",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "did not verify the requested background consent",
+        ))
+        .stdout(predicate::str::contains("consent saved").not());
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/config/routing "));
+    assert!(requests.recv().unwrap().starts_with("PUT /api/config "));
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+}
+
+#[test]
+fn disable_legacy_daemon_clears_pins_and_verifies_inactive_routes() {
+    let (base, requests) = spawn_stub(vec![
+        response("{}"),
+        response("{}"),
+        response(&routing("unconfigured", "unconfigured")),
+    ]);
+    cli(&base)
+        .args(["enrichment", "disable"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Background enrichment disabled"));
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    let put = requests.recv().unwrap();
+    assert!(put.contains(r#""everyday_source":"""#), "{put}");
+    assert!(put.contains(r#""synthesis_source":"""#), "{put}");
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/config/routing "));
+}
+
+#[test]
+fn disable_does_not_claim_success_when_current_or_legacy_daemon_keeps_work_enabled() {
+    for replies in [
+        vec![
+            response(r#"{"background_ai_enabled":true}"#),
+            response("{}"),
+            response(r#"{"background_ai_enabled":true}"#),
+        ],
+        vec![
+            response("{}"),
+            response("{}"),
+            response(&routing("pinned", "pinned")),
+        ],
+    ] {
+        let (base, _requests) = spawn_stub(replies);
+        cli(&base)
+            .args(["enrichment", "disable"])
+            .assert()
+            .failure()
+            .stdout(predicate::str::contains("Background enrichment disabled").not());
+    }
+}
+
+#[test]
+fn basic_setup_explicitly_disables_previously_enabled_background_work() {
+    let data = tempfile::tempdir().expect("basic setup data dir");
+    let config_path = data.path().join("config.json");
+    std::fs::write(
+        &config_path,
+        r#"{"background_ai_enabled":true,"everyday_source":"anthropic","synthesis_source":"on_device"}"#,
+    )
+    .expect("seed opted-in config");
+    cli("http://127.0.0.1:9")
+        .env("WENLAN_DATA_DIR", data.path())
+        .args(["setup", "--basic"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Model-backed background enrichment is off",
+        ));
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_path).expect("read saved config"))
+            .expect("saved config json");
+    assert_eq!(saved["background_ai_enabled"], false, "{saved}");
+    assert!(saved["everyday_source"].is_null(), "{saved}");
+    assert!(saved["synthesis_source"].is_null(), "{saved}");
+}
+
+#[test]
+fn configure_cancel_keeps_settings_unchanged_even_when_already_enabled() {
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":true}"#),
+        response(&routing("pinned", "pinned")),
+    ]);
+    cli(&base)
+        .args([
+            "enrichment",
+            "configure",
+            "--everyday",
+            "anthropic",
+            "--synthesis",
+            "on-device",
+        ])
+        .write_stdin("n\n")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Background enrichment settings were not changed",
+        ))
+        .stdout(predicate::str::contains("remains off").not());
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    assert!(requests
+        .recv()
+        .unwrap()
+        .starts_with("GET /api/config/routing "));
+}
+
+#[test]
+fn disable_verification_connection_failure_does_not_fall_back_to_disk() {
+    let data = tempfile::tempdir().expect("consent data dir");
+    let config_path = data.path().join("config.json");
+    let original = r#"{"background_ai_enabled":true,"everyday_source":"anthropic","synthesis_source":"on_device"}"#;
+    std::fs::write(&config_path, original).expect("seed local config");
+    // The stub closes after acknowledging PUT, so the verification GET cannot
+    // connect. A started live mutation must never be replaced by a disk write.
+    let (base, requests) = spawn_stub(vec![
+        response(r#"{"background_ai_enabled":true}"#),
+        response("{}"),
+    ]);
+    cli(&base)
+        .env("WENLAN_DATA_DIR", data.path())
+        .args(["enrichment", "disable"])
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("Background enrichment disabled").not());
+    assert!(requests.recv().unwrap().starts_with("GET /api/config "));
+    assert!(requests.recv().unwrap().starts_with("PUT /api/config "));
+    assert_eq!(
+        std::fs::read_to_string(config_path).expect("read local config"),
+        original
+    );
 }

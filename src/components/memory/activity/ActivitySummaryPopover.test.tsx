@@ -95,6 +95,25 @@ beforeEach(async () => {
 });
 
 describe("ActivitySummaryPopover", () => {
+  it("treats opted-out backlog as quiet and keeps notes available", async () => {
+    await openPopover(activity({
+      state: "off",
+      everyday: route("everyday", "none", false),
+      synthesis: route("synthesis", "none", false),
+      assets: [asset("memories", { total: 5, blocked: 5 })],
+    }));
+
+    expect(screen.getByTestId("activity-summary-headline")).toHaveTextContent(
+      "Background AI organization is off. Your notes remain available.",
+    );
+    expect(screen.getByTestId("activity-asset-memories")).toHaveTextContent(
+      "Your notes remain available.",
+    );
+    expect(screen.queryByTestId("activity-summary-causes")).toBeNull();
+    expect(screen.queryByTestId("activity-summary-trust")).toBeNull();
+    expect(screen.queryByTestId("activity-asset-bar-memories")).toBeNull();
+  });
+
   it("names a missing model once, not on every row it blocks", async () => {
     // Memories and Entities both run on the everyday model. The live app
     // printed "no everyday model is chosen" under each row.

@@ -7,6 +7,7 @@ import { createElement, type ReactNode } from "react";
 const mocks = vi.hoisted(() => ({
   shouldShowWizard: vi.fn(),
   getResolvedRouting: vi.fn(),
+  getBackgroundAiEnabled: vi.fn(),
   setSourcePin: vi.fn(),
 }));
 vi.mock("./tauri", async (importOriginal) => {
@@ -38,6 +39,7 @@ beforeEach(() => {
   resetLaunchPinFillForTest();
   mocks.shouldShowWizard.mockResolvedValue(false);
   mocks.getResolvedRouting.mockResolvedValue(unpinnedWithLoadedModel());
+  mocks.getBackgroundAiEnabled.mockResolvedValue(true);
   mocks.setSourcePin.mockResolvedValue(undefined);
 });
 

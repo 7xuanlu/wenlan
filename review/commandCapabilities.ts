@@ -36,6 +36,7 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "active_import_batches_cmd",
     // The toolbar Activity button reads it on every screen.
     "get_activity",
+    "get_background_ai_enabled",
     // The main shell reads routing once per launch, to give an unpinned
     // background job a source. Shared chrome, so it belongs in the contract
     // rather than in a list of screens that are allowed to fail.
@@ -43,6 +44,10 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     // The main shell asks once per launch whether a wenlan://pair link
     // opened the app. Shared chrome, so it belongs in the contract.
     "take_remote_pairing_link",
+  ],
+  backgroundAi: [
+    // Fixture-only preference state; this never starts a background service.
+    "set_background_ai_enabled",
   ],
   wikiAndPages: [
     "list_pages",
