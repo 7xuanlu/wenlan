@@ -61,11 +61,31 @@ describe("AtlasTypeFilters", () => {
     await user.click(trigger);
 
     const panel = screen.getByRole("dialog", { name: "Topic types" });
+    expect(panel.parentElement).toBe(document.body);
     expect(panel).toHaveTextContent("Showing 3 of 3 types");
     expect(within(panel).getByRole("button", { name: "Theme" })).toBeVisible();
     expect(panel.textContent).not.toMatch(/[✓✔]/);
     expect(within(panel).queryByRole("checkbox")).not.toBeInTheDocument();
     expect(panel).toHaveFocus();
+  });
+
+  it("focuses the panel only after its positioning pass makes it visible", async () => {
+    const user = userEvent.setup();
+    const focusVisibility: string[] = [];
+    const recordFocus = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement && event.target.classList.contains("atlas-type-filter-panel")) {
+        focusVisibility.push(event.target.style.visibility);
+      }
+    };
+    document.addEventListener("focusin", recordFocus);
+    try {
+      render(<StatefulFilter />);
+      await user.click(screen.getByRole("button", { name: "Filter topic types" }));
+      expect(screen.getByRole("dialog", { name: "Topic types" })).toHaveFocus();
+      expect(focusVisibility).toEqual(["visible"]);
+    } finally {
+      document.removeEventListener("focusin", recordFocus);
+    }
   });
 
   it("toggles immediately while the panel stays open and reports filtered counts", async () => {

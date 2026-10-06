@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openSpaceEntity } from "./helpers/spaceEntity";
+import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { pngDimensions } from "./helpers/png";
 
@@ -153,6 +154,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
 
   await page.getByRole("button", { name: "Wenlan", exact: true }).click();
   await openSpaceEntity(page, "Ada Lovelace");
+  await openTopicContext(page);
   await settle(page);
   await page.screenshot({
     path: path.join(screenshotEvidenceDir, "entity-1280x900-graph-label.png"),

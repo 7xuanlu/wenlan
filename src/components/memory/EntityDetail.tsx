@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -16,11 +16,11 @@ import { slotForEntityType } from "../../lib/graph/palette";
 import { EntityConnections } from "./entity-detail/EntityConnections";
 import { EntityContextRail } from "./entity-detail/EntityContextRail";
 import "./entity-detail/EntityDetail.css";
-import {
-  entityMonogram,
-  formatAbsoluteTimestamp,
-  formatRelativeEntityTime,
-} from "./entity-detail/formatEntityMetadata";
+import { formatRelativeEntityTime } from "./entity-detail/formatEntityMetadata";
+import { EntityTopicMenu } from "./entity-detail/EntityTopicMenu";
+import PageInfoDrawer from "./page/PageInfoDrawer";
+import "./page/pageDocumentTools.css";
+import "./context/knowledge-context.css";
 import { EntityObservations } from "./entity-detail/EntityObservations";
 import FocusGraph from "./FocusGraph";
 
@@ -51,6 +51,7 @@ function EntityDetailContent({
   const queryClient = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   const notesPending = useIsMutating({ mutationKey: ["entity-observations", entityId] }) > 0;
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { data: detail, isError, refetch } = useQuery({
@@ -70,16 +71,6 @@ function EntityDetailContent({
     enabled: Boolean(detail?.entity.name),
     staleTime: 30_000,
   });
-  useEffect(() => {
-    if (!graphOpen) return;
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      setGraphOpen(false);
-    };
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [graphOpen]);
   const invalidateEntityDetail = () => {
     queryClient.invalidateQueries({ queryKey: ["entityDetail", entityId] });
     queryClient.invalidateQueries({ queryKey: ["entities"] });
@@ -152,120 +143,43 @@ function EntityDetailContent({
 
   const { entity, observations, relations } = detail;
   const archived = entity.status === "archived";
-  const space = entity.space ?? entity.domain;
-  const relativeTime = formatRelativeEntityTime(entity.updated_at, locale);
-  const absoluteTime = formatAbsoluteTimestamp(entity.updated_at);
-  const dateline = [entity.entity_type, space, relativeTime].filter(Boolean).join(" · ");
-
   return (
-    <>
-      <div
-        className="page-detail entity-detail-dossier"
-        aria-label={t("entityDetail.dossierLabel")}
-      >
-      <header className="entity-dossier-header">
-        <BackButton onBack={onBack} label={t("entityDetail.back")} />
-        <div className="entity-dossier-hero">
-          <div className="entity-dossier-hero-row">
-            <div className="entity-detail-head">
-              <div className="entity-detail-seal" aria-hidden="true">
-                {entityMonogram(entity.name)}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h1 className="page-detail-title">{entity.name}</h1>
-                <p className="page-detail-dateline" title={absoluteTime ?? undefined}>
-                  {dateline}
-                </p>
-              </div>
-            </div>
-            <div className="memory-detail-actions">
-              {confirmMutation.isError || deleteMutation.isError || lifecycleMutation.isError ? (
-                <span className="entity-error" role="alert">
-                  {t("entityDetail.saveError")}
-                </span>
-              ) : null}
-              {archived ? (
-                <span className="memory-detail-chip entity-status-chip entity-status-archived">
-                  {t("entityDetail.archived")}
-                </span>
-              ) : <button
-                type="button"
-                disabled={actionsPending}
-                onClick={() => confirmMutation.mutate(!entity.confirmed)}
-                className={`memory-detail-chip entity-status-chip ${entity.confirmed ? "success" : "warning"}`}
-                title={
-                  entity.confirmed
-                    ? t("entityDetail.markUnconfirmed")
-                    : t("entityDetail.confirmEntity")
-                }
-              >
-                {entity.confirmed ? t("entityDetail.confirmed") : t("entityDetail.confirmEntity")}
-              </button>}
-              <button
-                type="button"
-                className="memory-detail-text-button"
-                disabled={actionsPending}
-                onClick={() => lifecycleMutation.mutate(!archived)}
-              >
-                {t(archived ? "entities.actions.restore" : "entities.actions.archive")}
-              </button>
-              {confirmDelete ? (
-                <>
-                  <span className="entity-delete-question">{t("entityDetail.deleteQuestion")}</span>
-                  <button
-                    type="button"
-                    disabled={actionsPending}
-                    onClick={() => deleteMutation.mutate()}
-                    className="entity-delete-confirm"
-                  >
-                    {t("entityDetail.delete")}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={actionsPending}
-                    onClick={() => setConfirmDelete(false)}
-                    className="memory-detail-text-button"
-                  >
-                    {t("entityDetail.cancel")}
-                  </button>
-                </>
-              ) : (
-                <button
-                  type="button"
-                  disabled={actionsPending}
-                  onClick={() => setConfirmDelete(true)}
-                  className="memory-detail-icon-button memory-detail-delete"
-                  aria-label={t("entityDetail.deleteEntity")}
-                  title={t("entityDetail.deleteEntity")}
-                >
-                  <svg
-                    aria-hidden="true"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14" />
-                  </svg>
-                </button>
-              )}
-            </div>
+    <div
+      className={`page-detail entity-detail-dossier document-context-host${infoOpen ? " document-context-open" : ""}`}
+      aria-label={t("entityDetail.dossierLabel")}
+    >
+      <div className="page-detail-document">
+        <header className="page-document-title-row">
+          <h1 className="page-detail-title">{entity.name}</h1>
+          <div className="page-document-tools">
+            <BackButton onBack={onBack} label={t("entityDetail.back")} />
+            <EntityTopicMenu
+              confirmed={entity.confirmed}
+              archived={archived}
+              actionsPending={actionsPending}
+              onContext={() => setInfoOpen(true)}
+              onConfirm={() => confirmMutation.mutate(!entity.confirmed)}
+              onArchive={() => lifecycleMutation.mutate(!archived)}
+              onDelete={() => setConfirmDelete(true)}
+            />
           </div>
-        </div>
-      </header>
-      <div className="page-detail-grid">
-        <section
-          className="page-detail-prose entity-detail-reading"
-          aria-label={t("entityDetail.readingLabel")}
-        >
-          <EntityConnections
-            name={entity.name}
-            relations={relations}
-            onEntityClick={onEntityClick}
-            onExpand={() => setGraphOpen(true)}
-          />
+        </header>
+        {archived ? <p className="entity-archived-notice" role="status">{t("entityDetail.archived")}</p> : null}
+        {confirmMutation.isError || deleteMutation.isError || lifecycleMutation.isError ? (
+          <p className="entity-error" role="alert">{t("entityDetail.saveError")}</p>
+        ) : null}
+        {confirmDelete ? (
+          <div className="entity-delete-confirmation">
+            <span className="entity-delete-question">{t("entityDetail.deleteQuestion")}</span>
+            <button type="button" disabled={actionsPending} onClick={() => deleteMutation.mutate()} className="entity-delete-confirm">
+              {t("entityDetail.delete")}
+            </button>
+            <button type="button" disabled={actionsPending} onClick={() => setConfirmDelete(false)} className="memory-detail-text-button">
+              {t("entityDetail.cancel")}
+            </button>
+          </div>
+        ) : null}
+        <section className="page-detail-prose entity-detail-reading" aria-label={t("entityDetail.readingLabel")}>
           <EntityObservations
             key={`${entityId}:${archived}`}
             entityId={entityId}
@@ -275,21 +189,30 @@ function EntityDetailContent({
             readOnly={archived || actionsPending}
           />
         </section>
-        <EntityContextRail entity={entity} locale={locale} onMemoryClick={onMemoryClick} />
       </div>
-      </div>
-      {graphOpen ? (
-        <EntityGraphOverlay
-          detail={detail}
-          linkedMemoriesCount={linkedMemories.length}
-          locale={locale}
-          onClose={() => setGraphOpen(false)}
-          onEntityClick={onEntityClick}
-          onMemoryClick={onMemoryClick}
-          onPageClick={onPageClick}
-        />
-      ) : null}
-    </>
+      <PageInfoDrawer docked open={infoOpen} onClose={() => setInfoOpen(false)} title={t("entityDetail.contextTitle")} closeLabel={t("common.close")}>
+        <div className="entity-topic-context">
+          <EntityConnections
+            name={entity.name}
+            relations={relations}
+            onEntityClick={onEntityClick}
+            onExpand={() => setGraphOpen(true)}
+          />
+          <EntityContextRail entity={entity} locale={locale} onMemoryClick={onMemoryClick} />
+          {graphOpen ? (
+            <EntityGraphOverlay
+              detail={detail}
+              linkedMemoriesCount={linkedMemories.length}
+              locale={locale}
+              onClose={() => setGraphOpen(false)}
+              onEntityClick={onEntityClick}
+              onMemoryClick={onMemoryClick}
+              onPageClick={onPageClick}
+            />
+          ) : null}
+        </div>
+      </PageInfoDrawer>
+    </div>
   );
 }
 
@@ -337,6 +260,47 @@ function EntityGraphOverlay({
   onPageClick,
 }: EntityGraphOverlayProps) {
   const { t } = useTranslation();
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.defaultPrevented) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCloseRef.current();
+      } else if (event.key === "Tab") {
+        // The graph owns this focus scope, including a popover focused at -1.
+        // Prevent the parent drawer from competing with normal internal Tab.
+        event.stopPropagation();
+        const controls = Array.from(overlayRef.current?.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ) ?? []);
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey && (active === first || !overlayRef.current?.contains(active))) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && (active === last || !overlayRef.current?.contains(active))) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    // Inner Atlas popovers handle Escape at document capture first. The graph
+    // then owns bubbling keys before the parent context drawer sees them.
+    const overlay = overlayRef.current;
+    overlay?.addEventListener("keydown", onKeyDown);
+    return () => {
+      overlay?.removeEventListener("keydown", onKeyDown);
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, []);
   const [mode, setMode] = useState<"focus" | "map">("focus");
   const [showVerbs, setShowVerbs] = useState(true);
   const { entity, relations } = detail;
@@ -356,6 +320,7 @@ function EntityGraphOverlay({
 
   return (
     <div
+      ref={overlayRef}
       role="dialog"
       aria-modal="true"
       aria-label={t("entityDetail.expandGraph")}
@@ -380,7 +345,7 @@ function EntityGraphOverlay({
       >
         <button
           type="button"
-          autoFocus
+          ref={closeRef}
           onClick={onClose}
           className="memory-detail-icon-button"
           aria-label={t("common.close")}

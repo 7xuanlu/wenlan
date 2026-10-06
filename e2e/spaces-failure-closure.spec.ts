@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { openTopicMenu } from "./helpers/topicTools";
 import { expect, test, type Page } from "@playwright/test";
 import { openSpaceEntity } from "./helpers/spaceEntity";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
@@ -111,7 +112,8 @@ test("retries Topic load, retains a failed observation draft, and retries two-st
   await page.getByRole("textbox", { name: "Edit note" }).press("Escape");
 
   controller.failNext("delete_entity_cmd", "delete failed");
-  await page.getByRole("button", { name: "Delete topic" }).click();
+  const topicMenu = await openTopicMenu(page);
+  await topicMenu.getByRole("menuitem", { name: "Delete topic", exact: true }).click();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Couldn't save. Try again.");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
