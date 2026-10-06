@@ -162,7 +162,7 @@ for (const theme of THEMES) {
         .click();
       await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
       await returnToPageReading(page);
-      await page.getByRole("button", { name: "Canvas" }).click();
+      await page.getByRole("button", { name: "Mind map", exact: true }).click();
       await expect(page.getByText("Loading canvas")).toBeVisible();
       await page.screenshot({ path: `shots/${theme}-7-loading.png` });
     });
@@ -181,7 +181,7 @@ for (const theme of THEMES) {
         .click();
       await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
       await returnToPageReading(page);
-      await page.getByRole("button", { name: "Canvas" }).click();
+      await page.getByRole("button", { name: "Mind map", exact: true }).click();
       await expect(page.getByText("Could not load the canvas")).toBeVisible();
       await page.screenshot({ path: `shots/${theme}-8-error.png` });
     });
