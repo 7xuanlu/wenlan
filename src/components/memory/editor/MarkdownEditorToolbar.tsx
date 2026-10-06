@@ -35,6 +35,7 @@ export interface MarkdownEditorToolbarLabels {
 }
 
 export interface MarkdownEditorToolbarProps {
+  showPersistenceActions?: boolean;
   status: MarkdownEditorStatus;
   labels: MarkdownEditorToolbarLabels;
   saveDisabled: boolean;
@@ -81,6 +82,7 @@ function horizontalOverflowCue(element: HTMLElement): HorizontalOverflowCue {
 }
 
 export function MarkdownEditorToolbar({
+  showPersistenceActions = true,
   status,
   labels,
   saveDisabled,
@@ -164,6 +166,7 @@ export function MarkdownEditorToolbar({
   return (
     <div
       className="page-editor-toolbar"
+      style={showPersistenceActions ? undefined : { border: "none", borderRadius: 0, background: "transparent", padding: "0 0 12px" }}
       role="toolbar"
       aria-label={labels.blockStyle}
       data-composition-active={status.compositionActive ? "true" : undefined}
@@ -216,7 +219,7 @@ export function MarkdownEditorToolbar({
         </div>
       ) : null}
 
-      <div className="page-editor-persistence-actions">
+      {showPersistenceActions && <div className="page-editor-persistence-actions">
         <button
           type="button"
           title={labels.save}
@@ -241,7 +244,7 @@ export function MarkdownEditorToolbar({
         >
           {labels.cancel}
         </button>
-      </div>
+      </div>}
     </div>
   );
 }

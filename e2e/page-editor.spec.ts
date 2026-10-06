@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
   Page as WenlanPage,
@@ -13,12 +14,23 @@ import {
 } from "./tauriMock";
 
 const PAGE_ID = "page-editor-e2e";
+const PAGE_TITLE = "Browser editor fixture";
 const INITIAL_SOURCE = "# Browser editor fixture\n\nInitial source paragraph.\n";
+const UUID_V4 =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Comfortably past the 650ms autosave debounce, used only to prove a write
+// did NOT happen; positive expectations poll instead.
+const QUIET_WINDOW_MS = 1_500;
+const AUTOSAVE_TIMEOUT = { timeout: 10_000 };
+// Canonical readback after a saved CAS write. The contract reads with
+// explicit intent (`get_page_explicit_browse`); plain `get_page` is accepted
+// so the assertion pins the ordering, not the wrapper choice.
+const PAGE_READ_COMMANDS = new Set(["get_page", "get_page_explicit_browse"]);
 
 function pageFixture(content = INITIAL_SOURCE): WenlanPage {
   return {
     id: PAGE_ID,
-    title: "Browser editor fixture",
+    title: PAGE_TITLE,
     summary: null,
     content,
     entity_id: null,
@@ -36,10 +48,18 @@ function pageFixture(content = INITIAL_SOURCE): WenlanPage {
   };
 }
 
+async function openFromWiki(page: Page, title = PAGE_TITLE): Promise<void> {
+  await page
+    .locator("main").getByRole("button", { name: `Open ${title}`, exact: true })
+    .click();
+  await expect(page.locator(".page-detail")).toBeVisible();
+}
+
 async function openPage(
   page: Page,
   fixture = pageFixture(),
   pageScenario?: TauriMockPageScenario,
+  delays?: Readonly<Record<string, number>>,
 ): Promise<TauriMockController> {
   const defaults = createSpacesNavigationFixture();
   const controller = await installTauriMock(page, {
@@ -47,19 +67,24 @@ async function openPage(
     rawActions: [],
     fixture: { ...defaults, pages: [fixture] },
     pageScenario,
+    delays,
   });
   await page.goto("/");
-  await page
-    .getByRole("button", { name: `Open ${fixture.title}`, exact: true })
-    .click();
-  await expect(page.getByRole("heading", { name: fixture.title })).toBeVisible();
+  await openPrimaryDestination(page, "Wiki");
+  await openFromWiki(page, fixture.title);
   return controller;
 }
 
-async function beginEditing(page: Page): Promise<Locator> {
-  await page.getByRole("button", { name: "Edit page", exact: true }).first().click();
-  const editor = page.getByRole("textbox", { name: "Page editor" });
+/**
+ * An ordinary page opens straight into the editor: no Edit click. Waits for
+ * the editor to hold the expected source so tests never race the lazy
+ * CodeMirror module (or its fallback) while it is still mounting.
+ */
+async function openedEditor(page: Page, source = INITIAL_SOURCE): Promise<Locator> {
+  const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
   await expect(editor).toBeVisible();
+  await expect(editor).toBeEditable();
+  await expect.poll(() => editorSource(editor)).toBe(source);
   return editor;
 }
 
@@ -86,11 +111,81 @@ async function editorSource(editor: Locator): Promise<string> {
   });
 }
 
-test("uses one contextual editing view without source-mode controls", async ({ page }) => {
-  await openPage(page);
+/** Tags the live editor node so a later remount is observable. */
+async function markEditorSession(editor: Locator): Promise<void> {
+  await editor.evaluate((element) => {
+    (element as HTMLElement & { __e2eEditorSession?: boolean }).__e2eEditorSession = true;
+  });
+}
 
-  const editor = await beginEditing(page);
+async function isSameEditorSession(editor: Locator): Promise<boolean> {
+  return editor.evaluate((element) =>
+    (element as HTMLElement & { __e2eEditorSession?: boolean }).__e2eEditorSession === true
+  );
+}
 
+function updateCalls(controller: TauriMockController): UpdatePageInput[] {
+  return controller.calls()
+    .filter((call) => call.command === "update_page")
+    .map((call) => call.args as UpdatePageInput);
+}
+
+/** Page reads issued after the nth update_page call and before the next one. */
+function canonicalReadsAfterUpdate(
+  controller: TauriMockController,
+  updateNumber: number,
+): number {
+  let updatesSeen = 0;
+  let reads = 0;
+  for (const call of controller.calls()) {
+    if (call.command === "update_page") {
+      updatesSeen += 1;
+      continue;
+    }
+    if (
+      updatesSeen === updateNumber
+      && PAGE_READ_COMMANDS.has(call.command)
+      && (call.args as { id?: unknown } | undefined)?.id === PAGE_ID
+    ) {
+      reads += 1;
+    }
+  }
+  return reads;
+}
+
+/**
+ * Reads the mock store directly. This issues a `get_page` call, so check
+ * canonical-read evidence with {@link canonicalReadsAfterUpdate} first.
+ */
+async function storedPage(page: Page): Promise<WenlanPage> {
+  return await page.evaluate(async (id) =>
+    window.__TAURI_INTERNALS__!.invoke("get_page", { id })
+  , PAGE_ID) as WenlanPage;
+}
+
+function persistenceButtons(page: Page): Locator[] {
+  const detail = page.locator(".page-detail");
+  return [
+    detail.getByRole("button", { name: "Save", exact: true }),
+    detail.getByRole("button", { name: "Cancel", exact: true }),
+  ];
+}
+
+test("opens an ordinary page directly in one editable writing view", async ({ page }) => {
+  const controller = await openPage(page);
+
+  const editor = await openedEditor(page);
+
+  const saveStatus = page.locator('.page-detail [role="status"]');
+  await expect(saveStatus).toHaveText("Saved");
+  // Still announced to assistive technology, without a row above the title.
+  await expect(saveStatus).toHaveCSS("position", "absolute");
+  await expect(saveStatus).toHaveCSS("clip-path", "inset(50%)");
+  const pageInfo = page.getByRole("button", { name: "Page info", exact: true });
+  await expect(pageInfo).toHaveText("");
+  await expect(pageInfo.locator("svg")).toHaveCount(1);
+
+  for (const button of persistenceButtons(page)) await expect(button).toHaveCount(0);
   await expect(
     page.getByRole("radio", { name: "Live Preview", exact: true }),
   ).toHaveCount(0);
@@ -103,16 +198,21 @@ test("uses one contextual editing view without source-mode controls", async ({ p
 
   const heading = editor.locator(".cm-line").first();
   await editor.locator(".cm-line").last().click();
-  await expect(heading).toHaveText("Browser editor fixture");
+  await expect(heading).toHaveText(PAGE_TITLE);
   await heading.click();
   await expect(heading).toHaveText("# Browser editor fixture");
+
+  // Opening, focusing and moving the caret are not edits.
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toEqual([]);
 });
 
-test("formats through the toolbar and toggles a task without source loss", async ({ page }) => {
+test("formats with a keyboard shortcut and toggles a task, then autosaves the exact source", async ({ page }) => {
   const source = "alpha\n\n- [ ] verify exact source";
-  await openPage(page, pageFixture(source));
+  const formatted = "**alpha**\n\n- [x] verify exact source";
+  const controller = await openPage(page, pageFixture(source));
 
-  const editor = await beginEditing(page);
+  const editor = await openedEditor(page, source);
   const task = editor.locator(".cm-writing-task-checkbox");
   await expect(task).not.toBeChecked();
   await expect(task).toHaveAccessibleName("verify exact source");
@@ -127,54 +227,164 @@ test("formats through the toolbar and toggles a task without source loss", async
   await editor.locator(".cm-line").first().click();
   await editor.press("Home");
   await editor.press("Shift+End");
-  await page.getByRole("button", { name: "Bold", exact: true }).click();
+  await editor.press("ControlOrMeta+b");
 
   await expect(editor).toBeFocused();
-  await expect.poll(() => editorSource(editor)).toBe(
-    "**alpha**\n\n- [x] verify exact source",
-  );
+  await expect.poll(() => editorSource(editor)).toBe(formatted);
+
+  // Format commands are edits: the final source reaches the store verbatim.
+  await expect.poll(
+    () => updateCalls(controller).at(-1)?.content,
+    AUTOSAVE_TIMEOUT,
+  ).toBe(formatted);
+  await expect.poll(async () => (await storedPage(page)).content, AUTOSAVE_TIMEOUT)
+    .toBe(formatted);
+  await expect.poll(() => editorSource(editor)).toBe(formatted);
 });
 
-test("saves the exact source through a typed CAS request and refetches it", async ({ page }) => {
+test("autosaves the exact source through one typed CAS request and a canonical readback", async ({ page }) => {
   const controller = await openPage(page);
   const savedSource =
     "# Browser editor fixture\n\nSaved through the browser route exactly.  \n";
-  const editor = await beginEditing(page);
+  const editor = await openedEditor(page);
+  await markEditorSession(editor);
+
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toEqual([]);
 
   await editor.fill(savedSource);
   await expect.poll(() => editorSource(editor)).toBe(savedSource);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
 
-  await expect(
-    page.getByText("Saved through the browser route exactly."),
-  ).toBeVisible();
-  const updateCalls = controller.calls().filter(
-    (call) => call.command === "update_page",
-  );
-  expect(updateCalls).toHaveLength(1);
-  expect(updateCalls[0]?.args).toMatchObject({
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(1);
+  const [request] = updateCalls(controller);
+  expect(request).toMatchObject({
     id: PAGE_ID,
     content: savedSource,
     expectedVersion: 7,
     callerId: "wenlan-app",
   } satisfies Omit<UpdatePageInput, "operationId">);
-  expect((updateCalls[0]?.args as UpdatePageInput).operationId).toMatch(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
-  );
+  expect(request?.operationId).toMatch(UUID_V4);
+  await expect.poll(
+    () => canonicalReadsAfterUpdate(controller, 1),
+    AUTOSAVE_TIMEOUT,
+  ).toBeGreaterThan(0);
 
-  const stored = await page.evaluate(async (id) =>
-    window.__TAURI_INTERNALS__!.invoke("get_page", { id })
-  , PAGE_ID) as WenlanPage;
-  expect(stored).toMatchObject({
+  expect(await storedPage(page)).toMatchObject({
     id: PAGE_ID,
     content: savedSource,
     version: 8,
     user_edited: true,
   });
+
+  // Same editor session, still editable, and the save is not repeated.
+  await expect(editor).toBeVisible();
+  await expect(editor).toBeEditable();
+  expect(await isSameEditorSession(editor)).toBe(true);
+  expect(await editorSource(editor)).toBe(savedSource);
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toHaveLength(1);
+});
+
+test("chains a second edit on the confirmed canonical version", async ({ page }) => {
+  const controller = await openPage(page);
+  const firstSource = "# Browser editor fixture\n\nFirst autosaved edit.\n";
+  const secondSource = "# Browser editor fixture\n\nSecond autosaved edit.\n";
+  const editor = await openedEditor(page);
+  await markEditorSession(editor);
+
+  await editor.fill(firstSource);
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(1);
+  await expect.poll(
+    () => canonicalReadsAfterUpdate(controller, 1),
+    AUTOSAVE_TIMEOUT,
+  ).toBeGreaterThan(0);
+  expect(await storedPage(page)).toMatchObject({ content: firstSource, version: 8 });
+
+  await editor.fill(secondSource);
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(2);
+  const [first, second] = updateCalls(controller);
+  expect(first).toMatchObject({ content: firstSource, expectedVersion: 7 });
+  expect(second).toMatchObject({
+    id: PAGE_ID,
+    content: secondSource,
+    expectedVersion: 8,
+    callerId: "wenlan-app",
+  });
+  expect(second?.operationId).toMatch(UUID_V4);
+  expect(second?.operationId).not.toBe(first?.operationId);
+  await expect.poll(
+    () => canonicalReadsAfterUpdate(controller, 2),
+    AUTOSAVE_TIMEOUT,
+  ).toBeGreaterThan(0);
+
+  expect(await storedPage(page)).toMatchObject({ content: secondSource, version: 9 });
+  expect(await isSameEditorSession(editor)).toBe(true);
+  expect(await editorSource(editor)).toBe(secondSource);
+});
+
+test("keeps typing while a save is in flight and saves the newest source on the new baseline", async ({ page }) => {
+  const controller = await openPage(page, pageFixture(), undefined, {
+    update_page: 1_200,
+  });
+  const pendingSource = "# Browser editor fixture\n\nSnapshot already in flight.\n";
+  const newestSource =
+    "# Browser editor fixture\n\nTyped while the first save was pending.\n";
+  const editor = await openedEditor(page);
+  await markEditorSession(editor);
+
+  await editor.fill(pendingSource);
+  // The mock logs the call before holding it, so the write is now in flight.
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(1);
+  await editor.fill(newestSource);
+  await expect.poll(() => editorSource(editor)).toBe(newestSource);
+
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(2);
+  const [first, second] = updateCalls(controller);
+  expect(first).toMatchObject({ content: pendingSource, expectedVersion: 7 });
+  expect(second).toMatchObject({ content: newestSource, expectedVersion: 8 });
+  expect(second?.operationId).not.toBe(first?.operationId);
+
+  // The canonical readback of the first snapshot never replaced newer text.
+  expect(await editorSource(editor)).toBe(newestSource);
+  expect(await isSameEditorSession(editor)).toBe(true);
+  await expect.poll(
+    () => canonicalReadsAfterUpdate(controller, 2),
+    AUTOSAVE_TIMEOUT,
+  ).toBeGreaterThan(0);
+  expect(await storedPage(page)).toMatchObject({ content: newestSource, version: 9 });
+  expect(await editorSource(editor)).toBe(newestSource);
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toHaveLength(2);
+});
+
+test("flushes the newest draft before sidebar navigation leaves the page", async ({ page }) => {
+  const controller = await openPage(page, pageFixture(), undefined, {
+    update_page: 600,
+  });
+  const draft = "# Browser editor fixture\n\nFlushed before leaving the page.  \n";
+  const editor = await openedEditor(page);
+
+  await editor.fill(draft);
+  await openPrimaryDestination(page, "Wiki");
+
+  await expect(page.locator(".page-detail")).toHaveCount(0, AUTOSAVE_TIMEOUT);
+  // Read at once: a navigate-first-then-save bug still has the delayed write
+  // in flight here and would show version 7.
+  expect(await storedPage(page)).toMatchObject({ content: draft, version: 8 });
+  await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
+  expect(updateCalls(controller)).toHaveLength(1);
+  expect(updateCalls(controller)[0]).toMatchObject({
+    content: draft,
+    expectedVersion: 7,
+  });
+
+  await openFromWiki(page);
+  await openedEditor(page, draft);
 });
 
 test("stateful mock replays exact receipts and rejects reused or stale writes", async ({ page }) => {
   await openPage(page);
+  await openedEditor(page);
 
   const outcomes = await page.evaluate(async (pageId) => {
     const invoke = window.__TAURI_INTERNALS__!.invoke;
@@ -225,26 +435,36 @@ test("stateful mock replays exact receipts and rejects reused or stale writes", 
   });
 });
 
-test("preserves the local draft when a remote write wins the CAS race", async ({ page }) => {
+test("keeps the local draft and stops autosaving when a remote write wins the CAS race", async ({ page }) => {
   const remoteSource = "# Browser editor fixture\n\nRemote writer won.\n";
-  await openPage(page, pageFixture(), {
+  const controller = await openPage(page, pageFixture(), {
     firstWriteRemoteMutation: { pageId: PAGE_ID, content: remoteSource },
   });
-  const editor = await beginEditing(page);
+  const editor = await openedEditor(page);
   const localDraft = "# Browser editor fixture\n\nMy unsaved local draft.\n";
 
   await editor.fill(localDraft);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
 
   const conflict = page.getByRole("alert");
-  await expect(conflict).toContainText("This page changed elsewhere.");
+  await expect(conflict).toContainText("This page changed elsewhere.", AUTOSAVE_TIMEOUT);
   await expect(conflict).toContainText("Your local draft is still here.");
   await expect(page.getByText("Latest source (version 8)")).toBeVisible();
   await expect.poll(() => editorSource(editor)).toBe(localDraft);
+  expect(updateCalls(controller)).toHaveLength(1);
+  expect(updateCalls(controller)[0]).toMatchObject({
+    content: localDraft,
+    expectedVersion: 7,
+  });
 
-  const stored = await page.evaluate(async (id) =>
-    window.__TAURI_INTERNALS__!.invoke("get_page", { id })
-  , PAGE_ID) as WenlanPage;
+  // More typing neither clears the conflict nor overwrites the remote copy.
+  const extendedDraft = `${localDraft}Still typing after the conflict.\n`;
+  await editor.fill(extendedDraft);
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toHaveLength(1);
+  await expect(conflict).toContainText("This page changed elsewhere.");
+  expect(await editorSource(editor)).toBe(extendedDraft);
+
+  const stored = await storedPage(page);
   expect(stored.content).toBe(remoteSource);
   expect(stored.version).toBe(8);
 });
@@ -253,8 +473,6 @@ test("blocks editing below the daemon floor and records the typed diagnostic", a
   const controller = await openPage(page, pageFixture(), {
     daemonVersion: "0.14.0",
   });
-
-  await page.getByRole("button", { name: "Edit page", exact: true }).first().click();
 
   await expect(page.getByRole("alert")).toContainText(
     "Page editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
@@ -269,55 +487,76 @@ test("blocks editing below the daemon floor and records the typed diagnostic", a
     reportedVersion: "0.14.0",
     requiredFloor: "0.14.1",
   }]);
+  expect(updateCalls(controller)).toEqual([]);
 });
 
 test("keeps the local draft when the daemon falls below the save floor", async ({ page }) => {
-  await openPage(page, pageFixture(), {
+  const controller = await openPage(page, pageFixture(), {
     daemonVersion: "0.14.1",
     saveDaemonVersion: "0.14.0",
   });
-  const editor = await beginEditing(page);
+  const editor = await openedEditor(page);
   const localDraft =
     "# Browser editor fixture\n\nUnsaved because the daemon was downgraded.\n";
 
   await editor.fill(localDraft);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect(page.getByRole("alert")).toContainText(
     "Page editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
+    AUTOSAVE_TIMEOUT,
   );
   await expect.poll(() => editorSource(editor)).toBe(localDraft);
+  expect(updateCalls(controller)).toHaveLength(1);
+  expect(updateCalls(controller)[0]).toMatchObject({
+    content: localDraft,
+    expectedVersion: 7,
+  });
 
-  const stored = await page.evaluate(async (id) =>
-    window.__TAURI_INTERNALS__!.invoke("get_page", { id })
-  , PAGE_ID) as WenlanPage;
-  expect(stored).toMatchObject({
+  // A refused write stops the automatic loop instead of retrying it.
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toHaveLength(1);
+  expect(await editorSource(editor)).toBe(localDraft);
+
+  expect(await storedPage(page)).toMatchObject({
     id: PAGE_ID,
     content: INITIAL_SOURCE,
     version: 7,
   });
 });
 
-test("falls back to the basic editor and saves exact source after module load failure", async ({ page }) => {
-  const controller = await openPage(page);
+test("falls back to the basic editor and autosaves exact source after module load failure", async ({ page }) => {
   await page.route(
     "**/src/components/memory/editor/CodeMirrorMarkdownEditor.tsx*",
     (route) => route.abort("failed"),
   );
+  const controller = await openPage(page);
 
-  const editor = await beginEditing(page);
+  const editor = await openedEditor(page);
   await expect(page.getByText("Basic editor active", { exact: true })).toBeVisible();
   await expect(editor).toHaveJSProperty("tagName", "TEXTAREA");
   await expect(page.getByRole("radio")).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Formatting" })).toHaveCount(0);
+  for (const button of persistenceButtons(page)) await expect(button).toHaveCount(0);
+  await markEditorSession(editor);
 
   const fallbackSource =
-    "# Browser editor fixture\n\nSaved exactly through the basic fallback.\n";
+    "# Browser editor fixture\n\nSaved exactly through the basic fallback.  \n";
   await editor.fill(fallbackSource);
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(
-    page.getByText("Saved exactly through the basic fallback."),
-  ).toBeVisible();
+
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(1);
+  expect(updateCalls(controller)[0]).toMatchObject({
+    id: PAGE_ID,
+    content: fallbackSource,
+    expectedVersion: 7,
+    callerId: "wenlan-app",
+  });
+  await expect.poll(
+    () => canonicalReadsAfterUpdate(controller, 1),
+    AUTOSAVE_TIMEOUT,
+  ).toBeGreaterThan(0);
+  expect(await storedPage(page)).toMatchObject({ content: fallbackSource, version: 8 });
+  await expect(editor).toHaveValue(fallbackSource);
+  expect(await isSameEditorSession(editor)).toBe(true);
   await expect.poll(() =>
     controller.calls().filter(
       (call) => call.command === "record_page_editor_diagnostic",
@@ -325,7 +564,7 @@ test("falls back to the basic editor and saves exact source after module load fa
   ).toEqual([{ event: "editor_fallback", reason: "load" }]);
 });
 
-test("gives a long document main-content scrolling while persistence actions remain usable", async ({ page }) => {
+test("gives a long document main-content scrolling without a formatting toolbar or overflow", async ({ page }) => {
   const longSource = [
     "# Browser editor fixture",
     "",
@@ -334,9 +573,12 @@ test("gives a long document main-content scrolling while persistence actions rem
     ),
   ].join("\n");
   await page.setViewportSize({ width: 1280, height: 900 });
-  await openPage(page, pageFixture(longSource));
+  const controller = await openPage(page, pageFixture(longSource));
+  // CodeMirror virtualizes lines; assert the document model, not 180 DOM rows.
+  await openedEditor(page, longSource);
 
   const main = page.locator("main.memory-main-content");
+  await expect.poll(() => main.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
   await main.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
@@ -346,14 +588,8 @@ test("gives a long document main-content scrolling while persistence actions rem
     element.scrollTop = 0;
   });
 
-  const editor = await beginEditing(page);
   await expect(page.getByRole("radio")).toHaveCount(0);
-  const save = page.getByRole("button", { name: "Save", exact: true });
-  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-  await expect(save).toBeVisible();
-  await expect(save).toBeEnabled();
-  await expect(cancel).toBeVisible();
-  await expect(cancel).toBeEnabled();
+  for (const button of persistenceButtons(page)) await expect(button).toHaveCount(0);
 
   const scroller = page.locator(
     '[data-markdown-editor-engine="codemirror"] .cm-scroller',
@@ -377,40 +613,33 @@ test("gives a long document main-content scrolling while persistence actions rem
   });
   await expect.poll(() => main.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
-  await expect(save).toBeVisible();
-  await expect(cancel).toBeVisible();
 
-  await save.click();
-  await expect(editor).toHaveCount(0);
-  await beginEditing(page);
-  await cancel.click();
-  await expect(page.getByRole("textbox", { name: "Page editor" })).toHaveCount(0);
+  await expect(page.getByRole("toolbar", { name: "Formatting", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Formatting", exact: true })).toHaveCount(0);
+  expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth))
+    .toBeLessThanOrEqual(1);
+  const info = page.getByRole("button", { name: "Page info", exact: true });
+  await expect(info).toBeEnabled();
+  await info.focus();
+  await expect(info).toBeFocused();
+
+  // Scrolling and focusing a control are not edits.
+  await page.waitForTimeout(QUIET_WINDOW_MS);
+  expect(updateCalls(controller)).toEqual([]);
 });
 
-test("keeps persistence actions visible at 375px while the format row owns horizontal overflow", async ({ page }) => {
+test("fits a 375px viewport without persistence actions, a formatting toolbar, or overflow", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await openPage(page);
-  const editor = await beginEditing(page);
-  const save = page.getByRole("button", { name: "Save", exact: true });
-  const cancel = page.getByRole("button", { name: "Cancel", exact: true });
-  const formatRow = page.getByRole("group", { name: "Formatting", exact: true });
+  const editor = await openedEditor(page);
 
-  await expect(save).toBeVisible();
-  await expect(cancel).toBeVisible();
-  const persistenceBounds = await Promise.all([save.boundingBox(), cancel.boundingBox()]);
-  for (const bounds of persistenceBounds) {
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(375);
-  }
+  for (const button of persistenceButtons(page)) await expect(button).toHaveCount(0);
 
-  const formatGeometry = await formatRow.evaluate((element) => ({
-    clientWidth: element.clientWidth,
-    scrollWidth: element.scrollWidth,
-    overflowX: window.getComputedStyle(element).overflowX,
-  }));
-  expect(formatGeometry.scrollWidth).toBeGreaterThan(formatGeometry.clientWidth);
-  expect(formatGeometry.overflowX).toBe("auto");
+  await expect(page.getByRole("toolbar", { name: "Formatting", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("group", { name: "Formatting", exact: true })).toHaveCount(0);
+  const info = page.getByRole("button", { name: "Page info", exact: true });
+  await expect(info).toBeInViewport();
+
   expect(await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,
     scrollWidth: document.documentElement.scrollWidth,
@@ -422,47 +651,68 @@ test("keeps persistence actions visible at 375px while the format row owns horiz
   expect(editorBox!.x + editorBox!.width).toBeLessThanOrEqual(375);
 });
 
-test("renders a focused opaque accent border in the dark editor", async ({ page }) => {
+test("renders a borderless dark editor while page-info focus stays visible", async ({ page }) => {
   await openPage(page);
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
 
-  const editor = await beginEditing(page);
-  const editorSurface = page.locator('[data-markdown-editor-engine="codemirror"] .cm-editor');
-  const toolbar = page.getByRole("toolbar", { name: "Formatting", exact: true });
+  const editor = await openedEditor(page);
+  const editorFrame = page.locator('[data-markdown-editor-engine="codemirror"]');
+  const editorSurface = editorFrame.locator(".cm-editor");
   await expect(editorSurface).toBeVisible();
-  await expect(toolbar).toBeVisible();
+  await expect(page.getByRole("toolbar", { name: "Formatting", exact: true })).toHaveCount(0);
 
   await editor.focus();
   await expect(editor).toBeFocused();
   await expect(editorSurface).toHaveClass(/cm-focused/);
-  expect(await editorSurface.evaluate((element) => {
+  for (const surface of [editorFrame, editorSurface]) {
+    expect(await surface.evaluate((element) => {
+      const style = window.getComputedStyle(element);
+      const sides = ["Top", "Right", "Bottom", "Left"] as const;
+      return {
+        visibleBorders: sides.filter((side) =>
+          style.getPropertyValue(`border-${side.toLowerCase()}-style`) !== "none"
+          && style.getPropertyValue(`border-${side.toLowerCase()}-width`) !== "0px"
+        ),
+        transparentBackground:
+          style.backgroundColor === "transparent"
+          || style.backgroundColor === "rgba(0, 0, 0, 0)",
+      };
+    })).toEqual({ visibleBorders: [], transparentBackground: true });
+  }
+
+  const info = page.getByRole("button", { name: "Page info", exact: true });
+  await info.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(info).toBeFocused();
+  expect(await info.evaluate((element) => {
     const style = window.getComputedStyle(element);
     return {
       accent: window.getComputedStyle(document.documentElement)
         .getPropertyValue("--mem-accent-page")
         .trim(),
-      borderTopColor: style.borderTopColor,
+      outlineColor: style.outlineColor,
+      outlineVisible: style.outlineStyle !== "none" && style.outlineWidth !== "0px",
     };
   })).toEqual({
     accent: "#8FB3EA",
-    borderTopColor: "rgb(143, 179, 234)",
+    outlineColor: "rgb(143, 179, 234)",
+    outlineVisible: true,
   });
 });
 
-test("uses opaque light-theme focus indicators on editor controls and tasks", async ({ page }) => {
-  await openPage(
-    page,
-    pageFixture("# Browser editor fixture\n\n- [ ] Keyboard task\n"),
-  );
-  const editor = await beginEditing(page);
-  const bold = page.getByRole("button", { name: "Bold", exact: true });
-  const italic = page.getByRole("button", { name: "Italic", exact: true });
+test("uses opaque light-theme focus indicators on page info and tasks", async ({ page }) => {
+  const source = "# Browser editor fixture\n\n- [ ] Keyboard task\n";
+  await openPage(page, pageFixture(source));
+  const editor = await openedEditor(page, source);
+  const info = page.getByRole("button", { name: "Page info", exact: true });
   const task = editor.locator(".cm-writing-task-checkbox");
 
-  await bold.focus();
+  await info.focus();
+  await page.keyboard.press("Shift+Tab");
   await page.keyboard.press("Tab");
-  await expect(italic).toBeFocused();
-  expect(await italic.evaluate((element) => {
+  await expect(info).toBeFocused();
+  expect(await info.evaluate((element) => {
     const style = window.getComputedStyle(element);
     return {
       accent: window.getComputedStyle(document.documentElement)
@@ -491,7 +741,7 @@ test("gives a long document most of the available desktop height", async ({ page
   ).join("\n");
   await page.setViewportSize({ width: 1280, height: 900 });
   await openPage(page, pageFixture(longSource));
-  await beginEditing(page);
+  await openedEditor(page, longSource);
 
   const scroller = page.locator(
     '[data-markdown-editor-engine="codemirror"] .cm-scroller',
@@ -499,4 +749,25 @@ test("gives a long document most of the available desktop height", async ({ page
   await expect.poll(() =>
     scroller.evaluate((element) => element.clientHeight)
   ).toBeGreaterThanOrEqual(600);
+});
+
+
+test("confirms a remotely deleted page before offering guarded local draft discard", async ({ page }, testInfo) => {
+  const controller = await openPage(page);
+  const editor = await openedEditor(page);
+  await page.evaluate(async id => window.__TAURI_INTERNALS__!.invoke("delete_page", { id }), PAGE_ID);
+  const draft = "A local draft that must survive remote deletion.";
+  await editor.fill(draft);
+  await expect.poll(() => updateCalls(controller).length, AUTOSAVE_TIMEOUT).toBe(1);
+  await expect(page.getByRole("alert")).toContainText("This page no longer exists. Copy your draft before closing.");
+  await expect.poll(() => editorSource(editor)).toBe(draft);
+  await expect(page.getByRole("button", { name: "Discard draft", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("editor-deleted-before-recovery.png"), fullPage: true });
+  page.once("dialog", dialog => dialog.dismiss());
+  await page.getByRole("button", { name: "Discard draft", exact: true }).click();
+  await expect.poll(() => editorSource(editor)).toBe(draft);
+  page.once("dialog", dialog => dialog.accept());
+  await page.getByRole("button", { name: "Discard draft", exact: true }).click();
+  await expect(page.locator(".page-detail")).toHaveCount(0);
+  expect(updateCalls(controller)).toHaveLength(1);
 });

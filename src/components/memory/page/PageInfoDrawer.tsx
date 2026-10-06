@@ -1,0 +1,102 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+import { useEffect, useId, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { X } from "@phosphor-icons/react";
+import "./PageInfoDrawer.css";
+
+interface PageInfoDrawerProps {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  children: ReactNode;
+  closeLabel: string;
+}
+
+const FOCUSABLE = 'a[href], button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+function focusableControls(panel: HTMLElement): HTMLElement[] {
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((element) => {
+    if (element.tabIndex < 0 || element.matches(":disabled") || element.closest("[hidden], [inert]")) return false;
+    for (let ancestor: HTMLElement | null = element; ancestor && ancestor !== panel; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+    }
+    return true;
+  }).sort((left, right) => {
+    const leftOrder = left.tabIndex > 0 ? left.tabIndex : Infinity;
+    const rightOrder = right.tabIndex > 0 ? right.tabIndex : Infinity;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  });
+}
+
+export default function PageInfoDrawer({ open, onClose, title, children, closeLabel }: PageInfoDrawerProps) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLElement>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    if (!open) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeRef.current?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.isComposing) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) return;
+      const controls = focusableControls(panelRef.current);
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      const active = document.activeElement;
+      const inside = active instanceof HTMLElement && controls.includes(active);
+      if (event.shiftKey && (!inside || active === first)) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && (!inside || active === last)) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    const containFocus = (event: FocusEvent) => {
+      if (event.target instanceof Node && !panelRef.current?.contains(event.target)) closeRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("focusin", containFocus);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("focusin", containFocus);
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  return createPortal(
+    <div className="page-info-drawer-overlay" onClick={(event) => {
+      if (event.target === event.currentTarget) onClose();
+    }}>
+      <aside
+        aria-labelledby={titleId}
+        aria-modal="true"
+        className="page-info-drawer"
+        ref={panelRef}
+        role="dialog"
+      >
+        <header className="page-info-drawer-header">
+          <h2 id={titleId}>{title}</h2>
+          <button aria-label={closeLabel} className="page-info-drawer-close" onClick={onClose} ref={closeRef} type="button">
+            <X aria-hidden="true" size={18} />
+          </button>
+        </header>
+        <div className="page-info-drawer-content">{children}</div>
+      </aside>
+    </div>,
+    document.body,
+  );
+}

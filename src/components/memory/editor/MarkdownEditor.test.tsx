@@ -29,6 +29,17 @@ const baseProps = (overrides: Partial<MarkdownEditorProps> = {}): MarkdownEditor
 });
 
 describe("MarkdownEditor", () => {
+  it("forwards restored selection and live selection callbacks through lazy loading", async () => {
+    const onSelectionChange = vi.fn();
+    const props = baseProps({ initialSelection: { anchor: 5, head: 2 }, onSelectionChange });
+    render(<MarkdownEditor {...props} />);
+    const view = editorViewFromTextbox(await screen.findByRole("textbox", { name: "Source" }));
+    expect(view.state.selection.main).toMatchObject({ anchor: 5, head: 2 });
+    act(() => selectRange(view, 3, 1));
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ anchor: 3, head: 1 });
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+  });
+
   it("reports loading once per session across same-session rerenders", async () => {
     const statuses: MarkdownEditorStatus[] = [];
     const props = baseProps({

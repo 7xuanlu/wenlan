@@ -82,6 +82,15 @@ describe("translation resources", () => {
     }
   });
 
+  it("labels deliberate draft discard in each editor locale", () => {
+    expect(supportedAppLocales.map((locale) =>
+      resources[locale].translation.pageDetail.editor.discard,
+    )).toEqual(["Discard draft", "丢弃草稿", "捨棄草稿"]);
+    for (const locale of supportedAppLocales) {
+      expect(resources[locale].translation.pageDetail.editor.discardConfirm).toBeTruthy();
+    }
+  });
+
   it("keeps the Review fixture boundary explicit in every locale", () => {
     expect([
       resources.en.translation.reviewEnvironment.testData,

@@ -2702,6 +2702,15 @@ html[data-theme="light"] {
   align-items: start;
 }
 
+.page-detail-rail {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.page-detail .memory-detail-rail-title {
+  border-bottom: 0;
+}
+
 /* Reading column: capped measure + roomier type via ContentRenderer vars.
    Type and width scale together — the measure (chars/line) stays constant. */
 .page-detail-prose {

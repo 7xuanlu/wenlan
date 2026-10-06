@@ -68,7 +68,10 @@ beforeEach(() => {
     entries: [],
   });
   tauriMocks.redistillPage.mockResolvedValue({ status: "ok", updated: true });
-  tauriMocks.updatePage.mockResolvedValue({ outcome: "saved" });
+  tauriMocks.updatePage.mockImplementation(async (input) => {
+    tauriMocks.getPage.mockResolvedValue({ ...PAGE, content: input.content, version: input.expectedVersion + 1 });
+    return { outcome: "saved" };
+  });
   tauriMocks.getDaemonVersion.mockResolvedValue("0.14.1");
   tauriMocks.getSystemInfo.mockResolvedValue({ os: "macos" });
   tauriMocks.recordPageEditorDiagnostic.mockResolvedValue(undefined);
@@ -111,7 +114,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
         "page-markdown-editor-description",
       );
       expect(description).toHaveTextContent(
-        `Markdown appears at the cursor. Save with ${modifier}+S.`,
+        `Changes save automatically. Use ${modifier}+S to save now.`,
       );
       expect(description).toHaveClass("sr-only");
       expect(description).not.toHaveTextContent(otherModifier);
@@ -142,7 +145,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
 
     expect(
       document.getElementById("page-markdown-editor-description"),
-    ).toHaveTextContent("Markdown appears at the cursor. Save with Cmd+S.");
+    ).toHaveTextContent("Changes save automatically. Use Cmd+S to save now.");
     expect(tauriMocks.getSystemInfo).toHaveBeenCalledOnce();
   });
 
@@ -184,7 +187,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     expect(
       document.getElementById("page-markdown-editor-description"),
     ).toHaveTextContent(
-      "Markdown appears at the cursor. Save with Cmd+S.",
+      "Changes save automatically. Use Cmd+S to save now.",
     );
 
     act(() => {
@@ -196,7 +199,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     expect(tauriMocks.updatePage).not.toHaveBeenCalled();
   });
 
-  it("formats through the top toolbar and Save sends the exact live CodeMirror snapshot", async () => {
+  it("formats through the keyboard and flush sends the exact live CodeMirror snapshot", async () => {
     const editablePage = { ...PAGE, content: "alpha" };
     tauriMocks.getPage.mockResolvedValue(editablePage);
     const client = new QueryClient({
@@ -220,11 +223,11 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     const view = editorViewFromTextbox(textbox);
     act(() => selectRange(view, 0, view.state.doc.length));
 
-    await user.click(screen.getByRole("button", { name: "Bold" }));
+    act(() => pressKey(textbox, "b", { ctrlKey: true }));
     expect(view.state.doc.toString()).toBe("**alpha**");
     expect(textbox).toHaveFocus();
 
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    act(() => pressKey(textbox, "s", { ctrlKey: true }));
 
     await waitFor(() => {
       expect(tauriMocks.updatePage).toHaveBeenCalledWith({
@@ -283,14 +286,18 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
         operationId: expect.any(String),
       });
     });
-    await waitFor(() => {
-      expect(
-        screen.queryByRole("textbox", { name: "Page editor" }),
-      ).toBeNull();
-    });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(exactSource);
+    act(() => pressKey(textbox, "z", { ctrlKey: true }));
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(PAGE.content);
+    act(() => pressKey(textbox, "y", { ctrlKey: true }));
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(exactSource);
+    expect(screen.queryByRole("button", { name: /^Save$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
-  it("preserves an upgrade-blocked draft, offers copy, and keeps Save recoverable", async () => {
+  it("preserves an upgrade-blocked draft, offers copy, and keeps retry recoverable", async () => {
     tauriMocks.updatePage.mockResolvedValue({
       outcome: "upgrade_required",
       reportedVersion: "0.14.0",
@@ -318,14 +325,14 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     });
     const blockedDraft = "# Draft blocked by the old daemon\n";
     act(() => replaceDocument(editorViewFromTextbox(textbox), blockedDraft));
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    act(() => pressKey(textbox, "s", { ctrlKey: true }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Page editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
     );
     expect(screen.getByRole("button", { name: "Copy my draft" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Retry$/ })).toBeNull();
-    expect(screen.getByRole("button", { name: /^Save$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Retry$/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Save$/ })).toBeNull();
     expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(blockedDraft);
 
     const editedDraft = `${blockedDraft}\nStill editing locally.\n`;
@@ -334,11 +341,11 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     await user.click(screen.getByRole("button", { name: "Copy my draft" }));
     expect(tauriMocks.clipboardWrite).toHaveBeenCalledWith(editedDraft);
 
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(tauriMocks.updatePage).toHaveBeenCalledTimes(2));
   });
 
-  it("uses the editable H1 as the single title and the toolbar as the only action center", async () => {
+  it("uses the editable H1 as the single title without a persistent formatting toolbar", async () => {
     const editablePage = {
       ...PAGE,
       content: `# ${PAGE.title}\n\nBody copy.\n`,
@@ -377,8 +384,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       screen.getByRole("heading", { level: 1, name: PAGE.title }),
     ).toHaveClass("sr-only");
     expect(
-      screen.getByRole("toolbar", { name: "Formatting" }),
-    ).toBeInTheDocument();
+      screen.queryByRole("toolbar", { name: "Formatting" }),
+    ).toBeNull();
     expect(
       screen.queryByRole("button", { name: "Copy as context" }),
     ).toBeNull();
@@ -403,7 +410,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       screen.getByRole("heading", { level: 1, name: PAGE.title }),
     ).toHaveClass("sr-only");
 
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    act(() => pressKey(textbox, "Escape"));
     expect(await screen.findByText(PAGE.title)).toHaveClass("page-detail-title");
     expect(
       screen.getByRole("button", { name: "Copy as context" }),
@@ -493,4 +500,326 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       screen.queryByRole("textbox", { name: "Page editor" }),
     ).toBeNull();
   });
+
+  it("autosaves without persistence buttons and keeps undo history across confirmed versions", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("toolbar", { name: "Formatting" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    const view = editorViewFromTextbox(textbox);
+    act(() => replaceDocument(view, "A new autosaved body.\n"));
+    await waitFor(() => expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+
+    act(() => pressKey(textbox, "z", { ctrlKey: true }));
+    expect(view.state.doc.toString()).toBe(PAGE.content);
+    await waitFor(() => expect(tauriMocks.updatePage).toHaveBeenCalledTimes(2));
+    expect(tauriMocks.updatePage.mock.calls[1][0]).toEqual(expect.objectContaining({
+      content: PAGE.content, expectedVersion: PAGE.version + 1,
+    }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Saved"));
+  });
+
+  it("registered flush drains newer input through the confirmed canonical version", async () => {
+    let finishWrite!: (value: { outcome: "saved" }) => void;
+    const writing = new Promise<{ outcome: "saved" }>((resolve) => { finishWrite = resolve; });
+    tauriMocks.updatePage.mockReturnValueOnce(writing);
+    const register = vi.fn();
+    const dirty = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={register} onEditDirtyChange={dirty} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    const view = editorViewFromTextbox(textbox);
+    act(() => replaceDocument(view, "First snapshot."));
+    tauriMocks.getPage.mockResolvedValueOnce({ ...PAGE, content: "First snapshot.", version: PAGE.version + 1 });
+    const flush = register.mock.lastCall?.[0] as () => Promise<boolean>;
+    let flushed!: Promise<boolean>;
+    act(() => { flushed = flush(); });
+    expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
+    expect(textbox).toHaveAttribute("contenteditable", "true");
+    act(() => replaceDocument(view, "Second snapshot while saving."));
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    const pendingUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(pendingUnload);
+    expect(pendingUnload.defaultPrevented).toBe(true);
+
+    await act(async () => {
+      finishWrite({ outcome: "saved" });
+      expect(await flushed).toBe(true);
+    });
+    expect(tauriMocks.updatePage).toHaveBeenCalledTimes(2);
+    expect(tauriMocks.updatePage.mock.calls[1][0]).toEqual(expect.objectContaining({
+      content: "Second snapshot while saving.", expectedVersion: PAGE.version + 1,
+    }));
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    expect(view.state.doc.toString()).toBe("Second snapshot while saving.");
+    const confirmedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(confirmedUnload);
+    expect(confirmedUnload.defaultPrevented).toBe(false);
+  });
+
+  it("Back waits for canonical confirmation and leaves the editor intact until then", async () => {
+    let finishRead!: (page: typeof PAGE) => void;
+    const canonical = new Promise<typeof PAGE>((resolve) => { finishRead = resolve; });
+    const onBack = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={onBack} onMemoryClick={vi.fn()} onPageClick={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    const draft = "Leave only after canonical confirmation.";
+    act(() => replaceDocument(editorViewFromTextbox(textbox), draft));
+    tauriMocks.getPage.mockReturnValueOnce(canonical);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
+    expect(onBack).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    await act(async () => finishRead({ ...PAGE, content: draft, version: PAGE.version + 1 }));
+    await waitFor(() => expect(onBack).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+  });
+
+
+  it.each([false, true])("preserves the live editor when the canonical page is deleted (local edit: %s)", async (changed) => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const navigate = vi.fn();
+    const dirty = vi.fn();
+    const register = vi.fn();
+    const onBack = vi.fn(async () => {
+      if (await register.mock.lastCall?.[0]()) navigate();
+    });
+    const confirmDiscard = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={onBack} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onEditDirtyChange={dirty} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    const draft = changed ? "Keep this locally after deletion." : PAGE.content;
+    if (changed) act(() => replaceDocument(editorViewFromTextbox(textbox), draft));
+    tauriMocks.getPage.mockResolvedValue(null);
+    await act(async () => { await client.invalidateQueries({ queryKey: ["page", PAGE.id] }); });
+
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    expect(await screen.findByRole("alert")).toHaveTextContent("This page no longer exists. Copy your draft before closing.");
+    expect(screen.getByRole("status")).toHaveTextContent("Unsaved changes");
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    await user.click(screen.getByRole("button", { name: "Copy my draft" }));
+    expect(tauriMocks.clipboardWrite).toHaveBeenCalledWith(draft);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(navigate).not.toHaveBeenCalled();
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+    const closing = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(closing);
+    expect(closing.defaultPrevented).toBe(true);
+    const flush = register.mock.lastCall?.[0] as () => Promise<boolean>;
+    expect(await flush()).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(confirmDiscard).toHaveBeenCalledWith("Discard your unsaved draft?");
+    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    expect(await flush()).toBe(false);
+    const cancelledUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(cancelledUnload);
+    expect(cancelledUnload.defaultPrevented).toBe(true);
+
+    confirmDiscard.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    expect(await flush()).toBe(true);
+    const discardedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(discardedUnload);
+    expect(discardedUnload.defaultPrevented).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+  });
+
+  it("confirms deletion after a typed not-found save without a query refresh and guards discard", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const dirty = vi.fn();
+    const register = vi.fn();
+    const confirmDiscard = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onEditDirtyChange={dirty} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    tauriMocks.updatePage.mockResolvedValueOnce({ outcome: "failure", kind: "not_found", status: 404, message: "Missing" });
+    tauriMocks.getPage.mockResolvedValue(null);
+    const draft = "Draft survives a remote deletion discovered during save.";
+    act(() => replaceDocument(editorViewFromTextbox(textbox), draft));
+    const flush = register.mock.lastCall?.[0] as () => Promise<boolean>;
+    await act(async () => { expect(await flush()).toBe(false); });
+    expect(client.getQueryData(["page", PAGE.id])).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("This page no longer exists. Copy your draft before closing.");
+    await user.click(screen.getByRole("button", { name: "Copy my draft" }));
+    expect(tauriMocks.clipboardWrite).toHaveBeenCalledWith(draft);
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(confirmDiscard).toHaveBeenCalledWith("Discard your unsaved draft?");
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    expect(dirty).toHaveBeenLastCalledWith(true);
+    expect(await flush()).toBe(false);
+    const cancelledUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(cancelledUnload);
+    expect(cancelledUnload.defaultPrevented).toBe(true);
+    confirmDiscard.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Discard draft" }));
+    expect(screen.queryByRole("textbox", { name: "Page editor" })).toBeNull();
+    expect(dirty).toHaveBeenLastCalledWith(false);
+    expect(await flush()).toBe(true);
+    const discardedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(discardedUnload);
+    expect(discardedUnload.defaultPrevented).toBe(false);
+    expect(tauriMocks.updatePage).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a not-found draft protected without offering discard when confirmation cannot load", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const register = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    tauriMocks.updatePage.mockResolvedValueOnce({ outcome: "failure", kind: "not_found", status: 404, message: "Missing" });
+    tauriMocks.getPage.mockRejectedValueOnce(new Error("offline"));
+    const draft = "Unconfirmed deletion still protects my draft.";
+    act(() => replaceDocument(editorViewFromTextbox(textbox), draft));
+    await act(async () => { expect(await register.mock.lastCall?.[0]()).toBe(false); });
+    expect(client.getQueryData(["page", PAGE.id])).toEqual(PAGE);
+    expect(screen.queryByRole("button", { name: "Discard draft" })).toBeNull();
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    const unload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unload);
+    expect(unload.defaultPrevented).toBe(true);
+    expect(tauriMocks.updatePage).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the newest observed conflict preview and reloads it only after confirmation", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const confirmReload = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    const draft = "Keep my local document until confirmation.";
+    act(() => replaceDocument(editorViewFromTextbox(textbox), draft));
+    const remote4 = { ...PAGE, content: "Remote first conflict.", version: PAGE.version + 1 };
+    const remote5 = { ...PAGE, content: "Remote newest conflict.", version: PAGE.version + 2 };
+    await act(async () => { client.setQueryData(["page", PAGE.id], remote4); });
+    await screen.findByText(`Latest source (version ${remote4.version})`);
+    await act(async () => { client.setQueryData(["page", PAGE.id], remote5); });
+    await screen.findByText(`Latest source (version ${remote5.version})`);
+    expect(screen.queryByRole("button", { name: "Discard draft" })).toBeNull();
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    await user.click(screen.getByRole("button", { name: "Reload latest" }));
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe(draft);
+    expect(client.getQueryData(["page", PAGE.id])).toEqual(remote5);
+    confirmReload.mockReturnValue(true);
+    await user.click(screen.getByRole("button", { name: "Reload latest" }));
+    await waitFor(() => expect(editorViewFromTextbox(screen.getByRole("textbox", { name: "Page editor" })).state.doc.toString()).toBe(remote5.content));
+    expect(client.getQueryData(["page", PAGE.id])).toEqual(remote5);
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+  });
+
+  it("retains a successful Retry latest preview after additional typing", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const register = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    tauriMocks.updatePage.mockResolvedValueOnce({ outcome: "conflict", message: "Remote edit" });
+    tauriMocks.getPage.mockRejectedValueOnce(new Error("Latest temporarily unavailable"));
+    act(() => replaceDocument(editorViewFromTextbox(textbox), "Local document."));
+    await act(async () => { expect(await register.mock.lastCall?.[0]()).toBe(false); });
+    await screen.findByRole("button", { name: "Retry loading latest" });
+    expect(screen.queryByRole("button", { name: "Discard draft" })).toBeNull();
+    const latest = { ...PAGE, content: "Recovered remote source.", version: PAGE.version + 1 };
+    tauriMocks.getPage.mockResolvedValue(latest);
+    await user.click(screen.getByRole("button", { name: "Retry loading latest" }));
+    await screen.findByText(`Latest source (version ${latest.version})`);
+    act(() => replaceDocument(editorViewFromTextbox(textbox), "Local document with more typing."));
+    expect(screen.getByText(`Latest source (version ${latest.version})`)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry loading latest" })).toBeNull();
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe("Local document with more typing.");
+    expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no discard escape during a pending or ambiguous write", async () => {
+    let rejectWrite!: (error: Error) => void;
+    tauriMocks.updatePage.mockReturnValueOnce(new Promise((_resolve, reject) => { rejectWrite = reject; }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const register = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(textbox), "Possibly committed local draft."));
+    let flushing!: Promise<boolean>;
+    act(() => { flushing = register.mock.lastCall?.[0](); });
+    expect(screen.queryByRole("button", { name: "Discard draft" })).toBeNull();
+    await act(async () => {
+      rejectWrite(new Error("Response lost"));
+      expect(await flushing).toBe(false);
+    });
+    expect(screen.queryByRole("button", { name: "Discard draft" })).toBeNull();
+    expect(await register.mock.lastCall?.[0]()).toBe(false);
+    const unresolvedUnload = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(unresolvedUnload);
+    expect(unresolvedUnload.defaultPrevented).toBe(true);
+    expect(editorViewFromTextbox(textbox).state.doc.toString()).toBe("Possibly committed local draft.");
+  });
+
+  it("queues Back immediately with the navigation owner when a flush handle is registered", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    const onBack = vi.fn();
+    const register = vi.fn();
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={onBack} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={register} />
+      </QueryClientProvider>,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    act(() => replaceDocument(editorViewFromTextbox(textbox), "Main owns this flush."));
+    await user.click(screen.getByRole("button", { name: "Back" }));
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+    const flush = register.mock.lastCall?.[0] as () => Promise<boolean>;
+    await act(async () => expect(await flush()).toBe(true));
+    expect(tauriMocks.updatePage).toHaveBeenCalledOnce();
+  });
+
 });

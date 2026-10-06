@@ -22,6 +22,51 @@ const baseProps = (overrides: Partial<MarkdownEditorProps> = {}): MarkdownEditor
 });
 
 describe("NativeMarkdownEditor", () => {
+  it("restores backward ranges and reports selection without a document write", () => {
+    const onSelectionChange = vi.fn();
+    const props = baseProps({ initialSelection: { anchor: 8, head: 2 }, onSelectionChange });
+    render(<NativeMarkdownEditor {...props} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(textbox.selectionStart).toBe(2);
+    expect(textbox.selectionEnd).toBe(8);
+    expect(textbox.selectionDirection).toBe("backward");
+    textbox.setSelectionRange(1, 6, "backward");
+    fireEvent.select(textbox);
+    expect(onSelectionChange).toHaveBeenLastCalledWith({ anchor: 6, head: 1 });
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+    expect(props.onSave).not.toHaveBeenCalled();
+  });
+
+  it("keeps live selection during a session and clamps restored selection for shorter text", () => {
+    const props = baseProps({ initialSelection: { anchor: 8, head: 2 } });
+    const { rerender } = render(<NativeMarkdownEditor {...props} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    textbox.setSelectionRange(1, 4, "forward");
+    rerender(<NativeMarkdownEditor {...props} initialSelection={{ anchor: 0, head: 0 }} />);
+    expect(textbox.selectionStart).toBe(1);
+    expect(textbox.selectionEnd).toBe(4);
+    rerender(<NativeMarkdownEditor {...props} sessionId="page-1:2" initialDocument="xy"
+      initialSelection={{ anchor: 8, head: -2 }} />);
+    const next = screen.getByRole("textbox") as HTMLTextAreaElement;
+    expect(next.selectionStart).toBe(0);
+    expect(next.selectionEnd).toBe(2);
+    expect(next.selectionDirection).toBe("backward");
+    expect(props.onDocumentChange).not.toHaveBeenCalled();
+  });
+
+  it("reports the current selection after text changes through the latest callback", () => {
+    const firstSelection = vi.fn();
+    const latestSelection = vi.fn();
+    const props = baseProps({ onSelectionChange: firstSelection });
+    const { rerender } = render(<NativeMarkdownEditor {...props} />);
+    rerender(<NativeMarkdownEditor {...props} onSelectionChange={latestSelection} />);
+    const textbox = screen.getByRole("textbox") as HTMLTextAreaElement;
+    fireEvent.change(textbox, { target: { value: "xy", selectionStart: 2, selectionEnd: 2 } });
+    expect(latestSelection).toHaveBeenLastCalledWith({ anchor: 2, head: 2 });
+    expect(firstSelection).not.toHaveBeenCalled();
+    expect(props.onDocumentChange).toHaveBeenCalledExactlyOnceWith("xy");
+  });
+
   it("reports Markdown-only status and saves the live document through its handle", () => {
     const ref = createRef<MarkdownEditorHandle>();
     const onSave = vi.fn();

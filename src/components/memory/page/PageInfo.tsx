@@ -12,6 +12,8 @@ import type { CitationState } from "../../../lib/pageCitations";
 import { prettyAgent, relativeMs } from "./format";
 
 interface PageInfoProps {
+  /** Render inside PageDetail's single expandable information section. */
+  embedded?: boolean;
   sourceCount: number;
   sources: PageSourceWithMemory[] | undefined;
   inbound: PageLinkInbound[];
@@ -73,6 +75,7 @@ function sortSourceRows(
 }
 
 export default function PageInfo({
+  embedded = false,
   sourceCount,
   sources,
   inbound,
@@ -129,14 +132,15 @@ export default function PageInfo({
         : citationState === "stripped-mismatch"
           ? t("pageInfo.citationsStrippedMismatch")
           : null;
+  const Wrapper = embedded ? "div" : "details";
 
   return (
-    <details
-      aria-label={t("pageInfo.label")}
+    <Wrapper
+      aria-label={embedded ? undefined : t("pageInfo.label")}
       className="rounded-lg"
-      style={{ border: "1px solid var(--mem-border)" }}
+      style={{ border: embedded ? "none" : "1px solid var(--mem-border)" }}
     >
-      <summary
+      {!embedded && <summary
         className="flex items-center gap-2 px-4 py-3 cursor-pointer select-none list-none"
         style={{
           fontFamily: "var(--mem-font-mono)",
@@ -153,8 +157,8 @@ export default function PageInfo({
           {t("pageInfo.revisions", { count: revisions.length })} ·{" "}
           {t("pageInfo.sources", { count: sourceCount })}
         </span>
-      </summary>
-      <div className="flex flex-col gap-4 px-4 pb-4">
+      </summary>}
+      <div className={embedded ? "flex flex-col gap-4" : "flex flex-col gap-4 px-4 pb-4"}>
         {inbound.length > 0 && (
           <div>
             <h4 className="mb-1" style={groupHeading}>
@@ -411,6 +415,6 @@ export default function PageInfo({
           </p>
         )}
       </div>
-    </details>
+    </Wrapper>
   );
 }

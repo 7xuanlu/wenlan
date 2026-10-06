@@ -43,13 +43,21 @@ export interface MarkdownEditorStatus {
   canRedo: boolean;
 }
 
+export interface MarkdownEditorSelection {
+  anchor: number;
+  head: number;
+}
+
 export interface MarkdownEditorProps {
   initialDocument: string;
+  initialSelection?: MarkdownEditorSelection;
   sessionId: string;
+  seamless?: boolean;
   disabled: boolean;
   ariaLabel: string;
   describedBy?: string;
   onDocumentChange(document: string): void;
+  onSelectionChange?(selection: MarkdownEditorSelection): void;
   onSave(document: string): void;
   onCancel(): void;
   onFallback(reason: "load" | "construction"): void;
@@ -74,6 +82,7 @@ const MarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       onStatusChange: props.onStatusChange,
     });
     const originalDocumentRef = useRef(props.initialDocument);
+    const originalSelectionRef = useRef(props.initialSelection);
     const fallbackEmittedRef = useRef(false);
     const [loadState, setLoadState] = useState<LoadState>({
       sessionId: props.sessionId,
@@ -190,6 +199,7 @@ const MarkdownEditorSession = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     const sessionProps = {
       ...props,
       initialDocument: originalDocumentRef.current,
+      initialSelection: originalSelectionRef.current,
     };
 
     if (loadState.status === "fallback") {

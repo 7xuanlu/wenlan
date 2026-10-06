@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -25,7 +25,6 @@ import {
   type Entity,
   type Page,
   type PageReviewOutcome,
-  type UpdatePageInput,
   type UpdatePageFailureKind,
 } from "../../lib/tauri";
 // Imported from its own module, not the lib/tauri barrel: tests mock that
@@ -36,6 +35,7 @@ import { PageTruthBadges } from "./PageTruthBadges";
 import ContentRenderer from "./ContentRenderer";
 import RelatedPages from "./page/RelatedPages";
 import PageInfo from "./page/PageInfo";
+import PageInfoDrawer from "./page/PageInfoDrawer";
 import { pageReviewNotice, type PageReviewNotice } from "./page/pageReviewNotice";
 import { RailPanelTitle } from "./MemoryDetailPrimitives";
 import { processCitations, stripCitationLinks } from "../../lib/pageCitations";
@@ -49,10 +49,6 @@ import {
   type PreparedMarkdownSource,
 } from "./editor/markdownSourceContract";
 import {
-  beginPageSave,
-  pageDraftChanged,
-  pageVersionChanged,
-  settlePageSave,
   type PageEditBaseline,
   type PageSaveCoordinatorState,
 } from "./editor/pageSaveCoordinator";
@@ -60,15 +56,18 @@ import {
   MarkdownEditor,
   type MarkdownEditorHandle,
   type MarkdownEditorStatus,
+  type MarkdownEditorSelection,
 } from "./editor/MarkdownEditor";
-import {
-  MarkdownEditorToolbar,
-  type MarkdownEditorToolbarLabels,
-} from "./editor/MarkdownEditorToolbar";
 import { leadingMarkdownH1MatchesTitle } from "./editor/pageEditorPresentation";
+import { PageAutosave } from "./editor/pageAutosave";
 
 interface PageDetailProps {
   pageId: string;
+  /** Navigation intent: ordinary pages can start editing; review origins read. */
+  initialMode?: "read" | "edit";
+  initialSelection?: MarkdownEditorSelection;
+  onSelectionChange?: (selection: MarkdownEditorSelection) => void;
+  onEditorReady?: () => void;
   onBack: () => void;
   onMemoryClick: (sourceId: string) => void;
   onPageClick?: (pageId: string) => void;
@@ -77,6 +76,7 @@ interface PageDetailProps {
   onPageLoaded?: (page: Pick<Page, "id" | "status" | "title">) => void;
   onSavePendingChange?: (pending: boolean) => void;
   onEditDirtyChange?: (dirty: boolean) => void;
+  onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
   showAttachedPageNotice?: boolean;
 }
 
@@ -199,6 +199,10 @@ function handleMenuKeyDown(
 
 export default function PageDetail({
   pageId,
+  initialMode = "read",
+  initialSelection,
+  onSelectionChange,
+  onEditorReady,
   onBack,
   onMemoryClick,
   onPageClick,
@@ -207,6 +211,7 @@ export default function PageDetail({
   onPageLoaded,
   onSavePendingChange,
   onEditDirtyChange,
+  onRegisterFlush,
   showAttachedPageNotice = false,
 }: PageDetailProps) {
   const { t } = useTranslation();
@@ -216,6 +221,9 @@ export default function PageDetail({
   const [copying, setCopying] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
+  useEffect(() => setInfoOpen(false), [pageId]);
+  const [editDirty, setEditDirty] = useState(false);
   const [editInitialDocument, setEditInitialDocument] = useState("");
   const [editHasMatchingTitle, setEditHasMatchingTitle] = useState(false);
   const [editGate, setEditGate] = useState<PageEditGate>({ kind: "closed" });
@@ -271,12 +279,16 @@ export default function PageDetail({
   const editDirtyRef = useRef(false);
   const editPageTitleRef = useRef("");
   const beginEditAttemptRef = useRef(0);
+  const autoEditIntentRef = useRef<{ pageId: string; mode: "read" | "edit" } | null>(null);
   const editorSessionEpochRef = useRef(0);
   const activeEditorSessionRef = useRef<{
     id: string;
     epoch: number;
   } | null>(null);
   const saveStateRef = useRef<PageSaveCoordinatorState>({ phase: "idle" });
+  const autosaveRef = useRef<PageAutosave | null>(null);
+  const editorPageRef = useRef<Page | null>(null);
+  const backAttemptRef = useRef(0);
   const exportMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const exportMenuInitialFocusRef = useRef<MenuInitialFocus>("first");
@@ -286,13 +298,12 @@ export default function PageDetail({
   const actionMenuInitialFocusRef = useRef<MenuInitialFocus>("first");
   const activePageIdRef = useRef(pageId);
   activePageIdRef.current = pageId;
-  const editorSessionId = editBaseline
-    ? `${editBaseline.pageId}:${editBaseline.version}`
-    : null;
+  // Canonical versions advance during autosave without remounting the editor.
+  const editorSessionId = editorSessionToken?.id ?? null;
   const editorSessionEpoch = editorSessionToken?.epoch ?? 0;
 
   const {
-    data: page,
+    data: canonicalPage,
     isLoading,
     isLoadingError: pageLoadFailed,
     isFetching: pageIsFetching,
@@ -302,6 +313,10 @@ export default function PageDetail({
     queryFn: () => getPage(pageId, "explicit"),
     ...EXPLICIT_BROWSE_QUERY_POLICY,
   });
+  // A remote deletion must not unmount the only copy of the local document.
+  const page = canonicalPage ?? (
+    editing && editorPageRef.current?.id === pageId ? editorPageRef.current : null
+  );
   const { cutoverLive } = useTruthStatus();
 
   // Fails closed on purpose, exactly like `useDaemonVersion`: an unreachable
@@ -422,6 +437,9 @@ export default function PageDetail({
   }, [pageId, page?.title, pageSources, entitySignature]);
 
   useEffect(() => {
+    autosaveRef.current?.reset(null);
+    editorPageRef.current = null;
+    autoEditIntentRef.current = null;
     setRedistillNotice(null);
     setActionErrorMessage(null);
     setCopied(false);
@@ -450,20 +468,6 @@ export default function PageDetail({
   }, []);
 
   useEffect(() => {
-    const blockPendingEscape = (event: KeyboardEvent) => {
-      if (
-        event.key === "Escape" &&
-        saveStateRef.current.phase === "pending"
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    };
-    window.addEventListener("keydown", blockPendingEscape, true);
-    return () => window.removeEventListener("keydown", blockPendingEscape, true);
-  }, []);
-
-  useEffect(() => {
     onSavePendingChange?.(saveState.phase === "pending");
   }, [onSavePendingChange, saveState.phase]);
 
@@ -485,20 +489,57 @@ export default function PageDetail({
     (dirty: boolean) => {
       if (editDirtyRef.current === dirty) return;
       editDirtyRef.current = dirty;
+      setEditDirty(dirty);
       onEditDirtyChange?.(dirty);
     },
     [onEditDirtyChange],
   );
 
-  const isCurrentSave = useCallback((input: UpdatePageInput) => {
-    const current = saveStateRef.current;
-    return (
-      current.phase === "pending" &&
-      current.pending.operationId === input.operationId &&
-      current.pending.content === input.content &&
-      current.pending.expectedVersion === input.expectedVersion
-    );
-  }, []);
+  if (!autosaveRef.current) {
+    autosaveRef.current = new PageAutosave({
+      write: updatePage,
+      read: (id) => getPage(id, "explicit"),
+      operationId: createPageOperationId,
+      onChange: () => {},
+      onMissing: (id) => { queryClient.setQueryData(["page", id], null); },
+      onCanonical: (canonical) => {
+        queryClient.setQueryData(["page", canonical.id], canonical);
+        void queryClient.invalidateQueries({ queryKey: ["pages"] });
+        void queryClient.invalidateQueries({ queryKey: ["page-links", canonical.id] });
+        void queryClient.invalidateQueries({ queryKey: ["page-revisions", canonical.id] });
+      },
+    });
+  }
+  const autosave = autosaveRef.current;
+  useLayoutEffect(() => {
+    autosave.setObserver((snapshot) => {
+      updateSaveState(snapshot.state);
+      setEditBaseline(snapshot.baseline);
+      updateEditDirty(snapshot.dirty);
+      setEditValidation(snapshot.validation ? t("pageDetail.editor.empty") : null);
+      if (snapshot.state.phase === "conflict") {
+        setConflictLatest(snapshot.latest
+          ? { kind: "loaded", operationId: snapshot.state.pending.operationId, page: snapshot.latest }
+          : { kind: "error", operationId: snapshot.state.pending.operationId });
+      }
+    });
+  }, [autosave, t, updateEditDirty, updateSaveState]);
+  useEffect(() => () => autosave.dispose(), [autosave]);
+
+  const flushEditor = useCallback(() => autosave.flush(), [autosave]);
+  useEffect(() => {
+    onRegisterFlush?.(flushEditor);
+    return () => onRegisterFlush?.(null);
+  }, [flushEditor, onRegisterFlush, pageId]);
+  useEffect(() => {
+    const protectUnsavedPage = (event: BeforeUnloadEvent) => {
+      if (!autosave.snapshot().dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", protectUnsavedPage);
+    return () => window.removeEventListener("beforeunload", protectUnsavedPage);
+  }, [autosave]);
 
   const fetchConflictLatest = useCallback(
     async (operationId: string): Promise<Page | null> => {
@@ -509,7 +550,7 @@ export default function PageDetail({
           : { kind: "loading", operationId },
       );
       try {
-        const latest = await getPage(pageId, "explicit");
+        const latest = await autosave.readConflictLatest(operationId);
         const current = saveStateRef.current;
         if (
           current.phase !== "conflict" ||
@@ -517,28 +558,25 @@ export default function PageDetail({
         ) {
           return null;
         }
-        if (!latest) {
-          setConflictLatest((currentLatest) =>
-            currentLatest.kind === "loaded" &&
-            currentLatest.operationId === operationId
-              ? currentLatest
-              : { kind: "error", operationId },
-          );
+        // Feed both recovery reads and any newer cache observation into the
+        // autosaver, so typing cannot restore an older/null conflict preview.
+        autosave.observeConflictLatest(latest, operationId);
+        const cached = queryClient.getQueryData<Page | null>(["page", pageId]);
+        const baseline = autosave.snapshot().baseline;
+        if (cached && baseline && (
+          cached.version > baseline.version || cached.content !== baseline.content
+        )) autosave.observeConflictLatest(cached, operationId);
+        const newest = autosave.snapshot().latest;
+        if (!newest) {
+          setConflictLatest({ kind: "error", operationId });
           return null;
         }
         queryClient.setQueryData<Page | null>(["page", pageId], (currentPage) =>
-          currentPage && currentPage.version >= latest.version
+          currentPage?.id === pageId && currentPage.version >= newest.version
             ? currentPage
-            : latest,
+            : newest,
         );
-        setConflictLatest((currentLatest) =>
-          currentLatest.kind === "loaded" &&
-          currentLatest.operationId === operationId &&
-          currentLatest.page.version >= latest.version
-            ? currentLatest
-            : { kind: "loaded", operationId, page: latest },
-        );
-        return latest;
+        return newest;
       } catch {
         const current = saveStateRef.current;
         if (
@@ -555,55 +593,22 @@ export default function PageDetail({
         return null;
       }
     },
-    [pageId, queryClient],
+    [autosave, pageId, queryClient],
   );
-
-  const updateMutation = useMutation({
-    mutationFn: (input: UpdatePageInput) => updatePage(input),
-    onSuccess: (outcome, input) => {
-      if (!isCurrentSave(input)) return;
-      const next = settlePageSave(saveStateRef.current, outcome);
-      updateSaveState(next);
-      if (outcome.outcome === "saved") {
-        queryClient.invalidateQueries({ queryKey: ["page", input.id] });
-        queryClient.invalidateQueries({ queryKey: ["pages"] });
-        queryClient.invalidateQueries({ queryKey: ["page-links", input.id] });
-        queryClient.invalidateQueries({ queryKey: ["page-revisions", input.id] });
-        if (activePageIdRef.current !== input.id) return;
-        setActionErrorMessage(null);
-        setEditing(false);
-        setEditGate({ kind: "closed" });
-        setEditBaseline(null);
-        setSourceProfile(null);
-        setEditValidation(null);
-        setEditorFallbackSessionId(null);
-        setEditorSessionToken(null);
-        activeEditorSessionRef.current = null;
-        editDocumentRef.current = "";
-        updateEditDirty(false);
-      } else if (outcome.outcome === "conflict") {
-        void fetchConflictLatest(input.operationId);
-      }
-    },
-    onError: (_error, input) => {
-      if (!isCurrentSave(input)) return;
-      updateSaveState(
-        settlePageSave(saveStateRef.current, { outcome: "transport" }),
-      );
-    },
-  });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deletePage(id),
     onSuccess: (_result, id) => {
-      queryClient.invalidateQueries({ queryKey: ["page", id] });
+      // The detail remains mounted until navigation completes. Mark its caches
+      // stale without immediately requesting a page that was just deleted.
+      queryClient.invalidateQueries({ queryKey: ["page", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["pages"] });
-      queryClient.invalidateQueries({ queryKey: ["page-links", id] });
-      queryClient.invalidateQueries({ queryKey: ["page-revisions", id] });
-      queryClient.invalidateQueries({ queryKey: ["page-sources", id] });
+      queryClient.invalidateQueries({ queryKey: ["page-links", id], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["page-revisions", id], refetchType: "none" });
+      queryClient.invalidateQueries({ queryKey: ["page-sources", id], refetchType: "none" });
       if (activePageIdRef.current !== id) return;
       setActionErrorMessage(null);
-      onBack();
+      void requestBack();
     },
     onError: (error, id) => {
       if (activePageIdRef.current !== id) return;
@@ -740,6 +745,8 @@ export default function PageDetail({
   );
 
   const closeEditor = () => {
+    autosave.reset(null);
+    editorPageRef.current = null;
     activeEditorSessionRef.current = null;
     beginEditAttemptRef.current += 1;
     editorSessionEpochRef.current += 1;
@@ -766,9 +773,11 @@ export default function PageDetail({
     updateEditDirty(false);
   };
 
-  const openPageSourceForEditing = (sourcePage: Page) => {
+  const openPageSourceForEditing = (sourcePage: Page, automatic = false) => {
     if (activePageIdRef.current !== sourcePage.id) return;
 
+    autosave.reset(sourcePage);
+    editorPageRef.current = sourcePage;
     const prepared = prepareMarkdownSource(sourcePage.content);
     const sessionId = `${sourcePage.id}:${sourcePage.version}`;
     editorSessionEpochRef.current += 1;
@@ -805,6 +814,11 @@ export default function PageDetail({
     setConflictLatest({ kind: "idle" });
     updateSaveState({ phase: "idle" });
     if (!prepared.canEditLosslessly) {
+      if (automatic) {
+        closeEditor();
+        setActionErrorMessage(`${t("pageDetail.editor.normalizeTitle")} ${t("pageDetail.editor.normalizeDescription")}`);
+        return;
+      }
       setSourceProfile(null);
       setEditGate({ kind: "normalize", prepared });
       return;
@@ -815,7 +829,7 @@ export default function PageDetail({
     setEditGate({ kind: "editor" });
   };
 
-  const beginEditing = async () => {
+  const beginEditing = async (automatic = false) => {
     if (!page) return;
     const originPageId = page.id;
     const beginEditAttempt = ++beginEditAttemptRef.current;
@@ -847,7 +861,15 @@ export default function PageDetail({
     } catch {
       if (!isActiveBeginEdit()) return;
 
-      setEditGate({ kind: "unsupported", version: null });
+      if (automatic) {
+        closeEditor();
+        setActionErrorMessage(t("pageDetail.editor.upgradeRequired", {
+          floor: PAGE_EDIT_DAEMON_FLOOR,
+          version: t("pageDetail.editor.unavailableVersion"),
+        }));
+      } else {
+        setEditGate({ kind: "unsupported", version: null });
+      }
       void recordPageEditorDiagnostic({
         event: "daemon_floor_blocked",
         reportedVersion: null,
@@ -858,7 +880,15 @@ export default function PageDetail({
     if (!isActiveBeginEdit()) return;
 
     if (!daemonMeetsFloor(version, PAGE_EDIT_DAEMON_FLOOR)) {
-      setEditGate({ kind: "unsupported", version });
+      if (automatic) {
+        closeEditor();
+        setActionErrorMessage(t("pageDetail.editor.upgradeRequired", {
+          floor: PAGE_EDIT_DAEMON_FLOOR,
+          version,
+        }));
+      } else {
+        setEditGate({ kind: "unsupported", version });
+      }
       void recordPageEditorDiagnostic({
         event: "daemon_floor_blocked",
         reportedVersion: version,
@@ -868,8 +898,23 @@ export default function PageDetail({
     }
 
     if (!isActiveBeginEdit()) return;
-    openPageSourceForEditing(page);
+    openPageSourceForEditing(page, automatic);
   };
+
+  useEffect(() => {
+    if (initialMode === "read") {
+      autoEditIntentRef.current = { pageId, mode: "read" };
+      return;
+    }
+    if (!page || page.id !== pageId || page.status !== "active") return;
+    const attempted = autoEditIntentRef.current;
+    if (attempted?.pageId === pageId && attempted.mode === "edit") return;
+    autoEditIntentRef.current = { pageId, mode: "edit" };
+    void beginEditing(true);
+    // The intent key, not the page query object, controls this one-shot gate.
+    // Refetches and successful saves must not open or reset the editor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialMode, pageId, page?.id, page?.status]);
 
   const handleNormalizeAndEdit = () => {
     if (editGate.kind !== "normalize") return;
@@ -881,58 +926,20 @@ export default function PageDetail({
     setEditInitialDocument(editGate.prepared.editorDocument);
     setSourceProfile(normalizedProfile);
     setEditGate({ kind: "editor" });
-    updateEditDirty(
-      editBaseline !== null &&
-        serializeMarkdownSource(
-          editGate.prepared.editorDocument,
-          normalizedProfile,
-        ) !== editBaseline.content,
-    );
+    autosave.setSource(serializeMarkdownSource(editGate.prepared.editorDocument, normalizedProfile));
   };
 
   const saveDocument = (document: string) => {
-    if (!editBaseline || !sourceProfile) return;
-
+    if (!sourceProfile) return;
     editDocumentRef.current = document;
-    const content = serializeMarkdownSource(document, sourceProfile);
-    const attempt = beginPageSave(
-      saveStateRef.current,
-      editBaseline,
-      content,
-      createPageOperationId,
-    );
-
-    if (attempt.kind === "invalid") {
-      setEditValidation(t("pageDetail.editor.empty"));
-      return;
-    }
-    if (attempt.kind === "unchanged") {
-      closeEditor();
-      return;
-    }
-    if (attempt.kind !== "request") {
-      return;
-    }
-
-    setEditValidation(null);
-    updateSaveState(attempt.state);
-    updateMutation.mutate(attempt.input);
+    autosave.setSource(serializeMarkdownSource(document, sourceProfile));
+    void autosave.flush();
   };
 
   const handleDocumentChange = (content: string) => {
     editDocumentRef.current = content;
-    setEditHasMatchingTitle(
-      leadingMarkdownH1MatchesTitle(content, editPageTitleRef.current),
-    );
-    setEditValidation(null);
-    updateSaveState(pageDraftChanged(saveStateRef.current));
-    updateEditDirty(
-      editGate.kind === "editor" &&
-        editBaseline !== null &&
-        (sourceProfile
-          ? serializeMarkdownSource(content, sourceProfile)
-          : content) !== editBaseline.content,
-    );
+    setEditHasMatchingTitle(leadingMarkdownH1MatchesTitle(content, editPageTitleRef.current));
+    if (sourceProfile) autosave.setSource(serializeMarkdownSource(content, sourceProfile));
   };
 
   const currentDraftSource = () =>
@@ -940,104 +947,20 @@ export default function PageDetail({
       ? serializeMarkdownSource(editDocumentRef.current, sourceProfile)
       : editDocumentRef.current;
 
-  const editorIsDirty = () =>
-    editGate.kind === "editor" &&
-    editBaseline !== null &&
-    currentDraftSource() !== editBaseline.content;
-
-  const editorToolbarLabels: MarkdownEditorToolbarLabels = {
-    undo: t("pageDetail.editor.toolbar.undo"),
-    redo: t("pageDetail.editor.toolbar.redo"),
-    blockStyle: t("pageDetail.editor.toolbar.blockStyle"),
-    paragraph: t("pageDetail.editor.toolbar.paragraph"),
-    heading1: t("pageDetail.editor.toolbar.heading1"),
-    heading2: t("pageDetail.editor.toolbar.heading2"),
-    heading3: t("pageDetail.editor.toolbar.heading3"),
-    bold: t("pageDetail.editor.toolbar.bold"),
-    italic: t("pageDetail.editor.toolbar.italic"),
-    inlineCode: t("pageDetail.editor.toolbar.inlineCode"),
-    link: t("pageDetail.editor.toolbar.link"),
-    blockquote: t("pageDetail.editor.toolbar.blockquote"),
-    bulletList: t("pageDetail.editor.toolbar.bulletList"),
-    numberedList: t("pageDetail.editor.toolbar.numberedList"),
-    save:
-      saveState.phase === "pending"
-        ? t("pageDetail.editor.saving")
-        : saveState.phase === "retryable"
-          ? t("pageDetail.editor.retry")
-          : t("pageDetail.editor.save"),
-    cancel: t("pageDetail.editor.cancel"),
-  };
-
-  useEffect(() => {
-    if (
-      !editing ||
-      editGate.kind !== "editor" ||
-      !editBaseline ||
-      !page ||
-      page.id !== editBaseline.pageId
-    ) {
-      return;
+  useLayoutEffect(() => {
+    if (editing && editGate.kind === "editor" && canonicalPage !== undefined) {
+      autosave.observeCanonical(canonicalPage);
     }
+  }, [autosave, editing, editGate.kind, canonicalPage]);
 
-    const current = saveStateRef.current;
-    const next = pageVersionChanged(
-      current,
-      editBaseline,
-      currentDraftSource(),
-      page.version,
-      createPageOperationId,
-    );
-    if (next === current) {
-      if (
-        current.phase === "conflict" &&
-        page.version > editBaseline.version
-      ) {
-        setConflictLatest((currentLatest) =>
-          currentLatest.kind === "loaded" &&
-          currentLatest.operationId === current.pending.operationId &&
-          currentLatest.page.version >= page.version
-            ? currentLatest
-            : {
-                kind: "loaded",
-                operationId: current.pending.operationId,
-                page,
-              },
-        );
-      }
-      return;
-    }
-    if (next.phase !== "conflict") return;
-
-    updateSaveState(next);
-    setConflictLatest({
-      kind: "loaded",
-      operationId: next.pending.operationId,
-      page,
-    });
-  }, [
-    editing,
-    editGate.kind,
-    editBaseline,
-    page,
-    saveState,
-    sourceProfile,
-    updateSaveState,
-  ]);
-
-  const requestCloseEditor = () => {
-    if (saveStateRef.current.phase === "pending") return;
-    if (
-      editorIsDirty() &&
-      !confirm(t("pageDetail.editor.discardConfirm"))
-    ) {
-      return;
-    }
+  const requestCloseEditor = async () => {
+    const originPageId = pageId;
+    if (!await flushEditor() || activePageIdRef.current !== originPageId) return;
     closeEditor();
   };
 
   useEffect(() => {
-    if (!editing) return;
+    if (!editing || infoOpen) return;
     const captureUnfocusedEditorEscape = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -1049,7 +972,9 @@ export default function PageDetail({
       if (
         event.target instanceof Element &&
         event.target.closest(
-          'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+          // Navigation owns Escape while its popover or narrow drawer is open.
+          // Dismissing those layers must not flush and leave the writing view.
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-sidebar-escape-scope], [data-sidebar-overlay="true"]',
         )
       ) {
         return;
@@ -1065,17 +990,18 @@ export default function PageDetail({
         captureUnfocusedEditorEscape,
         true,
       );
-  }, [editing, requestCloseEditor]);
+  }, [editing, infoOpen, requestCloseEditor]);
 
-  const requestBack = () => {
-    if (saveStateRef.current.phase === "pending") return;
-    if (
-      editorIsDirty() &&
-      !confirm(t("pageDetail.editor.discardConfirm"))
-    ) {
+  const requestBack = async () => {
+    // Main owns navigation ordering when the flush handle is registered. Queue
+    // the intent there immediately so a later sidebar intent can supersede it.
+    if (onRegisterFlush) {
+      onBack();
       return;
     }
-    if (editing) closeEditor();
+    const originPageId = pageId;
+    const attempt = ++backAttemptRef.current;
+    if (!await flushEditor() || activePageIdRef.current !== originPageId || backAttemptRef.current !== attempt) return;
     onBack();
   };
 
@@ -1117,6 +1043,7 @@ export default function PageDetail({
     ) {
       return;
     }
+    autosave.setComposing(status.compositionActive);
     setEditorStatus(status);
   };
 
@@ -1130,14 +1057,32 @@ export default function PageDetail({
       return;
     }
     const operationId = saveStateRef.current.pending.operationId;
-    const latest =
-      conflictLatest.kind === "loaded" &&
-      conflictLatest.operationId === operationId
-        ? conflictLatest.page
-        : await fetchConflictLatest(operationId);
+    if (!autosave.snapshot().latest) await fetchConflictLatest(operationId);
+    const current = autosave.snapshot();
+    if (
+      activePageIdRef.current !== pageId ||
+      current.state.phase !== "conflict" ||
+      current.state.pending.operationId !== operationId
+    ) return;
+    const cached = queryClient.getQueryData<Page | null>(["page", pageId]);
+    if (cached) autosave.observeConflictLatest(cached, operationId);
+    const latest = autosave.snapshot().latest;
     if (!latest) return;
-    queryClient.setQueryData(["page", pageId], latest);
+    queryClient.setQueryData<Page | null>(["page", pageId], (currentPage) =>
+      currentPage?.id === pageId && currentPage.version >= latest.version
+        ? currentPage
+        : latest,
+    );
     openPageSourceForEditing(latest);
+  };
+
+  const handleDiscardDeletedDraft = () => {
+    if (
+      canonicalPage !== null ||
+      autosave.snapshot().state.phase !== "conflict" ||
+      !confirm(t("pageDetail.editor.discardConfirm"))
+    ) return;
+    closeEditor();
   };
 
   const failureMessage = (kind: UpdatePageFailureKind | "transport") => {
@@ -1243,9 +1188,9 @@ export default function PageDetail({
     };
   }, [actionMenuOpen]);
 
-  if (isLoading) return null;
+  if (isLoading && !page) return null;
 
-  if (pageLoadFailed) {
+  if (pageLoadFailed && !page) {
     return (
       <div className="page-detail-load-state">
         <p role="alert">{t("pageDetail.loadError")}</p>
@@ -1273,7 +1218,7 @@ export default function PageDetail({
           Page not found
         </span>
         <button
-          onClick={onBack}
+          onClick={requestBack}
           className="transition-colors text-sm"
           style={{ color: "var(--mem-text-secondary)" }}
         >
@@ -1390,16 +1335,29 @@ export default function PageDetail({
     <div className="page-detail" onKeyDown={handlePageDetailKeyDown}>
       {/* Back + Header */}
       <div>
+        <div className="flex items-start justify-between">
         <button
           aria-label={t("main.back")}
           onClick={requestBack}
-          disabled={saveState.phase === "pending"}
           className="mem-icon-action -ml-1.5"
           style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0, marginBottom: "12px" }}
           type="button"
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </button>
+
+        {!showCanvas && <button
+          type="button"
+          className="mem-icon-action"
+          aria-label={t("pageInfo.label")}
+          title={t("pageInfo.label")}
+          aria-expanded={infoOpen}
+          aria-haspopup="dialog"
+          onClick={() => setInfoOpen(true)}
+        >
+          <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="12" cy="12" r="9"/><path d="M12 11v6"/><circle cx="12" cy="7.5" r=".75" fill="currentColor" stroke="none"/></svg>
+        </button>}
+        </div>
 
         <div className="page-detail-heading-row flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
@@ -1410,47 +1368,6 @@ export default function PageDetail({
             >
               {page.title}
             </h1>
-            <div className="page-detail-dateline">
-              <span className="page-detail-dateline-item">
-                {page.creation_kind === "source" ||
-                page.creation_kind === "imported"
-                  ? t("pageDetail.dateline.lastUpdated", {
-                      time: relativeTimeFromISO(page.last_modified, t),
-                    })
-                  : t("pageDetail.dateline.lastDistilled", {
-                      time: relativeTimeFromISO(page.last_compiled, t),
-                    })}
-              </span>
-              <span className="page-detail-dateline-item">
-                {t("pageDetail.dateline.sourceMemories", { count: sourceCount })}
-              </span>
-              {page.stale_reason && (
-                <span
-                  className="page-detail-dateline-item"
-                  style={{
-                    color:
-                      page.stale_reason === "source_conflict" ||
-                      page.refresh_blocked_reason
-                        ? "var(--mem-accent-amber)"
-                        : "var(--mem-text-tertiary)",
-                  }}
-                >
-                  {page.stale_reason === "source_conflict"
-                    ? t("pageDetail.dateline.needsReview")
-                    : page.refresh_blocked_reason
-                      ? // The daemon discarded the automatic rebuild (citation
-                        // gate) and will not retry until sources change, so
-                        // "updating..." would be a lie that never resolves.
-                        t("pageDetail.dateline.updateBlocked")
-                      : t("pageDetail.dateline.updating")}
-                </span>
-              )}
-            </div>
-            <PageTruthBadges
-              cutoverLive={cutoverLive}
-              truth={page.truth}
-              wrapperClassName="mt-2 flex flex-wrap items-center gap-2"
-            />
           </div>
 
           {!editing && (
@@ -1458,7 +1375,7 @@ export default function PageDetail({
               <button
                 type="button"
                 className="page-detail-primary-action"
-                onClick={beginEditing}
+                onClick={() => void beginEditing()}
               >
                 {t("pageDetail.editPage")}
               </button>
@@ -1489,7 +1406,7 @@ export default function PageDetail({
                 </button>
                 <button
                   aria-label={t("pageDetail.editPage")}
-                  onClick={beginEditing}
+                  onClick={() => void beginEditing()}
                   className="mem-icon-action"
                   title={t("pageDetail.editPage")}
                   type="button"
@@ -1987,7 +1904,7 @@ export default function PageDetail({
             {saveState.phase === "conflict" && (
               <div role="alert" className="page-editor-notice">
                 <strong>{t("pageDetail.editor.conflictTitle")}</strong>
-                <div>{t("pageDetail.editor.conflictBody")}</div>
+                <div>{t(canonicalPage === null ? "pageDetail.editor.failure.notFound" : "pageDetail.editor.conflictBody")}</div>
                 {conflictLatest.kind === "loading" && (
                   <div role="status">
                     {t("pageDetail.editor.latestLoading")}
@@ -2036,6 +1953,15 @@ export default function PageDetail({
                       disabled={conflictLatest.kind !== "loaded"}
                     >
                       {t("pageDetail.editor.reloadLatest")}
+                    </button>
+                  )}
+                  {canonicalPage === null && (
+                    <button
+                      type="button"
+                      className="page-editor-action"
+                      onClick={handleDiscardDeletedDraft}
+                    >
+                      {t("pageDetail.editor.discard")}
                     </button>
                   )}
                   <button
@@ -2117,19 +2043,17 @@ export default function PageDetail({
                 <div>{t("pageDetail.editor.fallbackBody")}</div>
               </div>
             )}
-            {editorSessionId && (
-              <MarkdownEditorToolbar
-                status={editorStatus}
-                labels={editorToolbarLabels}
-                saveDisabled={
-                  saveState.phase === "pending" ||
-                  saveState.phase === "conflict"
-                }
-                cancelDisabled={saveState.phase === "pending"}
-                onCommand={(command) => editorRef.current?.runCommand(command)}
-                onSave={() => editorRef.current?.requestSave()}
-                onCancel={() => editorRef.current?.requestCancel()}
-              />
+            <div role="status" aria-live="polite" className="sr-only">
+              {saveState.phase === "pending"
+                ? t("pageDetail.editor.saving")
+                : editDirty
+                  ? t("pageDetail.editor.unsaved")
+                  : t("pageDetail.editor.saved")}
+            </div>
+            {(saveState.phase === "retryable" || saveState.phase === "failed" || saveState.phase === "upgrade_required") && (
+              <button type="button" className="page-editor-action self-start" onClick={() => void autosave.retry()}>
+                {t("pageDetail.editor.retry")}
+              </button>
             )}
             <p
               id="page-markdown-editor-description"
@@ -2137,8 +2061,8 @@ export default function PageDetail({
             >
               {t(
                 editorStatus.engine === "native"
-                  ? "pageDetail.editor.descriptionFallback"
-                  : "pageDetail.editor.description",
+                  ? "pageDetail.editor.autosaveDescriptionFallback"
+                  : "pageDetail.editor.autosaveDescription",
                 { modifier: editorShortcutModifier },
               )}
             </p>
@@ -2146,20 +2070,24 @@ export default function PageDetail({
               <MarkdownEditor
                 ref={editorRef}
                 initialDocument={editInitialDocument}
+                initialSelection={initialSelection}
+                onSelectionChange={onSelectionChange}
                 sessionId={editorSessionId}
-                disabled={saveState.phase === "pending"}
+                disabled={false}
+                seamless
                 ariaLabel={t("pageDetail.editor.label")}
                 describedBy="page-markdown-editor-description"
                 onDocumentChange={handleDocumentChange}
                 onSave={saveDocument}
                 onCancel={requestCloseEditor}
-                onStatusChange={(status) =>
+                onStatusChange={(status) => {
+                  if (status.ready) onEditorReady?.();
                   handleEditorStatus(
                     editorSessionId,
                     editorSessionEpoch,
                     status,
-                  )
-                }
+                  );
+                }}
                 onFallback={(reason) =>
                   handleEditorFallback(
                     editorSessionId,
@@ -2172,7 +2100,7 @@ export default function PageDetail({
           </div>
         )
       ) : (
-        <div className={hasRail ? "page-detail-grid" : undefined}>
+        <div>
           <div className="page-detail-prose" onClickCapture={handleContentClick}>
             {ledeText && (
               <div className="page-detail-lede">
@@ -2193,47 +2121,76 @@ export default function PageDetail({
               renderCitation={renderCitation}
             />
           </div>
-          {hasRail && (
-            <aside className="memory-detail-rail page-detail-rail">
-              {pageEntities.length > 0 && (
-                <section className="memory-detail-rail-section">
-                  <RailPanelTitle>{t("pageDetail.entities")}</RailPanelTitle>
-                  <div className="memory-detail-entity-chip-list">
-                    {pageEntities.map((e) => (
-                      <button
-                        key={e.id}
-                        type="button"
-                        onClick={() => onEntityClick?.(e.id)}
-                        className="memory-detail-entity-chip"
-                      >
-                        <span className="memory-detail-entity-name">{e.name}</span>
-                        <span className="memory-detail-entity-type">{e.entity_type}</span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
-              <RelatedPages outbound={outboundLinks} onPageClick={onPageClick} />
-            </aside>
-          )}
         </div>
       )}
 
-      {/* The canvas replaces the reading column rather than sitting above
-          its apparatus: sources, citations and revisions are how a page is
-          read, and the map is the other way of reading it. */}
-      {!editing && !showCanvas && (
-        <PageInfo
-          sourceCount={sourceCount}
-          sources={pageSources}
-          inbound={inboundLinks}
-          revisions={pageRevisionEntries}
-          citations={page.citations}
-          citationState={processed.state}
-          onMemoryClick={onMemoryClick}
-          onPageClick={onPageClick}
-        />
-      )}
+      <PageInfoDrawer
+        open={infoOpen && !showCanvas}
+        onClose={() => setInfoOpen(false)}
+        title={t("pageInfo.label")}
+        closeLabel={t("common.close")}
+      >
+          <div className="flex flex-wrap gap-2">
+            {page.stale_reason && <span style={{ color: "var(--mem-accent-amber)" }}>
+              {page.stale_reason === "source_conflict"
+                ? t("pageDetail.dateline.needsReview")
+                : page.refresh_blocked_reason
+                  ? t("pageDetail.dateline.updateBlocked")
+                  : t("pageDetail.dateline.updating")}
+            </span>}
+            <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
+          </div>
+          <div className="flex flex-col gap-5 pt-4">
+            <div className="page-detail-dateline" style={{ marginTop: 0 }}>
+              <span className="page-detail-dateline-item">
+                {page.creation_kind === "source" || page.creation_kind === "imported"
+                  ? t("pageDetail.dateline.lastUpdated", {
+                      time: relativeTimeFromISO(page.last_modified, t),
+                    })
+                  : t("pageDetail.dateline.lastDistilled", {
+                      time: relativeTimeFromISO(page.last_compiled, t),
+                    })}
+              </span>
+              <span className="page-detail-dateline-item">
+                {t("pageDetail.dateline.sourceMemories", { count: sourceCount })}
+              </span>
+            </div>
+            {hasRail && (
+              <div className="flex flex-col gap-4">
+                {pageEntities.length > 0 && (
+                  <section className="memory-detail-rail-section">
+                    <RailPanelTitle>{t("pageDetail.entities")}</RailPanelTitle>
+                    <div className="memory-detail-entity-chip-list">
+                      {pageEntities.map((entity) => (
+                        <button
+                          key={entity.id}
+                          type="button"
+                          onClick={() => { setInfoOpen(false); onEntityClick?.(entity.id); }}
+                          className="memory-detail-entity-chip"
+                        >
+                          <span className="memory-detail-entity-name">{entity.name}</span>
+                          <span className="memory-detail-entity-type">{entity.entity_type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </section>
+                )}
+                <RelatedPages outbound={outboundLinks} onPageClick={(id) => { setInfoOpen(false); onPageClick?.(id); }} />
+              </div>
+            )}
+            <PageInfo
+              embedded
+              sourceCount={sourceCount}
+              sources={pageSources}
+              inbound={inboundLinks}
+              revisions={pageRevisionEntries}
+              citations={page.citations}
+              citationState={processed.state}
+              onMemoryClick={(id) => { setInfoOpen(false); onMemoryClick(id); }}
+              onPageClick={(id) => { setInfoOpen(false); onPageClick?.(id); }}
+            />
+          </div>
+      </PageInfoDrawer>
     </div>
   );
 }

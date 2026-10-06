@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Main from "./Main";
 import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
+const flushHarness = vi.hoisted(() => ({ enabled: false, flush: vi.fn<() => Promise<boolean>>() }));
+
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
 );
@@ -23,6 +25,7 @@ vi.mock("../../lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/tauri")>()),
   FACET_COLORS: {},
   STABILITY_TIERS: {},
+  shouldShowWizard: vi.fn().mockResolvedValue(true),
   listMemoriesRich: vi.fn().mockResolvedValue([]),
   listSpaces: vi.fn().mockResolvedValue([]),
   getMemoryStats: vi.fn().mockResolvedValue({
@@ -57,13 +60,22 @@ vi.mock("./MemoryDetail", () => ({
     <div data-testid="memory-detail">{sourceId}</div>
   ),
 }));
-vi.mock("./PageDetail", () => ({
+vi.mock("./PageDetail", async () => {
+  const { useEffect } = await import("react");
+  return ({
   default: (props: {
+    onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
     onBack?: () => void;
     onEditDirtyChange?: (dirty: boolean) => void;
     onSavePendingChange?: (pending: boolean) => void;
     pageId: string;
-  }) => (
+  }) => {
+    useEffect(() => {
+      if (!flushHarness.enabled) return;
+      props.onRegisterFlush?.(flushHarness.flush);
+      return () => props.onRegisterFlush?.(null);
+    }, [props.onRegisterFlush]);
+    return (
     <section data-testid="page-detail">
       <h1>{props.pageId === "page-two" ? "Second page" : "Pending page"}</h1>
       <button type="button" onClick={() => props.onEditDirtyChange?.(true)}>
@@ -78,7 +90,7 @@ vi.mock("./PageDetail", () => ({
       <button
         type="button"
         onClick={() => {
-          if (confirm("Discard your unsaved draft?")) props.onBack?.();
+          if (flushHarness.enabled || confirm("Discard your unsaved draft?")) props.onBack?.();
         }}
       >
         PageDetail back
@@ -89,21 +101,22 @@ vi.mock("./PageDetail", () => ({
         <option value="paragraph">Paragraph</option>
       </select>
     </section>
-  ),
-}));
+  ); },
+}); });
 vi.mock("./DistillReviewPanel", () => ({ default: () => <div /> }));
 vi.mock("./SettingsPage", () => ({ default: () => <div /> }));
 vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
 vi.mock("./Sidebar", () => ({
   default: (props: {
     currentPageId?: string | null;
-    onNavigateHome: () => void;
+    onNavigatePages: () => void;
     onSelectPage?: (page: { id: string }) => void;
   }) => (
     <aside>
-      <button type="button" onClick={props.onNavigateHome}>
-        Sidebar home
+      <button type="button" onClick={props.onNavigatePages}>
+        Sidebar Wiki
       </button>
+      <button type="button" onClick={() => props.onSelectPage?.({ id: "page-two" })}>Sidebar second page</button>
       {props.currentPageId && (
         <button
           type="button"
@@ -124,7 +137,15 @@ vi.mock("./Sidebar", () => ({
   ),
   SidebarHeaderDivider: () => null,
 }));
-vi.mock("./pages/PagesOverview", () => ({ PagesOverview: () => <div /> }));
+vi.mock("./pages/PagesOverview", () => ({
+  PagesOverview: ({ onSelectPage }: { onSelectPage: (id: string) => void }) => (
+    <div data-testid="pages-overview">
+      <button type="button" onClick={() => onSelectPage("page-two")}>
+        Open second page
+      </button>
+    </div>
+  ),
+}));
 vi.mock("./pages/PageDraftEditor", async () => {
   const React = await import("react");
   return { PageDraftEditor: React.forwardRef(() => <div />) };
@@ -169,12 +190,76 @@ function renderMain(props: RenderMainProps = { initialPageId: "page-one" }) {
 describe("Main published PageDetail navigation guards", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    flushHarness.enabled = false;
+    flushHarness.flush.mockReset();
     eventListeners.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     clearPendingPairingCode();
+  });
+
+  it("waits for automatic saving before sidebar navigation without a discard prompt", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    flushHarness.flush.mockImplementation(() => new Promise((resolve) => { settle = resolve; }));
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Make page dirty" }));
+    await user.click(screen.getByRole("button", { name: "Start page save" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(flushHarness.flush).toHaveBeenCalledOnce();
+    await act(async () => settle(true));
+    expect(await screen.findByTestId("pages-overview")).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("lets the latest sidebar intent supersede repeated Back while saving", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    flushHarness.flush.mockReturnValue(saving);
+    const confirmSpy = vi.spyOn(window, "confirm");
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Start page save" }));
+    await user.click(screen.getByRole("button", { name: "PageDetail back" }));
+    await user.click(screen.getByRole("button", { name: "PageDetail back" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(flushHarness.flush).toHaveBeenCalledTimes(3);
+    await act(async () => settle(true));
+    expect(await screen.findByText("Second page")).toBeInTheDocument();
+    expect(screen.queryByTestId("pages-overview")).toBeNull();
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the current note when automatic saving fails and prevents quit", async () => {
+    flushHarness.enabled = true;
+    flushHarness.flush.mockResolvedValue(false);
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const { user } = renderMain({ initialPageId: "page-one", onRegisterQuitGuard: (guard) => { quitGuard = guard; } });
+    await user.click(screen.getByRole("button", { name: "Make page dirty" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    await expect(quitGuard!()).resolves.toBe(false);
+  });
+
+  it("flushes before header search hides the editor and keeps the latest search input", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    flushHarness.flush.mockReturnValue(saving);
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Make page dirty" }));
+    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    fireEvent.change(search, { target: { value: "first" } });
+    fireEvent.change(search, { target: { value: "latest" } });
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+    await act(async () => settle(true));
+    expect(search).toHaveValue("latest");
+    expect(flushHarness.flush).toHaveBeenCalledTimes(2);
   });
 
   it("opens Connections for a pairing link only after a pending page save", async () => {
@@ -220,7 +305,7 @@ describe("Main published PageDetail navigation guards", () => {
     );
     expect(search).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Sidebar home" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
 
     eventListeners.get("focus-search")?.();
@@ -252,7 +337,7 @@ describe("Main published PageDetail navigation guards", () => {
   it("does not replay the consumed initial page after internal navigation", async () => {
     const { user } = renderMain();
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Sidebar home" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
     await user.click(screen.getByRole("button", { name: "Open second page" }));
     expect(await screen.findByText("Second page")).toBeInTheDocument();
 
@@ -358,7 +443,7 @@ describe("Main published PageDetail navigation guards", () => {
     expect(search).toHaveValue("");
     expect(confirmSpy).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("button", { name: "Sidebar home" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
     expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(screen.getByText("Pending page")).toBeInTheDocument();
 

@@ -8,6 +8,7 @@ import {
   editorViewFromTextbox,
   installCodeMirrorDomPolyfills,
   replaceDocument,
+  pressKey,
 } from "./editor/editorTestUtils";
 
 const tauriMocks = vi.hoisted(() => ({
@@ -92,7 +93,10 @@ describe("PageDetail page links", () => {
     });
     tauriMocks.listPages.mockResolvedValue([]);
     tauriMocks.redistillPage.mockResolvedValue({ status: "ok", updated: true });
-    tauriMocks.updatePage.mockResolvedValue({ outcome: "saved" });
+    tauriMocks.updatePage.mockImplementation(async (input) => {
+      tauriMocks.getPage.mockResolvedValue({ ...LINKED_PAGE, content: input.content, version: input.expectedVersion + 1 });
+      return { outcome: "saved" };
+    });
     tauriMocks.getDaemonVersion.mockResolvedValue("0.14.1");
     tauriMocks.getSystemInfo.mockResolvedValue({ os: "macos" });
     tauriMocks.daemonMeetsFloor.mockReturnValue(true);
@@ -124,13 +128,16 @@ describe("PageDetail page links", () => {
     await user.click(contentLink);
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
 
+    expect(screen.queryByLabelText("Related pages")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     const related = await screen.findByLabelText("Related pages");
-    await user.click(within(related).getByRole("button", { name: /Resolved Link/ }));
-    expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
     expect(within(related).getByText("Missing Link")).toBeInTheDocument();
     expect(within(related).queryByRole("button", { name: /Missing Link/ })).toBeNull();
+    await user.click(within(related).getByRole("button", { name: /Resolved Link/ }));
+    expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
+    expect(screen.queryByRole("dialog", { name: "Page info" })).toBeNull();
 
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(screen.getByRole("button", { name: "Inbound Mention" })).toBeInTheDocument();
   });
 
@@ -149,7 +156,7 @@ describe("PageDetail page links", () => {
         "Intro sentence.\n\nThis page now links [[New Link]].",
       ),
     );
-    await user.click(screen.getByRole("button", { name: /Save/ }));
+    act(() => pressKey(editor, "s", { ctrlKey: true }));
 
     await waitFor(() => {
       expect(tauriMocks.updatePage).toHaveBeenCalledWith(
@@ -177,7 +184,7 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(screen.getAllByRole("button", { name: "Shared Mention" })).toHaveLength(2);
     expect(screen.queryByText(/source-page-a/)).toBeNull();
   });
@@ -210,7 +217,7 @@ describe("PageDetail page links", () => {
   it("keeps the page visible and hides links when the daemon route fails", async () => {
     tauriMocks.getPageLinks.mockRejectedValue(new Error("HTTP GET /api/pages/page-1/links returned 404"));
 
-    renderWithQuery(<PageDetail {...defaultProps} />);
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
     expect(await screen.findByText(/This page references/)).toBeInTheDocument();
@@ -218,13 +225,15 @@ describe("PageDetail page links", () => {
       expect(tauriMocks.getPageLinks).toHaveBeenCalledWith("page-1");
     });
     expect(tauriMocks.listPages).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByText(/Page info/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page info" })).toBeInTheDocument();
   });
 
   it("does not query orphan links and renders no Unlinked Mentions section", async () => {
-    renderWithQuery(<PageDetail {...defaultProps} />);
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(tauriMocks.listOrphanLinks).not.toHaveBeenCalled();
     expect(screen.queryByText("Unlinked Mentions")).toBeNull();
   });
@@ -248,7 +257,7 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByText(/Page info/i));
+    await user.click(screen.getByRole("button", { name: "Page info" }));
     expect(screen.getByText(/added backlinks/i)).toBeInTheDocument();
     expect(screen.getByText("just now")).toBeInTheDocument();
   });
@@ -256,9 +265,13 @@ describe("PageDetail page links", () => {
   it("keeps rendering the page when page revisions route is unavailable", async () => {
     tauriMocks.getPageRevisions.mockRejectedValue(new Error("404"));
 
-    renderWithQuery(<PageDetail {...defaultProps} />);
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    expect(screen.getByText(/0 revisions/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Page info" }));
+    const info = screen.getByRole("dialog", { name: "Page info" });
+    expect(info).toBeInTheDocument();
+    expect(within(info).queryByRole("heading", { name: /revisions/i })).toBeNull();
+    expect(screen.getByText("Intro sentence.", { exact: false })).toBeInTheDocument();
   });
 });

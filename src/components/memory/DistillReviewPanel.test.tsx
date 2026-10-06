@@ -33,6 +33,8 @@ vi.mock("../../lib/tauri", async () => {
     deleteMemory: vi.fn(),
     getMemoryDetail: vi.fn(),
     getEntityDetail: vi.fn(),
+    getPage: vi.fn(),
+    getPageSources: vi.fn(),
     redistillPage: vi.fn(),
     search: vi.fn(),
     listRecentChanges: vi.fn(),
@@ -52,6 +54,8 @@ import {
   deleteMemory,
   getMemoryDetail,
   getEntityDetail,
+  getPage,
+  getPageSources,
   redistillPage,
   search,
   listRecentChanges,
@@ -154,7 +158,10 @@ const reviewPayload: DistillReviewResponse = {
   orphan_topics: [{ label: "Vector clocks", count: 4 }],
 };
 
-beforeEach(() => {
+beforeEach(async () => {
+  const actual = await vi.importActual<typeof import("../../lib/tauri")>("../../lib/tauri");
+  vi.mocked(getPage).mockImplementation(actual.getPage);
+  vi.mocked(getPageSources).mockImplementation(actual.getPageSources);
   localStorage.clear();
   vi.clearAllMocks();
   vi.mocked(distillReview).mockResolvedValue(reviewPayload);
@@ -532,6 +539,223 @@ describe("DistillReviewPanel review queue", () => {
     await waitFor(() => {
       expect(acceptRefinement).toHaveBeenCalledWith("prop_1");
     });
+  });
+
+  it("opens the contradiction dialog with before/after panes and resolves it", async () => {
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [
+        {
+          id: "ref-contra",
+          action: "detect_contradiction",
+          source_ids: ["mem-new", "mem-old"],
+          payload: { action: "detect_contradiction" },
+          confidence: 0.78,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(getMemoryDetail).mockImplementation(async (sourceId: string) =>
+      memory({
+        source_id: sourceId,
+        title: sourceId === "mem-new" ? "New memory" : "Old memory",
+        content: sourceId === "mem-new"
+          ? "The project stores data in redb."
+          : "The project stores data in SQLite.",
+      }),
+    );
+    const { user } = renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /contradicts/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Existing memory")).toBeInTheDocument();
+    expect(within(dialog).getByText("Newer memory")).toBeInTheDocument();
+    await within(dialog).findByText(/SQLite/);
+    await within(dialog).findByText(/redb/);
+    expect(within(dialog).getByRole("button", { name: "Keep both" })).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: "Resolve" }));
+    await waitFor(() => expect(acceptRefinement).toHaveBeenCalledWith("ref-contra"));
+    expect(rejectRefinement).not.toHaveBeenCalled();
+  });
+
+  it("opens the page-merge strip-off dossier and merges it", async () => {
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [
+        {
+          id: "ref-page-merge",
+          action: "page_merge",
+          source_ids: ["page-keep", "page-absorb"],
+          payload: {
+            action: "page_merge",
+            left_page_id: "page-keep",
+            right_page_id: "page-absorb",
+            source_overlap: 5,
+            source_overlap_ratio: 1.0,
+          },
+          confidence: 1.0,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+      ],
+    });
+    vi.mocked(getPage).mockImplementation(async (id: string) => ({
+      id,
+      title: id === "page-keep" ? "Surviving page" : "Absorbed page",
+      content: "Page body",
+      summary: null,
+      entity_id: null,
+      domain: null,
+      source_memory_ids: [],
+      version: 1,
+      status: "active",
+      created_at: "2026-07-09T00:00:00Z",
+      last_compiled: "2026-07-09T00:00:00Z",
+      last_modified: "2026-07-09T00:00:00Z",
+    }) as any);
+    // The retiring page's 5 sources are a strict subset of the kept page's 6,
+    // so the dossier ledger yields no unique retiring sources: safe verdict.
+    vi.mocked(getPageSources).mockImplementation(async (id: string) => {
+      const ids = id === "page-keep" ? ["m1", "m2", "m3", "m4", "m5", "m6"] : ["m1", "m2", "m3", "m4", "m5"];
+      return ids.map((m) => ({
+        source: { page_id: id, memory_source_id: m, linked_at: 0 },
+        memory: { source_id: m, title: `Source ${m}`, content: `Evidence ${m}` },
+      })) as any;
+    });
+    const { user } = renderPanel();
+
+    await user.click(
+      await screen.findByRole("button", { name: /“Surviving page” absorbs “Absorbed page”/ }),
+    );
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findByText(/Nothing unique is lost/i);
+    expect(within(dialog).getByText("Kept page")).toBeInTheDocument();
+    expect(within(dialog).getByText("Retiring page")).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole("button", { name: /Merge pages/i }));
+    await waitFor(() => expect(acceptRefinement).toHaveBeenCalledWith("ref-page-merge"));
+  });
+
+  it("shows a before/after relation pair for relation conflicts and approves", async () => {
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [
+        {
+          id: "ref-relation",
+          action: "relation_conflict",
+          source_ids: ["rel-new", "rel-old"],
+          payload: {
+            action: "relation_conflict",
+            existing_id: "rel-old",
+            new_id: "rel-new",
+            from: "Lucian",
+            to: "Zed",
+            old_type: "EVALUATES",
+            new_type: "USES_DAILY",
+          },
+          confidence: 0.82,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+      ],
+    });
+    const { user } = renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /Lucian → Zed/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Current relation")).toBeInTheDocument();
+    expect(within(dialog).getByText("Proposed relation")).toBeInTheDocument();
+    expect(within(dialog).getByText(/EVALUATES/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/USES_DAILY/)).toBeInTheDocument();
+    // The relation ids must never be fetched as memories.
+    expect(getMemoryDetail).not.toHaveBeenCalledWith("rel-new");
+
+    await user.click(within(dialog).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(acceptRefinement).toHaveBeenCalledWith("ref-relation"));
+  });
+
+  it("offers only dismiss for proposals the daemon cannot accept", async () => {
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [
+        {
+          id: "ref-suggest",
+          action: "suggest_entity",
+          source_ids: ["mem-a"],
+          payload: { action: "suggest_entity", name_hint: "Zed Editor" },
+          confidence: 0.7,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+      ],
+    });
+    const { user } = renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /Zed Editor/ }));
+
+    const dialog = await screen.findByRole("dialog");
+    await within(dialog).findAllByText("Zed Editor");
+    expect(within(dialog).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    // Enter must not fire the blocked accept verb either.
+    await user.keyboard("{Enter}");
+    expect(acceptRefinement).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(rejectRefinement).toHaveBeenCalledWith("ref-suggest"));
+  });
+
+  it("walks the review queue revisions first, then conflicts, then page items", async () => {
+    vi.mocked(distillReview).mockResolvedValue({
+      ...reviewPayload,
+      pending: [],
+      stale_pages: [],
+      stale_truncated: false,
+      orphan_topics: [],
+    });
+    vi.mocked(listPendingRevisions).mockResolvedValue([
+      revision({ target_source_id: "mem_target", revision_content: "Prefers pnpm for installs" }),
+    ]);
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [
+        {
+          id: "ref-merge",
+          action: "entity_merge",
+          source_ids: ["ent_2", "ent_1"],
+          payload: { action: "entity_merge", existing_id: "ent_1", new_id: "ent_2", similarity: 0.94 },
+          confidence: 0.94,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+        {
+          id: "ref-page-merge",
+          action: "page_merge",
+          source_ids: ["page-keep", "page-absorb"],
+          payload: null,
+          confidence: 1.0,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+        {
+          id: "ref-contra",
+          action: "detect_contradiction",
+          source_ids: ["mem-new", "mem-old"],
+          payload: { action: "detect_contradiction" },
+          confidence: 0.78,
+          created_at: "2026-07-09T00:00:00Z",
+        },
+      ],
+    });
+    const { user } = renderPanel();
+
+    // The dialog walks one ranked list, so each item's position is its rank.
+    const expected: Array<[RegExp, string]> = [
+      [/Review Target memory/, "1 of 4"],
+      [/contradicts/, "2 of 4"],
+      [/Page merge/, "3 of 4"],
+      [/look like the same entity/, "4 of 4"],
+    ];
+    for (const [card, position] of expected) {
+      await user.click(await screen.findByRole("button", { name: card }));
+      const dialog = await screen.findByRole("dialog");
+      expect(within(dialog).getByText(position)).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    }
   });
 
   it("keeps new-memory captures off the review page", async () => {
