@@ -14,7 +14,7 @@
 .knowledge-local-map-diagram { position: relative; width: 100%; height: 220px; }
 .knowledge-local-map-diagram > svg { position: absolute; width: 100%; height: 100%; }
 .knowledge-local-map-diagram line { stroke: var(--mem-border); stroke-width: 1; }
-.knowledge-local-map-center, .knowledge-local-map-node { position: absolute; transform: translate(-50%,-50%); display: flex; flex-direction: column; gap: 5px; align-items: center; font: 11px/1.35 var(--mem-font-body); color: var(--mem-text-secondary); background: var(--mem-surface); border: 0; border-radius: 5px; padding: 5px; max-width: 85px; }
+.knowledge-local-map-center, .knowledge-local-map-node { position: absolute; transform: translate(-50%,-50%); display: flex; flex-direction: column; gap: 5px; align-items: center; font: 11px/1.35 var(--mem-font-body); color: var(--mem-text-secondary); background: var(--mem-sidebar); border: 0; border-radius: 5px; padding: 5px; max-width: 85px; }
 .knowledge-local-map-center { left: 50%; top: 50%; color: var(--mem-accent-page); }
 .knowledge-local-map-node { cursor: pointer; }
 .knowledge-local-map-node svg { color: var(--mem-accent-page); }
