@@ -1696,6 +1696,15 @@ async fn refresh_revision_cas_preserves_source_attached_during_synthesis() {
     seed_memory(&db, "mem-refresh-b", "second source").await;
     let page_id = seed_page(&db, "mem-refresh-a", "first source").await;
     let expected_revision = db.get_page_source_revision(&page_id).await.unwrap();
+    let knowledge = tempfile::tempdir().unwrap();
+    let projection = crate::export::knowledge::KnowledgeProjectionWrite::new(
+        knowledge.path().to_path_buf(),
+        &db,
+    );
+    projection
+        .write_page_gated(&db, &db.get_page(&page_id).await.unwrap().unwrap())
+        .await
+        .unwrap();
 
     page_write(
         &db,
@@ -1721,7 +1730,7 @@ async fn refresh_revision_cas_preserves_source_attached_during_synthesis() {
         "re_distill",
         true,
         expected_revision,
-        None,
+        Some(knowledge.path()),
         None,
     )
     .await
@@ -1729,6 +1738,19 @@ async fn refresh_revision_cas_preserves_source_attached_during_synthesis() {
 
     assert!(!result.wrote);
     assert!(!result.acknowledged);
+    let watcher = crate::sources::page_watcher::sync_filesystem_edits(&db, knowledge.path())
+        .await
+        .unwrap();
+    assert_eq!(
+        watcher.applied, 0,
+        "a rejected candidate must never be laundered through fs_edit"
+    );
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert!(!after
+        .content
+        .contains("compiled from only the first source"));
+    assert!(!after.user_edited);
+
     assert_eq!(
         db.get_page_sources(&page_id)
             .await

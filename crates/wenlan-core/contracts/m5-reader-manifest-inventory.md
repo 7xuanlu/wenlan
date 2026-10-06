@@ -1244,7 +1244,8 @@ carrying the authority of agreement.
 | `core/post_write/page_create.rs::write_document_source_page_impl` | `pub(super)` | no | no | — | `core/db.rs::insert_document_source_page_at_hash` |
 | `core/post_write/page_revision.rs::accept_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_revision.rs::resolve_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
-| `core/post_write/page_update.rs::update_page_impl` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_update.rs::project_latest_page` | `private` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_update.rs::update_page_db_impl` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/refinery/mod.rs::enqueue_changed_pages` | `pub(crate)` | no | no | — | `core/db.rs::list_pages` |
 | `core/refinery/mod.rs::maybe_refresh_overview_page` | `private` | no | no | — | `core/synthesis/overview.rs::refresh_overview_page` |
 | `core/refinery/mod.rs::re_distill_stale_pages` | `pub(crate)` | no | no | — | `core/db.rs::list_stale_pages` |
@@ -1343,10 +1344,10 @@ carrying the authority of agreement.
 | `core/m6/shadow.rs::sample_oracle` | `private` | no | no | — | `core/m6/oracle.rs::recompute_full` |
 | `core/maintenance/page_merge_order.rs::order_survivor` | `pub(super)` | no | no | — | `core/maintenance/page_merge_order.rs::load_candidate` |
 | `core/post_ingest.rs::write_grown_page` | `private` | no | no | — | `core/db.rs::find_page_by_source_memory` |
-| `core/post_write/page_dispatch.rs::page_write` | `pub` | no | no | — | `core/post_write/page_create.rs::create_page_impl`, `core/post_write/page_create.rs::replace_source_page_impl`, `core/post_write/page_create.rs::write_document_source_page_impl`, `core/post_write/page_update.rs::update_page_impl` |
-| `core/post_write/page_dispatch.rs::update_page_growth_at_versions` | `pub(crate)` | no | no | — | `core/post_write/page_update.rs::update_page_impl` |
+| `core/post_write/page_dispatch.rs::page_write` | `pub` | no | no | — | `core/post_write/page_create.rs::create_page_impl`, `core/post_write/page_create.rs::replace_source_page_impl`, `core/post_write/page_create.rs::write_document_source_page_impl` |
 | `core/post_write/page_revision.rs::accept_pending_revision_with_knowledge_path` | `pub` | no | **yes** | `server/memory_routes.rs::handle_accept_revision` | `core/post_write/page_revision.rs::accept_page_revision_card`, `core/post_write/page_revision.rs::resolve_page_revision_card` |
 | `core/post_write/page_revision.rs::dismiss_pending_revision` | `pub` | yes | no | — | `core/post_write/page_revision.rs::resolve_page_revision_card` |
+| `core/post_write/page_update.rs::update_page_impl` | `pub(super)` | no | no | — | `core/post_write/page_update.rs::project_latest_page`, `core/post_write/page_update.rs::update_page_db_impl` |
 | `core/reconcile.rs::write_revision` | `pub` | no | no | — | `core/ingest.rs::run_canonical_enrichment` |
 | `core/refinery/mod.rs::run_periodic_steep_with_api` | `pub` | no | **yes** | `server/routes.rs::handle_steep` | `core/refinery/mod.rs::run_periodic_steep_with_api_scope` |
 | `core/repair.rs::capture_page_projection_on_connection` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_on_connection` |

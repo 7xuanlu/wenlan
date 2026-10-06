@@ -10,7 +10,11 @@ mod common;
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
-use wenlan_core::export::provenance::{SOURCES_BLOCK_END, SOURCES_BLOCK_START};
+use wenlan_core::export::knowledge::{KnowledgeProjectionWrite, KnowledgeWriter};
+use wenlan_core::export::provenance::{
+    canonicalize_page_body, SOURCES_BLOCK_END, SOURCES_BLOCK_START,
+};
+use wenlan_core::sources::obsidian::extract_frontmatter;
 
 fn post_page(id: &str, body: serde_json::Value) -> Request<Body> {
     Request::builder()
@@ -32,6 +36,41 @@ fn get_page(id: &str) -> Request<Body> {
 async fn response_json(response: axum::response::Response) -> serde_json::Value {
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     serde_json::from_slice(&bytes).unwrap()
+}
+
+fn projected_page_path(
+    root: &std::path::Path,
+    db: &wenlan_core::db::MemoryDB,
+    page_id: &str,
+) -> std::path::PathBuf {
+    let filename = KnowledgeWriter::new(root.to_path_buf(), db)
+        .page_filename(page_id)
+        .expect("a synced page must have a recorded Markdown filename");
+    root.join(filename)
+}
+
+fn assert_projection_matches_page(
+    root: &std::path::Path,
+    db: &wenlan_core::db::MemoryDB,
+    page: &wenlan_types::Page,
+) -> std::path::PathBuf {
+    let path = projected_page_path(root, db, &page.id);
+    let markdown = std::fs::read_to_string(&path).unwrap();
+    let (frontmatter, body) = extract_frontmatter(&markdown);
+    assert_eq!(
+        frontmatter.fields.get("origin_id").and_then(|v| v.as_str()),
+        Some(page.id.as_str())
+    );
+    assert_eq!(
+        frontmatter
+            .fields
+            .get("origin_version")
+            .and_then(|v| v.as_i64()),
+        Some(page.version),
+        "Markdown must identify the committed DB version"
+    );
+    assert_eq!(canonicalize_page_body(body), page.content);
+    path
 }
 
 /// A manual edit must leave a changelog entry and a history row — the trail a
@@ -405,4 +444,334 @@ async fn canonical_page_write_rejects_every_reserved_sources_marker_shape() {
             "{case} must not record a receipt for a rejected write"
         );
     }
+}
+
+#[tokio::test]
+async fn manual_edit_projects_committed_page_and_preserves_sources_and_history() {
+    let (app, tmp, db) = common::test_app().await;
+    common::insert_memory(
+        &db,
+        "manual-projection-source",
+        "Ferns reproduce through spores.",
+        "memory",
+        None,
+        None,
+        false,
+        1,
+    )
+    .await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "Projected ferns",
+        "Ferns have spores.",
+        None,
+        &["manual-projection-source"],
+        "distilled",
+    )
+    .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+    let root = tmp.path().join("pages");
+    assert!(!root.exists(), "DB fixture creation has no file projection");
+
+    let response = app
+        .oneshot(post_page(
+            &page_id,
+            serde_json::json!({
+                "content": "Ferns reproduce through spores, rather than seeds.",
+                "expected_version": before.version,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = response_json(response).await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["projection_status"], "synced");
+
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(after.version, before.version + 1);
+    assert_eq!(after.source_memory_ids, before.source_memory_ids);
+    assert!(
+        !after.source_memory_ids.is_empty(),
+        "positive source control"
+    );
+    let history = db.list_page_history(&page_id, 10).await.unwrap();
+    assert_eq!(history.len(), history_before.len() + 1);
+    let saved = history
+        .iter()
+        .find(|entry| entry.version == after.version)
+        .expect("manual save must append its committed version to history");
+    assert_eq!(saved.content, after.content);
+    assert_eq!(saved.source_memory_ids, after.source_memory_ids);
+    for prior in history_before {
+        assert!(
+            history.iter().any(|entry| {
+                entry.version == prior.version
+                    && entry.content == prior.content
+                    && entry.source_memory_ids == prior.source_memory_ids
+            }),
+            "saving must retain earlier content and provenance history"
+        );
+    }
+    let path = assert_projection_matches_page(&root, &db, &after);
+    let markdown = std::fs::read_to_string(path).unwrap();
+    assert!(markdown.contains("manual-projection-source"));
+    assert!(markdown.contains(SOURCES_BLOCK_START));
+    assert!(markdown.contains(SOURCES_BLOCK_END));
+}
+
+#[tokio::test]
+async fn projection_io_failure_commits_edit_and_receipt_then_replay_repairs_file() {
+    let (app, tmp, db) = common::test_app().await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "Projection retry",
+        "Before the save.",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+    let root = tmp.path().join("pages");
+    std::fs::write(&root, "a file obstructs the projection directory").unwrap();
+    let request = serde_json::json!({
+        "content": "The save survives a disk failure.",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "projection-io-retry",
+    });
+
+    let response = app
+        .clone()
+        .oneshot(post_page(&page_id, request.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = response_json(response).await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["projection_status"], "pending");
+    assert!(
+        result["projection_error"]
+            .as_str()
+            .is_some_and(|error| !error.is_empty()),
+        "a pending projection exposes the reason it could not be written"
+    );
+    let landed = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_landed = db.list_page_history(&page_id, 10).await.unwrap();
+    assert_eq!(landed.content, "The save survives a disk failure.");
+    assert_eq!(landed.version, before.version + 1);
+    assert_eq!(history_landed.len(), history_before.len() + 1);
+    assert!(db
+        .get_operation_receipt("wenlan-app", "projection-io-retry")
+        .await
+        .unwrap()
+        .is_some());
+
+    std::fs::remove_file(&root).unwrap();
+    let response = app.oneshot(post_page(&page_id, request)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = response_json(response).await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["projection_status"], "synced");
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(after.version, landed.version);
+    assert_eq!(after.content, landed.content);
+    assert_eq!(
+        db.list_page_history(&page_id, 10).await.unwrap().len(),
+        history_landed.len()
+    );
+    assert_projection_matches_page(&root, &db, &after);
+}
+
+#[tokio::test]
+async fn old_operation_replay_projects_latest_page_without_reverting_later_edit() {
+    let (app, tmp, db) = common::test_app().await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "Latest projection",
+        "Initial body.",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let old_request = serde_json::json!({
+        "content": "First saved body.",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "old-projection-operation",
+    });
+    let response = app
+        .clone()
+        .oneshot(post_page(&page_id, old_request.clone()))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["projection_status"], "synced");
+    let first = db.get_page(&page_id).await.unwrap().unwrap();
+    let response = app
+        .clone()
+        .oneshot(post_page(
+            &page_id,
+            serde_json::json!({
+                "content": "A newer body from a later save.",
+                "expected_version": first.version,
+                "caller_id": "wenlan-app",
+                "operation_id": "new-projection-operation",
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response_json(response).await["projection_status"], "synced");
+    let latest = db.get_page(&page_id).await.unwrap().unwrap();
+    let history_latest = db.list_page_history(&page_id, 10).await.unwrap();
+    assert_eq!(latest.version, first.version + 1);
+    let root = tmp.path().join("pages");
+    let path = assert_projection_matches_page(&root, &db, &latest);
+    std::fs::remove_file(path).unwrap();
+
+    let response = app.oneshot(post_page(&page_id, old_request)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = response_json(response).await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["projection_status"], "synced");
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(after.content, latest.content);
+    assert_eq!(after.version, latest.version);
+    assert_eq!(
+        db.list_page_history(&page_id, 10).await.unwrap().len(),
+        history_latest.len()
+    );
+    assert_projection_matches_page(&root, &db, &after);
+}
+
+#[tokio::test]
+async fn unchanged_save_recreates_missing_projection_without_new_history_or_version() {
+    let (app, tmp, db) = common::test_app().await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "Unchanged projection",
+        "The unchanged body.",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let root = tmp.path().join("pages");
+    KnowledgeProjectionWrite::new(root.clone(), &db)
+        .write_page(&before)
+        .unwrap();
+    let path = assert_projection_matches_page(&root, &db, &before);
+    std::fs::remove_file(path).unwrap();
+    let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+
+    let response = app
+        .oneshot(post_page(
+            &page_id,
+            serde_json::json!({
+                "content": before.content,
+                "expected_version": before.version,
+            }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result = response_json(response).await;
+    assert_eq!(result["ok"], true);
+    assert_eq!(result["projection_status"], "synced");
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(after.version, before.version);
+    assert_eq!(
+        db.list_page_history(&page_id, 10).await.unwrap().len(),
+        history_before.len()
+    );
+    assert_projection_matches_page(&root, &db, &after);
+}
+
+#[tokio::test]
+async fn external_markdown_edit_survives_manual_save_replay_and_startup_reconcile() {
+    let (app, tmp, db) = common::test_app().await;
+    let page_id = common::create_page_fixture(
+        &db,
+        "External edit preservation",
+        "The original projected prose.",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let root = tmp.path().join("pages");
+    KnowledgeProjectionWrite::new(root.clone(), &db)
+        .write_page(&before)
+        .unwrap();
+    let path = assert_projection_matches_page(&root, &db, &before);
+    let projected = std::fs::read_to_string(&path).unwrap();
+    let external = projected.replace(
+        "The original projected prose.",
+        "Unimported prose edited directly in the vault.",
+    );
+    assert_ne!(external, projected, "positive external edit control");
+    std::fs::write(&path, &external).unwrap();
+    let history_before = db.list_page_history(&page_id, 10).await.unwrap();
+    let request = serde_json::json!({
+        "content": "A separately saved edit in the app.",
+        "expected_version": before.version,
+        "caller_id": "wenlan-app",
+        "operation_id": "preserve-external-projection",
+    });
+
+    for attempt in 0..2 {
+        let response = app
+            .clone()
+            .oneshot(post_page(&page_id, request.clone()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let result = response_json(response).await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["projection_status"], "pending", "attempt {attempt}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            external,
+            "unimported external prose must remain recoverable after save/replay"
+        );
+    }
+    let after = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(after.content, "A separately saved edit in the app.");
+    assert_eq!(after.version, before.version + 1);
+    assert_eq!(
+        db.list_page_history(&page_id, 10).await.unwrap().len(),
+        history_before.len() + 1
+    );
+    assert!(db
+        .get_operation_receipt("wenlan-app", "preserve-external-projection")
+        .await
+        .unwrap()
+        .is_some());
+    let (frontmatter, _) = extract_frontmatter(&external);
+    assert_eq!(
+        frontmatter
+            .fields
+            .get("origin_version")
+            .and_then(|value| value.as_i64()),
+        Some(before.version),
+        "external edit now carries a stale stamp relative to the saved DB page"
+    );
+
+    // Exercise the same projection recovery entrypoint used at daemon startup.
+    KnowledgeProjectionWrite::new(root, &db)
+        .reconcile(&[after.clone()])
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), external);
+    let reconciled = db.get_page(&page_id).await.unwrap().unwrap();
+    assert_eq!(reconciled.content, after.content);
+    assert_eq!(reconciled.version, after.version);
 }

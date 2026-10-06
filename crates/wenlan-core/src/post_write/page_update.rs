@@ -532,6 +532,67 @@ pub(super) async fn update_page_impl(
     user_forced: bool,
     page_fence: Option<&PageFence>,
 ) -> Result<WriteResult, WenlanError> {
+    let result = update_page_db_impl(
+        db,
+        page_id,
+        req,
+        edited_by,
+        require_stale,
+        expected_source_revision,
+        knowledge_path,
+        citations,
+        page_growth,
+        preserve_sources,
+        user_forced,
+        page_fence,
+    )
+    .await?;
+    // Receipts describe the DB transaction. Repairing an independent
+    // projection on replay must neither change that receipt nor replay old
+    // content over a newer Page. Unchanged saves repair too.
+    if matches!(
+        result.outcome,
+        WriteOutcome::Wrote | WriteOutcome::Unchanged
+    ) {
+        if let Some(path) = knowledge_path {
+            project_latest_page(db, page_id, path).await;
+        }
+    }
+    Ok(result)
+}
+
+async fn project_latest_page(db: &MemoryDB, page_id: &str, path: &Path) {
+    let result = async {
+        let page = db
+            .get_page(page_id)
+            .await?
+            .ok_or_else(|| WenlanError::Validation(format!("page '{page_id}' does not exist")))?;
+        let projection =
+            crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db);
+        let result = projection.write_page_gated(db, &page).await;
+        post_commit_projection_pause_and_fail(page_id, result).await
+    }
+    .await;
+    if let Err(error) = result {
+        log::warn!("[update_page] md repair pending for {page_id}: {error}");
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn update_page_db_impl(
+    db: &MemoryDB,
+    page_id: &str,
+    req: UpdatePageRequest,
+    edited_by: &str,
+    require_stale: bool,
+    expected_source_revision: Option<i64>,
+    knowledge_path: Option<&Path>,
+    citations: Option<(String, String)>,
+    page_growth: Option<PageGrowthCommit<'_>>,
+    preserve_sources: bool,
+    user_forced: bool,
+    page_fence: Option<&PageFence>,
+) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
         return Err(WenlanError::Validation(
@@ -633,10 +694,6 @@ pub(super) async fn update_page_impl(
     // projection delimiters before ownership gating, revision-card staging, or
     // any canonical page/projection mutation.
     crate::export::provenance::validate_canonical_page_content(&req.content)?;
-
-    let projection = knowledge_path.map(|path| {
-        crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db)
-    });
 
     // ── Load, decide ownership, and write under one version CAS ─────────────
     // The ownership decision is made from a loaded row, and the write CASes on
@@ -971,6 +1028,17 @@ pub(super) async fn update_page_impl(
             let new_changelog =
                 crate::db::append_changelog_entry(&existing_cl, entry, DEFAULT_CHANGELOG_CAP)?;
 
+            // Seed a legacy byte baseline from the exact CAS generation.
+            // Differing external prose is preserved; this is best-effort and
+            // cannot fail a canonical write. A lost CAS reloads and rechecks.
+            if let Some(path) = knowledge_path {
+                let projection =
+                    crate::export::knowledge::KnowledgeProjectionWrite::new(path.to_path_buf(), db);
+                if let Err(error) = projection.write_page_gated(db, &current).await {
+                    log::warn!("[update_page] baseline pending for {page_id}: {error}");
+                }
+            }
+
             // ── Apply DB update ─────────────────────────────────────────────
             // The receipt records the response this call is about to return,
             // so a replay hands back the identical envelope rather than a
@@ -1126,19 +1194,6 @@ pub(super) async fn update_page_impl(
         )
         .await;
     };
-
-    // ── md re-write ─────────────────────────────────────────────────────────
-    if let Some(ref projection) = projection {
-        if let Ok(Some(updated_page)) = db.get_page(page_id).await {
-            let projection_result = projection.write_page_gated(db, &updated_page).await;
-            let projection_result =
-                post_commit_projection_pause_and_fail(page_id, projection_result).await;
-            if let Err(e) = projection_result {
-                log::warn!("[update_page] md re-write failed for {page_id}: {e}");
-            }
-        }
-    }
-    drop(projection);
 
     Ok(WriteResult {
         id: page_id.to_string(),

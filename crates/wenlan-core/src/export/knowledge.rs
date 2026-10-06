@@ -60,6 +60,9 @@ fn default_schema_v2() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PageFileState {
     file: String,
+    /// SHA-256 of the exact bytes installed, not of canonicalized prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_sha256: Option<String>,
     version: i64,
     last_written: String,
     /// The index-relevant fields as of the write that produced `file`, so
@@ -183,6 +186,7 @@ pub struct KnowledgeWriter {
     tracker: std::sync::Arc<crate::page_projection_tracker::PageProjectionTracker>,
     reap_orphan_stubs: bool,
     write_provenance: bool,
+    protect_external_edits: bool,
 }
 
 impl KnowledgeWriter {
@@ -192,6 +196,7 @@ impl KnowledgeWriter {
             tracker: database.page_projection_tracker(),
             reap_orphan_stubs: true,
             write_provenance: true,
+            protect_external_edits: true,
         }
     }
 
@@ -201,6 +206,7 @@ impl KnowledgeWriter {
             tracker: database.page_projection_tracker(),
             reap_orphan_stubs: false,
             write_provenance: false,
+            protect_external_edits: false,
         }
     }
 
@@ -218,6 +224,7 @@ impl KnowledgeWriter {
             tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             reap_orphan_stubs: true,
             write_provenance: true,
+            protect_external_edits: true,
         }
     }
 
@@ -230,6 +237,7 @@ impl KnowledgeWriter {
             tracker: crate::page_projection_tracker::PageProjectionTracker::new(),
             reap_orphan_stubs: false,
             write_provenance: false,
+            protect_external_edits: false,
         }
     }
 
@@ -351,12 +359,24 @@ impl KnowledgeWriter {
             std::process::id(),
             TEMP_FILE_SEQ.fetch_add(1, Ordering::Relaxed)
         );
-        write_page_atomically_nofollow(
-            &capabilities.root,
-            &filename,
-            &temp_filename,
-            content.as_bytes(),
-        )?;
+        if self.protect_external_edits {
+            write_page_preserving_external_edits(
+                capabilities,
+                &filename,
+                &temp_filename,
+                page,
+                content.as_bytes(),
+                state.pages.get(&page.id),
+            )?;
+        } else {
+            // Explicit repair operations carry their own captured-byte guards.
+            write_page_atomically_nofollow(
+                &capabilities.root,
+                &filename,
+                &temp_filename,
+                content.as_bytes(),
+            )?;
+        }
         after_target_write()?;
 
         if self.write_provenance {
@@ -396,6 +416,7 @@ impl KnowledgeWriter {
             page.id.clone(),
             PageFileState {
                 file: filename,
+                content_sha256: Some(projection_digest(content.as_bytes())),
                 version: page.version,
                 last_written: page.last_modified.clone(),
                 title: Some(page.title.clone()),
@@ -429,23 +450,11 @@ impl KnowledgeWriter {
     /// through the same atomic `write_page` path, and sweeps `.tmp` leftovers
     /// from writes that died between write and rename.
     ///
-    /// Staleness is judged by the `origin_version` stamp, NOT by comparing
-    /// bytes against `render_markdown`. md is canonical for prose (see
-    /// `sources::page_watcher`): a body that differs while the stamp is
-    /// current is a user edit made while the daemon was down, and the watcher
-    /// reflects it back into the DB on its next tick. Rewriting on
-    /// content-inequality would delete that edit before the watcher ever saw
-    /// it. A stale stamp, by contrast, can only mean the daemon wrote last and
-    /// the file did not keep up.
-    ///
-    /// ponytail: two known ceilings, both cheap to live with. (1) A file
-    /// corrupted in the BODY while its frontmatter still reads current is
-    /// indistinguishable from a user edit without a per-page checksum, so it
-    /// is left alone — add a content hash to `PageFileState` if that ever
-    /// bites. (2) Pages with no `state.json` entry are skipped: we cannot tell
-    /// which file on disk is theirs, and guessing forks a `<slug>-2.md`
-    /// duplicate. The empty-directory case is already covered by the daemon's
-    /// one-time backfill.
+    /// A stale stamp is a repair candidate, never permission to overwrite.
+    /// The writer checks its last byte digest and preserves external edits.
+    /// Legacy files without a digest are upgraded only if their prose already
+    /// matches the canonical page. Unknown differing prose is left intact.
+    /// Pages without a state entry are skipped to avoid duplicate filenames.
     pub fn reconcile(
         &self,
         guard: &crate::page_projection_tracker::PageProjectionWriteGuard,
@@ -569,8 +578,19 @@ impl KnowledgeWriter {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
                 Err(error) => return Err(WenlanError::Io(error)),
             };
-            if !collides_state && !collides_disk {
-                return Ok(candidate);
+            if !collides_state {
+                if !collides_disk {
+                    return Ok(candidate);
+                }
+                // Installation may have completed before its first state
+                // entry was saved. Reuse its exact id instead of forking a
+                // duplicate; the protected writer still checks its prose.
+                if self.protect_external_edits
+                    && Self::read_origin_id(root, &OsString::from(&candidate)).as_deref()
+                        == Some(page_id)
+                {
+                    return Ok(candidate);
+                }
             }
             candidate = format!("{base}-{n}.md");
             n += 1;
@@ -1201,7 +1221,9 @@ impl KnowledgeWriter {
 
     fn save_state_cap(&self, wenlan: &Dir, state: &KnowledgeState) -> Result<(), WenlanError> {
         let data = serde_json::to_vec_pretty(state)?;
-        write_regular_nofollow(wenlan, "state.json", &data)
+        let sequence = PROJECTION_STATE_TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temporary = format!(".projection-state-{}-{sequence}.tmp", std::process::id());
+        write_page_atomically_nofollow(wenlan, "state.json", &temporary, &data)
     }
 
     /// Fallback for a legacy `state.json` entry with no `title` field: read
@@ -4132,6 +4154,143 @@ fn write_new_file_nofollow(directory: &Dir, name: &OsStr, bytes: &[u8]) -> Resul
 /// torn file. `reconcile` repairs the remaining failure mode (temp written,
 /// rename never happened), which leaves the target's `origin_version` behind
 /// the DB's.
+fn projection_digest(bytes: &[u8]) -> String {
+    format!("{:x}", sha2::Sha256::digest(bytes))
+}
+
+fn projection_bytes_replaceable(
+    bytes: &[u8],
+    page: &Page,
+    baseline: Option<&PageFileState>,
+) -> bool {
+    if bytes.is_empty() {
+        return true; // Retain the torn inode, then repair from DB.
+    }
+    let Ok(raw) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let (fm, body) = crate::sources::obsidian::extract_frontmatter(raw);
+    let owned = fm
+        .get_str("origin_id")
+        .map_or(baseline.is_some(), |id| id == page.id);
+    let not_newer = projected_origin_version(&fm) <= page.version;
+    let unchanged = baseline.and_then(|entry| entry.content_sha256.as_deref())
+        == Some(projection_digest(bytes).as_str());
+    let rendered = render_markdown(page);
+    let (_, rendered_body) = crate::sources::obsidian::extract_frontmatter(&rendered);
+    let adopted = crate::export::provenance::canonicalize_page_body(body)
+        == crate::export::provenance::canonicalize_page_body(rendered_body);
+    owned && not_newer && (unchanged || adopted)
+}
+
+/// Move the old inode into a durable recovery directory before installing a
+/// new file. A check followed by rename-over would lose an editor save that
+/// landed between them. Here a replacement appearing at the original name
+/// makes the create-only hard link fail, and the displaced inode remains
+/// reachable even if an editor still has it open and writes to it later.
+/// Readers can briefly see a missing path; they never see truncated prose.
+fn write_page_preserving_external_edits(
+    capabilities: &ProjectionCapabilities,
+    name: &str,
+    temporary: &str,
+    page: &Page,
+    bytes: &[u8],
+    baseline: Option<&PageFileState>,
+) -> Result<(), WenlanError> {
+    write_page_preserving_external_edits_with_hook(
+        capabilities,
+        name,
+        temporary,
+        page,
+        bytes,
+        baseline,
+        || Ok(()),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_page_preserving_external_edits_with_hook(
+    capabilities: &ProjectionCapabilities,
+    name: &str,
+    temporary: &str,
+    page: &Page,
+    bytes: &[u8],
+    baseline: Option<&PageFileState>,
+    after_move: impl FnOnce() -> Result<(), WenlanError>,
+) -> Result<(), WenlanError> {
+    let root = &capabilities.root;
+    // Avoid archiving an unchanged file on every receipt replay. State may
+    // still need repairing if the previous write stopped after installation.
+    let mut budget = RepairReadBudget::new();
+    if let Some(current) = read_optional_regular_nofollow(root, OsStr::new(name), &mut budget)? {
+        if current == bytes {
+            return Ok(());
+        }
+        if !projection_bytes_replaceable(&current, page, baseline) {
+            return Err(WenlanError::Conflict(format!(
+                "page_projection_external_edit: preserved {name}"
+            )));
+        }
+    }
+    let mut options = OpenOptions::new();
+    options
+        .write(true)
+        .create_new(true)
+        .follow(FollowSymlinks::No);
+    let mut file = root.open_with(temporary, &options)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+
+    let result = (|| {
+        match capabilities.wenlan.create_dir("projection-recovery") {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        let recovery = capabilities
+            .wenlan
+            .open_dir_nofollow("projection-recovery")?;
+        let previous = format!("{}.{}.md", page.id, uuid::Uuid::new_v4());
+        // The source may change after the initial read. Validate the actual
+        // inode moved, not the one observed before that race.
+        match root.rename(name, &recovery, &previous) {
+            Ok(()) => {
+                // Test seam at the real race boundary; production is a no-op.
+                let moved_hook = after_move();
+                let mut budget = RepairReadBudget::new();
+                let allowed = (|| {
+                    moved_hook?;
+                    let displaced =
+                        read_regular_nofollow(&recovery, OsStr::new(&previous), &mut budget)?;
+                    Ok::<_, WenlanError>(projection_bytes_replaceable(&displaced, page, baseline))
+                })();
+                if !matches!(allowed, Ok(true)) {
+                    // Do not rename-over a new editor file while restoring.
+                    // If one appeared, both it and the displaced file survive.
+                    let _ = recovery.hard_link(&previous, root, name);
+                    return Err(WenlanError::Conflict(format!(
+                        "page_projection_external_edit: preserved {name} and .wenlan/projection-recovery/{previous}"
+                    )));
+                }
+                if let Err(error) = root.hard_link(temporary, root, name) {
+                    let _ = recovery.hard_link(&previous, root, name);
+                    return Err(error.into());
+                }
+                // Retain the displaced inode: an external editor may still
+                // write through an open handle after the new file is installed.
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                root.hard_link(temporary, root, name)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    })();
+    let _ = root.remove_file(temporary);
+    result
+}
+
 fn write_page_atomically_nofollow(
     directory: &Dir,
     name: &str,
@@ -4634,6 +4793,7 @@ pub fn render_markdown_for(page: &Page) -> String {
 pub(crate) fn page_file_state_value(page: &Page, file: &str) -> serde_json::Value {
     serde_json::to_value(PageFileState {
         file: file.to_string(),
+        content_sha256: Some(projection_digest(render_markdown(page).as_bytes())),
         version: page.version,
         last_written: page.last_modified.clone(),
         title: Some(page.title.clone()),
@@ -6909,5 +7069,188 @@ mod tests {
                 "{path:?} must have a non-empty `type` frontmatter key, got {ty:?}"
             );
         }
+    }
+    #[test]
+    fn projection_recovery_preserves_an_editor_open_inode_after_installation() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        let file = writer.write_page_for_test(&page).unwrap();
+        let mut editor = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap();
+        page.version += 1;
+        page.content = "The desktop saved its new draft.".into();
+        writer.write_page_for_test(&page).unwrap();
+        // An in-place editor may finish saving through its old open handle.
+        editor
+            .write_all(b"\nlate external draft must survive\n")
+            .unwrap();
+        editor.sync_all().unwrap();
+        assert!(std::fs::read_to_string(&file)
+            .unwrap()
+            .contains(&page.content));
+        let recovered: Vec<_> = std::fs::read_dir(dir.path().join(".wenlan/projection-recovery"))
+            .unwrap()
+            .map(|e| std::fs::read_to_string(e.unwrap().path()).unwrap())
+            .collect();
+        assert!(recovered
+            .iter()
+            .any(|s| s.contains("late external draft must survive")));
+        let state = writer.load_state();
+        assert_eq!(
+            state.pages[&page.id].content_sha256.as_deref(),
+            Some(projection_digest(&std::fs::read(&file).unwrap()).as_str())
+        );
+    }
+
+    #[test]
+    fn projection_recovery_does_not_replace_an_editor_file_created_after_move() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        let file = writer.write_page_for_test(&page).unwrap();
+        let old = std::fs::read(&file).unwrap();
+        let state = writer.load_state();
+        let filename = state.pages[&page.id].file.clone();
+        page.version += 1;
+        page.content = "new desktop prose".into();
+        let result = KnowledgeProjectionWrite::with_projection_capabilities(dir.path(), |caps| {
+            write_page_preserving_external_edits_with_hook(
+                caps,
+                &filename,
+                ".race.tmp",
+                &page,
+                render_markdown(&page).as_bytes(),
+                state.pages.get(&page.id),
+                || {
+                    std::fs::write(&file, b"external replacement at the old pathname")?;
+                    Ok(())
+                },
+            )
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(&file).unwrap(),
+            b"external replacement at the old pathname"
+        );
+        assert!(
+            std::fs::read_dir(dir.path().join(".wenlan/projection-recovery"))
+                .unwrap()
+                .any(|e| std::fs::read(e.unwrap().path()).unwrap() == old)
+        );
+    }
+
+    #[test]
+    fn projection_recovery_repairs_file_installed_before_first_state_save() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let page = test_concept();
+        let guard = writer.begin_test_write();
+        create_projection_root_nofollow(dir.path()).unwrap();
+        let interrupted =
+            KnowledgeProjectionWrite::with_projection_capabilities(dir.path(), |caps| {
+                writer.write_page_with_lock_held_and_hook(
+                    caps,
+                    &guard,
+                    &page,
+                    || Err(WenlanError::Conflict("injected before state save".into())),
+                    true,
+                )
+            });
+        assert!(interrupted.is_err());
+        assert!(writer.page_filename(&page.id).is_none());
+        let file = writer.write_page_for_test(&page).unwrap();
+        assert_eq!(
+            std::path::Path::new(&file).file_name().unwrap(),
+            "rust-ownership.md"
+        );
+        assert!(!dir.path().join("rust-ownership-2.md").exists());
+        assert_eq!(
+            writer.load_state().pages[&page.id]
+                .content_sha256
+                .as_deref(),
+            Some(projection_digest(&std::fs::read(&file).unwrap()).as_str())
+        );
+    }
+
+    #[test]
+    fn projection_recovery_preserves_legacy_differing_prose_and_adopts_matching_prose() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        let file = writer.write_page_for_test(&page).unwrap();
+        let mut state = writer.load_state();
+        state.pages.get_mut(&page.id).unwrap().content_sha256 = None;
+        writer.save_state(&state).unwrap();
+        page.version += 1;
+        page.content = "DB moved past the legacy file".into();
+        let old = std::fs::read(&file).unwrap();
+        assert!(writer.write_page_for_test(&page).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), old);
+        let stats = writer
+            .reconcile_for_test(std::slice::from_ref(&page))
+            .unwrap();
+        assert_eq!(stats.errors, 1);
+        assert_eq!(std::fs::read(&file).unwrap(), old);
+        // Human has adopted the external prose: establishing the byte baseline
+        // does not delete unknown text and can now complete the projection.
+        page.content = test_concept().content;
+        writer.write_page_for_test(&page).unwrap();
+        assert!(writer.load_state().pages[&page.id].content_sha256.is_some());
+    }
+    #[test]
+    fn projection_recovery_preserves_edits_to_the_actual_moved_inode() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let mut page = test_concept();
+        let file = writer.write_page_for_test(&page).unwrap();
+        let mut editor = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&file)
+            .unwrap();
+        let state = writer.load_state();
+        let filename = state.pages[&page.id].file.clone();
+        page.version += 1;
+        page.content = "desktop candidate".into();
+        let result = KnowledgeProjectionWrite::with_projection_capabilities(dir.path(), |caps| {
+            write_page_preserving_external_edits_with_hook(
+                caps,
+                &filename,
+                ".moved-race.tmp",
+                &page,
+                render_markdown(&page).as_bytes(),
+                state.pages.get(&page.id),
+                || {
+                    editor.write_all(b"\nexternal prose arrived during replacement\n")?;
+                    editor.sync_all()?;
+                    Ok(())
+                },
+            )
+        });
+        assert!(matches!(result, Err(WenlanError::Conflict(_))));
+        assert!(std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("external prose arrived during replacement"));
+        assert!(!std::fs::read_to_string(&file)
+            .unwrap()
+            .contains("desktop candidate"));
+    }
+
+    #[test]
+    fn projection_recovery_refuses_a_writer_holding_an_older_page_snapshot() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let writer = KnowledgeWriter::new_for_test(dir.path().to_path_buf());
+        let older = test_concept();
+        let file = writer.write_page_for_test(&older).unwrap();
+        let mut newer = older.clone();
+        newer.version += 1;
+        newer.content = "a second writer already projected this version".into();
+        writer.write_page_for_test(&newer).unwrap();
+        let saved = std::fs::read(&file).unwrap();
+        assert!(writer.write_page_for_test(&older).is_err());
+        assert_eq!(std::fs::read(&file).unwrap(), saved);
+        assert_eq!(writer.load_state().pages[&older.id].version, newer.version);
     }
 }

@@ -643,3 +643,147 @@ async fn split_projection_states_fail_closed_and_retain_pending() {
         assert!(pending.is_file());
     }
 }
+
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn interrupted_rename_recovery_accepts_legacy_post_state_without_projection_hash() {
+    let fixture = rename_fixture().await;
+    let filename = target_filename(fixture.page_root.path(), "page-a");
+    let target_path = fixture.page_root.path().join(&filename);
+    let state_path = fixture.page_root.path().join(".wenlan/state.json");
+    let target_before = std::fs::read(&target_path).unwrap();
+    let state_before = std::fs::read(&state_path).unwrap();
+    let page_before = fixture.db.get_page("page-a").await.unwrap().unwrap();
+    create_empty_pending(&fixture);
+    let (target_post, state_post) = write_post_projection(&fixture).await;
+    assert_ne!(
+        target_post, target_before,
+        "positive interrupted-write control"
+    );
+
+    // Model an older binary that wrote the renamed Markdown and state, then
+    // stopped before committing the database rename.
+    let mut legacy_state: serde_json::Value = serde_json::from_slice(&state_post).unwrap();
+    assert!(legacy_state["pages"]["page-a"]
+        .as_object_mut()
+        .unwrap()
+        .remove("content_sha256")
+        .is_some());
+    std::fs::write(
+        &state_path,
+        serde_json::to_vec_pretty(&legacy_state).unwrap(),
+    )
+    .unwrap();
+
+    let recovered = recover_rename_page_title_apply_receipt(
+        &fixture.db,
+        &fixture.store,
+        &fixture.manifest,
+        fixture.page_root.path(),
+    )
+    .await
+    .expect("verified legacy Markdown permits restore and retry after upgrade");
+
+    assert!(
+        recovered.is_none(),
+        "the interrupted DB write must be retried"
+    );
+    assert_eq!(std::fs::read(&target_path).unwrap(), target_before);
+    assert_eq!(std::fs::read(&state_path).unwrap(), state_before);
+    let page_after = fixture.db.get_page("page-a").await.unwrap().unwrap();
+    assert_eq!(page_after.title, page_before.title);
+    assert_eq!(page_after.version, page_before.version);
+    let (pending, final_path) = artifact_paths(&fixture);
+    assert!(
+        !pending.exists(),
+        "successful recovery clears the interrupted marker"
+    );
+    assert!(
+        !final_path.exists(),
+        "an uncommitted rename has no success receipt"
+    );
+}
+
+#[tokio::test]
+#[cfg_attr(not(unix), ignore = "repair artifacts are unix-only")]
+async fn interrupted_rename_recovery_refuses_wrong_hash_changed_bytes_and_other_state() {
+    for case in ["wrong_hash", "changed_bytes", "other_state"] {
+        let fixture = rename_fixture().await;
+        let filename = target_filename(fixture.page_root.path(), "page-a");
+        let target_path = fixture.page_root.path().join(&filename);
+        let state_path = fixture.page_root.path().join(".wenlan/state.json");
+        let page_before = fixture.db.get_page("page-a").await.unwrap().unwrap();
+        create_empty_pending(&fixture);
+        let (target_post, state_post) = write_post_projection(&fixture).await;
+        let mut current_state: serde_json::Value = serde_json::from_slice(&state_post).unwrap();
+        let page_state = current_state["pages"]["page-a"].as_object_mut().unwrap();
+        match case {
+            "wrong_hash" => {
+                // Exact expected Markdown alone cannot excuse a present bad hash.
+                page_state.insert(
+                    "content_sha256".to_string(),
+                    serde_json::json!("0".repeat(64)),
+                );
+            }
+            "changed_bytes" => {
+                // Missing legacy hash cannot excuse even one changed Markdown byte.
+                assert!(page_state.remove("content_sha256").is_some());
+                let mut changed = target_post;
+                changed.push(b'!');
+                std::fs::write(&target_path, changed).unwrap();
+            }
+            "other_state" => {
+                // The legacy exception applies to the hash only.
+                assert!(page_state.remove("content_sha256").is_some());
+                page_state.insert(
+                    "version".to_string(),
+                    serde_json::json!(page_before.version + 2),
+                );
+            }
+            _ => unreachable!(),
+        }
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&current_state).unwrap(),
+        )
+        .unwrap();
+        let target_before_recovery = std::fs::read(&target_path).unwrap();
+        let state_before_recovery = std::fs::read(&state_path).unwrap();
+
+        let error = recover_rename_page_title_apply_receipt(
+            &fixture.db,
+            &fixture.store,
+            &fixture.manifest,
+            fixture.page_root.path(),
+        )
+        .await
+        .expect_err(case);
+
+        assert!(
+            matches!(error, WenlanError::Conflict(ref message) if message == "repair_apply_recovery_required"),
+            "{case}: {error}"
+        );
+        assert_eq!(
+            std::fs::read(&target_path).unwrap(),
+            target_before_recovery,
+            "{case}"
+        );
+        assert_eq!(
+            std::fs::read(&state_path).unwrap(),
+            state_before_recovery,
+            "{case}"
+        );
+        let page_after = fixture.db.get_page("page-a").await.unwrap().unwrap();
+        assert_eq!(page_after.title, page_before.title, "{case}");
+        assert_eq!(page_after.version, page_before.version, "{case}");
+        let (pending, final_path) = artifact_paths(&fixture);
+        assert!(
+            pending.is_file(),
+            "{case}: refused recovery preserves its marker"
+        );
+        assert!(
+            !final_path.exists(),
+            "{case}: refused recovery cannot publish success"
+        );
+    }
+}

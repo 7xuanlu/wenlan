@@ -85,7 +85,8 @@ pub async fn test_app() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>) {
     let state = ServerState {
         db: Some(db_arc.clone()),
         ..ServerState::default()
-    };
+    }
+    .with_page_root(dir.path().join("pages"));
     // These fixtures model a ready daemon with no pending repair recovery.
     state.maintenance_coordinator.finish_recovery();
     let router = build_router(Arc::new(RwLock::new(state)));
@@ -114,7 +115,8 @@ pub async fn test_app_no_gate() -> (AppRouter, tempfile::TempDir, Arc<MemoryDB>)
         db: Some(db_arc.clone()),
         quality_gate: QualityGate::new(gate_cfg),
         ..ServerState::default()
-    };
+    }
+    .with_page_root(dir.path().join("pages"));
     // These fixtures model a ready daemon with no pending repair recovery.
     state.maintenance_coordinator.finish_recovery();
     let router = build_router(Arc::new(RwLock::new(state)));
