@@ -127,12 +127,15 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   const detail = page.getByRole("main", { name: "Memory dossier" });
   await expect(detail.getByText(memoryFixtures[0].content)).toBeVisible();
   await expect(detail.getByText(memoryFixtures[0].source_text!)).not.toBeVisible();
-  await page.getByRole("button", { name: "Memory context", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Memory context", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Memory actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Memory context", exact: true }).click();
   const context = page.getByRole("dialog", { name: "Memory context" });
   await context.locator("summary").filter({ hasText: /^Source$/ }).click();
   await expect(context.getByText(memoryFixtures[0].source_text!)).toBeVisible();
   await expect(context.getByRole("button", { name: /decision/ })).toBeVisible();
   await context.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Memory actions", exact: true })).toBeFocused();
   const bodyParagraph = detail.locator(".content-renderer p").first();
   // Short memories use reading type, not a length-dependent display headline.
   await expect(bodyParagraph).toHaveCSS("font-size", "16px");

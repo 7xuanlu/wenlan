@@ -1107,9 +1107,12 @@ function PageCanvasInner({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      // Typing a box's name is not a canvas shortcut.
-      if (target && (target.tagName === "INPUT" || target.isContentEditable)) return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      // The note and its page menu remain usable beside this nonmodal map.
+      // Only keystrokes from the actual map surface belong to its shortcuts.
+      if (!target || !surfaceRef.current?.contains(target) || e.defaultPrevented || e.isComposing) return;
+      // Naming a box or using a native field must never mutate the selection.
+      if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
 
       // Controls outside the nodes keep their native activation and focus keys.
       // In particular, Enter on "Back to note" must not create a sibling box.
@@ -1336,28 +1339,16 @@ function PageCanvasInner({
     return edges;
   }, [views, map?.edges, palette, draft, pending]);
 
-  // React Flow puts its own key handling on the document rather than on its
-  // container, which is why its Shift-drag and Meta-click work wherever focus
-  // happens to be. Ours hung off this surface's onKeyDown instead, so every
-  // shortcut died the moment focus was anywhere else — opening the canvas
-  // leaves focus on the button in the page header, and clicking the page title
-  // is enough to lose it again — and Cmd-A fell through to the browser, which
-  // select-alls the window and paints its highlight over the map. Same model as
-  // the library now: one document listener, ignored while a field has focus.
-  // Capture, not bubble: React runs its own handlers at the root container,
-  // which is inside the document, so a bubble-phase listener here lands after
-  // the page's Escape handler and Escape closed the whole canvas instead of
-  // dropping the selection. Capture puts the canvas first, and the layered
-  // Escape below still hands the key onward when it has nothing of its own left
-  // to close.
+  // Capture keeps the map's layered Escape ahead of parent page handlers.
+  // The listener is scoped to surface descendants so neighboring note text,
+  // page menus, and drawer controls retain their own keyboard behavior.
   useEffect(() => {
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [handleKeyDown]);
 
-  // Focus still moves to the map when it opens, so Tab adds a box straight away
-  // and a screen reader lands in the region it just asked for. The shortcuts no
-  // longer depend on it.
+  // Focus moves into the map on open so its scoped shortcuts work immediately
+  // and a screen reader lands in the region it just asked for.
   useEffect(() => {
     surfaceRef.current?.focus({ preventScroll: true });
   }, [isLoading]);
@@ -1432,6 +1423,13 @@ function PageCanvasInner({
         tabIndex={0}
         aria-label={t("pageCanvas.regionLabel", { title: pageTitle })}
         onDoubleClick={handleDoubleClick}
+        onPointerDownCapture={(event) => {
+          // Clicking the map again after reading the note restores shortcuts.
+          // Native controls and node buttons keep their own browser focus.
+          if (event.target instanceof Element && !event.target.closest(
+            'button, a[href], input, textarea, select, [role="button"], [role="menuitem"], [contenteditable]:not([contenteditable="false"])',
+          )) surfaceRef.current?.focus({ preventScroll: true });
+        }}
       >
         <ReactFlow
           nodes={displayNodes}

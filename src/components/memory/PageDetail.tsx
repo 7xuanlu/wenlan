@@ -4,7 +4,7 @@ import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } fr
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowLeft, FileText, SidebarSimple, TreeStructure } from "@phosphor-icons/react";
+import { ArrowLeft } from "@phosphor-icons/react";
 import {
   getPage,
   getPageLinks,
@@ -38,6 +38,7 @@ import ContentRenderer from "./ContentRenderer";
 import RelatedPages from "./page/RelatedPages";
 import PageInfo from "./page/PageInfo";
 import PageInfoDrawer from "./page/PageInfoDrawer";
+import "./page/pageDocumentTools.css";
 import KnowledgeContext from "./context/KnowledgeContext";
 import { pageReviewNotice, type PageReviewNotice } from "./page/pageReviewNotice";
 import { RailPanelTitle } from "./MemoryDetailPrimitives";
@@ -263,7 +264,6 @@ export default function PageDetail({
     setActionError(message);
     setDeleteGuardEntityId(entityId);
   };
-  const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const [redistillNotice, setRedistillNotice] = useState<{
     kind: "success" | "warning" | "error";
@@ -299,9 +299,6 @@ export default function PageDetail({
   const autosaveRef = useRef<PageAutosave | null>(null);
   const editorPageRef = useRef<Page | null>(null);
   const backAttemptRef = useRef(0);
-  const exportMenuTriggerRef = useRef<HTMLButtonElement>(null);
-  const exportMenuRef = useRef<HTMLDivElement>(null);
-  const exportMenuInitialFocusRef = useRef<MenuInitialFocus>("first");
   const actionMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuListRef = useRef<HTMLDivElement>(null);
@@ -745,7 +742,6 @@ export default function PageDetail({
   const handleExportToVault = useCallback(
     async (vaultPath: string) => {
       const originPageId = pageId;
-      setExportMenuOpen(false);
       setActionErrorMessage(null);
       setExporting(true);
       try {
@@ -994,6 +990,7 @@ export default function PageDetail({
     }
     if (!editing) {
       canvasReturnToEditorRef.current = false;
+      setInfoOpen(false);
       setCanvasOpen(true);
       return;
     }
@@ -1013,6 +1010,7 @@ export default function PageDetail({
       if (!await flushEditor() || !isCurrentAttempt()) return;
       closeEditor();
       canvasReturnToEditorRef.current = true;
+      setInfoOpen(false);
       setCanvasOpen(true);
     } finally {
       if (mountedRef.current && canvasSwitchAttemptRef.current === attempt) {
@@ -1022,8 +1020,17 @@ export default function PageDetail({
     }
   };
 
+  const requestPageInfo = async () => {
+    if (canvasSwitchPendingRef.current) return;
+    if (showCanvas) {
+      // Switching tools closes the map writer before the editor can resume.
+      await requestToggleCanvas();
+    }
+    setInfoOpen(true);
+  };
+
   useEffect(() => {
-    if (!editing || infoOpen) return;
+    if (!editing || infoOpen || actionMenuOpen) return;
     const captureUnfocusedEditorEscape = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -1053,7 +1060,7 @@ export default function PageDetail({
         captureUnfocusedEditorEscape,
         true,
       );
-  }, [editing, infoOpen, requestCloseEditor]);
+  }, [editing, infoOpen, actionMenuOpen, requestCloseEditor]);
 
   const requestBack = async () => {
     // Main owns navigation ordering when the flush handle is registered. Queue
@@ -1178,15 +1185,13 @@ export default function PageDetail({
     }
   };
 
-  const openExportMenu = (initialFocus: MenuInitialFocus) => {
-    exportMenuInitialFocusRef.current = initialFocus;
+  const closeActionMenu = () => {
     setActionMenuOpen(false);
-    setExportMenuOpen(true);
+    actionMenuTriggerRef.current?.focus();
   };
 
   const openActionMenu = (initialFocus: MenuInitialFocus) => {
     actionMenuInitialFocusRef.current = initialFocus;
-    setExportMenuOpen(false);
     setActionMenuOpen(true);
   };
 
@@ -1202,7 +1207,10 @@ export default function PageDetail({
 
   const handlePageDetailKeyDown = (e: React.KeyboardEvent) => {
     if (
-      !editing ||
+      // Portaled context controls still bubble through this React parent.
+      // The drawer owns Escape while open; leaving the editor here would
+      // consume the key before the drawer's document listener receives it.
+      !editing || infoOpen || actionMenuOpen ||
       e.defaultPrevented ||
       e.nativeEvent.isComposing ||
       e.key !== "Escape"
@@ -1227,11 +1235,6 @@ export default function PageDetail({
       editorRef.current?.focus();
     }
   }, [editing, editGate.kind, editorSessionId]);
-
-  useEffect(() => {
-    if (!exportMenuOpen) return;
-    focusMenuBoundary(exportMenuRef.current, exportMenuInitialFocusRef.current);
-  }, [exportMenuOpen]);
 
   useEffect(() => {
     if (!actionMenuOpen) return;
@@ -1394,55 +1397,17 @@ export default function PageDetail({
   const hideOuterTitleWhileEditing =
     editing && editGate.kind === "editor" && editHasMatchingTitle;
 
-  return (
-    <div className={`page-detail document-context-host${infoOpen && !showCanvas ? " document-context-open" : ""}`} onKeyDown={handlePageDetailKeyDown}>
-      <div className="page-detail-top-row">
-        <div className="document-kind-label" title={t("knowledgeContext.noteHint")}>
-          <WorkspaceBackButton
-            aria-label={t("main.back")}
-            className="mem-icon-action"
-            onClick={requestBack}
-            type="button"
-          >
-            <ArrowLeft aria-hidden="true" size={16} />
-          </WorkspaceBackButton>
-          <span>{t("knowledgeContext.noteKind")}</span>
-        </div>
-        <div className="page-detail-view-controls">
-          <button
-            type="button"
-            className="page-detail-canvas-toggle"
-            aria-label={showCanvas ? t("pageCanvas.closeCanvas") : t("pageCanvas.tabNote")}
-            aria-pressed={!showCanvas}
-            disabled={canvasSwitchPending}
-            onClick={() => { if (showCanvas) void requestToggleCanvas(); }}
-          >
-            <FileText aria-hidden="true" size={14} />
-            <span>{t("pageCanvas.tabNote")}</span>
-          </button>
-          <button
-            type="button"
-            className="page-detail-canvas-toggle"
-            aria-pressed={showCanvas}
-            disabled={canvasSwitchPending}
-            onClick={() => { if (!showCanvas) void requestToggleCanvas(); }}
-          >
-            <TreeStructure aria-hidden="true" size={14} />
-            <span>{t("pageCanvas.tabCanvas")}</span>
-          </button>
-        </div>
-        <div className="page-detail-info-slot">
-          {!showCanvas && <button
-            type="button"
-            className="mem-icon-action"
-            aria-label={t("pageInfo.label")}
-            title={t("pageInfo.label")}
-            aria-expanded={infoOpen}
-            onClick={() => setInfoOpen(true)}
-          >
-            <SidebarSimple aria-hidden="true" size={18} style={{ transform: "scaleX(-1)" }} />
-          </button>}
-              <div className="page-detail-actions-anchor" ref={actionMenuRef}>
+  const documentTools = (
+    <div className="page-document-tools">
+      <WorkspaceBackButton
+          aria-label={t("main.back")}
+          className="mem-icon-action"
+          onClick={requestBack}
+          type="button"
+        >
+          <ArrowLeft aria-hidden="true" size={16} />
+        </WorkspaceBackButton>
+      <div className="page-detail-actions-anchor" ref={actionMenuRef}>
                 <button
                   ref={actionMenuTriggerRef}
                   type="button"
@@ -1481,11 +1446,24 @@ export default function PageDetail({
                     ref={actionMenuListRef}
                     role="menu"
                   >
-                    <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); setInfoOpen(true); }}>{t("pageInfo.label")}</button>
-                    {!editing ? (
+                    <button type="button" role="menuitem" disabled={canvasSwitchPending} onClick={() => {
+                      closeActionMenu();
+                      void requestPageInfo();
+                    }}>{t("pageInfo.label")}</button>
+                    <button type="button" role="menuitem" disabled={canvasSwitchPending} onClick={() => {
+                      closeActionMenu();
+                      if (!showCanvas) void requestToggleCanvas();
+                    }}>{t("pageCanvas.tabCanvas")}</button>
+                    {!editing && !showCanvas ? (
+                      <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); void beginEditing(); }}>
+                        {t("pageDetail.editPage")}
+                      </button>
+                    ) : null}
+                    {!editing && !showCanvas ? (
                       <button
                         className="page-detail-mobile-menu-item"
                         disabled={redistillMutation.isPending}
+                        aria-busy={redistillMutation.isPending}
                         onClick={() => {
                           setActionMenuOpen(false);
                           handleRedistillClick();
@@ -1532,7 +1510,7 @@ export default function PageDetail({
                           role="menuitem"
                           type="button"
                         >
-                          {obsidianSources.length === 1
+                          {exported ? t("pageDetail.exported") : obsidianSources.length === 1
                             ? t("pageDetail.exportToObsidian")
                             : t("pageDetail.exportToVault", { vault: folderName(source.path) })}
                         </button>
@@ -1554,7 +1532,7 @@ export default function PageDetail({
                         Gone while editing, matching Canvas and Re-distill: the
                         mark attests the stored text, which is not what an open
                         editor is showing. (M5 App PR, D2/D7.) */}
-                    {!editing ? (
+                    {!editing && !showCanvas ? (
                       <button
                         disabled={!reviewSupported || reviewMutation.isPending}
                         onClick={() => {
@@ -1575,7 +1553,7 @@ export default function PageDetail({
                     <button
                       className="page-detail-menu-danger"
                       disabled={
-                        editing || deleteMutation.isPending ||
+                        editing || showCanvas || deleteMutation.isPending ||
                         saveState.phase === "pending"
                       }
                       onClick={requestDelete}
@@ -1587,181 +1565,19 @@ export default function PageDetail({
                   </div>
                 ) : null}
               </div>
-        </div>
-      </div>
+    </div>
+  );
 
+
+  return (
+    <div className={`page-detail document-context-host${infoOpen || showCanvas ? " document-context-open" : ""}${showCanvas ? " page-document-map-open" : ""}`} onKeyDown={handlePageDetailKeyDown}>
       <div className="page-detail-document">
-        <div className={hideOuterTitleWhileEditing ? "page-detail-heading-block--writing" : undefined}>
-          <div className="page-detail-heading-row flex items-start justify-between gap-4">
-            <div className="flex-1 min-w-0">
-              <h1
-                className={
-                  hideOuterTitleWhileEditing ? "sr-only" : "page-detail-title"
-                }
-              >
-                {page.title}
-              </h1>
-            </div>
-
-            {!editing && (
-              <div className="page-detail-header-actions">
-                <button
-                  type="button"
-                  className="page-detail-primary-action"
-                  onClick={() => void beginEditing()}
-                >
-                  {t("pageDetail.editPage")}
-                </button>
-                <div className="page-detail-icon-actions">
-                  <button
-                    aria-label={t("pageDetail.editPage")}
-                    onClick={() => void beginEditing()}
-                    className="mem-icon-action"
-                    title={t("pageDetail.editPage")}
-                    type="button"
-                  >
-                    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={handleRedistillClick}
-                    disabled={redistillMutation.isPending}
-                    aria-busy={redistillMutation.isPending}
-                    className="mem-icon-action"
-                    aria-label={
-                      redistillMutation.isPending
-                        ? t("pageDetail.redistillingPage")
-                        : t("pageDetail.redistillPage")
-                    }
-                    title={
-                      redistillMutation.isPending
-                        ? t("pageDetail.redistillingPage")
-                        : t("pageDetail.redistillPage")
-                    }
-                    type="button"
-                  >
-                    <svg
-                      aria-hidden="true"
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      className={redistillMutation.isPending ? "animate-spin motion-reduce:animate-none" : undefined}
-                    >
-                      <path d="M21 12a9 9 0 11-2.64-6.36" />
-                      <path d="M21 3v6h-6" />
-                    </svg>
-                  </button>
-              <button
-                onClick={copyAsContext}
-                disabled={copying}
-                className={`mem-icon-action ${copied ? "text-emerald-400" : ""}`}
-                title={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
-                aria-label={copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
-                type="button"
-              >
-                {copied ? (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                ) : (
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                    <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
-                  </svg>
-                )}
-              </button>
-              {/* Export button: 0 sources = disabled, 1 = direct, 2+ = popover */}
-              <div className="relative">
-                {obsidianSources.length === 0 ? (
-                  <button
-                    disabled
-                    className="mem-icon-action"
-                    title={t("pageDetail.exportUnavailable")}
-                    aria-label={t("pageDetail.exportUnavailable")}
-                    type="button"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                  </button>
-                ) : (
-                  <button
-                    ref={exportMenuTriggerRef}
-                    aria-expanded={obsidianSources.length >= 2 ? exportMenuOpen : undefined}
-                    aria-haspopup={obsidianSources.length >= 2 ? "menu" : undefined}
-                    onKeyDown={(event) => {
-                      if (obsidianSources.length >= 2) {
-                        handleMenuTriggerKeyDown(event, openExportMenu);
-                      }
-                    }}
-                    onClick={() => {
-                      if (obsidianSources.length === 1) {
-                        handleExportToVault(obsidianSources[0].path);
-                      } else if (exportMenuOpen) {
-                        setExportMenuOpen(false);
-                      } else {
-                        openExportMenu("first");
-                      }
-                    }}
-                    disabled={exporting}
-                    className={`mem-icon-action ${exported ? "text-emerald-400" : ""}`}
-                    title={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
-                    aria-label={exported ? t("pageDetail.exported") : t("pageDetail.exportToObsidian")}
-                    type="button"
-                  >
-                    {exported ? (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    ) : (
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                        <polyline points="7 10 12 15 17 10" />
-                        <line x1="12" y1="15" x2="12" y2="3" />
-                      </svg>
-                    )}
-                  </button>
-                )}
-                {exportMenuOpen && obsidianSources.length >= 2 && (
-                  <div
-                    className="mem-popover-surface page-detail-export-menu absolute right-0 top-full mt-1 z-50"
-                    onKeyDown={(event) => {
-                      handleMenuKeyDown(
-                        event,
-                        exportMenuRef.current,
-                        () => setExportMenuOpen(false),
-                        exportMenuTriggerRef.current,
-                      );
-                    }}
-                    ref={exportMenuRef}
-                    role="menu"
-                  >
-                    {obsidianSources.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => handleExportToVault(s.path)}
-                        role="menuitem"
-                        type="button"
-                      >
-                        {folderName(s.path)}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              </div>
-
-            </div>
-            )}
+        {!hideOuterTitleWhileEditing && (
+          <div className="page-document-title-row">
+            <h1 className="page-detail-title">{page.title}</h1>
+            {documentTools}
           </div>
-        </div>
+        )}
 
         {showAttachedPageNotice && (
           <div
@@ -1889,18 +1705,7 @@ export default function PageDetail({
           </div>
         )}
 
-        {showCanvas ? (
-          <div>
-            <PageCanvas
-              pageId={pageId}
-              pageTitle={page.title}
-              labelOverrides={labelOverrides}
-              onMemoryClick={onMemoryClick}
-              onPageClick={onPageClick}
-              onEntityClick={onEntityClick}
-            />
-          </div>
-        ) : editing ? (
+        {editing ? (
           editGate.kind === "checking" ? (
             <div role="status" className="page-editor-notice">
               {t("pageDetail.editor.checking")}
@@ -2114,6 +1919,8 @@ export default function PageDetail({
                 )}
               </p>
               {editorSessionId && (
+                <div className={hideOuterTitleWhileEditing ? "page-document-editor page-document-editor--title" : "page-document-editor"}>
+                {hideOuterTitleWhileEditing && <><h1 className="sr-only">{page.title}</h1>{documentTools}</>}
                 <MarkdownEditor
                   ref={editorRef}
                   initialDocument={editInitialDocument}
@@ -2143,12 +1950,13 @@ export default function PageDetail({
                     )
                   }
                 />
+                </div>
               )}
             </div>
           )
         ) : (
           <div>
-            <div className="page-detail-prose" onClickCapture={handleContentClick}>
+            <div className="page-detail-prose" data-testid="page-document-reading" onClickCapture={handleContentClick}>
               {ledeText && (
                 <div className="page-detail-lede">
                   {ledeMarkdown ? (
@@ -2174,11 +1982,29 @@ export default function PageDetail({
 
       <PageInfoDrawer
         docked
+        variant="canvas"
+        open={showCanvas}
+        onClose={() => { void requestToggleCanvas(); }}
+        title={t("pageCanvas.tabCanvas")}
+        closeLabel={t("common.close")}
+      >
+        <PageCanvas
+          pageId={pageId}
+          pageTitle={page.title}
+          labelOverrides={labelOverrides}
+          onMemoryClick={onMemoryClick}
+          onPageClick={onPageClick}
+          onEntityClick={onEntityClick}
+        />
+      </PageInfoDrawer>
+      <PageInfoDrawer
+        docked
         open={infoOpen && !showCanvas}
         onClose={() => setInfoOpen(false)}
         title={t("pageInfo.label")}
         closeLabel={t("common.close")}
       >
+          <p className="document-kind-label">{t("knowledgeContext.noteKind")}</p>
           <p className="document-kind-description">{t("knowledgeContext.noteHint")}</p>
           <KnowledgeContext key={pageId} kind="page" id={pageId} title={page.title}
             onNavigateMemory={(id) => { setInfoOpen(false); onMemoryClick(id); }}

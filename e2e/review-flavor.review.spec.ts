@@ -77,6 +77,7 @@ test("keeps every enabled primary destination inside the Review command contract
 
   await openPrimaryDestination(page, "Memories");
   await expect(page.getByRole("region", { name: "Memory list" })).toBeVisible();
+  // Keep the same fixture row even if a mutation changes list ordering.
   const firstMemory = page.getByRole("article", { name: "Fixture architecture", exact: true });
   const memoryActions = firstMemory.getByRole("button", { name: "Memory actions", exact: true });
   await memoryActions.click();
@@ -139,7 +140,8 @@ test("proves Review identity and exercises Wiki Page mutations", async ({ page }
   await expect(page.getByText("Edited through the Review-flavor lane.")).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "Re-distill page" }).click();
+  await page.getByRole("button", { name: "Page actions", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Re-distill page", exact: true }).click();
   await expect(page.getByText("Page re-distilled.", { exact: true })).toBeVisible();
   await expect.poll(async () => (await storedReviewPage(page, "page-architecture"))?.last_compiled).toBe("2026-07-10T12:33:00Z");
 
@@ -193,10 +195,14 @@ test("marks a stored page reviewed through the Review presence contract", async 
   await page.goto("/");
   await openFixtureArchitecture(page);
 
-  // All reading actions are absent while writing. Escape flushes the editor
-  // and returns to the stored text before the review action is reachable.
+  // Review attests stored text, so the menu omits it while writing. Escape
+  // flushes the editor before that action becomes reachable.
   await expect(page.getByRole("textbox", { name: "Page editor", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Page actions", exact: true })).toHaveCount(0);
+  const actions = page.getByRole("button", { name: "Page actions", exact: true });
+  await actions.click();
+  await expect(page.getByRole("menuitem", { name: "Mark page reviewed", exact: true })).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(actions).toBeFocused();
   await closeWritingView(page);
 
   await expect(page.getByRole("button", { name: "Page actions", exact: true })).toBeVisible();

@@ -27,7 +27,6 @@ import {
   type MemoryType,
   type PendingRevision,
 } from "../../lib/tauri";
-import { SidebarSimple } from "@phosphor-icons/react";
 import TagEditor from "../TagEditor";
 import PageInfoDrawer from "./page/PageInfoDrawer";
 import KnowledgeContext from "./context/KnowledgeContext";
@@ -510,18 +509,6 @@ export default function MemoryDetail({
               {t("memoryDetail.edit")}
             </button>
           )}
-
-          <button
-            type="button"
-            className="memory-detail-icon-button memory-detail-context-trigger"
-            aria-label={t("knowledgeContext.memoryPanel")}
-            title={t("knowledgeContext.memoryPanel")}
-            aria-expanded={infoOpen}
-            aria-haspopup="dialog"
-            onClick={() => setInfoOpen(!infoOpen)}
-          >
-            <SidebarSimple aria-hidden="true" size={18} style={{ transform: "scaleX(-1)" }} />
-          </button>
 
           <div
             className="memory-detail-action-menu-anchor"

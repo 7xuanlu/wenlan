@@ -110,7 +110,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       );
 
       expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-      await user.click(screen.getByTitle("Edit page"));
+      await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
 
       const description = document.getElementById(
         "page-markdown-editor-description",
@@ -143,7 +144,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
 
     expect(
       document.getElementById("page-markdown-editor-description"),
@@ -173,7 +175,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", { name: "Page editor" });
     const view = editorViewFromTextbox(textbox);
     expect(
@@ -220,7 +223,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", { name: "Page editor" });
     const view = editorViewFromTextbox(textbox);
     act(() => selectRange(view, 0, view.state.doc.length));
@@ -261,7 +265,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", {
       name: "Page editor",
     });
@@ -321,7 +326,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toBeInTheDocument();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", {
       name: "Page editor",
     });
@@ -369,14 +375,13 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     expect(await screen.findByText(PAGE.title)).toHaveClass("page-detail-title");
-    expect(
-      screen.getByRole("button", { name: "Copy as context" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy as context" })).toBeNull();
     expect(
       screen.getByRole("button", { name: "Page actions" }),
     ).toBeInTheDocument();
 
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", {
       name: "Page editor",
     });
@@ -414,9 +419,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
 
     act(() => pressKey(textbox, "Escape"));
     expect(await screen.findByText(PAGE.title)).toHaveClass("page-detail-title");
-    expect(
-      screen.getByRole("button", { name: "Copy as context" }),
-    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy as context" })).toBeNull();
   });
 
   it("keeps title suppression tied to the active editor baseline during a remote conflict", async () => {
@@ -441,7 +444,8 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
     );
 
     await screen.findByRole("heading", { level: 1, name: PAGE.title });
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
     const textbox = await screen.findByRole("textbox", { name: "Page editor" });
     const localDraft = `# ${PAGE.title}\n\nUnsaved local draft.\n`;
     act(() => replaceDocument(editorViewFromTextbox(textbox), localDraft));
@@ -487,9 +491,10 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       </QueryClientProvider>,
     );
 
-    await screen.findByTitle("Edit page");
+    await screen.findByRole("button", { name: "Page actions" });
     expect(container.querySelector(".page-detail-title")).toBeVisible();
-    await user.click(screen.getByTitle("Edit page"));
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Edit page" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Line-ending normalization required",
@@ -831,7 +836,8 @@ it("refreshes an open context graph after a page autosave persists new links", a
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} /></QueryClientProvider>);
   const textbox = await screen.findByRole("textbox", { name: "Page editor" });
-  await userEvent.click(screen.getByRole("button", { name: "Page info" }));
+  await userEvent.click(screen.getByRole("button", { name: "Page actions" }));
+  await userEvent.click(screen.getByRole("menuitem", { name: "Page info" }));
   await screen.findByText("No direct connections in the currently visible knowledge.");
   const priorSave = tauriMocks.updatePage.getMockImplementation()!;
   tauriMocks.updatePage.mockImplementationOnce(async (input) => {

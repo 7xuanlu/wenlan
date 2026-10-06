@@ -122,106 +122,60 @@ function renderDetail() {
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
-describe("PageDetail canvas toggle", () => {
-  it("opens reading with one unpressed Canvas control and no tab row", async () => {
-    renderDetail();
+async function selectTool(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByRole("button", { name: i18n.t("pageDetail.actions") }));
+  await user.click(screen.getByRole("menuitem", { name }));
+}
+
+describe("PageDetail optional map panel", () => {
+  it("opens with document tools beside the title and no persistent view or information controls", async () => {
+    const { user, container } = renderDetail();
     await screen.findByText("libSQL Architecture");
-
-    // Both views remain explicit; Note is selected initially.
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabNote") })).toHaveAttribute("aria-pressed", "true");
-    expect(
-      screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }).getAttribute("aria-pressed"),
-    ).toBe("false");
-    expect(screen.getByRole("button", { name: "Page info" })).toBeTruthy();
-  });
-
-  it("swaps the reading column and Page info for the canvas", async () => {
-    const { user } = renderDetail();
-    await screen.findByText("libSQL Architecture");
-
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
-
-    expect(
-      await screen.findByRole("region", { name: "Canvas for libSQL Architecture" }),
-    ).toBeTruthy();
-    // the page title stays in the header; the prose and Page info do not
+    expect(container.querySelector(".page-detail-top-row")).toBeNull();
+    expect(screen.queryByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeNull();
     expect(screen.queryByRole("button", { name: "Page info" })).toBeNull();
-    expect(screen.queryByText("More prose here.")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }).getAttribute("aria-pressed"),
-    ).toBe("true");
-  });
-
-  it("returns through Note while clicking the selected map leaves its view unchanged", async () => {
-    const { user } = renderDetail();
-    await screen.findByText("libSQL Architecture");
-
-    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
-    await user.click(toggle);
-    await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
-
-    await user.click(toggle);
-    expect(screen.getByRole("region", { name: "Canvas for libSQL Architecture" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.closeCanvas") }));
-    expect(
-      screen.queryByRole("region", { name: "Canvas for libSQL Architecture" }),
-    ).toBeNull();
-    expect(await screen.findByText("More prose here.")).toBeTruthy();
-    expect(toggle.getAttribute("aria-pressed")).toBe("false");
-  });
-
-  it("keeps the text entry outside the toolbar hidden on narrow windows", async () => {
-    const { user } = renderDetail();
-    await screen.findByText("libSQL Architecture");
-
-    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
-    expect(toggle.closest(".page-detail-top-row")).toBeTruthy();
-    expect(toggle.closest(".page-detail-header-actions")).toBeNull();
-    expect(toggle.querySelector("span")?.textContent).toBe(i18n.t("pageCanvas.tabCanvas"));
+    expect(screen.getByRole("button", { name: "Page actions" }).closest(".page-document-title-row")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Page actions" }));
-    expect(screen.queryByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeNull();
-    expect(screen.getAllByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toHaveLength(1);
+    expect(screen.getByRole("menuitem", { name: "Page info" })).toBeTruthy();
+    expect(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
   });
 
-  it("keeps the view switch above the document and Page info at the workspace edge", async () => {
-    renderDetail();
-    await screen.findByText("libSQL Architecture");
-
-    const toggle = screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") });
-    const cluster = toggle.closest(".page-detail-view-controls");
-    expect(cluster).toBeTruthy();
-    expect(toggle.closest(".page-detail-document")).toBeNull();
-    expect(cluster?.querySelector('[title="Page info"]')).toBeNull();
-    expect(toggle.closest(".page-detail-top-row")?.querySelector('[title="Page info"]')).toBeTruthy();
-  });
-
-  it("resolves the root node label from the page title it already loaded", async () => {
+  it("opens the map beside the reading note and returns through the panel close button", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
+    await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
+    const panel = await screen.findByRole("dialog", { name: i18n.t("pageCanvas.tabCanvas") });
+    expect(await screen.findByRole("region", { name: "Canvas for libSQL Architecture" })).toBeTruthy();
+    expect(screen.getByText("More prose here.")).toBeTruthy();
+    expect(screen.getByTestId("page-document-reading")).not.toHaveAttribute("contenteditable");
+    await user.click(panel.querySelector<HTMLButtonElement>(".page-info-drawer-close")!);
+    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Page actions" })).toHaveFocus();
+  });
 
-    // Both nodes arrive with label: null — the daemon stores refs, the client
-    // renders the backing objects PageDetail already has in hand.
+  it("resolves node labels from the page and sources already loaded", async () => {
+    const { user } = renderDetail();
+    await screen.findByText("libSQL Architecture");
+    await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
     await screen.findByTestId("react-flow");
     expect(screen.getAllByText("libSQL Architecture").length).toBeGreaterThan(1);
     expect(screen.getByText("libSQL stores vectors")).toBeTruthy();
   });
 
-  it("retains the canvas entry while the ordinary toolbar is hidden for editing", async () => {
-    const { user } = renderDetail();
-    await screen.findByText("libSQL Architecture");
-
-    await user.click(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") }));
-    await screen.findByRole("region", { name: "Canvas for libSQL Architecture" });
-
-    await user.click(screen.getByTitle("Edit page"));
-    expect(screen.getByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
-    // Edit mode engaged: the whole header actions row goes with it. Asserted
-    // through the row rather than through a field, because what the editor
-    // itself resolves to is the editor's business — under this env's daemon
-    // check it is the page-editor floor notice, not a text box.
-    expect(screen.queryByTitle("Edit page")).toBeNull();
-    expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+  it("switches the only wide right panel between information and map", async () => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    try {
+      const { user } = renderDetail();
+      await screen.findByText("libSQL Architecture");
+      await selectTool(user, "Page info");
+      expect(screen.getByRole("complementary", { name: "Page info" })).toBeTruthy();
+      await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
+      expect(await screen.findByRole("complementary", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
+      expect(screen.queryByRole("complementary", { name: "Page info" })).toBeNull();
+      await selectTool(user, "Page info");
+      expect(screen.getByRole("complementary", { name: "Page info" })).toBeTruthy();
+      expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
+    } finally { window.matchMedia = original; }
   });
 });
