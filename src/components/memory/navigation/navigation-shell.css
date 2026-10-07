@@ -22,6 +22,10 @@
   min-width: 0;
   min-height: 0;
   width: 100%;
+  box-sizing: border-box;
+  gap: 8px;
+  padding: 8px;
+  background: var(--workspace-chrome);
 }
 
 .workspace-pane-host {
@@ -30,6 +34,8 @@
   min-width: 0;
   min-height: 0;
   height: 100%;
+  box-sizing: border-box;
+  padding: 8px 8px 8px 0;
 }
 
 .workspace-pane-host:empty { display: none; }
@@ -67,6 +73,13 @@
     box-shadow: none;
   }
   .workspace-header-search-icon { display: none; }
+}
+
+.memory-shell-content > main {
+  --mem-bg: var(--workspace-surface);
+  --mem-detail-surface: var(--workspace-surface);
+  border-radius: var(--workspace-radius);
+  background: var(--workspace-surface);
 }
 
 .memory-main-content {

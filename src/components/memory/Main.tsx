@@ -713,7 +713,7 @@ export default function Main({
     <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
     <div
       className="memory-shell h-screen w-full"
-      style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)" }}
+      style={{ backgroundColor: "var(--workspace-chrome)", color: "var(--mem-text)" }}
     >
       {/* Header follows the width of the primary workspace. */}
       <header
@@ -722,7 +722,7 @@ export default function Main({
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
           paddingRight: "var(--workspace-header-right-padding, 20px)",
-          background: "var(--mem-bg)",
+          background: "var(--workspace-chrome)",
         }}
         data-tauri-drag-region
       >
@@ -785,7 +785,7 @@ export default function Main({
             <div
               className="workspace-header-search-field flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)]"
               style={{
-                backgroundColor: "var(--mem-sidebar)",
+                backgroundColor: "var(--workspace-surface)",
                 border: "1px solid var(--mem-border)",
               }}
             >

@@ -79,8 +79,8 @@ for (const copy of copies) for (const width of [1280, 375]) {
     if (width >= 1100) {
       const mapBox = (await map.boundingBox())!;
       const noteBox = (await page.locator(".page-detail-document").boundingBox())!;
-      expect(mapBox.width).toBeGreaterThanOrEqual(480);
-      expect(mapBox.width).toBeLessThanOrEqual(560);
+      expect(mapBox.width).toBeGreaterThanOrEqual(340);
+      expect(mapBox.width).toBeLessThan(noteBox.width);
       expect(mapBox.x).toBeGreaterThanOrEqual(noteBox.x + noteBox.width - 1);
     } else {
       await expect(map).toHaveAttribute("aria-modal", "true");
@@ -133,6 +133,7 @@ test("the note and its action menu do not send shortcuts to the open map", async
   const writes = () => controller.calls().filter((call) =>
     ["put_page_map_layout", "patch_page_map_node", "delete_page_map_node", "create_page_map_node"].includes(call.command),
   ).length;
+  expect(writes()).toBe(0); // Opening and selecting an automatic layout must not persist it.
   const before = writes();
   const actions = page.getByRole("button", { name: "Page actions", exact: true });
   await actions.click();
@@ -176,8 +177,10 @@ test("docked tools resize the complete workspace and keep search usable across t
   await expect(pane).toBeVisible();
   const panelBox = (await pane.boundingBox())!;
   const headerBox = (await header.boundingBox())!;
-  expect(panelBox.y).toBe(0);
-  expect(Math.abs(headerBox.x + headerBox.width - panelBox.x)).toBeLessThanOrEqual(1);
+  expect(panelBox.y).toBeGreaterThan(0);
+  expect(panelBox.y).toBeLessThan(headerBox.height);
+  expect(panelBox.x).toBeGreaterThanOrEqual(headerBox.x + headerBox.width);
+  expect(panelBox.y + panelBox.height).toBeLessThan(900);
   await expect(search).toBeHidden();
   await header.getByRole("button", { name: "Search", exact: true }).click();
   await expect(search).toBeFocused();

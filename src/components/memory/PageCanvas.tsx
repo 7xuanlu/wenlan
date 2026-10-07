@@ -314,7 +314,7 @@ function PageCanvasInner({
     return showSuggestions ? all : all.filter((n) => n.status !== "suggested");
   }, [map?.nodes, showSuggestions]);
   const views = useMemo(
-    () => layoutMap(visibleNodes, labelOverrides, untitled),
+    () => layoutMap(visibleNodes, labelOverrides, untitled, "portrait"),
     [visibleNodes, labelOverrides, untitled],
   );
 

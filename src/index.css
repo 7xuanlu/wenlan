@@ -340,9 +340,12 @@ body {
 /* Dark (default — logo ink with a quiet reading cast) */
 :root,
 html[data-theme="dark"] {
+  --workspace-radius: 12px;
+  --workspace-chrome: #121419;
+  --workspace-surface: #1B1E25;
   --mem-bg: #11131A;
   --mem-surface: #171A23;
-  --mem-sidebar: #0E1017;
+  --mem-sidebar: var(--workspace-chrome);
   --mem-account-card: #141823;
   --mem-account-card-border: #30364A;
   --mem-popover: #171A23;
@@ -464,9 +467,11 @@ html[data-theme="dark"] {
 
 /* Light (cool paper workspace with restrained brand warmth) */
 html[data-theme="light"] {
+  --workspace-chrome: #F1F2F4;
+  --workspace-surface: #FFFFFF;
   --mem-bg: #FCFCFB;
   --mem-surface: #FFFFFF;
-  --mem-sidebar: #F3F3F1;
+  --mem-sidebar: var(--workspace-chrome);
   --mem-account-card: #FCFCFB;
   --mem-account-card-border: #E3E7EE;
   --mem-popover: #FFFFFF;

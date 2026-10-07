@@ -334,6 +334,8 @@ test.describe("canvas viewport and keys", () => {
     await openCanvas(page);
 
     const target = box(page, "Query path");
+    const sibling = box(page, "Storage layer");
+    const siblingBefore = (await sibling.boundingBox())!;
     const from = await target.boundingBox();
     if (!from) throw new Error("box has no position");
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -350,5 +352,9 @@ test.describe("canvas viewport and keys", () => {
     // And it must not snap back once the map is refetched.
     await page.waitForTimeout(1200);
     await expect.poll(async () => (await target.boundingBox())?.x).not.toBe(from.x);
+    // The first saved drag must preserve the automatic positions of untouched siblings.
+    const siblingAfter = (await sibling.boundingBox())!;
+    expect(siblingAfter.x).toBeCloseTo(siblingBefore.x, 0);
+    expect(siblingAfter.y).toBeCloseTo(siblingBefore.y, 0);
   });
 });
