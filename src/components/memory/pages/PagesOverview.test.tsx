@@ -21,6 +21,7 @@ vi.mock("../../../lib/tauri", async (importOriginal) => ({
   listOnboardingMilestones: vi.fn().mockResolvedValue([]),
   getTruthStatus: vi.fn().mockResolvedValue(null),
   listSpaces: vi.fn(),
+  knowledgeFoldersList: vi.fn().mockResolvedValue({ folders: [], truncated: false }),
 }));
 
 function page(overrides: Partial<Page>): Page {
@@ -119,7 +120,6 @@ describe("PagesOverview", () => {
             review_status: "unconfirmed",
           }),
         ]);
-    const user = userEvent.setup();
     const onSelectDraft = vi.fn();
     const onSelectPage = vi.fn();
     renderOverview({ onSelectDraft, onSelectPage });
@@ -136,13 +136,12 @@ describe("PagesOverview", () => {
     expect(onSelectDraft).toHaveBeenCalledWith("draft-titled", "Research");
     expect(onSelectPage).not.toHaveBeenCalled();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
     expect(screen.getByRole("button", {
       name: "Open Needs verification · Needs review",
     })).toBeInTheDocument();
-    expect(screen.queryByRole("button", {
+    expect(screen.getByRole("button", {
       name: "Open Working theory · Draft",
-    })).not.toBeInTheDocument();
+    })).toBeInTheDocument();
   });
 
   it("renders the approved full-width Wiki inventory without inventing a label for empty Space", async () => {
@@ -157,15 +156,14 @@ describe("PagesOverview", () => {
     const { onSelectPage } = renderOverview();
 
     expect(await screen.findByRole("heading", { name: "Wiki" })).toBeInTheDocument();
-    expect(screen.getByText("A living ledger of ideas, people, decisions, and recaps.")).toBeInTheDocument();
+    expect(screen.queryByText("A living ledger of ideas, people, decisions, and recaps.")).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "All pages" })).not.toBeInTheDocument();
     expect(await screen.findByText("3 pages")).toBeInTheDocument();
     for (const heading of ["Page", "Space", "Updated"]) {
       expect(screen.getByRole("columnheader", { name: heading })).toBeInTheDocument();
     }
     expect(screen.queryByRole("columnheader", { name: "Kind" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Space" })).toHaveValue("all");
-    expect(screen.getByRole("combobox", { name: "Sort" })).toHaveValue("recent");
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.getByTestId("page-space-independent")).toBeEmptyDOMElement();
     for (const rejected of ["Independent", "Optional", "Unassigned", "No Space", "Browse by type", "Independent pages", "In spaces"]) {
       expect(screen.queryByText(rejected)).not.toBeInTheDocument();
@@ -183,13 +181,11 @@ describe("PagesOverview", () => {
       page({ id: "entity", title: "Nash Su", entity_id: "entity-1", review_status: "unconfirmed" }),
       page({ id: "prose", title: "Needs verification", review_status: "unconfirmed" }),
     ]);
-    const user = userEvent.setup();
     renderOverview();
 
     expect(await screen.findByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Open Nash Su/ })).toBeNull();
 
-    await user.selectOptions(screen.getByRole("combobox", { name: "State" }), "unconfirmed");
     expect(await screen.findByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Open Nash Su/ })).toBeNull();
   });
@@ -199,16 +195,14 @@ describe("PagesOverview", () => {
       page({ id: "confirmed", title: "Confirmed note" }),
       page({ id: "unconfirmed", title: "Needs verification", review_status: "unconfirmed" }),
     ]);
-    const user = userEvent.setup();
     renderOverview();
 
-    const statusFilter = await screen.findByRole("combobox", { name: "State" });
+    await screen.findByRole("button", { name: "Open Needs verification · Needs review" });
     expect(screen.getByText("Needs review", { selector: "span" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New page candidates" })).not.toBeInTheDocument();
 
-    await user.selectOptions(statusFilter, "unconfirmed");
     expect(screen.getByRole("button", { name: "Open Needs verification · Needs review" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Confirmed note" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Confirmed note" })).toBeInTheDocument();
   });
 
   it("marks a persisted Page when Review has a page cleanup suggestion", async () => {
@@ -419,31 +413,15 @@ describe("PagesOverview", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("filters by Space, sorts by title, and paginates twelve rows at a time", async () => {
+  it("paginates twelve notes and keeps the Wiki controls quiet", async () => {
     window.localStorage.setItem("wenlan-wiki-view-mode", "rows");
-    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([
-      page({ id: "topic-z", title: "Zulu topic", space: null }),
-      page({ id: "decision", title: "Why citations stay visible", content: "Decision: keep citations visible.", space: "Wenlan" }),
-      page({ id: "recap", title: "July research recap", space: "Research" }),
-      ...Array.from({ length: 10 }, (_, index) => page({ id: `topic-${index}`, title: `Topic ${index}`, last_modified: `2026-07-${String(index + 1).padStart(2, "0")}T00:00:00Z` })),
-    ]);
-    const user = userEvent.setup();
+    vi.mocked(listPagesExplicitBrowse).mockImplementation(async status => status === "draft" ? [] : Array.from({ length: 14 }, (_, index) => page({ id: `p-${index}`, title: `Note ${index}` })));
     renderOverview();
-
-    expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
-    expect(screen.queryByText("A page can stand on its own.")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Topic 0" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(await screen.findByText("13–13 of 13")).toBeInTheDocument();
-
-    await user.selectOptions(screen.getByRole("combobox", { name: "Space" }), "Research");
-    expect(screen.getByRole("button", { name: "Open July research recap" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Why citations stay visible" })).not.toBeInTheDocument();
-
-    await user.selectOptions(screen.getByRole("combobox", { name: "Space" }), "all");
-    await user.selectOptions(screen.getByRole("combobox", { name: "Sort" }), "title");
-    const openButtons = screen.getAllByRole("button", { name: /^Open / });
-    expect(openButtons[0]).toHaveAccessibleName("Open July research recap");
+    await screen.findByRole("button", { name: "Open Note 0" });
+    expect(screen.getAllByRole("row")).toHaveLength(13);
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: /Next/ }));
+    expect(screen.getAllByRole("row")).toHaveLength(3);
   });
 
   it("shows a quiet empty state without inventing a Space requirement", async () => {
@@ -487,12 +465,12 @@ describe("PagesOverview", () => {
     renderOverview();
 
     expect(await screen.findByTestId("wiki-cards")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Rows" }));
+    await user.click(screen.getByRole("button", { name: "List" }));
 
     expect(await screen.findByRole("columnheader", { name: "Page" })).toBeInTheDocument();
     expect(screen.queryByTestId("wiki-cards")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("wenlan-wiki-view-mode")).toBe("rows");
-    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -556,7 +534,7 @@ describe("PagesOverview", () => {
     expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
     expect(screen.getAllByTestId(/^wiki-card-/)).toHaveLength(12);
 
-    await user.click(screen.getByRole("button", { name: "Rows" }));
+    await user.click(screen.getByRole("button", { name: "List" }));
     expect(await screen.findByText("1–12 of 13")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /^Open / })).toHaveLength(12);
 

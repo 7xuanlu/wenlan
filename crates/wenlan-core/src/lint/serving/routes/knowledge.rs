@@ -26,6 +26,8 @@ pub(super) const ROUTES: &[SensitiveReadRoute] = &[
     row!(Get,"/api/spaces/default","default_save_space",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
     row!(Get,"/api/sources","source_list",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
     row!(Get,"/api/profile/narrative","profile_narrative",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
+    row!(Post,"/api/knowledge/folders","knowledge_folder_create",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
+    row!(Get,"/api/knowledge/folders","knowledge_folders",QueryThenHeader,UnauthenticatedLocal,PageWorkspace,NoGate,Rejected,Forbidden),
     row!(Get,"/api/knowledge/count","knowledge_count",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,AggregateOnly),
     row!(Get,"/api/onboarding/milestones","onboarding_state",NoSelector,UnauthenticatedLocal,Global,NoGate,NotApplicable,GlobalRead),
     row!(Get,"/api/communities","community_list",QueryThenHeader,UnauthenticatedLocal,EntitySpace,NoGate,Rejected,Forbidden),

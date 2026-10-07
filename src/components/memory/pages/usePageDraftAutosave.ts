@@ -40,6 +40,7 @@ type PendingDiscard = {
 
 type UsePageDraftAutosaveOptions = {
   readonly draftId?: string;
+  readonly folderPath?: string;
   readonly enabled?: boolean;
   readonly initial: PageDraftSnapshot;
   readonly initialVersion?: number;
@@ -88,6 +89,7 @@ function errorCode(error: unknown): string | null {
 
 export function usePageDraftAutosave({
   draftId: initialDraftId,
+  folderPath,
   enabled = true,
   initial,
   initialVersion,
@@ -195,6 +197,7 @@ export function usePageDraftAutosave({
           if (pendingCreate) {
             const saved = await createPageDraft({
               clientDraftId: pendingCreate.clientDraftId,
+              ...(folderPath !== undefined ? { folderPath } : {}),
               ...pendingCreate.snapshot,
             });
             pendingCreateRef.current = null;
@@ -246,6 +249,7 @@ export function usePageDraftAutosave({
             };
             saved = await createPageDraft({
               clientDraftId,
+              ...(folderPath !== undefined ? { folderPath } : {}),
               ...next,
             });
             pendingCreateRef.current = null;
@@ -303,7 +307,7 @@ export function usePageDraftAutosave({
     } finally {
       if (loopRef.current === loop) loopRef.current = null;
     }
-  }, [enabled, invalidateInventories, onSpaceReconciled, updateState]);
+  }, [enabled, folderPath, invalidateInventories, onSpaceReconciled, updateState]);
 
   const flush = useCallback(async (): Promise<boolean> => {
     if (timerRef.current) {

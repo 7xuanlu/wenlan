@@ -11,6 +11,10 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
     router
         .route("/api/knowledge/path", get(handle_get_knowledge_path))
         .route("/api/knowledge/count", get(handle_get_knowledge_count))
+        .route(
+            "/api/knowledge/folders",
+            get(handle_list_knowledge_folders).post(handle_create_knowledge_folder),
+        )
 }
 
 /// GET /api/knowledge/path
@@ -77,3 +81,117 @@ mod tests {
         assert_eq!(count, 2);
     }
 }
+
+/// Global browsing lists real directories. Scoped browsing derives only authorized ancestors.
+pub async fn handle_list_knowledge_folders(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    view: crate::truth_guard::TruthView,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<wenlan_types::responses::KnowledgeFoldersResponse>, ServerError> {
+    use wenlan_types::responses::{KnowledgeFolderEntry, KnowledgeFoldersResponse};
+    let (db, root) = {
+        let s = state.read().await;
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
+    };
+    let scope = crate::read_scope::effective_read_scope(
+        &db,
+        params.get("space").map(String::as_str),
+        header_space.as_deref(),
+    )
+    .await?;
+    let Some(root) = root else {
+        return Ok(Json(KnowledgeFoldersResponse {
+            folders: vec![],
+            truncated: false,
+        }));
+    };
+    let folders = if scope == wenlan_core::read_scope::ReadScope::Global {
+        tokio::task::spawn_blocking(move || {
+            wenlan_core::export::knowledge::list_knowledge_folders(&root)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))??
+        .into_iter()
+        .map(|f| KnowledgeFolderEntry {
+            path: f.path,
+            parent_path: f.parent_path,
+            name: f.name,
+        })
+        .collect()
+    } else {
+        let pages = db.list_pages_scoped("active", i64::MAX, 0, &scope).await?;
+        let pages = wenlan_core::truth_adapter::filter_pages(&db, &view.grant, pages).await?;
+        let ids: Vec<String> = pages
+            .into_iter()
+            .filter(wenlan_core::pages::is_active_file_page)
+            .map(|p| p.id)
+            .collect();
+        let paths = tokio::task::spawn_blocking(move || {
+            let ids: Vec<&str> = ids.iter().map(String::as_str).collect();
+            wenlan_core::export::knowledge::KnowledgeWriter::new(root, &db)
+                .live_page_filenames(&ids)
+        })
+        .await
+        .map_err(|e| ServerError::Internal(e.to_string()))?;
+        let mut folders = std::collections::BTreeMap::new();
+        for path in paths.values() {
+            let components: Vec<&str> = path.split('/').collect();
+            for depth in 1..components.len() {
+                let path = components[..depth].join("/");
+                folders.insert(
+                    path.clone(),
+                    KnowledgeFolderEntry {
+                        path,
+                        parent_path: components[..depth - 1].join("/"),
+                        name: components[depth - 1].into(),
+                    },
+                );
+            }
+        }
+        folders.into_values().collect()
+    };
+    Ok(Json(KnowledgeFoldersResponse {
+        folders,
+        truncated: false,
+    }))
+}
+
+pub async fn handle_create_knowledge_folder(
+    axum::extract::State(state): axum::extract::State<SharedState>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Json(req): Json<wenlan_types::requests::CreateKnowledgeFolderRequest>,
+) -> Result<Json<wenlan_types::responses::CreateKnowledgeFolderResponse>, ServerError> {
+    let (db, root) = {
+        let s = state.read().await;
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    if scope != wenlan_core::read_scope::ReadScope::Global {
+        return Err(ServerError::ValidationError(
+            "Scoped callers cannot create unowned empty Wiki folders".into(),
+        ));
+    }
+    let root = root
+        .ok_or_else(|| ServerError::ValidationError("Wiki projection is not configured".into()))?;
+    let projection_write = db.begin_page_projection_write();
+    let path = tokio::task::spawn_blocking(move || {
+        let _projection_write = projection_write;
+        wenlan_core::export::knowledge::create_knowledge_folder(&root, &req.parent_path, &req.name)
+    })
+    .await
+    .map_err(|e| ServerError::Internal(e.to_string()))??;
+    Ok(Json(
+        wenlan_types::responses::CreateKnowledgeFolderResponse { path },
+    ))
+}
+
+#[cfg(test)]
+#[path = "folder_routes_test.rs"]
+mod folder_route_tests;

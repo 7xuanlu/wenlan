@@ -204,3 +204,6 @@ main|post|/api/repairs/prepare-operation/cancel|wenlan_server::repair_prepare_op
 main|post|/api/repairs/prepare-operation|wenlan_server::repair_prepare_operation_routes::handle_prepare_operation
 repair|post|/api/repairs/prepare-operation/status|wenlan_server::repair_prepare_operation_routes::handle_prepare_status
 repair|post|/api/repairs/prepare-operation/cancel|wenlan_server::repair_prepare_operation_routes::handle_prepare_cancel
+main|get|/api/knowledge/folders|wenlan_server::knowledge_routes::handle_list_knowledge_folders
+main|post|/api/knowledge/folders|wenlan_server::knowledge_routes::handle_create_knowledge_folder
+main|post|/api/pages/{id}/move|wenlan_server::page_routes::handle_move_page

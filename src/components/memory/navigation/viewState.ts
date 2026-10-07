@@ -1,3 +1,4 @@
+import type { WikiInventoryScope, PageProjectionIssue } from "../pages/pageInventory";
 import type { SettingsSection } from "../settings/SettingsSidebar";
 
 export type View =
@@ -11,15 +12,17 @@ export type View =
   | { readonly kind: "first-use"; readonly showKnowledge?: boolean; readonly batchId?: string }
   | { readonly kind: "import"; readonly fromFirstUse?: boolean }
   | { readonly kind: "memory"; readonly sourceId: string }
-  | { readonly kind: "page"; readonly pageId: string; readonly mode?: "read" | "edit" }
+  | { readonly kind: "page"; readonly pageId: string; readonly mode?: "read" | "edit"; readonly inventoryScope?: WikiInventoryScope; readonly projectionIssue?: PageProjectionIssue }
   | {
     readonly kind: "page-draft";
     readonly draftId?: string;
+    readonly folderPath?: string;
+    readonly inventoryScope?: WikiInventoryScope;
     readonly space: string | null;
     /** Stable across autosaves and history; distinct for each new draft intent. */
     readonly sessionKey?: number;
   }
-  | { readonly kind: "pages" }
+  | { readonly kind: "pages"; readonly inventoryScope?: WikiInventoryScope }
   | { readonly kind: "recaps" }
   | { readonly kind: "settings"; readonly section?: SettingsSection }
   | { readonly kind: "sources" }

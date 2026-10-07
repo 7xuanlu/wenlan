@@ -395,6 +395,8 @@ pub struct CreatePageDraftRequest {
     pub title: String,
     pub content: String,
     pub space: Option<String>,
+    /// Immutable first-placement intent relative to the Wiki root.
+    pub folder_path: Option<String>,
     space_provided: bool,
 }
 
@@ -408,6 +410,7 @@ impl CreatePageDraftRequest {
             title,
             content,
             space,
+            folder_path: None,
             space_provided: true,
         }
     }
@@ -420,6 +423,7 @@ impl CreatePageDraftRequest {
             title,
             content,
             space: None,
+            folder_path: None,
             space_provided: false,
         }
     }
@@ -440,11 +444,15 @@ impl Serialize for CreatePageDraftRequest {
     {
         use serde::ser::SerializeStruct;
 
-        let field_count = if self.space_provided { 4 } else { 3 };
+        let field_count =
+            3 + usize::from(self.space_provided) + usize::from(self.folder_path.is_some());
         let mut state = serializer.serialize_struct("CreatePageDraftRequest", field_count)?;
         state.serialize_field("draft_id", &self.draft_id)?;
         state.serialize_field("title", &self.title)?;
         state.serialize_field("content", &self.content)?;
+        if let Some(folder_path) = &self.folder_path {
+            state.serialize_field("folder_path", folder_path)?;
+        }
         if self.space_provided {
             state.serialize_field("space", &self.space)?;
         }
@@ -466,6 +474,8 @@ impl<'de> Deserialize<'de> for CreatePageDraftRequest {
             content: String,
             #[serde(default, deserialize_with = "double_option")]
             space: Option<Option<String>>,
+            #[serde(default)]
+            folder_path: Option<String>,
         }
 
         let wire = Wire::deserialize(deserializer)?;
@@ -478,6 +488,7 @@ impl<'de> Deserialize<'de> for CreatePageDraftRequest {
             title: wire.title,
             content: wire.content,
             space,
+            folder_path: wire.folder_path,
             space_provided,
         })
     }
@@ -1125,4 +1136,18 @@ impl std::fmt::Debug for PresenceCapability {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ReviewPageRequest {
     pub presence: PresenceCapability,
+}
+
+/// Create one physical child directory; this never changes Space.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateKnowledgeFolderRequest {
+    #[serde(default)]
+    pub parent_path: String,
+    pub name: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MovePageRequest {
+    pub expected_storage_path: String,
+    pub folder_path: String,
+    pub operation_id: String,
 }

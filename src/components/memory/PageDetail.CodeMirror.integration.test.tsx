@@ -510,9 +510,10 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
 
   it("autosaves without persistence buttons and keeps undo history across confirmed versions", async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const registerFlush = vi.fn();
     render(
       <QueryClientProvider client={client}>
-        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} />
+        <PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} onRegisterFlush={registerFlush} />
       </QueryClientProvider>,
     );
     const textbox = await screen.findByRole("textbox", { name: "Page editor" });
@@ -549,9 +550,15 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
         }),
       );
       expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(textbox);
+      const flush = registerFlush.mock.lastCall?.[0] as () => Promise<boolean>;
+      await act(async () => {
+        expect(await flush()).toBe(true);
+      });
+      expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
 
       act(() => pressKey(textbox, "z", { ctrlKey: true }));
       expect(view.state.doc.toString()).toBe(PAGE.content);
+      expect(screen.getByRole("status")).toHaveTextContent("Unsaved changes");
       await act(async () => {
         await vi.advanceTimersByTimeAsync(649);
       });

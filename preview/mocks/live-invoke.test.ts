@@ -89,6 +89,102 @@ describe("liveInvoke Page editor support", () => {
   });
 });
 
+describe("liveInvoke knowledge folders and Page moves", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("returns the daemon folder listing unchanged", async () => {
+    const response = {
+      folders: [{ path: "研究/知識庫", parent_path: "研究", name: "知識庫" }],
+      truncated: true,
+    };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("knowledge_folders_list")).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/knowledge/folders",
+      expect.objectContaining({ method: "GET", body: undefined }),
+    );
+  });
+
+  it("creates a Unicode folder at the Wiki root with the daemon wire shape", async () => {
+    const response = { path: "知識庫" };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("knowledge_folder_create", {
+      parentPath: "",
+      name: "知識庫",
+    })).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/knowledge/folders",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ parent_path: "", name: "知識庫" }),
+      }),
+    );
+  });
+
+  it("moves daemon Pages with encoded IDs and preserves the daemon response", async () => {
+    const response = { storage_path: "研究/知識庫/筆記.md", operation_id: "move-1" };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("page_move", {
+      id: "page/with space",
+      expectedStoragePath: "old.md",
+      folderPath: "研究/知識庫",
+      operationId: "move-1",
+    })).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/pages/page%2Fwith%20space/move",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expected_storage_path: "old.md",
+          folder_path: "研究/知識庫",
+          operation_id: "move-1",
+        }),
+      }),
+    );
+  });
+
+  it("propagates the daemon HttpError for a rejected folder mutation", async () => {
+    const body = JSON.stringify({ error: "folder is outside the writable root" });
+    const fetch = vi.fn(async () => new Response(body, { status: 422 }));
+    vi.stubGlobal("fetch", fetch);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(liveInvoke("knowledge_folder_create", {
+      parentPath: "",
+      name: "Denied",
+    })).rejects.toMatchObject({ status: 422, body, message: body });
+  });
+
+  it("rejects moving preview-authored Pages without a network request", async () => {
+    const fetch = vi.fn(() => Promise.reject(new Error("local Page must not reach the daemon")));
+    vi.stubGlobal("fetch", fetch);
+    const created = (await liveInvoke("create_page", {
+      title: "Local preview Page",
+      content: "This Page has no daemon-backed file.",
+      space: null,
+    })) as { id: string };
+
+    await expect(liveInvoke("page_move", {
+      id: created.id,
+      expectedStoragePath: "Local preview Page.md",
+      folderPath: "研究",
+      operationId: "move-local",
+    })).rejects.toThrow("preview cannot move its local file");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe("liveInvoke authored Page preview", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

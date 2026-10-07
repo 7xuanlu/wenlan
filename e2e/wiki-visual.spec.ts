@@ -17,17 +17,25 @@ function wikiPages() {
     { ...ambient, title: "Ambient memory", summary: "Capturing and surfacing useful context over time.", domain: null, space: null },
     { ...person, title: "Grace Hopper", summary: "Pioneer of programming languages and tooling.", entity_id: "entity-grace", domain: null, space: null },
     { ...policy, title: "Source credibility policy", summary: "Ensure sources are evaluated for credibility and trust.", content: "Decision: evaluate every source.", space: "Wenlan" },
-    { ...topic, id: "page-eighth", title: "Memory provenance", summary: "Where durable context comes from.", last_modified: "2026-07-05T12:00:00Z", space: "Research" },
-    { ...topic, id: "page-ninth", title: "Local-first architecture", summary: "Private knowledge stays on this device.", last_modified: "2026-07-04T12:00:00Z", space: "Wenlan" },
+    { ...topic, id: "page-eighth", title: "Memory provenance", summary: "Where durable context comes from.", last_modified: "2026-07-05T12:00:00Z", space: "Research", storage_path: "Research/memory-provenance.md" },
+    { ...topic, id: "page-ninth", title: "Local-first architecture", summary: "Private knowledge stays on this device.", last_modified: "2026-07-04T12:00:00Z", space: "Wenlan", storage_path: "Research/Notes/local-first-architecture.md" },
   ];
 }
 
 async function openWiki(page: BrowserPage, locale: "en" | "zh-Hant", theme: "dark" | "light", lens: "rows" | "cards") {
   const browserErrors = collectBrowserErrors(page);
   await installTauriMock(page, {
-    fixture: { ...createSpacesNavigationFixture(), pages: wikiPages() },
+    fixture: {
+      ...createSpacesNavigationFixture(),
+      folders: [
+        { path: "Research", parent_path: "", name: "Research" },
+        { path: "Research/Notes", parent_path: "Research", name: "Notes" },
+      ],
+      pages: wikiPages(),
+    },
     locale,
     localStorage: { "wenlan-theme": theme, "wenlan-wiki-view-mode": lens },
+    preserveLocalStorage: true,
     rawActions: [],
   });
   await page.goto("/");
@@ -49,25 +57,41 @@ test("Wiki desktop light matches the approved inventory and its controls work", 
   await expect(page.getByRole("columnheader", { name: "Page" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Space" })).toBeVisible();
   await expect(page.getByRole("columnheader", { name: "Updated" })).toBeVisible();
+  await expect(page.locator(".wiki-page-row")).toHaveCount(7);
   await expect(page.getByTestId("page-space-page-errors")).toHaveText("Wenlan");
   await expect(page.getByTestId("page-space-page-cjk")).toBeEmpty();
   await expect(page.getByText("Independent", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Optional", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Browse by type", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("7 pages");
+  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
+  const lensGroup = page.getByRole("group", { name: "Note view", exact: true });
+  await expect(lensGroup.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "New page", exact: true })).toBeVisible();
 
   await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Nash Su/ })).not.toBeVisible();
   await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Grace Hopper/ })).not.toBeVisible();
   await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true })).toBeVisible();
-  await page.locator(".wiki-overview").getByLabel("Space", { exact: true }).selectOption("Research");
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open July research recap", exact: true })).toBeVisible();
-  await page.locator(".wiki-overview").getByLabel("Space", { exact: true }).selectOption("all");
-  await page.locator(".wiki-overview").getByLabel("Sort", { exact: true }).selectOption("recent");
+  await page.locator(".notes-list-panel").getByRole("button", { name: "Research", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Research", exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-page-row")).toHaveCount(1);
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Memory provenance", exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Local-first architecture", exact: true })).toHaveCount(0);
+  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
+  await page.getByRole("navigation", { name: "Browse notes", exact: true }).getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(page.locator(".wiki-page-row")).toHaveCount(7);
+
+  await lensGroup.getByRole("button", { name: "Cards", exact: true }).click();
+  await expect(lensGroup.getByRole("button", { name: "Cards", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".asset-card")).toHaveCount(7);
+  expect(await page.evaluate(() => localStorage.getItem("wenlan-wiki-view-mode"))).toBe("cards");
+  await page.reload();
+  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(page.locator(".asset-card")).toHaveCount(7);
+  await expect(page.getByRole("group", { name: "Note view", exact: true }).getByRole("button", { name: "Cards", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
 
   await page.screenshot({ path: `${evidenceDirectory}/wiki-light-1487x1058.png`, fullPage: true });
-
-  await expect(page.getByRole("button", { name: /^Next/ })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Previous" })).toBeDisabled();
 
   const firstPageLink = page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true });
   await firstPageLink.hover();
@@ -89,8 +113,11 @@ test("Wiki renders in dark mode", async ({ page }) => {
 test("Wiki keeps Traditional Chinese controls precise at tablet and mobile widths", async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 900 });
   const tabletErrors = await openWiki(page, "zh-Hant", "light", "rows");
-  await expect(page.locator(".wiki-overview").getByLabel("空間", { exact: true })).toBeVisible();
-  await expect(page.locator(".wiki-overview").getByLabel("排序", { exact: true })).toBeVisible();
+  const tabletLens = page.getByRole("group", { name: "筆記檢視", exact: true });
+  await expect(tabletLens).toBeVisible();
+  await expect(tabletLens.getByRole("button", { name: "清單", exact: true })).toBeVisible();
+  await expect(tabletLens.getByRole("button", { name: "卡片", exact: true })).toBeVisible();
+  await expect(page.locator(".wiki-overview").getByRole("button", { name: "新增頁面", exact: true })).toBeVisible();
   await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-768x900.png`, fullPage: true });
   expect(tabletErrors.pageErrors).toEqual([]);
   expect(tabletErrors.consoleErrors).toEqual([]);
@@ -155,12 +182,13 @@ test("Wiki cards lens stays inside the viewport at every width", async ({ contex
     const browserErrors = await openWiki(page, "en", theme, "cards");
 
     await expect(page.getByTestId("wiki-cards")).toBeVisible();
-    await expect(page.getByText("1–7 of 7", { exact: true })).toBeVisible();
+    await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("7 pages");
+    await expect(page.locator(".wiki-pagination")).toHaveCount(0);
     await expect(page.locator(".asset-card")).toHaveCount(7);
 
-    const lensGroup = page.getByRole("group", { name: "View" });
+    const lensGroup = page.getByRole("group", { name: "Note view", exact: true });
     await expect(lensGroup.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
-    await expect(lensGroup.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "false");
+    await expect(lensGroup.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "false");
 
     const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     expect(fitsViewport).toBe(true);
@@ -188,7 +216,7 @@ test("Wiki cards lens keeps Traditional Chinese titles inside the card", async (
   await page.setViewportSize({ width: 375, height: 812 });
   const browserErrors = await openWiki(page, "zh-Hant", "light", "cards");
 
-  const lensGroup = page.getByRole("group", { name: "檢視" });
+  const lensGroup = page.getByRole("group", { name: "筆記檢視", exact: true });
   await expect(lensGroup).toBeVisible();
   await expect(page.getByTestId("wiki-cards")).toBeVisible();
 
@@ -208,8 +236,8 @@ test("Wiki cards lens keeps Traditional Chinese titles inside the card", async (
 
   await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-zh-hant-375x812.png`, fullPage: true });
 
-  await lensGroup.getByRole("button", { name: "列表" }).click();
-  await expect(lensGroup.getByRole("button", { name: "列表" })).toHaveAttribute("aria-pressed", "true");
+  await lensGroup.getByRole("button", { name: "清單" }).click();
+  await expect(lensGroup.getByRole("button", { name: "清單" })).toHaveAttribute("aria-pressed", "true");
   await expect(lensGroup.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("table")).toBeVisible();
 

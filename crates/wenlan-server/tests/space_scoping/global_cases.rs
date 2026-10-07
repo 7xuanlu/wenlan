@@ -12,7 +12,7 @@ async fn response_parts(response: Response<Body>) -> (StatusCode, Vec<u8>) {
     (status, bytes.to_vec())
 }
 
-pub async fn global_routes_ignore_space_header() {
+pub async fn global_routes_enforce_scope_contracts() {
     let fixture = ScopeFixture::new().await;
     let probes = [
         ("/api/profile", "/api/profile"),
@@ -52,6 +52,40 @@ pub async fn global_routes_ignore_space_header() {
         assert_eq!(selected, baseline, "Global route honored Space: {uri}");
         executed.push((Method::Get, catalog_path));
     }
+
+    let created = response_parts(
+        fixture
+            .send(
+                HttpMethod::POST,
+                "/api/knowledge/folders",
+                Some(serde_json::json!({"parent_path": "", "name": "Global-folder"})),
+                None,
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(created.0, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&created.1).unwrap()["path"],
+        "Global-folder"
+    );
+    assert!(fixture._tmp.path().join("pages/Global-folder").is_dir());
+
+    let scoped_create = response_parts(
+        fixture
+            .send(
+                HttpMethod::POST,
+                "/api/knowledge/folders",
+                Some(serde_json::json!({"parent_path": "", "name": "Forbidden-folder"})),
+                Some("work"),
+            )
+            .await,
+    )
+    .await;
+    assert_eq!(scoped_create.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(!fixture._tmp.path().join("pages/Forbidden-folder").exists());
+
+    executed.push((Method::Post, "/api/knowledge/folders"));
 
     assert_global_executed_keys(executed);
 }

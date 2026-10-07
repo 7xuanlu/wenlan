@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type {
   DistillReviewResponse,
+  KnowledgeFolder,
   Entity,
   EntityDetail,
   MemoryItem,
@@ -11,6 +12,7 @@ import type {
 } from "../../src/lib/tauri";
 
 export type SpacesNavigationFixture = {
+  readonly folders?: readonly KnowledgeFolder[];
   readonly pendingRevisions?: readonly PendingRevisionItem[];
   readonly spaces: readonly Space[];
   readonly pages: readonly KnowledgePage[];

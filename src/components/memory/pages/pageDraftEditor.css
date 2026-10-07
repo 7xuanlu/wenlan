@@ -34,6 +34,8 @@
 }
 
 .page-draft-back {
+  grid-column: 1;
+  grid-row: 1;
   background: transparent;
   border: 1px solid transparent;
   color: var(--mem-text-secondary);
@@ -46,6 +48,8 @@
 }
 
 .page-draft-status {
+  grid-column: 2;
+  grid-row: 1;
   color: var(--mem-text-tertiary);
   font: 12px/1 var(--mem-font-body);
   justify-self: end;
@@ -55,6 +59,9 @@
 }
 
 .page-draft-publish {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
   background: var(--mem-indigo-bg);
   border: 1px solid color-mix(in srgb, var(--mem-accent-indigo) 34%, var(--mem-control-border));
   color: var(--mem-accent-indigo);

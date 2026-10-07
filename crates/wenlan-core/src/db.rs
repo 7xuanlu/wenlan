@@ -1429,7 +1429,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 131;
+pub const SCHEMA_VERSION: u32 = 132;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10241,6 +10241,26 @@ impl MemoryDB {
             // `okf_concept_links`. See okf_concepts::migrate_131_okf_concepts.
             if version < 131 {
                 self.migrate_131_okf_concepts(version).await?;
+            }
+            if ceiling < 132 {
+                return Ok(());
+            }
+            // Immutable first placement is request intent, never Page taxonomy.
+            if version < 132 {
+                // ALTER can commit before an interrupted version stamp. Preserve
+                // its rows and placement intent when that 131 state is reopened.
+                let has_folder_path = self
+                    .get_table_columns("page_draft_create_requests")
+                    .await?
+                    .contains("folder_path");
+                let conn = self.conn.lock().await;
+                if !has_folder_path {
+                    conn.execute("ALTER TABLE page_draft_create_requests ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''", ()).await
+                        .map_err(|e| WenlanError::VectorDb(format!("m132 draft folder: {e}")))?;
+                }
+                conn.execute("PRAGMA user_version = 132", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m132 bump: {e}")))?;
             }
         }
 

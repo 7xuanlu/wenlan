@@ -8,16 +8,20 @@ import { PrimaryNavigation } from "./navigation/PrimaryNavigation";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import type { GlobalNavigation } from "./navigation/viewState";
 import { MemoryInventoryPanel } from "./navigation/MemoryInventoryPanel";
+import type { WikiInventoryScope } from "./pages/pageInventory";
 import { PageInventoryPanel } from "./pages/PageInventoryPanel";
 import "./navigation/notes-sidebar.css";
 
 interface SidebarProps {
   readonly activeNavigation?: GlobalNavigation | null;
   readonly collapsed: boolean;
+  readonly inventoryScope?: WikiInventoryScope;
+  readonly browsingPages?: boolean;
+  readonly onBrowsePages?: (scope: WikiInventoryScope) => void;
   readonly currentPageId?: string | null;
   readonly currentMemoryId?: string | null;
   readonly currentSpaceId?: string | null;
-  readonly onCreatePage?: () => void;
+  readonly onCreatePage?: (folderPath?: string) => void;
   readonly onEntityClick: (entityId: string) => void;
   readonly onNavigateEntities?: () => void;
   readonly onNavigateGraph?: () => void;
@@ -61,6 +65,9 @@ function closeAfterNavigation<Arguments extends readonly unknown[]>(
 export default function Sidebar({
   activeNavigation = null,
   collapsed,
+  inventoryScope = "all",
+  browsingPages = false,
+  onBrowsePages,
   currentPageId = null,
   currentMemoryId = null,
   onCreatePage,
@@ -189,6 +196,9 @@ export default function Sidebar({
               />
             ) : (
               <PageInventoryPanel
+                inventoryScope={inventoryScope}
+                browsing={browsingPages}
+                onBrowse={closeAfterNavigation(onBrowsePages, closeOverlay)}
                 currentPageId={currentPageId}
                 onCreatePage={closeAfterNavigation(onCreatePage, closeOverlay)}
                 onOpenDraft={closeAfterNavigation(onSelectDraft, closeOverlay)}

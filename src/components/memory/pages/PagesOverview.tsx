@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { DotsThree } from "@phosphor-icons/react";
+import { DotsThree, Folder } from "@phosphor-icons/react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -8,7 +8,6 @@ import { formatLocaleDate, type LocaleDateDisplay } from "../../../lib/dateForma
 import { listRefinements, type DistillReviewResponse, type Page } from "../../../lib/tauri";
 import { useTruthStatus } from "../../../hooks/useTruthStatus";
 import { AssetCard } from "../assets/AssetCard";
-import { AssetLensToggle } from "../assets/AssetLensToggle";
 import "../assets/assetCards.css";
 import { PageTruthBadges } from "../PageTruthBadges";
 import ReviewDialog from "../ReviewDialog";
@@ -25,20 +24,25 @@ import {
   pageCandidateItems,
   pageCleanupSuggestionIds,
 } from "./pageReviewSignals";
-import { classifyPage, pageSpaceContext } from "./pagePresentation";
+import { inventoryFolderPath, folderScope, pageMatchesInventoryScope, collectPageInventory, type WikiInventoryScope } from "./pageInventory";
+import "./wikiInventoryOverview.css";
+import { useKnowledgeFolders } from "./useKnowledgeFolders";
+import { pageSpaceContext } from "./pagePresentation";
 import "./pageActions.css";
 import { FirstPageMilestone } from "../../onboarding/FirstPageMilestone";
 
 interface PagesOverviewProps {
+  readonly inventoryScope?: WikiInventoryScope;
+  readonly onBrowseAll?: () => void;
+  readonly onBrowseFolder?: (scope: WikiInventoryScope) => void;
   readonly onOpenReview?: () => void;
-  readonly onCreatePage: (space: string | null) => void;
+  readonly onCreatePage: (space: string | null, folderPath?: string) => void;
   readonly onSelectDraft: (draftId: string, space: string | null) => void;
   readonly onSelectPage: (pageId: string) => void;
   readonly onSelectSpace: (spaceName: string) => void;
 }
 
 type PageSort = "recent" | "title";
-type StatusFilter = "all" | "unconfirmed";
 
 // The review badge belongs to distilled prose awaiting a human look. Entity
 // rows are excluded from the Wiki because the Entities view is their home.
@@ -211,6 +215,9 @@ function describeWikiPage(
 }
 
 export function PagesOverview({
+  inventoryScope = "all",
+  onBrowseAll,
+  onBrowseFolder,
   onOpenReview,
   onCreatePage,
   onSelectDraft,
@@ -218,9 +225,11 @@ export function PagesOverview({
   onSelectSpace,
 }: PagesOverviewProps) {
   const { i18n, t } = useTranslation();
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [spaceFilter, setSpaceFilter] = useState("all");
-  const [sort, setSort] = useState<PageSort>("recent");
+  const sort: PageSort = "recent";
+  const folderPath = inventoryFolderPath(inventoryScope);
+  const folders = useKnowledgeFolders();
+  const childFolders = folderPath === null || folders.data?.truncated ? [] : (folders.data?.folders ?? []).filter(folder => folder.parent_path === folderPath);
+  const folderTitle = folderPath === null ? t("pages.overview.title") : folderPath === "" ? t("pages.folders.root") : folderPath.split("/").slice(-1)[0];
   const [pageIndex, setPageIndex] = useState(0);
   const [lens, setLens] = useState<AssetLens>(() => readAssetLens("wiki"));
   const [openCandidateId, setOpenCandidateId] = useState<string | null>(null);
@@ -237,10 +246,7 @@ export function PagesOverview({
     ...EXPLICIT_BROWSE_QUERY_POLICY,
   });
   const pages = useMemo(
-    () => Array.from(new Map([
-      ...(draftPagesQuery.data ?? []).map((page) => [page.id, page] as const),
-      ...(activePagesQuery.data ?? []).map((page) => [page.id, page] as const),
-    ]).values()).filter((page) => classifyPage(page) !== "entity"),
+    () => collectPageInventory(activePagesQuery.data ?? [], draftPagesQuery.data ?? []),
     [activePagesQuery.data, draftPagesQuery.data],
   );
   const isPending = activePagesQuery.isPending || draftPagesQuery.isPending;
@@ -272,26 +278,19 @@ export function PagesOverview({
     [refinements],
   );
 
-  const spaces = useMemo(
-    () => Array.from(new Set(pages.map(pageSpaceContext).filter((space): space is string => space !== undefined))).sort((left, right) => left.localeCompare(right)),
-    [pages],
-  );
   const filteredPages = useMemo(
     () => pages
-      .filter((page) => statusFilter === "all" || isUnconfirmedPage(page))
-      .filter((page) => spaceFilter === "all" || pageSpaceContext(page) === spaceFilter)
+      .filter((page) => pageMatchesInventoryScope(page, inventoryScope))
       .sort((left, right) => comparePages(left, right, sort)),
-    [pages, sort, spaceFilter, statusFilter],
+    [pages, sort, inventoryScope],
   );
   const pageCount = Math.max(1, Math.ceil(filteredPages.length / PAGE_SIZE));
   const safePageIndex = Math.min(pageIndex, pageCount - 1);
   const visiblePages = filteredPages.slice(safePageIndex * PAGE_SIZE, (safePageIndex + 1) * PAGE_SIZE);
-  const rangeStart = filteredPages.length === 0 ? 0 : safePageIndex * PAGE_SIZE + 1;
-  const rangeEnd = Math.min((safePageIndex + 1) * PAGE_SIZE, filteredPages.length);
 
   useEffect(() => {
     setPageIndex(0);
-  }, [sort, spaceFilter, statusFilter]);
+  }, [sort, inventoryScope]);
 
   const handleLensChange = (next: AssetLens) => {
     setLens(next);
@@ -308,7 +307,8 @@ export function PagesOverview({
 
   const pagination = (
     <footer className="wiki-pagination">
-      <span>{t("pages.overview.paginationRange", { start: rangeStart, end: rangeEnd, total: filteredPages.length })}</span>
+      <span className="sr-only">{t("pages.overview.paginationRange", { start: safePageIndex * PAGE_SIZE + 1, end: Math.min((safePageIndex + 1) * PAGE_SIZE, filteredPages.length), total: filteredPages.length })}</span>
+
       <div>
         <button disabled={safePageIndex === 0} onClick={() => setPageIndex((current) => Math.max(0, current - 1))} type="button">{t("pages.overview.previous")}</button>
         <button disabled={safePageIndex >= pageCount - 1} onClick={() => setPageIndex((current) => Math.min(pageCount - 1, current + 1))} type="button">
@@ -332,22 +332,18 @@ export function PagesOverview({
   return (
     <section aria-labelledby="pages-overview-title" className="wiki-overview mx-auto w-full max-w-[1130px] pb-16">
       <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
+      {inventoryScope !== "all" && onBrowseAll && <nav aria-label={t("pages.inventory.browse")} className="wiki-inventory-breadcrumb"><button onClick={onBrowseAll} type="button">{t("pages.overview.title")}</button><span aria-hidden="true">/</span><span>{folderPath || t("pages.folders.root")}</span></nav>}
       <header className="wiki-overview-header">
         <div className="wiki-overview-heading">
           <div className="wiki-overview-title-row">
-            <h1 id="pages-overview-title">{t("pages.overview.title")}</h1>
-            {!isPending && !isError && pages.length > 0 && (
-              <span className="wiki-overview-count">
-                {t("pages.overview.pageCount", { count: pages.length })}
-              </span>
-            )}
+            <h1 id="pages-overview-title">{folderTitle}</h1>
+            {!isPending && !isError && <span className="sr-only">{t("pages.overview.pageCount", { count: filteredPages.length })}</span>}
           </div>
-          <p>{t("pages.overview.description")}</p>
         </div>
         <div className="wiki-overview-actions">
           <button
             className="page-create-action wiki-new-page-action"
-            onClick={() => onCreatePage(null)}
+            onClick={() => folderPath === null ? onCreatePage(null) : onCreatePage(null, folderPath)}
             type="button"
           >
             {t("pages.overview.newPage")}
@@ -402,48 +398,26 @@ export function PagesOverview({
         </section>
       )}
 
-      {pages.length > 0 && <div className="wiki-filters" aria-label={t("pages.overview.filtersLabel")}>
-        <label>
-          <span className="sr-only">{t("pages.overview.reviewStatusLabel")}</span>
-          <select
-            aria-label={t("pages.overview.reviewStatusLabel")}
-            onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
-            value={statusFilter}
-          >
-            <option value="all">{t("pages.overview.reviewStatusAll")}</option>
-            <option value="unconfirmed">{t("pages.overview.reviewStatusUnconfirmed")}</option>
-          </select>
-        </label>
-        <label>
-          <span className="sr-only">{t("pages.overview.spaceLabel")}</span>
-          <select aria-label={t("pages.overview.spaceLabel")} onChange={(event) => setSpaceFilter(event.target.value)} value={spaceFilter}>
-            <option value="all">{t("pages.overview.spaceAll")}</option>
-            {spaces.map((space) => <option key={space} value={space}>{space}</option>)}
-          </select>
-        </label>
-        <label>
-          <span className="sr-only">{t("pages.overview.sortLabel")}</span>
-          <select aria-label={t("pages.overview.sortLabel")} onChange={(event) => setSort(event.target.value as PageSort)} value={sort}>
-            <option value="recent">{t("pages.overview.sortRecent")}</option>
-            <option value="title">{t("pages.overview.sortTitle")}</option>
-          </select>
-        </label>
-        <span className="wiki-filters-side">
-          <AssetLensToggle onChange={handleLensChange} value={lens} />
-        </span>
+      <div className="wiki-folder-lenses" role="group" aria-label={t("pages.folders.view")}>
+        <button type="button" data-testid="asset-lens-cards" aria-pressed={lens === "cards"} onClick={() => handleLensChange("cards")}>{t("pages.folders.cards")}</button>
+        <button type="button" data-testid="asset-lens-rows" aria-pressed={lens === "rows"} onClick={() => handleLensChange("rows")}>{t("pages.folders.list")}</button>
+      </div>
+      {!folders.isError && childFolders.length > 0 && <div className={lens === "cards" ? "wiki-child-folders wiki-child-folders--cards" : "wiki-child-folders"} aria-label={t("pages.folders.title")}>
+        {childFolders.map(folder => <button key={folder.path} type="button" className="wiki-child-folder" onClick={() => onBrowseFolder?.(folderScope(folder.path))}><Folder aria-hidden="true" size={18}/><span>{folder.name}</span></button>)}
       </div>}
+      {folderPath !== null && (folders.isError || folders.data?.truncated) && <p className="wiki-state" role="status">{t("pages.folders.unavailable")}</p>}
 
       {isPending ? (
         <p className="wiki-state">{t("pages.overview.loading")}</p>
       ) : isError ? (
         <p className="wiki-state" role="alert" style={{ color: "var(--mem-danger)" }}>{t("pages.overview.error")}</p>
-      ) : pages.length === 0 ? (
+      ) : pages.length === 0 && childFolders.length === 0 && folderPath === null ? (
         <div className="wiki-empty-state">
           <p>{t("pages.overview.empty")}</p>
           <span>{t("pages.overview.emptyDescription")}</span>
         </div>
       ) : filteredPages.length === 0 ? (
-        <p className="wiki-state">{t("pages.overview.noMatches")}</p>
+        <p className="wiki-state">{t("pages.folders.empty")}</p>
       ) : lens === "cards" ? (
         <div className="wiki-cards-wrap" data-testid="pages-library">
           <div className="asset-cards" data-testid="wiki-cards">
@@ -455,8 +429,8 @@ export function PagesOverview({
                   context={page.summary}
                   footer={(
                     <>
-                      {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
-                      {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                      {folderPath === null && view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
+                      {folderPath === null && view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                     </>
                   )}
                   status={(view.isDraft || view.isUnconfirmed || view.hasCleanupSuggestion || (cutoverLive && page.truth)) ? (
@@ -487,16 +461,15 @@ export function PagesOverview({
               );
             })}
           </div>
-          {pagination}
+          {pageCount > 1 && pagination}
         </div>
       ) : (
         <div className="wiki-table-wrap" data-testid="pages-library">
           <table className="wiki-table">
-            <thead>
+            <thead className={folderPath !== null ? "sr-only" : undefined}>
               <tr>
                 <th scope="col">{t("pages.overview.columns.page")}</th>
-                <th scope="col">{t("pages.overview.columns.space")}</th>
-                <th scope="col">{t("pages.overview.columns.updated")}</th>
+                {folderPath === null && <><th scope="col">{t("pages.overview.columns.space")}</th><th scope="col">{t("pages.overview.columns.updated")}</th></>}
               </tr>
             </thead>
             <tbody>
@@ -536,19 +509,19 @@ export function PagesOverview({
                           </span>
                         </button>
                         <div className="wiki-page-mobile-meta">
-                          {view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
-                          {view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
+                          {folderPath === null && view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}
+                          {folderPath === null && view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}
                         </div>
                       </div>
                     </td>
-                    <td data-testid={`page-space-${page.id}`}>{view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}</td>
-                    <td>{view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}</td>
+                    {folderPath === null && <><td data-testid={`page-space-${page.id}`}>{folderPath === null && view.assignedSpace && <SpaceChip ariaLabel={view.spaceDestination} label={view.assignedSpace} onSelectSpace={onSelectSpace} />}</td>
+                    <td>{folderPath === null && view.updated && <time dateTime={view.updated.dateTime}>{view.updated.label}</time>}</td></>}
                   </tr>
                 );
               })}
             </tbody>
           </table>
-          {pagination}
+          {pageCount > 1 && pagination}
         </div>
       )}
 

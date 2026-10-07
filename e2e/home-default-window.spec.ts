@@ -53,9 +53,16 @@ async function openWiki(page: BrowserPage, fixture: SpacesNavigationFixture) {
   });
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
-  await expect(page.locator(".wiki-overview")).toBeVisible();
-  if (fixture.pages.length > 0) await expect(page.locator(".wiki-filters")).toBeVisible();
-  else await expect(page.locator(".wiki-filters")).toHaveCount(0);
+  const wiki = page.locator(".wiki-overview");
+  await expect(wiki).toBeVisible();
+  const noteView = page.getByRole("group", { name: "Note view", exact: true });
+  await expect(noteView).toBeVisible();
+  await expect(noteView.getByRole("button", { name: "Cards", exact: true })).toBeVisible();
+  await expect(noteView.getByRole("button", { name: "List", exact: true })).toBeVisible();
+  await expect(wiki.getByRole("button", { name: "New page", exact: true })).toBeVisible();
+  const visiblePages = fixture.pages.filter((page) => !page.entity_id && page.creation_kind !== "entity");
+  await expect(wiki.locator(".wiki-overview-title-row .sr-only")).toHaveText(`${visiblePages.length} pages`);
+  await expect(wiki.locator(".wiki-pagination")).toHaveCount(0);
   await expect(page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
   return browserErrors;
 }

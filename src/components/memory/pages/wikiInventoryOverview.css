@@ -1,0 +1,30 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.wiki-inventory-breadcrumb { display:flex;align-items:center;gap:8px;margin:0 0 16px;color:var(--mem-text-tertiary);font:12px var(--mem-font-body); }
+.wiki-inventory-breadcrumb button { background:none;border:0;padding:2px 0;color:var(--mem-text-secondary);cursor:pointer; }
+.wiki-inventory-breadcrumb button:hover { color:var(--mem-accent-page); }
+.wiki-inventory-breadcrumb button:focus-visible { outline:2px solid var(--mem-accent-page);outline-offset:3px; }
+.wiki-inventory-filename { display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--mem-text-tertiary);font-size:11px; }
+.wiki-table .wiki-inventory-filename { max-width:240px; }
+.wiki-folder-lenses { display:flex;gap:4px;justify-content:flex-end;margin:0 0 18px; }
+.wiki-folder-lenses button { background:none;border:0;border-radius:5px;padding:6px 10px;font:var(--mem-control-font-size)/1.2 var(--mem-font-body);min-height:32px;color:var(--mem-text-secondary);cursor:pointer; }
+.wiki-folder-lenses button[aria-pressed="true"] { background:var(--mem-indigo-bg);color:var(--mem-text); }
+.wiki-folder-lenses button:hover { background:var(--mem-hover); }
+.wiki-folder-lenses button:focus-visible,.wiki-child-folder:focus-visible { outline:2px solid var(--mem-accent-page);outline-offset:2px; }
+.wiki-child-folders { display:flex;flex-direction:column;gap:8px;margin-bottom:20px; }
+.wiki-child-folders--cards { display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); }
+.wiki-child-folder { display:flex;align-items:center;gap:10px;padding:14px 16px;border:0;border-radius:6px;background:var(--mem-surface);color:var(--mem-text-secondary);font:13px var(--mem-font-body);text-align:left;cursor:pointer; }
+.wiki-child-folder:hover { background:var(--mem-hover); }
+.wiki-child-folder span { overflow-wrap:anywhere; }
+.wiki-move-dialog { margin:auto;inset:0;background:var(--mem-bg);color:var(--mem-text);border:1px solid var(--mem-border);border-radius:10px;padding:24px;width:min(420px,calc(100vw - 32px));font:14px var(--mem-font-body); }
+.wiki-move-dialog::backdrop { background:rgba(0,0,0,.35); }
+.wiki-move-dialog h2 { margin:0;font-size:18px;font-weight:500; }
+.wiki-move-note { color:var(--mem-text-secondary);overflow-wrap:anywhere; }
+.wiki-move-dialog label { display:flex;flex-direction:column;gap:8px;color:var(--mem-text-secondary); }
+.wiki-move-dialog select { border:1px solid var(--mem-border);border-radius:5px;padding:8px;background:var(--mem-surface);color:var(--mem-text); }
+.wiki-move-actions { display:flex;justify-content:flex-end;gap:8px;margin-top:24px; }
+.wiki-move-actions button { border:0;background:var(--mem-hover);color:var(--mem-text);padding:8px 12px;border-radius:5px;cursor:pointer; }
+.wiki-move-actions button:disabled { opacity:.4;cursor:default; }
+
+.wiki-projection-notice { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 14px;padding:9px 12px;border:1px solid var(--mem-border);border-radius:6px;color:var(--mem-text-secondary);font:12px/1.5 var(--mem-font-body); }
+.wiki-projection-notice button { border:0;background:none;color:var(--mem-text);cursor:pointer;padding:3px 0;white-space:nowrap; }
+.wiki-projection-notice button:disabled { opacity:.4;cursor:default; }

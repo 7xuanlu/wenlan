@@ -366,18 +366,18 @@ pub fn assert_wave_4_knowledge_catalog_contract() {
     }
 
     let rows = wenlan_server::sensitive_read_routes::sensitive_read_routes().collect::<Vec<_>>();
-    assert_eq!(rows.len(), 66);
+    assert_eq!(rows.len(), 69);
     assert_eq!(
         rows.iter()
             .filter(|row| row.scope_binding == ScopeBinding::Global)
             .count(),
-        19
+        20
     );
     assert_eq!(
         rows.iter()
             .filter(|row| row.scope_binding != ScopeBinding::Global)
             .count(),
-        47
+        49
     );
     assert_eq!(
         rows.iter()
@@ -415,7 +415,7 @@ pub fn assert_global_executed_keys(executed: impl IntoIterator<Item = (Method, &
     let executed = executed.into_iter().collect::<Vec<_>>();
     let unique = executed.iter().copied().collect::<BTreeSet<_>>();
 
-    assert_eq!(expected.len(), 19, "Global route catalog count drifted");
+    assert_eq!(expected.len(), 20, "Global route catalog count drifted");
     assert_eq!(
         unique.len(),
         executed.len(),

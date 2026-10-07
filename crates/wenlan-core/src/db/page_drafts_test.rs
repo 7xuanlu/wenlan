@@ -1426,3 +1426,182 @@ async fn update_and_discard_after_publish_report_draft_not_found() {
     let (status, _, _) = page_status_kind_and_embedding(&db, &draft.id).await;
     assert_eq!(status, "active", "the published page must survive both");
 }
+
+#[tokio::test]
+async fn draft_folder_intent_is_atomic_immutable_and_durable() {
+    let (db, tmp) = test_db().await;
+    let id = "page_00000000-0000-4000-8000-000000000fa1";
+    let draft = db
+        .create_page_draft_with_id_in_registered_space_and_folder(
+            id,
+            "Folder note",
+            "Body",
+            None,
+            "Research/Ideas",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        db.page_initial_folder_path(id).await.unwrap(),
+        "Research/Ideas"
+    );
+    assert!(matches!(
+        db.create_page_draft_with_id_in_registered_space_and_folder(
+            id,
+            "Folder note",
+            "Body",
+            None,
+            "Other"
+        )
+        .await,
+        Err(WenlanError::PageDraftIdConflict(_))
+    ));
+    db.update_page_draft_in_registered_space(id, draft.version, "Changed", "Changed body", None)
+        .await
+        .unwrap();
+    assert!(db
+        .create_page_draft_with_id_in_registered_space_and_folder(
+            id,
+            "Folder note",
+            "Body",
+            None,
+            "Research/Ideas"
+        )
+        .await
+        .is_ok());
+    assert_eq!(
+        db.page_initial_folder_path(id).await.unwrap(),
+        "Research/Ideas"
+    );
+    drop(db);
+    let db = MemoryDB::new(tmp.path(), Arc::new(crate::events::NoopEmitter))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.page_initial_folder_path(id).await.unwrap(),
+        "Research/Ideas"
+    );
+    let current = db.get_page(id).await.unwrap().unwrap();
+    assert!(matches!(
+        db.publish_page_draft(id, current.version).await.unwrap(),
+        PageDraftPublishOutcome::Published(_)
+    ));
+    assert_eq!(
+        db.page_initial_folder_path(id).await.unwrap(),
+        "Research/Ideas"
+    );
+}
+
+#[tokio::test]
+async fn invalid_folder_does_not_insert_draft_or_request_ledger() {
+    let (db, _tmp) = test_db().await;
+    let id = "page_00000000-0000-4000-8000-000000000fa2";
+    assert!(db
+        .create_page_draft_with_id_in_registered_space_and_folder(
+            id,
+            "Note",
+            "Body",
+            None,
+            "../escape"
+        )
+        .await
+        .is_err());
+    assert!(db.get_page(id).await.unwrap().is_none());
+    assert_eq!(
+        scalar_i64(
+            &db,
+            "SELECT COUNT(*) FROM page_draft_create_requests WHERE page_id=?1",
+            id
+        )
+        .await,
+        0
+    );
+}
+
+#[tokio::test]
+async fn migration_132_backfills_existing_draft_intent_to_root() {
+    let (db, tmp) = super::tests::test_db_at(131).await;
+    let id = "page_00000000-0000-4000-8000-000000000fa3";
+    {
+        let conn = db.conn.lock().await;
+        conn.execute("INSERT INTO page_draft_create_requests(page_id,title,content) VALUES(?1,'Legacy','Body')",libsql::params![id]).await.unwrap();
+    }
+    drop(db);
+    let db = MemoryDB::new(tmp.path(), Arc::new(crate::events::NoopEmitter))
+        .await
+        .unwrap();
+    assert_eq!(db.page_initial_folder_path(id).await.unwrap(), "");
+}
+
+#[tokio::test]
+async fn migration_132_reopens_after_interrupted_alter_preserving_ledger_intent() {
+    let (db, tmp) = super::tests::test_db_at(131).await;
+    let root_id = "page_00000000-0000-4000-8000-000000000fa4";
+    let nested_id = "page_00000000-0000-4000-8000-000000000fa5";
+    {
+        let conn = db.conn.lock().await;
+        for id in [root_id, nested_id] {
+            conn.execute("INSERT INTO page_draft_create_requests(page_id,title,content,space,workspace) VALUES(?1,'Kept title','Kept body',NULL,NULL)",libsql::params![id]).await.unwrap();
+        }
+        // The exact durable interruption edge: ALTER committed, user_version
+        // remains 131 because the following version stamp did not run.
+        conn.execute("ALTER TABLE page_draft_create_requests ADD COLUMN folder_path TEXT NOT NULL DEFAULT ''",()).await.unwrap();
+        conn.execute(
+            "UPDATE page_draft_create_requests SET folder_path='Retained/Chosen' WHERE page_id=?1",
+            libsql::params![nested_id],
+        )
+        .await
+        .unwrap();
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            131
+        );
+    }
+    drop(db);
+    let db = MemoryDB::new(tmp.path(), Arc::new(crate::events::NoopEmitter))
+        .await
+        .unwrap();
+    assert_eq!(db.page_initial_folder_path(root_id).await.unwrap(), "");
+    assert_eq!(
+        db.page_initial_folder_path(nested_id).await.unwrap(),
+        "Retained/Chosen"
+    );
+    {
+        let conn = db.conn.lock().await;
+        let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            i64::from(super::SCHEMA_VERSION)
+        );
+        for id in [root_id, nested_id] {
+            let mut rows=conn.query("SELECT title,content,space,workspace FROM page_draft_create_requests WHERE page_id=?1",libsql::params![id]).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "Kept title");
+            assert_eq!(row.get::<String>(1).unwrap(), "Kept body");
+            assert_eq!(row.get::<Option<String>>(2).unwrap(), None);
+            assert_eq!(row.get::<Option<String>>(3).unwrap(), None);
+        }
+        // The existing default is kept for delayed tombstones/legacy inserts.
+        conn.execute(
+            "INSERT INTO page_draft_create_requests(page_id) VALUES('post-recovery-ledger')",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    assert_eq!(
+        db.page_initial_folder_path("post-recovery-ledger")
+            .await
+            .unwrap(),
+        ""
+    );
+    drop(db);
+    let db = MemoryDB::new(tmp.path(), Arc::new(crate::events::NoopEmitter))
+        .await
+        .unwrap();
+    assert_eq!(
+        db.page_initial_folder_path(nested_id).await.unwrap(),
+        "Retained/Chosen"
+    );
+}

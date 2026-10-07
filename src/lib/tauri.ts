@@ -1317,6 +1317,13 @@ export interface TruthStatus {
 }
 
 export interface Page {
+  /** Live Markdown projection filename, relative to the daemon knowledge root.
+   * null means no verified file; absent on older daemon versions. */
+  storage_path?: string | null;
+  /** Initial draft destination. Active pages are located by storage_path. */
+  folder_path?: string | null;
+  projection_status?: string | null;
+  projection_error?: string | null;
   id: string;
   title: string;
   summary: string | null;
@@ -1354,6 +1361,18 @@ export interface Page {
   truth?: PageTruth | null;
 }
 
+export interface KnowledgeFolder { path: string; parent_path: string; name: string; }
+export interface KnowledgeFoldersResponse { folders: KnowledgeFolder[]; truncated: boolean; }
+export function knowledgeFoldersList(): Promise<KnowledgeFoldersResponse> {
+  return invoke("knowledge_folders_list");
+}
+export function knowledgeFolderCreate(parentPath: string, name: string): Promise<{ path: string }> {
+  return invoke("knowledge_folder_create", { parentPath, name });
+}
+export function pageMove(id: string, expectedStoragePath: string, folderPath: string, operationId: string): Promise<{ storage_path: string }> {
+  return invoke("page_move", { id, expectedStoragePath, folderPath, operationId });
+}
+
 export interface CreatePageInput {
   title: string;
   content: string;
@@ -1374,6 +1393,7 @@ export interface PageDraftSnapshotInput {
 
 export interface PageDraftWriteInput extends PageDraftSnapshotInput {
   clientDraftId: string;
+  folderPath?: string;
 }
 
 export interface UpdatePageDraftInput extends PageDraftSnapshotInput {
@@ -2180,6 +2200,7 @@ export async function createPage(input: CreatePageInput): Promise<CreatePageResp
 export async function createPageDraft(input: PageDraftWriteInput): Promise<Page> {
   const page = await invokePageDraft<Page>("create_page_draft", {
     clientDraftId: input.clientDraftId,
+    ...(input.folderPath !== undefined ? { folderPath: input.folderPath } : {}),
     title: input.title,
     content: input.content,
     space: input.space?.trim() || null,

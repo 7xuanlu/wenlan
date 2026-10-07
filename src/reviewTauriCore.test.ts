@@ -11,6 +11,21 @@ import { TauriMockRuntime } from "../e2e/tauriMock/runtime";
 import type { Page, RefinementProposalSummary, PageSourceWithMemory } from "./lib/tauri";
 
 describe("Review fixture IPC", () => {
+  it("creates and moves fixture folders without changing Page identity or Space", async () => {
+    const runtime = new TauriMockRuntime(createReviewDecisionFixture("wiki-folders"));
+    const before = await runtime.invoke("get_page", {id:"page-architecture"}) as Page;
+    const created = await runtime.invoke("knowledge_folder_create", {parentPath:"Work",name:"New"});
+    expect(created).toEqual({path:"Work/New"});
+    expect(await runtime.invoke("knowledge_folders_list")).toMatchObject({truncated:false,folders:expect.arrayContaining([{path:"Work/New",parent_path:"Work",name:"New"}])});
+    const request = {id:before.id,expectedStoragePath:before.storage_path,folderPath:"Work/New",operationId:"fixture-move"};
+    const response = await runtime.invoke("page_move",request);
+    expect(response).toEqual({storage_path:"Work/New/fixture-architecture.md"});
+    expect(await runtime.invoke("page_move",request)).toEqual(response);
+    expect(before.storage_path).toBe("Work/fixture-architecture.md");
+    const after = await runtime.invoke("get_page",{id:before.id}) as Page;
+    expect(after.id).toBe(before.id); expect(after.space).toBe(before.space); expect(after.content).toBe(before.content);
+  });
+
   it("promotes only the proposal's concept entities, preserving manually typed entities", async () => {
     const runtime = new TauriMockRuntime(createReviewDecisionFixture("vocab_promote"));
     await runtime.invoke("accept_refinement", { id: "review-vocabulary" });

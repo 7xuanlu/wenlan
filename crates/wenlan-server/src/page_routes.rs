@@ -14,9 +14,12 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_types::requests::{
     CreateConceptRequest, CreatePageDraftRequest, ExportFormat, ExportPagesRequest,
-    PageDraftVersionRequest, SearchPagesRequest, UpdatePageDraftRequest,
+    MovePageRequest, PageDraftVersionRequest, SearchPagesRequest, UpdatePageDraftRequest,
 };
-use wenlan_types::responses::{CreatePageResponse, PageDraftResponse};
+use wenlan_types::responses::{
+    CreatePageResponse, MovePageResponse, PageDraftResponse, PageInventoryEntry,
+    PageInventoryResponse, PageProjectionStatus,
+};
 use wenlan_types::{WriteOutcome, WriteSpaceSource, WriteSpaceTarget};
 
 pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<SharedState> {
@@ -50,6 +53,7 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
         )
         .route("/api/pages/{id}/sources", get(handle_get_page_sources))
         .route("/api/pages/{id}/links", get(handle_get_page_links))
+        .route("/api/pages/{id}/move", post(handle_move_page))
         .route("/api/pages/{id}/archive", post(handle_archive_page))
         .route("/api/pages/{id}/revisions", get(handle_get_page_revisions))
         .route("/api/pages/{id}/review", post(handle_review_page))
@@ -67,7 +71,7 @@ pub async fn handle_list_pages(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     view: crate::truth_guard::TruthView,
     axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<PageInventoryResponse>, ServerError> {
     let status = params.get("status").map(|s| s.as_str()).unwrap_or("active");
     let space = params
         .get("space")
@@ -82,9 +86,12 @@ pub async fn handle_list_pages(
         .and_then(|o| o.parse().ok())
         .unwrap_or(0);
 
-    let db = {
+    let (db, page_root) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
     };
     let scope =
         crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
@@ -99,7 +106,41 @@ pub async fn handle_list_pages(
     let pages = wenlan_core::truth_adapter::filter_pages(&db, &view.grant, pages)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
-    Ok(Json(serde_json::json!({ "pages": pages })))
+    // Enrich only the final scoped, truth-filtered browse result. Entity shadow
+    // pages and drafts are browse records, not Markdown projection claims.
+    let page_ids: Vec<String> = pages
+        .iter()
+        .filter(|page| page.kind != "entity" && page.status != "draft")
+        .map(|page| page.id.clone())
+        .collect();
+    let mut folders = HashMap::new();
+    for page in pages.iter().filter(|page| page.status == "draft") {
+        folders.insert(
+            page.id.clone(),
+            db.page_initial_folder_path(&page.id).await?,
+        );
+    }
+    let filenames = if let Some(root) = page_root {
+        tokio::task::spawn_blocking(move || {
+            let ids: Vec<&str> = page_ids.iter().map(String::as_str).collect();
+            wenlan_core::export::knowledge::KnowledgeWriter::new(root, &db)
+                .live_page_filenames(&ids)
+        })
+        .await
+        .unwrap_or_default()
+    } else {
+        HashMap::new()
+    };
+    Ok(Json(PageInventoryResponse {
+        pages: pages
+            .into_iter()
+            .map(|page| PageInventoryEntry {
+                storage_path: filenames.get(&page.id).cloned(),
+                folder_path: folders.get(&page.id).cloned(),
+                page,
+            })
+            .collect(),
+    }))
 }
 
 /// GET /api/pages/:id
@@ -109,9 +150,12 @@ pub async fn handle_get_page(
     view: crate::truth_guard::TruthView,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ServerError> {
-    let db = {
+    let (db, page_root) = {
         let s = state.read().await;
-        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
     };
     let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     // Q1 browse surface: a shadow id resolves 200 here, so read the unfenced
@@ -128,7 +172,31 @@ pub async fn handle_get_page(
             // An imported OKF concept carries its bundle frontmatter beside the
             // page, for display only. The key is omitted for every other page,
             // so a reader that does not know about OKF sees today's shape.
+            // kind is intentionally skipped on the public Page wire; inspect the
+            // authorized internal record before serialization.
+            let is_draft = page.status == "draft";
+            let has_live_file = wenlan_core::pages::is_active_file_page(&page);
             let mut body = serde_json::json!({ "page": page });
+            if is_draft {
+                body["page"]["folder_path"] = db.page_initial_folder_path(&id).await?.into();
+            } else if has_live_file {
+                // Resolve only after scope and truth authorization. A path is verified
+                // physical metadata, never a guess from title or initial folder intent.
+                let storage_path = if let Some(root) = page_root {
+                    let db = db.clone();
+                    let page_id = id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        wenlan_core::export::knowledge::KnowledgeWriter::new(root, &db)
+                            .live_page_filenames(&[page_id.as_str()])
+                            .remove(&page_id)
+                    })
+                    .await
+                    .unwrap_or_default()
+                } else {
+                    None
+                };
+                body["page"]["storage_path"] = serde_json::json!(storage_path);
+            }
             if let Ok(Some(record)) = db.get_okf_concept(&id).await {
                 body["okf"] = serde_json::json!({
                     "source_id": record.source_id,
@@ -510,6 +578,59 @@ async fn draft_db(
     s.db.clone().ok_or(ServerError::DbNotInitialized)
 }
 
+async fn draft_response(
+    db: &wenlan_core::db::MemoryDB,
+    page: wenlan_core::pages::Page,
+) -> Result<PageDraftResponse, ServerError> {
+    Ok(PageDraftResponse {
+        folder_path: db.page_initial_folder_path(&page.id).await?,
+        page,
+        projection_status: None,
+        storage_path: None,
+        projection_error: None,
+    })
+}
+
+/// Move only an authorized, visible active note. Scope/truth checks precede disk lookup.
+pub async fn handle_move_page(
+    State(state): State<SharedState>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    view: crate::truth_guard::TruthView,
+    Path(id): Path<String>,
+    Json(req): Json<MovePageRequest>,
+) -> Result<Json<MovePageResponse>, ServerError> {
+    let (db, root) = {
+        let s = state.read().await;
+        (
+            s.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            s.lint_config.page_root().map(std::path::Path::to_path_buf),
+        )
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    let page = db.get_page_scoped(&id, &scope).await?;
+    let page = wenlan_core::truth_adapter::filter_page(&db, &view.grant, page)
+        .await?
+        .filter(wenlan_core::pages::is_active_file_page)
+        .ok_or_else(|| ServerError::NotFound("page not found".into()))?;
+    let root = root
+        .ok_or_else(|| ServerError::ValidationError("Wiki projection is not configured".into()))?;
+    let projection_write = db.begin_page_projection_write();
+    let storage_path = tokio::task::spawn_blocking(move || {
+        // The blocking mutation may outlive cancellation of the request future.
+        let _projection_write = projection_write;
+        wenlan_core::export::knowledge::move_projected_page(
+            &root,
+            &page.id,
+            &req.expected_storage_path,
+            &req.folder_path,
+            &req.operation_id,
+        )
+    })
+    .await
+    .map_err(|e| ServerError::Internal(e.to_string()))??;
+    Ok(Json(MovePageResponse { storage_path }))
+}
+
 /// POST /api/pages/drafts
 ///
 /// First durable snapshot of a human-authored Page draft. An omitted `space`
@@ -527,16 +648,17 @@ pub async fn handle_create_page_draft(
         header_space
     };
     let page = db
-        .create_page_draft_with_id_in_registered_space(
+        .create_page_draft_with_id_in_registered_space_and_folder(
             &req.draft_id,
             &req.title,
             &req.content,
             space.as_deref(),
+            req.folder_path.as_deref().unwrap_or(""),
         )
         .await
         .map_err(page_draft_error)?;
     let page = filter_draft_echo(&db, &view, page).await?;
-    Ok(Json(PageDraftResponse { page }))
+    Ok(Json(draft_response(&db, page).await?))
 }
 
 /// PUT /api/pages/drafts/{id}
@@ -560,7 +682,7 @@ pub async fn handle_update_page_draft(
     {
         wenlan_core::pages::PageDraftUpdateOutcome::Updated(page) => {
             let page = filter_draft_echo(&db, &view, page).await?;
-            Ok(Json(PageDraftResponse { page }))
+            Ok(Json(draft_response(&db, page).await?))
         }
         wenlan_core::pages::PageDraftUpdateOutcome::VersionConflict { current_version } => {
             Err(draft_version_conflict(current_version))
@@ -582,6 +704,8 @@ pub async fn handle_publish_page_draft(
             s.lint_config.page_root().map(std::path::Path::to_path_buf),
         )
     };
+    // Resolve response intent before the DB commit; projection failures below remain pending.
+    let folder_path = db.page_initial_folder_path(&id).await?;
     let page = match db
         .publish_page_draft(&id, req.expected_version)
         .await
@@ -619,24 +743,43 @@ pub async fn handle_publish_page_draft(
         }
     };
     let page = filter_draft_echo(&db, &view, page).await?;
-    // First projection write for this page: `reconcile` only repairs pages
-    // already in the projection state, so skipping here would leave the
-    // published page invisible to `wenlan pages` until another write projects
-    // it. Same root as `handle_create_page` (None disables projection);
-    // DB-first with a warn on projection failure mirrors `handle_delete_page`:
-    // the publish must not be reported as failed once the row flipped.
+    let mut response = PageDraftResponse {
+        page,
+        folder_path,
+        projection_status: None,
+        storage_path: None,
+        projection_error: None,
+    };
+    response.projection_status = Some(PageProjectionStatus::NotConfigured);
     if let Some(page_root) = page_root {
         let projection =
-            wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(page_root, &db);
-        if let Err(e) = projection.write_page_gated(&db, &page).await {
-            tracing::warn!(
-                "[page] draft {} published but md projection write failed: {}",
-                page.id,
-                e
-            );
+            wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(page_root.clone(), &db);
+        match projection.write_page_gated(&db, &response.page).await {
+            Ok(Some(path)) => {
+                response.projection_status = Some(PageProjectionStatus::Synced);
+                response.storage_path = std::path::Path::new(&path)
+                    .strip_prefix(&page_root)
+                    .ok()
+                    .map(|relative| {
+                        relative
+                            .components()
+                            .map(|c| c.as_os_str().to_string_lossy())
+                            .collect::<Vec<_>>()
+                            .join("/")
+                    });
+            }
+            Ok(None) => response.projection_status = Some(PageProjectionStatus::Hidden),
+            Err(error) => {
+                tracing::warn!(
+                    "draft {} published with pending projection: {error}",
+                    response.page.id
+                );
+                response.projection_status = Some(PageProjectionStatus::Pending);
+                response.projection_error = Some(error.to_string());
+            }
         }
     }
-    Ok(Json(PageDraftResponse { page }))
+    Ok(Json(response))
 }
 
 /// DELETE /api/pages/drafts/{id}
@@ -1430,6 +1573,10 @@ fn refusal_response(refusal: wenlan_core::presence::PresenceRefusal) -> axum::re
 }
 
 #[cfg(test)]
+#[path = "page_routes/page_routes_test.rs"]
+mod page_inventory_tests;
+
+#[cfg(test)]
 mod create_page_endpoint_tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -2081,3 +2228,7 @@ mod conflict_identity_tests {
 #[cfg(test)]
 #[path = "page_routes/entity_page_guard_tests.rs"]
 mod entity_page_guard_tests;
+
+#[cfg(test)]
+#[path = "page_routes/real_folder_page_routes_test.rs"]
+mod real_folder_page_route_tests;

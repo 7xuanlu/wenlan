@@ -1,103 +1,23 @@
-// SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../../i18n";
-import type { Page } from "../../../lib/tauri";
+import { knowledgeFoldersList, knowledgeFolderCreate, type Page } from "../../../lib/tauri";
 import { PageInventoryPanel } from "./PageInventoryPanel";
-
-const {
-  listAllActivePagesMock,
-  listAllDraftPagesMock,
-  explicitActiveMock,
-  explicitDraftMock,
-} = vi.hoisted(() => ({
-  listAllActivePagesMock: vi.fn().mockResolvedValue([]),
-  listAllDraftPagesMock: vi.fn().mockResolvedValue([]),
-  explicitActiveMock: vi.fn(),
-  explicitDraftMock: vi.fn(),
-}));
-
-vi.mock("./listAllPages", () => ({
-  listAllActivePages: listAllActivePagesMock,
-  listAllDraftPages: listAllDraftPagesMock,
-  listAllActivePagesExplicitBrowse: explicitActiveMock,
-  listAllDraftPagesExplicitBrowse: explicitDraftMock,
-}));
-
-function page(id: string, title: string, status = "active"): Page {
-  return {
-    id, title, status,
-    summary: null, content: "", entity_id: null, domain: null,
-    source_memory_ids: [], version: 1,
-    created_at: "2026-07-16T00:00:00Z",
-    last_compiled: "2026-07-16T00:00:00Z",
-    last_modified: "2026-07-16T00:00:00Z",
-  };
-}
-
-function renderPanel(props: Partial<React.ComponentProps<typeof PageInventoryPanel>> = {}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return {
-    queryClient,
-    ...render(
-      <QueryClientProvider client={queryClient}>
-        <PageInventoryPanel onOpenPage={() => {}} onOpenDraft={() => {}} {...props} />
-      </QueryClientProvider>,
-    ),
-  };
-}
-
-describe("PageInventoryPanel", () => {
-  beforeEach(async () => {
-    listAllActivePagesMock.mockReset().mockResolvedValue([]);
-    listAllDraftPagesMock.mockReset().mockResolvedValue([]);
-    explicitActiveMock.mockReset();
-    explicitDraftMock.mockReset();
-    await i18n.changeLanguage("en");
-  });
-
-  it("lists every active page and draft using passive queries, excluding entity shadows", async () => {
-    const pages = Array.from({ length: 15 }, (_, index) => page(String(index), "Note " + index));
-    const entity = page("entity", "Person shadow");
-    entity.creation_kind = "entity";
-    const draft = page("draft", "Loose thought", "draft");
-    listAllActivePagesMock.mockResolvedValue([...pages, entity]);
-    listAllDraftPagesMock.mockResolvedValue([draft]);
-    const { queryClient } = renderPanel();
-
-    expect(await screen.findByRole("button", { name: "Open Note 14" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /^Open Note / })).toHaveLength(15);
-    expect(screen.getByRole("button", { name: "Open Loose thought" })).toHaveTextContent("Draft");
-    expect(screen.queryByRole("button", { name: "Open Person shadow" })).not.toBeInTheDocument();
-    expect(queryClient.getQueryData(["pages", "inventory", "passive", "active"])).toBeDefined();
-    expect(explicitActiveMock).not.toHaveBeenCalled();
-    expect(explicitDraftMock).not.toHaveBeenCalled();
-  });
-
-  it("filters locally without changing the global header search", async () => {
-    listAllActivePagesMock.mockResolvedValue([page("a", "Budget"), page("b", "Project plan")]);
-    const user = userEvent.setup();
-    renderPanel();
-
-    const filter = screen.getByRole("searchbox", { name: "Filter notes" });
-    await screen.findByRole("button", { name: "Open Project plan" });
-    await user.type(filter, "project");
-    expect(screen.getByRole("button", { name: "Open Project plan" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open Budget" })).not.toBeInTheDocument();
-    expect(explicitActiveMock).not.toHaveBeenCalled();
-  });
-
-  it("does not present a partial inventory as complete when one status fails", async () => {
-    listAllActivePagesMock.mockResolvedValue([page("a", "Available page")]);
-    listAllDraftPagesMock.mockRejectedValueOnce(new Error("draft list unavailable")).mockResolvedValue([]);
-    const user = userEvent.setup();
-    renderPanel();
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Pages couldn't be loaded.");
-    expect(screen.queryByRole("button", { name: "Open Available page" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Try again" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Open Available page" })).toBeInTheDocument());
-  });
+const { active, drafts } = vi.hoisted(() => ({ active:vi.fn(), drafts:vi.fn() }));
+vi.mock("./listAllPages", () => ({ EXPLICIT_BROWSE_QUERY_POLICY:{},listAllActivePages:active,listAllDraftPages:drafts,listAllActivePagesExplicitBrowse:active,listAllDraftPagesExplicitBrowse:drafts }));
+vi.mock("../../../lib/tauri", async original => ({...await original<typeof import("../../../lib/tauri")>(),knowledgeFoldersList:vi.fn(),knowledgeFolderCreate:vi.fn()}));
+const page = (id:string, overrides:Partial<Page>={}):Page => ({id,title:id,summary:null,content:"",entity_id:null,domain:null,source_memory_ids:[],version:1,status:"active",created_at:"2026-07-16",last_modified:"2026-07-16",last_compiled:"2026-07-16",...overrides});
+function setup(props:Partial<React.ComponentProps<typeof PageInventoryPanel>>={}) { const client=new QueryClient({defaultOptions:{queries:{retry:false}}});return render(<QueryClientProvider client={client}><PageInventoryPanel onBrowse={vi.fn()} onOpenPage={vi.fn()} onOpenDraft={vi.fn()} {...props}/></QueryClientProvider>); }
+beforeEach(async () => { await i18n.changeLanguage("en");active.mockReset().mockResolvedValue([page("Direct",{storage_path:"Work/direct.md"}),page("Nested",{storage_path:"Work/Research/nested.md"}),page("Legacy")]);drafts.mockReset().mockResolvedValue([]);vi.mocked(knowledgeFoldersList).mockReset().mockResolvedValue({folders:[{path:"Work",name:"Work",parent_path:""},{path:"Work/Research",name:"Research",parent_path:"Work"},{path:"Empty",name:"Empty",parent_path:""}],truncated:false});vi.mocked(knowledgeFolderCreate).mockReset();});
+describe("folder tree",()=>{
+ it("selects actual directories without duplicate note list while browsing",async()=>{const onBrowse=vi.fn();setup({browsing:true,inventoryScope:"folder:Work",onBrowse});await screen.findByRole("button",{name:"Work"});expect(screen.queryByRole("button",{name:"Open Direct"})).not.toBeInTheDocument();expect(screen.getByRole("button",{name:"Work"})).toHaveAttribute("aria-current","page");await userEvent.setup().click(screen.getByRole("button",{name:"Research"}));expect(onBrowse).toHaveBeenCalledWith("folder:Work/Research");expect(screen.queryByText("Other notes")).not.toBeInTheDocument();});
+ it("expands selected note directory and preserves draft Space",async()=>{drafts.mockResolvedValue([page("Draft",{status:"draft",folder_path:"Work",space:"Personal"})]);const onOpenDraft=vi.fn();setup({currentPageId:"Draft",onOpenDraft});await screen.findByRole("button",{name:"Open Draft"});expect(screen.queryByRole("button",{name:"Open Nested"})).not.toBeInTheDocument();await userEvent.setup().click(screen.getByRole("button",{name:"Open Draft"}));expect(onOpenDraft).toHaveBeenCalledWith("Draft","Personal");});
+ it("creates an empty child directory and immediately selects its real response",async()=>{vi.mocked(knowledgeFolderCreate).mockResolvedValue({path:"Work/New"});const onBrowse=vi.fn();setup({inventoryScope:"folder:Work",browsing:true,onBrowse});const user=userEvent.setup();await user.click(await screen.findByRole("button",{name:"New folder"}));await user.type(screen.getByRole("textbox",{name:"Folder name"}),"New");await user.click(screen.getByRole("button",{name:"Create"}));await waitFor(()=>expect(onBrowse).toHaveBeenCalledWith("folder:Work/New"));expect(knowledgeFolderCreate).toHaveBeenCalledWith("Work","New");});
+ it("creates a Page in the selected folder",async()=>{const onCreatePage=vi.fn();setup({inventoryScope:"folder:Work",onCreatePage});const user=userEvent.setup();await user.click(await screen.findByRole("button",{name:"New note"}));expect(onCreatePage).toHaveBeenCalledWith("Work");});
+ it("keeps New note available without a folder selection when folder listing is unavailable",async()=>{vi.mocked(knowledgeFoldersList).mockRejectedValue(new Error("unknown command"));const onCreatePage=vi.fn();setup({onCreatePage});const user=userEvent.setup();await screen.findByText("Folder browsing is unavailable. All notes are still accessible.");const createPage=screen.getByRole("button",{name:"New note"});expect(createPage).toBeEnabled();await user.click(createPage);expect(onCreatePage).toHaveBeenCalledWith();});
+ it("keeps folder creation errors visible and retries without navigating",async()=>{vi.mocked(knowledgeFolderCreate).mockRejectedValue(new Error("collision"));const onBrowse=vi.fn();setup({browsing:true,onBrowse});const user=userEvent.setup();await user.click(await screen.findByRole("button",{name:"New folder"}));await user.type(screen.getByRole("textbox",{name:"Folder name"}),"New");await user.click(screen.getByRole("button",{name:"Create"}));expect(await screen.findByRole("alert")).toHaveTextContent("couldn't be created");expect(onBrowse).not.toHaveBeenCalled();expect(screen.getByRole("textbox",{name:"Folder name"})).toHaveValue("New");});
+ it("keeps global title/path search explicit and legacy notes available",async()=>{setup({browsing:true});await screen.findByRole("button",{name:"Work"});await userEvent.setup().type(screen.getByRole("searchbox",{name:"Search all notes"}),"legacy");expect(screen.getByRole("button",{name:"Open Legacy"})).toBeInTheDocument();expect(screen.queryByRole("button",{name:"Open Direct"})).not.toBeInTheDocument();});
+ it("disables unsupported folders while all notes remain accessible",async()=>{vi.mocked(knowledgeFoldersList).mockRejectedValue(new Error("unknown command"));setup({browsing:true});await screen.findByText("Folder browsing is unavailable. All notes are still accessible.");expect(screen.getByRole("button",{name:"New folder"})).toBeDisabled();expect(screen.getByRole("button",{name:"All notes"})).toBeEnabled();expect(screen.queryByRole("button",{name:"Work"})).not.toBeInTheDocument();});
 });
