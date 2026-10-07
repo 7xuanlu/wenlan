@@ -212,3 +212,30 @@
     transition: none;
   }
 }
+
+.space-project-tabs {
+  display: flex;
+  gap: 24px;
+  margin: 20px 0 12px;
+}
+.space-project-tabs > button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 8px 2px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 14px/1.5 var(--mem-font-body);
+  cursor: pointer;
+}
+.space-project-tabs > button[aria-selected="true"] {
+  color: var(--mem-text);
+  border-bottom-color: var(--mem-text);
+}
+.space-project-sources { margin: 0; padding: 0; list-style: none; }
+
+.space-project-sources li { border: 0; }
+.space-project-sources .source-library-icon { flex-basis: 22px; height: 24px; background: none; border: 0; }
+.space-project-sources .source-library-row { align-items: flex-start; min-height: 64px; padding: 12px 8px; gap: 12px; }
+.space-project-sources .source-library-row-title { font: 500 17px/1.4 var(--mem-font-heading); }
+.space-project-sources .source-library-row-meta { font: 14px/1.5 var(--mem-font-body); }

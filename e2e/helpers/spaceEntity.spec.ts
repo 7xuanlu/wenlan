@@ -1,35 +1,44 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test } from "@playwright/test";
+import { collectBrowserErrors, installTauriMock } from "../tauriMock";
 import { getSpaceEntityButton } from "./spaceEntity";
 
-test("returns the entity when it and View all are both visible", async ({ page }) => {
-  await page.setContent(`
-    <section aria-label="Key topics" role="region">
-      <details open>
-        <summary>Key topics</summary>
-        <button>Ada Lovelace</button>
-        <button>View all 2</button>
-      </details>
-    </section>
-  `);
+const TOPICS_PINNED = JSON.stringify({ version: 1, visible: ["pages", "spaces", "graph", "entities"] });
+
+test("finds the exact entity after navigating to Topics in More", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await page.goto("/");
+
+  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await expect(navigation.getByRole("button", { name: "Topics", exact: true })).toHaveCount(0);
+  await expect(navigation.getByRole("button", { name: "More", exact: true })).toBeVisible();
 
   const entity = await getSpaceEntityButton(page, "Ada Lovelace");
-
+  await expect(page.getByRole("heading", { name: "Topics", exact: true })).toBeVisible();
   await expect(entity).toBeVisible();
+  await expect(entity).toHaveAccessibleName("Ada Lovelace");
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
 });
 
+test("finds the exact entity when Topics is pinned in primary navigation", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await installTauriMock(page, {
+    locale: "en",
+    rawActions: [],
+    localStorage: { "wenlan-navigation-v1": TOPICS_PINNED },
+  });
+  await page.goto("/");
 
-test("opens the Topics disclosure before returning an entity", async ({ page }) => {
-  await page.setContent(`
-    <section aria-label="Key topics" role="region">
-      <details>
-        <summary>Key topics</summary>
-        <button>Ada Lovelace</button>
-      </details>
-    </section>
-  `);
-  await expect(page.getByRole("button", { name: "Ada Lovelace" })).toBeHidden();
+  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await expect(navigation.getByRole("button", { name: "Topics", exact: true })).toBeVisible();
   const entity = await getSpaceEntityButton(page, "Ada Lovelace");
+  await expect(page.getByRole("heading", { name: "Topics", exact: true })).toBeVisible();
   await expect(entity).toBeVisible();
-  await expect(page.locator("details")).toHaveAttribute("open");
+  await expect(entity).toHaveAccessibleName("Ada Lovelace");
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
 });

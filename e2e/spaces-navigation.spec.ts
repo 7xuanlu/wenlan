@@ -4,7 +4,7 @@ import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openSpaceEntity } from "./helpers/spaceEntity";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
-test("Wiki -> Spaces -> Space -> Page -> back and Space -> Entity -> back", async ({ page }) => {
+test("Wiki -> Spaces -> Space -> Page -> back and Space -> global Topics -> Topic -> back", async ({ page }) => {
   // Keep the six-row Wiki long enough to exercise real scrolling and reset.
   await page.setViewportSize({ width: 1280, height: 500 });
   // Given a clean fixture and browser error capture.
@@ -73,7 +73,9 @@ test("Wiki -> Spaces -> Space -> Page -> back and Space -> Entity -> back", asyn
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
   await page.keyboard.press("Escape");
 
-  // Then history returns to the Space and the browser stayed error-free.
+  // Topic history first returns to global Topics, then to the previous Space.
+  await expect(page.getByRole("heading", { level: 1, name: "Topics", exact: true })).toBeVisible();
+  await page.getByRole("group", { name: "History navigation" }).getByRole("button", { name: "Back", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
   await expect(primaryNavigation.getByRole("button", { name: "Spaces", exact: true })).toHaveAttribute("aria-current", "page");

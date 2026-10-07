@@ -11,6 +11,7 @@ type SpaceIdentityActions = {
   readonly onCreatePage: () => void;
   readonly onDelete: () => void;
   readonly onKeep: () => void;
+  readonly onReviewAll?: () => void;
   readonly onSaveIdentity: (value: SpaceIdentityValue) => void;
 };
 
@@ -256,6 +257,12 @@ export function SpaceDossierHeader({
                       onKeyDown={handleMenuKeyDown}
                       role="menu"
                     >
+                      {actions.onReviewAll && (
+                        <button role="menuitem" type="button" onClick={() => {
+                          setMenuOpen(false);
+                          actions.onReviewAll?.();
+                        }}>{t("home.reviewPageChanges")}</button>
+                      )}
                       <button
                         className="space-dossier-menu-danger"
                         onClick={() => {

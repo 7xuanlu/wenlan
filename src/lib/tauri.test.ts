@@ -518,7 +518,22 @@ describe('listIndexedFiles', () => {
   it('calls invoke', async () => {
     mockInvoke.mockResolvedValue([]);
     await tauri.listIndexedFiles();
-    expect(mockInvoke).toHaveBeenCalledWith('list_indexed_files');
+    expect(mockInvoke.mock.calls).toEqual([['list_indexed_files']]);
+  });
+
+  it('passes the supplied canonical Space name without broadening blank scope', async () => {
+    mockInvoke.mockResolvedValue([]);
+    await tauri.listIndexedFiles('專案 & R+D');
+    await tauri.listIndexedFiles('');
+    expect(mockInvoke.mock.calls).toEqual([
+      ['list_indexed_files', { space: '專案 & R+D' }],
+      ['list_indexed_files', { space: '' }],
+    ]);
+  });
+
+  it('returns native scope errors to the caller', async () => {
+    mockInvoke.mockRejectedValue('unknown space: missing');
+    await expect(tauri.listIndexedFiles('missing')).rejects.toBe('unknown space: missing');
   });
 });
 
@@ -547,7 +562,18 @@ describe('getChunks', () => {
   it('calls invoke with source and sourceId', async () => {
     mockInvoke.mockResolvedValue([]);
     await tauri.getChunks('local_files', 'doc1');
-    expect(mockInvoke).toHaveBeenCalledWith('get_chunks', { source: 'local_files', sourceId: 'doc1' });
+    expect(mockInvoke.mock.calls).toEqual([['get_chunks', { source: 'local_files', sourceId: 'doc1' }]]);
+  });
+
+  it('preserves source identity and includes the Space for previews', async () => {
+    mockInvoke.mockResolvedValue([]);
+    const sourceId = 'https://example.com/post?q=a&lang=zh#part';
+    await tauri.getChunks('webpage', sourceId, '專案 & R+D');
+    await tauri.getChunks('file', 'doc1', '');
+    expect(mockInvoke.mock.calls).toEqual([
+      ['get_chunks', { source: 'webpage', sourceId, space: '專案 & R+D' }],
+      ['get_chunks', { source: 'file', sourceId: 'doc1', space: '' }],
+    ]);
   });
 });
 

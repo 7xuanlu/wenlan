@@ -1064,9 +1064,7 @@ export default function Main({
               onBack={() => replaceView({ kind: "spaces" })}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onReviewAll={() => navigateTo({ kind: "distill-review" })}
-              onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
-              onEntityClick={handleEntityClick}
               onSpaceDeleted={handleSpaceDeleted}
               onSpaceLoaded={handleSpaceLoaded}
               onSpaceRenamed={handleSpaceRenamed}

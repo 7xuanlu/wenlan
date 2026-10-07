@@ -115,9 +115,7 @@ describe("SpaceDetail context header", () => {
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 
@@ -132,9 +130,7 @@ describe("SpaceDetail context header", () => {
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 
@@ -160,15 +156,13 @@ describe("SpaceDetail context header", () => {
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 
     await screen.findByRole("heading", { name: "Origin" });
     expect(document.querySelector(".space-dossier-metrics")).toBeNull();
-    expect(screen.getByRole("button", { name: "Raw memories (47)" })).not.toHaveTextContent("47");
+    expect(screen.queryByRole("button", { name: "Raw memories (47)" })).not.toBeInTheDocument();
   });
 
   it("keeps topic counts out of the header", async () => {
@@ -176,9 +170,7 @@ describe("SpaceDetail context header", () => {
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 
@@ -187,32 +179,12 @@ describe("SpaceDetail context header", () => {
     expect(document.querySelector(".space-dossier-metrics")).toBeNull();
   });
 
-  it("keeps expanded memories in the embedded stream presentation", async () => {
-    renderWithQuery(
-      <SpaceDetail
-        spaceName="Origin"
-        onBack={() => {}}
-        onSelectMemory={() => {}}
-        onSelectPage={() => {}}
-        onEntityClick={() => {}}
-      />,
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Raw memories (47)" }));
-
-    expect(await screen.findByText("Prefers TDD workflow")).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Memory list" })).not.toBeInTheDocument();
-    expect(document.querySelector(".memory-list-shell")).not.toBeInTheDocument();
-  });
-
   it("deletes a space with only the daemon-supported keep behavior", async () => {
     renderWithQuery(
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 
@@ -240,9 +212,7 @@ describe("SpaceDetail context header", () => {
       <SpaceDetail
         spaceName="Origin"
         onBack={() => {}}
-        onSelectMemory={() => {}}
         onSelectPage={() => {}}
-        onEntityClick={() => {}}
       />,
     );
 

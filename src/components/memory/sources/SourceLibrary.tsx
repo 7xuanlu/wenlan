@@ -69,7 +69,7 @@ export default function SourceLibrary({ onAdd, onManageSources, onBrowseFolder, 
   const [localState, setLocalState] = useState<SourceLibraryState>({ search: "", filter: "all" });
   const { search, filter } = state ?? localState;
   const foldersQuery = useQuery({ queryKey: ["registeredSources"], queryFn: listRegisteredSources });
-  const filesQuery = useQuery({ queryKey: ["indexedFiles"], queryFn: listIndexedFiles, refetchInterval: 5000 });
+  const filesQuery = useQuery({ queryKey: ["indexedFiles"], queryFn: () => listIndexedFiles(), refetchInterval: 5000 });
 
   const folders = useMemo(() => (foldersQuery.data ?? [])
     .filter((source) => !/(?:^|\/)\.wenlan\/sources$/.test(normalizedPath(source.path)))

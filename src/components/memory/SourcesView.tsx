@@ -134,7 +134,7 @@ export function SourceFolderBrowser({ onManageSources, initialSourceId }: Source
   // leaving a count quietly wrong.
   const { data: indexedFiles } = useQuery({
     queryKey: ["indexedFiles"],
-    queryFn: listIndexedFiles,
+    queryFn: () => listIndexedFiles(),
     // Poll while on the Sources tab so a file that finishes indexing flips from
     // "Indexing…" to "In your library" without waiting for a window blur/focus.
     // Pauses when the window is unfocused (React Query default) and stops when

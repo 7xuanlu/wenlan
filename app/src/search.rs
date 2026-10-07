@@ -1886,9 +1886,12 @@ pub async fn get_version_chain_cmd(
 #[tauri::command]
 pub async fn list_indexed_files(
     state: tauri::State<'_, State>,
+    space: Option<String>,
 ) -> Result<Vec<IndexedFileInfo>, String> {
     let client = daemon_client(&state).await;
-    let resp: responses::IndexedFilesResponse = client.get_json("/api/indexed-files").await?;
+    let resp: responses::IndexedFilesResponse = client
+        .get_json_scoped("/api/indexed-files", space.as_deref())
+        .await?;
     Ok(resp.files)
 }
 
@@ -1897,10 +1900,11 @@ pub async fn get_chunks(
     state: tauri::State<'_, State>,
     source: String,
     source_id: String,
+    space: Option<String>,
 ) -> Result<Vec<MemoryDetail>, String> {
     let client = daemon_client(&state).await;
     let chunks: Vec<MemoryDetail> = client
-        .get_json(&chunks_request_path(&source, &source_id))
+        .get_json_scoped(&chunks_request_path(&source, &source_id), space.as_deref())
         .await?;
     Ok(chunks)
 }

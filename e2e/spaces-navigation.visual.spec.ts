@@ -159,23 +159,12 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(recent.locator(".space-dossier-page-summary")).toHaveCount(6);
     await expect(recent.locator(".space-dossier-page-meta, time")).toHaveCount(0);
     await expect(dossier.locator(".space-dossier-rail")).toHaveCount(0);
-    await expect(dossier.locator(".space-dossier-disclosure")).toHaveCount(2);
-    for (const disclosure of await dossier.locator(".space-dossier-disclosure").all()) {
-      await expect(disclosure).not.toHaveAttribute("open");
-      await expect(disclosure.locator("summary")).toBeVisible();
-    }
-    await expect(dossier.getByRole("button", { name: "Review all", exact: true })).toBeHidden();
-    const topicsDisclosure = dossier.locator(".space-dossier-entities details");
-    await topicsDisclosure.locator("summary").click();
-    await expect(dossier.locator(".space-dossier-entity-list > button")).toHaveCount(6);
-    await expect(dossier.locator(".space-dossier-entity-list > button").first()).toBeVisible();
-    await topicsDisclosure.locator("summary").click();
-    const reviewDisclosure = dossier.locator(".space-dossier-review details");
-    await reviewDisclosure.locator("summary").click();
-    await expect(dossier.locator(".space-dossier-review-list > button")).toHaveCount(2);
-    await expect(dossier.locator(".space-dossier-review-list small")).toHaveText(["Source conflict", "New sources waiting"]);
-    await expect(dossier.getByRole("button", { name: "Review all", exact: true })).toBeVisible();
-    await reviewDisclosure.locator("summary").click();
+    await expect(dossier.locator(".space-dossier-disclosure,.space-dossier-archive,.space-dossier-entities,.space-dossier-review")).toHaveCount(0);
+    await expect(dossier.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+    await expect(dossier.getByRole("tab", { name: "Sources" })).toBeVisible();
+    await dossier.getByRole("button", { name: "Actions for Wenlan" }).click();
+    await expect(dossier.getByRole("menuitem", { name: "Review page changes" })).toBeVisible();
+    await page.keyboard.press("Escape");
     await page.locator("main").evaluate((node) => { node.scrollTop = 0; });
     await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
     const create = dossier.getByRole("button", { name: "New page", exact: true });
@@ -197,9 +186,8 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
       expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
     }
     const recentBox = (await recent.boundingBox())!;
-    const secondaryBox = (await dossier.locator(".space-dossier-secondary").boundingBox())!;
-    expect(secondaryBox.y, "supplementary sections follow the page list at every width").toBeGreaterThanOrEqual(recentBox.y + recentBox.height);
-    expect(Math.abs(secondaryBox.x - recentBox.x)).toBeLessThanOrEqual(1);
+    const tabsBox = (await dossier.locator(".space-project-tabs").boundingBox())!;
+    expect(recentBox.y, "notes follow the two-tab project navigation at every width").toBeGreaterThanOrEqual(tabsBox.y + tabsBox.height);
     const contrast = await renderedContrast(page, [
       { selector: ".space-dossier h1", label: "Space title", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".space-dossier-new-page", label: "Space creation control", foregroundProperty: "color", minimum: 4.5 },

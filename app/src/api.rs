@@ -490,6 +490,49 @@ impl WenlanClient {
             .map_err(|e| format!("Parse {}: {}", path, e))
     }
 
+    /// Read within the daemon's existing Space scope, without changing truth intent.
+    /// Encode canonical names as query values, including Unicode and punctuation.
+    /// A supplied but empty name must fail instead of becoming global.
+    pub async fn get_json_scoped<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        space: Option<&str>,
+    ) -> Result<T, String> {
+        let Some(space) = space else {
+            return self.get_json(path).await;
+        };
+        let space = space.trim();
+        if space.is_empty() {
+            return Err("Space scope must not be blank".to_string());
+        }
+        let resp = self
+            .client
+            .get(self.url(path))
+            .query(&[("space", space)])
+            .send()
+            .await
+            .map_err(|e| format!("HTTP GET {}: {}", path, e))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("HTTP GET {} returned {}: {}", path, status, body));
+        }
+        let expected_scope = percent_encode_path_segment(space);
+        if resp
+            .headers()
+            .get("x-wenlan-source-scope")
+            .and_then(|value| value.to_str().ok())
+            != Some(expected_scope.as_str())
+        {
+            return Err(format!(
+                "HTTP GET {path}: daemon did not confirm the requested source Space scope"
+            ));
+        }
+        resp.json()
+            .await
+            .map_err(|e| format!("Parse {}: {}", path, e))
+    }
+
     pub async fn get_optional_json<T: DeserializeOwned>(
         &self,
         path: &str,
@@ -2146,6 +2189,133 @@ mod tests {
             value.map(|memory| memory.source_id),
             Some("memory-present".to_string())
         );
+    }
+
+    async fn serve_source_scope_once(
+        body: &'static str,
+        scope: Option<&'static str>,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let n = stream.read(&mut buf).await.unwrap();
+            let header = scope.map_or(String::new(), |scope| {
+                format!("x-wenlan-source-scope: {scope}\r\n")
+            });
+            let response = format!("HTTP/1.1 200 OK\r\n{header}content-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len());
+            stream.write_all(response.as_bytes()).await.unwrap();
+            String::from_utf8_lossy(&buf[..n]).to_string()
+        });
+        (format!("http://{addr}"), server)
+    }
+
+    #[tokio::test]
+    async fn scoped_get_rejects_missing_or_mismatched_scope_ack_before_json() {
+        for scope in [None, Some("work")] {
+            // An older daemon may ignore the query and return a global success.
+            let (base_url, request) =
+                serve_source_scope_once(r#"{"files":[{"title":"Global private source"}]}"#, scope)
+                    .await;
+            let client = WenlanClient::with_base_url(base_url);
+            let error = client
+                .get_json_scoped::<serde_json::Value>("/api/indexed-files", Some("專案 & R+D"))
+                .await
+                .unwrap_err();
+            assert!(
+                error.contains("did not confirm the requested source Space scope"),
+                "{error}"
+            );
+            request.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_get_encodes_space_query_for_source_routes() {
+        for (path, body) in [
+            ("/api/indexed-files", r#"{"files":[]}"#),
+            ("/api/chunks/document%2F1", "[]"),
+            ("/api/webpage-chunks/https%3A%2F%2Fexample.com", "[]"),
+        ] {
+            let (base_url, request) =
+                serve_source_scope_once(body, Some("%E5%B0%88%E6%A1%88%20%26%20R%2BD")).await;
+            let client = WenlanClient::with_base_url(base_url);
+            let response: serde_json::Value = client
+                .get_json_scoped(path, Some("專案 & R+D"))
+                .await
+                .unwrap();
+            assert_eq!(
+                response,
+                serde_json::from_str::<serde_json::Value>(body).unwrap()
+            );
+            let request = request.await.unwrap();
+            assert_eq!(
+                request.lines().next().unwrap(),
+                format!("GET {path}?space=%E5%B0%88%E6%A1%88+%26+R%2BD HTTP/1.1")
+            );
+            let headers = request.to_ascii_lowercase();
+            assert!(!headers.contains("x-wenlan-space:"), "{request}");
+            assert!(!headers.contains("x-wenlan-truth-contract:"), "{request}");
+            assert!(!headers.contains("x-wenlan-reader-intent:"), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_get_omitted_space_preserves_global_request() {
+        let (base_url, request) = serve_json_once(r#"{"files":[]}"#).await;
+        let client = WenlanClient::with_base_url(base_url);
+        let response: wenlan_types::responses::IndexedFilesResponse = client
+            .get_json_scoped("/api/indexed-files", None)
+            .await
+            .unwrap();
+        assert!(response.files.is_empty());
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "GET /api/indexed-files HTTP/1.1"
+        );
+        let headers = request.to_ascii_lowercase();
+        assert!(!headers.contains("x-wenlan-space:"), "{headers}");
+        assert!(!headers.contains("x-wenlan-truth-contract:"), "{headers}");
+        assert!(!headers.contains("x-wenlan-reader-intent:"), "{headers}");
+    }
+
+    #[tokio::test]
+    async fn scoped_get_rejects_blank_space_before_network() {
+        // An unreachable target makes an accidental HTTP fallback observable.
+        let client = WenlanClient::with_base_url("http://127.0.0.1:0".to_string());
+        for space in ["", " ", "\t\r\n"] {
+            let error = client
+                .get_json_scoped::<serde_json::Value>("/api/indexed-files", Some(space))
+                .await
+                .unwrap_err();
+            assert_eq!(error, "Space scope must not be blank");
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_get_preserves_unknown_scope_rejection() {
+        let (base_url, request) = serve_status_once(
+            422,
+            "Unprocessable Entity",
+            r#"{"error":"unknown Space: missing"}"#,
+        )
+        .await;
+        let client = WenlanClient::with_base_url(base_url);
+        let error = client
+            .get_json_scoped::<wenlan_types::responses::IndexedFilesResponse>(
+                "/api/indexed-files",
+                Some("missing"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("returned 422"), "{error}");
+        assert!(error.contains("unknown Space: missing"), "{error}");
+        assert!(request
+            .await
+            .unwrap()
+            .starts_with("GET /api/indexed-files?space=missing HTTP/1.1"));
     }
 
     #[tokio::test]

@@ -144,6 +144,7 @@ function Harness() {
     cursor: "pointer",
   });
 
+  if (params.get("mode") === "spaces") return <Main initialView={{kind:"space",spaceId:null,spaceName:params.get("space") ?? "Wenlan"}} />;
   if (params.get("mode") === "folders") return <Main initialView={{kind:"pages",inventoryScope:params.has("folder") ? `folder:${params.get("folder") ?? ""}` : "all"}} />;
   return (
     <div style={{ minHeight: "100vh", background: "var(--mem-bg)" }}>

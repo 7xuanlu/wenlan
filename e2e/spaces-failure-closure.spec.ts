@@ -118,7 +118,7 @@ test("retries Topic load, retains a failed observation draft, and retries two-st
   await expect(page.getByRole("alert")).toContainText("Couldn't save. Try again.");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Topics" })).toBeVisible();
 
   expect(controller.calls().filter(({ command }) => command === "get_entity_detail_cmd").length).toBeGreaterThanOrEqual(2);
   expect(controller.calls().filter(({ command }) => command === "update_observation_cmd")).toHaveLength(1);

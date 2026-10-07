@@ -210,26 +210,13 @@ describe("SpaceDetail existing behavior", () => {
     expect(onSelectPage).toHaveBeenCalledWith("p1");
   });
 
-  it("opens an entity chip", async () => {
-    const onEntityClick = vi.fn();
-    renderDetail({ onEntityClick });
-
-    fireEvent.click(await screen.findByText("Key entities"));
-    fireEvent.click(await screen.findByRole("button", { name: "Lucian" }));
-
-    expect(onEntityClick).toHaveBeenCalledWith("e1");
-  });
-
-  it("keeps raw memories collapsed and preserves its sort controls", async () => {
+  it("keeps memories and topics out of the Space workspace", async () => {
     renderDetail();
-    expect(screen.queryByText("Memory one")).not.toBeInTheDocument();
-
-    fireEvent.click(await screen.findByRole("button", { name: "Raw memories (1)" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Curated first" }));
-    fireEvent.click(screen.getByRole("button", { name: "Oldest first" }));
-
-    expect(screen.getByText("Memory one")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Oldest first" })).toBeInTheDocument();
+    await screen.findByRole("tab", { name: "Notes" });
+    expect(screen.queryByText("Key entities")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Raw memories (1)" })).not.toBeInTheDocument();
+    expect(listEntities).not.toHaveBeenCalled();
+    expect(listMemoriesRich).not.toHaveBeenCalled();
   });
 
   it("renders distinct loading, error, and missing-space states", async () => {

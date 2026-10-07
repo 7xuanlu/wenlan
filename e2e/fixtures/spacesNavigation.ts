@@ -9,9 +9,11 @@ import type {
   RefinementProposalSummary,
   PendingRevisionItem,
   Space,
+  IndexedFileInfo,
 } from "../../src/lib/tauri";
 
 export type SpacesNavigationFixture = {
+  readonly documents?: readonly { readonly file: IndexedFileInfo; readonly content: string }[];
   readonly folders?: readonly KnowledgeFolder[];
   readonly pendingRevisions?: readonly PendingRevisionItem[];
   readonly spaces: readonly Space[];

@@ -22,7 +22,7 @@ const TEST_COPY: Readonly<Record<string, string>> = {
   "spaceDetail.needsReview": "Needs review",
   "spaceDetail.noEntities": "No key entities yet",
   "spaceDetail.noMemories": "No memories in this space yet",
-  "spaceDetail.noPages": "No refined pages yet",
+  "spaceDetail.noPages": "No notes yet",
   "spaceDetail.noReview": "No pages need review",
   "spaceDetail.notFound": "Space not found",
   "spaceDetail.notUpdated": "Not updated",
