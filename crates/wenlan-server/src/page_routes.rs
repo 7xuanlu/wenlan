@@ -175,8 +175,7 @@ pub async fn handle_get_page(
             // kind is intentionally skipped on the public Page wire; inspect the
             // authorized internal record before serialization.
             let is_draft = page.status == "draft";
-            let has_live_file = page.status == "active"
-                && matches!(page.kind.as_str(), "authored" | "concept" | "source");
+            let has_live_file = wenlan_core::pages::is_active_file_page(&page);
             let mut body = serde_json::json!({ "page": page });
             if is_draft {
                 body["page"]["folder_path"] = db.page_initial_folder_path(&id).await?.into();
@@ -611,9 +610,7 @@ pub async fn handle_move_page(
     let page = db.get_page_scoped(&id, &scope).await?;
     let page = wenlan_core::truth_adapter::filter_page(&db, &view.grant, page)
         .await?
-        .filter(|p| {
-            p.status == "active" && matches!(p.kind.as_str(), "authored" | "concept" | "source")
-        })
+        .filter(wenlan_core::pages::is_active_file_page)
         .ok_or_else(|| ServerError::NotFound("page not found".into()))?;
     let root = root
         .ok_or_else(|| ServerError::ValidationError("Wiki projection is not configured".into()))?;
@@ -2340,6 +2337,71 @@ mod real_folder_page_route_tests {
     use super::*;
     use crate::{space_header::SpaceHeader, state::LintServerConfig, truth_guard::TruthView};
 
+    async fn project_active_page(
+        id: &str,
+        title: &str,
+        folder: &str,
+    ) -> (
+        tempfile::TempDir,
+        Arc<wenlan_core::db::MemoryDB>,
+        std::path::PathBuf,
+        wenlan_core::pages::Page,
+        String,
+    ) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.create_space("work", None, false).await.unwrap();
+        let root = tmp.path().join("pages");
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        let draft = db
+            .create_page_draft_with_id_in_registered_space_and_folder(
+                id,
+                title,
+                "Body",
+                Some("work"),
+                folder,
+            )
+            .await
+            .unwrap();
+        let wenlan_core::pages::PageDraftPublishOutcome::Published(page) =
+            db.publish_page_draft(id, draft.version).await.unwrap()
+        else {
+            panic!("publish")
+        };
+        let absolute =
+            wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(root.clone(), &db)
+                .write_page_gated(&db, &page)
+                .await
+                .unwrap()
+                .unwrap();
+        let relative = std::path::Path::new(&absolute)
+            .strip_prefix(&root)
+            .unwrap()
+            .components()
+            .map(|component| component.as_os_str().to_str().unwrap())
+            .collect::<Vec<_>>()
+            .join("/");
+        (tmp, db, root, page, relative)
+    }
+
+    async fn set_stored_kind(tmp: &tempfile::TempDir, id: &str, kind: &str) {
+        let fixture = libsql::Builder::new_local(tmp.path().join("origin_memory.db"))
+            .build()
+            .await
+            .unwrap();
+        let conn = fixture.connect().unwrap();
+        conn.execute(
+            "UPDATE pages SET kind = ?1 WHERE id = ?2",
+            libsql::params![kind, id],
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn publish_reports_committed_page_with_pending_projection_and_retains_intent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2509,6 +2571,148 @@ mod real_folder_page_route_tests {
             inventory.pages[0].storage_path.as_deref(),
             Some(moved.storage_path.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn detail_resolves_a_live_file_when_stored_kind_is_stale_overview() {
+        let (tmp, db, root, page, expected) = project_active_page(
+            "page_00000000-0000-4000-8000-000000000fc5",
+            "Ordinary active file",
+            "Existing/Nested",
+        )
+        .await;
+        set_stored_kind(&tmp, &page.id, "overview").await;
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            lint_config: LintServerConfig::new(vec![], Some(root)),
+            ..Default::default()
+        }));
+
+        let Json(detail) = handle_get_page(
+            State(state),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Path(page.id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail["page"]["storage_path"], expected);
+    }
+
+    #[tokio::test]
+    async fn move_accepts_a_live_file_when_stored_kind_is_stale_overview() {
+        let (tmp, db, root, page, expected) = project_active_page(
+            "page_00000000-0000-4000-8000-000000000fc6",
+            "Ordinary active file",
+            "Existing/Nested",
+        )
+        .await;
+        set_stored_kind(&tmp, &page.id, "overview").await;
+        std::fs::create_dir_all(root.join("Moved")).unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            lint_config: LintServerConfig::new(vec![], Some(root.clone())),
+            ..Default::default()
+        }));
+
+        let Json(moved) = handle_move_page(
+            State(state.clone()),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Path(page.id.clone()),
+            Json(MovePageRequest {
+                expected_storage_path: expected.clone(),
+                folder_path: "Moved".into(),
+                operation_id: "00000000-0000-4000-8000-000000000fc7".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        let filename = std::path::Path::new(&expected)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(moved.storage_path, format!("Moved/{filename}"));
+        assert!(!root.join(&expected).exists());
+        assert!(root.join(&moved.storage_path).is_file());
+
+        let saved = db.get_page(&page.id).await.unwrap().unwrap();
+        assert_eq!(saved.id, page.id);
+        assert_eq!(saved.title, page.title);
+        assert_eq!(saved.space, Some("work".into()));
+        assert_eq!(saved.version, page.version);
+        let Json(detail) = handle_get_page(
+            State(state),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Path(page.id),
+        )
+        .await
+        .unwrap();
+        assert_eq!(detail["page"]["storage_path"], moved.storage_path);
+    }
+
+    #[tokio::test]
+    async fn overview_title_with_stale_concept_kind_has_no_file_path() {
+        let (tmp, db, root, page, _expected) = project_active_page(
+            "page_00000000-0000-4000-8000-000000000fc8",
+            wenlan_core::synthesis::overview::OVERVIEW_PAGE_TITLE,
+            "ReservedOverview/Nested",
+        )
+        .await;
+        set_stored_kind(&tmp, &page.id, "concept").await;
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            lint_config: LintServerConfig::new(vec![], Some(root)),
+            ..Default::default()
+        }));
+
+        let Json(detail) = handle_get_page(
+            State(state),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Path(page.id),
+        )
+        .await
+        .unwrap();
+        assert!(detail["page"].get("storage_path").is_none());
+    }
+
+    #[tokio::test]
+    async fn overview_title_with_stale_concept_kind_cannot_be_moved() {
+        let (tmp, db, root, page, expected) = project_active_page(
+            "page_00000000-0000-4000-8000-000000000fc9",
+            wenlan_core::synthesis::overview::OVERVIEW_PAGE_TITLE,
+            "ReservedOverview/Nested",
+        )
+        .await;
+        set_stored_kind(&tmp, &page.id, "concept").await;
+        std::fs::create_dir_all(root.join("Moved")).unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            lint_config: LintServerConfig::new(vec![], Some(root.clone())),
+            ..Default::default()
+        }));
+
+        let result = handle_move_page(
+            State(state),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Path(page.id),
+            Json(MovePageRequest {
+                expected_storage_path: expected.clone(),
+                folder_path: "Moved".into(),
+                operation_id: "00000000-0000-4000-8000-000000000fca".into(),
+            }),
+        )
+        .await;
+        assert!(matches!(result, Err(ServerError::NotFound(_))));
+        assert!(root.join(&expected).is_file());
+        assert!(std::fs::read_dir(root.join("Moved"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[tokio::test]

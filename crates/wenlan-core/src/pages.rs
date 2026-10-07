@@ -106,6 +106,20 @@ pub(crate) fn page_kind_for(title: &str, creation_kind: &str, status: &str) -> &
     }
 }
 
+/// Whether authoritative page fields describe an active Markdown-backed page.
+///
+/// The stored `kind` remains a trusted entity fence. Other classifications are
+/// recomputed from title, creation kind, and status because historical rows can
+/// retain a stale non-entity kind.
+pub fn is_active_file_page(page: &Page) -> bool {
+    page.status == "active"
+        && page.kind != "entity"
+        && matches!(
+            page_kind_for(&page.title, &page.creation_kind, &page.status),
+            "authored" | "concept" | "source"
+        )
+}
+
 /// Maps a source memory's `memory_type` to the read-trust tier it sits behind.
 pub fn trust_tier_for_memory_type(memory_type: Option<&str>) -> u8 {
     match memory_type {
@@ -240,6 +254,35 @@ mod tests {
             citations: Vec::new(),
             kind: "concept".to_string(),
             truth: None,
+        }
+    }
+
+    #[test]
+    fn active_file_page_classification_matrix() {
+        let cases = [
+            ("ordinary", "distilled", "active", "overview", true),
+            ("ordinary", "authored", "active", "authored", true),
+            ("ordinary", "imported", "active", "concept", true),
+            ("ordinary", "source", "active", "source", true),
+            ("ordinary", "distilled", "active", "entity", false),
+            ("ordinary", "entity", "active", "concept", false),
+            ("ordinary", "authored", "draft", "authored", false),
+            ("ordinary", "authored", "archived", "authored", false),
+            ("overview", "authored", "active", "concept", false),
+            ("OVERVIEW", "authored", "active", "authored", false),
+        ];
+
+        for (title, creation_kind, status, stored_kind, expected) in cases {
+            let mut page = make_page("classification", &[]);
+            page.title = title.to_string();
+            page.creation_kind = creation_kind.to_string();
+            page.status = status.to_string();
+            page.kind = stored_kind.to_string();
+            assert_eq!(
+                is_active_file_page(&page),
+                expected,
+                "title={title}, creation_kind={creation_kind}, status={status}, stored_kind={stored_kind}"
+            );
         }
     }
 

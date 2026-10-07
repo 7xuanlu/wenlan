@@ -127,7 +127,7 @@ pub async fn handle_list_knowledge_folders(
         let pages = wenlan_core::truth_adapter::filter_pages(&db, &view.grant, pages).await?;
         let ids: Vec<String> = pages
             .into_iter()
-            .filter(|p| p.kind != "entity" && p.kind != "overview")
+            .filter(wenlan_core::pages::is_active_file_page)
             .map(|p| p.id)
             .collect();
         let paths = tokio::task::spawn_blocking(move || {
@@ -403,5 +403,93 @@ mod folder_route_tests {
         .await
         .unwrap();
         assert_eq!(created.path, "Visible/New");
+    }
+
+    #[tokio::test]
+    async fn scoped_folder_listing_uses_authoritative_page_fields_for_live_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.create_space("work", None, false).await.unwrap();
+        let root = tmp.path().join("pages");
+        std::fs::create_dir_all(root.join("Ordinary/Nested")).unwrap();
+        std::fs::create_dir_all(root.join("Overview/Nested")).unwrap();
+
+        for (id, title, folder) in [
+            (
+                "page_00000000-0000-4000-8000-000000000fb4",
+                "Ordinary active file",
+                "Ordinary/Nested",
+            ),
+            (
+                "page_00000000-0000-4000-8000-000000000fb5",
+                wenlan_core::synthesis::overview::OVERVIEW_PAGE_TITLE,
+                "Overview/Nested",
+            ),
+        ] {
+            let draft = db
+                .create_page_draft_with_id_in_registered_space_and_folder(
+                    id,
+                    title,
+                    "Body",
+                    Some("work"),
+                    folder,
+                )
+                .await
+                .unwrap();
+            let wenlan_core::pages::PageDraftPublishOutcome::Published(page) =
+                db.publish_page_draft(id, draft.version).await.unwrap()
+            else {
+                panic!("publish")
+            };
+            wenlan_core::export::knowledge::KnowledgeProjectionWrite::new(root.clone(), &db)
+                .write_page_gated(&db, &page)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+
+        let fixture = libsql::Builder::new_local(tmp.path().join("origin_memory.db"))
+            .build()
+            .await
+            .unwrap();
+        let conn = fixture.connect().unwrap();
+        conn.execute(
+            "UPDATE pages SET kind = 'overview' WHERE id = ?1",
+            ["page_00000000-0000-4000-8000-000000000fb4"],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "UPDATE pages SET kind = 'concept' WHERE id = ?1",
+            ["page_00000000-0000-4000-8000-000000000fb5"],
+        )
+        .await
+        .unwrap();
+
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db),
+            lint_config: LintServerConfig::new(vec![], Some(root)),
+            ..Default::default()
+        }));
+        let Json(response) = handle_list_knowledge_folders(
+            State(state),
+            SpaceHeader(Some("work".into())),
+            TruthView::automatic(),
+            Query(Default::default()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            response
+                .folders
+                .iter()
+                .map(|folder| folder.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Ordinary", "Ordinary/Nested"]
+        );
     }
 }
