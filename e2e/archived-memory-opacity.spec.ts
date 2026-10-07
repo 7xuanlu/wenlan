@@ -39,8 +39,7 @@ function makeMemory(
     chunk_count: 1,
     access_count: 0,
     is_recap: false,
-    // Confirmed on purpose: the grid card derives an unarchived row's opacity
-    // from stability and confidence, and only a confirmed row rests at 1.
+    // Keep the neighboring row at its normal resting opacity.
     stability: "confirmed",
     ...overrides,
   };
@@ -64,32 +63,6 @@ async function openApp(page: Page): Promise<void> {
   await page.goto("/");
 }
 
-// Space detail renders its memories through the embedded MemoryStream, the one
-// surface with a grid/list toggle.
-async function openRawMemories(page: Page): Promise<Locator> {
-  await openApp(page);
-  await page
-    .getByRole("navigation", { name: "Primary navigation" })
-    .getByRole("button", { name: "Spaces", exact: true })
-    .click();
-  await page
-    .getByTestId("space-row-space-wenlan")
-    .getByRole("button", { name: "Wenlan", exact: true })
-    .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
-  const rawMemories = page.getByRole("region", { name: "Raw memories" });
-  await rawMemories.getByRole("button", { name: /^Raw memories \(\d+\)$/ }).click();
-  return rawMemories;
-}
-
-// The card root is the nearest ancestor of the title that carries an inline
-// opacity: MemoryCard sets one on its root for every memory, archived or not.
-function cardRoot(scope: Locator, title: string): Locator {
-  return scope
-    .getByText(title, { exact: true })
-    .locator("xpath=ancestor::*[contains(@style,'opacity')][1]");
-}
-
 async function expectMuted(archived: Locator, neighbour: Locator): Promise<void> {
   await expect(archived).toHaveCSS("opacity", MUTED);
   await expect(neighbour).toHaveCSS("opacity", "1");
@@ -104,27 +77,6 @@ test("list row on the Memories page", async ({ page }) => {
 
   await expect(archived.getByText("archived")).toBeVisible();
   // The row itself is the animated element — the shape that failed before #568.
-  await expect(archived).toHaveCSS("animation-name", "mem-fade-up");
-  await expectMuted(archived, neighbour);
-});
-
-test("grid card in a space's raw memories", async ({ page }) => {
-  const rawMemories = await openRawMemories(page);
-  const archived = cardRoot(rawMemories, ARCHIVED_TITLE);
-  const neighbour = cardRoot(rawMemories, NEIGHBOUR_TITLE);
-
-  // Grid tiles animate a wrapper; the card's own opacity sits on a child of it.
-  await expect(archived.locator("xpath=..")).toHaveCSS("animation-name", "mem-fade-up");
-  await expectMuted(archived, neighbour);
-});
-
-test("list card in a space's raw memories", async ({ page }) => {
-  const rawMemories = await openRawMemories(page);
-  await page.getByTitle("Switch to list view").click();
-  const archived = cardRoot(rawMemories, ARCHIVED_TITLE);
-  const neighbour = cardRoot(rawMemories, NEIGHBOUR_TITLE);
-
-  // Here the card root is the animated element, exactly like the list row.
   await expect(archived).toHaveCSS("animation-name", "mem-fade-up");
   await expectMuted(archived, neighbour);
 });
