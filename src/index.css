@@ -466,7 +466,7 @@ html[data-theme="dark"] {
 html[data-theme="light"] {
   --mem-bg: #FCFCFB;
   --mem-surface: #FFFFFF;
-  --mem-sidebar: #FFFFFF;
+  --mem-sidebar: #F3F3F1;
   --mem-account-card: #FCFCFB;
   --mem-account-card-border: #E3E7EE;
   --mem-popover: #FFFFFF;
@@ -2200,14 +2200,14 @@ html[data-theme="light"] {
   box-sizing: border-box;
   width: min(100%, 1130px);
   margin-inline: auto;
-  padding: 24px 32px 40px;
+  padding: 40px 32px 40px;
   flex-direction: column;
   gap: 22px;
 }
 
 @media (max-width: 640px) {
   .page-detail-document {
-    padding-inline: 16px;
+    padding: 24px 16px 40px;
   }
 }
 

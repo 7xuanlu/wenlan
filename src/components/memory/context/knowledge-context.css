@@ -37,3 +37,8 @@
 @media (min-width: 1100px) {
   .document-context-host.document-context-open.memory-detail-content-first { padding-right: 384px; }
 }
+
+@media (min-width: 1100px) {
+  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open { padding-right: 0; }
+  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open.memory-detail-content-first { padding-right: 24px; }
+}

@@ -83,3 +83,36 @@
 .page-info-drawer--canvas .page-info-drawer-content { display: flex; padding: 0; overflow: hidden; }
 .page-info-drawer--canvas .page-canvas { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; padding: 0; }
 .page-info-drawer--canvas .page-canvas-surface { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; background-color: var(--mem-sidebar); }
+.page-info-drawer--canvas .page-canvas-surface:focus-visible { outline: none; }
+.page-info-drawer--canvas:has(.page-canvas-surface:focus-visible) .page-info-drawer-header h2 {
+  text-decoration: underline;
+  text-decoration-color: var(--mem-accent-page);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 5px;
+}
+
+.page-info-drawer-hosted {
+  position: static;
+  inset: auto;
+  z-index: auto;
+  display: flex;
+  width: 360px;
+  height: 100%;
+  justify-content: stretch;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.page-info-drawer-hosted--canvas { width: 520px; }
+.page-info-drawer-hosted .page-info-drawer {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  border-left: 1px solid var(--mem-border);
+  box-shadow: none;
+}
+.page-info-drawer-hosted .page-info-drawer-header {
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: 0 16px 0 20px;
+}

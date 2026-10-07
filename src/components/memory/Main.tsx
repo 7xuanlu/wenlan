@@ -61,6 +61,7 @@ import { useLaunchPinFill } from "../../lib/launchPinFill";
 import type { MarkdownEditorSelection } from "./editor/MarkdownEditor";
 import { useViewScroll } from "./navigation/useViewScroll";
 import { WorkspaceBackButton, WorkspaceNavigationProvider } from "./navigation/WorkspaceNavigation";
+import { WorkspacePaneHostContext } from "./navigation/WorkspacePaneHost";
 import "./navigation/navigation-shell.css";
 import { inventoryFolderPath } from "./pages/pageInventory";
 
@@ -230,6 +231,8 @@ export default function Main({
   const [recentPagesRevision, setRecentPagesRevision] = useState(0);
   const [recentSpacesRevision, setRecentSpacesRevision] = useState(0);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const [workspacePaneHost, setWorkspacePaneHost] = useState<HTMLDivElement | null>(null);
+  const setWorkspacePaneHostRef = useCallback((node: HTMLDivElement | null) => setWorkspacePaneHost(node), []);
   const [pendingDraftSearchQuery, setPendingDraftSearchQuery] = useState<string | null>(null);
   const viewScrollDestination = scrollDestinationKey(view);
   pageSavePendingRef.current = pageSavePending;
@@ -707,13 +710,14 @@ export default function Main({
 
   return (
     <WorkspaceNavigationProvider>
+    <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
     <div
-      className="memory-shell flex h-screen w-full flex-col"
+      className="memory-shell h-screen w-full"
       style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)" }}
     >
-      {/* Full-width header */}
+      {/* Header follows the width of the primary workspace. */}
       <header
-        className="memory-workspace-header relative flex items-center gap-3 shrink-0"
+        className="memory-workspace-header workspace-header-container relative flex items-center gap-3 shrink-0"
         style={{
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
@@ -739,7 +743,7 @@ export default function Main({
             <button
               aria-expanded={mobileSearchOpen}
               aria-label={t("main.searchButton")}
-              className="lg:hidden rounded-md p-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
+              className="workspace-header-search-toggle rounded-md p-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
               disabled={pageSavePending}
               onClick={() => {
                 if (!pageSavePending) setMobileSearchOpen((open) => !open);
@@ -774,18 +778,18 @@ export default function Main({
             </button>
           </div>
 
-          {/* Search — absolutely centered */}
+          {/* Search — centered when the remaining header width permits it. */}
           <div
-            className={`${mobileSearchOpen ? "flex" : "hidden"} absolute left-4 right-4 top-[56px] z-50 items-center lg:flex lg:left-1/2 lg:right-auto lg:top-auto lg:-translate-x-1/2`}
+            className={`workspace-header-search${mobileSearchOpen ? " is-open" : ""}`}
           >
             <div
-              className="flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)] lg:w-[clamp(220px,40vw,480px)] lg:shadow-none"
+              className="workspace-header-search-field flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)]"
               style={{
                 backgroundColor: "var(--mem-sidebar)",
                 border: "1px solid var(--mem-border)",
               }}
             >
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "var(--mem-text-tertiary)" }}>
+            <svg className="workspace-header-search-icon w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "var(--mem-text-tertiary)" }}>
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
             <input
@@ -825,7 +829,7 @@ export default function Main({
       </header>
 
       {/* Sidebar + Content row */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="memory-shell-content flex flex-1 overflow-hidden">
         {view.kind === "settings" ? (
           <SettingsSidebar
             collapsed={sidebarCollapsed}
@@ -1235,9 +1239,12 @@ export default function Main({
         </main>
       </div>
 
+      <div className="workspace-pane-host" ref={setWorkspacePaneHostRef} />
+
       <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
       <QuickCaptureScrim />
     </div>
+    </WorkspacePaneHostContext.Provider>
     </WorkspaceNavigationProvider>
   );
 }

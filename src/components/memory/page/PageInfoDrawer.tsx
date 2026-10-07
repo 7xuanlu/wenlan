@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "@phosphor-icons/react";
+import { WorkspacePaneHostContext } from "../navigation/WorkspacePaneHost";
 import "./PageInfoDrawer.css";
 
 interface PageInfoDrawerProps {
@@ -37,6 +38,7 @@ function focusableControls(panel: HTMLElement): HTMLElement[] {
 }
 
 export default function PageInfoDrawer({ open, onClose, title, children, closeLabel, docked = false, variant = "info" }: PageInfoDrawerProps) {
+  const workspacePaneHost = useContext(WorkspacePaneHostContext);
   const [wide, setWide] = useState(() => typeof window.matchMedia === "function" && window.matchMedia("(min-width: 1100px)").matches);
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
@@ -46,6 +48,7 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
     return () => media.removeEventListener?.("change", update);
   }, []);
   const nonModal = docked && wide;
+  const hosted = nonModal && workspacePaneHost !== null;
   const titleId = useId();
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -97,8 +100,9 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
 
   if (!open) return null;
 
+  const hostClass = hosted ? ` page-info-drawer-hosted${variant === "canvas" ? " page-info-drawer-hosted--canvas" : ""}` : "";
   return createPortal(
-    <div className={`page-info-drawer-overlay${nonModal ? " page-info-drawer-docked" : ""}`} onClick={(event) => {
+    <div className={`page-info-drawer-overlay${nonModal ? " page-info-drawer-docked" : ""}${hostClass}`} onClick={(event) => {
       if (event.target === event.currentTarget) onClose();
     }}>
       <aside
@@ -108,8 +112,8 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
         ref={panelRef}
         role={nonModal ? "complementary" : "dialog"}
       >
-        <header className="page-info-drawer-header">
-          <h2 id={titleId}>{title}</h2>
+        <header className="page-info-drawer-header" data-tauri-drag-region={hosted ? "" : undefined}>
+          <h2 data-tauri-drag-region={hosted ? "" : undefined} id={titleId}>{title}</h2>
           <button aria-label={closeLabel} className="page-info-drawer-close" onClick={onClose} ref={closeRef} type="button">
             <X aria-hidden="true" size={18} />
           </button>
@@ -117,6 +121,6 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
         <div className="page-info-drawer-content">{children}</div>
       </aside>
     </div>,
-    document.body,
+    hosted ? workspacePaneHost : document.body,
   );
 }

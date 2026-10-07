@@ -162,3 +162,41 @@ test("the note and its action menu do not send shortcuts to the open map", async
   await page.keyboard.press("ArrowRight");
   await expect.poll(writes).toBeGreaterThan(before);
 });
+
+test("docked tools resize the complete workspace and keep search usable across the pane breakpoint", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const errors = collectBrowserErrors(page);
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await page.goto("/");
+  await page.locator("main").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+  await openPageTool(page, "Mind map");
+  const pane = page.getByRole("complementary", { name: "Mind map", exact: true });
+  const header = page.locator(".memory-workspace-header");
+  const search = header.getByRole("textbox");
+  await expect(pane).toBeVisible();
+  const panelBox = (await pane.boundingBox())!;
+  const headerBox = (await header.boundingBox())!;
+  expect(panelBox.y).toBe(0);
+  expect(Math.abs(headerBox.x + headerBox.width - panelBox.x)).toBeLessThanOrEqual(1);
+  await expect(search).toBeHidden();
+  await header.getByRole("button", { name: "Search", exact: true }).click();
+  await expect(search).toBeFocused();
+  await search.press("Escape");
+  await expect(search).toBeHidden();
+  await expect(pane).toBeVisible();
+
+  await page.setViewportSize({ width: 1099, height: 900 });
+  const modal = page.getByRole("dialog", { name: "Mind map", exact: true });
+  await expect(modal).toBeVisible();
+  expect((await header.boundingBox())!.width).toBe(1099);
+  await expect.poll(() => modal.evaluate(node => node.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(modal).toHaveCount(0);
+  await expect(page.getByRole("textbox", { name: "Page editor", exact: true })).toBeFocused();
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await expect(search).toBeVisible();
+  expect((await header.boundingBox())!.width).toBe(1280);
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
+});

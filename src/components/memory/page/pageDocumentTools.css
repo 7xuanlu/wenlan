@@ -18,6 +18,7 @@
 .page-detail .page-document-editor--title textarea { padding-right: calc(2 * var(--mem-icon-action-size) + 12px); }
 @media (min-width: 1100px) {
   .page-detail.document-context-host.page-document-map-open { padding-right: 520px; }
+  .memory-shell:has(.page-info-drawer-hosted) .page-detail.document-context-host.page-document-map-open { padding-right: 0; }
 }
 /* These actions no longer have a duplicate desktop toolbar. */
 .page-document-tools .page-detail-actions-menu .page-detail-mobile-menu-item { display: block; }

@@ -17,7 +17,7 @@
 .source-library-add { display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 7px; background: var(--mem-accent-indigo); color: var(--mem-text-on-accent); padding: 9px 13px; font-size: 13px !important; white-space: nowrap; }
 .source-library-manage { border: none; background: none; color: var(--mem-text-secondary); padding: 9px 4px; font-size: 13px !important; }
 .source-library-manage:hover { color: var(--mem-text); }
-.source-library-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding-bottom: 18px; border-bottom: 1px solid var(--mem-border); }
+.source-library-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; padding-bottom: 18px; }
 .source-library-filters { display: flex; gap: 4px; }
 .source-library-filters button { border: none; border-radius: 6px; background: transparent; color: var(--mem-text-secondary); padding: 7px 12px; font-size: 13px; }
 .source-library-filters button[aria-pressed="true"] { background: var(--mem-surface); color: var(--mem-text); font-weight: 500; }
@@ -31,7 +31,6 @@
 .source-library-notices [role="alert"] { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .source-library-notices button { background: none; border: none; color: var(--mem-accent-indigo); padding: 4px 0; text-decoration: underline; }
 .source-library-list { list-style: none; padding: 0; margin: 0; }
-.source-library-list li { border-bottom: 1px solid var(--mem-border); }
 .source-library-row { display: flex; align-items: center; gap: 16px; width: 100%; min-width: 0; padding: 19px 8px; border: none; border-radius: 5px; background: transparent; text-align: left; color: var(--mem-text); }
 .source-library-row:hover { background: var(--mem-surface); }
 .source-library-icon { display: flex; flex: 0 0 40px; justify-content: center; align-items: center; height: 42px; color: var(--mem-text-secondary); background: var(--mem-surface); border: 1px solid var(--mem-border); border-radius: 7px; }
