@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=fda8304774e07fce492dbec2bd92d13c42f6df9114598eabb4eec4cf8ec2ef28 -->
+<!-- README_SYNC: source=README.md sha256=6bb2b7079b112ae16bcdde95f468e239512c00c02689d446755261b4e2c77523 -->
 
 <p align="center">
   <picture>
@@ -187,7 +187,7 @@ Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂�
 - **留下有用的 AI 對話：** 匯入 ChatGPT 或 Claude 匯出的 ZIP，已匯入的對話不會重複加入。
 - **帶入現有筆記：** 匯入 Markdown、文字檔或可擷取文字的 PDF，也能整批讀取資料夾，或把 Obsidian 儲存庫接為來源。掃描版 PDF 須先擷取文字。
 - **快速記錄：** 直接在桌面 app 記下想法或決策，不必先開啟 AI 對話。
-- **[請 AI 記住工作重點](https://wenlan.app/learn/ai-memory-provenance)：** 請 AI 工具記下決策、經驗、更正、偏好與事實，保留來源及取代的舊記錄。
+- **[請 AI 記住工作重點](https://wenlan.app/learn/ai-work-memory)：** 請 AI 工具記下決策、經驗、更正、偏好與事實，保留來源及取代的舊記錄。
 - **帶入其他 wiki：** 透過 CLI 或 API 匯入外部 OKF wiki，保留來源引用與連結。目前不支援重新匯入 Wenlan 自己匯出的 OKF。
 
 ### 瀏覽你的個人 wiki
@@ -217,7 +217,7 @@ Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂�
 
 ### 保有資料與控制權
 
-- **[資料在本地，也能檢查](https://wenlan.app/learn/markdown-local-index-ai-memory)：** 保留 Markdown 頁面、引用、修訂、git 歷史與 Obsidian 匯出；記憶與圖譜存於本地 libSQL。
+- **[資料在本地，也能檢查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 頁面、引用、修訂、git 歷史與 Obsidian 匯出；記憶與圖譜存於本地 libSQL。
 - **把 wiki 帶走：** 從設定或 CLI，把各空間符合條件的頁面匯出成 OKF v0.2 wiki。這是 wiki 匯出，不是完整資料庫備份。
 - **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的補全與頁面合成能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
 - **檢查問題，確認後修復：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 與 [lint](plugin/skills/lint/SKILL.md) 只回報問題，不改寫知識。支援的修復可在 app 預覽，確認後套用並驗證。
@@ -336,7 +336,7 @@ AI 工具連接好後，可以直接這樣說：
 - [為什麼需要持續演進的 wiki，而不只是 AI 記憶](https://wenlan.app/learn/ai-work-memory)：深入理解問題與產品模型。
 - [MCP 記憶伺服器](https://wenlan.app/learn/mcp-memory-server)：Wenlan 如何讓知識跨 AI 工具使用。
 - [本機優先的 AI 記憶](https://wenlan.app/learn/local-first-ai-memory)：資料、隱私與控制權。
-- [Markdown 與本地索引](https://wenlan.app/learn/markdown-local-index-ai-memory)：儲存、檢索與所有權。
+- [Markdown 與本地索引](https://wenlan.app/learn/local-first-ai-memory)：儲存、檢索與所有權。
 - [AI agent 的交接循環](https://wenlan.app/learn/ai-agent-handoff-loop)：把工作完整帶到下一次會話。
 - [用論文建立研究知識庫](https://wenlan.app/zh-TW/learn/source-backed-research-knowledge-base)：把已選好的論文整理成可檢查的文獻矩陣與來源支撐綜合。
 

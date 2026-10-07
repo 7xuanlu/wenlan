@@ -183,7 +183,7 @@ Connect your existing Obsidian vault as a read-only source without moving your n
 - **Keep useful AI conversations:** Import ChatGPT or Claude export ZIPs without duplicating conversations already imported.
 - **Bring your existing notes:** Import Markdown, text files, or text-extractable PDFs, by file or folder; connect an Obsidian vault as a source. Scanned PDFs need text extraction first.
 - **Quick Capture:** Save a thought or decision directly in the desktop app without opening an AI chat.
-- **[Capture decisions with your AI](https://wenlan.app/learn/ai-memory-provenance):** Ask your AI tool to save decisions, lessons, corrections, preferences, and facts, with their sources and what they replace.
+- **[Capture decisions with your AI](https://wenlan.app/learn/ai-work-memory):** Ask your AI tool to save decisions, lessons, corrections, preferences, and facts, with their sources and what they replace.
 - **Bring in another wiki:** Import an external OKF wiki through the CLI or API, preserving source references and links. Reimporting Wenlan's own OKF exports is not supported.
 
 ### Explore your personal wiki
@@ -213,7 +213,7 @@ Optional background organization and Page updates need a [configured model](#mod
 
 ### Keep ownership and control
 
-- **[Local, inspectable knowledge](https://wenlan.app/learn/markdown-local-index-ai-memory):** Keep Markdown Pages, citations, revisions, git history, and Obsidian exports; Memories and graph data live in local libSQL.
+- **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Pages, citations, revisions, git history, and Obsidian exports; Memories and graph data live in local libSQL.
 - **Take your wiki with you:** Export eligible Pages across Spaces as an OKF v0.2 wiki from Settings or the CLI. This is a wiki export, not a full database backup.
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Optional enrichment and synthesis can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.
@@ -332,7 +332,7 @@ More detailed documentation, concepts, and comparisons:
 - [Why a living wiki, not just AI memory](https://wenlan.app/learn/ai-work-memory): the problem and product model in depth.
 - [MCP memory server](https://wenlan.app/learn/mcp-memory-server): how Wenlan exposes knowledge across AI tools.
 - [Local-first AI memory](https://wenlan.app/learn/local-first-ai-memory): data, privacy, and control.
-- [Markdown and local index](https://wenlan.app/learn/markdown-local-index-ai-memory): storage, retrieval, and ownership.
+- [Markdown and local index](https://wenlan.app/learn/local-first-ai-memory): storage, retrieval, and ownership.
 - [AI agent handoff loop](https://wenlan.app/learn/ai-agent-handoff-loop): carrying work cleanly into the next session.
 - [Research knowledge base from papers](https://wenlan.app/learn/source-backed-research-knowledge-base): build an inspectable literature matrix and source-backed synthesis from papers you already have.
 
