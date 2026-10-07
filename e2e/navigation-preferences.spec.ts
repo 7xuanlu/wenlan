@@ -134,9 +134,14 @@ test("closing navigation customization keeps the note in its writing session", a
   await page.goto("/");
   const nav = page.locator(".notes-rail-nav");
   const more = nav.getByRole("button", { name: "More", exact: true });
-  await page.locator(".notes-list-panel").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+  await nav.getByRole("button", { name: "Wiki", exact: true }).click();
+  const wiki = page.locator(".wiki-overview");
+  await expect(wiki.getByRole("button", { name: "Open Fixture architecture", exact: true })).toBeVisible();
+  await wiki.getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
   const editor = page.locator(".cm-content[contenteditable='true']");
   await expect(editor).toBeVisible();
+  await expect(editor).toContainText("Fixture architecture");
+  await expect(editor).toContainText("Deterministic content for the integrated Wenlan journey.");
   for (const narrow of [false, true]) {
     if (narrow) {
       await page.setViewportSize({ width: 375, height: 812 });
@@ -150,6 +155,8 @@ test("closing navigation customization keeps the note in its writing session", a
     await expect(page.getByRole("group", { name: "Customize navigation", exact: true })).toHaveCount(0);
     await expect(more).toBeFocused();
     await expect(editor).toBeVisible();
+    await expect(editor).toContainText("Fixture architecture");
+    await expect(editor).toContainText("Deterministic content for the integrated Wenlan journey.");
     if (narrow) {
       await page.keyboard.press("Escape");
       await expect(page.locator(".notes-workspace-sidebar")).toHaveAttribute("aria-hidden", "true");

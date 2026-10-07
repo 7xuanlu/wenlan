@@ -66,8 +66,15 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(page.locator(".wiki-overview")).not.toContainText("[[");
     const titleFonts = await cards.locator(".asset-card-title").evaluateAll((nodes) => nodes.map((node) => Number.parseFloat(getComputedStyle(node).fontSize)));
     for (const font of titleFonts) expect(font, "Wiki page titles must remain readable").toBeGreaterThanOrEqual(14);
-    const controls = page.locator(".wiki-filters select, .wiki-new-page-action");
-    await expect(controls).toHaveCount(4);
+    const noteView = page.getByRole("group", { name: "Note view", exact: true });
+    await expect(noteView).toBeVisible();
+    await expect(noteView.getByRole("button", { name: "Cards", exact: true })).toBeVisible();
+    await expect(noteView.getByRole("button", { name: "List", exact: true })).toBeVisible();
+    await expect(page.locator(".wiki-new-page-action")).toBeVisible();
+    await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("6 pages");
+    await expect(page.locator(".wiki-pagination")).toHaveCount(0);
+    const controls = page.locator(".wiki-folder-lenses button, .wiki-new-page-action");
+    await expect(controls).toHaveCount(3);
     const controlBounds = await controls.evaluateAll((nodes) => nodes.map((node) => {
       const box = node.getBoundingClientRect();
       return { left: box.left, right: box.right, height: box.height, fontSize: Number.parseFloat(getComputedStyle(node).fontSize) };
@@ -91,7 +98,7 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     }
     const contrast = await renderedContrast(page, [
       { selector: ".wiki-overview h1", label: "Wiki title", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".wiki-filters select", label: "Wiki filter controls", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".wiki-folder-lenses button, .wiki-new-page-action", label: "Wiki view and creation controls", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".wiki-overview .asset-card-title", label: "Wiki page title", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
