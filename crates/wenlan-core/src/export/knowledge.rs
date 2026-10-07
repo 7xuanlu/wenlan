@@ -4745,6 +4745,12 @@ fn sync_dir_capability(directory: &Dir) -> Result<(), WenlanError> {
     Ok(())
 }
 
+#[cfg(not(unix))]
+fn sync_dir_capability(_directory: &Dir) -> Result<(), WenlanError> {
+    // Other platforms keep regular-file syncing; directory metadata sync is Unix-only.
+    Ok(())
+}
+
 impl KnowledgeProjectionWrite {
     pub fn new(path: PathBuf, database: &crate::db::MemoryDB) -> Self {
         Self {

@@ -934,7 +934,7 @@ mod tests {
         let guard = writer.begin_test_write();
         assert_eq!(
             writer
-                .evict_projected_pages(&guard, &[page.id.clone()])
+                .evict_projected_pages(&guard, std::slice::from_ref(&page.id))
                 .unwrap(),
             1
         );

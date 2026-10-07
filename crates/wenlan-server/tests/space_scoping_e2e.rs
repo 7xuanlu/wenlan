@@ -4,8 +4,8 @@ mod common;
 mod space_scoping;
 
 #[tokio::test]
-async fn global_routes_ignore_space_selectors() {
-    space_scoping::global_cases::global_routes_ignore_space_header().await;
+async fn global_routes_enforce_scope_contracts() {
+    space_scoping::global_cases::global_routes_enforce_scope_contracts().await;
 }
 
 #[tokio::test]

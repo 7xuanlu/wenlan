@@ -444,12 +444,15 @@ impl Serialize for CreatePageDraftRequest {
     {
         use serde::ser::SerializeStruct;
 
-        let field_count = if self.space_provided { 5 } else { 4 };
+        let field_count =
+            3 + usize::from(self.space_provided) + usize::from(self.folder_path.is_some());
         let mut state = serializer.serialize_struct("CreatePageDraftRequest", field_count)?;
         state.serialize_field("draft_id", &self.draft_id)?;
         state.serialize_field("title", &self.title)?;
         state.serialize_field("content", &self.content)?;
-        state.serialize_field("folder_path", &self.folder_path)?;
+        if let Some(folder_path) = &self.folder_path {
+            state.serialize_field("folder_path", folder_path)?;
+        }
         if self.space_provided {
             state.serialize_field("space", &self.space)?;
         }

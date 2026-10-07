@@ -5,17 +5,22 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
 import { i18n } from "../../i18n";
-import type { Page } from "../../lib/tauri";
+import { type KnowledgeFoldersResponse, type Page } from "../../lib/tauri";
 import Sidebar, { SidebarToggleButton } from "./Sidebar";
 
-const { listAllActivePagesMock, listAllDraftPagesMock } = vi.hoisted(() => ({
+const { listAllActivePagesMock, listAllDraftPagesMock, knowledgeFoldersListMock } = vi.hoisted(() => ({
   listAllActivePagesMock: vi.fn().mockResolvedValue([]),
   listAllDraftPagesMock: vi.fn().mockResolvedValue([]),
+  knowledgeFoldersListMock: vi.fn(),
 }));
 
 vi.mock("./pages/listAllPages", () => ({
   listAllActivePages: listAllActivePagesMock,
   listAllDraftPages: listAllDraftPagesMock,
+}));
+vi.mock("../../lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../lib/tauri")>()),
+  knowledgeFoldersList: knowledgeFoldersListMock,
 }));
 vi.mock("./IdentityCard", () => ({
   default: ({ onOpenAbout, onOpenDetail, onOpenSettings }: {
@@ -66,6 +71,10 @@ describe("Sidebar workspace", () => {
   beforeEach(async () => {
     listAllActivePagesMock.mockReset().mockResolvedValue([]);
     listAllDraftPagesMock.mockReset().mockResolvedValue([]);
+    knowledgeFoldersListMock.mockReset().mockResolvedValue({
+      folders: [],
+      truncated: false,
+    } satisfies KnowledgeFoldersResponse);
     localStorage.clear();
     await i18n.changeLanguage("en");
   });
@@ -109,8 +118,10 @@ describe("Sidebar workspace", () => {
 
   it("routes active pages, drafts and creation through the supplied Main callbacks", async () => {
     const active = page("active-1", "Project plan");
+    active.storage_path = `${active.id}.md`;
     const draft = page("draft-1", "Rough note", "draft");
     draft.space = "Work";
+    draft.folder_path = "";
     listAllActivePagesMock.mockResolvedValue([active]);
     listAllDraftPagesMock.mockResolvedValue([draft]);
     const user = userEvent.setup();
@@ -119,10 +130,8 @@ describe("Sidebar workspace", () => {
     const onCreatePage = vi.fn();
     renderSidebar({ onSelectPage, onSelectDraft, onCreatePage });
 
-    await user.click(await screen.findByRole("button", { name: "Expand Other notes" }));
-    await user.click(screen.getByRole("button", { name: "Open Project plan" }));
-    await user.click(screen.getByRole("button", { name: "Expand Drafts" }));
-    await user.click(screen.getByRole("button", { name: "Open Rough note" }));
+    await user.click(await screen.findByRole("button", { name: "Open Project plan" }));
+    await user.click(await screen.findByRole("button", { name: "Open Rough note" }));
     await user.click(screen.getByRole("button", { name: "New note" }));
     expect(onSelectPage).toHaveBeenCalledWith(active);
     expect(onSelectDraft).toHaveBeenCalledWith("draft-1", "Work");
@@ -147,6 +156,7 @@ describe("Sidebar workspace", () => {
 
   it("closes the narrow drawer after navigation from More and the page list", async () => {
     const active = page("page-1", "One note");
+    active.storage_path = `${active.id}.md`;
     listAllActivePagesMock.mockResolvedValue([active]);
     const user = userEvent.setup();
     const onRequestClose = vi.fn();
@@ -160,8 +170,7 @@ describe("Sidebar workspace", () => {
       onNavigateGraph,
     });
 
-    await user.click(await screen.findByRole("button", { name: "Expand Other notes" }));
-    await user.click(screen.getByRole("button", { name: "Open One note" }));
+    await user.click(await screen.findByRole("button", { name: "Open One note" }));
     await user.click(screen.getByRole("button", { name: "More" }));
     await user.click(screen.getByRole("button", { name: "Graph" }));
     expect(onSelectPage).toHaveBeenCalledWith(active);

@@ -75,6 +75,82 @@ fn create_round_trips_omitted_null_and_named_space_distinctly() {
 }
 
 #[test]
+fn create_omits_null_folder_path_without_changing_space() {
+    let cases = [
+        (
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000007",
+                "title": "Inherit space",
+                "content": "",
+                "folder_path": null
+            }),
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000007",
+                "title": "Inherit space",
+                "content": ""
+            }),
+            false,
+        ),
+        (
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000008",
+                "title": "Unscoped",
+                "content": "",
+                "space": null,
+                "folder_path": null
+            }),
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000008",
+                "title": "Unscoped",
+                "content": "",
+                "space": null
+            }),
+            true,
+        ),
+        (
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000009",
+                "title": "Named space",
+                "content": "",
+                "space": "work",
+                "folder_path": null
+            }),
+            json!({
+                "draft_id": "page_00000000-0000-4000-8000-000000000009",
+                "title": "Named space",
+                "content": "",
+                "space": "work"
+            }),
+            true,
+        ),
+    ];
+
+    for (input, expected, space_was_provided) in cases {
+        let parsed: CreatePageDraftRequest = serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.space_was_provided(), space_was_provided);
+        assert_eq!(serde_json::to_value(parsed).unwrap(), expected);
+    }
+}
+
+#[test]
+fn create_preserves_empty_and_named_folder_paths() {
+    for folder_path in ["", "專案/知識庫/二〇二六"] {
+        let wire = json!({
+            "draft_id": "page_00000000-0000-4000-8000-000000000006",
+            "title": "Folder placement",
+            "content": "",
+            "space": "work",
+            "folder_path": folder_path
+        });
+        let parsed: CreatePageDraftRequest = serde_json::from_value(wire.clone()).unwrap();
+
+        assert_eq!(parsed.folder_path.as_deref(), Some(folder_path));
+        assert!(parsed.space_was_provided());
+        assert_eq!(serde_json::to_value(parsed).unwrap(), wire);
+    }
+}
+
+#[test]
 fn create_constructors_choose_header_inheritance_or_explicit_space() {
     let inherited = CreatePageDraftRequest::new_inheriting_header_space(
         "page_00000000-0000-4000-8000-000000000004".into(),

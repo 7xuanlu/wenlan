@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useMemo, useState } from "react";
-import { CaretRight, FileText, Folder, FolderPlus, MagnifyingGlass, Stack } from "@phosphor-icons/react";
+import { CaretRight, FileText, Folder, FolderPlus, MagnifyingGlass, Plus, Stack } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { knowledgeFolderCreate, type Page, type KnowledgeFolder } from "../../../lib/tauri";
@@ -20,7 +20,7 @@ type PageInventoryPanelProps = {
   readonly onOpenPage?: (page: Page) => void;
 };
 
-export function PageInventoryPanel({ currentPageId = null, inventoryScope = "all", browsing = false, onBrowse, onOpenDraft, onOpenPage }: PageInventoryPanelProps) {
+export function PageInventoryPanel({ currentPageId = null, inventoryScope = "all", browsing = false, onBrowse, onCreatePage, onOpenDraft, onOpenPage }: PageInventoryPanelProps) {
   const { i18n, t } = useTranslation();
   const id = useId();
   const queryClient = useQueryClient();
@@ -78,7 +78,10 @@ export function PageInventoryPanel({ currentPageId = null, inventoryScope = "all
     } catch { setCreateError(true); } finally { setCreatePending(false); }
   };
   return <section aria-label={t("sidebar.notes")} className="notes-list-panel notes-inventory-panel">
-    <div className="notes-list-header"><h2>{t("sidebar.notes")}</h2><button type="button" className="notes-list-create" aria-label={t("pages.folders.newFolder")} title={t("pages.folders.newFolder")} disabled={!canCreate} onClick={() => { setCreating(value => !value); setCreateError(false); }}><FolderPlus aria-hidden="true" size={16}/></button></div>
+    <div className="notes-list-header"><h2>{t("sidebar.notes")}</h2><div className="flex items-center gap-1">
+      {onCreatePage && <button type="button" className="notes-list-create" aria-label={t("sidebar.newNote")} title={t("sidebar.newNote")} onClick={() => { if (selectedPath === null) onCreatePage(); else onCreatePage(selectedPath); }}><Plus aria-hidden="true" size={16}/></button>}
+      <button type="button" className="notes-list-create" aria-label={t("pages.folders.newFolder")} title={t("pages.folders.newFolder")} disabled={!canCreate} onClick={() => { setCreating(value => !value); setCreateError(false); }}><FolderPlus aria-hidden="true" size={16}/></button>
+    </div></div>
     {creating && <form className="notes-folder-create" onSubmit={create}><label htmlFor={`${id}-name`}>{t("pages.folders.folderName")}</label><input id={`${id}-name`} autoFocus value={name} disabled={createPending} maxLength={100} onChange={event => setName(event.target.value)} /><span className="notes-folder-parent">{t("pages.folders.createIn", { name: selectedPath || t("pages.folders.root") })}</span><div><button type="submit" disabled={createPending || !name.trim()}>{t("pages.folders.create")}</button><button type="button" onClick={() => setCreating(false)} disabled={createPending}>{t("pages.folders.cancel")}</button></div>{createError && <p role="alert">{t("pages.folders.createError")}</p>}</form>}
     <label className="notes-list-filter"><span className="sr-only">{t("pages.folders.searchAll")}</span><MagnifyingGlass aria-hidden="true" size={14}/><input aria-label={t("pages.folders.searchAll")} placeholder={t("pages.folders.searchAll")} onChange={event => setFilter(event.target.value)} type="search" value={filter}/></label>
     <div className="notes-list-scroll">

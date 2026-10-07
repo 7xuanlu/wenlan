@@ -439,6 +439,12 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
     }),
   restart_daemon: () =>
     get("/api/health").then((response) => String(response?.version ?? "")),
+  knowledge_folders_list: () => get("/api/knowledge/folders"),
+  knowledge_folder_create: (a) =>
+    post("/api/knowledge/folders", {
+      parent_path: a.parentPath,
+      name: a.name,
+    }),
   // --- pages (mirrors search.rs exactly) ---
   get_page: (a) => getPageVia(a),
   // M5 truth axes: same lookup, marked as a human-initiated wiki browse so
@@ -446,6 +452,18 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   // PageDetail (a page a person navigated to) calls this — see
   // app/src/search.rs::get_page_explicit_browse.
   get_page_explicit_browse: (a) => getPageVia(a, EXPLICIT_BROWSE_HEADERS),
+  page_move: (a) => {
+    if (PREVIEW_AUTHORED_PAGES.has(String(a.id))) {
+      return Promise.reject(new Error(
+        "Moving a preview-authored Page is unavailable because preview cannot move its local file.",
+      ));
+    }
+    return post(`/api/pages/${enc(String(a.id))}/move`, {
+      expected_storage_path: a.expectedStoragePath,
+      folder_path: a.folderPath,
+      operation_id: a.operationId,
+    });
+  },
   create_page: (a) => {
     const title = String(a?.title ?? "").trim();
     const content = String(a?.content ?? "").trim();
