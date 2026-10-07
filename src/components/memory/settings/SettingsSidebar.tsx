@@ -5,7 +5,7 @@
 // footer brand treatment as the main Sidebar so the transition feels like
 // "the sidebar switched modes" rather than "a different layout loaded".
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
 
@@ -111,34 +111,93 @@ interface SettingsSidebarProps {
   collapsed: boolean;
   active: SettingsSection;
   onSelect: (section: SettingsSection) => void;
+  open?: boolean;
+  presentation?: "desktop" | "overlay";
+  onRequestClose?: () => void;
 }
 
 export default function SettingsSidebar({
   collapsed,
   active,
   onSelect,
+  open = !collapsed,
+  presentation = "desktop",
+  onRequestClose,
 }: SettingsSidebarProps) {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>("");
+  const asideRef = useRef<HTMLElement>(null);
+  const overlay = presentation === "overlay";
+  const sidebarVisible = !overlay || open;
+  const contentInert = !sidebarVisible || (collapsed && !overlay);
+
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
+  useEffect(() => {
+    if (!overlay || !open) return;
+    const first = asideRef.current?.querySelector<HTMLElement>(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
+    first?.focus();
+  }, [open, overlay]);
+
+  const trapFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !overlay) return;
+    const focusable = asideRef.current?.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    );
+    if (!focusable || focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <aside
-      className="flex-shrink-0 flex flex-col transition-[width] duration-200 ease-out"
-      style={{
-        width: collapsed ? 0 : 240,
-        backgroundColor: "var(--mem-sidebar)",
-        borderRight: collapsed ? "none" : "1px solid var(--mem-border)",
-        overflow: "hidden",
-      }}
-    >
+    <>
+      {overlay && open && (
+        <button
+          aria-label={t("sidebar.close")}
+          className="fixed inset-x-0 bottom-0 top-[52px] z-30 border-0 bg-black/40"
+          onClick={onRequestClose}
+          type="button"
+        />
+      )}
+      <aside
+        aria-hidden={!sidebarVisible || (!overlay && collapsed)}
+        aria-label={t("settings.title")}
+        className="settings-sidebar flex-shrink-0 flex flex-col"
+        data-sidebar-overlay={overlay && open ? "true" : undefined}
+        inert={contentInert}
+        onKeyDown={trapFocus}
+        ref={asideRef}
+        style={{
+          width: overlay ? 240 : collapsed ? 0 : 240,
+          backgroundColor: "var(--mem-sidebar)",
+          borderRight: !overlay && !collapsed ? "1px solid var(--mem-border)" : "none",
+          bottom: overlay ? 0 : undefined,
+          height: overlay ? "auto" : "100%",
+          left: overlay ? 0 : undefined,
+          overflow: "hidden",
+          position: overlay ? "fixed" : "relative",
+          top: overlay ? 52 : undefined,
+          transform: overlay && !open ? "translateX(-100%)" : undefined,
+          visibility: overlay && !open ? "hidden" : "visible",
+          zIndex: overlay ? 40 : 2,
+        }}
+      >
       <div
         className="flex flex-col h-full transition-opacity duration-150"
         style={{
           width: 240,
-          opacity: collapsed ? 0 : 1,
-          pointerEvents: collapsed ? "none" : "auto",
+          opacity: contentInert ? 0 : 1,
+          pointerEvents: contentInert ? "none" : "auto",
         }}
       >
         {/* Section caption */}
@@ -252,6 +311,7 @@ export default function SettingsSidebar({
           </div>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

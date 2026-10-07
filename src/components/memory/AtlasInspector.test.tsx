@@ -71,4 +71,15 @@ describe("AtlasInspector", () => {
     await user.click(within(entitySection).getByRole("button", { name: "Show more" }));
     expect(within(entitySection).getAllByRole("button")).toHaveLength(25);
   });
+
+  it("uses the shared drawer title and a single return-to-map close control", async () => {
+    const { user, onClose } = renderInspector();
+
+    expect(screen.getByRole("dialog", { name: "Selected" })).toBeInTheDocument();
+    const close = screen.getByRole("button", { name: "Return to full map" });
+    expect(screen.getAllByRole("button", { name: "Return to full map" })).toHaveLength(1);
+
+    await user.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

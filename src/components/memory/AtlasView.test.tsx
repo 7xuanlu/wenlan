@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
@@ -290,6 +290,8 @@ function makeEntity(overrides: Partial<import("../../lib/tauri").Entity> = {}): 
 }
 
 describe("AtlasView", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
   beforeEach(async () => {
     await i18n.changeLanguage("en");
     vi.clearAllMocks();
@@ -672,6 +674,7 @@ describe("AtlasView", () => {
   });
 
   it("filters entity types without remounting or moving the map and clears a hidden selection", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     mockConnectedPair();
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
@@ -700,6 +703,7 @@ describe("AtlasView", () => {
   });
 
   it("removes a hidden type from search and selected connections", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const entities = mockConnectedPair();
     entities[0].entity_type = "technology";
     entities[1].entity_type = "person";
@@ -723,7 +727,8 @@ describe("AtlasView", () => {
     const instance = capturedSigmaInstances[0];
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
     instance.camera.isAnimated.mockReturnValue(true);
-    fireEvent.click(screen.getAllByRole("button", { name: "Return to full map" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "Return to full map" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Jump to a topic" })).toHaveFocus());
     expect(instance.camera.animate).toHaveBeenLastCalledWith(
       { x: instance.camera.x, y: instance.camera.y, ratio: instance.camera.ratio, angle: instance.camera.angle }, { duration: 1 },
     );
@@ -2480,13 +2485,13 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     const instance = capturedSigmaInstances[0];
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
-    expect(screen.getByRole("complementary", { name: "Graph selection" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Alice" })).toBeInTheDocument();
     act(() => instance.handlers.get("leaveNode")?.({ node: "e1" }));
     expect(instance.settings.nodeReducer("e1", instance.graph.getNodeAttributes("e1")).highlighted).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Bob" }));
     expect(screen.getByRole("heading", { name: "Bob" })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("complementary", { name: "Graph selection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Bob" })).not.toBeInTheDocument();
   });
 
 });

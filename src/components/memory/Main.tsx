@@ -541,7 +541,7 @@ export default function Main({
   const responsiveSidebar = useResponsiveSidebar(contextSidebarCollapsed, toggleContextSidebar, sidebarToggleRef);
   const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
   const headerSidebarBackdropClass = view.kind === "settings"
-    ? sidebarCollapsed ? "is-sidebar-backdrop-zero" : "is-sidebar-backdrop-settings"
+    ? `is-settings ${responsiveSidebar.presentation === "overlay" || responsiveSidebar.collapsed ? "is-sidebar-backdrop-zero" : "is-sidebar-backdrop-settings"}`
     : standardSidebarMounted && responsiveSidebar.presentation !== "overlay"
       ? responsiveSidebar.collapsed ? "is-sidebar-backdrop-collapsed" : "is-sidebar-backdrop-expanded"
       : "is-sidebar-backdrop-zero";
@@ -731,7 +731,9 @@ export default function Main({
         }}
         data-tauri-drag-region
       >
-        <SidebarToggleButton collapsed={responsiveSidebar.collapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+        {view.kind !== "connect-agent" && (
+          <SidebarToggleButton collapsed={responsiveSidebar.collapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+        )}
         <div className="workspace-history-navigation" role="group" aria-label={t("main.historyNavigation")}>
           <button type="button" aria-label={t("main.back")} title={t("main.back")}
             className="workspace-history-button" disabled={!canNavigateBack}
@@ -841,9 +843,15 @@ export default function Main({
       <div className="memory-shell-content flex flex-1 overflow-hidden">
         {view.kind === "settings" ? (
           <SettingsSidebar
-            collapsed={sidebarCollapsed}
+            collapsed={responsiveSidebar.collapsed}
             active={view.section ?? "general"}
-            onSelect={(section) => navigateTo({ kind: "settings", section })}
+            open={responsiveSidebar.open}
+            presentation={responsiveSidebar.presentation}
+            onRequestClose={responsiveSidebar.close}
+            onSelect={(section) => {
+              navigateTo({ kind: "settings", section });
+              if (responsiveSidebar.presentation === "overlay") responsiveSidebar.close();
+            }}
           />
         ) : view.kind === "connect-agent" ? null : (
           <Sidebar
@@ -879,7 +887,7 @@ export default function Main({
         )}
 
         {/* Main content */}
-        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${(view.kind === "page" || view.kind === "memory") && !query ? " memory-main-content--page" : ""}`}`}>
+        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" || view.kind === "connect-agent" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${(view.kind === "page" || view.kind === "memory") && !query ? " memory-main-content--page" : ""}`}`}>
           {/* Search results overlay */}
           {query ? (
             (memoryResults.length > 0 || sourceResults.length > 0 || entityResults.length > 0 || conceptResults.length > 0) ? (
@@ -1094,6 +1102,7 @@ export default function Main({
             />
           ) : view.kind === "connect-agent" ? (
             <SetupWizard
+              embedded
               initialStep="connect"
               onComplete={navigateBack}
             />

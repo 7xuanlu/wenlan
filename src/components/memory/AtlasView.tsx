@@ -444,6 +444,12 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [searchFocused, setSearchFocused] = useState(false);
+  const restoreSearchFocusOnCloseRef = useRef(false);
+  useEffect(() => {
+    if (selectedId !== null || !restoreSearchFocusOnCloseRef.current) return;
+    restoreSearchFocusOnCloseRef.current = false;
+    searchInputRef.current?.focus();
+  }, [selectedId]);
   // Start with a clean map; Regions reveals community contours and names.
   // The count line keeps reporting regions either way.
   // Ref mirror so the sigma mount effect (which recreates the overlay per
@@ -501,16 +507,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // Ratio only ever shrinks (zooms in) — landing further out than the
       // current view would read as the map running away from the match.
       const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, openingRatioRef.current / 2.5) };
-      const { width, height } = renderer.getDimensions();
-      if (width <= 640) {
-        // The narrow inspector occupies the lower canvas. Keep the selected
-        // neighborhood above it, using Sigma's projection (also handles rotation).
-        const center = renderer.viewportToFramedGraph({ x: width / 2, y: height / 2 });
-        const target = renderer.viewportToFramedGraph({ x: width / 2, y: height * 0.16 });
-        const scale = state.ratio / camera.ratio;
-        state.x += (center.x - target.x) * scale;
-        state.y += (center.y - target.y) * scale;
-      }
       if (prefersReducedMotion()) camera.setState(state);
       else camera.animate(state, { duration: 450 });
     }
@@ -521,6 +517,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const returnToMap = () => {
     selectedRef.current = null;
     setSelectedId(null);
+    restoreSearchFocusOnCloseRef.current = true;
     const renderer = sigmaRef.current;
     const drawn = graphRef.current;
     if (renderer && drawn) {
@@ -533,7 +530,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       renderer.refresh();
     }
     overviewRef.current = null;
-    searchInputRef.current?.focus();
   };
   returnToMapRef.current = returnToMap;
   const frameMap = (mode: AtlasFrameMode) => {
@@ -1328,7 +1324,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
           padding: "12px 16px",
           borderBottom: "1px solid var(--mem-border)",
           flexWrap: "wrap",
-          background: "var(--mem-surface)",
+          background: "var(--mem-bg)",
           fontFamily: "var(--mem-font-body)",
         }}
       >
@@ -1583,7 +1579,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       {filteredModel.nodes.length === 0 && excludedTypes.size > 0 && <div className="atlas-filter-empty">
         <p>{t("atlas.noTypeMatches")}</p><button type="button" className="atlas-action" onClick={() => setExcludedTypes(new Set())}>{t("atlas.allEntityTypes")}</button>
       </div>}
-      {selectedNode && <AtlasInspector key={selectedNode.id} node={selectedNode} neighbors={selectedNeighbors}
+      {selectedNode && <AtlasInspector node={selectedNode} neighbors={selectedNeighbors}
         edges={filteredModel.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)}
         onSelect={focusEntity} onClose={returnToMap}
         onOpen={onNodeClick ? () => onNodeClick(targetForNode(selectedNode.id)) : undefined} />}

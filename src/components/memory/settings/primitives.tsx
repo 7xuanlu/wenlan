@@ -89,7 +89,7 @@ export function SettingRow(props: SettingRowProps) {
 
   return (
     <div className="px-5 py-4">
-      <div className="flex items-start justify-between gap-4">
+      <div className={`flex items-start justify-between gap-4 ${"control" in props ? "max-sm:flex-col max-sm:items-stretch" : ""}`}>
         <div className="min-w-0">
           <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
             {title}
@@ -98,7 +98,7 @@ export function SettingRow(props: SettingRowProps) {
             {description}
           </p>
         </div>
-        <div className="mt-0.5">
+        <div className={`mt-0.5 ${"control" in props ? "min-w-0 max-w-full max-sm:w-full" : "shrink-0"}`}>
           {"control" in props ? (
             props.control
           ) : (
@@ -278,7 +278,7 @@ export function SegmentedControl<T extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="flex gap-0.5 p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)] w-fit shrink-0"
+      className="flex max-w-full flex-wrap gap-0.5 p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)] w-fit"
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -289,7 +289,7 @@ export function SegmentedControl<T extends string>({
             aria-pressed={active}
             onClick={() => onChange(opt.value)}
             className={[
-              "flex items-center gap-1.5 px-3 h-[26px] rounded-[var(--mem-radius-sm)] border",
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 h-[26px] rounded-[var(--mem-radius-sm)] border",
               "transition-[background-color,border-color,color,box-shadow] duration-[var(--mem-dur-fast)]",
               "focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-0",
               active

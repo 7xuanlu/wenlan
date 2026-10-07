@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowLeft, ArrowRight, X } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight } from "@phosphor-icons/react";
 import type { GraphEdge, GraphNode, GraphNodeKind } from "../../lib/graph/model";
 import { entityTypeLabel } from "../../lib/graph/typeFilter";
+import PageInfoDrawer from "./page/PageInfoDrawer";
 import "./atlasInspectorGroups.css";
 
 const GROUP_ORDER: GraphNodeKind[] = ["page", "entity", "memory"];
@@ -53,16 +54,14 @@ export interface AtlasInspectorProps {
   onOpen?: () => void;
 }
 
-export default function AtlasInspector({
+function AtlasInspectorContents({
   node,
   neighbors,
   edges = [],
   onSelect,
-  onClose,
   onOpen,
 }: AtlasInspectorProps) {
   const { t } = useTranslation();
-  const heading = useRef<HTMLHeadingElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Partial<Record<GraphNodeKind, HTMLElement | null>>>({});
   const [filter, setFilter] = useState("");
@@ -71,8 +70,6 @@ export default function AtlasInspector({
     entity: INITIAL_GROUP_LIMIT,
     memory: INITIAL_GROUP_LIMIT,
   });
-
-  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
 
   const grouped = useMemo(() => {
     const byKind = new Map<GraphNodeKind, GroupedNeighbor[]>();
@@ -108,15 +105,10 @@ export default function AtlasInspector({
     </span>
   );
 
-  return <aside className="atlas-inspector" aria-label={t("atlas.inspectorLabel")}>
-    <div className="atlas-inspector-heading">
-      <h2 ref={heading} tabIndex={-1}>{node.name}</h2>
-      <button type="button" className="atlas-icon-button" onClick={onClose} aria-label={t("atlas.returnToMap")}><X size={16} /></button>
-    </div>
+  return <div className="atlas-inspector" role="group" aria-label={t("atlas.inspectorLabel")}>
     <p className="atlas-inspector-kind">
       {node.kind === "entity" ? t(`atlas.entityType.${node.entityType}`, { defaultValue: entityTypeLabel(node.entityType) }) : t(`atlas.layer.${node.kind}`)}
     </p>
-    <button type="button" className="atlas-action" onClick={onClose}><ArrowLeft size={15} />{t("atlas.returnToMap")}</button>
     <h3 className="atlas-inspector-connections-heading">{t("atlas.connections")} <span>{neighbors.length}</span></h3>
     {neighbors.length > 12 && <input className="atlas-connection-filter" aria-label={t("atlas.filterConnections")} placeholder={t("atlas.filterConnections")} value={filter} onChange={(event) => changeFilter(event.target.value)} />}
     {totalMatches > 0 && <nav className="atlas-connection-summary" aria-label={t("atlas.connections")}>
@@ -151,5 +143,18 @@ export default function AtlasInspector({
       {totalMatches === 0 && <p className="atlas-connection-empty">{t("atlas.noMatches")}</p>}
     </div>
     {onOpen && <button type="button" className="atlas-action atlas-open-detail" onClick={onOpen}>{t("atlas.openDetails")}<ArrowRight size={15} /></button>}
-  </aside>;
+  </div>;
+}
+
+export default function AtlasInspector(props: AtlasInspectorProps) {
+  const { t } = useTranslation();
+  return <PageInfoDrawer
+    open
+    docked
+    title={props.node.name}
+    closeLabel={t("atlas.returnToMap")}
+    onClose={props.onClose}
+  >
+    <AtlasInspectorContents key={props.node.id} {...props} />
+  </PageInfoDrawer>;
 }

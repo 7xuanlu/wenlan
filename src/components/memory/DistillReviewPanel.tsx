@@ -736,7 +736,7 @@ export default function DistillReviewPanel({
         </WorkspaceBackButton>
       </div>
 
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <h1
             style={{
@@ -753,7 +753,7 @@ export default function DistillReviewPanel({
             {t("review.subtitle")}
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5 sm:flex-nowrap">
           {decisionItems.length > 0 && (
             <span
               style={{
@@ -795,7 +795,7 @@ export default function DistillReviewPanel({
             type="button"
             onClick={refresh}
             disabled={review.isPending}
-            className="rounded-md px-3 py-2 text-sm transition-colors duration-150 hover:bg-[var(--mem-hover)] disabled:opacity-60"
+            className="shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm transition-colors duration-150 hover:bg-[var(--mem-hover)] disabled:opacity-60"
             style={{
               border: "1px solid var(--mem-border)",
               backgroundColor: "var(--mem-surface)",

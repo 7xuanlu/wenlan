@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import SettingsSidebar from "./SettingsSidebar";
 
@@ -43,5 +43,55 @@ describe("SettingsSidebar", () => {
     expect(screen.queryByRole("button", { name: "Wenlan" })).toBeNull();
 
     expect(settingsLabel.compareDocumentPosition(brand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps collapsed desktop controls inert and out of the tab order", () => {
+    const { container } = renderSettingsSidebar({ collapsed: true });
+    const sidebar = container.querySelector(".settings-sidebar");
+
+    expect(sidebar).toHaveAttribute("aria-hidden", "true");
+    expect(sidebar).toHaveAttribute("inert");
+    expect(sidebar?.querySelector("button")).not.toHaveFocus();
+  });
+
+  it("focuses, traps, and closes the narrow overlay", async () => {
+    const user = userEvent.setup();
+    const onRequestClose = vi.fn();
+    const onSelect = vi.fn();
+    const { container, rerender } = renderSettingsSidebar({
+      collapsed: true,
+      active: "general",
+      onSelect,
+      open: false,
+      presentation: "overlay",
+      onRequestClose,
+    });
+    const sidebar = container.querySelector(".settings-sidebar");
+
+    expect(sidebar).toHaveAttribute("aria-hidden", "true");
+    expect(sidebar).toHaveAttribute("inert");
+
+    rerender(
+      <SettingsSidebar
+        collapsed={false}
+        active="general"
+        onSelect={onSelect}
+        open
+        presentation="overlay"
+        onRequestClose={onRequestClose}
+      />,
+    );
+    const first = screen.getByRole("button", { name: "General" });
+    const last = screen.getByRole("button", { name: "Sources" });
+    await waitFor(() => expect(first).toHaveFocus());
+
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: "Close sidebar" }));
+    expect(onRequestClose).toHaveBeenCalledOnce();
   });
 });
