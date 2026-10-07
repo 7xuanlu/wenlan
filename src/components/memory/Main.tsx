@@ -540,6 +540,11 @@ export default function Main({
   };
   const responsiveSidebar = useResponsiveSidebar(contextSidebarCollapsed, toggleContextSidebar, sidebarToggleRef);
   const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
+  const headerSidebarBackdropClass = view.kind === "settings"
+    ? sidebarCollapsed ? "is-sidebar-backdrop-zero" : "is-sidebar-backdrop-settings"
+    : standardSidebarMounted && responsiveSidebar.presentation !== "overlay"
+      ? responsiveSidebar.collapsed ? "is-sidebar-backdrop-collapsed" : "is-sidebar-backdrop-expanded"
+      : "is-sidebar-backdrop-zero";
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
@@ -713,7 +718,7 @@ export default function Main({
     <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
     <div
       className="memory-shell h-screen w-full"
-      style={{ backgroundColor: "var(--workspace-chrome)", color: "var(--mem-text)" }}
+      style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)" }}
     >
       {/* Header follows the width of the primary workspace. */}
       <header
@@ -722,7 +727,7 @@ export default function Main({
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
           paddingRight: "var(--workspace-header-right-padding, 20px)",
-          background: "var(--workspace-chrome)",
+          background: "var(--mem-bg)",
         }}
         data-tauri-drag-region
       >
@@ -785,7 +790,7 @@ export default function Main({
             <div
               className="workspace-header-search-field flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)]"
               style={{
-                backgroundColor: "var(--workspace-surface)",
+                backgroundColor: "var(--mem-sidebar)",
                 border: "1px solid var(--mem-border)",
               }}
             >
@@ -826,6 +831,10 @@ export default function Main({
             )}
             </div>
           </div>
+        <div
+          aria-hidden="true"
+          className={`workspace-header-sidebar-backdrop ${headerSidebarBackdropClass}`}
+        />
       </header>
 
       {/* Sidebar + Content row */}

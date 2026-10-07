@@ -12,9 +12,22 @@
 .memory-workspace-header {
   grid-column: 1;
   grid-row: 1;
+  isolation: isolate;
   min-width: 0;
   width: 100%;
 }
+
+.workspace-header-sidebar-backdrop {
+  position: absolute;
+  z-index: -1;
+  inset: 0 auto 0 0;
+  pointer-events: none;
+  background: var(--mem-sidebar);
+}
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-zero { width: 0; }
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-expanded { width: 264px; }
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-collapsed { width: 48px; }
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-settings { width: 240px; }
 
 .memory-shell-content {
   grid-column: 1;
@@ -23,9 +36,6 @@
   min-height: 0;
   width: 100%;
   box-sizing: border-box;
-  gap: 8px;
-  padding: 8px;
-  background: var(--workspace-chrome);
 }
 
 .workspace-pane-host {
@@ -35,7 +45,7 @@
   min-height: 0;
   height: 100%;
   box-sizing: border-box;
-  padding: 8px 8px 8px 0;
+  padding: 8px;
 }
 
 .workspace-pane-host:empty { display: none; }
@@ -73,13 +83,6 @@
     box-shadow: none;
   }
   .workspace-header-search-icon { display: none; }
-}
-
-.memory-shell-content > main {
-  --mem-bg: var(--workspace-surface);
-  --mem-detail-surface: var(--workspace-surface);
-  border-radius: var(--workspace-radius);
-  background: var(--workspace-surface);
 }
 
 .memory-main-content {

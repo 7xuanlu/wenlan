@@ -10,8 +10,7 @@
 
 .page-info-drawer {
   /* Embedded graph labels mask their edges against the same pane surface. */
-  --mem-sidebar: var(--workspace-surface);
-  --mem-detail-surface: var(--workspace-surface);
+  --mem-detail-surface: var(--mem-sidebar);
   display: flex;
   flex-direction: column;
   width: 360px;
@@ -21,7 +20,7 @@
   overflow: hidden;
   border-left: 1px solid var(--mem-border);
   border-radius: var(--workspace-radius);
-  background: var(--workspace-surface);
+  background: var(--mem-sidebar);
   color: var(--mem-text);
   box-shadow: var(--mem-shadow-overlay);
 }
@@ -86,7 +85,7 @@
 .page-info-drawer--canvas .page-canvas { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; padding: 0; }
 .page-info-drawer--canvas .page-canvas-surface { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; background-color: var(--mem-sidebar); }
 .page-info-drawer--canvas .page-canvas-surface:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--workspace-surface) 72%, var(--mem-accent-page));
+  outline: 2px solid color-mix(in srgb, var(--mem-sidebar) 72%, var(--mem-accent-page));
   outline-offset: -2px;
 }
 
@@ -125,10 +124,10 @@
   border: 0;
   border-radius: var(--workspace-radius);
   box-shadow: none;
-  background: var(--workspace-surface);
+  background: var(--mem-sidebar);
 }
 .page-info-drawer-hosted .page-info-drawer-content {
-  background: var(--workspace-surface);
+  background: var(--mem-sidebar);
 }
 .page-info-drawer-hosted .page-info-drawer-header {
   min-height: 52px;
