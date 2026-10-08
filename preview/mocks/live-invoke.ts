@@ -4,6 +4,7 @@
 // Commands with no daemon route get app-local defaults; unknown ones warn.
 
 import { daemonMeetsFloor } from "../../src/lib/daemonVersion";
+import type { RenamePageResponse } from "../../src/lib/tauri";
 
 type Args = Record<string, unknown> | undefined;
 const PAGE_EDIT_DAEMON_FLOOR = "0.14.1";
@@ -452,6 +453,11 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   // PageDetail (a page a person navigated to) calls this — see
   // app/src/search.rs::get_page_explicit_browse.
   get_page_explicit_browse: (a) => getPageVia(a, EXPLICIT_BROWSE_HEADERS),
+  rename_page: (a): Promise<RenamePageResponse> =>
+    post(`/api/pages/${enc(String(a.id))}/rename`, {
+      title: String(a.title),
+      expected_version: Number(a.expectedVersion),
+    }),
   page_move: (a) => {
     if (PREVIEW_AUTHORED_PAGES.has(String(a.id))) {
       return Promise.reject(new Error(

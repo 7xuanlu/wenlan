@@ -59,6 +59,7 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "list_pages_explicit_browse",
     "get_page_explicit_browse",
     "create_page",
+    "rename_page",
     "update_page",
     "delete_page",
     "redistill_page",

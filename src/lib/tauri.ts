@@ -1363,6 +1363,20 @@ export interface Page {
   truth?: PageTruth | null;
 }
 
+export interface RenamePageResponse {
+  id: string;
+  title: string;
+  version: number;
+}
+
+export async function renamePage(
+  id: string,
+  title: string,
+  expectedVersion: number,
+): Promise<RenamePageResponse> {
+  return invoke("rename_page", { id, title, expectedVersion });
+}
+
 export interface KnowledgeFolder { path: string; parent_path: string; name: string; }
 export interface KnowledgeFoldersResponse { folders: KnowledgeFolder[]; truncated: boolean; }
 export function knowledgeFoldersList(): Promise<KnowledgeFoldersResponse> {
@@ -1568,6 +1582,7 @@ export type ConceptSourceWithMemory = PageSourceWithMemory;
 export interface PageLinkOutbound {
   label: string;
   target_page_id: string | null;
+  target_title?: string | null;
 }
 
 export interface PageLinkInbound {

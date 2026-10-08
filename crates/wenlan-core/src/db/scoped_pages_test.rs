@@ -551,6 +551,27 @@ async fn page_links_scoped_gate_parent_and_filter_source_pages() {
         .await
         .unwrap();
     assert_eq!(outbound.len(), 2);
+    let work_target_link = outbound
+        .iter()
+        .find(|link| link.label == "Work target")
+        .unwrap();
+    assert_eq!(
+        work_target_link.target_title.as_deref(),
+        Some("work-target")
+    );
+    let personal_outbound = db
+        .get_page_outbound_links_scoped("personal-source", &ReadScope::Global)
+        .await
+        .unwrap();
+    let cross_scope_link = personal_outbound
+        .iter()
+        .find(|link| link.label == "Work target")
+        .unwrap();
+    assert_eq!(
+        cross_scope_link.target_page_id.as_deref(),
+        Some("work-target")
+    );
+    assert_eq!(cross_scope_link.target_title, None);
     let inbound = db
         .get_page_inbound_links_scoped("work-target", &scope)
         .await
@@ -622,20 +643,20 @@ async fn page_links_scoped_outbound_merges_edges_and_orphans_by_label_key() {
         .await
         .unwrap();
     assert_eq!(
-        links,
+        links
+            .iter()
+            .map(|link| {
+                (
+                    link.target_page_id.as_deref(),
+                    link.label.as_str(),
+                    link.target_title.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>(),
         vec![
-            crate::synthesis::wikilinks::Wikilink {
-                target_page_id: Some("outbound-alpha".to_string()),
-                label: "ALPHA".to_string(),
-            },
-            crate::synthesis::wikilinks::Wikilink {
-                target_page_id: None,
-                label: "Bravo".to_string(),
-            },
-            crate::synthesis::wikilinks::Wikilink {
-                target_page_id: Some("outbound-zulu".to_string()),
-                label: "zUlU".to_string(),
-            },
+            (Some("outbound-alpha"), "ALPHA", Some("Alpha")),
+            (None, "Bravo", None),
+            (Some("outbound-zulu"), "zUlU", Some("Zulu")),
         ]
     );
 }
@@ -759,15 +780,106 @@ async fn page_links_scoped_outbound_reads_edges_not_resolved_page_links() {
     .unwrap();
     drop(conn);
 
+    let links = db
+        .get_page_outbound_links_scoped("reader-swap-source", &ReadScope::Global)
+        .await
+        .unwrap();
+    assert_eq!(links.len(), 1);
     assert_eq!(
-        db.get_page_outbound_links_scoped("reader-swap-source", &ReadScope::Global)
-            .await
-            .unwrap(),
-        vec![crate::synthesis::wikilinks::Wikilink {
-            target_page_id: Some("reader-swap-edge-target".to_string()),
-            label: "Edge only".to_string(),
-        }]
+        links[0].target_page_id.as_deref(),
+        Some("reader-swap-edge-target")
     );
+    assert_eq!(links[0].label, "Edge only");
+    assert_eq!(
+        links[0].target_title.as_deref(),
+        Some("reader-swap-edge-target")
+    );
+}
+
+#[tokio::test]
+async fn outbound_link_title_tracks_current_target_without_changing_stored_label() {
+    let (db, _tmp) = test_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    for (id, title) in [
+        ("live-title-source", "Source"),
+        ("live-title-target", "Before rename"),
+    ] {
+        db.insert_page_with_kind(
+            id,
+            title,
+            None,
+            "page link current-title lookup",
+            None,
+            Some("work"),
+            &[],
+            &now,
+            "authored",
+            "confirmed",
+            Some("work"),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    db.replace_page_links(
+        "live-title-source",
+        &[crate::synthesis::wikilinks::Wikilink {
+            target_page_id: Some("live-title-target".to_string()),
+            label: "Before rename".to_string(),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let before = db
+        .get_page_outbound_links_scoped("live-title-source", &ReadScope::Global)
+        .await
+        .unwrap();
+    assert_eq!(
+        before[0].target_page_id.as_deref(),
+        Some("live-title-target")
+    );
+    assert_eq!(before[0].label, "Before rename");
+    assert_eq!(before[0].target_title.as_deref(), Some("Before rename"));
+
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE pages SET title = 'After rename' WHERE id = 'live-title-target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let after = db
+        .get_page_outbound_links_scoped("live-title-source", &ReadScope::Global)
+        .await
+        .unwrap();
+    assert_eq!(
+        after[0].target_page_id.as_deref(),
+        Some("live-title-target")
+    );
+    assert_eq!(after[0].label, "Before rename");
+    assert_eq!(after[0].target_title.as_deref(), Some("After rename"));
+
+    db.conn
+        .lock()
+        .await
+        .execute(
+            "UPDATE pages SET workspace = 'private-workspace' WHERE id = 'live-title-target'",
+            (),
+        )
+        .await
+        .unwrap();
+    let hidden = db
+        .get_page_outbound_links_scoped("live-title-source", &ReadScope::Global)
+        .await
+        .unwrap();
+    assert_eq!(
+        hidden[0].target_page_id.as_deref(),
+        Some("live-title-target")
+    );
+    assert_eq!(hidden[0].target_title, None);
 }
 
 #[tokio::test]

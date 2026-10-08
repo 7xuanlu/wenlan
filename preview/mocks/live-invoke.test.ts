@@ -154,6 +154,26 @@ describe("liveInvoke knowledge folders and Page moves", () => {
     );
   });
 
+  it("renames daemon Pages with an encoded ID and the expected-version wire field", async () => {
+    const response = { id: "page/with space", title: "Renamed title", version: 8 };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("rename_page", {
+      id: "page/with space",
+      title: "Renamed title",
+      expectedVersion: 7,
+    })).resolves.toEqual(response);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/pages/page%2Fwith%20space/rename",
+      expect.objectContaining({
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "Renamed title", expected_version: 7 }),
+      }),
+    );
+  });
+
   it("propagates the daemon HttpError for a rejected folder mutation", async () => {
     const body = JSON.stringify({ error: "folder is outside the writable root" });
     const fetch = vi.fn(async () => new Response(body, { status: 422 }));

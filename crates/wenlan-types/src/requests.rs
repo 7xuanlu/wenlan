@@ -844,6 +844,15 @@ pub struct RefreshPageRequest {
     pub summary: Option<String>,
 }
 
+/// Explicit metadata edit, separate from content refresh. A caller must have
+/// read the page version so a stale rename cannot overwrite a newer decision.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RenamePageRequest {
+    pub title: String,
+    pub expected_version: i64,
+}
+
 // ===== Concept Export =====
 
 /// Request body for `POST /api/pages/export` (bulk export all pages to an Obsidian vault).

@@ -27,6 +27,14 @@ describe("translation resources", () => {
     expect(resources.en.translation.settings.language.label).toBe("Language");
   });
 
+  it("explains the page-review requirement before rename in every locale", () => {
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.pageDetail.renameReviewRequired)).toEqual([
+      "Review this note before renaming it.",
+      "请先复核此笔记，再进行重命名。",
+      "請先覆核此筆記，再進行重新命名。",
+    ]);
+  });
+
   it("keeps telemetry consent and conditional privacy copy explicit in every locale", () => {
     const telemetry = supportedAppLocales.map(
       (locale) => resources[locale].translation.settings.general,

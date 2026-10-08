@@ -218,10 +218,10 @@ fn manifest_counts_match_the_spec() {
     // The public webpage preview adds one main-only, non-page-bearing route.
     assert_eq!(
         HTTP_READERS.len(),
-        196,
+        197,
         "registered (method, path, handler) triples"
     );
-    assert_eq!(MCP_READERS.len(), 29, "#[tool( declarations");
+    assert_eq!(MCP_READERS.len(), 30, "#[tool( declarations");
     // No hand-bumped CLI count here: `wenlan-cli`'s
     // `catalog_tests::truth_manifest_cli_rows_match_clap_subcommands` derives
     // the expected set from clap's `Commands` enum, which this crate cannot see.
@@ -229,7 +229,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        208,
+        209,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -237,7 +237,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        191,
+        192,
         "main builder entries"
     );
     assert_eq!(
@@ -253,7 +253,7 @@ fn manifest_counts_match_the_spec() {
         .iter()
         .filter(|r| r.page_bearing == PageBearing::Yes)
         .count();
-    assert_eq!(bearing, 73, "page-bearing HTTP routes");
+    assert_eq!(bearing, 74, "page-bearing HTTP routes");
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        189 // all remaining handlers carry no page markers
+        190 // all remaining handlers carry no page markers
     );
 }
 

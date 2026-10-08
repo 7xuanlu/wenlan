@@ -301,6 +301,7 @@ pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Get, path: "/api/pages/{id}", builder: Builder::Repair, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::NamedPage, adapter: "handle_get_repair_page", evidence: "exact durable pending repair target page" },
     HttpReader { method: ReaderMethod::Put, path: "/api/pages/{id}", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "no prose fields" },
     HttpReader { method: ReaderMethod::Post, path: "/api/pages/{id}/archive", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_archive_page", evidence: "opaque response type — fail-closed" },
+    HttpReader { method: ReaderMethod::Post, path: "/api/pages/{id}/rename", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_rename_page", evidence: "title metadata — core page_write_permit before mutation" },
     HttpReader { method: ReaderMethod::Post, path: "/api/pages/{id}/export", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_export_page", evidence: "EFFECT: writes page prose to the requested vault" },
     HttpReader { method: ReaderMethod::Get, path: "/api/pages/{id}/links", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::NamedPage, adapter: "handle_get_page_links", evidence: "PageLinkInbound.label, PageLinkOutbound.label" },
     HttpReader { method: ReaderMethod::Delete, path: "/api/pages/{id}/map", builder: Builder::Main, page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "handle_reset_page_map", evidence: "opaque response type — fail-closed" },
@@ -408,6 +409,7 @@ pub const MCP_READERS: &[McpReader] = &[
     McpReader { tool: "reject_refinement", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "verify_lint_repair", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "write_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "rename_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
 ];
 
 /// All 23 top-level `Commands` variants in `crates/wenlan-cli/src/main.rs`.

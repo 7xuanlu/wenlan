@@ -15,12 +15,12 @@ describe("RelatedPages", () => {
     const onPageClick = vi.fn();
     render(
       <RelatedPages
-        outbound={[{ label: "Resolved Link", target_page_id: "page-2" }]}
+        outbound={[{ label: "Resolved Link", target_page_id: "page-2", target_title: "New title" }]}
         onPageClick={onPageClick}
       />,
     );
     const section = screen.getByLabelText("Related pages");
-    await user.click(within(section).getByRole("button", { name: /Resolved Link/ }));
+    await user.click(within(section).getByRole("button", { name: "New title" }));
     expect(onPageClick).toHaveBeenCalledWith("page-2");
   });
 

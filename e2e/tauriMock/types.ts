@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { AppLocale } from "../../src/i18n/locales";
-import type { MemoryItem, PageReviewAvailability, PageReviewOutcome } from "../../src/lib/tauri";
+import type { MemoryItem, PageChange, PageReviewAvailability, PageReviewOutcome } from "../../src/lib/tauri";
 import type { SpacesNavigationFixture } from "../fixtures/spacesNavigation";
 
 export type MockCommandCall = {
@@ -16,6 +16,8 @@ export type MockFailure = {
 
 export type TauriMockPageScenario = {
   readonly projectionPendingOnce?: boolean;
+  readonly recentChanges?: readonly PageChange[];
+  readonly outboundLinks?: Readonly<Record<string, readonly { label: string; target_page_id: string | null }[]>>;
   readonly daemonVersion?: string;
   readonly saveDaemonVersion?: string;
   /**

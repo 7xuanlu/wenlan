@@ -9,6 +9,15 @@ vi.mock("./live-invoke", () => ({
 }));
 
 describe("fixture background AI preference", () => {
+  it("never sends a fixture rename to the live daemon", async () => {
+    vi.mocked(liveInvoke).mockClear();
+    (window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__ = true;
+    await expect(invoke("rename_page", {
+      id: "page-cited", title: "New title", expectedVersion: 1,
+    })).rejects.toThrow("Renaming is unavailable in this fixture");
+    expect(liveInvoke).not.toHaveBeenCalled();
+  });
+
   it("keeps enable and disable entirely inside the fixture", async () => {
     vi.mocked(liveInvoke).mockClear();
     (window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__ = true;

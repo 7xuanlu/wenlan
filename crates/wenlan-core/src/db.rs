@@ -60,6 +60,7 @@ mod okf_concepts;
 mod onboarding_milestones;
 mod page_drafts;
 pub mod page_map;
+mod page_rename;
 mod page_summary_backfill;
 mod presence_review;
 pub(crate) mod relation_write;
@@ -149,6 +150,10 @@ mod maintenance_retro_scan_test;
 mod memory_point_reads_test;
 #[cfg(test)]
 mod page_drafts_test;
+#[cfg(test)]
+mod page_history_title_test;
+#[cfg(test)]
+mod page_rename_test;
 #[cfg(test)]
 mod presence_review_test;
 #[cfg(test)]
@@ -1421,7 +1426,8 @@ pub const EMBEDDING_DIM: usize = 768;
 /// entity absorbing a recurring mention instead of a duplicate being created
 /// beside it (#708). Migration 131 adds `okf_concepts` and
 /// `okf_concept_links`, the provenance and concept links of pages imported
-/// from an OKF bundle source.
+/// from an OKF bundle source. Migration 133 adds page titles to immutable
+/// version history, backfilling only the exact snapshot matching a live page.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1429,7 +1435,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 132;
+pub const SCHEMA_VERSION: u32 = 133;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -1782,6 +1788,8 @@ pub struct NullEmbeddingRecoveryReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageHistoryEntry {
     pub version: i64,
+    /// `None` when this legacy snapshot's title cannot be recovered safely.
+    pub title: Option<String>,
     pub content: String,
     pub source_memory_ids: Vec<String>,
     pub edited_by: String,
@@ -10261,6 +10269,54 @@ impl MemoryDB {
                 conn.execute("PRAGMA user_version = 132", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m132 bump: {e}")))?;
+            }
+            if ceiling < 133 {
+                return Ok(());
+            }
+            // Migration 133 adds title to immutable Page snapshots. Only the
+            // history row that exactly matches a live page's current version,
+            // content, and sources can be assigned its present-day title;
+            // older or divergent snapshots remain NULL rather than guessing.
+            if version < 133 {
+                let has_title = self
+                    .get_table_columns("page_history")
+                    .await?
+                    .contains("title");
+                let conn = self.conn.lock().await;
+                if !has_title {
+                    conn.execute("ALTER TABLE page_history ADD COLUMN title TEXT", ())
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("m133 add page history title: {e}"))
+                        })?;
+                }
+                conn.execute(
+                    "UPDATE page_history
+                        SET title=(
+                            SELECT p.title FROM pages p
+                             WHERE p.id=page_history.page_id
+                               AND p.version=page_history.version
+                               AND p.content=page_history.content
+                               AND p.source_memory_ids=page_history.source_memory_ids
+                        )
+                      WHERE title IS NULL
+                        AND EXISTS (
+                            SELECT 1 FROM pages p
+                             WHERE p.id=page_history.page_id
+                               AND p.version=page_history.version
+                               AND p.content=page_history.content
+                               AND p.source_memory_ids=page_history.source_memory_ids
+                        )",
+                    (),
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m133 backfill page history title: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 133", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m133 bump: {e}")))?;
+                log::info!("[migration] Migration 133 applied: exact current page-history titles");
             }
         }
 
@@ -50574,8 +50630,8 @@ impl MemoryDB {
     ) -> Result<(), libsql::Error> {
         conn.execute(
             "INSERT INTO page_history \
-               (page_id, version, content, source_memory_ids, edited_by, created_at) \
-             SELECT id, version, content, source_memory_ids, ?2, ?3 \
+               (page_id, version, title, content, source_memory_ids, edited_by, created_at) \
+             SELECT id, version, title, content, source_memory_ids, ?2, ?3 \
              FROM pages WHERE id = ?1",
             libsql::params![page_id, edited_by, created_at],
         )
@@ -50888,8 +50944,8 @@ impl MemoryDB {
         if let Err(e) = conn
             .execute(
                 "INSERT OR IGNORE INTO page_history \
-                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
-                 SELECT id, version, content, source_memory_ids, 'create', ?2 \
+                   (page_id, version, title, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, title, content, source_memory_ids, 'create', ?2 \
                  FROM pages WHERE id = ?1",
                 libsql::params![id, linked_at],
             )
@@ -51597,7 +51653,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, content, source_memory_ids, edited_by, created_at \
+                "SELECT version, title, content, source_memory_ids, edited_by, created_at \
                  FROM page_history WHERE page_id = ?1 \
                  ORDER BY version DESC LIMIT ?2",
                 libsql::params![page_id, limit],
@@ -51610,13 +51666,14 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_page_history row: {e}")))?
         {
-            let source_ids_json: String = row.get(2).unwrap_or_else(|_| "[]".to_string());
+            let source_ids_json: String = row.get(3).unwrap_or_else(|_| "[]".to_string());
             out.push(PageHistoryEntry {
                 version: row.get(0).unwrap_or(0),
-                content: row.get(1).unwrap_or_default(),
+                title: row.get(1).unwrap_or(None),
+                content: row.get(2).unwrap_or_default(),
                 source_memory_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
-                edited_by: row.get(3).unwrap_or_default(),
-                created_at: row.get(4).unwrap_or(0),
+                edited_by: row.get(4).unwrap_or_default(),
+                created_at: row.get(5).unwrap_or(0),
             });
         }
         Ok(out)
@@ -54249,6 +54306,57 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_links begin: {e}")))?;
         let exec = async {
+            // Keep the identity of a resolved backlink when this body is
+            // saved again after its target was renamed. Its old display label
+            // may no longer resolve by title, and a newly created page may
+            // later reuse that label. Only retain an active, same-space,
+            // ordinary target already linked from this exact source page.
+            // Imported concept links are resolved by their concept registry;
+            // preserving them here would resurrect removed concept targets.
+            let mut stable_targets: HashMap<String, Option<String>> = HashMap::new();
+            let mut existing_edges = conn
+                .query(
+                    "SELECT e.dst_id,e.payload
+                       FROM edges e
+                       JOIN pages source ON source.id=e.src_id
+                       JOIN pages target ON target.id=e.dst_id
+                      WHERE e.src_id=?1 AND e.src_kind='page' AND e.dst_kind='page'
+                        AND e.edge_type='links' AND e.valid_until IS NULL
+                        AND source.status='active' AND target.status='active'
+                        AND COALESCE(target.kind,'concept')!='entity'
+                        AND target.space IS source.space
+                        AND target.workspace IS source.workspace
+                        AND NOT EXISTS (
+                            SELECT 1 FROM okf_concept_links concept_link
+                            WHERE concept_link.page_id=e.src_id
+                              AND concept_link.target_key=CASE WHEN json_valid(e.payload)
+                                  THEN lower(json_extract(e.payload,'$.label')) END
+                        )",
+                    libsql::params![source_page_id],
+                )
+                .await?;
+            while let Some(row) = existing_edges.next().await? {
+                let target_id = row.get::<String>(0)?;
+                let payload = row.get::<Option<String>>(1)?.unwrap_or_default();
+                let Some(label) = serde_json::from_str::<serde_json::Value>(&payload)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                else {
+                    continue;
+                };
+                let key = Self::page_title_key(&label);
+                stable_targets
+                    .entry(key)
+                    .and_modify(|existing| *existing = None)
+                    .or_insert(Some(target_id));
+            }
+            drop(existing_edges);
+
             // Dual-write (M2 PR-1): invalidate every active `links` edge
             // from this page up front; the loop below re-asserts (or
             // reactivates, via `dual_write_edge`'s upsert) an edge for each
@@ -54270,9 +54378,11 @@ impl MemoryDB {
             .await?;
             let mut src_space: Option<Option<String>> = None;
             for link in links {
-                let label_key = link.label.to_lowercase();
+                let label_key = Self::page_title_key(&link.label);
+                let stable_target = stable_targets.get(&label_key).and_then(Option::as_deref);
+                let target_page_id = stable_target.or(link.target_page_id.as_deref());
 
-                let Some(target_page_id) = &link.target_page_id else {
+                let Some(target_page_id) = target_page_id else {
                     // G6 Stage 2 PR 2b: orphan-only narrowing (item 3) --
                     // page_links keeps writing unresolved wikilinks only. A
                     // resolved link's row stops here; the edge minted below
@@ -54309,7 +54419,7 @@ impl MemoryDB {
                 let mut dst_rows = conn
                     .query(
                         "SELECT space FROM pages WHERE id = ?1",
-                        libsql::params![target_page_id.clone()],
+                        libsql::params![target_page_id],
                     )
                     .await?;
                 let dst_space: Option<String> = match dst_rows.next().await? {

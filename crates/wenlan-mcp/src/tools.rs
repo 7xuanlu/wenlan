@@ -1072,6 +1072,20 @@ pub struct WritePageParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RenamePageParams {
+    #[schemars(
+        description = "Opaque page id (e.g. 'page_abc'). Get it from distill output or another page tool."
+    )]
+    pub page_id: String,
+    #[schemars(description = "The new page title requested by the user.")]
+    pub title: String,
+    #[schemars(
+        description = "Current page version from the latest page result. Required to prevent renaming a page that changed since it was read."
+    )]
+    pub expected_version: i64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DeletePageParams {
     #[schemars(
         description = "Page id (e.g. 'page_abc' or legacy 'concept_abc'). Get it from distill output."
@@ -2296,6 +2310,40 @@ impl WenlanMcpServer {
         }
     }
 
+    pub async fn rename_page_impl(
+        &self,
+        params: RenamePageParams,
+    ) -> Result<CallToolResult, McpError> {
+        if self.transport == TransportMode::Http {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Rename operations are not available over remote connections. Use local MCP on the machine running Wenlan to rename pages."
+                    .to_string(),
+            )]));
+        }
+        if params.title.trim().is_empty() {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "title must not be blank.".to_string(),
+            )]));
+        }
+        if params.expected_version < 1 {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "expected_version must be at least 1.".to_string(),
+            )]));
+        }
+
+        let req = wenlan_types::requests::RenamePageRequest {
+            title: params.title,
+            expected_version: params.expected_version,
+        };
+        let path = format!("/api/pages/{}/rename", url_encode_simple(&params.page_id));
+        let resp: wenlan_types::responses::RenamePageResponse =
+            try_call!(self.client.post(&path, &req), "rename_page");
+        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+            "Renamed page {} to \"{}\" (version {}).",
+            resp.id, resp.title, resp.version
+        ))]))
+    }
+
     pub async fn delete_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![ContentBlock::text(
@@ -2986,7 +3034,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Create or refresh a distilled wiki page. This write can replace an existing page: omit page_id to create a new page (title required); the daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. Refresh is not available over remote HTTP MCP transport (local stdio only).",
+        description = "Create or refresh a distilled wiki page. This write can replace an existing page: omit page_id to create a new page (title required); the daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Refresh is not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Write page",
             read_only_hint = false,
@@ -3000,6 +3048,23 @@ impl WenlanMcpServer {
         Parameters(params): Parameters<WritePageParams>,
     ) -> Result<CallToolResult, McpError> {
         self.write_page_impl(params).await
+    }
+
+    #[tool(
+        description = "Rename an existing page only when the user explicitly asks to change its title. Pass the page_id and expected_version from the latest page result; the version prevents renaming a page that changed since it was read. This changes the title only and preserves the page id and content. It is unavailable over remote HTTP MCP transport (local stdio only). Do not call this during distillation, synthesis, or content refresh; write_page keeps an existing title when refreshing.",
+        annotations(
+            title = "Rename page",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn rename_page(
+        &self,
+        Parameters(params): Parameters<RenamePageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.rename_page_impl(params).await
     }
 
     #[tool(
@@ -3240,6 +3305,7 @@ const LOCAL_ONLY_TOOL_NAMES: &[&str] = &[
     "verify_lint_repair",
     "forget",
     "confirm_memory",
+    "rename_page",
     "delete_page",
     "accept_refinement",
     "reject_refinement",
@@ -6482,6 +6548,169 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn rename_page_tool_requires_expected_version() {
+        let tool = make_server(TransportMode::Stdio, "agent", None)
+            .tool_router
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "rename_page")
+            .expect("rename_page registered");
+        let schema = tool.input_schema.as_ref();
+        let required = schema
+            .get("required")
+            .and_then(serde_json::Value::as_array)
+            .expect("required fields present");
+        for field in ["page_id", "title", "expected_version"] {
+            assert!(
+                required.iter().any(|value| value.as_str() == Some(field)),
+                "rename_page must require {field}: {schema:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_page_posts_typed_request_and_reports_daemon_result() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/pages/page_123/rename"))
+            .and(body_json(serde_json::json!({
+                "title": "New title",
+                "expected_version": 7
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": "page_123",
+                "title": "New title",
+                "version": 8
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+
+        let result = server
+            .rename_page_impl(RenamePageParams {
+                page_id: "page_123".into(),
+                title: "New title".into(),
+                expected_version: 7,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(false));
+        match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => {
+                assert!(text.text.contains("page_123"));
+                assert!(text.text.contains("New title"));
+                assert!(text.text.contains("version 8"));
+            }
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_page_propagates_daemon_errors() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/pages/page_123/rename"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "duplicate"
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+
+        let result = server
+            .rename_page_impl(RenamePageParams {
+                page_id: "page_123".into(),
+                title: "Existing title".into(),
+                expected_version: 2,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => {
+                assert!(text.text.contains("HTTP 409"));
+                assert!(text.text.contains("duplicate"));
+            }
+            other => panic!("expected text content, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn rename_page_validates_title_and_version_before_network() {
+        use wiremock::MockServer;
+
+        let mock = MockServer::start().await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+        for (title, expected_version) in [(" \t ", 1), ("Valid title", 0)] {
+            let result = server
+                .rename_page_impl(RenamePageParams {
+                    page_id: "page_123".into(),
+                    title: title.into(),
+                    expected_version,
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.is_error, Some(true));
+        }
+        assert!(mock.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rename_page_is_blocked_over_http_without_daemon_call() {
+        use wiremock::MockServer;
+
+        let mock = MockServer::start().await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Http,
+            "agent".into(),
+            None,
+        );
+        let result = server
+            .rename_page_impl(RenamePageParams {
+                page_id: "page_123".into(),
+                title: "New title".into(),
+                expected_version: 1,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result.is_error, Some(true));
+        match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => {
+                assert!(text.text.contains("not available over remote connections"));
+            }
+            other => panic!("expected text content, got {other:?}"),
+        }
+        assert!(mock.received_requests().await.unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn test_delete_page_blocked_on_http_transport() {
         let server = make_server(TransportMode::Http, "agent", None);
@@ -6931,6 +7160,7 @@ mod tests {
             ("prepare_lint_repair", (false, false, false)),
             ("prepare_lint_repair_plan", (false, false, false)),
             ("recall", (false, false, false)),
+            ("rename_page", (false, true, false)),
             ("reject_refinement", (false, true, false)),
             ("restore_entities", (false, false, false)),
             ("verify_lint_repair", (false, false, false)),
@@ -7294,7 +7524,7 @@ mod tests {
         );
     }
 
-    /// The 29 tools in the final 2026-07 Phase A MCP surface.
+    /// The current public MCP tool surface.
     /// Deleting or adding a tool must edit this list deliberately.
     fn expected_tool_surface() -> Vec<&'static str> {
         vec![
@@ -7326,6 +7556,7 @@ mod tests {
             "prepare_lint_repair",
             "prepare_lint_repair_plan",
             "recall",
+            "rename_page",
             "reject_refinement",
             "restore_entities",
             "verify_lint_repair",

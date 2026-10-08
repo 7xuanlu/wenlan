@@ -119,6 +119,7 @@ main|post|/api/pages/drafts/{id}/publish|wenlan_server::page_routes::handle_publ
 main|post|/api/pages/export|wenlan_server::page_routes::handle_export_pages
 main|post|/api/pages/search|wenlan_server::page_routes::handle_search_pages
 main|post|/api/pages/{id}/archive|wenlan_server::page_routes::handle_archive_page
+main|post|/api/pages/{id}/rename|wenlan_server::page_routes::handle_rename_page
 main|post|/api/pages/{id}/review|wenlan_server::page_routes::handle_review_page
 main|post|/api/pages/{id}/export|wenlan_server::page_routes::handle_export_page
 main|post|/api/pages/{id}/map/edges|wenlan_server::page_map_routes::handle_create_map_edge

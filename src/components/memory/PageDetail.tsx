@@ -12,6 +12,7 @@ import {
   getEntityDetail,
   redistillPage,
   updatePage,
+  renamePage,
   getDaemonVersion,
   getSystemInfo,
   daemonMeetsFloor,
@@ -111,7 +112,7 @@ function normalizeLinkLabel(label: string): string {
   return label.trim().toLowerCase();
 }
 
-function parseWikilink(inner: string): { targetLabel: string; displayText: string } {
+function parseWikilink(inner: string): { targetLabel: string; displayText: string; hasAlias: boolean } {
   const pipeIndex = inner.indexOf("|");
   const rawTarget = pipeIndex >= 0 ? inner.slice(0, pipeIndex) : inner;
   const headingIndex = rawTarget.indexOf("#");
@@ -121,6 +122,7 @@ function parseWikilink(inner: string): { targetLabel: string; displayText: strin
   return {
     targetLabel,
     displayText: alias || targetDisplay || inner.trim(),
+    hasAlias: alias.length > 0,
   };
 }
 
@@ -233,6 +235,11 @@ export default function PageDetail({
   const [copying, setCopying] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [renameExpectedVersion, setRenameExpectedVersion] = useState<number | null>(null);
+  const [renameError, setRenameError] = useState(false);
+  const [renameNeedsReview, setRenameNeedsReview] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
   useEffect(() => setInfoOpen(false), [pageId]);
   const [editDirty, setEditDirty] = useState(false);
@@ -297,6 +304,7 @@ export default function PageDetail({
   const editDirtyRef = useRef(false);
   const editPageTitleRef = useRef("");
   const beginEditAttemptRef = useRef(0);
+  const renameAttemptRef = useRef(0);
   const autoEditIntentRef = useRef<{ pageId: string; mode: "read" | "edit" } | null>(null);
   const editorSessionEpochRef = useRef(0);
   const activeEditorSessionRef = useRef<{
@@ -373,10 +381,10 @@ export default function PageDetail({
   });
 
   const outboundTargetByLabel = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, { id: string; title?: string | null }>();
     for (const link of pageLinks?.outbound ?? []) {
       if (link.target_page_id) {
-        map.set(normalizeLinkLabel(link.label), link.target_page_id);
+        map.set(normalizeLinkLabel(link.label), { id: link.target_page_id, title: link.target_title });
       }
     }
     return map;
@@ -452,6 +460,11 @@ export default function PageDetail({
   }, [pageId, page?.title, pageSources, entitySignature]);
 
   useEffect(() => {
+    renameAttemptRef.current += 1;
+    setRenaming(false);
+    setRenameExpectedVersion(null);
+    setRenameError(false);
+    setRenameNeedsReview(false);
     autosaveRef.current?.reset(null);
     editorPageRef.current = null;
     autoEditIntentRef.current = null;
@@ -637,6 +650,49 @@ export default function PageDetail({
       const guard = parseEntityGuardError(error);
       if (guard) setActionErrorMessage(guard.message, guard.entityId);
       else setActionErrorMessage(t("pageDetail.deleteError"));
+    },
+  });
+
+  const renameMutation = useMutation({
+    mutationFn: (input: { id: string; title: string; expectedVersion: number }) =>
+      renamePage(input.id, input.title, input.expectedVersion),
+    onSuccess: (renamed, input) => {
+      if (renamed.id !== input.id) return;
+      queryClient.setQueryData<Page | null>(["page", input.id], (current) =>
+        current?.id === renamed.id && current.version > renamed.version
+          ? current
+          : current?.id === renamed.id
+            ? { ...current, title: renamed.title, version: renamed.version }
+            : current,
+      );
+      for (const queryKey of [
+        ["pages"],
+        ["searchPages"],
+        ["search"],
+        ["knowledge-graph"],
+        ["constellation-cartography"],
+        ["recent-pages"],
+        ["space-pages"],
+        ["spaces-page-counts"],
+        ["sidebar-space-page-counts"],
+        ["page-links"],
+        ["page-revisions", input.id],
+        ["page", input.id],
+      ]) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+      if (activePageIdRef.current !== input.id) return;
+      renameAttemptRef.current += 1;
+      setRenaming(false);
+      setRenameExpectedVersion(null);
+      setRenameError(false);
+      setRenameNeedsReview(false);
+    },
+    onError: (error, input) => {
+      if (activePageIdRef.current !== input.id) return;
+      const needsReview = String(error).includes("page_review_required");
+      setRenameNeedsReview(needsReview);
+      setRenameError(!needsReview);
     },
   });
 
@@ -856,7 +912,7 @@ export default function PageDetail({
   };
 
   const beginEditing = async (automatic = false) => {
-    if (!page) return;
+    if (!page || renaming || renameMutation.isPending) return;
     setCanvasOpen(false);
     canvasReturnToEditorRef.current = false;
     const originPageId = page.id;
@@ -1312,10 +1368,15 @@ export default function PageDetail({
   // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
   const renderWikilinks = (content: string) => content.replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
     const link = parseWikilink(inner);
-    const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+    const target = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+    const cid = target?.id;
+    const currentTitle = cid === page.id ? page.title : target?.title;
+    const displayText = !link.hasAlias && currentTitle
+      ? currentTitle.replace(/[\\`*_[\]<>]/g, "\\$&")
+      : link.displayText;
     // Self references read as the page's name, not a link back to this page.
-    if (cid && cid !== page.id) return `[${link.displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
-    return link.displayText;
+    if (cid && cid !== page.id) return `[${displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
+    return displayText;
   });
   const cleanedContent = renderWikilinks(processed.content)
     .replace(/^#\s+.*\n+/, "")
@@ -1402,6 +1463,57 @@ export default function PageDetail({
   const pageRevisionEntries = pageRevisions?.entries ?? [];
 
   const hasRail = pageEntities.length > 0 || outboundLinks.length > 0;
+  const canRenamePage = page.status === "active" &&
+    page.creation_kind !== "entity" && page.creation_kind !== "source" &&
+    page.creation_kind !== "imported";
+  const renameDisabled = editing || editDirty || saveState.phase !== "idle" ||
+    !!editorStatus?.compositionActive || renameMutation.isPending;
+
+  const startRename = () => {
+    if (!canRenamePage || renaming || renameDisabled) return;
+    renameAttemptRef.current += 1;
+    setRenameTitle(page.title);
+    setRenameExpectedVersion(page.version);
+    setRenameError(false);
+    setRenameNeedsReview(false);
+    setRenaming(true);
+  };
+
+  const cancelRename = () => {
+    if (renameMutation.isPending) return;
+    renameAttemptRef.current += 1;
+    setRenaming(false);
+    setRenameExpectedVersion(null);
+    setRenameTitle(page.title);
+    setRenameError(false);
+    setRenameNeedsReview(false);
+  };
+
+  const submitRename = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const title = renameTitle.trim();
+    if (!title || title === page.title || renameDisabled) return;
+    setRenameError(false);
+    setRenameNeedsReview(false);
+    if (renameExpectedVersion === null) return;
+    renameMutation.mutate({ id: page.id, title, expectedVersion: renameExpectedVersion });
+  };
+
+  const reloadForRename = async () => {
+    const originPageId = page.id;
+    const attempt = renameAttemptRef.current;
+    const result = await refetchPage();
+    if (
+      activePageIdRef.current === originPageId &&
+      result.data?.id === originPageId &&
+      renameAttemptRef.current === attempt
+    ) {
+      setRenameExpectedVersion(result.data.version);
+      setRenameError(false);
+      setRenameNeedsReview(false);
+    }
+  };
+
   const hideOuterTitleWhileEditing =
     editing && editGate.kind === "editor" && editHasMatchingTitle;
 
@@ -1465,8 +1577,21 @@ export default function PageDetail({
                       if (!showCanvas) void requestToggleCanvas();
                     }}>{t("pageCanvas.tabCanvas")}</button>
                     {!editing && !showCanvas ? (
-                      <button type="button" role="menuitem" onClick={() => { setActionMenuOpen(false); void beginEditing(); }}>
+                      <button type="button" role="menuitem" disabled={renaming || renameMutation.isPending} onClick={() => { setActionMenuOpen(false); void beginEditing(); }}>
                         {t("pageDetail.editPage")}
+                      </button>
+                    ) : null}
+                    {!editing && !showCanvas && canRenamePage ? (
+                      <button
+                        disabled={renaming || renameDisabled}
+                        onClick={() => {
+                          closeActionMenu();
+                          startRename();
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {t("pageDetail.renamePage")}
                       </button>
                     ) : null}
                     {!editing && !showCanvas ? (
@@ -1563,7 +1688,7 @@ export default function PageDetail({
                     <button
                       className="page-detail-menu-danger"
                       disabled={
-                        editing || showCanvas || deleteMutation.isPending ||
+                        editing || showCanvas || renaming || renameMutation.isPending || deleteMutation.isPending ||
                         saveState.phase === "pending"
                       }
                       onClick={requestDelete}
@@ -1584,7 +1709,55 @@ export default function PageDetail({
       <div className="page-detail-document">
         {!hideOuterTitleWhileEditing && (
           <div className="page-document-title-row">
-            <h1 className="page-detail-title">{page.title}</h1>
+            {renaming ? (
+              <form
+                className="flex flex-wrap items-center gap-2"
+                onSubmit={submitRename}
+                aria-busy={renameMutation.isPending}
+              >
+                <label className="sr-only" htmlFor="page-rename-title">
+                  {t("pageDetail.pageTitle")}
+                </label>
+                <input
+                  autoFocus
+                  id="page-rename-title"
+                  aria-label={t("pageDetail.pageTitle")}
+                  maxLength={500}
+                  className="page-detail-title min-w-0 flex-1 rounded border border-[var(--mem-border)] bg-[var(--mem-surface)] px-2 py-1"
+                  value={renameTitle}
+                  onChange={(event) => {
+                    setRenameTitle(event.target.value);
+                    setRenameError(false);
+                    setRenameNeedsReview(false);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelRename();
+                    }
+                  }}
+                  disabled={renameMutation.isPending}
+                />
+                <button type="submit" disabled={!renameTitle.trim() || renameTitle.trim() === page.title || renameExpectedVersion === null || renameMutation.isPending}>
+                  {renameMutation.isPending ? t("pageDetail.renaming") : t("pageDetail.saveTitle")}
+                </button>
+                <button type="button" onClick={cancelRename} disabled={renameMutation.isPending}>
+                  {t("pageDetail.cancelRename")}
+                </button>
+                {renameError || renameNeedsReview ? (
+                  <span className="flex basis-full items-center gap-2" role="alert">
+                    <span>{t(renameNeedsReview ? "pageDetail.renameReviewRequired" : "pageDetail.renameError")}</span>
+                    {!renameNeedsReview ? (
+                      <button type="button" onClick={() => void reloadForRename()} disabled={pageIsFetching}>
+                        {t("pageDetail.reloadPage")}
+                      </button>
+                    ) : null}
+                  </span>
+                ) : null}
+              </form>
+            ) : (
+              <h1 className="page-detail-title">{page.title}</h1>
+            )}
             {documentTools}
           </div>
         )}

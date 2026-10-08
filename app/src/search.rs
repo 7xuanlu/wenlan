@@ -3560,6 +3560,27 @@ pub async fn create_page(
     client.post_json("/api/pages", &request).await
 }
 
+/// Rename an existing active knowledge page without changing its body.
+#[tauri::command]
+pub async fn rename_page(
+    state: tauri::State<'_, State>,
+    id: String,
+    title: String,
+    expected_version: i64,
+) -> Result<responses::RenamePageResponse, String> {
+    let client = daemon_client(&state).await;
+    let request = requests::RenamePageRequest {
+        title,
+        expected_version,
+    };
+    client
+        .post_json(
+            &format!("/api/pages/{}/rename", percent_encode_path_segment(&id)),
+            &request,
+        )
+        .await
+}
+
 #[derive(Debug, Serialize)]
 struct DraftWriteRequest {
     draft_id: String,
