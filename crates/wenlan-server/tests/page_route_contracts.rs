@@ -520,6 +520,118 @@ async fn page_routes_preserve_typed_contracts() {
 }
 
 #[tokio::test]
+async fn outbound_links_show_live_target_title_and_hide_ungranted_titles() {
+    let _guard = data_dir_lock().lock().await;
+    let (router, tmp, db) = common::test_app_no_gate().await;
+    let target_id = common::create_page_fixture(
+        &db,
+        "Old linked title",
+        "Target page body",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    let source_id = common::create_page_fixture(
+        &db,
+        "Link source",
+        "This keeps the original mention [[Old linked title]].",
+        None,
+        &[],
+        "authored",
+    )
+    .await;
+    db.replace_page_links(
+        &source_id,
+        &[wenlan_core::synthesis::wikilinks::Wikilink {
+            label: "Old linked title".to_string(),
+            target_page_id: Some(target_id.clone()),
+        }],
+    )
+    .await
+    .unwrap();
+
+    let before = db.get_page(&target_id).await.unwrap().unwrap();
+    wenlan_core::post_write::rename_page(
+        &db,
+        &target_id,
+        "Current linked title",
+        before.version,
+        &wenlan_core::read_scope::ReadScope::Global,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let (status, visible): (StatusCode, PageLinksResponse) =
+        request_typed(&router, get(format!("/api/pages/{source_id}/links"), false)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(visible.outbound.len(), 1);
+    assert_eq!(visible.outbound[0].label, "Old linked title");
+    assert_eq!(
+        visible.outbound[0].target_page_id.as_deref(),
+        Some(target_id.as_str())
+    );
+    assert_eq!(
+        visible.outbound[0].target_title.as_deref(),
+        Some("Current linked title")
+    );
+
+    // A named-page grant opens the source, but the target needs a real current
+    // unsupported verdict to exercise the route's target-title redaction.
+    let target = db.get_page(&target_id).await.unwrap().unwrap();
+    let fixture = libsql::Builder::new_local(tmp.path().join("origin_memory.db"))
+        .build()
+        .await
+        .unwrap();
+    let conn = fixture.connect().unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO page_truth_state
+            (page_id,page_version,support_status,human_reviewed,updated_at,evaluated_at)
+         VALUES (?1,?2,'provisional',0,1,1)",
+        libsql::params![target_id.as_str(), target.version],
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "INSERT OR REPLACE INTO claim_derivation_markers
+            (page_id,page_version,page_version_digest,extractor_version,inventory_count,created_at)
+         VALUES (?1,?2,?3,?4,1,0)",
+        libsql::params![
+            target_id.as_str(),
+            target.version,
+            wenlan_core::provenance::revision_content_digest(&target.content),
+            wenlan_core::db::EXTRACTOR_VERSION
+        ],
+    )
+    .await
+    .unwrap();
+    db.set_app_metadata("claim_promoter_enforcement", "1")
+        .await
+        .unwrap();
+    db.set_truth_cutover_generation(1).await.unwrap();
+    let visibility = db
+        .page_visibility(
+            &wenlan_core::truth_contract::TruthGrant::Automatic,
+            std::slice::from_ref(&target_id),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        visibility.get(&target_id),
+        Some(&wenlan_core::truth_contract::Visibility::Hidden),
+        "the target fixture must be genuinely hidden before testing response redaction"
+    );
+    let (status, hidden): (StatusCode, PageLinksResponse) =
+        request_typed(&router, get(format!("/api/pages/{source_id}/links"), true)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hidden.outbound.len(), 1);
+    assert_eq!(hidden.outbound[0].label, "Old linked title");
+    assert_eq!(hidden.outbound[0].target_page_id, None);
+    assert_eq!(hidden.outbound[0].target_title, None);
+}
+
+#[tokio::test]
 async fn export_okf_format_writes_bundle_and_enforces_safety() {
     let _guard = data_dir_lock().lock().await;
     let _config = WritableKnowledgeConfig::new();

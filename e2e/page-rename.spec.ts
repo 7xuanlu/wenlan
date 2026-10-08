@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 
 const recentChanges = [{
   page_id: "page-architecture",
@@ -24,6 +25,39 @@ async function chooseRename(page: Page): Promise<void> {
   await page.getByRole("button", { name: "Page actions" }).click();
   await page.getByRole("menuitem", { name: "Rename note" }).click();
 }
+
+test("existing linked mentions show the new target title while stored text and aliases stay intact", async ({ page }, testInfo) => {
+  const errors = collectBrowserErrors(page);
+  const fixture = createSpacesNavigationFixture();
+  const content = "Read [[History semantics]] or [[History semantics|my shorthand]].";
+  await installTauriMock(page, {
+    locale: "en", rawActions: [],
+    fixture: { ...fixture, pages: fixture.pages.map((note) => note.id === "page-architecture" ? { ...note, content } : note) },
+    pageScenario: {
+      recentChanges: [...recentChanges, { page_id: "page-history", title: "History semantics", change_kind: "revised", changed_at_ms: Date.parse("2026-07-10T12:00:00Z") }],
+      outboundLinks: { "page-architecture": [{ label: "History semantics", target_page_id: "page-history" }] },
+    },
+  });
+  await openFixturePage(page);
+  await expect(page.getByRole("link", { name: "History semantics", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("linked-title-before.png") });
+  await openFixturePage(page, "History semantics");
+  await chooseRename(page);
+  await page.getByRole("textbox", { name: "Note title" }).fill("Version history guide");
+  await page.getByRole("button", { name: "Save title" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Version history guide" })).toBeVisible();
+  await openFixturePage(page);
+  await expect(page.getByRole("link", { name: "Version history guide", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "History semantics", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "my shorthand", exact: true })).toBeVisible();
+  const stored = await page.evaluate(async () => window.__TAURI_INTERNALS__!.invoke("get_page", { id: "page-architecture" })) as { content: string };
+  expect(stored.content).toBe(content);
+  await page.screenshot({ path: testInfo.outputPath("linked-title-after.png") });
+  await page.getByRole("link", { name: "Version history guide", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Version history guide" })).toBeVisible();
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
+});
 
 test("renames an active page while preserving its identity and body after revisiting", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);

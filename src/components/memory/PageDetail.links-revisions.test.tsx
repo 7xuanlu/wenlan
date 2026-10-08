@@ -194,14 +194,14 @@ describe("PageDetail page links", () => {
     expect(screen.queryByText(/source-page-a/)).toBeNull();
   });
 
-  it("uses daemon target labels for alias and heading wikilinks", async () => {
+  it("shows current titles for ordinary links while preserving explicit aliases", async () => {
     tauriMocks.getPage.mockResolvedValueOnce({
       ...LINKED_PAGE,
       content:
         "Intro sentence.\n\nAlias [[Resolved Link|Alias Text]], heading [[Resolved Link#Section]], unresolved [[Missing Link|Missing Alias]].",
     });
     tauriMocks.getPageLinks.mockResolvedValue({
-      outbound: [{ label: "Resolved Link", target_page_id: "resolved-page" }],
+      outbound: [{ label: "Resolved Link", target_page_id: "resolved-page", target_title: "Renamed [linked] *note*" }],
       inbound: [],
     });
 
@@ -209,7 +209,8 @@ describe("PageDetail page links", () => {
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
     const aliasLink = await screen.findByRole("link", { name: "Alias Text" });
-    const headingLink = await screen.findByRole("link", { name: "Resolved Link" });
+    const headingLink = await screen.findByRole("link", { name: "Renamed [linked] *note*" });
+    expect(screen.queryByRole("link", { name: "Resolved Link" })).toBeNull();
     expect(screen.getByText(/Missing Alias/)).toBeInTheDocument();
     expect(screen.queryByText("Missing Link|Missing Alias")).toBeNull();
 
@@ -217,6 +218,10 @@ describe("PageDetail page links", () => {
     await user.click(headingLink);
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("resolved-page");
     expect(defaultProps.onPageClick).toHaveBeenCalledTimes(2);
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    expect(within(screen.getByLabelText("Related pages")).getByRole("button", { name: "Renamed [linked] *note*" })).toBeInTheDocument();
   });
 
   it("keeps the page visible and hides links when the daemon route fails", async () => {

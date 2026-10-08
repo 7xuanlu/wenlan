@@ -54311,6 +54311,8 @@ impl MemoryDB {
             // may no longer resolve by title, and a newly created page may
             // later reuse that label. Only retain an active, same-space,
             // ordinary target already linked from this exact source page.
+            // Imported concept links are resolved by their concept registry;
+            // preserving them here would resurrect removed concept targets.
             let mut stable_targets: HashMap<String, Option<String>> = HashMap::new();
             let mut existing_edges = conn
                 .query(
@@ -54322,7 +54324,14 @@ impl MemoryDB {
                         AND e.edge_type='links' AND e.valid_until IS NULL
                         AND source.status='active' AND target.status='active'
                         AND COALESCE(target.kind,'concept')!='entity'
-                        AND target.space IS source.space",
+                        AND target.space IS source.space
+                        AND target.workspace IS source.workspace
+                        AND NOT EXISTS (
+                            SELECT 1 FROM okf_concept_links concept_link
+                            WHERE concept_link.page_id=e.src_id
+                              AND concept_link.target_key=CASE WHEN json_valid(e.payload)
+                                  THEN lower(json_extract(e.payload,'$.label')) END
+                        )",
                     libsql::params![source_page_id],
                 )
                 .await?;

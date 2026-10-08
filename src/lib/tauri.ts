@@ -1582,6 +1582,7 @@ export type ConceptSourceWithMemory = PageSourceWithMemory;
 export interface PageLinkOutbound {
   label: string;
   target_page_id: string | null;
+  target_title?: string | null;
 }
 
 export interface PageLinkInbound {

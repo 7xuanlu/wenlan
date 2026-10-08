@@ -40,7 +40,7 @@ export default function RelatedPages({ outbound, onPageClick }: RelatedPagesProp
                   color: "var(--mem-text)",
                 }}
               >
-                {link.label}
+                {link.target_page_id ? link.target_title || link.label : link.label}
               </span>
             </span>
           );

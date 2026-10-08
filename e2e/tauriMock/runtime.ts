@@ -250,6 +250,16 @@ export class TauriMockRuntime {
       case "record_page_editor_diagnostic": return null;
       case "list_pages": return this.listPages(args);
       case "list_recent_changes": return this.pageScenario.recentChanges ?? [];
+      case "get_page_links": {
+        const id = requiredString(command, args, "pageId");
+        return {
+          outbound: (this.pageScenario.outboundLinks?.[id] ?? []).map((link) => ({
+            ...link,
+            target_title: this.pages.find((target) => target.id === link.target_page_id)?.title ?? null,
+          })),
+          inbound: [],
+        };
+      }
       case "get_page_sources": {
         const pageId = requiredString(command, args, "pageId");
         const page = this.pages.find((entry) => entry.id === pageId);

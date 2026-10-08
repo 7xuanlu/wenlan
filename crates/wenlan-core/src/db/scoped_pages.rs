@@ -828,7 +828,7 @@ impl MemoryDB {
         &self,
         source_page_id: &str,
         scope: &ReadScope,
-    ) -> Result<Vec<crate::synthesis::wikilinks::Wikilink>, WenlanError> {
+    ) -> Result<Vec<wenlan_types::responses::PageLinkOutbound>, WenlanError> {
         let (scope_sql, scope_value) = page_scope_clause(scope, "c.workspace", 2);
         let conn = self.conn.lock().await;
         let existence_sql = format!("SELECT c.id FROM pages c WHERE c.id = ?1{scope_sql}");
@@ -853,8 +853,11 @@ impl MemoryDB {
         }
 
         let edge_sql = format!(
-            "SELECT e.dst_id, json_extract(e.payload, '$.label') \
+            "SELECT e.dst_id, json_extract(e.payload, '$.label'), target.title \
              FROM edges e INNER JOIN pages c ON c.id = e.src_id \
+             LEFT JOIN pages target ON target.id = e.dst_id \
+               AND target.status = 'active' AND target.space = c.space \
+               AND target.workspace IS c.workspace \
              WHERE c.id = ?1 AND e.edge_type = 'links' \
                AND e.src_kind = 'page' AND e.dst_kind = 'page' \
                AND e.valid_until IS NULL{scope_sql}"
@@ -878,9 +881,10 @@ impl MemoryDB {
                 .unwrap_or_default();
             links.push((
                 page_link_label_key(&label),
-                crate::synthesis::wikilinks::Wikilink {
+                wenlan_types::responses::PageLinkOutbound {
                     target_page_id: row.get::<String>(0).ok(),
                     label,
+                    target_title: row.get::<Option<String>>(2).unwrap_or(None),
                 },
             ));
         }
@@ -906,9 +910,10 @@ impl MemoryDB {
             };
             links.push((
                 page_link_label_key(&label),
-                crate::synthesis::wikilinks::Wikilink {
+                wenlan_types::responses::PageLinkOutbound {
                     target_page_id: row.get::<Option<String>>(0).unwrap_or(None),
                     label,
+                    target_title: None,
                 },
             ));
         }

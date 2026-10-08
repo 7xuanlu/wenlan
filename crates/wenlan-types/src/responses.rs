@@ -541,6 +541,10 @@ pub struct PageLinkOutbound {
     /// `None` when the resolver couldn't find a matching active page —
     /// surfaces in the orphan-by-count feed via /api/pages/orphan-links.
     pub target_page_id: Option<String>,
+    /// Current title of the resolved active target, when visible in the
+    /// source page's space and workspace. Older serialized responses omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_title: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

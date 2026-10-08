@@ -1135,9 +1135,19 @@ pub async fn handle_get_page_links(
         .collect();
     let outbound = outbound_raw
         .into_iter()
-        .map(|l| wenlan_types::responses::PageLinkOutbound {
-            label: l.label,
-            target_page_id: l.target_page_id.filter(|t| visible_targets.contains(t)),
+        .map(|l| {
+            let target_page_id = l
+                .target_page_id
+                .filter(|target_id| visible_targets.contains(target_id));
+            wenlan_types::responses::PageLinkOutbound {
+                label: l.label,
+                target_title: if target_page_id.is_some() {
+                    l.target_title
+                } else {
+                    None
+                },
+                target_page_id,
+            }
         })
         .collect();
     let inbound = inbound_raw

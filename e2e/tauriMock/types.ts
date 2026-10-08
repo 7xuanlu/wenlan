@@ -17,6 +17,7 @@ export type MockFailure = {
 export type TauriMockPageScenario = {
   readonly projectionPendingOnce?: boolean;
   readonly recentChanges?: readonly PageChange[];
+  readonly outboundLinks?: Readonly<Record<string, readonly { label: string; target_page_id: string | null }[]>>;
   readonly daemonVersion?: string;
   readonly saveDaemonVersion?: string;
   /**

@@ -112,7 +112,7 @@ function normalizeLinkLabel(label: string): string {
   return label.trim().toLowerCase();
 }
 
-function parseWikilink(inner: string): { targetLabel: string; displayText: string } {
+function parseWikilink(inner: string): { targetLabel: string; displayText: string; hasAlias: boolean } {
   const pipeIndex = inner.indexOf("|");
   const rawTarget = pipeIndex >= 0 ? inner.slice(0, pipeIndex) : inner;
   const headingIndex = rawTarget.indexOf("#");
@@ -122,6 +122,7 @@ function parseWikilink(inner: string): { targetLabel: string; displayText: strin
   return {
     targetLabel,
     displayText: alias || targetDisplay || inner.trim(),
+    hasAlias: alias.length > 0,
   };
 }
 
@@ -380,10 +381,10 @@ export default function PageDetail({
   });
 
   const outboundTargetByLabel = useMemo(() => {
-    const map = new Map<string, string>();
+    const map = new Map<string, { id: string; title?: string | null }>();
     for (const link of pageLinks?.outbound ?? []) {
       if (link.target_page_id) {
-        map.set(normalizeLinkLabel(link.label), link.target_page_id);
+        map.set(normalizeLinkLabel(link.label), { id: link.target_page_id, title: link.target_title });
       }
     }
     return map;
@@ -674,7 +675,7 @@ export default function PageDetail({
         ["space-pages"],
         ["spaces-page-counts"],
         ["sidebar-space-page-counts"],
-        ["page-links", input.id],
+        ["page-links"],
         ["page-revisions", input.id],
         ["page", input.id],
       ]) {
@@ -1367,10 +1368,15 @@ export default function PageDetail({
   // Convert [[wikilinks]] to markdown links if they resolve to pages, else plain text
   const renderWikilinks = (content: string) => content.replace(/\[\[([^\]]+)\]\]/g, (_match, inner) => {
     const link = parseWikilink(inner);
-    const cid = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+    const target = outboundTargetByLabel.get(normalizeLinkLabel(link.targetLabel));
+    const cid = target?.id;
+    const currentTitle = cid === page.id ? page.title : target?.title;
+    const displayText = !link.hasAlias && currentTitle
+      ? currentTitle.replace(/[\\`*_[\]<>]/g, "\\$&")
+      : link.displayText;
     // Self references read as the page's name, not a link back to this page.
-    if (cid && cid !== page.id) return `[${link.displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
-    return link.displayText;
+    if (cid && cid !== page.id) return `[${displayText}](${PAGE_LINK_ANCHOR_PREFIX}${cid})`;
+    return displayText;
   });
   const cleanedContent = renderWikilinks(processed.content)
     .replace(/^#\s+.*\n+/, "")

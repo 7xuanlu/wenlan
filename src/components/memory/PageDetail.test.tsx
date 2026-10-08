@@ -183,7 +183,12 @@ describe("PageDetail", () => {
       title: "Renamed architecture",
       version: 4,
     });
-    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    client.setQueryData(["page-links", "referencing-note"], {
+      outbound: [{ label: "libSQL Architecture", target_page_id: "concept_abc", target_title: "libSQL Architecture" }],
+      inbound: [],
+    });
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />, client);
 
     await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
     const currentPage = await getPage("concept_abc");
@@ -201,6 +206,7 @@ describe("PageDetail", () => {
 
     expect(renamePage).toHaveBeenCalledWith("concept_abc", "Renamed architecture", 3);
     expect(await screen.findByRole("heading", { level: 1, name: "Renamed architecture" })).toBeInTheDocument();
+    expect(client.getQueryState(["page-links", "referencing-note"])?.isInvalidated).toBe(true);
     expect(screen.getByText(/libSQL is the core database layer powering Origin/)).toBeInTheDocument();
   });
 
