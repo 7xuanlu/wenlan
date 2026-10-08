@@ -50,6 +50,9 @@ export async function invoke(
   if (!(window as { __PREVIEW_FIXTURES__?: boolean }).__PREVIEW_FIXTURES__) {
     return liveInvoke(cmd, args);
   }
+  if (cmd === "rename_page") {
+    throw new Error("Renaming is unavailable in this fixture");
+  }
   if (new URLSearchParams(window.location.search).get("mode") === "spaces") return projectRuntime.invoke(cmd, args);
   if (new URLSearchParams(window.location.search).get("mode") === "folders") return folderRuntime.invoke(cmd, args);
   // Fixture previews must never toggle the maintainer's background service.

@@ -66,7 +66,7 @@ impl MemoryDB {
             return Err(WenlanError::Conflict("page version conflict".to_string()));
         }
         if visible.status != "active"
-            || matches!(visible.kind.as_str(), "entity" | "source")
+            || visible.kind == "entity"
             || matches!(
                 visible.creation_kind.as_str(),
                 "entity" | "source" | "imported"
@@ -203,7 +203,7 @@ impl MemoryDB {
                 return Err(WenlanError::NotFound("page not found".to_string()));
             }
             if status != "active"
-                || matches!(kind.as_str(), "entity" | "source")
+                || kind == "entity"
                 || matches!(creation_kind.as_str(), "entity" | "source" | "imported")
             {
                 return Err(WenlanError::Validation(

@@ -150,6 +150,17 @@ async fn effective_truth(db: &super::MemoryDB, id: &str) -> (crate::truth_contra
 #[tokio::test]
 async fn rename_preserves_identity_sources_body_history_and_pinned_projection() {
     let fixture = fixture().await;
+    {
+        let conn = fixture.db.conn.lock().await;
+        super::MemoryDB::append_page_history(&conn, "page-rename", "create", 1)
+            .await
+            .unwrap();
+    }
+    let history_before = fixture
+        .db
+        .list_page_history("page-rename", 10)
+        .await
+        .unwrap();
     let before = fixture.db.get_page("page-rename").await.unwrap().unwrap();
     let path_before = projected_filename(fixture.page_root.path(), "page-rename");
     let embedding_before = page_embedding_bytes(&fixture.db).await;
@@ -231,10 +242,13 @@ async fn rename_preserves_identity_sources_body_history_and_pinned_projection() 
         .list_page_history("page-rename", 10)
         .await
         .unwrap();
-    assert_eq!(history.len(), 1);
+    assert_eq!(history.len(), 2);
     assert_eq!(history[0].version, 8);
+    assert_eq!(history[0].title.as_deref(), Some("New title"));
     assert_eq!(history[0].content, before.content);
     assert_eq!(history[0].source_memory_ids, before.source_memory_ids);
+    assert_eq!(&history[1..], history_before.as_slice());
+    assert_eq!(history[1].title.as_deref(), Some("Old title"));
     let changelog: Vec<wenlan_types::responses::PageChangelogEntry> =
         serde_json::from_str(&after.changelog.unwrap()).unwrap();
     let entry = changelog.last().unwrap();
@@ -244,6 +258,54 @@ async fn rename_preserves_identity_sources_body_history_and_pinned_projection() 
         entry.delta_summary.as_deref(),
         Some("Title changed from ‘Old title’ to ‘New title’")
     );
+}
+
+#[tokio::test]
+async fn rename_titles_remain_in_history_after_the_changelog_is_trimmed() {
+    let fixture = fixture().await;
+    {
+        let conn = fixture.db.conn.lock().await;
+        super::MemoryDB::append_page_history(&conn, "page-rename", "create", 1)
+            .await
+            .unwrap();
+    }
+    let original = fixture
+        .db
+        .list_page_history("page-rename", 100)
+        .await
+        .unwrap();
+    for step in 1..=25 {
+        rename_page(
+            &fixture.db,
+            "page-rename",
+            &format!("Historical title {step}"),
+            6 + step,
+            &ReadScope::Global,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let history = fixture
+        .db
+        .list_page_history("page-rename", 100)
+        .await
+        .unwrap();
+    assert_eq!(history.len(), 26);
+    assert_eq!(&history[25..], original.as_slice());
+    for (index, snapshot) in history[..25].iter().enumerate() {
+        let step = 25 - index;
+        assert_eq!(snapshot.title, Some(format!("Historical title {step}")));
+        assert_eq!(snapshot.version, 7 + step as i64);
+        assert_eq!(snapshot.content, original[0].content);
+        assert_eq!(snapshot.source_memory_ids, original[0].source_memory_ids);
+    }
+    let page = fixture.db.get_page("page-rename").await.unwrap().unwrap();
+    let changelog: Vec<wenlan_types::responses::PageChangelogEntry> =
+        serde_json::from_str(&page.changelog.unwrap()).unwrap();
+    assert_eq!(changelog.len(), 20);
+    assert_eq!(changelog[0].version, 13);
+    assert_eq!(history[24].title.as_deref(), Some("Historical title 1"));
 }
 
 #[tokio::test]
@@ -571,8 +633,7 @@ async fn unsupported_rename_is_refused_without_projecting() {
         Some(empty_projection_root.path()),
     )
     .await
-    .err()
-    .expect("unsupported pages require review before rename");
+    .expect_err("unsupported pages require review before rename");
     assert!(matches!(
         error,
         crate::error::WenlanError::Conflict(message)
@@ -979,6 +1040,23 @@ async fn renaming_to_and_from_overview_rederives_page_kind() {
 #[tokio::test]
 async fn renamed_target_identity_survives_source_reindex_and_old_title_reuse() {
     let fixture = fixture().await;
+    {
+        let conn = fixture.db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET content='Read [[Old title]]' WHERE id='page-collision'",
+            (),
+        )
+        .await
+        .unwrap();
+        super::MemoryDB::append_page_history(&conn, "page-collision", "create", 1)
+            .await
+            .unwrap();
+    }
+    let source_history = fixture
+        .db
+        .list_page_history("page-collision", 10)
+        .await
+        .unwrap();
     rename_page(
         &fixture.db,
         "page-rename",
@@ -1026,6 +1104,15 @@ async fn renamed_target_identity_survives_source_reindex_and_old_title_reuse() {
     assert_eq!(outbound.len(), 1);
     assert_eq!(outbound[0].label, "Old title");
     assert_eq!(outbound[0].target_page_id.as_deref(), Some("page-rename"));
+    assert_eq!(
+        fixture
+            .db
+            .list_page_history("page-collision", 10)
+            .await
+            .unwrap(),
+        source_history
+    );
+    assert_eq!(source_history[0].content, "Read [[Old title]]");
 }
 
 #[tokio::test]
@@ -1098,6 +1185,11 @@ async fn projection_failure_after_write_restores_projection_and_database() {
         .await
         .unwrap();
     let truth_before = effective_truth(&fixture.db, "page-rename").await;
+    let history_before = fixture
+        .db
+        .list_page_history("page-rename", 10)
+        .await
+        .unwrap();
     let filename = projected_filename(fixture.page_root.path(), "page-rename");
     let target = fixture.page_root.path().join(&filename);
     let state_path = fixture.page_root.path().join(".wenlan/state.json");
@@ -1120,6 +1212,14 @@ async fn projection_failure_after_write_restores_projection_and_database() {
     let after = fixture.db.get_page("page-rename").await.unwrap().unwrap();
     assert_eq!(after.title, "Old title");
     assert_eq!(after.version, 7);
+    assert_eq!(
+        fixture
+            .db
+            .list_page_history("page-rename", 10)
+            .await
+            .unwrap(),
+        history_before
+    );
     assert_eq!(
         effective_truth(&fixture.db, "page-rename").await,
         truth_before

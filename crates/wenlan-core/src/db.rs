@@ -151,6 +151,8 @@ mod memory_point_reads_test;
 #[cfg(test)]
 mod page_drafts_test;
 #[cfg(test)]
+mod page_history_title_test;
+#[cfg(test)]
 mod page_rename_test;
 #[cfg(test)]
 mod presence_review_test;
@@ -1424,7 +1426,8 @@ pub const EMBEDDING_DIM: usize = 768;
 /// entity absorbing a recurring mention instead of a duplicate being created
 /// beside it (#708). Migration 131 adds `okf_concepts` and
 /// `okf_concept_links`, the provenance and concept links of pages imported
-/// from an OKF bundle source.
+/// from an OKF bundle source. Migration 133 adds page titles to immutable
+/// version history, backfilling only the exact snapshot matching a live page.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1432,7 +1435,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 132;
+pub const SCHEMA_VERSION: u32 = 133;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -1785,6 +1788,8 @@ pub struct NullEmbeddingRecoveryReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageHistoryEntry {
     pub version: i64,
+    /// `None` when this legacy snapshot's title cannot be recovered safely.
+    pub title: Option<String>,
     pub content: String,
     pub source_memory_ids: Vec<String>,
     pub edited_by: String,
@@ -10264,6 +10269,54 @@ impl MemoryDB {
                 conn.execute("PRAGMA user_version = 132", ())
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m132 bump: {e}")))?;
+            }
+            if ceiling < 133 {
+                return Ok(());
+            }
+            // Migration 133 adds title to immutable Page snapshots. Only the
+            // history row that exactly matches a live page's current version,
+            // content, and sources can be assigned its present-day title;
+            // older or divergent snapshots remain NULL rather than guessing.
+            if version < 133 {
+                let has_title = self
+                    .get_table_columns("page_history")
+                    .await?
+                    .contains("title");
+                let conn = self.conn.lock().await;
+                if !has_title {
+                    conn.execute("ALTER TABLE page_history ADD COLUMN title TEXT", ())
+                        .await
+                        .map_err(|e| {
+                            WenlanError::VectorDb(format!("m133 add page history title: {e}"))
+                        })?;
+                }
+                conn.execute(
+                    "UPDATE page_history
+                        SET title=(
+                            SELECT p.title FROM pages p
+                             WHERE p.id=page_history.page_id
+                               AND p.version=page_history.version
+                               AND p.content=page_history.content
+                               AND p.source_memory_ids=page_history.source_memory_ids
+                        )
+                      WHERE title IS NULL
+                        AND EXISTS (
+                            SELECT 1 FROM pages p
+                             WHERE p.id=page_history.page_id
+                               AND p.version=page_history.version
+                               AND p.content=page_history.content
+                               AND p.source_memory_ids=page_history.source_memory_ids
+                        )",
+                    (),
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("m133 backfill page history title: {e}"))
+                })?;
+                conn.execute("PRAGMA user_version = 133", ())
+                    .await
+                    .map_err(|e| WenlanError::VectorDb(format!("m133 bump: {e}")))?;
+                log::info!("[migration] Migration 133 applied: exact current page-history titles");
             }
         }
 
@@ -50577,8 +50630,8 @@ impl MemoryDB {
     ) -> Result<(), libsql::Error> {
         conn.execute(
             "INSERT INTO page_history \
-               (page_id, version, content, source_memory_ids, edited_by, created_at) \
-             SELECT id, version, content, source_memory_ids, ?2, ?3 \
+               (page_id, version, title, content, source_memory_ids, edited_by, created_at) \
+             SELECT id, version, title, content, source_memory_ids, ?2, ?3 \
              FROM pages WHERE id = ?1",
             libsql::params![page_id, edited_by, created_at],
         )
@@ -50891,8 +50944,8 @@ impl MemoryDB {
         if let Err(e) = conn
             .execute(
                 "INSERT OR IGNORE INTO page_history \
-                   (page_id, version, content, source_memory_ids, edited_by, created_at) \
-                 SELECT id, version, content, source_memory_ids, 'create', ?2 \
+                   (page_id, version, title, content, source_memory_ids, edited_by, created_at) \
+                 SELECT id, version, title, content, source_memory_ids, 'create', ?2 \
                  FROM pages WHERE id = ?1",
                 libsql::params![id, linked_at],
             )
@@ -51600,7 +51653,7 @@ impl MemoryDB {
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
-                "SELECT version, content, source_memory_ids, edited_by, created_at \
+                "SELECT version, title, content, source_memory_ids, edited_by, created_at \
                  FROM page_history WHERE page_id = ?1 \
                  ORDER BY version DESC LIMIT ?2",
                 libsql::params![page_id, limit],
@@ -51613,13 +51666,14 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_page_history row: {e}")))?
         {
-            let source_ids_json: String = row.get(2).unwrap_or_else(|_| "[]".to_string());
+            let source_ids_json: String = row.get(3).unwrap_or_else(|_| "[]".to_string());
             out.push(PageHistoryEntry {
                 version: row.get(0).unwrap_or(0),
-                content: row.get(1).unwrap_or_default(),
+                title: row.get(1).unwrap_or(None),
+                content: row.get(2).unwrap_or_default(),
                 source_memory_ids: serde_json::from_str(&source_ids_json).unwrap_or_default(),
-                edited_by: row.get(3).unwrap_or_default(),
-                created_at: row.get(4).unwrap_or(0),
+                edited_by: row.get(4).unwrap_or_default(),
+                created_at: row.get(5).unwrap_or(0),
             });
         }
         Ok(out)

@@ -670,7 +670,6 @@ export default function PageDetail({
         ["search"],
         ["knowledge-graph"],
         ["constellation-cartography"],
-        ["recent-concepts"],
         ["recent-pages"],
         ["space-pages"],
         ["spaces-page-counts"],
