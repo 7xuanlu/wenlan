@@ -325,6 +325,7 @@ AI 工具连接好后，可以直接这样说：
 
 ### 工作流指南
 
+- [建立第一个 LLM Wiki](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory)：用三份来源试做，核对引用，再检查来源更新后哪些内容需要修改。
 - [为咨询项目建立客户知识库](https://wenlan.app/zh-CN/learn/build-client-project-knowledge-base-for-consulting)
 - [建立有来源支撑的投资研究知识库](https://wenlan.app/zh-CN/learn/build-investment-research-knowledge-base)
 - [在撰写 PRD 前建立产品研究知识库](https://wenlan.app/zh-CN/learn/build-product-research-knowledge-base-for-prd)
