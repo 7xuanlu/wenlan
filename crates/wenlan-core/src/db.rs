@@ -60,6 +60,7 @@ mod okf_concepts;
 mod onboarding_milestones;
 mod page_drafts;
 pub mod page_map;
+mod page_rename;
 mod page_summary_backfill;
 mod presence_review;
 pub(crate) mod relation_write;
@@ -149,6 +150,8 @@ mod maintenance_retro_scan_test;
 mod memory_point_reads_test;
 #[cfg(test)]
 mod page_drafts_test;
+#[cfg(test)]
+mod page_rename_test;
 #[cfg(test)]
 mod presence_review_test;
 #[cfg(test)]
@@ -54249,6 +54252,48 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("replace_page_links begin: {e}")))?;
         let exec = async {
+            // Keep the identity of a resolved backlink when this body is
+            // saved again after its target was renamed. Its old display label
+            // may no longer resolve by title, and a newly created page may
+            // later reuse that label. Only retain an active, same-space,
+            // ordinary target already linked from this exact source page.
+            let mut stable_targets: HashMap<String, Option<String>> = HashMap::new();
+            let mut existing_edges = conn
+                .query(
+                    "SELECT e.dst_id,e.payload
+                       FROM edges e
+                       JOIN pages source ON source.id=e.src_id
+                       JOIN pages target ON target.id=e.dst_id
+                      WHERE e.src_id=?1 AND e.src_kind='page' AND e.dst_kind='page'
+                        AND e.edge_type='links' AND e.valid_until IS NULL
+                        AND source.status='active' AND target.status='active'
+                        AND COALESCE(target.kind,'concept')!='entity'
+                        AND target.space IS source.space",
+                    libsql::params![source_page_id],
+                )
+                .await?;
+            while let Some(row) = existing_edges.next().await? {
+                let target_id = row.get::<String>(0)?;
+                let payload = row.get::<Option<String>>(1)?.unwrap_or_default();
+                let Some(label) = serde_json::from_str::<serde_json::Value>(&payload)
+                    .ok()
+                    .and_then(|value| {
+                        value
+                            .get("label")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                else {
+                    continue;
+                };
+                let key = Self::page_title_key(&label);
+                stable_targets
+                    .entry(key)
+                    .and_modify(|existing| *existing = None)
+                    .or_insert(Some(target_id));
+            }
+            drop(existing_edges);
+
             // Dual-write (M2 PR-1): invalidate every active `links` edge
             // from this page up front; the loop below re-asserts (or
             // reactivates, via `dual_write_edge`'s upsert) an edge for each
@@ -54270,9 +54315,11 @@ impl MemoryDB {
             .await?;
             let mut src_space: Option<Option<String>> = None;
             for link in links {
-                let label_key = link.label.to_lowercase();
+                let label_key = Self::page_title_key(&link.label);
+                let stable_target = stable_targets.get(&label_key).and_then(Option::as_deref);
+                let target_page_id = stable_target.or(link.target_page_id.as_deref());
 
-                let Some(target_page_id) = &link.target_page_id else {
+                let Some(target_page_id) = target_page_id else {
                     // G6 Stage 2 PR 2b: orphan-only narrowing (item 3) --
                     // page_links keeps writing unresolved wikilinks only. A
                     // resolved link's row stops here; the edge minted below
@@ -54309,7 +54356,7 @@ impl MemoryDB {
                 let mut dst_rows = conn
                     .query(
                         "SELECT space FROM pages WHERE id = ?1",
-                        libsql::params![target_page_id.clone()],
+                        libsql::params![target_page_id],
                     )
                     .await?;
                 let dst_space: Option<String> = match dst_rows.next().await? {

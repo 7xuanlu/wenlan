@@ -146,6 +146,74 @@ struct LegacyKnowledgeStateV1 {
     concepts: HashMap<String, PageFileState>,
 }
 
+/// Rename may rewrite the projection state, so unknown or malformed state
+/// entries must fail closed instead of being silently discarded by serde.
+fn parse_rename_projection_state(bytes: &[u8]) -> Result<KnowledgeState, WenlanError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+    if object
+        .keys()
+        .any(|key| !["schema_version", "pages"].contains(&key.as_str()))
+    {
+        return Err(WenlanError::Conflict(
+            "page_projection_state_invalid".into(),
+        ));
+    }
+    let pages = object
+        .get("pages")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+    const PAGE_KEYS: &[&str] = &[
+        "file",
+        "content_sha256",
+        "version",
+        "last_written",
+        "title",
+        "description",
+        "space",
+    ];
+    for entry in pages.values() {
+        let entry = entry
+            .as_object()
+            .ok_or_else(|| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+        if entry.keys().any(|key| !PAGE_KEYS.contains(&key.as_str())) {
+            return Err(WenlanError::Conflict(
+                "page_projection_state_invalid".into(),
+            ));
+        }
+    }
+
+    let mut state = serde_json::from_slice::<KnowledgeState>(bytes)
+        .map_err(|_| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+    if state.pages.len() != pages.len() || pages.keys().any(|id| !state.pages.contains_key(id)) {
+        return Err(WenlanError::Conflict(
+            "page_projection_state_invalid".into(),
+        ));
+    }
+    if state.schema_version == 0 {
+        state.schema_version = KNOWLEDGE_STATE_SCHEMA_V2;
+    }
+    if state.schema_version != KNOWLEDGE_STATE_SCHEMA_V2 {
+        return Err(WenlanError::Conflict(
+            "page_projection_state_invalid".into(),
+        ));
+    }
+    let mut paths = std::collections::HashSet::new();
+    for entry in state.pages.values() {
+        folders::validate_page_path(&entry.file)
+            .map_err(|_| WenlanError::Conflict("page_projection_state_invalid".into()))?;
+        if !paths.insert(folders::collision_key(&entry.file)) {
+            return Err(WenlanError::Conflict(
+                "page_projection_state_invalid".into(),
+            ));
+        }
+    }
+    Ok(state)
+}
+
 /// Reserved OKF v0.2 root document (spec 2026-09-16-okf-projection.md change
 /// 4). Not a page: no `origin_id`, so `sources::page_watcher` already leaves
 /// it alone, and `lint::pages::traversal::scope_for` excludes it from
@@ -2038,6 +2106,77 @@ impl LockedProjection<'_> {
         Ok((normalized, entries))
     }
 
+    /// Capture a page projection when one is already indexed in state.json.
+    /// A missing state file or a state file with no entry for this page means
+    /// there is no projection to update; malformed state and broken indexed
+    /// files remain errors so a rename cannot silently overwrite user data.
+    pub(crate) fn capture_optional_page_projection(
+        &self,
+        page_id: &str,
+    ) -> Result<Option<(String, Vec<wenlan_types::repair::RepairRollbackFileEntry>)>, WenlanError>
+    {
+        let mut budget = RepairReadBudget::new();
+        let Some(state_bytes) =
+            self.read_relative_regular_nofollow_budget(".wenlan/state.json", &mut budget)?
+        else {
+            return Ok(None);
+        };
+        let state = parse_rename_projection_state(&state_bytes)?;
+        if !state.pages.contains_key(page_id) {
+            return Ok(None);
+        }
+        self.capture_rename_page_projection(page_id).map(Some)
+    }
+
+    /// Capture and prove that an indexed projection is still the canonical
+    /// version recorded by the DB. A syntactically safe path alone does not
+    /// authorize overwriting a user's unsynced Markdown edits.
+    pub(crate) fn capture_checked_page_projection(
+        &self,
+        page: &Page,
+    ) -> Result<Option<(String, Vec<wenlan_types::repair::RepairRollbackFileEntry>)>, WenlanError>
+    {
+        let Some((path, entries)) = self.capture_optional_page_projection(&page.id)? else {
+            return Ok(None);
+        };
+        if entries.len() != 2 {
+            return Err(WenlanError::Conflict("repair_target_stale".to_string()));
+        }
+        let state_bytes = hex::decode(entries[0].content_hex())
+            .map_err(|_| WenlanError::Conflict("repair_target_stale".to_string()))?;
+        let state: serde_json::Value = serde_json::from_slice(&state_bytes)
+            .map_err(|_| WenlanError::Conflict("repair_target_stale".to_string()))?;
+        let stored_page = state
+            .get("pages")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|pages| pages.get(&page.id));
+        let expected_state = page_file_state_value(page, &path);
+        let target_bytes = hex::decode(entries[1].content_hex())
+            .map_err(|_| WenlanError::Conflict("repair_target_stale".to_string()))?;
+        let expected_markdown = render_markdown_for(page);
+        let state_matches = stored_page.is_some_and(|stored| {
+            if stored == &expected_state {
+                return true;
+            }
+            // `content_sha256` was added after older PageFileState entries
+            // were already on disk. A missing hash is compatible only when
+            // the actual projection bytes still match the current DB render;
+            // present hashes and every other known field must match exactly.
+            let mut expected_without_hash = expected_state.clone();
+            expected_without_hash
+                .as_object_mut()
+                .expect("PageFileState serializes as an object")
+                .remove("content_sha256");
+            stored.get("content_sha256").is_none() && stored == &expected_without_hash
+        });
+        if !state_matches || target_bytes.as_slice() != expected_markdown.as_bytes() {
+            return Err(WenlanError::Conflict(
+                "page projection contains unsynced edits".to_string(),
+            ));
+        }
+        Ok(Some((path, entries)))
+    }
+
     fn restore_rename_page_projection(
         &self,
         target_path: &str,
@@ -2095,7 +2234,9 @@ impl LockedProjection<'_> {
             WenlanError::Validation("repair_projection_rollback_invalid".to_string())
         })?;
         before_target_restore()?;
-        write_regular_nofollow(&self.capabilities.root, target_path, &target_bytes)?;
+        let (target_directory, target_name) =
+            folders::page_parent(&self.capabilities.root, target_path)?;
+        write_regular_nofollow(&target_directory, &target_name, &target_bytes)?;
         after_target_restore()?;
         let mut budget = RepairReadBudget::new();
         let (_, state_mode) = read_state_nofollow(&self.capabilities.wenlan, &mut budget)?;
@@ -2114,6 +2255,13 @@ impl LockedRepairProjection<'_> {
         LockedProjection {
             capabilities: self.capabilities,
         }
+    }
+
+    /// Refresh the generated root index after a committed title write. This
+    /// reuses the same no-follow capability and ownership check as page writes.
+    pub(crate) fn refresh_index(&self) -> Result<(), WenlanError> {
+        let state = folders::read_state_strict(&self.capabilities.wenlan)?;
+        KnowledgeWriter::regenerate_index_cap(self.capabilities, &state)
     }
 
     pub(crate) fn scan_page_root_controlled(
@@ -2189,6 +2337,15 @@ impl LockedRepairProjection<'_> {
     ) -> Result<(String, Vec<wenlan_types::repair::RepairRollbackFileEntry>), WenlanError> {
         self.locked_projection()
             .capture_rename_page_projection(page_id)
+    }
+
+    pub(crate) fn capture_checked_page_projection(
+        &self,
+        page: &Page,
+    ) -> Result<Option<(String, Vec<wenlan_types::repair::RepairRollbackFileEntry>)>, WenlanError>
+    {
+        self.locked_projection()
+            .capture_checked_page_projection(page)
     }
 
     pub(crate) fn restore_rename_page_projection(

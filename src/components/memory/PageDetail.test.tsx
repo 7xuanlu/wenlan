@@ -85,6 +85,7 @@ vi.mock("../../lib/tauri", () => ({
   listPages: vi.fn().mockResolvedValue([]),
   redistillPage: vi.fn().mockResolvedValue({ status: "ok", updated: true }),
   updatePage: vi.fn().mockResolvedValue({ outcome: "saved" }),
+  renamePage: vi.fn(),
   getDaemonVersion: vi.fn().mockResolvedValue("0.14.1"),
   getSystemInfo: vi.fn().mockResolvedValue({ os: "macos" }),
   daemonMeetsFloor: vi.fn().mockReturnValue(true),
@@ -174,6 +175,152 @@ describe("PageDetail", () => {
     expect(await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
+
+  it("renames a note with its current version and keeps its content", async () => {
+    const { getPage, renamePage } = await import("../../lib/tauri");
+    (renamePage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      id: "concept_abc",
+      title: "Renamed architecture",
+      version: 4,
+    });
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+
+    await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
+    const currentPage = await getPage("concept_abc");
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...currentPage,
+      title: "Renamed architecture",
+      version: 4,
+    });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    const titleInput = screen.getByRole("textbox", { name: "Note title" });
+    await user.clear(titleInput);
+    await user.type(titleInput, "Renamed architecture");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+
+    expect(renamePage).toHaveBeenCalledWith("concept_abc", "Renamed architecture", 3);
+    expect(await screen.findByRole("heading", { level: 1, name: "Renamed architecture" })).toBeInTheDocument();
+    expect(screen.getByText(/libSQL is the core database layer powering Origin/)).toBeInTheDocument();
+  });
+
+  it("cancels a note rename without changing the title", async () => {
+    const { renamePage } = await import("../../lib/tauri");
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+
+    await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    await user.click(screen.getByRole("button", { name: "Cancel rename" }));
+
+    expect(renamePage).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { level: 1, name: "libSQL Architecture" })).toBeInTheDocument();
+  });
+
+  it("keeps a failed note rename retryable with the proposed title", async () => {
+    const { renamePage } = await import("../../lib/tauri");
+    (renamePage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("daemon offline"));
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+
+    await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    await user.clear(screen.getByRole("textbox", { name: "Note title" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Changed title");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not rename this note. Reload and try again.");
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Changed title");
+    expect(screen.getByRole("button", { name: "Reload note" })).toBeInTheDocument();
+  });
+
+  it("asks for review after a policy denial and retains the original note title", async () => {
+    const { renamePage } = await import("../../lib/tauri");
+    (renamePage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("page_review_required: review this page before renaming"),
+    );
+    const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+
+    await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    await user.clear(screen.getByRole("textbox", { name: "Note title" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Proposed title");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Review this note before renaming it.");
+    expect(screen.getByRole("textbox", { name: "Note title" })).toHaveValue("Proposed title");
+    expect(screen.queryByRole("button", { name: "Reload note" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel rename" }));
+    expect(screen.getByRole("heading", { level: 1, name: "libSQL Architecture" })).toBeInTheDocument();
+  });
+
+  it("ignores a stale rename reload after navigating to another note", async () => {
+    const { getPage, renamePage } = await import("../../lib/tauri");
+    const originalPage = (await getPage("concept_abc"))!;
+    (renamePage as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("version conflict"));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { user, rerender } = renderWithQuery(<PageDetail {...defaultProps} />, queryClient);
+
+    await screen.findByRole("heading", { level: 1, name: "libSQL Architecture" });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    await user.clear(screen.getByRole("textbox", { name: "Note title" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Old note proposal");
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+    await screen.findByRole("alert");
+
+    const staleReload = deferred<Awaited<ReturnType<typeof getPage>>>();
+    (getPage as ReturnType<typeof vi.fn>).mockImplementationOnce(() => staleReload.promise);
+    await user.click(screen.getByRole("button", { name: "Reload note" }));
+    (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...originalPage,
+      id: "concept_next",
+      title: "Next note",
+      version: 8,
+    });
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <PageDetail {...defaultProps} pageId="concept_next" />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("heading", { level: 1, name: "Next note" });
+
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Rename note" }));
+    await user.clear(screen.getByRole("textbox", { name: "Note title" }));
+    await user.type(screen.getByRole("textbox", { name: "Note title" }), "Renamed next note");
+    await act(async () => staleReload.resolve({ ...originalPage, version: 99 }));
+    await user.click(screen.getByRole("button", { name: "Save title" }));
+    expect(renamePage).toHaveBeenLastCalledWith("concept_next", "Renamed next note", 8);
+  });
+
+  it.each(["entity", "source", "imported"] as const)(
+    "does not offer rename for autogenerated %s notes",
+    async (creationKind) => {
+      const { getPage } = await import("../../lib/tauri");
+      (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        id: "concept_abc",
+        title: "Generated note",
+        summary: null,
+        content: "Generated note body.",
+        entity_id: creationKind === "entity" ? "entity_abc" : null,
+        domain: null,
+        source_memory_ids: [],
+        version: 1,
+        status: "active",
+        creation_kind: creationKind,
+        created_at: "2026-07-17T11:00:00+00:00",
+        last_compiled: "2026-07-17T11:55:00+00:00",
+        last_modified: "2026-07-17T11:59:00+00:00",
+      });
+      const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
+
+      await screen.findByRole("heading", { level: 1, name: "Generated note" });
+      await user.click(screen.getByRole("button", { name: "Page actions" }));
+      expect(screen.queryByRole("menuitem", { name: "Rename note" })).toBeNull();
+    },
+  );
 
   it("fetches the page with the explicit-browse intent, not the automatic default", async () => {
     const { getPage } = await import("../../lib/tauri");

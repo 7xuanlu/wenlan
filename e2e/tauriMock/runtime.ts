@@ -249,6 +249,7 @@ export class TauriMockRuntime {
       };
       case "record_page_editor_diagnostic": return null;
       case "list_pages": return this.listPages(args);
+      case "list_recent_changes": return this.pageScenario.recentChanges ?? [];
       case "get_page_sources": {
         const pageId = requiredString(command, args, "pageId");
         const page = this.pages.find((entry) => entry.id === pageId);
@@ -272,6 +273,7 @@ export class TauriMockRuntime {
       // rejected as an unknown command.
       case "active_import_batches_cmd": return { batches: [] };
       case "create_page": return this.createPage(args);
+      case "rename_page": return this.renamePage(args);
       case "update_page": return this.updatePage(args);
       case "delete_page": return this.deletePage(args);
       case "redistill_page": return this.redistillPage(args);
@@ -588,6 +590,25 @@ export class TauriMockRuntime {
       outcome: structuredClone(outcome),
     });
     return outcome;
+  }
+
+  private renamePage(args: unknown): { id: string; title: string; version: number } {
+    const id = requiredString("rename_page", args, "id");
+    const title = requiredString("rename_page", args, "title").trim();
+    const expectedVersion = requiredNumber("rename_page", args, "expectedVersion");
+    const index = this.pages.findIndex((page) => page.id === id);
+    const current = this.pages[index];
+    if (!current) throw new Error("page not found (404)");
+    if (current.status !== "active" || current.creation_kind === "entity" || current.creation_kind === "source") {
+      throw new Error("page cannot be renamed (403)");
+    }
+    if (current.version !== expectedVersion) throw new Error("page version conflict (409)");
+    if (this.pages.some((page) => page.id !== id && page.title.toLocaleLowerCase() === title.toLocaleLowerCase())) {
+      throw new Error("page title collision (409)");
+    }
+    const renamed = { ...current, title, version: current.version + 1 };
+    this.pages[index] = renamed;
+    return { id: renamed.id, title: renamed.title, version: renamed.version };
   }
 
   private redistillPage(args: unknown): { status: "ok"; updated: true } {

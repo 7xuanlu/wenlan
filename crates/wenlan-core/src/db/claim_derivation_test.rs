@@ -875,6 +875,15 @@ async fn stale_done_job_cleanup_respects_the_captured_batch() {
 /// Give a page a completed derivation: N claims, N revisions, membership rows,
 /// and a marker whose digest matches the page's live text.
 async fn derive_page(db: &MemoryDB, page_id: &str, claim_count: usize) -> Vec<String> {
+    derive_page_at_version(db, page_id, claim_count, 1).await
+}
+
+async fn derive_page_at_version(
+    db: &MemoryDB,
+    page_id: &str,
+    claim_count: usize,
+    page_version: i64,
+) -> Vec<String> {
     let conn = db.conn.lock().await;
     let content: String = {
         let mut rows = conn
@@ -918,8 +927,8 @@ async fn derive_page(db: &MemoryDB, page_id: &str, claim_count: usize) -> Vec<St
         .unwrap();
         conn.execute(
             "INSERT INTO page_version_claims (page_id, page_version, claim_revision_id, ordinal)
-             VALUES (?1, 1, ?2, ?3)",
-            libsql::params![page_id, rev_id.clone(), i as i64],
+             VALUES (?1, ?2, ?3, ?4)",
+            libsql::params![page_id, page_version, rev_id.clone(), i as i64],
         )
         .await
         .unwrap();
@@ -929,8 +938,14 @@ async fn derive_page(db: &MemoryDB, page_id: &str, claim_count: usize) -> Vec<St
         "INSERT INTO claim_derivation_markers
              (page_id, page_version, page_version_digest, extractor_version,
               inventory_count, created_at)
-         VALUES (?1, 1, ?2, ?3, ?4, 0)",
-        libsql::params![page_id, digest, EXTRACTOR_VERSION, claim_count as i64],
+         VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+        libsql::params![
+            page_id,
+            page_version,
+            digest,
+            EXTRACTOR_VERSION,
+            claim_count as i64
+        ],
     )
     .await
     .unwrap();
@@ -1133,6 +1148,34 @@ fn evidence_span_digest() -> String {
 /// rather than about the condition under test. Cheaper to seed it right.
 async fn support_claim(db: &MemoryDB, page_id: &str, revision_id: &str, score: f64) {
     support_claim_at_chunk(db, page_id, revision_id, score, 0).await;
+}
+
+/// Seed one exact, eligible support verdict for another core test module.
+/// This keeps metadata-only rename tests on the real page-version, claim,
+/// evidence, lease, and finalization paths rather than hand-writing a truth row.
+pub(super) async fn publish_supported_page_for_rename_test(
+    db: &MemoryDB,
+    page_id: &str,
+    page_version: i64,
+) {
+    set_test_judge_eligibility(db, "active", SUPPORT_THRESHOLD).await;
+    let revisions = derive_page_at_version(db, page_id, 1, page_version).await;
+    assert_eq!(revisions.len(), 1);
+    support_claim(db, page_id, &revisions[0], 0.9).await;
+    let job = lease_page(db, page_id, page_version, "rename-test-worker").await;
+    let outcome = db
+        .evaluate_page_support(page_id, page_version)
+        .await
+        .unwrap();
+    assert_eq!(outcome, SupportOutcome::Supported);
+    assert!(db
+        .finalize_page_support(page_id, page_version, &job, "rename-test-worker", &outcome,)
+        .await
+        .unwrap());
+    assert!(db
+        .finish_derivation_job(&job, "rename-test-worker")
+        .await
+        .unwrap());
 }
 
 /// [`support_claim`] where the cited evidence is some chunk other than the

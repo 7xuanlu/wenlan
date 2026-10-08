@@ -664,6 +664,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/pages/{id}` | repair | yes | automatic | **`named_page`** | `handle_get_repair_page` | exact durable pending repair target page |
 | `PUT` | `/api/pages/{id}` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/pages/{id}/archive` | main | yes | automatic | `none` | `handle_archive_page` | opaque response type — fail-closed |
+| `POST` | `/api/pages/{id}/rename` | main | yes | automatic | `none` | `handle_rename_page` | title metadata — core page_write_permit before mutation |
 | `POST` | `/api/pages/{id}/export` | main | yes | automatic | `none` | `handle_export_page` | EFFECT: writes page prose to the requested vault |
 | `GET` | `/api/pages/{id}/links` | main | yes | automatic | **`named_page`** | `handle_get_page_links` | PageLinkInbound.label, PageLinkOutbound.label |
 | `DELETE` | `/api/pages/{id}/map` | main | yes | automatic | `none` | `handle_reset_page_map` | opaque response type — fail-closed |
@@ -782,6 +783,7 @@ must be demoted individually with a recorded reason. **Every MCP tool is
 | `reject_refinement` | yes | automatic | `none` | tool handler |
 | `verify_lint_repair` | yes | automatic | `none` | tool handler |
 | `write_page` | yes | automatic | `none` | tool handler |
+| `rename_page` | yes | automatic | `none` | tool handler |
 
 ## CLI — all 23 `Commands` variants
 
@@ -998,6 +1000,8 @@ carrying the authority of agreement.
 | `core/db/maintenance_duplicate_reads.rs::scan_near_duplicate_slice` | `pub(crate)` | no | no | — | — |
 | `core/db/maintenance_retro_scan.rs::scan_automatic_retro_stub_slice` | `pub(crate)` | no | no | — | — |
 | `core/db/page_drafts.rs::publish_page_draft` | `pub` | no | **yes** | `server/page_routes.rs::handle_publish_page_draft` | — |
+| `core/db/page_rename.rs::page_for_title_rename_on_connection` | `private` | no | no | — | — |
+| `core/db/page_rename.rs::rename_page` | `pub` | yes | no | — | — |
 | `core/db/page_summary_backfill.rs::backfill_page_summaries` | `pub` | no | **yes** | `server/main/startup.rs::prepare_startup_state` | — |
 | `core/db/presence_review.rs::page_binding` | `private` | no | no | — | — |
 | `core/db/repair_deterministic.rs::apply_deterministic_repair_cas` | `pub` | no | no | — | — |

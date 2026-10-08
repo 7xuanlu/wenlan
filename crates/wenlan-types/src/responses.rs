@@ -439,6 +439,14 @@ pub struct CreatePageResponse {
     pub write_outcome: Option<WriteOutcome>,
 }
 
+/// Result of an explicit page-title change. Does not expose page prose.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenamePageResponse {
+    pub id: String,
+    pub title: String,
+    pub version: i64,
+}
+
 /// `POST /api/memory/entities` (legacy list) and `POST /api/memory/entities/query`.
 /// `total` is the number of entities matching the filter before `limit`/`offset`;
 /// the legacy route sets it to `entities.len()`.

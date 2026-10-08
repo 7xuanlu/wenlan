@@ -55,6 +55,7 @@ pub(crate) fn register(router: TrackedRouter<SharedState>) -> TrackedRouter<Shar
         .route("/api/pages/{id}/links", get(handle_get_page_links))
         .route("/api/pages/{id}/move", post(handle_move_page))
         .route("/api/pages/{id}/archive", post(handle_archive_page))
+        .route("/api/pages/{id}/rename", post(handle_rename_page))
         .route("/api/pages/{id}/revisions", get(handle_get_page_revisions))
         .route("/api/pages/{id}/review", post(handle_review_page))
 }
@@ -1032,6 +1033,39 @@ pub async fn handle_export_page(
     Ok(Json(wenlan_types::responses::ExportPageResponse {
         path: result.path,
     }))
+}
+
+/// Explicit title edit shared by the desktop app and local agent clients.
+/// Scope and the automatic-reader write permit are rechecked by the core
+/// capability; no content-refresh or delete/recreate path is involved.
+pub async fn handle_rename_page(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Path(id): Path<String>,
+    Json(req): Json<wenlan_types::requests::RenamePageRequest>,
+) -> Result<Json<wenlan_types::responses::RenamePageResponse>, ServerError> {
+    let (db, page_root) = {
+        let state = state.read().await;
+        (
+            state.db.clone().ok_or(ServerError::DbNotInitialized)?,
+            state
+                .lint_config
+                .page_root()
+                .map(std::path::Path::to_path_buf),
+        )
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    Ok(Json(
+        wenlan_core::post_write::rename_page(
+            &db,
+            &id,
+            &req.title,
+            req.expected_version,
+            &scope,
+            page_root.as_deref(),
+        )
+        .await?,
+    ))
 }
 
 /// POST /api/memory/{id}/update-page

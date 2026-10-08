@@ -36,6 +36,22 @@ pub(crate) use self::page_update::merge_shrink_threshold;
 pub(crate) use self::page_update::PRE_WRITE_GATE;
 pub use self::page_update::{page_is_human_owned, stage_page_revision_card, PipelineStage, Writer};
 
+/// Rename an active knowledge page using the canonical page-write boundary.
+/// This preserves its identity and source metadata while applying the same
+/// scope, cutover, version, history, and projection protections as other
+/// durable page writes.
+pub async fn rename_page(
+    db: &MemoryDB,
+    id: &str,
+    title: &str,
+    expected_version: i64,
+    scope: &crate::read_scope::ReadScope,
+    knowledge_path: Option<&Path>,
+) -> Result<wenlan_types::responses::RenamePageResponse, WenlanError> {
+    db.rename_page(id, title, expected_version, scope, knowledge_path)
+        .await
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WriteResult {
     pub id: String,
