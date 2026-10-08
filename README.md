@@ -321,6 +321,7 @@ More detailed documentation, concepts, and comparisons:
 
 ### Workflow guides
 
+- [Build your first LLM Wiki](https://wenlan.app/learn/distilled-wiki-pages-ai-memory): work through a three-source example, check its citations, and review what changes when a source is updated.
 - [Build a client project knowledge base for consulting](https://wenlan.app/learn/build-client-project-knowledge-base-for-consulting)
 - [Build an investment research knowledge base](https://wenlan.app/learn/build-investment-research-knowledge-base)
 - [Build a product research knowledge base before writing a PRD](https://wenlan.app/learn/build-product-research-knowledge-base-for-prd)

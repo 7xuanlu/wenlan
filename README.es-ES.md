@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6bb2b7079b112ae16bcdde95f468e239512c00c02689d446755261b4e2c77523 -->
+<!-- README_SYNC: source=README.md sha256=8a2a6a1713d374177d0d70418acfc3793d2a31bab4dd18308765e7d86907a0a7 -->
 
 <p align="center">
   <picture>
@@ -326,6 +326,7 @@ Documentación más detallada, conceptos y comparaciones:
 
 ### Guías de flujo de trabajo
 
+- [Crear tu primera LLM Wiki (guía en inglés)](https://wenlan.app/learn/distilled-wiki-pages-ai-memory): prueba un ejemplo con tres fuentes, revisa las citas y comprueba qué cambia al actualizar una fuente.
 - [Crear una base de conocimiento de proyectos para consultoría](https://wenlan.app/learn/build-client-project-knowledge-base-for-consulting)
 - [Crear una base de conocimiento para investigación de inversiones](https://wenlan.app/learn/build-investment-research-knowledge-base)
 - [Crear una base de conocimiento de investigación de producto antes de redactar un PRD](https://wenlan.app/learn/build-product-research-knowledge-base-for-prd)

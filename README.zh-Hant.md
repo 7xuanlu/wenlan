@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6bb2b7079b112ae16bcdde95f468e239512c00c02689d446755261b4e2c77523 -->
+<!-- README_SYNC: source=README.md sha256=8a2a6a1713d374177d0d70418acfc3793d2a31bab4dd18308765e7d86907a0a7 -->
 
 <p align="center">
   <picture>
@@ -325,6 +325,7 @@ AI 工具連接好後，可以直接這樣說：
 
 ### 工作流程指南
 
+- [建立第一個 LLM Wiki](https://wenlan.app/zh-TW/learn/distilled-wiki-pages-ai-memory)：用三份來源試做，核對引用，再檢查來源更新後哪些內容需要修改。
 - [為顧問專案建立客戶知識庫](https://wenlan.app/zh-TW/learn/build-client-project-knowledge-base-for-consulting)
 - [建立有來源支撐的投資研究知識庫](https://wenlan.app/zh-TW/learn/build-investment-research-knowledge-base)
 - [在撰寫 PRD 前建立產品研究知識庫](https://wenlan.app/zh-TW/learn/build-product-research-knowledge-base-for-prd)
