@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,11 @@ import Main from "./Main";
 import { i18n } from "../../i18n";
 import { clearPendingPairingCode, setPendingPairingCode } from "../../lib/pairingLink";
 
-const flushHarness = vi.hoisted(() => ({ enabled: false, flush: vi.fn<() => Promise<boolean>>() }));
+const flushHarness = vi.hoisted(() => ({
+  enabled: false,
+  flush: vi.fn<() => Promise<boolean>>(),
+  draftIdentity: { draftId: null as string | null, version: null as number | null },
+}));
 
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
@@ -58,6 +62,7 @@ vi.mock("./PageDetail", async () => {
   default: (props: {
     onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
     onBack?: () => void;
+    onDeleted?: (pageId: string) => void;
     onEditDirtyChange?: (dirty: boolean) => void;
     onSavePendingChange?: (pending: boolean) => void;
     pageId: string;
@@ -78,6 +83,9 @@ vi.mock("./PageDetail", async () => {
       </button>
       <button type="button" onClick={() => props.onSavePendingChange?.(false)}>
         Finish page save
+      </button>
+      <button type="button" onClick={() => { props.onDeleted?.(props.pageId); props.onBack?.(); }}>
+        Delete current page
       </button>
       <button
         type="button"
@@ -100,23 +108,23 @@ vi.mock("./SettingsPage", () => ({ default: () => <div /> }));
 vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
 vi.mock("./Sidebar", () => ({
   default: (props: {
-    currentPageId?: string | null;
     onNavigatePages: () => void;
-    onSelectPage?: (page: { id: string }) => void;
+    onOpenSearch?: (trigger: HTMLButtonElement) => void;
+    searchDisabled?: boolean;
+    searchOpen?: boolean;
   }) => (
     <aside>
+      <button
+        aria-expanded={props.searchOpen ?? false}
+        disabled={props.searchDisabled}
+        onClick={(event) => props.onOpenSearch?.(event.currentTarget)}
+        type="button"
+      >
+        Search
+      </button>
       <button type="button" onClick={props.onNavigatePages}>
         Sidebar Wiki
       </button>
-      <button type="button" onClick={() => props.onSelectPage?.({ id: "page-two" })}>Sidebar second page</button>
-      {props.currentPageId && (
-        <button
-          type="button"
-          onClick={() => props.onSelectPage?.({ id: props.currentPageId! })}
-        >
-          Reselect current page
-        </button>
-      )}
     </aside>
   ),
   SidebarToggleButton: (props: {
@@ -129,6 +137,33 @@ vi.mock("./Sidebar", () => ({
   ),
   SidebarHeaderDivider: () => null,
 }));
+vi.mock("./navigation/ContextBrowser", () => ({
+  ContextBrowser: (props: { currentPageId: string | null; onSelectPage: (page: { id: string }) => void }) => (
+    <div data-testid="context-browser">
+      <button type="button" onClick={() => props.onSelectPage({ id: "page-two" })}>Context browser second page</button>
+      {props.currentPageId && <button type="button" onClick={() => props.onSelectPage({ id: props.currentPageId! })}>Reselect current page</button>}
+    </div>
+  ),
+}));
+vi.mock("./pages/WikiWorkspace", () => ({
+  WikiWorkspace: (props: {
+    children: React.ReactNode;
+    tabs?: React.ReactNode;
+    onSecondaryHost?: (node: HTMLDivElement | null) => void;
+    currentPageId?: string | null;
+    onOpenPage: (page: { id: string }) => void;
+    onCreatePage?: () => void;
+    onOpenDraft?: (draftId: string, space: string | null) => void;
+  }) => (
+    <div data-current-page={props.currentPageId ?? "none"} data-testid="wiki-workspace">
+      {props.tabs}{props.children}<div ref={props.onSecondaryHost} />
+      {props.currentPageId && <button type="button" onClick={() => props.onOpenPage({ id: props.currentPageId! })}>Reselect current page</button>}
+      <button type="button" onClick={() => props.onOpenPage({ id: "page-two" })}>Wiki directory second page</button>
+      {props.onCreatePage && <button type="button" onClick={props.onCreatePage}>Create note draft</button>}
+      {props.onOpenDraft && <button type="button" onClick={() => props.onOpenDraft!("draft-x", null)}>Open draft X</button>}
+    </div>
+  ),
+}));
 vi.mock("./pages/PagesOverview", () => ({
   PagesOverview: ({ onSelectPage }: { onSelectPage: (id: string) => void }) => (
     <div data-testid="pages-overview">
@@ -140,7 +175,27 @@ vi.mock("./pages/PagesOverview", () => ({
 }));
 vi.mock("./pages/PageDraftEditor", async () => {
   const React = await import("react");
-  return { PageDraftEditor: React.forwardRef(() => <div />) };
+  return { PageDraftEditor: React.forwardRef((props: {
+    draftId?: string;
+    onBack?: () => void;
+    onDraftIdentity?: (draftId: string) => void;
+  }, ref) => {
+    React.useImperativeHandle(ref, () => props.draftId ? null : ({
+      flush: () => flushHarness.enabled ? flushHarness.flush() : Promise.resolve(true),
+      getIdentity: () => flushHarness.draftIdentity,
+      requestBack: async () => {},
+    }));
+    return (
+      <div data-testid="draft-editor">
+        {props.draftId && <p>Unhydrated draft</p>}
+        <button type="button" onClick={() => {
+          flushHarness.draftIdentity = { draftId: "draft-x", version: 1 };
+          props.onDraftIdentity?.("draft-x");
+        }}>Report draft X identity</button>
+        <button type="button" onClick={props.onBack}>Draft back</button>
+      </div>
+    );
+  }) };
 });
 vi.mock("./spaces", () => ({ SpacesOverview: () => <div /> }));
 vi.mock("./settings/SettingsSidebar", () => ({ default: () => <aside /> }));
@@ -153,6 +208,7 @@ vi.mock("./ImportView", () => ({
 vi.mock("./AboutWenlanDialog", () => ({ default: () => <div /> }));
 
 interface RenderMainProps {
+  initialView?: React.ComponentProps<typeof Main>["initialView"];
   initialMemoryId?: string | null;
   initialPageId?: string | null;
   onRegisterQuitGuard?: (guard: (() => Promise<boolean>) | null) => void;
@@ -184,12 +240,130 @@ describe("Main published PageDetail navigation guards", () => {
     vi.clearAllMocks();
     flushHarness.enabled = false;
     flushHarness.flush.mockReset();
+    flushHarness.draftIdentity = { draftId: null, version: null };
     eventListeners.clear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     clearPendingPairingCode();
+  });
+
+  it("includes the independently mounted right editor in the quit guard", async () => {
+    flushHarness.enabled = true;
+    flushHarness.flush.mockResolvedValue(true);
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const { user } = renderMain({ initialPageId: "page-one", onRegisterQuitGuard: guard => { quitGuard = guard; } });
+    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
+    const right = await screen.findByRole("region", { name: "Right notes" });
+    await user.click(screen.getByRole("button", { name: "Open second page" }));
+    expect(within(right).getByRole("heading", { name: "Pending page" })).toBeInTheDocument();
+    flushHarness.flush.mockResolvedValue(false);
+    await act(async () => { await expect(quitGuard!()).resolves.toBe(false); });
+    expect(within(right).getByRole("heading", { name: "Pending page" })).toBeInTheDocument();
+    flushHarness.flush.mockResolvedValue(true);
+    await act(async () => { await expect(quitGuard!()).resolves.toBe(true); });
+  });
+
+  it("blocks Back, Escape, and tab close while a note move waits, then remains recoverable", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    flushHarness.flush.mockReturnValue(saving);
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const { user } = renderMain({ initialPageId: "page-one", onRegisterQuitGuard: guard => { quitGuard = guard; } });
+
+    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
+    expect(flushHarness.flush).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
+    fireEvent.keyDown(window, { key: "Escape" });
+    await user.click(screen.getByRole("button", { name: "Close Untitled note" }));
+    expect(flushHarness.flush).toHaveBeenCalledOnce();
+    await act(async () => settle(true));
+
+    const right = await screen.findByRole("region", { name: "Right notes" });
+    expect(within(right).getByRole("heading", { name: "Pending page" })).toBeInTheDocument();
+    await expect(quitGuard!()).resolves.toBe(true);
+  });
+
+  it("keeps an initial Page destination pending until a note move completes", async () => {
+    flushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    flushHarness.flush.mockReturnValue(saving);
+    const { user, rerenderMain } = renderMain();
+
+    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
+    rerenderMain({ initialPageId: "page-two" });
+    expect(flushHarness.flush).toHaveBeenCalledOnce();
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+
+    await act(async () => settle(true));
+    expect(await screen.findByText("Second page")).toBeInTheDocument();
+  });
+
+  it("releases a refused initial-memory request after draft flush failure", async () => {
+    flushHarness.enabled = true;
+    flushHarness.flush
+      .mockResolvedValueOnce(false)
+      .mockResolvedValue(true);
+    const initialView = { kind: "page-draft" as const, space: null, sessionKey: 90 };
+    const { rerenderMain } = renderMain({ initialView });
+
+    rerenderMain({ initialView, initialMemoryId: "memory-one" });
+    await waitFor(() => expect(flushHarness.flush).toHaveBeenCalledOnce());
+
+    rerenderMain({ initialView, initialMemoryId: "memory-two" });
+    await waitFor(() => expect(flushHarness.flush).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId("memory-detail")).toHaveTextContent("memory-two");
+  });
+
+  it("removes a deleted primary page from tabs and does not restore it with Forward", async () => {
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
+    expect(await screen.findByText("Second page")).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Open notes" });
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Delete current page" }));
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("closes an unhydrated secondary draft and allows quit without an editor handle", async () => {
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const { user } = renderMain({
+      initialView: { kind: "page-draft", draftId: "missing-draft", space: null, sessionKey: 72 },
+      onRegisterQuitGuard: guard => { quitGuard = guard; },
+    });
+    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
+    const right = await screen.findByRole("region", { name: "Right notes" });
+    expect(within(right).getByText("Unhydrated draft")).toBeInTheDocument();
+    await expect(quitGuard!()).resolves.toBe(true);
+
+    await user.click(within(right).getByRole("button", { name: "Draft back" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Right notes" })).toBeNull());
+  });
+
+  it("routes a newly saved draft identity to its current owner without mounting a second editor", async () => {
+    const { user } = renderMain({
+      initialView: { kind: "page-draft", space: null, sessionKey: 81 },
+    });
+    await user.click(screen.getByRole("button", { name: "Report draft X identity" }));
+    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
+    const right = await screen.findByRole("region", { name: "Right notes" });
+    const ownerEditor = within(right).getByTestId("draft-editor");
+
+    await user.click(screen.getByRole("button", { name: "Open draft X" }));
+    expect(screen.getAllByTestId("draft-editor")).toHaveLength(1);
+    expect(within(right).getByTestId("draft-editor")).toBe(ownerEditor);
   });
 
   it("records a guarded root exit from an initial Page and restores it with Forward", async () => {
@@ -214,7 +388,7 @@ describe("Main published PageDetail navigation guards", () => {
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
     flushHarness.flush.mockResolvedValue(true);
-    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     flushHarness.flush.mockResolvedValue(false);
@@ -230,7 +404,7 @@ describe("Main published PageDetail navigation guards", () => {
     flushHarness.flush.mockReturnValue(saving);
     const { user } = renderMain();
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
-    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     await act(async () => settle(true));
     expect(screen.getByText("Second page")).toBeInTheDocument();
@@ -263,7 +437,7 @@ describe("Main published PageDetail navigation guards", () => {
     await user.click(screen.getByRole("button", { name: "Start page save" }));
     await user.click(screen.getByRole("button", { name: "PageDetail back" }));
     await user.click(screen.getByRole("button", { name: "PageDetail back" }));
-    await user.click(screen.getByRole("button", { name: "Sidebar second page" }));
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     expect(flushHarness.flush).toHaveBeenCalledTimes(3);
     await act(async () => settle(true));
@@ -283,19 +457,21 @@ describe("Main published PageDetail navigation guards", () => {
     await expect(quitGuard!()).resolves.toBe(false);
   });
 
-  it("flushes before header search hides the editor and keeps the latest search input", async () => {
+  it("flushes the first search query and keeps the mounted editor and latest input", async () => {
     flushHarness.enabled = true;
     let settle!: (saved: boolean) => void;
     const saving = new Promise<boolean>((resolve) => { settle = resolve; });
     flushHarness.flush.mockReturnValue(saving);
     const { user } = renderMain();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
+    await user.click(screen.getByRole("button", { name: "Search" }));
     const search = screen.getByPlaceholderText("Search pages, memories, sources...");
     fireEvent.change(search, { target: { value: "first" } });
     fireEvent.change(search, { target: { value: "latest" } });
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     await act(async () => settle(true));
     expect(search).toHaveValue("latest");
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
     expect(flushHarness.flush).toHaveBeenCalledTimes(2);
   });
 
@@ -337,22 +513,24 @@ describe("Main published PageDetail navigation guards", () => {
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start page save" }));
-    const search = screen.getByPlaceholderText(
-      "Search pages, memories, sources...",
-    );
-    expect(search).toBeDisabled();
+    const searchAction = screen.getByRole("button", { name: "Search" });
+    expect(searchAction).toBeDisabled();
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
 
     eventListeners.get("focus-search")?.();
-    expect(search).not.toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
     expect(quitGuard).not.toBeNull();
     await expect(quitGuard!()).resolves.toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Finish page save" }));
-    await waitFor(() => expect(search).toBeEnabled());
+    await waitFor(() => expect(searchAction).toBeEnabled());
     await expect(quitGuard!()).resolves.toBe(true);
+    eventListeners.get("focus-search")?.();
+    expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Search pages, memories, sources...")).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
     await expect(quitGuard!()).resolves.toBe(false);
@@ -413,6 +591,7 @@ describe("Main published PageDetail navigation guards", () => {
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
 
+    await user.click(screen.getByRole("button", { name: "Search" }));
     const search = screen.getByPlaceholderText(
       "Search pages, memories, sources...",
     );
@@ -473,6 +652,7 @@ describe("Main published PageDetail navigation guards", () => {
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
 
+    await user.click(screen.getByRole("button", { name: "Search" }));
     const search = screen.getByPlaceholderText(
       "Search pages, memories, sources...",
     );

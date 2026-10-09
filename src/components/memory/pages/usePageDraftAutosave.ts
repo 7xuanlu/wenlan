@@ -44,6 +44,7 @@ type UsePageDraftAutosaveOptions = {
   readonly enabled?: boolean;
   readonly initial: PageDraftSnapshot;
   readonly initialVersion?: number;
+  readonly onDraftIdentity?: (draftId: string) => void;
   readonly onSpaceReconciled?: (space: string | null) => void;
   readonly snapshot: PageDraftSnapshot;
 };
@@ -93,6 +94,7 @@ export function usePageDraftAutosave({
   enabled = true,
   initial,
   initialVersion,
+  onDraftIdentity,
   onSpaceReconciled,
   snapshot,
 }: UsePageDraftAutosaveOptions) {
@@ -203,6 +205,9 @@ export function usePageDraftAutosave({
             pendingCreateRef.current = null;
             draftIdRef.current = saved.id;
             versionRef.current = saved.version;
+            // Publish ownership before inventory invalidation can expose the
+            // new draft to another editor group.
+            onDraftIdentity?.(saved.id);
             const savedSnapshot = saved.id === pendingCreate.clientDraftId
               ? snapshotFromPage(saved)
               : pendingCreate.snapshot;
@@ -269,6 +274,7 @@ export function usePageDraftAutosave({
 
           draftIdRef.current = saved.id;
           versionRef.current = saved.version;
+          if (!currentId) onDraftIdentity?.(saved.id);
           persistedRef.current = savedSnapshot;
           if (mountedRef.current) {
             setDraftId(saved.id);
@@ -307,7 +313,7 @@ export function usePageDraftAutosave({
     } finally {
       if (loopRef.current === loop) loopRef.current = null;
     }
-  }, [enabled, folderPath, invalidateInventories, onSpaceReconciled, updateState]);
+  }, [enabled, folderPath, invalidateInventories, onDraftIdentity, onSpaceReconciled, updateState]);
 
   const flush = useCallback(async (): Promise<boolean> => {
     if (timerRef.current) {

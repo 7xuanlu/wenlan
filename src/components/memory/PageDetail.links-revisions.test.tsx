@@ -4,6 +4,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PageDetail from "./PageDetail";
+import { i18n } from "../../i18n";
 import {
   editorViewFromTextbox,
   installCodeMirrorDomPolyfills,
@@ -70,6 +71,11 @@ beforeAll(() => {
   installCodeMirrorDomPolyfills();
 });
 
+async function openPageInfo(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: i18n.t("pageInspector.open") }));
+  return screen.getByRole("dialog", { name: i18n.t("pageInspector.label") });
+}
+
 describe("PageDetail page links", () => {
   const defaultProps = {
     pageId: "page-1",
@@ -129,18 +135,14 @@ describe("PageDetail page links", () => {
     await user.click(contentLink);
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
 
-    expect(screen.queryByLabelText("Related pages")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
-    const related = await screen.findByLabelText("Related pages");
+    expect(screen.queryByLabelText("Linked pages")).toBeNull();
+    await openPageInfo(user);
+    const related = await screen.findByLabelText("Linked pages");
     expect(within(related).getByText("Missing Link")).toBeInTheDocument();
     expect(within(related).queryByRole("button", { name: /Missing Link/ })).toBeNull();
     await user.click(within(related).getByRole("button", { name: /Resolved Link/ }));
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("page-2");
-    expect(screen.queryByRole("dialog", { name: "Page info" })).toBeNull();
-
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    expect(screen.getByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inbound Mention" })).toBeInTheDocument();
   });
 
@@ -188,8 +190,7 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    await openPageInfo(user);
     expect(screen.getAllByRole("button", { name: "Shared Mention" })).toHaveLength(2);
     expect(screen.queryByText(/source-page-a/)).toBeNull();
   });
@@ -219,9 +220,12 @@ describe("PageDetail page links", () => {
     expect(defaultProps.onPageClick).toHaveBeenCalledWith("resolved-page");
     expect(defaultProps.onPageClick).toHaveBeenCalledTimes(2);
     expect(tauriMocks.updatePage).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
-    expect(within(screen.getByLabelText("Related pages")).getByRole("button", { name: "Renamed [linked] *note*" })).toBeInTheDocument();
+    await openPageInfo(user);
+    expect(
+      within(screen.getByLabelText(i18n.t("knowledgeContext.linkedPages"))).getByRole("button", {
+        name: "Renamed [linked] *note*",
+      }),
+    ).toBeInTheDocument();
   });
 
   it("keeps the page visible and hides links when the daemon route fails", async () => {
@@ -235,17 +239,15 @@ describe("PageDetail page links", () => {
       expect(tauriMocks.getPageLinks).toHaveBeenCalledWith("page-1");
     });
     expect(tauriMocks.listPages).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
-    expect(screen.queryByLabelText("Related pages")).toBeNull();
-    expect(screen.getByRole("dialog", { name: "Page info" })).toBeInTheDocument();
+    await openPageInfo(user);
+    expect(screen.queryByLabelText("Linked pages")).toBeNull();
+    expect(screen.getByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeInTheDocument();
   });
 
   it("does not query orphan links and renders no Unlinked Mentions section", async () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    await openPageInfo(user);
     expect(tauriMocks.listOrphanLinks).not.toHaveBeenCalled();
     expect(screen.queryByText("Unlinked Mentions")).toBeNull();
   });
@@ -269,8 +271,7 @@ describe("PageDetail page links", () => {
 
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    await openPageInfo(user);
     expect(screen.getByText(/added backlinks/i)).toBeInTheDocument();
     expect(screen.getByText("just now")).toBeInTheDocument();
   });
@@ -281,11 +282,17 @@ describe("PageDetail page links", () => {
     const { user } = renderWithQuery(<PageDetail {...defaultProps} />);
 
     expect(await screen.findByText("Link Test Page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
-    const info = screen.getByRole("dialog", { name: "Page info" });
+    await openPageInfo(user);
+    const info = screen.getByRole("dialog", { name: i18n.t("pageInspector.label") });
     expect(info).toBeInTheDocument();
-    expect(within(info).queryByRole("heading", { name: /revisions/i })).toBeNull();
+    expect(within(info).getByRole("heading", { name: /revision history/i })).toBeInTheDocument();
+    expect(within(info).getByRole("alert")).toHaveTextContent(i18n.t("pageInfo.revisionsError"));
+    tauriMocks.getPageRevisions.mockResolvedValueOnce({ page_id: "page-1", current_version: 2, user_edited: false, entries: [
+      { version: 2, at: Math.floor(Date.now() / 1000), edited_by: "human", delta_summary: "Recovered history" },
+    ] });
+    await user.click(within(info).getByRole("button", { name: i18n.t("pageInfo.retryRevisions") }));
+    expect(await within(info).findByText("Recovered history")).toBeInTheDocument();
+    expect(within(info).queryByRole("alert")).toBeNull();
     expect(screen.getByText("Intro sentence.", { exact: false })).toBeInTheDocument();
   });
 });

@@ -70,7 +70,7 @@ describe("window chrome", () => {
   });
 
   it("measures the two platforms it can place", () => {
-    expect(topBarLeftInset(MACOS_WKWEBVIEW)).toBe(82);
+    expect(topBarLeftInset(MACOS_WKWEBVIEW)).toBe(104);
     expect(topBarLeftInset(WINDOWS_WEBVIEW2)).toBe(20);
     expect(topBarLeftInset(LINUX_WEBKITGTK)).toBe(20);
 
@@ -83,7 +83,7 @@ describe("window chrome", () => {
   // from the webview the app is running in.
   it("reads the ambient user agent when called with no argument", () => {
     withNavigator({ userAgent: MACOS_WKWEBVIEW }, () => {
-      expect(topBarLeftInset()).toBe(82);
+      expect(topBarLeftInset()).toBe(104);
       expect(dragStripHeight()).toBe(32);
     });
 
@@ -102,11 +102,11 @@ describe("window chrome", () => {
     // Guessing "not macOS" on a real Mac paints the sidebar toggle under the
     // traffic lights, which sit on top of the webview and take the click --
     // aiming at the toggle presses Close. Guessing "macOS" off macOS indents a
-    // full-width header by 62px. Destructive loses to cosmetic.
-    expect(topBarLeftInset(UNRECOGNISED_UA)).toBe(82);
-    expect(topBarLeftInset("")).toBe(82);
+    // full-width header by 84px. Destructive loses to cosmetic.
+    expect(topBarLeftInset(UNRECOGNISED_UA)).toBe(104);
+    expect(topBarLeftInset("")).toBe(104);
     withNavigator(undefined, () => {
-      expect(topBarLeftInset()).toBe(82);
+      expect(topBarLeftInset()).toBe(104);
     });
 
     // The defect this replaces: `unknown` and a measured "Windows" produced the

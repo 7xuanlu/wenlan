@@ -79,14 +79,15 @@ test.describe("Chinese interface localization", () => {
       await moreButton.click();
       await expect(primaryNavigation.getByRole("button", { name: labels.wiki, exact: true })).toBeVisible();
       await expect(header.getByRole("button", { name: labels.home })).toHaveCount(0);
-      await expect(header.getByRole("button", { name: labels.activity })).toBeVisible();
+      await expect(header.getByRole("button", { name: labels.activity })).toHaveCount(0);
+      await expect(page.getByRole("complementary", { name: labels.navigation }).getByRole("button", { name: labels.activity, exact: true })).toBeVisible();
       await expect(primaryNavigation.getByRole("button", { name: labels.spaces, exact: true })).toBeVisible();
       await expect(page.getByText("Wenlan 文瀾", { exact: true })).toHaveCount(0);
       await expect(page.getByText("SPACES", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Home", { exact: true })).toHaveCount(0);
       await expect(page.getByText("Activity", { exact: true })).toHaveCount(0);
 
-      // The toolbar Activity button opens its summary; the summary's own
+      // The global sidebar Activity entry opens its summary; the summary's own
       // action goes to the Activity page.
       const activityButton = page.getByTestId("activity-status");
       await expect(activityButton).toHaveAttribute("aria-haspopup", "dialog");

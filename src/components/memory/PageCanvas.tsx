@@ -2,10 +2,14 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useId,
   type Dispatch,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type RefObject,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type SetStateAction,
@@ -30,22 +34,20 @@ import {
   asPageMapApiError,
   createPageMapNode,
   deletePageMapNode,
-  getPage,
   getPageMap,
   improvePageMap,
   patchPageMapNode,
   putPageMapLayout,
-  updatePage,
   type PageMapLayoutPosition,
+  type PageMap,
   type PageMapNode,
   type PageMapStatus,
-  type UpdatePageOutcome,
 } from "../../lib/tauri";
 import { layoutMap, nodeBoxSize, NODE_HEIGHT } from "../../lib/pageMap/tree";
-import { slugify, withHeading } from "../../lib/pageMap/slug";
 import { useGraphPalette } from "../../lib/graph/palette";
 import CanvasNode, { type CanvasNodeData } from "./canvas/CanvasNode";
 import SpineEdge from "./canvas/SpineEdge";
+import "./canvas/pageCanvasApply.css";
 
 interface PageCanvasProps {
   pageId: string;
@@ -60,8 +62,14 @@ interface PageCanvasProps {
 // The map shape this build knows how to edit. A map stamped higher was written
 // by a newer Wenlan: render it, never write to it (spec: degrade, never
 // corrupt).
-const SUPPORTED_MAP_SCHEMA = 1;
+const SUPPORTED_MAP_SCHEMA = 2;
 const LAYOUT_DEBOUNCE_MS = 600;
+
+function supportsIndependentIdeas(map: PageMap): boolean {
+  return map.map_schema >= 1 &&
+    map.map_schema <= SUPPORTED_MAP_SCHEMA &&
+    map.independent_ideas === true;
+}
 
 // A box the user is still naming. It lives only in local state and never
 // reaches the daemon: a node's `ref_id` is fixed at creation (PATCH takes
@@ -88,8 +96,10 @@ const NUDGE_STEP_COARSE = 40;
 // `as const` is load-bearing: i18n keys are a literal union here, and a
 // `string` annotation would widen them past the point where t() type-checks.
 const SHORTCUTS = [
-  { cap: "Double-click", key: "pageCanvas.hintCreate" },
+  { cap: "N", key: "pageCanvas.hintCreate" },
   { cap: "Right-click", key: "pageCanvas.hintMenu" },
+  { cap: "Shift F10", key: "pageCanvas.hintMenu" },
+  { cap: "Double-click", key: "pageCanvas.hintCreate" },
   { cap: "Drag", key: "pageCanvas.hintMarquee" },
   { cap: "Tab", key: "pageCanvas.hintAddChild" },
   { cap: "Enter", key: "pageCanvas.hintAddSibling" },
@@ -102,7 +112,6 @@ const SHORTCUTS = [
   { cap: "Shift /", key: "pageCanvas.hintHelp" },
 ] as const;
 
-const HELP_PANEL_ID = "page-canvas-help-panel";
 
 /**
  * How the map is framed when it opens.
@@ -179,8 +188,9 @@ type CanvasMenu =
 interface MenuItem {
   key: string;
   label: string;
-  run: () => void;
+  run: () => void | boolean;
   danger?: boolean;
+  disabled?: boolean;
 }
 
 /**
@@ -198,20 +208,6 @@ class PartialSubtreeDelete extends Error {
   ) {
     super("page map subtree delete stopped partway");
     this.name = "PartialSubtreeDelete";
-  }
-}
-
-/**
- * The page write that has to land before a new box can point at anything was
- * refused. `updatePage` reports refusals as a value, so this carries the whole
- * outcome rather than flattening it to a message — `conflict` is the page
- * moving underneath, which the user recovers from by reloading, and the other
- * outcomes are genuine failures.
- */
-class PageWriteRefused extends Error {
-  constructor(readonly outcome: UpdatePageOutcome) {
-    super(`page update ${outcome.outcome}`);
-    this.name = "PageWriteRefused";
   }
 }
 
@@ -243,23 +239,40 @@ function PageCanvasInner({
   const [notice, setNotice] = useState<string | null>(null);
   const [menu, setMenu] = useState<CanvasMenu | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
+  const menuElementRef = useRef<HTMLUListElement | null>(null);
+  const menuReturnFocusRef = useRef<HTMLElement | null>(null);
   // Node state is local and React Flow owns it during a drag. This is what
   // makes dragging cheap: a pointer move rewrites one node's position instead
   // of re-deriving the whole tree, and every other node keeps its identity so
   // memo(CanvasNode) actually holds.
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [draft, setDraft] = useState<{ parentId: string; x: number; y: number } | null>(null);
-  // The named box, held on screen while the daemon catches up. Creating one is
-  // three round-trips against a real library — read the page, write the heading,
-  // create the node — and the map refetch behind them takes another second or
-  // two. Dropping the box at commit left that whole window blank, which reads as
-  // the box having been thrown away.
+  const [draft, setDraft] = useState<{ parentId: string; x: number; y: number; label: string; refId: string } | null>(null);
+  // The named idea stays visible while the map write/refetch completes. Its
+  // ref_id is stable across retries so an uncertain response cannot duplicate it.
   const [pending, setPending] = useState<
-    { parentId: string; label: string; x: number; y: number } | null
+    { parentId: string; label: string; x: number; y: number; refId: string } | null
   >(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [ideaDraft, setIdeaDraft] = useState("");
+  const [ideaEntryOpen, setIdeaEntryOpen] = useState(false);
+  const ideaDraftRefId = useRef<string | null>(null);
+  const ideaSubmissionAttemptedRef = useRef(false);
+  const refocusSurfaceRef = useRef(false);
+  const [ideaError, setIdeaError] = useState<string | null>(null);
+  const ideaNameInputId = useId();
+  const ideaEntryRef = useRef<HTMLFormElement | null>(null);
+  const [ideaEntryAnchor, setIdeaEntryAnchor] = useState<{ x: number; y: number } | null>(null);
+  const activePageRef = useRef({ pageId, pageTitle });
+  activePageRef.current = { pageId, pageTitle };
+
+  useLayoutEffect(() => {
+    if (!ideaEntryOpen && refocusSurfaceRef.current) {
+      refocusSurfaceRef.current = false;
+      surfaceRef.current?.focus({ preventScroll: true });
+    }
+  }, [ideaEntryOpen]);
 
   const {
     data: map,
@@ -273,6 +286,7 @@ function PageCanvasInner({
   });
 
   const readOnly = !!map && map.map_schema > SUPPORTED_MAP_SCHEMA;
+  const independentIdeasSupported = !!map && supportsIndependentIdeas(map);
 
   const invalidate = useCallback(
     () => queryClient.invalidateQueries({ queryKey: ["page-map", pageId] }),
@@ -302,21 +316,27 @@ function PageCanvasInner({
     setNotice(null);
     setMenu(null);
     setShowSuggestions(false);
-  }, [pageId]);
+    setIdeaDraft("");
+    setIdeaEntryOpen(false);
+    ideaDraftRefId.current = null;
+    ideaSubmissionAttemptedRef.current = false;
+    setIdeaError(null);
+    setIdeaEntryAnchor(null);
+  }, [pageId, pageTitle]);
 
   const untitled = t("pageCanvas.untitled");
 
   // Suggestions are the daemon's guesses, not the user's map, so a page opens
-  // on what the user actually put there. "Improve" is the one thing that asks
-  // for them, and it un-hides them for the rest of the session.
+  // on what the user actually put there. The counted reveal keeps them reachable.
   const visibleNodes = useMemo(() => {
     const all = map?.nodes ?? [];
     return showSuggestions ? all : all.filter((n) => n.status !== "suggested");
   }, [map?.nodes, showSuggestions]);
   const views = useMemo(
-    () => layoutMap(visibleNodes, labelOverrides, untitled),
+    () => layoutMap(visibleNodes, labelOverrides, untitled, "portrait"),
     [visibleNodes, labelOverrides, untitled],
   );
+  const isEmptyMap = !map || map.revision === 0 || views.length === 0;
 
   // Suggestions outlive the session that hid them: `showSuggestions` resets on
   // every mount, so without a count to offer back, a reload would strand the
@@ -367,7 +387,13 @@ function PageCanvasInner({
   }, [invalidate]);
 
   const improveMutation = useMutation({
-    mutationFn: () => improvePageMap(pageId),
+    mutationFn: async () => {
+      if (!map || readOnly || map.map_schema < 1) {
+        throw new Error("page map generation is unavailable");
+      }
+      return improvePageMap(pageId);
+    },
+    onMutate: () => setNotice(t("pageCanvas.generating")),
     onSuccess: () => {
       setShowSuggestions(true);
       onMutated();
@@ -391,7 +417,10 @@ function PageCanvasInner({
         base_revision: revisionRef.current,
         label,
       }),
-    onSuccess: onMutated,
+    onSuccess: (_result, variables) => {
+      setEditingId((current) => current === variables.nodeId ? null : current);
+      onMutated();
+    },
     onError: handleMutationError,
   });
 
@@ -488,57 +517,52 @@ function PageCanvasInner({
     },
   });
 
-  // A new box is a new section of the page. The daemon recomputes a section
-  // node's liveness from the page's own headings on every read
-  // (`compute_ref_state`), so the heading has to exist before the node does —
-  // otherwise the box the user just drew comes back marked as gone.
+  // Every canvas add gesture creates an independent idea. It never writes the
+  // page body, and uses the fresh map revision plus the draft's stable ref_id so
+  // a retry after an uncertain response cannot create a second idea.
   const addMutation = useMutation({
     mutationFn: async ({
+      targetPageId,
+      targetPageTitle,
       parentId,
       label,
       x,
       y,
+      refId,
     }: {
+      targetPageId: string;
+      targetPageTitle: string;
       parentId: string;
       label: string;
       x: number;
       y: number;
+      refId: string;
     }) => {
-      const page = await getPage(pageId);
-      const content = page?.content ?? "";
-      const next = withHeading(content, label);
-      // A new box is a new section, so the page text gains the heading. The
-      // write goes through the same guarded path the editor uses — it reports
-      // refusals as a value rather than throwing, and a heading that silently
-      // did not land would leave the box with nothing to point at, so anything
-      // but `saved` stops the create. The outcome travels with the error
-      // because `conflict` is a different situation from a failed write and
-      // deserves to be told apart downstream.
-      if (next !== content && page) {
-        const outcome = await updatePage({
-          id: pageId,
-          content: next,
-          expectedVersion: page.version,
-          callerId: "wenlan-app",
-          operationId: globalThis.crypto.randomUUID(),
-        });
-        if (outcome.outcome !== "saved") {
-          throw new PageWriteRefused(outcome);
-        }
+      const freshMap = await getPageMap(targetPageId);
+      if (
+        activePageRef.current.pageId !== targetPageId ||
+        activePageRef.current.pageTitle !== targetPageTitle
+      ) return null;
+      if (!supportsIndependentIdeas(freshMap)) {
+        throw new Error("independent ideas are unavailable on this runtime");
       }
-      // Residual, deliberately not fixed here: the heading write and the node
-      // create are two calls with no transaction over them, so a create that
-      // fails after the write leaves the page carrying a heading with no box
-      // on the canvas. It is visible and self-correcting — the next Improve
-      // pass proposes a node for that heading — and closing it properly needs
-      // the daemon to accept both halves in one request.
-      const created = await createPageMapNode(pageId, {
-        base_revision: revisionRef.current,
+      const parent = freshMap.nodes.find(
+        (node) => node.id === parentId && node.status === "active",
+      );
+      if (!parent) throw new Error("idea parent is no longer active");
+      let created = await createPageMapNode(targetPageId, {
+        base_revision: freshMap.revision,
         parent_id: parentId,
-        ref_kind: "section",
-        ref_id: `${pageId}#${slugify(label)}`,
+        ref_kind: "idea",
+        ref_id: refId,
         label,
       });
+      if (created.node.label !== label) {
+        created = await patchPageMapNode(targetPageId, created.node.id, {
+          base_revision: created.revision,
+          label,
+        });
+      }
       // Where the box was let go of is the whole statement of where it belongs,
       // and create cannot carry a position — so write it here, before anything
       // refetches. A node that arrives unplaced is given a computed ring slot,
@@ -547,7 +571,7 @@ function PageCanvasInner({
       // settles around the drop point instead of away from it.
       const size = nodeBoxSize(label);
       try {
-        await putPageMapLayout(pageId, {
+        await putPageMapLayout(targetPageId, {
           base_revision: created.revision,
           positions: [
             {
@@ -567,34 +591,197 @@ function PageCanvasInner({
       }
       return created;
     },
-    onSuccess: async () => {
+    onSuccess: async (created, variables) => {
+      if (
+        !created ||
+        activePageRef.current.pageId !== variables.targetPageId ||
+        activePageRef.current.pageTitle !== variables.targetPageTitle
+      ) return;
       setNotice(null);
-      // The page body gained a heading, so the reading column and the revision
-      // list are both stale now.
-      void queryClient.invalidateQueries({ queryKey: ["page", pageId] });
-      void queryClient.invalidateQueries({ queryKey: ["page-revisions", pageId] });
       // Held until the refetch lands: clearing first would blink the box out and
       // back in as the server copy takes its place.
-      await invalidate();
+      await queryClient.invalidateQueries({ queryKey: ["page-map", variables.targetPageId] });
       setPending(null);
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, variables) => {
+      if (
+        activePageRef.current.pageId !== variables.targetPageId ||
+        activePageRef.current.pageTitle !== variables.targetPageTitle
+      ) return;
       setPending(null);
-      // A conflict is not a broken write: the page moved under us, and the fix
-      // is to reload rather than to try again. The editor's own banner, with
-      // its copy-the-draft and reload escapes, lives in PageDetail and would
-      // have to be lifted through two components to reach here — so the canvas
-      // says the same thing in a sentence instead of showing the generic
-      // "something went wrong", which is what sent the user looking for a bug.
-      if (error instanceof PageWriteRefused && error.outcome.outcome === "conflict") {
-        void invalidate();
+      setDraft({
+        parentId: variables.parentId,
+        label: variables.label,
+        x: variables.x,
+        y: variables.y,
+        refId: variables.refId,
+      });
+      if (error instanceof Error && error.message.includes("unavailable")) {
+        setNotice(t("pageCanvas.independentIdeasUnavailable"));
+      } else if (asPageMapApiError(error)?.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ["page-map", variables.targetPageId] });
         void refetch();
-        setNotice(t("pageCanvas.pageChanged"));
-        return;
+        setNotice(t("pageCanvas.conflict"));
+      } else {
+        handleMutationError(error);
       }
-      handleMutationError(error);
     },
   });
+
+  const addIdeaMutation = useMutation({
+    mutationFn: async ({ targetPageId, targetPageTitle, label, refId }: {
+      targetPageId: string;
+      targetPageTitle: string;
+      label: string;
+      refId: string;
+    }) => {
+      const freshMap = await getPageMap(targetPageId);
+      if (
+        activePageRef.current.pageId !== targetPageId ||
+        activePageRef.current.pageTitle !== targetPageTitle
+      ) return null;
+      if (!supportsIndependentIdeas(freshMap)) {
+        throw new Error("independent ideas are unavailable on this runtime");
+      }
+      const root = freshMap.nodes.find((node) => node.parent_id === null && node.status !== "dismissed");
+      if (!root && (freshMap.revision !== 0 || freshMap.nodes.length !== 0)) {
+        throw new Error("page map has no usable root");
+      }
+      const created = await createPageMapNode(targetPageId, {
+        base_revision: freshMap.revision,
+        ...(root ? { parent_id: root.id } : {}),
+        ref_kind: "idea",
+        ref_id: refId,
+        label,
+      });
+      if (created.node.label !== label) {
+        return patchPageMapNode(targetPageId, created.node.id, {
+          base_revision: created.revision,
+          label,
+        });
+      }
+      return created;
+    },
+    onSuccess: async (created, variables) => {
+      if (
+        !created ||
+        activePageRef.current.pageId !== variables.targetPageId ||
+        activePageRef.current.pageTitle !== variables.targetPageTitle
+      ) return;
+      setIdeaError(null);
+      setIdeaDraft("");
+      refocusSurfaceRef.current = true;
+      setIdeaEntryOpen(false);
+      setIdeaEntryAnchor(null);
+      ideaDraftRefId.current = null;
+      ideaSubmissionAttemptedRef.current = false;
+      await invalidate();
+    },
+    onError: (error, variables) => {
+      if (
+        activePageRef.current.pageId !== variables.targetPageId ||
+        activePageRef.current.pageTitle !== variables.targetPageTitle
+      ) return;
+      setIdeaError(
+        error instanceof Error && error.message.includes("unavailable")
+          ? t("pageCanvas.independentIdeasUnavailable")
+          : asPageMapApiError(error)?.status === 409
+            ? t("pageCanvas.conflict")
+            : t("pageCanvas.mutationError"),
+      );
+    },
+  });
+
+  const submitIdea = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const label = ideaDraft.trim();
+    if (!label || readOnly || !independentIdeasSupported || addIdeaMutation.isPending) return;
+    const refId = ideaDraftRefId.current ?? globalThis.crypto.randomUUID();
+    ideaDraftRefId.current = refId;
+    ideaSubmissionAttemptedRef.current = true;
+    setIdeaError(null);
+    addIdeaMutation.mutate({ targetPageId: pageId, targetPageTitle: pageTitle, label, refId });
+  };
+
+  const dismissIdeaEntry = () => {
+    if (addIdeaMutation.isPending) return;
+    refocusSurfaceRef.current = true;
+    setIdeaEntryOpen(false);
+    setIdeaEntryAnchor(null);
+    if (!ideaSubmissionAttemptedRef.current) {
+      setIdeaDraft("");
+      ideaDraftRefId.current = null;
+      setIdeaError(null);
+    }
+  };
+
+  const ideaEntry = ideaEntryOpen && ideaEntryAnchor ? (
+    <form
+      ref={ideaEntryRef}
+      id={`${ideaNameInputId}-entry`}
+      className="page-canvas-idea-entry page-canvas-empty-entry"
+      style={{ left: ideaEntryAnchor.x, top: ideaEntryAnchor.y }}
+      onSubmit={submitIdea}
+      aria-label={t("pageCanvas.addNode")}
+      onContextMenu={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          dismissIdeaEntry();
+        }
+      }}
+    >
+      <label className="sr-only" htmlFor={ideaNameInputId}>{t("pageCanvas.nodeNameLabel")}</label>
+      <input
+        id={ideaNameInputId}
+        value={ideaDraft}
+        onChange={(event) => {
+          const value = event.currentTarget.value;
+          if (value.trim().length > 0) ideaDraftRefId.current ??= globalThis.crypto.randomUUID();
+          setIdeaDraft(value);
+          setIdeaError(null);
+        }}
+        disabled={!independentIdeasSupported || addIdeaMutation.isPending}
+        placeholder={t("pageCanvas.nodeNameLabel")}
+        autoComplete="off"
+        autoFocus
+      />
+      <button type="submit" disabled={
+        !independentIdeasSupported || addIdeaMutation.isPending || ideaDraft.trim().length === 0
+      }>
+        {t("pageCanvas.addNode")}
+      </button>
+      <button type="button" onClick={dismissIdeaEntry} disabled={addIdeaMutation.isPending}>
+        {t("pageCanvas.cancelNode")}
+      </button>
+      {ideaError && <p className="page-canvas-idea-hint" role="alert">{ideaError}</p>}
+    </form>
+  ) : null;
+
+  useLayoutEffect(() => {
+    const form = ideaEntryRef.current;
+    const surface = surfaceRef.current;
+    if (!ideaEntryOpen || !form || !surface) return;
+    const clampEntry = () => {
+      const maxX = Math.max(8, surface.clientWidth - form.offsetWidth - 8);
+      const maxY = Math.max(8, surface.clientHeight - form.offsetHeight - 8);
+      setIdeaEntryAnchor((current) => {
+        if (!current) return current;
+        const x = Math.min(Math.max(8, current.x), maxX);
+        const y = Math.min(Math.max(8, current.y), maxY);
+        return x === current.x && y === current.y ? current : { x, y };
+      });
+    };
+    clampEntry();
+    const observer = new ResizeObserver(clampEntry);
+    observer.observe(form);
+    observer.observe(surface);
+    return () => observer.disconnect();
+  }, [ideaEntryOpen, ideaError]);
 
   const layoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -700,13 +887,13 @@ function PageCanvasInner({
       if (node.ref_kind === "memory") onMemoryClick(node.ref_id);
       else if (node.ref_kind === "page") onPageClick?.(node.ref_id);
       else if (node.ref_kind === "entity") onEntityClick?.(node.ref_id);
-      // "section" is a pure grouping node — there is nothing behind it to open.
+      // "section" and "idea" are pure grouping nodes with no backing page.
     },
     [onMemoryClick, onPageClick, onEntityClick],
   );
 
   const { mutate: mutateStatus } = statusMutation;
-  const { mutate: mutateRename } = renameMutation;
+  const { mutate: mutateRename, mutateAsync: mutateRenameAsync } = renameMutation;
   const { mutate: mutateRemove } = removeMutation;
   const { mutate: mutateAdd } = addMutation;
 
@@ -731,15 +918,17 @@ function PageCanvasInner({
           width: v.width,
           height: v.height,
           editing: false,
+          nameInputLabel: v.node.ref_kind === "idea" ? t("pageCanvas.nodeNameLabel") : undefined,
           onOpen: () => openNode(v.node),
           onAccept: () => mutateStatus({ nodeId: v.node.id, status: "active" }),
           onDismiss: () => mutateStatus({ nodeId: v.node.id, status: "dismissed" }),
           onCommit: (label: string) => {
-            setEditingId(null);
             const trimmed = label.trim();
-            if (trimmed && trimmed !== v.label) {
-              mutateRename({ nodeId: v.node.id, label: trimmed });
+            if (!trimmed || trimmed === v.label) {
+              setEditingId(null);
+              return;
             }
+            return mutateRenameAsync({ nodeId: v.node.id, label: trimmed }).then(() => undefined);
           },
           onCancel: () => setEditingId(null),
         };
@@ -751,7 +940,7 @@ function PageCanvasInner({
           data,
         };
       }),
-    [views, readOnly, palette, openNode, mutateStatus, mutateRename],
+    [views, readOnly, palette, openNode, mutateStatus, mutateRename, mutateRenameAsync, t],
   );
 
   // Fold the server's copy into local state, keeping what the user has done
@@ -783,19 +972,18 @@ function PageCanvasInner({
       // after it appeared. Leave it standing — Escape is how you say no.
       if (!trimmed) return;
       setDraft(null);
-      if (!slugify(trimmed)) {
-        setNotice(t("pageCanvas.badSectionName"));
-        return;
-      }
       setPending({ ...pending, label: trimmed });
       mutateAdd({
+        targetPageId: pageId,
+        targetPageTitle: pageTitle,
         parentId: pending.parentId,
         label: trimmed,
         x: pending.x,
         y: pending.y,
+        refId: pending.refId,
       });
     },
-    [draft, mutateAdd, t],
+    [draft, mutateAdd, pageId, pageTitle],
   );
 
   // One box, two moments: being named, then waiting for the daemon. It keeps the
@@ -805,8 +993,8 @@ function PageCanvasInner({
     if (!spot) return null;
     const naming = draft !== null;
     const data: CanvasNodeData = {
-      label: naming ? "" : (pending?.label ?? ""),
-      refKind: "section",
+      label: naming ? (draft?.label ?? "") : (pending?.label ?? ""),
+      refKind: "idea",
       status: "active",
       dangling: false,
       isRoot: false,
@@ -823,6 +1011,10 @@ function PageCanvasInner({
       height: DRAFT_SIZE.height,
       editing: naming,
       placeholder: t("pageCanvas.newSectionPlaceholder"),
+      nameInputLabel: t("pageCanvas.newSectionPlaceholder"),
+      onNameChange: (label: string) => {
+        setDraft((current) => current ? { ...current, label } : current);
+      },
       onOpen: () => {},
       onAccept: () => {},
       onDismiss: () => {},
@@ -851,14 +1043,19 @@ function PageCanvasInner({
   );
 
   const startDraftAt = useCallback((parentId: string, x: number, y: number) => {
+    if (readOnly) return;
+    if (!independentIdeasSupported) {
+      setNotice(t("pageCanvas.independentIdeasUnavailable"));
+      return;
+    }
     setEditingId(null);
     setMenu(null);
     // Why the last thing failed has nothing to do with the box being drawn now.
     // Left up, "The center box is the page itself" sat over a brand-new box and
     // read as a complaint about that one.
     setNotice(null);
-    setDraft({ parentId, x, y });
-  }, []);
+    setDraft({ parentId, x, y, label: "", refId: globalThis.crypto.randomUUID() });
+  }, [readOnly, independentIdeasSupported, t]);
 
   const startDraft = useCallback(
     (mode: "child" | "sibling") => {
@@ -882,7 +1079,18 @@ function PageCanvasInner({
   const addBoxAt = useCallback(
     (clientX: number, clientY: number, parentId?: string) => {
       if (readOnly || !rootId) return;
-      const point = screenToFlowPosition({ x: clientX, y: clientY });
+      if (!independentIdeasSupported) {
+        setNotice(t("pageCanvas.independentIdeasUnavailable"));
+        return;
+      }
+      const surface = surfaceRef.current;
+      const bounds = surface?.getBoundingClientRect();
+      const zoom = getViewport().zoom || 1;
+      const halfWidth = Math.min(DRAFT_SIZE.width * zoom / 2, Math.max(0, (surface?.clientWidth ?? 0) / 2 - 8));
+      const halfHeight = Math.min(DRAFT_SIZE.height * zoom / 2, Math.max(0, (surface?.clientHeight ?? 0) / 2 - 8));
+      const x = bounds ? Math.min(Math.max(clientX, bounds.left + halfWidth + 8), bounds.right - halfWidth - 8) : clientX;
+      const y = bounds ? Math.min(Math.max(clientY, bounds.top + halfHeight + 8), bounds.bottom - halfHeight - 8) : clientY;
+      const point = screenToFlowPosition({ x, y });
       const selected = nodesRef.current.find((n) => n.selected && n.id !== DRAFT_ID);
       startDraftAt(
         parentId ?? selected?.id ?? rootId,
@@ -890,7 +1098,7 @@ function PageCanvasInner({
         point.y - DRAFT_SIZE.height / 2,
       );
     },
-    [readOnly, rootId, screenToFlowPosition, startDraftAt],
+    [readOnly, independentIdeasSupported, rootId, screenToFlowPosition, getViewport, startDraftAt, t],
   );
 
   // Drag a box's connector into empty space and let go: the new box is already
@@ -964,10 +1172,35 @@ function PageCanvasInner({
     return { x: clientX - (box?.left ?? 0), y: clientY - (box?.top ?? 0) };
   }, []);
 
+  const openEmptyIdeaAt = useCallback((x: number, y: number) => {
+    const surface = surfaceRef.current;
+    const width = surface?.clientWidth ?? 320;
+    const height = surface?.clientHeight ?? 240;
+    const formWidth = Math.min(280, Math.max(120, width - 16));
+    const left = Math.min(Math.max(8, x), Math.max(8, width - formWidth - 8));
+    const top = Math.min(Math.max(8, y + 8), Math.max(8, height - 140));
+    setIdeaError(null);
+    setMenu(null);
+    setIdeaEntryAnchor({ x: left, y: top });
+    refocusSurfaceRef.current = false;
+    setIdeaEntryOpen(true);
+    return false;
+  }, []);
+
+  const restoreMenuFocus = useCallback((restore = true) => {
+    setMenu(null);
+    if (!restore) return;
+    requestAnimationFrame(() => {
+      const target = menuReturnFocusRef.current;
+      (target?.isConnected ? target : surfaceRef.current)?.focus({ preventScroll: true });
+    });
+  }, []);
+
   const handlePaneContextMenu = useCallback(
     (event: ReactMouseEvent | MouseEvent) => {
       event.preventDefault(); // the browser's own menu has nothing to offer here
       const point = localPoint(event.clientX, event.clientY);
+      menuReturnFocusRef.current = surfaceRef.current;
       setMenu({
         kind: "pane",
         x: point.x,
@@ -984,6 +1217,8 @@ function PageCanvasInner({
       event.preventDefault();
       if (node.id === DRAFT_ID) return;
       const point = localPoint(event.clientX, event.clientY);
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      menuReturnFocusRef.current = target?.closest<HTMLElement>(".react-flow__node")?.querySelector<HTMLElement>("button") ?? surfaceRef.current;
       setMenu({ kind: "node", x: point.x, y: point.y, nodeId: node.id });
       // Right-clicking inside an existing multi-selection keeps it — that is the
       // whole point of "delete these four". Right-clicking outside one moves the
@@ -1007,7 +1242,7 @@ function PageCanvasInner({
       // surface, so a double-click on any of them would otherwise draw a box
       // behind the control the user was aiming at.
       const inert =
-        ".react-flow__node, .page-canvas-actions, .page-canvas-help, .page-canvas-badge";
+        ".react-flow__node, .page-canvas-actions, .page-canvas-help, .page-canvas-badge, .page-canvas-empty-entry";
       if ((event.target as HTMLElement).closest(inert)) return;
       addBoxAt(event.clientX, event.clientY);
     },
@@ -1031,17 +1266,23 @@ function PageCanvasInner({
         items.push({
           key: "add",
           label: t("pageCanvas.menuAddHere"),
-          run: () => addBoxAt(menu.clientX, menu.clientY),
+          disabled: !independentIdeasSupported,
+          run: () => {
+            if (isEmptyMap) return openEmptyIdeaAt(menu.x, menu.y);
+            addBoxAt(menu.clientX, menu.clientY);
+            return false;
+          },
         });
+        if (map && map.map_schema >= 1 && map.map_schema <= SUPPORTED_MAP_SCHEMA) {
+          items.push({
+            key: "generate",
+            label: improveMutation.isPending ? t("pageCanvas.generating") : t("pageCanvas.generate"),
+            disabled: improveMutation.isPending,
+            run: () => { improveMutation.mutate(); },
+          });
+        }
       }
-      items.push(
-        { key: "all", label: t("pageCanvas.menuSelectAll"), run: selectAll },
-        {
-          key: "fit",
-          label: t("pageCanvas.menuFitView"),
-          run: () => void fitView(FIT_ALL_VIEW),
-        },
-      );
+      items.push({ key: "all", label: t("pageCanvas.menuSelectAll"), run: selectAll });
       return items;
     }
     const view = views.find((v) => v.node.id === menu.nodeId);
@@ -1049,11 +1290,11 @@ function PageCanvasInner({
     const items: MenuItem[] = [];
     // A section is a heading in the page body — there is nothing behind it to
     // open, so the verb is omitted rather than shown doing nothing.
-    if (view.node.ref_kind !== "section") {
+    if (view.node.ref_kind !== "section" && view.node.ref_kind !== "idea") {
       items.push({
         key: "open",
         label: t("pageCanvas.menuOpen"),
-        run: () => openNode(view.node),
+        run: () => { openNode(view.node); return false; },
       });
     }
     if (readOnly) return items;
@@ -1062,12 +1303,15 @@ function PageCanvasInner({
       {
         key: "child",
         label: t("pageCanvas.menuAddChild"),
-        run: () =>
+        disabled: !independentIdeasSupported,
+        run: () => {
           startDraftAt(
             menu.nodeId,
             (anchor?.x ?? 0) + DRAFT_OFFSET.x,
             (anchor?.y ?? 0) + DRAFT_OFFSET.y,
-          ),
+          );
+          return false;
+        },
       },
       {
         key: "rename",
@@ -1075,6 +1319,7 @@ function PageCanvasInner({
         run: () => {
           setMenu(null);
           setEditingId(menu.nodeId);
+          return false;
         },
       },
     );
@@ -1096,14 +1341,51 @@ function PageCanvasInner({
     menu,
     views,
     readOnly,
+    independentIdeasSupported,
+    isEmptyMap,
+    map,
+    improveMutation.isPending,
+    improveMutation.mutate,
     t,
     addBoxAt,
+    openEmptyIdeaAt,
     selectAll,
-    fitView,
     openNode,
     startDraftAt,
     deleteSelection,
   ]);
+
+  useLayoutEffect(() => {
+    const surface = surfaceRef.current;
+    const element = menuElementRef.current;
+    if (!menu || !surface || !element) return;
+    const maxX = Math.max(8, surface.clientWidth - element.offsetWidth - 8);
+    const maxY = Math.max(8, surface.clientHeight - element.offsetHeight - 8);
+    const x = Math.min(Math.max(8, menu.x), maxX);
+    const y = Math.min(Math.max(8, menu.y), maxY);
+    if (x !== menu.x || y !== menu.y) {
+      setMenu((current) => current ? { ...current, x, y } : current);
+    }
+  }, [menu, menuItems]);
+
+  const openKeyboardContextMenu = useCallback((target: HTMLElement) => {
+    const nodeElement = target.closest<HTMLElement>(".react-flow__node");
+    const rect = nodeElement?.getBoundingClientRect() ?? surfaceRef.current?.getBoundingClientRect();
+    const clientX = rect ? rect.left + rect.width / 2 : 0;
+    const clientY = rect ? rect.top + rect.height / 2 : 0;
+    const point = localPoint(clientX, clientY);
+    if (nodeElement) {
+      const nodeId = nodeElement.getAttribute("data-id") ?? nodeElement.getAttribute("data-node-id");
+      if (nodeId && nodesRef.current.some((node) => node.id === nodeId)) {
+        menuReturnFocusRef.current = nodeElement.querySelector<HTMLElement>("button") ?? surfaceRef.current;
+        setMenu({ kind: "node", x: point.x, y: point.y, nodeId });
+        setNodes((ns) => ns.map((node) => ({ ...node, selected: node.id === nodeId })));
+        return;
+      }
+    }
+    menuReturnFocusRef.current = surfaceRef.current;
+    setMenu({ kind: "pane", x: point.x, y: point.y, clientX, clientY });
+  }, [localPoint, setNodes]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -1111,6 +1393,7 @@ function PageCanvasInner({
       // The note and its page menu remain usable beside this nonmodal map.
       // Only keystrokes from the actual map surface belong to its shortcuts.
       if (!target || !surfaceRef.current?.contains(target) || e.defaultPrevented || e.isComposing) return;
+      if (menu && target.closest(".page-canvas-menu")) return;
       // Naming a box or using a native field must never mutate the selection.
       if (target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')) return;
 
@@ -1156,6 +1439,33 @@ function PageCanvasInner({
       // zoom keys below would resize the app UI and the map at once. Cmd+Tab and
       // Cmd+Arrow are the system's too, and were being swallowed here.
       if (e.metaKey || e.ctrlKey) return;
+
+      if (!e.altKey && (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey))) {
+        e.preventDefault();
+        openKeyboardContextMenu(target);
+        return;
+      }
+
+      if (e.key.toLowerCase() === "n" && !e.shiftKey && !e.altKey) {
+        if (readOnly) return;
+        e.preventDefault();
+        if (!independentIdeasSupported) {
+          setNotice(t("pageCanvas.independentIdeasUnavailable"));
+          return;
+        }
+        if (isEmptyMap) {
+          const rect = surfaceRef.current?.getBoundingClientRect();
+          openEmptyIdeaAt((rect?.width ?? 320) / 2, (rect?.height ?? 240) / 2);
+        } else if (rootId) {
+          const rect = surfaceRef.current?.getBoundingClientRect();
+          const point = screenToFlowPosition({
+            x: (rect?.left ?? 0) + (rect?.width ?? 320) / 2,
+            y: (rect?.top ?? 0) + (rect?.height ?? 240) / 2,
+          });
+          startDraftAt(rootId, point.x - DRAFT_SIZE.width / 2, point.y - DRAFT_SIZE.height / 2);
+        }
+        return;
+      }
 
       // "?" is what GitHub, Linear and Slack all bind to the shortcut sheet.
       // e.code again: the glyph is Shift+/ on a US layout and something else
@@ -1254,6 +1564,13 @@ function PageCanvasInner({
     },
     [
       readOnly,
+      independentIdeasSupported,
+      isEmptyMap,
+      rootId,
+      screenToFlowPosition,
+      startDraftAt,
+      openEmptyIdeaAt,
+      openKeyboardContextMenu,
       startDraft,
       deleteSelection,
       nudge,
@@ -1362,14 +1679,14 @@ function PageCanvasInner({
   if (error) {
     const status = asPageMapApiError(error)?.status;
     if (status === 404 || status === 405) {
-      return (
+      return <>
         <CanvasMessage
           title={t("pageCanvas.daemonOutdatedTitle")}
           body={t("pageCanvas.daemonOutdatedBody")}
         />
-      );
+      </>;
     }
-    return (
+    return <>
       <CanvasMessage
         title={t("pageCanvas.loadErrorTitle")}
         body={t("pageCanvas.loadErrorBody")}
@@ -1383,27 +1700,47 @@ function PageCanvasInner({
           </button>
         }
       />
-    );
+    </>;
   }
 
   if (!map || map.revision === 0 || views.length === 0) {
     return (
-      <CanvasMessage
-        title={t("pageCanvas.emptyTitle")}
-        body={t("pageCanvas.emptyBody")}
-        action={
-          <button
-            type="button"
-            className="page-canvas-message-action"
-            onClick={() => improveMutation.mutate()}
-            disabled={improveMutation.isPending || readOnly}
-          >
-            {improveMutation.isPending
-              ? t("pageCanvas.generating")
-              : t("pageCanvas.generate")}
-          </button>
-        }
-      />
+      <><div className="page-canvas">
+      <div
+        ref={surfaceRef}
+        className="page-canvas-surface is-message"
+        role="region"
+        tabIndex={0}
+        aria-label={t("pageCanvas.regionLabel", { title: pageTitle })}
+        onPointerDownCapture={() => surfaceRef.current?.focus({ preventScroll: true })}
+        onContextMenu={handlePaneContextMenu}
+        onDoubleClick={(event) => {
+          if (readOnly || !independentIdeasSupported) {
+            if (!readOnly) setNotice(t("pageCanvas.independentIdeasUnavailable"));
+            return;
+          }
+          const point = localPoint(event.clientX, event.clientY);
+          openEmptyIdeaAt(point.x, point.y);
+        }}
+      >
+          <div className="page-canvas-message">
+            <p className="page-canvas-message-title">{t(readOnly ? "pageCanvas.emptyTitle" : "pageCanvas.ideasEmptyTitle")}</p>
+            <p className="page-canvas-message-body">{t(readOnly ? "pageCanvas.emptyBody" : "pageCanvas.ideasEmptyBody")}</p>
+          </div>
+          {ideaEntry}
+          {menu && menuItems.length > 0 && (
+            <ContextMenu
+              menuRef={menuElementRef}
+              x={menu.x}
+              y={menu.y}
+              items={menuItems}
+              onClose={restoreMenuFocus}
+            />
+          )}
+          {notice && <span role="status" aria-live="polite" className="page-canvas-notice">{notice}</span>}
+          {!readOnly && <CanvasHelp open={helpOpen} setOpen={setHelpOpen} />}
+        </div>
+      </div></>
     );
   }
 
@@ -1474,7 +1811,7 @@ function PageCanvasInner({
           // 0.5, a 28-box map answered "fit all" by clamping there and leaving
           // ten boxes outside the frame — a command that says it shows
           // everything has to show everything, however small.
-          minZoom={0.25}
+          minZoom={0.01}
           // Where the zoom keys are discovered. React Flow puts these strings on
           // both the `title` and the `aria-label` of its own zoom buttons, so
           // hovering the control someone already reached for is what tells them
@@ -1494,10 +1831,11 @@ function PageCanvasInner({
         </ReactFlow>
         {menu && menuItems.length > 0 && (
           <ContextMenu
+            menuRef={menuElementRef}
             x={menu.x}
             y={menu.y}
             items={menuItems}
-            onClose={() => setMenu(null)}
+            onClose={restoreMenuFocus}
           />
         )}
         {readOnly && (
@@ -1506,33 +1844,6 @@ function PageCanvasInner({
           </span>
         )}
         <div className="page-canvas-actions">
-          {/* Improve is the only act here now. Adding a box had a button too,
-              which duplicated three gestures that are already the fastest way to
-              do it — double-click the canvas, Tab for a child, Enter for a
-              sibling — and an empty page offers Generate in its own right, so
-              nothing is only reachable by keyboard. */}
-          <div className="page-canvas-action-cluster">
-            <button
-              type="button"
-              className="page-canvas-action is-improve"
-              onClick={() => improveMutation.mutate()}
-              disabled={improveMutation.isPending || readOnly}
-            >
-              <span
-                aria-hidden="true"
-                className={
-                  improveMutation.isPending
-                    ? "page-canvas-action-glyph is-spinning"
-                    : "page-canvas-action-glyph"
-                }
-              >
-                {improveMutation.isPending ? "\u25CC" : "\u2726"}
-              </span>
-              {improveMutation.isPending
-                ? t("pageCanvas.improving")
-                : t("pageCanvas.improve")}
-            </button>
-          </div>
           {hiddenSuggestions > 0 && (
             <button
               type="button"
@@ -1558,20 +1869,48 @@ function PageCanvasInner({
 }
 
 function ContextMenu({
+  menuRef,
   x,
   y,
   items,
   onClose,
 }: {
+  menuRef: RefObject<HTMLUListElement | null>;
   x: number;
   y: number;
   items: MenuItem[];
-  onClose: () => void;
+  onClose: (restore?: boolean) => void;
 }) {
   const { t } = useTranslation();
+  useEffect(() => {
+    menuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [menuRef]);
+  const handleKeyDown = (event: ReactKeyboardEvent<HTMLUListElement>) => {
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)'));
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); return; }
+    if (event.key === "Home" || event.key === "End") {
+      event.preventDefault(); event.stopPropagation(); buttons[event.key === "Home" ? 0 : buttons.length - 1]?.focus(); return;
+    }
+    if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(event.key)) {
+      event.preventDefault(); event.stopPropagation();
+      const direction = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1;
+      buttons[(index + direction + buttons.length) % buttons.length]?.focus();
+      return;
+    }
+    if (event.key === "Tab") {
+      event.preventDefault(); event.stopPropagation();
+      const surface = menuRef.current?.closest<HTMLElement>(".page-canvas-surface");
+      onClose(false);
+      requestAnimationFrame(() => {
+        surface?.focus({ preventScroll: true });
+      });
+    }
+  };
   return (
     <ul
       className="page-canvas-menu"
+      ref={menuRef}
       role="menu"
       aria-label={t("pageCanvas.menuLabel")}
       style={{ left: x, top: y }}
@@ -1579,12 +1918,15 @@ function ContextMenu({
       // otherwise reach the pane underneath and fire the very handlers that
       // close it.
       onContextMenu={(e) => e.preventDefault()}
+      onKeyDown={handleKeyDown}
     >
       {items.map((item, i) => (
         <li key={item.key} role="none">
           <button
             type="button"
             role="menuitem"
+            tabIndex={-1}
+            disabled={item.disabled}
             className={[
               "page-canvas-menu-item",
               item.danger ? "is-danger" : "",
@@ -1596,8 +1938,8 @@ function ContextMenu({
               .filter(Boolean)
               .join(" ")}
             onClick={() => {
-              item.run();
-              onClose();
+              const restore = item.run();
+              onClose(restore !== false);
             }}
           >
             {item.label}
@@ -1617,6 +1959,7 @@ function CanvasHelp({
 }) {
   const { t } = useTranslation();
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const helpPanelId = useId();
 
   return (
     <div
@@ -1633,7 +1976,7 @@ function CanvasHelp({
     >
       {open && (
         <div
-          id={HELP_PANEL_ID}
+          id={helpPanelId}
           className="page-canvas-help-panel"
           role="note"
           aria-label={t("pageCanvas.hintsLabel")}
@@ -1653,7 +1996,7 @@ function CanvasHelp({
         className="page-canvas-help-button"
         aria-label={t("pageCanvas.hintsLabel")}
         aria-expanded={open}
-        aria-controls={open ? HELP_PANEL_ID : undefined}
+        aria-controls={open ? helpPanelId : undefined}
         onClick={() => setOpen((v) => !v)}
       >
         ?

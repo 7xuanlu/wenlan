@@ -1,42 +1,70 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 .notes-workspace-sidebar {
   display: flex;
+  flex-direction: column;
   flex: 0 0 auto;
   height: 100%;
   min-width: 0;
   overflow: visible;
-  transition: width 180ms ease, transform 180ms ease;
+  transition: transform 180ms ease;
 }
 
 .notes-icon-rail {
   position: relative;
   z-index: 3;
   display: flex;
-  flex: 0 0 48px;
+  flex: 1 1 auto;
   flex-direction: column;
-  width: 48px;
-  min-width: 48px;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .notes-rail-utilities {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 5px;
+  align-items: stretch;
+  gap: 6px;
   margin-top: auto;
+  padding: 10px 8px;
+  box-sizing: border-box;
+  width: 100%;
+}
+.notes-rail-utilities .mem-activity-status-anchor:not(.mem-activity-status-anchor--compact) {
+  width: 100%;
+  min-width: 0;
+}
+
+.notes-rail-utilities--icons {
+  align-items: center;
   padding: 11px 5px;
 }
+.notes-rail-utilities--icons .notes-rail-button { flex: 0 0 44px; }
+
+.settings-sidebar--icons .settings-sidebar-heading,
+.settings-sidebar--icons .settings-sidebar-group-label,
+.settings-sidebar--icons .settings-sidebar-footer { display: none; }
+.settings-sidebar--icons nav { align-items: center; padding-inline: 0; }
+.settings-sidebar--icons .settings-sidebar-group {
+  width: 44px;
+  height: 44px;
+  justify-content: center;
+  padding: 0;
+}
+.settings-sidebar--icons .settings-sidebar-group-icon svg { width: 22px; height: 22px; }
 
 .notes-rail-nav {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 11px 5px;
+  box-sizing: border-box;
+  width: 100%;
 }
 
 .notes-rail-button,
-.notes-more-item,
 .notes-list-create,
 .notes-page-button {
   border: 0;
@@ -47,8 +75,8 @@
 .notes-rail-button {
   position: relative;
   display: flex;
-  width: 36px;
-  height: 36px;
+  width: 44px;
+  height: 44px;
   align-items: center;
   justify-content: center;
   border-radius: 7px;
@@ -56,36 +84,61 @@
   color: var(--mem-text-secondary);
 }
 
+.notes-primary-link {
+  position: relative;
+  display: flex;
+  width: 100%;
+  min-height: 44px;
+  flex: 0 0 44px;
+  align-items: center;
+  gap: 11px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 14px var(--mem-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+.notes-primary-link:hover,
+.notes-primary-link[data-active="true"] { background: var(--mem-hover); color: var(--mem-text); }
+.notes-primary-link:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+.notes-primary-link .notes-navigation-glyph { flex: 0 0 22px; }
+.notes-rail-nav--icons { align-items: center; }
+.notes-rail-nav--icons .notes-rail-button { flex: 0 0 44px; }
+.notes-rail-nav--labels .notes-more-anchor { width: 100%; }
+
 /* A shared alignment slot with optical sizing for each asset's viewBox padding.
    Stroke weight stays fixed when a smaller drawing needs a larger SVG canvas. */
 .notes-navigation-glyph {
   display: inline-flex;
-  flex: 0 0 20px;
-  width: 20px;
-  height: 20px;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
   align-items: center;
   justify-content: center;
 }
 
 .notes-navigation-glyph > svg {
   flex: none;
-  width: 18px;
-  height: 18px;
-}
-
-.notes-navigation-glyph > svg[data-navigation-icon="wiki-page"] {
-  width: 16px;
-  height: 16px;
-}
-
-.notes-navigation-glyph > svg[data-navigation-icon="sources-intake-tray"] {
   width: 22px;
   height: 22px;
 }
 
-.notes-navigation-glyph > svg[data-navigation-icon="entities"] {
+.notes-navigation-glyph > svg[data-navigation-icon="wiki-page"] {
   width: 20px;
   height: 20px;
+}
+
+.notes-navigation-glyph > svg[data-navigation-icon="sources-intake-tray"] {
+  width: 26px;
+  height: 26px;
+}
+
+.notes-navigation-glyph > svg[data-navigation-icon="entities"] {
+  width: 24px;
+  height: 24px;
 }
 
 .notes-navigation-glyph svg :is(path, circle) {
@@ -94,7 +147,6 @@
 }
 
 .notes-rail-button:hover,
-.notes-more-item:hover,
 .notes-list-create:hover,
 .notes-page-button:hover {
   background: var(--mem-hover);
@@ -102,25 +154,15 @@
 }
 
 .notes-rail-button[data-active="true"],
-.notes-more-item[data-active="true"],
-.notes-navigation-option[data-active="true"],
 .notes-page-button[data-active="true"] {
-  background: var(--mem-indigo-bg);
+  background: var(--mem-hover);
   color: var(--mem-text);
 }
 
-.notes-nav-active-marker {
-  position: absolute;
-  inset-block: 8px;
-  left: 0;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--mem-accent-indigo);
-}
-
 .notes-rail-button:focus-visible,
-.notes-more-item:focus-visible,
-.notes-navigation-option:focus-within,
+.notes-more-destination-link:focus-visible,
+.notes-more-pin:focus-visible,
+.notes-primary-link:focus-visible,
 .notes-list-create:focus-visible,
 .notes-page-button:focus-visible,
 .notes-list-filter:focus-within {
@@ -133,9 +175,9 @@
 }
 
 .notes-more-panel {
-  position: absolute;
+  position: fixed;
   top: 0;
-  left: 43px;
+  left: 51px;
   z-index: 10;
   display: flex;
   box-sizing: border-box;
@@ -150,73 +192,91 @@
   border: 1px solid var(--mem-border);
   border-radius: 9px;
   background: var(--mem-sidebar);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--mem-text) 12%, transparent);
+  box-shadow: var(--mem-popover-shadow);
 }
 
-.notes-more-item {
+.settings-sidebar-group { min-height: 44px; flex: 0 0 44px; width: 100%; }
+.settings-sidebar-group-icon { flex: 0 0 auto; }
+.settings-sidebar-group-icon svg { width: 22px; height: 22px; }
+.settings-sidebar--icons > div > .px-4,
+.settings-sidebar--icons .settings-sidebar-group-label,
+.settings-sidebar--icons .settings-sidebar-footer { display: none; }
+.settings-sidebar--icons .settings-sidebar-group { justify-content: center; gap: 0; padding-inline: 0; }
+
+.notes-more-destination {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  width: 100%;
+  min-height: 44px;
+  border-radius: 6px;
+}
+
+.notes-more-destination-link {
   position: relative;
   display: flex;
-  min-height: 34px;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
   align-items: center;
   gap: 10px;
-  width: 100%;
-  padding: 7px 10px;
-  border-radius: 6px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px 0 0 6px;
   background: transparent;
   color: var(--mem-text-secondary);
-  font-size: 13px;
-  text-align: left;
-}
-
-.notes-more-item svg {
-  flex: 0 0 auto;
-}
-
-.notes-navigation-option {
-  position: relative;
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 10px;
-  border-radius: 6px;
-  color: var(--mem-text-secondary);
   font: 13px var(--mem-font-body);
+  text-align: left;
   cursor: pointer;
 }
 
-.notes-navigation-option:hover {
+.notes-more-destination:hover,
+.notes-more-destination:focus-within,
+.notes-more-destination[data-active="true"] {
   background: var(--mem-hover);
+}
+
+.notes-more-destination:hover > button,
+.notes-more-destination:focus-within > button,
+.notes-more-destination[data-active="true"] > button {
   color: var(--mem-text);
 }
 
-.notes-navigation-option input {
-  flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--mem-accent-indigo);
+.notes-more-pin {
+  display: flex;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0 6px 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--mem-text-secondary);
   cursor: pointer;
-  color-scheme: light;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-[data-theme="dark"] .notes-navigation-option input {
-  color-scheme: dark;
+.notes-more-destination:hover .notes-more-pin,
+.notes-more-destination:focus-within .notes-more-pin,
+.notes-more-pin[data-pinned="true"] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
 }
 
-.notes-navigation-option svg {
-  flex: 0 0 auto;
+.notes-more-pin[data-pinned="true"] {
+  color: var(--mem-text);
 }
 
-.notes-customize-hint {
-  margin: 2px 10px 7px;
-  color: var(--mem-text-tertiary);
-  font: 12px/1.5 var(--mem-font-body);
-}
-
-.notes-customize-reset {
-  margin-top: 4px;
-  color: var(--mem-accent-page);
+@media (hover: none), (pointer: coarse) {
+  .notes-more-pin {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+  }
 }
 
 .notes-workspace-panel {
@@ -259,9 +319,9 @@
 
 .notes-list-create {
   display: flex;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
   align-items: center;
   justify-content: center;
   border-radius: 6px;
@@ -310,7 +370,7 @@
 .notes-page-button {
   display: flex;
   width: 100%;
-  min-height: 32px;
+  min-height: 36px;
   align-items: center;
   justify-content: space-between;
   gap: 6px;
@@ -318,7 +378,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--mem-text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   text-align: left;
 }
 
@@ -392,5 +452,25 @@
 @media (max-width: 899px) {
   .notes-workspace-sidebar {
     box-shadow: 8px 0 24px color-mix(in srgb, var(--mem-text) 12%, transparent);
+  }
+}
+
+/* Compact desktop labels without shrinking touch or account targets. */
+@media (min-width: 768px) and (pointer: fine) {
+  .notes-rail-nav--labels {
+    gap: 4px;
+  }
+
+  .notes-rail-nav--labels .notes-primary-link {
+    min-height: 40px;
+    flex-basis: 40px;
+  }
+
+  .notes-rail-utilities .mem-activity-status-anchor:not(.mem-activity-status-anchor--compact),
+  .notes-rail-utilities .mem-activity-status-anchor:not(.mem-activity-status-anchor--compact) .mem-activity-status {
+    min-height: 40px;
+  }
+  .notes-rail-utilities .mem-activity-status-anchor:not(.mem-activity-status-anchor--compact) .mem-activity-status {
+    flex-basis: 40px;
   }
 }

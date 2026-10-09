@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Locator } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 
 type CanvasEvidence = {
   coloredPixels: number;
@@ -160,18 +161,59 @@ test("Graph keeps app search focused and canvas controls reachable", async ({ pa
   await expect(jump).toBeVisible();
   await jump.click();
   await page.evaluate(async () => {
-    await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "focus-search", payload: null });
+    await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "toggle-spotlight", payload: null });
   });
-  const input = page.getByPlaceholder("Search pages, memories, sources...");
+  const search = page.getByRole("dialog", { name: "Search", exact: true });
+  const input = search.getByPlaceholder("Search pages, memories, sources...");
   await expect(input).toBeFocused();
   await input.press("Meta+k");
   await expect(input).toBeFocused();
   await page.keyboard.press("Escape");
-  // This slice retains the desktop header search; the later workspace slice
-  // adds the search dialog and restores focus to the graph when it closes.
-  await expect(input).toBeFocused();
-  await expect(jump).toBeVisible();
+  await expect(search).toHaveCount(0);
+  await expect(jump).toBeFocused();
   for (const name of ["Zoom in", "Zoom out", "Reset view", "Fit entire graph"]) {
     await page.getByRole("button", { name, exact: true }).click();
   }
 });
+
+
+test("Graph can open a note while its focus camera is still moving", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 375, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await page.goto("/");
+  await openPrimaryDestination(page, "Graph");
+  const search = page.getByRole("combobox", { name: "Filter nodes" });
+  await search.fill("Fixture architecture");
+  await page.getByRole("option", { name: /Fixture architecture/ }).click();
+  const panel = page.getByRole("dialog", { name: "Fixture architecture", exact: true });
+  // Deliberately navigate during the 450 ms focus fly; do not wait for it to settle.
+  await panel.getByRole("button", { name: "Open details", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Fixture architecture", exact: true })).toHaveAttribute("aria-selected", "true");
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
+});
+
+for (const width of [1440, 375]) {
+  test(`keyboard filter selection keeps the graph inspector open at ${width}px`, async ({ page }) => {
+    const errors = collectBrowserErrors(page);
+    await page.setViewportSize({ width, height: 900 });
+    await installTauriMock(page, { locale: "en", rawActions: [] });
+    await page.goto("/");
+    await openPrimaryDestination(page, "Graph");
+    const filter = page.getByRole("combobox", { name: "Filter nodes" });
+    await filter.fill("Fixture architecture");
+    await expect(page.getByRole("option", { name: "Fixture architecture", exact: true })).toBeVisible();
+    await filter.press("ArrowDown");
+    await filter.press("Enter");
+    const inspector = page.locator(".page-info-drawer--inspector");
+    await expect(inspector).toBeVisible();
+    await expect(inspector.getByRole("heading", { name: "Fixture architecture", exact: true })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(inspector).toHaveCount(0);
+    await expect(filter).toBeFocused();
+    expect(errors.pageErrors).toEqual([]);
+    expect(errors.consoleErrors).toEqual([]);
+  });
+}

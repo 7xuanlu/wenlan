@@ -31,7 +31,8 @@ test("reads only current Space sources and opens notes through the shared editor
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "New page", exact: true }).click();
   await expect(page.getByRole("textbox", { name: "Content", exact: true })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "Space", exact: true })).toHaveValue("讀書會");
+  // New notes inherit their Space without an extra creation form.
+  await expect(page.getByRole("region", { name: "New note", exact: true }).getByRole("combobox")).toHaveCount(0);
   await page.getByRole("textbox", { name: "Title", exact: true }).fill("Reading observation");
   await expect.poll(() => controller.calls().find(call => call.command === "create_page_draft")?.args).toMatchObject({ space: "讀書會" });
   expect(errors.pageErrors).toEqual([]); expect(errors.consoleErrors).toEqual([]);

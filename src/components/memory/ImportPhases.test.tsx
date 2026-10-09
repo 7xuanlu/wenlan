@@ -103,9 +103,8 @@ describe("ImportPhaseList", () => {
     expect(screen.getByText("Receiving memories")).toBeInTheDocument();
     expect(screen.getByText("Storing memories")).toBeInTheDocument();
     expect(screen.getAllByText("10 of 10")).toHaveLength(2);
-    // The four background phases report from the toolbar Activity button and
-    // the Activity page now. In the foreground they read as cost before proof:
-    // minutes of grinding with nothing usable in sight.
+    // The four background phases report on Activity. In the foreground they
+    // read as cost before proof: minutes of grinding with nothing usable in sight.
     expect(screen.queryByText("Detecting entities")).not.toBeInTheDocument();
     expect(screen.queryByText("Enriching memories")).not.toBeInTheDocument();
     expect(screen.queryByText("Linking memories")).not.toBeInTheDocument();
@@ -124,7 +123,7 @@ describe("ImportPhaseList", () => {
     render(<ImportPhaseList phases={makeBatch().phases} />);
     const handoff = screen.getByTestId("import-handoff");
     expect(handoff).toHaveTextContent("10 memories stored and searchable now");
-    expect(handoff).toHaveTextContent("Follow along from Activity in the toolbar");
+    expect(handoff).toHaveTextContent("See further progress on Activity");
   });
 
   it("says nothing about the handoff while storing is still running", () => {

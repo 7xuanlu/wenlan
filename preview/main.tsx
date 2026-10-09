@@ -280,7 +280,8 @@ function Harness() {
         // page alone. The sidebar is half the settings design.
         <div style={{ display: "flex", height: `calc(100vh - ${BAR_H}px)` }}>
           <SettingsSidebar
-            collapsed={false}
+            hidden={false}
+            mode="labels"
             active={section}
             onSelect={setSection}
           />

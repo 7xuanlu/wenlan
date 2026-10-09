@@ -94,7 +94,8 @@ function renderSettingsScreen() {
     <QueryClientProvider client={queryClient}>
       <div>
         <SettingsSidebar
-          collapsed={false}
+          hidden={false}
+          mode="labels"
           active="general"
           onSelect={() => {}}
         />

@@ -7,6 +7,8 @@ import {
   type CitationKindLabels,
 } from "../../../lib/pageCitations";
 import CitationPopover, { openCitationTarget } from "./CitationPopover";
+import { ReferenceTypeIcon, citationReferenceKind } from "../links/ReferenceTypeIcon";
+import "../links/reference-links.css";
 
 interface CitationChipProps {
   occurrence: number;
@@ -100,7 +102,9 @@ export default function CitationChip({
 
   const activate = () => {
     // Touch has no hover: first tap opens the popover, its buttons navigate.
-    if (lastPointerType.current === "touch" && !open) {
+    if (lastPointerType.current === "touch") {
+      lastPointerType.current = "mouse";
+      clearTimers();
       setOpen(true);
       return;
     }
@@ -149,23 +153,22 @@ export default function CitationChip({
         ref={chipRef}
         type="button"
         data-status={citation.status}
+        data-reference-kind={citationReferenceKind(citation)}
         aria-describedby={open ? popoverId : undefined}
         onPointerDown={(e) => {
           lastPointerType.current = e.pointerType;
         }}
         onClick={activate}
-        className="focus-visible:outline-2 focus-visible:outline-[var(--mem-accent-indigo)]"
+        className="reference-link reference-link--source focus-visible:outline-2 focus-visible:outline-[var(--mem-accent-indigo)]"
         style={{
-          fontFamily: "var(--mem-font-mono)",
+          fontFamily: "var(--mem-font-body)",
           fontSize: "11px",
           lineHeight: 1,
           color: unverified ? "var(--mem-text-tertiary)" : "var(--mem-accent-indigo)",
-          background: "var(--mem-hover)",
-          border: unverified
-            ? "1px dashed var(--mem-border)"
-            : "1px solid transparent",
-          borderRadius: "4px",
-          padding: "1px 4px",
+          background: "transparent",
+          border: unverified ? "1px dashed var(--mem-accent-amber)" : "0",
+          borderRadius: "3px",
+          padding: "1px 2px",
           margin: "0 2px",
           verticalAlign: "baseline",
           cursor: "pointer",
@@ -173,8 +176,14 @@ export default function CitationChip({
           overflow: "hidden",
           whiteSpace: "nowrap",
           textOverflow: "ellipsis",
+          textDecoration: "underline",
+          textUnderlineOffset: "2px",
+          display: "inline-flex",
+          alignItems: "baseline",
+          gap: "2px",
         }}
       >
+        <ReferenceTypeIcon kind={citationReferenceKind(citation)} size={11} />
         <span
           style={{
             display: "inline-block",

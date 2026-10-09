@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState } from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { useEffect, useState } from "react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import PageInfoDrawer from "./PageInfoDrawer";
+import { WorkspacePaneHostContext } from "../navigation/WorkspacePaneHost";
+import { NoteGroupFrame } from "../pages/NoteGroupFrame";
 
 function Harness() {
   const [open, setOpen] = useState(false);
@@ -14,6 +16,75 @@ function Harness() {
       <button hidden type="button">Hidden source</button>
       <a href="#source">Open source</a>
     </PageInfoDrawer>
+  </>;
+}
+
+function InspectorHarness() {
+  const [open, setOpen] = useState(false);
+  return <>
+    <button onClick={() => setOpen(true)} type="button">Open note inspector</button>
+    <PageInfoDrawer
+      closeLabel="Close inspector"
+      headerContent={<div aria-label="Note views" role="tablist"><button aria-selected="true" role="tab" type="button">Info</button></div>}
+      inspector
+      onClose={() => setOpen(false)}
+      open={open}
+      title="Note inspector"
+    >
+      <a href="#source">Open source</a>
+    </PageInfoDrawer>
+  </>;
+}
+
+function CanvasProbe({ onMount, onUnmount }: { onMount: () => void; onUnmount: () => void }) {
+  const [draft, setDraft] = useState("saved map label");
+  useEffect(() => {
+    onMount();
+    return onUnmount;
+  }, [onMount, onUnmount]);
+  return <input aria-label="Map label" onChange={(event) => setDraft(event.target.value)} value={draft} />;
+}
+
+function ExpandableInspectorHarness({ onMount, onUnmount }: { onMount: () => void; onUnmount: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [variant, setVariant] = useState<"info" | "canvas">("canvas");
+  const [sidebarHost, setSidebarHost] = useState<HTMLDivElement | null>(null);
+  const [workspaceHost, setWorkspaceHost] = useState<HTMLDivElement | null>(null);
+  return <WorkspacePaneHostContext.Provider value={sidebarHost}>
+    <div data-testid="sidebar-host" ref={setSidebarHost} />
+    <div data-testid="article-workspace-host" ref={setWorkspaceHost} />
+    <PageInfoDrawer
+      closeLabel="Close map"
+      docked
+      expanded={expanded}
+      expandedHost={workspaceHost}
+      expandLabel="Expand workspace"
+      headerContent={<div aria-label="Note views" role="tablist"><button onClick={() => setVariant(v => v === "canvas" ? "info" : "canvas")} aria-selected="true" role="tab" type="button">Switch view</button></div>}
+      inspector
+      onClose={() => {}}
+      onExpandedChange={setExpanded}
+      open
+      restoreLabel="Restore sidebar"
+      title="Note inspector"
+      variant={variant}
+    >
+      <CanvasProbe onMount={onMount} onUnmount={onUnmount} />
+    </PageInfoDrawer>
+  </WorkspacePaneHostContext.Provider>;
+}
+
+function GroupExpandableInspectorHarness() {
+  const [expanded, setExpanded] = useState(false);
+  const [externalHost, setExternalHost] = useState<HTMLDivElement | null>(null);
+  return <>
+    <div data-testid="external-expanded-host" ref={setExternalHost} />
+    <NoteGroupFrame id="expandable" label="Expandable note" tabs={<button>Note tab</button>}>
+      <PageInfoDrawer docked inspector open expanded={expanded} expandedHost={externalHost}
+        onExpandedChange={setExpanded} expandLabel="Expand group" restoreLabel="Restore group"
+        onClose={() => {}} title="Group inspector" closeLabel="Close group">
+        <input aria-label="Group map label" defaultValue="unfinished map draft" />
+      </PageInfoDrawer>
+    </NoteGroupFrame>
   </>;
 }
 
@@ -92,6 +163,48 @@ describe("PageInfoDrawer", () => {
   });
 });
 
+it("moves the same map subtree between the sidebar and article workspace", async () => {
+  const original = window.matchMedia;
+  window.matchMedia = vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+  const onMount = vi.fn();
+  const onUnmount = vi.fn();
+  const user = userEvent.setup();
+  try {
+    render(<ExpandableInspectorHarness onMount={onMount} onUnmount={onUnmount} />);
+    const sidebarHost = screen.getByTestId("sidebar-host");
+    const workspaceHost = screen.getByTestId("article-workspace-host");
+    const originalInput = within(sidebarHost).getByRole("textbox", { name: "Map label" });
+    await user.clear(originalInput);
+    await user.type(originalInput, "unfinished draft");
+    expect(onMount).toHaveBeenCalledOnce();
+
+    await user.click(within(sidebarHost).getByRole("button", { name: "Expand workspace" }));
+    const expandedPanel = within(workspaceHost).getByRole("complementary", { name: "Note inspector" });
+    const restore = within(expandedPanel).getByRole("button", { name: "Restore sidebar" });
+    expect(within(workspaceHost).getByRole("textbox", { name: "Map label" })).toBe(originalInput);
+    expect(originalInput).toHaveValue("unfinished draft");
+    expect(restore).toHaveFocus();
+    expect(onMount).toHaveBeenCalledOnce();
+    expect(onUnmount).not.toHaveBeenCalled();
+    await user.tab();
+    expect(within(expandedPanel).getByRole("button", { name: "Close map" })).toHaveFocus();
+
+    await user.click(within(expandedPanel).getByRole("tab", { name: "Switch view" }));
+    expect(within(workspaceHost).getByRole("complementary", { name: "Note inspector" })).toBe(expandedPanel);
+    expect(originalInput).toHaveValue("unfinished draft");
+    expect(onUnmount).not.toHaveBeenCalled();
+
+    await user.click(restore);
+    expect(within(sidebarHost).getByRole("complementary", { name: "Note inspector" })).toBeInTheDocument();
+    expect(within(sidebarHost).getByRole("textbox", { name: "Map label" })).toBe(originalInput);
+    expect(originalInput).toHaveValue("unfinished draft");
+    expect(onMount).toHaveBeenCalledOnce();
+    expect(onUnmount).not.toHaveBeenCalled();
+  } finally {
+    window.matchMedia = original;
+  }
+});
+
 
 it("keeps wide docked context nonmodal without capturing editor focus or Escape", async () => {
   const original = window.matchMedia;
@@ -145,4 +258,127 @@ it("lets nested map editors and menus consume Escape before closing the panel", 
   fireEvent.keyDown(screen.getByRole("button", { name: "Close" }), { key: "Escape" });
   expect(close).toHaveBeenCalledOnce();
   expect(screen.getByRole("dialog", { name: "Mind map" })).toHaveClass("page-info-drawer--canvas");
+});
+it("keeps an accessible drawer title with custom inspector header content and restores trigger focus", async () => {
+  const user = userEvent.setup();
+  render(<InspectorHarness />);
+  const trigger = screen.getByRole("button", { name: "Open note inspector" });
+  await user.click(trigger);
+  const panel = screen.getByRole("dialog", { name: "Note inspector" });
+  const heading = within(panel).getByRole("heading", { name: "Note inspector" });
+  const tablist = within(panel).getByRole("tablist", { name: "Note views" });
+  const close = within(panel).getByRole("button", { name: "Close inspector" });
+
+  expect(panel).toHaveClass("page-info-drawer--inspector");
+  expect(heading).toHaveClass("sr-only");
+  expect(tablist.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(close).toHaveFocus();
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveFocus();
+});
+
+it("keeps two group inspectors local, nonmodal, and isolated for Escape and focus", () => {
+  const closeLeft = vi.fn();
+  const closeRight = vi.fn();
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains("note-group-frame")) {
+      return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 700, width: 800, height: 700, toJSON: () => ({}) } as DOMRect;
+    }
+    return originalRect.call(this);
+  });
+  try {
+    render(<>
+      <NoteGroupFrame id="left" label="Left note" tabs={<button>Left tab</button>}>
+        <button>Left editor</button>
+        <PageInfoDrawer docked inspector open onClose={closeLeft} title="Left inspector" closeLabel="Close left">
+          <button>Left source</button>
+        </PageInfoDrawer>
+      </NoteGroupFrame>
+      <NoteGroupFrame id="right" label="Right note" tabs={<button>Right tab</button>}>
+        <button>Right editor</button>
+        <PageInfoDrawer docked inspector open onClose={closeRight} title="Right inspector" closeLabel="Close right">
+          <button>Right source</button>
+        </PageInfoDrawer>
+      </NoteGroupFrame>
+    </>);
+    const leftGroup = document.querySelector<HTMLElement>('[data-note-group-id="left"]')!;
+    const rightGroup = document.querySelector<HTMLElement>('[data-note-group-id="right"]')!;
+    const leftInspector = within(leftGroup).getByRole("complementary", { name: "Left inspector" });
+    const rightInspector = within(rightGroup).getByRole("complementary", { name: "Right inspector" });
+    expect(leftGroup).toContainElement(leftInspector);
+    expect(rightGroup).not.toContainElement(leftInspector);
+    expect(rightGroup).toContainElement(rightInspector);
+    expect(leftGroup).not.toContainElement(rightInspector);
+    expect(leftInspector).not.toHaveAttribute("aria-modal");
+    expect(rightInspector).not.toHaveAttribute("aria-modal");
+    expect(document.activeElement).toBe(document.body);
+
+    const rightEditor = within(rightGroup).getByRole("button", { name: "Right editor" });
+    rightEditor.focus();
+    fireEvent.keyDown(rightEditor, { key: "Escape" });
+    expect(closeRight).toHaveBeenCalledOnce();
+    expect(closeLeft).not.toHaveBeenCalled();
+    expect(rightEditor).toHaveFocus();
+
+    fireEvent.keyDown(within(leftInspector).getByRole("button", { name: "Left source" }), { key: "Escape" });
+    expect(closeLeft).toHaveBeenCalledOnce();
+    expect(closeRight).toHaveBeenCalledOnce();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+it("reserves matching header and content width within only its own group", () => {
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains("note-group-frame")) {
+      return { x: 0, y: 0, top: 0, left: 0, right: 600, bottom: 700, width: 600, height: 700, toJSON: () => ({}) } as DOMRect;
+    }
+    return originalRect.call(this);
+  });
+  try {
+    render(<NoteGroupFrame id="narrow" label="Narrow note" tabs={<button>Note tab</button>}>
+      <PageInfoDrawer docked inspector open onClose={vi.fn()} title="Narrow inspector" closeLabel="Close">
+        <button>Source</button>
+      </PageInfoDrawer>
+    </NoteGroupFrame>);
+    const group = document.querySelector<HTMLElement>(".note-group-frame")!;
+    const overlay = within(group).getByRole("complementary", { name: "Narrow inspector" });
+    expect(overlay).toHaveClass("page-info-drawer-group-overlay-panel");
+    expect(overlay).not.toHaveAttribute("aria-modal");
+    expect(group).toContainElement(overlay.closest(".page-info-drawer-group-overlay"));
+    // jsdom cannot parse nested CSS min/max widths; the browser contract
+    // checks actual header/body geometry. Here assert ownership and cleanup.
+    expect(group.style.getPropertyValue("--note-group-inspector-header-width")).toContain("min(320px, 50%)");
+    expect(overlay.closest(".note-group-frame")).toBe(group);
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+it("expands an inspector inside its note group and preserves the map subtree", async () => {
+  const originalRect = HTMLElement.prototype.getBoundingClientRect;
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+    if (this.classList.contains("note-group-frame")) {
+      return { x: 0, y: 0, top: 0, left: 0, right: 800, bottom: 700, width: 800, height: 700, toJSON: () => ({}) } as DOMRect;
+    }
+    return originalRect.call(this);
+  });
+  try {
+    const user = userEvent.setup();
+    render(<GroupExpandableInspectorHarness />);
+    const group = document.querySelector<HTMLElement>(".note-group-frame")!;
+    const input = within(group).getByRole("textbox", { name: "Group map label" });
+    await user.clear(input);
+    await user.type(input, "preserved draft");
+    await user.click(within(group).getByRole("button", { name: "Expand group" }));
+    const expanded = within(group).getByRole("complementary", { name: "Group inspector" });
+    expect(group).toContainElement(expanded.closest(".page-info-drawer-expanded-workspace"));
+    expect(screen.getByTestId("external-expanded-host")).not.toContainElement(expanded);
+    expect(within(group).getByRole("textbox", { name: "Group map label" })).toBe(input);
+    expect(input).toHaveValue("preserved draft");
+  } finally {
+    vi.restoreAllMocks();
+  }
 });

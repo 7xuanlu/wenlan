@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight } from "@phosphor-icons/react";
+import { createPortal } from "react-dom";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { SearchModal } from "./SearchModal";
+import { RecentlyOpened, type RecentSearchItem } from "./RecentlyOpened";
+import { ArrowLeft, ArrowRight, House, X } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
@@ -20,14 +22,13 @@ import {
 import { clearPendingPairingCode, setPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
-import ActivityStatus from "./activity/ActivityStatus";
 import { useSearch } from "../../hooks/useSearch";
 import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
 import { FirstUseGuide } from "../onboarding/FirstUseGuide";
 import AtlasView from "./AtlasView";
-import MemorySearchResult from "./MemorySearchResult";
+import { SearchResults } from "./SearchResults";
 import MemoryDetail from "./MemoryDetail";
 import PageDetail from "./PageDetail";
 import DistillReviewPanel from "./DistillReviewPanel";
@@ -39,6 +40,10 @@ import SettingsSidebar from "./settings/SettingsSidebar";
 import SpaceDetail from "./SpaceDetail";
 import { SpacesOverview } from "./spaces";
 import { PagesOverview } from "./pages/PagesOverview";
+import { WikiWorkspace } from "./pages/WikiWorkspace";
+import { SecondaryNoteGroup, type SecondaryNoteGroupHandle } from "./pages/SecondaryNoteGroup";
+import { NoteTabs } from "./pages/NoteTabs";
+import { isNoteView, matchesNote, noteId, noteReadingKey, noteReadingPositionsFor, promoteNoteTab, reorderNoteTab, upsertNoteTab, type NoteTab, type NoteView } from "./pages/noteTabState";
 import { EntitiesView } from "./entities/EntitiesView";
 import {
   PageDraftEditor,
@@ -46,22 +51,33 @@ import {
 } from "./pages/PageDraftEditor";
 import SourcesView from "./SourcesView";
 import type { SourceLibraryState } from "./sources/SourceLibrary";
-import { RecapsList } from "./RecapsList";
 import AboutWenlanDialog from "./AboutWenlanDialog";
-import { readPreference, writePreference } from "../../lib/preferenceStorage";
 import { searchResultTarget } from "../../lib/searchResultTarget";
-import { recordRecentPageVisit } from "../../lib/recentPages";
-import { deleteRecentSpace, recordRecentSpaceVisit, renameRecentSpace } from "../../lib/recentSpaces";
+import { readRecentPageHistory, recordRecentPageVisit } from "../../lib/recentPages";
+import { readWikiInventoryMode, type WikiInventoryMode } from "../../lib/wikiNotesPreferences";
+import { deleteRecentSpace, readRecentSpaceHistory, recordRecentSpaceVisit, renameRecentSpace } from "../../lib/recentSpaces";
 import { createSpaceDetailCopy, createSpacesOverviewLabels } from "./navigation/copy";
 import { activeNavigationForView, type View } from "./navigation/viewState";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
+import { SidebarResizeHandle } from "./navigation/SidebarResizeHandle";
+import {
+  readSidebarPreferences,
+  writeSidebarPreferences,
+  type SidebarPreferences,
+} from "./navigation/navigationPreferences";
+import { ContextBrowser } from "./navigation/ContextBrowser";
 import { useLaunchPinFill } from "../../lib/launchPinFill";
 import type { MarkdownEditorSelection } from "./editor/MarkdownEditor";
+import { NoteTabDragProvider } from "./pages/NoteTabDragProvider";
+import type { NoteTabDrop } from "./pages/noteTabDragContext";
 import { useViewScroll } from "./navigation/useViewScroll";
 import { WorkspaceBackButton, WorkspaceNavigationProvider } from "./navigation/WorkspaceNavigation";
+import { WorkspacePaneHostContext, WorkspaceDocumentToolsHostContext } from "./navigation/WorkspacePaneHost";
+import { ReferenceNavigationProvider } from "./links/ReferenceNavigationContext";
 import "./navigation/navigation-shell.css";
+import "./assets/collectionToolbar.css";
 import { inventoryFolderPath } from "./pages/pageInventory";
 
 interface MainProps {
@@ -71,11 +87,10 @@ interface MainProps {
   onBackFromDetail?: () => void;
   onRegisterQuitGuard?: (guard: (() => Promise<boolean>) | null) => void;
 }
-const SIDEBAR_KEY = "wenlan-sidebar-collapsed";
-const LEGACY_SIDEBAR_KEY = "origin-sidebar-collapsed";
-
 function scrollDestinationKey(view: View): string {
   switch (view.kind) {
+    case "graph":
+      return `graph:${view.focusPageId ?? "all"}`;
     case "entity":
       return `entity:${view.entityId}`;
     case "memory":
@@ -83,7 +98,7 @@ function scrollDestinationKey(view: View): string {
     case "page":
       return `page:${view.pageId}`;
     case "page-draft":
-      return `page-draft:${view.draftId ?? "new"}:${view.space ?? "none"}`;
+      return noteReadingKey(view);
     case "settings":
       return `settings:${view.section ?? "general"}`;
     case "space":
@@ -105,6 +120,7 @@ function sameDestination(current: View, next: View): boolean {
   switch (current.kind) {
     case "page": return next.kind === "page" && current.pageId === next.pageId
       && (current.mode ?? "edit") === (next.mode ?? "edit");
+    case "graph": return next.kind === "graph" && current.focusPageId === next.focusPageId;
     case "memory": return next.kind === "memory" && current.sourceId === next.sourceId;
     case "entity": return next.kind === "entity" && current.entityId === next.entityId;
     case "settings": return next.kind === "settings"
@@ -120,6 +136,22 @@ function sameDestination(current: View, next: View): boolean {
         : !!next.draftId && current.draftId === next.draftId);
     default: return true;
   }
+}
+
+function navigationSettlement(callback?: () => void) {
+  let settled = false;
+  return {
+    succeed: (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      action();
+    },
+    refuse: () => {
+      if (settled) return;
+      settled = true;
+      callback?.();
+    },
+  };
 }
 
 export default function Main({
@@ -139,29 +171,52 @@ export default function Main({
   const mainContentRef = useRef<HTMLElement>(null);
   const pageDraftEditorRef = useRef<PageDraftEditorHandle>(null);
   const nextDraftSessionRef = useRef(0);
+  const secondaryGroupRef = useRef<SecondaryNoteGroupHandle>(null);
+  const [secondaryOpen, setSecondaryOpen] = useState(false);
+  const [groupToolsHost, setGroupToolsHost] = useState<HTMLDivElement | null>(null);
+  const [secondaryHost, setSecondaryHost] = useState<HTMLDivElement | null>(null);
+  const focusedGroup = useRef<"primary" | "secondary">("primary");
+  const [ownershipNotice, setOwnershipNotice] = useState<{ side: "primary" | "secondary"; note: NoteView } | null>(null);
+  const [movingNote, setMovingNote] = useState(false);
+  const movingNoteRef = useRef(false);
+  const focusPrimaryGroup = useCallback(() => { focusedGroup.current = "primary"; }, []);
+  const focusSecondaryGroup = useCallback(() => { focusedGroup.current = "secondary"; }, []);
+  const setSecondaryPresence = useCallback((present: boolean) => {
+    setSecondaryOpen(present);
+    if (!present) focusedGroup.current = "primary";
+  }, []);
   const pendingDraftNavigationRef = useRef<{
     readonly action: (sourceView: View) => void;
+    readonly refuse: () => void;
     readonly token: symbol;
   } | null>(null);
   const draftNavigationFlushRef = useRef<Promise<boolean> | null>(null);
   const pendingDraftSearchCancelRef = useRef<(() => void) | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchReturnFocusRef = useRef<HTMLElement | null>(null);
+  const searchFallbackFocusRef = useRef<HTMLElement | null>(null);
+  const searchHeaderButtonRef = useRef<HTMLButtonElement>(null);
+  const selectSearchOnOpenRef = useRef(false);
   const sidebarToggleRef = useRef<HTMLButtonElement>(null);
   const initialPageRequestRef = useRef<{
     observed: string | null;
     pending: string | null;
-  }>({ observed: initialPageId ?? null, pending: null });
+    inFlight: symbol | null;
+  }>({ observed: initialPageId ?? null, pending: null, inFlight: null });
   const initialMemoryRequestRef = useRef<{
     observed: string | null;
     active: string | null;
     pending: { memoryId: string | null } | null;
+    inFlight: symbol | null;
   }>({
     observed: initialMemoryId ?? null,
     active: initialMemoryId ?? null,
     pending: null,
+    inFlight: null,
   });
   const pageFlushRef = useRef<(() => Promise<boolean>) | null>(null);
   const pageNavigationTokenRef = useRef<symbol | null>(null);
+  const deletedPageIdsRef = useRef(new Set<string>());
   const registerPageFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
     pageFlushRef.current = flush;
     // A remembered View object may be reused by Back/Notes. Readiness belongs
@@ -175,8 +230,27 @@ export default function Main({
     : initialPageId ? { kind: "page", pageId: initialPageId }
     : initialView ?? { kind: "pages" },
   );
+  const [noteTabs, setNoteTabs] = useState<NoteTab[]>(() => isNoteView(view) ? upsertNoteTab([], view) : []);
+  const noteTabsRef = useRef(noteTabs);
+  const primaryDraftIdentityByTab = useRef(new Map<string, string>());
+  const [wikiCreationFolderPath, setWikiCreationFolderPath] = useState<string | null>(null);
+  const [wikiInventoryMode, setWikiInventoryMode] = useState<WikiInventoryMode>(readWikiInventoryMode);
+  const [recentPageRevision, setRecentPageRevision] = useState(0);
+  const updateNoteTabs = (next: NoteTab[]) => { noteTabsRef.current = next; setNoteTabs(next); };
+  const findPrimaryNoteTab = (next: NoteView) => noteTabsRef.current.find(tab =>
+    matchesNote(tab, next)
+    || (next.kind === "page-draft" && !!next.draftId && primaryDraftIdentityByTab.current.get(tab.key) === next.draftId)
+  );
   const viewRef = useRef(view);
   viewRef.current = view;
+  const primaryDraftTabKey = view.kind === "page-draft"
+    ? noteTabsRef.current.find(item => matchesNote(item, view))?.key
+    : undefined;
+  const reportPrimaryDraftIdentity = useCallback((draftId: string) => {
+    if (primaryDraftTabKey && noteTabsRef.current.some(item => item.key === primaryDraftTabKey)) {
+      primaryDraftIdentityByTab.current.set(primaryDraftTabKey, draftId);
+    }
+  }, [primaryDraftTabKey]);
   const [viewHistory, setViewHistory] = useState<View[]>([]);
   const viewHistoryRef = useRef<View[]>([]);
   const [viewForward, setViewForward] = useState<View[]>([]);
@@ -194,8 +268,32 @@ export default function Main({
     if (query) setQuery("");
     setMobileSearchOpen(false);
   };
+  const openSearch = (trigger?: HTMLElement | null) => {
+    if (pageSavePendingRef.current) return;
+    const activeElement = document.activeElement;
+    searchReturnFocusRef.current = trigger ?? (
+      activeElement instanceof HTMLElement && activeElement !== document.body
+        ? activeElement
+        : searchFallbackFocusRef.current
+    );
+    if (responsiveSidebar.presentation === "overlay" && responsiveSidebar.open) responsiveSidebar.close();
+    setMobileSearchOpen(true);
+  };
+  const openSearchRef = useRef(openSearch);
+  openSearchRef.current = openSearch;
   const showView = (next: View, dismissSearchOverlay = true) => {
+    setOwnershipNotice(null);
     if (dismissSearchOverlay) dismissSearch();
+    if (isNoteView(next) && secondaryGroupRef.current?.contains(next)) {
+      void secondaryGroupRef.current.open(next);
+      if (isNoteView(viewRef.current) || viewRef.current.kind === "pages" || viewRef.current.kind === "home") return;
+      next = { kind: "pages" };
+    }
+    if (isNoteView(next)) {
+      const existing = findPrimaryNoteTab(next);
+      if (existing) next = existing.view;
+      else updateNoteTabs(upsertNoteTab(noteTabsRef.current, next));
+    }
     viewRef.current = next;
     setView(next);
     if (next.kind === "pages" || next.kind === "home") setActiveTab("pages");
@@ -204,22 +302,23 @@ export default function Main({
   // Identity promotion and completed workflows replace the current entry.
   // Their abandoned forward branch must not restore a superseded editor.
   const replaceView = (next: View) => {
+    const source = viewRef.current;
+    if (source.kind === "page-draft" && next.kind === "page") {
+      updateNoteTabs(promoteNoteTab(noteTabsRef.current, source, next));
+    }
     updateHistory(viewHistoryRef.current, []);
     showView(next);
   };
   const lastNoteViewRef = useRef<View | null>(null);
   if (view.kind === "page" || view.kind === "page-draft") lastNoteViewRef.current = view;
   const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
+  const readingPositions = noteReadingPositionsFor(pageSelectionsRef.current);
   const [readyEditorView, setReadyEditorView] = useState<View | null>(null);
   const [sourceLibraryState, setSourceLibraryState] = useState<SourceLibraryState>({ search: "", filter: "all" });
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
   const [activeTab, setActiveTab] = useState<"pages" | "activity">(view.kind === "activity" ? "activity" : "pages");
-  // The Activity button's summary. Owned here, beside the toolbar that renders
-  // it, so the toggle keeps a stable identity for the outside-click listener.
-  const [activityOpen, setActivityOpen] = useState(false);
-  const toggleActivity = useCallback(() => setActivityOpen((open) => !open), []);
   const [aboutOpen, setAboutOpen] = useState(false);
   const memoryNavigationGuardRef = useRef<(() => boolean) | null>(null);
   const registerMemoryNavigationGuard = useCallback((guard: (() => boolean) | null) => {
@@ -227,10 +326,17 @@ export default function Main({
   }, []);
   const [pageSavePending, setPageSavePending] = useState(false);
   const [pageEditDirty, setPageEditDirty] = useState(false);
-  const [recentPagesRevision, setRecentPagesRevision] = useState(0);
-  const [recentSpacesRevision, setRecentSpacesRevision] = useState(0);
+  const reportPageDirty = useCallback((value: boolean) => { pageEditDirtyRef.current = value; setPageEditDirty(value); }, []);
+  const reportPageSaving = useCallback((value: boolean) => { pageSavePendingRef.current = value; setPageSavePending(value); }, []);
   const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
+  const searchDialogOpenRef = useRef(mobileSearchOpen);
+  searchDialogOpenRef.current = mobileSearchOpen;
+  const [recentSearchItems, setRecentSearchItems] = useState<RecentSearchItem[]>([]);
+  const [documentToolsHost, setDocumentToolsHost] = useState<HTMLDivElement | null>(null);
+  const [workspacePaneHost, setWorkspacePaneHost] = useState<HTMLDivElement | null>(null);
+  const setWorkspacePaneHostRef = useCallback((node: HTMLDivElement | null) => setWorkspacePaneHost(node), []);
   const [pendingDraftSearchQuery, setPendingDraftSearchQuery] = useState<string | null>(null);
+  const [pageInventoryFilter, setPageInventoryFilter] = useState("");
   const viewScrollDestination = scrollDestinationKey(view);
   pageSavePendingRef.current = pageSavePending;
   pageEditDirtyRef.current = pageEditDirty;
@@ -250,6 +356,7 @@ export default function Main({
   };
 
   const prepareForQuit = useCallback(async (): Promise<boolean> => {
+    if (movingNoteRef.current || (secondaryGroupRef.current && !await secondaryGroupRef.current.flush())) return false;
     if (viewRef.current.kind === "memory" && memoryNavigationGuardRef.current) return memoryNavigationGuardRef.current();
     if (viewRef.current.kind === "page" && pageFlushRef.current) {
       try { return await pageFlushRef.current(); } catch { return false; }
@@ -257,7 +364,18 @@ export default function Main({
     if (pageSavePendingRef.current || pageEditDirtyRef.current) return false;
     const editor = pageDraftEditorRef.current;
     if (viewRef.current.kind !== "page-draft" || !editor) return true;
-    return editor.flush();
+    const source = viewRef.current;
+    const saved = await editor.flush();
+    if (saved && source.kind === "page-draft" && viewRef.current === source) {
+      const identity = editor.getIdentity();
+      if (identity.publishedPage) {
+        const next: View = { kind: "page", pageId: identity.publishedPage.id, inventoryScope: source.inventoryScope, projectionIssue: identity.projectionIssue };
+        updateNoteTabs(promoteNoteTab(noteTabsRef.current, source, next).map(tab => matchesNote(tab, next) ? { ...tab, title: identity.publishedPage!.title } : tab));
+        lastNoteViewRef.current = next;
+        showView(next, false);
+      }
+    }
+    return saved;
   }, []);
 
   useEffect(() => {
@@ -265,21 +383,26 @@ export default function Main({
     return () => onRegisterQuitGuard?.(null);
   }, [onRegisterQuitGuard, prepareForQuit]);
 
-  useViewScroll(mainContentRef, viewScrollDestination,
-    view.kind !== "page" || view.mode === "read" || readyEditorView === view);
 
-  const afterPageDraftFlush = (action: (sourceView: View) => void): (() => void) => {
+  const afterPageDraftFlush = (action: (sourceView: View) => void, onRefused?: () => void): (() => void) => {
+    const settlement = navigationSettlement(onRefused);
     const editor = pageDraftEditorRef.current;
     if (view.kind !== "page-draft" || !editor) {
-      action(view);
+      settlement.succeed(() => action(view));
       return () => {};
     }
 
     const token = Symbol("draft-navigation");
-    pendingDraftNavigationRef.current = { action, token };
+    pendingDraftNavigationRef.current?.refuse();
+    pendingDraftNavigationRef.current = {
+      action: source => settlement.succeed(() => action(source)),
+      refuse: settlement.refuse,
+      token,
+    };
     const cancel = () => {
       if (pendingDraftNavigationRef.current?.token === token) {
         pendingDraftNavigationRef.current = null;
+        settlement.refuse();
       }
     };
     if (draftNavigationFlushRef.current) return cancel;
@@ -290,21 +413,34 @@ export default function Main({
       (saved) => {
         const pending = pendingDraftNavigationRef.current;
         pendingDraftNavigationRef.current = null;
-        if (saved && pending) {
+        if (saved && viewRef.current === view) {
           const identity = editor.getIdentity();
-          const sourceView: View = {
-            ...view,
-            draftId: identity.draftId ?? undefined,
-          };
+          const sourceView: View = identity.publishedPage
+            ? { kind: "page", pageId: identity.publishedPage.id, inventoryScope: view.inventoryScope, projectionIssue: identity.projectionIssue }
+            : { ...view, draftId: identity.draftId ?? undefined };
+          if (view.kind === "page-draft" && sourceView.kind === "page") {
+            const currentTab = noteTabsRef.current.find(tab => matchesNote(tab, view));
+            if (currentTab) primaryDraftIdentityByTab.current.delete(currentTab.key);
+            updateNoteTabs(promoteNoteTab(noteTabsRef.current, view, sourceView).map(tab => matchesNote(tab, sourceView) ? { ...tab, title: identity.publishedPage!.title } : tab));
+          } else if (view.kind === "page-draft" && sourceView.kind === "page-draft") {
+            const currentTab = noteTabsRef.current.find(tab => matchesNote(tab, view));
+            if (currentTab) {
+              if (identity.draftId) primaryDraftIdentityByTab.current.set(currentTab.key, identity.draftId);
+              else primaryDraftIdentityByTab.current.delete(currentTab.key);
+              updateNoteTabs(noteTabsRef.current.map(tab => tab.key === currentTab.key ? { ...tab, view: sourceView } : tab));
+            }
+          }
           // The intermediate setView may be batched away by navigation.
           // Remember the saved identity before leaving so Notes reopens it.
           lastNoteViewRef.current = sourceView;
-          if (sourceView !== view) showView(sourceView, false);
-          pending.action(sourceView);
-        }
+          if (sourceView.kind === "page") showView(sourceView, false);
+          pending?.action(sourceView);
+        } else pending?.refuse();
       },
       () => {
+        const pending = pendingDraftNavigationRef.current;
         pendingDraftNavigationRef.current = null;
+        pending?.refuse();
       },
     ).finally(() => {
       if (draftNavigationFlushRef.current === flush) {
@@ -314,34 +450,67 @@ export default function Main({
     return cancel;
   };
 
-  const afterNavigationGuards = (
+  const afterPrimaryNavigationGuards = (
     action: (sourceView: View) => void,
     onRefused?: () => void,
   ): (() => void) => {
+    const settlement = navigationSettlement(onRefused);
     const flush = view.kind === "page" ? pageFlushRef.current : null;
     if (flush) {
       const sourceView = view;
       const token = Symbol("page-navigation");
       pageNavigationTokenRef.current = token;
       void flush().then((saved) => {
-        if (pageNavigationTokenRef.current !== token || viewRef.current !== sourceView) return;
+        if (pageNavigationTokenRef.current !== token || viewRef.current !== sourceView) { settlement.refuse(); return; }
         pageNavigationTokenRef.current = null;
-        if (saved) action(sourceView);
-        else onRefused?.();
+        if (saved) settlement.succeed(() => action(sourceView));
+        else settlement.refuse();
       }, () => {
-        if (pageNavigationTokenRef.current !== token) return;
-        pageNavigationTokenRef.current = null;
-        onRefused?.();
+        if (pageNavigationTokenRef.current === token) pageNavigationTokenRef.current = null;
+        settlement.refuse();
       });
       return () => {
         if (pageNavigationTokenRef.current === token) pageNavigationTokenRef.current = null;
+        settlement.refuse();
       };
     }
     if (!canLeaveCurrentPage()) {
-      onRefused?.();
+      settlement.refuse();
       return () => {};
     }
-    return afterPageDraftFlush(action);
+    return afterPageDraftFlush(
+      source => settlement.succeed(() => action(source)),
+      settlement.refuse,
+    );
+  };
+
+  const groupNavigationToken = useRef<symbol | null>(null);
+  const groupNavigationCancelRef = useRef<(() => void) | null>(null);
+  const afterNavigationGuards = (action: (source: View) => void, onRefused?: () => void, includeSecondary = false) => {
+    if (!includeSecondary || !secondaryOpen) return afterPrimaryNavigationGuards(action, onRefused);
+    groupNavigationCancelRef.current?.();
+    const settlement = navigationSettlement(onRefused);
+    const token = Symbol("workspace-navigation"); groupNavigationToken.current = token;
+    let cancelPrimary = () => {};
+    let cancelled = false;
+    const cancel = () => {
+      if (cancelled) return;
+      cancelled = true;
+      if (groupNavigationToken.current === token) groupNavigationToken.current = null;
+      if (groupNavigationCancelRef.current === cancel) groupNavigationCancelRef.current = null;
+      cancelPrimary();
+      settlement.refuse();
+    };
+    groupNavigationCancelRef.current = cancel;
+    void (secondaryGroupRef.current?.flush() ?? Promise.resolve(true)).then(saved => {
+      if (cancelled || groupNavigationToken.current !== token) { settlement.refuse(); return; }
+      if (!saved) { settlement.refuse(); return; }
+      cancelPrimary = afterPrimaryNavigationGuards(source => {
+        if (cancelled || groupNavigationToken.current !== token) { settlement.refuse(); return; }
+        settlement.succeed(() => action(source));
+      }, settlement.refuse);
+    }).catch(() => settlement.refuse());
+    return cancel;
   };
 
   useEffect(() => {
@@ -352,18 +521,26 @@ export default function Main({
       request.pending = next;
     }
     const target = request.pending;
-    if (!target || pageSavePending) return;
-    request.pending = null;
+    if (!target || pageSavePending || movingNoteRef.current || request.inFlight) return;
     if (
       (view.kind === "page" && view.pageId === target)
     ) {
+      request.pending = null;
       return;
     }
-    const cancel = afterNavigationGuards(() => replaceView({ kind: "page", pageId: target }));
+    const token = Symbol("initial-page-navigation");
+    request.inFlight = token;
+    const settle = () => { if (request.inFlight === token) request.inFlight = null; };
+    const cancel = afterNavigationGuards(() => {
+      if (request.inFlight !== token) return;
+      settle();
+      if (request.pending === target) request.pending = null;
+      replaceView({ kind: "page", pageId: target });
+    }, settle);
     // An autosave changes pending state while this navigation waits. Do not
     // cancel the requested destination merely because that state changed.
     return pageFlushRef.current ? undefined : cancel;
-  }, [initialPageId, pageSavePending]);
+  }, [initialPageId, pageSavePending, movingNote]);
 
   useEffect(() => {
     const request = initialMemoryRequestRef.current;
@@ -373,21 +550,28 @@ export default function Main({
       request.pending = next || request.active ? { memoryId: next } : null;
     }
     const target = request.pending;
-    if (!target || pageSavePending) return;
-    request.pending = null;
+    if (!target || pageSavePending || movingNoteRef.current || request.inFlight) return;
     if (target.memoryId) {
       if (
         view.kind === "memory"
         && view.sourceId === target.memoryId
       ) {
         request.active = target.memoryId;
+        request.pending = null;
         return;
       }
     } else if (view.kind === activeTab) {
       request.active = null;
+      request.pending = null;
       return;
     }
+    const token = Symbol("initial-memory-navigation");
+    request.inFlight = token;
+    const settle = () => { if (request.inFlight === token) request.inFlight = null; };
     const cancel = afterNavigationGuards(() => {
+      if (request.inFlight !== token) return;
+      settle();
+      if (request.pending === target) request.pending = null;
       request.active = target.memoryId;
       updateHistory([], []);
       showView(
@@ -395,31 +579,157 @@ export default function Main({
           ? { kind: "memory", sourceId: target.memoryId }
           : { kind: activeTab },
       );
-    });
+    }, settle);
     return pageFlushRef.current ? undefined : cancel;
-  }, [initialMemoryId, activeTab, pageSavePending]);
+  }, [initialMemoryId, activeTab, pageSavePending, movingNote]);
 
   // New destinations branch from the current entry only after saving succeeds.
   const navigateTo = (next: View, onRefused?: () => void) => {
+    if (movingNoteRef.current) return;
+    if (isNoteView(next) && secondaryGroupRef.current?.contains(next)) {
+      const ownedNote = next;
+      if (isNoteView(viewRef.current) || viewRef.current.kind === "pages" || viewRef.current.kind === "home") {
+        setOwnershipNotice({ side: "secondary", note: ownedNote });
+      }
+      else afterNavigationGuards(() => { showView({ kind: "pages" }); void secondaryGroupRef.current?.open(ownedNote); }, onRefused, true);
+      return;
+    }
+    if (next.kind === "page-draft" && next.draftId) {
+      const open = findPrimaryNoteTab(next);
+      if (open?.view.kind === "page-draft") next = { ...next, sessionKey: open.view.sessionKey };
+    }
     if (sameDestination(viewRef.current, next)) {
       if (query || pendingDraftSearchQuery || mobileSearchOpen) {
         afterNavigationGuards(dismissSearch, onRefused);
       }
       return;
     }
+    const destination = next;
+    const existingTab = isNoteView(destination) ? findPrimaryNoteTab(destination) : undefined;
     afterNavigationGuards((sourceView) => {
+      // A tab may be closed while the current editor's asynchronous save runs.
+      // Completion must not resurrect that explicitly closed destination.
+      if (existingTab && !noteTabsRef.current.some(tab => tab.key === existingTab.key)) return;
       updateHistory([...viewHistoryRef.current, sourceView], []);
       // Allocate only after the current editor's save guard succeeds.
-      showView(next.kind === "page-draft" && next.sessionKey == null
+      showView(existingTab?.view ?? (next.kind === "page-draft" && next.sessionKey == null
         ? { ...next, sessionKey: ++nextDraftSessionRef.current }
-        : next);
-    }, onRefused);
+        : next));
+    }, onRefused, !isNoteView(next) && next.kind !== "pages" && next.kind !== "home");
   };
 
-  const navigateHome = () => navigateTo({ kind: "pages" });
+  const closeNoteTab = (tab: NoteTab) => {
+    if (movingNoteRef.current) return;
+    const active = isNoteView(viewRef.current) && matchesNote(tab, viewRef.current);
+    const close = () => {
+      const before = noteTabsRef.current;
+      const index = before.findIndex(current => current.key === tab.key);
+      if (index < 0) return;
+      const remaining = before.filter(current => current.key !== tab.key);
+      primaryDraftIdentityByTab.current.delete(tab.key);
+      updateNoteTabs(remaining);
+      if (active) {
+        const next = remaining[Math.min(index, remaining.length - 1)]?.view ?? { kind: "pages" } as View;
+        lastNoteViewRef.current = isNoteView(next) ? next : null;
+        showView(next);
+      } else if (lastNoteViewRef.current && isNoteView(lastNoteViewRef.current) && matchesNote(tab, lastNoteViewRef.current)) {
+        lastNoteViewRef.current = remaining[remaining.length - 1]?.view ?? null;
+      }
+    };
+    if (active) afterNavigationGuards(close);
+    else close();
+  };
+  const openWikiNote = (next: NoteView) => {
+    if (movingNoteRef.current) return;
+    if (findPrimaryNoteTab(next)) {
+      if (secondaryOpen && focusedGroup.current === "secondary") {
+        setOwnershipNotice({ side: "primary", note: next });
+      } else { focusPrimaryGroup(); navigateTo(next); }
+    }
+    else if (secondaryOpen && focusedGroup.current === "secondary") void secondaryGroupRef.current?.open(next);
+    else navigateTo(next);
+  };
+  const moveToSecondary = (tab: NoteTab, beforeKey?: string | null) => {
+    if (movingNoteRef.current) return;
+    // Block editing only during the save-and-transfer transaction. Neither
+    // group gives up its tab until both current documents have been saved.
+    movingNoteRef.current = true; setMovingNote(true);
+    const finish = () => { movingNoteRef.current = false; setMovingNote(false); };
+    const source = viewRef.current;
+    afterPrimaryNavigationGuards(() => {
+      const current = noteTabsRef.current.find(item => item.key === tab.key);
+      if (!current || !secondaryGroupRef.current) { finish(); return; }
+      const draftId = primaryDraftIdentityByTab.current.get(current.key);
+      const outgoing = draftId && current.view.kind === "page-draft"
+        ? { ...current, view: { ...current.view, draftId } }
+        : current;
+      void secondaryGroupRef.current.open(outgoing.view, outgoing, () => {
+        if (viewRef.current !== source && source.kind !== "page-draft") return false;
+        const before = noteTabsRef.current;
+        const index = before.findIndex(item => item.key === current.key);
+        if (index < 0) return false;
+        const active = isNoteView(viewRef.current) && matchesNote(current, viewRef.current);
+        const remaining = before.filter(item => item.key !== current.key);
+        primaryDraftIdentityByTab.current.delete(current.key);
+        updateNoteTabs(remaining);
+        const retained = (entry: View) => !isNoteView(entry) || !matchesNote(current, entry);
+        updateHistory(viewHistoryRef.current.filter(retained), viewForwardRef.current.filter(retained));
+        if (lastNoteViewRef.current && isNoteView(lastNoteViewRef.current) && matchesNote(current, lastNoteViewRef.current)) lastNoteViewRef.current = null;
+        if (active) {
+          const next = remaining[Math.min(index, remaining.length - 1)]?.view ?? { kind: "pages" } as View;
+          lastNoteViewRef.current = isNoteView(next) ? next : null;
+          showView(next);
+        }
+        return true;
+      }, beforeKey).finally(finish);
+    }, finish);
+  };
+  const moveToPrimary = (tab: NoteTab, commit: () => boolean, beforeKey?: string | null): Promise<boolean> => new Promise(resolve => {
+    if (movingNoteRef.current) { resolve(false); return; }
+    movingNoteRef.current = true; setMovingNote(true);
+    const finish = (saved: boolean) => { movingNoteRef.current = false; setMovingNote(false); resolve(saved); };
+    afterPrimaryNavigationGuards(() => {
+      if (beforeKey != null && !noteTabsRef.current.some(item => item.key === beforeKey)) { finish(false); return; }
+      if (!commit()) { finish(false); return; }
+      showView(tab.view);
+      updateNoteTabs(noteTabsRef.current.map(item => matchesNote(item, tab.view) ? { ...item, title: tab.title } : item));
+      if (beforeKey !== undefined) {
+        const inserted = noteTabsRef.current.find(item => matchesNote(item, tab.view));
+        if (inserted) updateNoteTabs(reorderNoteTab(noteTabsRef.current, inserted.key, beforeKey));
+      }
+      focusPrimaryGroup();
+      finish(true);
+    }, () => finish(false));
+  });
+  const dropNoteTab = ({ sourceGroup, targetGroup, tabKey, beforeKey }: NoteTabDrop) => {
+    if (movingNoteRef.current) return;
+    if (sourceGroup === targetGroup) {
+      if (sourceGroup === "primary") updateNoteTabs(reorderNoteTab(noteTabsRef.current, tabKey, beforeKey));
+      else secondaryGroupRef.current?.reorder(tabKey, beforeKey);
+    } else if (sourceGroup === "primary") {
+      const tab = noteTabsRef.current.find(item => item.key === tabKey);
+      if (tab) moveToSecondary(tab, beforeKey);
+    } else void secondaryGroupRef.current?.move(tabKey, beforeKey);
+  };
+  const noteTabStrip = <NoteTabs tabs={noteTabs}
+    activeKey={isNoteView(view) ? noteTabs.find(tab => matchesNote(tab, view))?.key : undefined}
+    onSelect={tab => { focusPrimaryGroup(); navigateTo(tab.view); }} onClose={closeNoteTab}
+    onMoveToOtherGroup={moveToSecondary} moveLabel={t("pages.groups.moveToRight")}
+    onCreate={() => navigateTo({
+      kind: "page-draft",
+      space: null,
+      folderPath: wikiInventoryMode === "folders" ? wikiCreationFolderPath ?? undefined : undefined,
+      inventoryScope: wikiInventoryMode === "folders" && (view.kind === "pages" || view.kind === "page" || view.kind === "page-draft")
+        ? view.inventoryScope : undefined,
+    })} />;
+
   const navigateSpaces = (create: boolean) => navigateTo(create
     ? { kind: "spaces", create: true } : { kind: "spaces" });
   const navigatePages = () => navigateTo({ kind: "pages" });
+  const navigateSettingsHome = () => {
+    navigatePages();
+    if (responsiveSidebar.presentation === "overlay") responsiveSidebar.close();
+  };
   const navigateNotes = () => {
     if (activeNavigationForView(view) !== "pages" && lastNoteViewRef.current) {
       navigateTo(lastNoteViewRef.current);
@@ -433,6 +743,7 @@ export default function Main({
   const fallbackView: View = view.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
   const canNavigateBack = viewHistory.length > 0 || externalDetailExit || !sameDestination(view, fallbackView);
   const applyBackNavigation = (sourceView: View) => {
+    const sourceStillExists = sourceView.kind !== "page" || !deletedPageIdsRef.current.has(sourceView.pageId);
     const past = viewHistoryRef.current;
     if (past.length === 0) {
       if (sourceView.kind === "memory" && initialMemoryId && onBackFromDetail) {
@@ -441,22 +752,28 @@ export default function Main({
       }
       const fallback: View = sourceView.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
       if (sameDestination(sourceView, fallback)) return;
-      updateHistory([], [...viewForwardRef.current, sourceView]);
+      updateHistory([], sourceStillExists ? [...viewForwardRef.current, sourceView] : viewForwardRef.current);
       showView(fallback);
       return;
     }
-    updateHistory(past.slice(0, -1), [...viewForwardRef.current, sourceView]);
+    updateHistory(past.slice(0, -1), sourceStillExists ? [...viewForwardRef.current, sourceView] : viewForwardRef.current);
     showView(past[past.length - 1]);
   };
-  const navigateBack = () => { afterNavigationGuards(applyBackNavigation); };
+  const navigateBack = () => {
+    if (movingNoteRef.current) return;
+    const destination = viewHistoryRef.current[viewHistoryRef.current.length - 1] ?? fallbackView;
+    const leavingNotes = !isNoteView(destination) && destination.kind !== "pages" && destination.kind !== "home";
+    afterNavigationGuards(applyBackNavigation, undefined, leavingNotes);
+  };
   const navigateForward = () => {
+    if (movingNoteRef.current) return;
     if (viewForwardRef.current.length === 0) return;
     afterNavigationGuards((sourceView) => {
       const forward = viewForwardRef.current;
       if (!forward.length) return;
       updateHistory([...viewHistoryRef.current, sourceView], forward.slice(0, -1));
       showView(forward[forward.length - 1]);
-    });
+    }, undefined, (() => { const next = viewForwardRef.current[viewForwardRef.current.length - 1]; return !!next && !isNoteView(next) && next.kind !== "pages" && next.kind !== "home"; })());
   };
 
   // Legacy standalone PageDetail confirms before calling this callback.
@@ -470,11 +787,18 @@ export default function Main({
     applyBackNavigation(viewRef.current);
   };
   const [sortMode, setSortMode] = useState<SortMode>("recent");
+  const [memoryCollectionFilter, setMemoryCollectionFilter] = useState("");
   const [stabilityFilter, setStabilityFilter] = useState<string | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    return readPreference(SIDEBAR_KEY, LEGACY_SIDEBAR_KEY) === "true";
-  });
-  const { query, setQuery, debouncedQuery, results } = useSearch();
+  const [sidebarPreferences, setSidebarPreferences] = useState<SidebarPreferences>(readSidebarPreferences);
+  useEffect(() => writeSidebarPreferences(sidebarPreferences), [sidebarPreferences]);
+  const [sidebarPreview, setSidebarPreview] = useState<SidebarPreferences | null>(null);
+  const effectiveSidebar = sidebarPreview ?? sidebarPreferences;
+  const { query, setQuery, debouncedQuery, results, isLoading: memorySearchLoading, error: memorySearchError } = useSearch();
+  const isWikiWorkspaceView = view.kind === "pages" || view.kind === "home" || view.kind === "page" || view.kind === "page-draft";
+
+  useViewScroll(mainContentRef, viewScrollDestination,
+    view.kind !== "page" || view.mode === "read" || readyEditorView === view,
+    isWikiWorkspaceView ? ".wiki-workspace-content" : undefined, readingPositions);
   const handleSearchQueryChange = (nextQuery: string) => {
     const needsFlush = view.kind === "page-draft" || (view.kind === "page" && !!pageFlushRef.current);
     if (!query && nextQuery && !needsFlush && !canLeaveCurrentPage()) return;
@@ -487,7 +811,6 @@ export default function Main({
         setPendingDraftSearchQuery(null);
       }, () => {
         pendingDraftSearchCancelRef.current = null;
-        setPendingDraftSearchQuery(null);
       });
       return;
     }
@@ -501,52 +824,107 @@ export default function Main({
   const sourceResults = results.filter((result) => searchResultTarget(result).kind === "file");
 
   useEffect(() => {
-    if (mobileSearchOpen && !pageSavePending) searchInputRef.current?.focus();
-  }, [mobileSearchOpen, pageSavePending]);
-
-  useEffect(() => {
     if (view.kind !== "page-draft" && view.kind !== "page") setPendingDraftSearchQuery(null);
   }, [view.kind]);
 
-  const { data: entityResults = [] } = useQuery({
+  const { data: entityResults = [], isFetching: entitySearchLoading, error: entitySearchError } = useQuery({
     queryKey: ["searchEntities", debouncedQuery],
     queryFn: () => searchEntities(debouncedQuery, 5),
     enabled: debouncedQuery.length > 0,
   });
 
-  const { data: conceptResults = [] } = useQuery({
+  const { data: conceptResults = [], isFetching: conceptSearchLoading, error: conceptSearchError } = useQuery({
     queryKey: ["searchPages", debouncedQuery],
     queryFn: () => searchPages(debouncedQuery, 5),
     enabled: debouncedQuery.length > 0,
   });
 
+  const searchLoading = !!displayedSearchQuery.trim() && (
+    displayedSearchQuery !== debouncedQuery || memorySearchLoading || entitySearchLoading || conceptSearchLoading
+  );
+  const searchError = displayedSearchQuery === debouncedQuery
+    && !!(memorySearchError || entitySearchError || conceptSearchError);
+
   const toggleSidebar = () => {
-    setSidebarCollapsed((v) => {
-      const next = !v;
-      writePreference(SIDEBAR_KEY, String(next));
-      return next;
-    });
+    setSidebarPreview(null);
+    setSidebarPreferences((current) => ({ ...current, visible: !current.visible }));
   };
   const activeNavigation = activeNavigationForView(view);
-  const browseContext = activeNavigation !== null && activeNavigation !== "pages" && activeNavigation !== "home" && activeNavigation !== "memories";
-  const [browseSidebarOpen, setBrowseSidebarOpen] = useState<Record<string, boolean>>({});
-  const contextSidebarCollapsed = browseContext ? !browseSidebarOpen[activeNavigation] : sidebarCollapsed;
-  const toggleContextSidebar = () => {
-    if (browseContext) setBrowseSidebarOpen((current) => ({ ...current, [activeNavigation]: !current[activeNavigation] }));
-    else toggleSidebar();
-  };
-  const responsiveSidebar = useResponsiveSidebar(contextSidebarCollapsed, toggleContextSidebar, sidebarToggleRef);
+  const wikiInventoryScope = view.kind === "pages" || view.kind === "page" || view.kind === "page-draft"
+    ? view.inventoryScope ?? "all"
+    : "all";
+  const retainWikiScope = view.kind === "pages" || view.kind === "page" || view.kind === "page-draft";
+  const openWikiDraft = (draftId: string, space: string | null) => openWikiNote({
+    kind: "page-draft", draftId, space, inventoryScope: retainWikiScope ? view.inventoryScope : undefined,
+  });
+  const openWikiPage = (page: Page) => openWikiNote({
+    kind: "page", pageId: page.id, inventoryScope: retainWikiScope ? view.inventoryScope : undefined,
+  });
+  const responsiveSidebar = useResponsiveSidebar(!sidebarPreferences.visible, toggleSidebar, sidebarToggleRef);
+  useEffect(() => setSidebarPreview(null), [view.kind, responsiveSidebar.isNarrow]);
+  const sidebarCollapsed = responsiveSidebar.isNarrow ? responsiveSidebar.collapsed : !effectiveSidebar.visible;
+  const sidebarOpen = responsiveSidebar.isNarrow ? responsiveSidebar.open : effectiveSidebar.visible;
+  searchFallbackFocusRef.current = searchHeaderButtonRef.current ?? sidebarToggleRef.current;
   const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
+  const sidebarLayout = responsiveSidebar.presentation === "overlay"
+    ? "overlay"
+    : (!effectiveSidebar.visible || view.kind === "connect-agent")
+      ? "zero"
+      : effectiveSidebar.mode;
+  const headerSidebarBackdropClass = `is-sidebar-backdrop-${sidebarLayout}`;
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
 
-  const refreshRecentSpaces = useCallback(() => {
-    setRecentSpacesRevision((revision) => revision + 1);
-  }, []);
+  useEffect(() => {
+    if (!mobileSearchOpen) return;
+    const pages = readRecentPageHistory().entries.map((entry) => ({
+      kind: "page" as const,
+      id: entry.id,
+      title: entry.title,
+      visitedAt: entry.visitedAt,
+    }));
+    const spacesHistory = readRecentSpaceHistory(spaces === undefined ? undefined : { spaces });
+    const recentSpaces = spacesHistory.entries.map((entry) => ({
+      kind: "space" as const,
+      id: entry.id,
+      title: entry.name,
+      visitedAt: entry.visitedAt,
+    }));
+    setRecentSearchItems([...pages, ...recentSpaces]
+      .sort((left, right) => right.visitedAt - left.visitedAt || left.kind.localeCompare(right.kind) || left.id.localeCompare(right.id))
+      .slice(0, 6));
+  }, [mobileSearchOpen, spaces]);
+
   const handlePageLoaded = useCallback((page: Pick<Page, "id" | "status" | "title">) => {
     recordRecentPageVisit(page);
-    setRecentPagesRevision((revision) => revision + 1);
+    setRecentPageRevision(revision => revision + 1);
+    const next = noteTabsRef.current.map(tab => noteId(tab.view) === page.id ? { ...tab, title: page.title } : tab);
+    if (next.some((tab, index) => tab.title !== noteTabsRef.current[index].title)) updateNoteTabs(next);
+  }, []);
+  const handlePageDeleted = useCallback((pageId: string) => {
+    deletedPageIdsRef.current.add(pageId);
+    const isPage = (candidate: View) => candidate.kind === "page" && candidate.pageId === pageId;
+    updateNoteTabs(noteTabsRef.current.filter(tab => !isPage(tab.view)));
+    updateHistory(viewHistoryRef.current.filter(candidate => !isPage(candidate)), viewForwardRef.current.filter(candidate => !isPage(candidate)));
+    if (lastNoteViewRef.current && isPage(lastNoteViewRef.current)) lastNoteViewRef.current = null;
+    pageSelectionsRef.current.delete(pageId);
+    secondaryGroupRef.current?.removePage(pageId);
+    if (isPage(viewRef.current)) {
+      pageFlushRef.current = null;
+      pageNavigationTokenRef.current = null;
+      pageSavePendingRef.current = false;
+      pageEditDirtyRef.current = false;
+      setPageSavePending(false);
+      setPageEditDirty(false);
+      setReadyEditorView(null);
+    }
+  }, []);
+  const handleDraftTitleChange = useCallback((title: string) => {
+    const current = viewRef.current;
+    if (current.kind !== "page-draft") return;
+    const next = noteTabsRef.current.map(tab => matchesNote(tab, current) ? { ...tab, title } : tab);
+    if (next.some((tab, index) => tab.title !== noteTabsRef.current[index].title)) updateNoteTabs(next);
   }, []);
   const handleSpaceLoaded = useCallback((space: Space) => {
     const runtime = spaces === undefined
@@ -556,8 +934,7 @@ export default function Main({
     setView((current) => current.kind === "space" && current.spaceName === space.name
       ? { ...current, spaceId: space.id }
       : current);
-    refreshRecentSpaces();
-  }, [refreshRecentSpaces, spaces]);
+  }, [spaces]);
   const handleSpaceRenamed = useCallback((space: Pick<Space, "id" | "name">) => {
     const runtime = spaces === undefined
       ? undefined
@@ -570,15 +947,13 @@ export default function Main({
     setView((current) => current.kind === "space" && current.spaceId === space.id
       ? { ...current, spaceName: space.name }
       : current);
-    refreshRecentSpaces();
-  }, [refreshRecentSpaces, spaces]);
+  }, [spaces]);
   const handleSpaceDeleted = useCallback((spaceId: string) => {
     const runtime = spaces === undefined
       ? undefined
       : { spaces: spaces.filter(({ id }) => id !== spaceId) };
     deleteRecentSpace(spaceId, runtime);
-    refreshRecentSpaces();
-  }, [refreshRecentSpaces, spaces]);
+  }, [spaces]);
 
   const { data: memories = [] } = useQuery({
     queryKey: ["memories"],
@@ -621,26 +996,34 @@ export default function Main({
     navigateTo({ kind: "settings", section: "agents" }, clearPendingPairingCode);
   }, [pendingPairingCode, pageSavePending]);
 
-  // Cmd+K global shortcut (fired from App.tsx) — focus the header search input.
+  // Cmd/Ctrl+K is delivered by App.tsx and opens the shared search dialog.
   useEffect(() => {
     const unlisten = listen("focus-search", () => {
       if (pageSavePending) return;
-      setMobileSearchOpen(true);
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
+      if (searchDialogOpenRef.current) {
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+      selectSearchOnOpenRef.current = true;
+      openSearchRef.current();
     });
     return () => { unlisten.then((f) => f()); };
   }, [pageSavePending]);
+
+  useEffect(() => {
+    if (!mobileSearchOpen || !selectSearchOnOpenRef.current) return;
+    selectSearchOnOpenRef.current = false;
+    searchInputRef.current?.select();
+  }, [mobileSearchOpen]);
 
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
+      if (e.key === "Escape" && movingNoteRef.current) return;
       const target = e.target;
-      const closesOpenSearch =
-        e.key === "Escape"
-        && mobileSearchOpen
-        && target === searchInputRef.current;
+      const closesOpenSearch = e.key === "Escape" && mobileSearchOpen;
       if (
         target instanceof Element
         && target.closest(
@@ -653,16 +1036,16 @@ export default function Main({
       if (e.key === "/" && !e.metaKey && !e.ctrlKey) {
         if (pageSavePending) return;
         e.preventDefault();
-        setMobileSearchOpen(true);
-        searchInputRef.current?.focus();
+        openSearch();
       }
       if (e.key === "Escape") {
         if (e.defaultPrevented) return;
+        if (!query && !mobileSearchOpen && target instanceof Element && target.closest('[data-note-group-id="secondary"]')) return;
         if (responsiveSidebar.presentation === "overlay" && responsiveSidebar.open) return;
         if (query) {
           setQuery("");
         } else if (mobileSearchOpen) {
-          setMobileSearchOpen(false);
+          dismissSearch();
         } else if (view.kind === "page-draft") {
           // PageDraftEditor owns Escape so it can await the same flush gate as Back.
           return;
@@ -689,8 +1072,7 @@ export default function Main({
   };
 
   const openSearchResult = async (result: SearchResult) => {
-    setQuery("");
-    setMobileSearchOpen(false);
+    dismissSearch();
     const target = searchResultTarget(result);
     if (target.kind === "page") {
       navigateTo({ kind: "page", pageId: target.pageId });
@@ -705,24 +1087,66 @@ export default function Main({
     }
   };
 
+  const isSettingsView = view.kind === "settings";
+  const keyboardShortcutModifier = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+  const searchActionLabel = t(isSettingsView ? "settings.home" : "main.searchButton");
+  const searchActionTitle = isSettingsView
+    ? searchActionLabel
+    : `${searchActionLabel} (${t("main.searchShortcut", { modifier: keyboardShortcutModifier })})`;
+  const globalActions = (
+          <div className="workspace-header-actions relative z-[1] flex items-center gap-1.5 shrink-0">
+            {(view.kind === "connect-agent" || sidebarLayout === "zero" || (responsiveSidebar.presentation === "overlay" && !responsiveSidebar.open)) && (
+              <button
+                aria-expanded={isSettingsView ? undefined : mobileSearchOpen}
+                aria-label={searchActionLabel}
+                className="workspace-header-search-fallback rounded-md p-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
+                disabled={pageSavePending}
+                onClick={(event) => isSettingsView ? navigateSettingsHome() : openSearch(event.currentTarget)}
+                ref={searchHeaderButtonRef}
+                style={{ color: "var(--mem-text-secondary)" }}
+                title={searchActionTitle}
+                type="button"
+              >
+                {isSettingsView ? <House size={18} aria-hidden="true" /> : (
+                <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" viewBox="0 0 24 24" width="16">
+                  <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
+                </svg>
+                )}
+              </button>
+            )}
+            <div className="workspace-document-tools-host" ref={setDocumentToolsHost} />
+          </div>
+  );
+
   return (
-    <WorkspaceNavigationProvider>
-    <div
-      className="memory-shell flex h-screen w-full flex-col"
-      style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)" }}
+    <ReferenceNavigationProvider
+      onOpenPage={(pageId) => navigateTo({ kind: "page", pageId })}
+      onOpenMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
     >
-      {/* Full-width header */}
+    <WorkspaceNavigationProvider>
+    <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
+    <WorkspaceDocumentToolsHostContext.Provider value={documentToolsHost}>
+    <div
+      className="memory-shell h-screen w-full"
+      data-sidebar-layout={sidebarLayout}
+      data-note-workspace={isWikiWorkspaceView || undefined}
+      inert={mobileSearchOpen || movingNote}
+      style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)", "--workspace-labels-width": `${effectiveSidebar.width ?? 240}px` } as CSSProperties}
+    >
+      {/* Header follows the width of the primary workspace. */}
       <header
-        className="memory-workspace-header relative flex items-center gap-3 shrink-0"
+        className="memory-workspace-header workspace-header-container relative flex items-center gap-3 shrink-0"
         style={{
           height: MAIN_HEADER_HEIGHT,
           paddingLeft: topBarLeftInset(),
           paddingRight: "var(--workspace-header-right-padding, 20px)",
-          background: "var(--mem-bg)",
+          background: "transparent",
         }}
         data-tauri-drag-region
       >
-        <SidebarToggleButton collapsed={responsiveSidebar.collapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+        {view.kind !== "connect-agent" && (
+          <SidebarToggleButton collapsed={sidebarCollapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+        )}
         <div className="workspace-history-navigation" role="group" aria-label={t("main.historyNavigation")}>
           <button type="button" aria-label={t("main.back")} title={t("main.back")}
             className="workspace-history-button" disabled={!canNavigateBack}
@@ -731,279 +1155,87 @@ export default function Main({
             className="workspace-history-button" disabled={!viewForward.length}
             onClick={navigateForward}><ArrowRight size={18} aria-hidden="true" /></button>
         </div>
+        {view.kind === "memory" && (
+          <ContextBrowser
+            key={activeNavigation}
+            kind="memories"
+            inventoryScope="all"
+            browsingPages={false}
+            currentPageId={null}
+            currentMemoryId={view.kind === "memory" ? (view.sourceId ?? null) : null}
+            onBrowsePages={() => navigateTo({ kind: "pages" })}
+            onCreatePage={() => navigateTo({ kind: "page-draft", space: null })}
+            onSelectDraft={openWikiDraft}
+            onSelectPage={openWikiPage}
+            onSelectMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
+          />
+        )}
         {(!standardSidebarMounted || !responsiveSidebar.open) && <ReviewEnvironmentBadge compact />}
         <div className="flex-1" data-tauri-drag-region />
 
-          {/* Right actions */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            <button
-              aria-expanded={mobileSearchOpen}
-              aria-label={t("main.searchButton")}
-              className="lg:hidden rounded-md p-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
-              disabled={pageSavePending}
-              onClick={() => {
-                if (!pageSavePending) setMobileSearchOpen((open) => !open);
-              }}
-              style={{ color: "var(--mem-text-secondary)" }}
-              type="button"
-            >
-              <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" viewBox="0 0 24 24" width="16">
-                <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
-              </svg>
-            </button>
-            <ActivityStatus
-              current={view.kind === "activity"}
-              expanded={activityOpen}
-              onToggle={toggleActivity}
-              onOpenActivity={() => {
-                navigateTo({ kind: "activity" });
-              }}
-              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
-            />
-            {/* Quick Capture */}
-            <button
-              onClick={() => void invoke("open_quick_capture", { placement: "centered-over-main" })}
-              className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
-              style={{ color: "var(--mem-text-secondary)" }}
-              title={t("main.quickCaptureTitle")}
-            >
-              <svg className="w-[16px] h-[16px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-              </svg>
-            </button>
-          </div>
+        {isWikiWorkspaceView && groupToolsHost ? createPortal(globalActions, groupToolsHost) : globalActions}
 
-          {/* Search — absolutely centered */}
-          <div
-            className={`${mobileSearchOpen ? "flex" : "hidden"} absolute left-4 right-4 top-[56px] z-50 items-center lg:flex lg:left-1/2 lg:right-auto lg:top-auto lg:-translate-x-1/2`}
-          >
-            <div
-              className="flex w-full items-center gap-2 rounded-md px-3 py-[6px] shadow-lg focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--mem-accent-page)] lg:w-[clamp(220px,40vw,480px)] lg:shadow-none"
-              style={{
-                backgroundColor: "var(--mem-sidebar)",
-                border: "1px solid var(--mem-border)",
-              }}
-            >
-            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: "var(--mem-text-tertiary)" }}>
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            <input
-              ref={searchInputRef}
-              data-wenlan-search-input
-              disabled={pageSavePending}
-              value={displayedSearchQuery}
-              onChange={(e) => handleSearchQueryChange(e.target.value)}
-              placeholder={t("main.searchPlaceholder")}
-              className="flex-1 bg-transparent outline-none"
-              style={{
-                fontFamily: "var(--mem-font-body)",
-                fontSize: "13px",
-                color: "var(--mem-text)",
-              }}
-              spellCheck={false}
-              autoComplete="off"
-            />
-            {displayedSearchQuery && (
-              <button
-                onClick={() => {
-                  pendingDraftSearchCancelRef.current?.();
-                  pendingDraftSearchCancelRef.current = null;
-                  setPendingDraftSearchQuery(null);
-                  setQuery("");
-                }}
-                className="shrink-0"
-                style={{ color: "var(--mem-text-tertiary)" }}
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" />
-                </svg>
-              </button>
-            )}
-            </div>
-          </div>
+        <div
+          aria-hidden="true"
+          className={`workspace-header-sidebar-backdrop ${headerSidebarBackdropClass}`}
+        />
+
       </header>
 
+      <SidebarResizeHandle
+        key={view.kind}
+        enabled={!responsiveSidebar.isNarrow && view.kind !== "connect-agent"}
+        preferences={sidebarPreferences}
+        onPreview={setSidebarPreview}
+        onCommit={setSidebarPreferences}
+        onHidden={() => sidebarToggleRef.current?.focus()}
+      />
+
       {/* Sidebar + Content row */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="memory-shell-content flex flex-1 overflow-hidden">
         {view.kind === "settings" ? (
-          <SettingsSidebar
-            collapsed={sidebarCollapsed}
+        <SettingsSidebar
+            hidden={sidebarCollapsed}
+            mode={effectiveSidebar.mode}
             active={view.section ?? "general"}
-            onSelect={(section) => navigateTo({ kind: "settings", section })}
+            open={sidebarOpen}
+            presentation={responsiveSidebar.presentation}
+            onRequestClose={responsiveSidebar.close}
+            onNavigateHome={navigateSettingsHome}
+            navigationDisabled={pageSavePending}
+            onSelect={(section) => {
+              navigateTo({ kind: "settings", section });
+              if (responsiveSidebar.presentation === "overlay") responsiveSidebar.close();
+            }}
           />
         ) : view.kind === "connect-agent" ? null : (
           <Sidebar
             activeNavigation={activeNavigation}
-            collapsed={responsiveSidebar.collapsed}
-            inventoryScope={view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined}
-            browsingPages={view.kind === "pages" || view.kind === "home"}
-            onBrowsePages={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
-            currentPageId={view.kind === "page" ? view.pageId : view.kind === "page-draft" ? view.draftId : null}
-            currentMemoryId={view.kind === "memory" ? view.sourceId : null}
-            onSelectMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
-            currentSpaceId={view.kind === "space" ? view.spaceId : null}
+            hidden={sidebarCollapsed}
+            mode={effectiveSidebar.mode}
             onEntityClick={handleEntityClick}
             onNavigateLog={() => navigateTo({ kind: "stream" })}
+            onNavigateActivity={() => navigateTo({ kind: "activity" })}
+            activityCurrent={view.kind === "activity"}
             onNavigatePages={navigateNotes}
-            onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
-            onNavigateHome={navigateHome}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
             onNavigateSources={() => navigateTo({ kind: "sources" })}
             onNavigateSpaces={navigateSpaces}
             onNavigateSettings={() => navigateTo({ kind: "settings", section: "general" })}
+            onOpenSearch={openSearch}
             onOpenAbout={() => setAboutOpen(true)}
+            searchOpen={mobileSearchOpen}
+            searchDisabled={pageSavePending}
             onRequestClose={responsiveSidebar.close}
-            onSelectDraft={(draftId, space) => navigateTo({ kind: "page-draft", draftId, space, inventoryScope: view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined })}
-            onSelectPage={(page) => navigateTo({ kind: "page", pageId: page.id, inventoryScope: view.kind === "pages" || view.kind === "page" || view.kind === "page-draft" ? view.inventoryScope : undefined })}
-            onSelectSpace={(space) => navigateTo({ kind: "space", spaceId: space.id, spaceName: space.name })}
-            open={responsiveSidebar.open}
+            open={sidebarOpen}
             presentation={responsiveSidebar.presentation}
-            recentPagesRevision={recentPagesRevision}
-            recentSpacesRevision={recentSpacesRevision}
           />
         )}
 
         {/* Main content */}
-        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" ? "min-w-0 overflow-hidden p-0" : `memory-main-content overflow-y-auto${(view.kind === "page" || view.kind === "memory") && !query ? " memory-main-content--page" : ""}`}`}>
-          {/* Search results overlay */}
-          {query ? (
-            (memoryResults.length > 0 || sourceResults.length > 0 || entityResults.length > 0 || conceptResults.length > 0) ? (
-              <div className="flex flex-col gap-2">
-                {conceptResults.length > 0 && (
-                  <>
-                    <p
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "11px",
-                        color: "var(--mem-text-tertiary)",
-                      }}
-                    >
-                      {t("main.search.pages")}
-                    </p>
-                    {conceptResults.map((c) => (
-                      <div
-                        key={c.id}
-                        className="rounded-lg px-4 py-3 cursor-pointer transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-                        style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                        onClick={() => { setQuery(""); navigateTo({ kind: "page", pageId: c.id }); }}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: "var(--mem-accent-page)" }} />
-                          <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}>
-                            {c.title}
-                          </span>
-                          {c.domain && (
-                            <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}>
-                              {c.domain}
-                            </span>
-                          )}
-                        </div>
-                        {c.summary && (
-                          <p
-                            style={{
-                              fontFamily: "var(--mem-font-body)",
-                              fontSize: "12px",
-                              color: "var(--mem-text-secondary)",
-                              marginTop: 4,
-                              marginLeft: 16,
-                              lineHeight: 1.5,
-                            }}
-                          >
-                            {c.summary}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </>
-                )}
-                {memoryResults.length > 0 && (
-                  <>
-                    <p
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "11px",
-                        color: "var(--mem-text-tertiary)",
-                        marginTop: conceptResults.length > 0 ? 12 : 0,
-                      }}
-                    >
-                      {t("main.search.memories", { count: memoryResults.length, query })}
-                    </p>
-                    {memoryResults.map((r) => (
-                      <MemorySearchResult key={r.id} result={r} query={query} onClick={() => void openSearchResult(r)} />
-                    ))}
-                  </>
-                )}
-                {sourceResults.length > 0 && (
-                  <>
-                    <p
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "11px",
-                        color: "var(--mem-text-tertiary)",
-                        marginTop: (memoryResults.length > 0 || conceptResults.length > 0) ? 12 : 0,
-                      }}
-                    >
-                      {t("main.search.sources")}
-                    </p>
-                    {sourceResults.map((r) => (
-                      <MemorySearchResult key={r.id} result={r} query={query} onClick={() => void openSearchResult(r)} />
-                    ))}
-                  </>
-                )}
-                {entityResults.length > 0 && (
-                  <>
-                    <p
-                      style={{
-                        fontFamily: "var(--mem-font-mono)",
-                        fontSize: "11px",
-                        color: "var(--mem-text-tertiary)",
-                        marginTop: (memoryResults.length > 0 || sourceResults.length > 0 || conceptResults.length > 0) ? 12 : 0,
-                      }}
-                    >
-                      {t("main.search.entities")}
-                    </p>
-                    {entityResults.map((r) => (
-                      <div
-                        key={r.entity.id}
-                        className="rounded-lg px-4 py-3 cursor-pointer transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-                        style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
-                        onClick={() => { setQuery(""); handleEntityClick(r.entity.id); }}
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full"
-                            style={{ backgroundColor: "color-mix(in srgb, var(--mem-accent-sage) 15%, transparent)", color: "var(--mem-accent-sage)" }}
-                          >
-                            {r.entity.entity_type}
-                          </span>
-                          <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", fontWeight: 500, color: "var(--mem-text)" }}>
-                            {r.entity.name}
-                          </span>
-                          {r.entity.domain && (
-                            <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}>
-                              {r.entity.domain}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
-            ) : (
-              <p
-                style={{
-                  fontFamily: "var(--mem-font-mono)",
-                  fontSize: "11px",
-                  color: "var(--mem-text-tertiary)",
-                }}
-              >
-                {t("main.search.noResults", { query })}
-              </p>
-            )
-          ) : view.kind === "import" ? (
+        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" || view.kind === "connect-agent" ? "min-w-0 overflow-hidden p-0" : isWikiWorkspaceView ? "memory-main-content memory-main-content--wiki overflow-hidden" : `memory-main-content overflow-y-auto${view.kind === "memory" ? " memory-main-content--page" : ["spaces", "entities", "stream"].includes(view.kind) ? " memory-main-content--collection" : ""}`}`}>
+          {view.kind === "import" ? (
             <ImportView
               onBack={navigateBack}
               completeLabel={view.fromFirstUse ? t("firstUse.guide.seeKnowledge") : undefined}
@@ -1029,21 +1261,33 @@ export default function Main({
               onImport={() => navigateTo({ kind: "import" })}
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
-            <PagesOverview
-              inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
-              onBrowseAll={() => navigateTo({ kind: "pages" })}
-              onBrowseFolder={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
-              onOpenReview={() => navigateTo({ kind: "distill-review" })}
-              onCreatePage={(space, folderPath) => navigateTo({ kind: "page-draft", space, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
-              onSelectDraft={(draftId, space) => navigateTo({
-                kind: "page-draft",
-                draftId,
-                space,
-                inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined,
-              })}
-              onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
-              onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
-            />
+            <WikiWorkspace
+              tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
+              secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
+              inventoryMode={wikiInventoryMode}
+              onInventoryModeChange={setWikiInventoryMode}
+              recentRevision={recentPageRevision}
+              onOpenRecentPage={(pageId) => openWikiNote({ kind: "page", pageId })}
+              inventoryScope={wikiInventoryScope}
+              onCreationFolderPathChange={setWikiCreationFolderPath}
+              browsing
+              filter={pageInventoryFilter}
+              onFilterChange={setPageInventoryFilter}
+              onBrowse={(scope) => navigateTo({ kind: "pages", inventoryScope: scope })}
+              onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
+              onOpenDraft={openWikiDraft}
+              onOpenPage={openWikiPage}
+            >
+              <PagesOverview
+                inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
+                onBrowseAll={() => navigateTo({ kind: "pages" })}
+                onBrowseFolder={(inventoryScope) => navigateTo({ kind: "pages", inventoryScope })}
+                onCreatePage={(space, folderPath) => navigateTo({ kind: "page-draft", space, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
+                onSelectDraft={openWikiDraft}
+                onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
+                onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
+              />
+            </WikiWorkspace>
           ) : view.kind === "entities" ? (
             <EntitiesView
               onEntityClick={handleEntityClick}
@@ -1081,6 +1325,7 @@ export default function Main({
             />
           ) : view.kind === "connect-agent" ? (
             <SetupWizard
+              embedded
               initialStep="connect"
               onComplete={navigateBack}
             />
@@ -1094,9 +1339,29 @@ export default function Main({
               onPageClick={(pageId) => navigateTo({ kind: "page", pageId })}
             />
           ) : view.kind === "page-draft" ? (
+            <WikiWorkspace
+              tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
+              secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
+              inventoryMode={wikiInventoryMode}
+              onInventoryModeChange={setWikiInventoryMode}
+              recentRevision={recentPageRevision}
+              onOpenRecentPage={(pageId) => openWikiNote({ kind: "page", pageId })}
+              inventoryScope={wikiInventoryScope}
+              onCreationFolderPathChange={setWikiCreationFolderPath}
+              currentPageId={view.draftId ?? null}
+              currentFolderPath={view.folderPath}
+              filter={pageInventoryFilter}
+              onFilterChange={setPageInventoryFilter}
+              onBrowse={(scope) => navigateTo({ kind: "pages", inventoryScope: scope })}
+              onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
+              onOpenDraft={openWikiDraft}
+              onOpenPage={openWikiPage}
+            >
             <PageDraftEditor
               key={view.sessionKey ?? view.draftId ?? "new"}
               draftId={view.draftId}
+              onDraftIdentity={reportPrimaryDraftIdentity}
+              onTitleChange={handleDraftTitleChange}
               onBack={() => {
                 if (responsiveSidebar.presentation === "overlay" && responsiveSidebar.open) {
                   responsiveSidebar.close();
@@ -1122,9 +1387,29 @@ export default function Main({
               folderPath={view.folderPath ?? (view.inventoryScope ? inventoryFolderPath(view.inventoryScope) ?? undefined : undefined)}
               space={view.space}
             />
+            </WikiWorkspace>
           ) : view.kind === "page" ? (
+            <WikiWorkspace
+              tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
+              secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
+              inventoryMode={wikiInventoryMode}
+              onInventoryModeChange={setWikiInventoryMode}
+              recentRevision={recentPageRevision}
+              onOpenRecentPage={(pageId) => openWikiNote({ kind: "page", pageId })}
+              inventoryScope={wikiInventoryScope}
+              onCreationFolderPathChange={setWikiCreationFolderPath}
+              currentPageId={view.pageId}
+              filter={pageInventoryFilter}
+              onFilterChange={setPageInventoryFilter}
+              fullBleed
+              onBrowse={(scope) => navigateTo({ kind: "pages", inventoryScope: scope })}
+              onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
+              onOpenDraft={openWikiDraft}
+              onOpenPage={openWikiPage}
+            >
             <PageDetail
               pageId={view.pageId}
+              onDeleted={handlePageDeleted}
               projectionIssue={view.projectionIssue}
               onProjectionResolved={() => replaceView({ ...view, projectionIssue: undefined })}
               initialSelection={pageSelectionsRef.current.get(view.pageId)}
@@ -1133,13 +1418,15 @@ export default function Main({
               initialMode={view.mode ?? "edit"}
               onBack={navigateBackFromPageDetail}
               onRegisterFlush={registerPageFlush}
-              onEditDirtyChange={setPageEditDirty}
+              onEditDirtyChange={reportPageDirty}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+              onOpenGraph={(pageId) => navigateTo({ kind: "graph", focusPageId: pageId })}
               onPageLoaded={handlePageLoaded}
               onPageClick={(id) => navigateTo({ kind: "page", pageId: id })}
               onEntityClick={handleEntityClick}
-              onSavePendingChange={setPageSavePending}
+              onSavePendingChange={reportPageSaving}
             />
+            </WikiWorkspace>
           ) : view.kind === "distill-review" ? (
             <DistillReviewPanel
               onBack={navigateBack}
@@ -1169,14 +1456,7 @@ export default function Main({
           ) : view.kind === "activity" ? (
             <ActivityFeed
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
-              onOpenIntelligence={() =>
-                navigateTo({ kind: "settings", section: "intelligence" })
-              }
-            />
-          ) : view.kind === "recaps" ? (
-            <RecapsList
-              onBack={navigateBack}
-              onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
+              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />
           ) : view.kind === "sources" ? (
             <SourcesView
@@ -1187,6 +1467,8 @@ export default function Main({
           ) : view.kind === "graph" ? (
             <div style={{ position: "relative", width: "100%", height: "100%" }}>
               <AtlasView
+                key={view.focusPageId ?? "all"}
+                focusPageId={view.focusPageId}
                 onNodeClick={(target) =>
                   target.kind === "memory"
                     ? navigateTo({ kind: "memory", sourceId: target.id })
@@ -1202,24 +1484,6 @@ export default function Main({
               <WorkspaceBackButton onClick={() => navigateTo({ kind: "pages" })} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)] mb-3" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
               </WorkspaceBackButton>
-              <div className="mb-3 flex items-center justify-between gap-3">
-                <h2 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "24px", fontWeight: 500, color: "var(--mem-text)", margin: 0 }}>{t("main.memories")}</h2>
-                <button
-                  className="rounded-md px-2.5 py-1.5 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-                  onClick={() => navigateTo({ kind: "recaps" })}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid var(--mem-border)",
-                    color: "var(--mem-text-secondary)",
-                    cursor: "pointer",
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "12px",
-                  }}
-                  type="button"
-                >
-                  {t("main.recaps")}
-                </button>
-              </div>
               <MemoryStream
                 memories={memories}
                 selectedDomain={null}
@@ -1229,15 +1493,80 @@ export default function Main({
                 onStabilityFilterChange={setStabilityFilter}
                 onSelectMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
                 presentation="parent-list"
+                filter={memoryCollectionFilter}
+                onFilterChange={setMemoryCollectionFilter}
               />
             </>
           )}
         </main>
       </div>
 
+      {ownershipNotice && <div className="note-owner-notice" role="status">
+        <span>{t(ownershipNotice.side === "secondary" ? "pages.groups.openInRight" : "pages.groups.openInCentral")}</span>
+        <button type="button" onClick={() => {
+          const notice = ownershipNotice; setOwnershipNotice(null);
+          if (notice.side === "secondary") {
+            if (secondaryGroupRef.current?.contains(notice.note)) void secondaryGroupRef.current.open(notice.note);
+          } else if (findPrimaryNoteTab(notice.note)) { focusPrimaryGroup(); navigateTo(notice.note); }
+        }}>{t("pages.groups.showNote")}</button>
+        <button className="note-owner-notice-dismiss" type="button" aria-label={t("pages.groups.dismiss")} onClick={() => setOwnershipNotice(null)}><X size={16} aria-hidden="true" /></button>
+      </div>}
+      <SecondaryNoteGroup readingPositions={readingPositions} selections={pageSelectionsRef.current} ref={secondaryGroupRef} host={isWikiWorkspaceView ? secondaryHost : null}
+        movingNote={movingNote}
+        onPageDeleted={handlePageDeleted}
+        onPresenceChange={setSecondaryPresence} onFocus={focusSecondaryGroup}
+        onNavigationIntent={() => { groupNavigationCancelRef.current?.(); }}
+        onNavigate={navigateTo} onOpenNote={next => {
+          if (findPrimaryNoteTab(next)) {
+            setOwnershipNotice({ side: "primary", note: next });
+          }
+          else void secondaryGroupRef.current?.open(next);
+        }} onMove={moveToPrimary} allocateDraftSession={() => ++nextDraftSessionRef.current} />
+      <div className="workspace-pane-host" ref={setWorkspacePaneHostRef} />
+
       <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
       <QuickCaptureScrim />
+      <SearchModal
+        open={mobileSearchOpen}
+        query={displayedSearchQuery}
+        placeholder={t("main.searchPlaceholder")}
+        inputRef={searchInputRef}
+        returnFocusRef={searchReturnFocusRef}
+        fallbackFocusRef={searchFallbackFocusRef}
+        loading={searchLoading}
+        error={searchError}
+        onQueryChange={handleSearchQueryChange}
+        onClose={dismissSearch}
+      >
+        <RecentlyOpened
+          query={displayedSearchQuery}
+          items={recentSearchItems}
+          onSelect={(item) => {
+            dismissSearch();
+            navigateTo(item.kind === "page"
+              ? { kind: "page", pageId: item.id }
+              : { kind: "space", spaceId: item.id, spaceName: item.title });
+          }}
+        />
+        <SearchResults
+          query={displayedSearchQuery}
+          memoryResults={memoryResults}
+          sourceResults={sourceResults}
+          entityResults={entityResults}
+          conceptResults={conceptResults}
+          loading={searchLoading}
+          error={searchError}
+          ready={!searchLoading && !searchError}
+          onOpenResult={(result) => void openSearchResult(result)}
+          onOpenPage={(pageId) => { dismissSearch(); navigateTo({ kind: "page", pageId }); }}
+          onOpenEntity={(entityId) => { dismissSearch(); handleEntityClick(entityId); }}
+        />
+      </SearchModal>
+      <NoteTabDragProvider onDrop={dropNoteTab} disabled={movingNote || !isWikiWorkspaceView || mobileSearchOpen} />
     </div>
+    </WorkspaceDocumentToolsHostContext.Provider>
+    </WorkspacePaneHostContext.Provider>
     </WorkspaceNavigationProvider>
+    </ReferenceNavigationProvider>
   );
 }

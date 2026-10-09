@@ -1,0 +1,99 @@
+/* Inspector tabs reuse the central connected-tab shape and only adapt its layout. */
+.note-inspector-tabs {
+  display: flex;
+  align-items: stretch;
+  align-self: flex-end;
+  flex: 1 1 auto;
+  gap: 4px;
+  min-width: 0;
+}
+
+.note-inspector-tabs > .note-tab {
+  box-sizing: border-box;
+  align-items: center;
+  flex: 1 1 0;
+  max-width: none;
+  min-width: 0;
+  height: 46px;
+  justify-content: center;
+  padding: 0 6px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font: 13px/1.4 var(--mem-font-body);
+}
+
+.note-inspector-tabs > .note-tab[data-active="true"],
+.note-inspector-tabs > .note-tab:is(:hover, :focus-within) {
+  color: var(--mem-text);
+}
+
+.note-inspector-tabs > .note-tab[data-active="true"] {
+  background: var(--workspace-document-background, var(--mem-bg));
+  font-weight: 500;
+}
+
+.note-inspector-tabs > .note-tab[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.note-inspector-tabs > .note-tab:focus-visible {
+  outline: 2px solid var(--mem-text-secondary);
+  outline-offset: -3px;
+  border-radius: 6px;
+}
+
+.note-inspector-tabs > .note-tab > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (pointer: coarse) {
+  .note-inspector-tabs > .note-tab {
+    height: 48px;
+    padding-bottom: 4px;
+  }
+}
+
+/* Preserve readable view names on the note-tab baseline in a narrow group. */
+.page-info-drawer--inspector:has(.note-inspector-panel--canvas) {
+  container-type: inline-size;
+  container-name: mind-map-inspector;
+}
+
+@container mind-map-inspector (max-width: 279px) {
+  .page-info-drawer.page-info-drawer--inspector .page-info-drawer-header {
+    display: grid;
+    grid-template-columns: 1fr 44px 44px;
+    grid-template-rows: 52px 44px;
+    height: 96px;
+    min-height: 96px;
+    column-gap: 3px;
+    row-gap: 0;
+    padding-inline: 3px;
+  }
+
+  .note-inspector-tabs {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    width: 100%;
+  }
+
+  .page-info-drawer-workspace-toggle {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .page-info-drawer-close {
+    grid-column: 3;
+    grid-row: 2;
+  }
+
+  .page-info-drawer-group-overlay-panel .page-info-drawer-content,
+  .page-info-drawer-expanded-group .page-info-drawer-content {
+    padding-top: 44px;
+  }
+}

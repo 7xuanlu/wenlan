@@ -72,6 +72,8 @@ export interface CanvasNodeView {
   depth: number;
 }
 
+export type MapOrientation = "landscape" | "portrait";
+
 /**
  * Reconstruct the parent_id spine into the nested shape flextree wants.
  *
@@ -136,36 +138,89 @@ export function layoutMap(
   nodes: readonly PageMapNode[],
   overrides: ReadonlyMap<string, string>,
   fallback?: string,
+  orientation: MapOrientation = "landscape",
 ): CanvasNodeView[] {
   const label = (n: PageMapNode) => displayLabel(n, overrides, fallback);
   const spine = buildSpine(nodes, label);
   if (!spine) return [];
 
-  let placed: PlacedNode[];
-  try {
-    placed = radialPolar(spine.root);
-  } catch {
-    // radialPolar throws only if ring growth fails to converge in 12 rounds.
-    // A canvas that renders stacked at the origin still beats a blank tab
-    // with a thrown error, and the user can drag out of it.
-    placed = [];
-  }
+  const hasPlacedCoordinates = nodes.some(
+    (node) => node.status !== "dismissed" && node.placed && Number.isFinite(node.x) && Number.isFinite(node.y),
+  );
+  const usePortraitLayout = orientation === "portrait" && !hasPlacedCoordinates;
+  const solverRoot = usePortraitLayout ? transpose(spine.root) : spine.root;
 
-  const views: CanvasNodeView[] = [];
-  for (const p of placed) {
-    const node = spine.byId.get(p.id);
-    if (!node) continue;
-    const pinnedPosition =
-      node.placed && typeof node.x === "number" && typeof node.y === "number";
-    views.push({
-      node,
-      label: label(node),
-      x: pinnedPosition ? (node.x as number) : p.x,
-      y: pinnedPosition ? (node.y as number) : p.y,
-      width: node.width ?? p.width,
-      height: node.height ?? p.height,
-      depth: p.depth,
-    });
+  let views: CanvasNodeView[];
+  try {
+    let placed: PlacedNode[] = radialPolar(solverRoot);
+    if (usePortraitLayout) {
+      placed = placed.map((node) => ({
+        ...node,
+        x: -node.y,
+        y: node.x,
+        width: node.height,
+        height: node.width,
+      }));
+    }
+
+    views = [];
+    for (const p of placed) {
+      const node = spine.byId.get(p.id);
+      if (!node) continue;
+      const pinnedPosition = node.placed && Number.isFinite(node.x) && Number.isFinite(node.y);
+      views.push({
+        node,
+        label: label(node),
+        x: pinnedPosition ? (node.x as number) : p.x,
+        y: pinnedPosition ? (node.y as number) : p.y,
+        width: node.width ?? p.width,
+        height: node.height ?? p.height,
+        depth: p.depth,
+      });
+    }
+    if (usePortraitLayout) views = spreadPortraitCenters(views);
+  } catch (error) {
+    if (usePortraitLayout && error instanceof Error && error.message.startsWith("Portrait layout has coincident centers:")) {
+      console.warn(error.message);
+    }
+    // Keep the existing recoverable empty layout if the solver or portrait
+    // spacing fails instead of manufacturing overlaps or breaking navigation.
+    return [];
   }
   return views;
+}
+
+/**
+ * Radial's collision solver was tuned for a wide canvas. After rotating that
+ * solution for a narrow portrait canvas, one uniform center scale restores a
+ * 12px clearance on at least one axis for every pair without changing ranks,
+ * box sizes, or the tree's shape.
+ */
+function spreadPortraitCenters(views: CanvasNodeView[]): CanvasNodeView[] {
+  let scale = 1;
+  for (let i = 0; i < views.length; i++) {
+    const a = views[i];
+    for (let j = i + 1; j < views.length; j++) {
+      const b = views[j];
+      const dx = Math.abs(a.x - b.x);
+      const dy = Math.abs(a.y - b.y);
+      if (dx === 0 && dy === 0) {
+        throw new Error(`Portrait layout has coincident centers: ${a.node.id}, ${b.node.id}`);
+      }
+      const neededX = dx === 0 ? Number.POSITIVE_INFINITY : ((a.width + b.width) / 2 + 12) / dx;
+      const neededY = dy === 0 ? Number.POSITIVE_INFINITY : ((a.height + b.height) / 2 + 12) / dy;
+      scale = Math.max(scale, Math.min(neededX, neededY));
+    }
+  }
+  if (scale === 1) return views;
+  return views.map((view) => ({ ...view, x: view.x * scale, y: view.y * scale }));
+}
+
+function transpose(node: MapNodeInput): MapNodeInput {
+  return {
+    id: node.id,
+    width: node.height,
+    height: node.width,
+    children: node.children?.map(transpose),
+  };
 }

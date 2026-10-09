@@ -1,5 +1,29 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
-.atlas-inspector-connections-heading { margin-bottom: 6px; }
+.page-info-drawer:has(.atlas-inspector),
+.page-info-drawer:has(.atlas-inspector) .page-info-drawer-header,
+.page-info-drawer:has(.atlas-inspector) .page-info-drawer-content { background: var(--workspace-sidebar-background, var(--mem-bg)); }
+.page-info-drawer:has(.atlas-inspector) .page-info-drawer-content { display: flex; flex-direction: column; overflow: hidden; }
+.atlas-inspector { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; color: var(--mem-text); font: 400 13px/1.5 var(--mem-font-body); }
+.atlas-inspector-metadata { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; margin: 0 0 16px; }
+.atlas-inspector-metadata,
+.atlas-inspector-connections-heading,
+.atlas-connection-filter,
+.atlas-connection-summary { flex-shrink: 0; }
+.atlas-inspector-kind { min-width: 0; margin: 0; color: var(--mem-text-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.atlas-open-detail {
+  display: inline-flex; flex: none; align-items: center; gap: 3px; min-height: 30px; padding: 3px 0 3px 8px;
+  border: 0; border-radius: 4px; background: transparent; color: var(--mem-text-secondary);
+  font: 500 12px/1.4 var(--mem-font-body); cursor: pointer;
+}
+.atlas-open-detail:hover { background: transparent; color: var(--mem-text); }
+.atlas-open-detail:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 2px; }
+@media (pointer: coarse) { .atlas-open-detail { min-height: 44px; } }
+.atlas-inspector-connections-heading { margin: 0 0 6px; color: var(--mem-text); font: 500 14px/1.4 var(--mem-font-body); }
+.atlas-inspector-connections-heading span { margin-left: 5px; color: var(--mem-text-secondary); font-variant-numeric: tabular-nums; }
+.atlas-connection-filter {
+  width: 100%; margin: 0 0 7px; padding: 7px 9px; border: 1px solid var(--mem-control-border); border-radius: 5px;
+  background: var(--mem-bg); color: var(--mem-text); font: 400 12px/1.4 var(--mem-font-body);
+}
 .atlas-connection-summary {
   display: flex;
   flex-wrap: wrap;
@@ -19,9 +43,9 @@
   cursor: pointer;
 }
 .atlas-connection-summary button:hover { color: var(--mem-text); }
-.atlas-connection-summary button:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+.atlas-connection-summary button:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 2px; }
 .atlas-connection-summary button span:last-child { color: var(--mem-text-secondary); font-variant-numeric: tabular-nums; }
-.atlas-connection-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; }
+.atlas-connection-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; }
 .atlas-connection-group { margin: 14px 0 0; }
 .atlas-connection-group:first-child { margin-top: 0; }
 .atlas-connection-group h4 {
@@ -31,29 +55,34 @@
   gap: 8px;
   margin: 0;
   padding: 0 0 5px;
-  color: var(--mem-text-secondary);
-  font: 500 12px/1.4 var(--mem-font-body);
+  color: var(--mem-text);
+  font: 500 14px/1.4 var(--mem-font-body);
 }
 .atlas-connection-group h4 span { color: var(--mem-text-secondary); font-variant-numeric: tabular-nums; }
-.atlas-connection-group-rows { border-top: 1px solid var(--mem-border); }
-.atlas-connection-group-rows button {
+.atlas-connection-group-heading-visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+.atlas-connection-group-rows { display: flex; flex-direction: column; gap: 2px; }
+.atlas-connection-group-rows > button {
   display: flex;
   width: 100%;
+  min-height: 44px;
   min-width: 0;
   align-items: center;
-  gap: 8px;
-  padding: 9px 0;
+  gap: 10px;
+  padding: 8px;
   border: 0;
-  border-bottom: 1px solid var(--mem-border);
+  border-radius: 8px;
   background: transparent;
   color: var(--mem-text);
-  font: 400 13px/1.4 var(--mem-font-body);
+  font: 400 14px/1.4 var(--mem-font-body);
   text-align: left;
   cursor: pointer;
 }
-.atlas-connection-group-rows button:hover { color: var(--mem-accent-indigo); }
+.atlas-connection-group-rows > button:hover { background: var(--mem-hover); color: var(--mem-text); }
 .atlas-connection-group-rows button:focus-visible,
-.atlas-more-connections:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+.atlas-more-connections:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 2px; }
 .atlas-connection-copy { display: block; min-width: 0; flex: 1; }
 .atlas-connection-name { display: block; overflow-wrap: anywhere; }
 .atlas-connection-relations {
@@ -62,7 +91,7 @@
   gap: 4px 9px;
   margin-top: 3px;
   color: var(--mem-text-secondary);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.3;
 }
 .atlas-connection-relation { display: inline-flex; max-width: 100%; align-items: center; gap: 3px; overflow-wrap: anywhere; }
@@ -70,13 +99,23 @@
 .atlas-connection-navigate { flex: none; color: var(--mem-text-secondary); }
 .atlas-more-connections {
   width: 100%;
+  min-height: 40px;
   margin-top: 6px;
   padding: 6px 0;
   border: 0;
   background: transparent;
-  color: var(--mem-accent-indigo);
+  color: var(--mem-text-secondary);
   font: 500 12px/1.4 var(--mem-font-body);
   text-align: left;
   cursor: pointer;
 }
 .atlas-connection-empty { margin: 10px 0; color: var(--mem-text-secondary); }
+
+/* Graph context shares the workspace chrome, including long node titles. */
+.page-info-drawer--inspector:has(.atlas-inspector) .page-info-drawer-header {
+  height: auto;
+  min-height: 52px;
+  padding: 12px 16px 12px 20px;
+  align-items: flex-start;
+  border-bottom: 0;
+}

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
-const NARROW_QUERY = "(max-width: 899px)";
+export const SIDEBAR_NARROW_QUERY = "(max-width: 899px)";
 
 function initialNarrowViewport(): boolean {
   if (typeof window.matchMedia !== "function") return false;
-  return window.matchMedia(NARROW_QUERY).matches;
+  return window.matchMedia(SIDEBAR_NARROW_QUERY).matches;
 }
 
 export type ResponsiveSidebar = {
@@ -31,7 +31,7 @@ export function useResponsiveSidebar(
 
   useEffect(() => {
     if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia(NARROW_QUERY);
+    const media = window.matchMedia(SIDEBAR_NARROW_QUERY);
     const onChange = (event: MediaQueryListEvent) => {
       setIsNarrow(event.matches);
       if (!event.matches) {

@@ -37,3 +37,13 @@
 @media (min-width: 1100px) {
   .document-context-host.document-context-open.memory-detail-content-first { padding-right: 384px; }
 }
+
+@media (min-width: 1100px) {
+  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open { padding-right: 0; }
+  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open.memory-detail-content-first { padding-right: 24px; }
+}
+
+.knowledge-context-open-graph { display: inline-flex; align-items: center; justify-self: start; gap: 6px; min-height: 32px; max-width: 100%; margin-top: 8px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--mem-text-secondary); font: 500 13px/1.5 var(--mem-font-body); text-align: left; cursor: pointer; }
+.knowledge-context-open-graph svg { flex: none; }
+.knowledge-context-open-graph:hover { background: var(--mem-hover); color: var(--mem-text); }
+@media (pointer: coarse), (max-width: 640px) { .knowledge-context-open-graph { min-height: 44px; } }

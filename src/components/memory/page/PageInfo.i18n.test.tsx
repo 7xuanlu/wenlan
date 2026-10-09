@@ -198,4 +198,49 @@ describe("PageInfo i18n", () => {
       screen.getByText("引用資料不相符——重新整理以修復"),
     ).toBeInTheDocument();
   });
+
+  it("localizes revision loading, failure, retry, and edited re-distill confirmation", async () => {
+    const translations = [
+      {
+        language: "en",
+        loading: "Loading revision history…",
+        error: "Could not load revision history.",
+        retry: "Retry",
+        confirm: "Rebuild this note from its sources? Your edits may be replaced.",
+      },
+      {
+        language: "zh-Hans",
+        loading: "正在加载修订记录…",
+        error: "无法加载修订记录。",
+        retry: "重试",
+        confirm: "要根据来源重新整理此笔记吗？您的编辑可能会被替换。",
+      },
+      {
+        language: "zh-Hant",
+        loading: "正在載入修訂紀錄…",
+        error: "無法載入修訂紀錄。",
+        retry: "重試",
+        confirm: "要根據來源重新整理此筆記嗎？您的編輯可能會被取代。",
+      },
+    ] as const;
+
+    for (const copy of translations) {
+      await i18n.changeLanguage(copy.language);
+      const { unmount } = renderInfo({ revisionsLoading: true });
+      expect(screen.getByText(copy.loading)).toBeInTheDocument();
+      unmount();
+
+      const onRetryRevisions = vi.fn();
+      const { user: retryUser, unmount: unmountError } = renderInfo({
+        revisionsError: true,
+        onRetryRevisions,
+      });
+      expect(screen.getByRole("alert")).toHaveTextContent(copy.error);
+      expect(screen.getByRole("button", { name: copy.retry })).toBeInTheDocument();
+      expect(i18n.t("pageDetail.redistillEditedConfirm")).toBe(copy.confirm);
+      await retryUser.click(screen.getByRole("button", { name: copy.retry }));
+      expect(onRetryRevisions).toHaveBeenCalledOnce();
+      unmountError();
+    }
+  });
 });

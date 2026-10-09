@@ -1,0 +1,113 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.page-canvas-node-name {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+.page-canvas-node-name input {
+  border-radius: 4px;
+}
+
+.page-canvas-name-confirm,
+.page-canvas-name-cancel {
+  display: grid;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.page-canvas-name-confirm:hover,
+.page-canvas-name-cancel:hover {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.page-canvas-idea-entry {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.page-canvas-idea-entry-wrap {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.page-canvas-empty-entry {
+  position: absolute;
+  z-index: 6;
+  box-sizing: border-box;
+  display: flex;
+  width: min(280px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow-y: auto;
+  justify-content: flex-start;
+  padding: 8px;
+  border: 1px solid var(--mem-border);
+  border-radius: 9px;
+  background: var(--mem-detail-surface);
+  box-shadow: var(--mem-shadow-overlay);
+}
+
+.page-canvas-idea-entry input {
+  box-sizing: border-box;
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-detail-surface);
+  color: var(--mem-text);
+  font: inherit;
+}
+
+.page-canvas-idea-entry button {
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  background: var(--mem-detail-surface);
+  color: var(--mem-text);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.page-canvas-idea-entry button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.page-canvas-idea-hint {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--mem-text-tertiary);
+  font-size: 12px;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .page-canvas-idea-entry input,
+  .page-canvas-idea-entry button {
+    min-height: 44px;
+  }
+}

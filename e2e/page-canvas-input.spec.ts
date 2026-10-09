@@ -72,7 +72,7 @@ test("a new box stays where it was dropped", async ({ page }) => {
   const spot = { x: pane.x + pane.width - 110, y: pane.y + pane.height - 130 };
 
   await page.mouse.dblclick(spot.x, spot.y);
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
   await field.fill("Deploy notes");
   await field.press("Enter");

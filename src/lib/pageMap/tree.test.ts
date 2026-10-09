@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 import { buildSpine, displayLabel, layoutMap, nodeBoxSize } from "./tree";
-import { radialPolar, type MapNodeInput } from "./radial";
+import { findCollisions, radialPolar, type MapNodeInput } from "./radial";
 import type { PageMapNode } from "../tauri";
 
 function n(o: Partial<PageMapNode> & { id: string }): PageMapNode {
@@ -30,6 +30,20 @@ const allIds = (node: MapNodeInput): string[] => [
   node.id,
   ...(node.children ?? []).flatMap(allIds),
 ];
+function expectPortraitClearance(views: ReturnType<typeof layoutMap>) {
+  const placed = views.map((view) => ({ id: view.node.id, ...view }));
+  expect(findCollisions(placed)).toEqual([]);
+  for (let i = 0; i < views.length; i++) {
+    for (let j = i + 1; j < views.length; j++) {
+      const a = views[i];
+      const b = views[j];
+      expect(
+        Math.abs(a.x - b.x) >= (a.width + b.width) / 2 + 12
+        || Math.abs(a.y - b.y) >= (a.height + b.height) / 2 + 12,
+      ).toBe(true);
+    }
+  }
+}
 
 describe("buildSpine", () => {
   it("drops dismissed nodes before the walk", () => {
@@ -129,6 +143,151 @@ describe("displayLabel", () => {
 });
 
 describe("layoutMap", () => {
+  it("turns an unplaced layout into a tall portrait map without changing box sizes", () => {
+    const nodes = [
+      n({ id: "root", ref_kind: "page", ref_id: "p1", label: "Workspace" }),
+      n({ id: "first", parent_id: "root", rank: 0, label: "First note" }),
+    ];
+    const before = JSON.stringify(nodes);
+    const views = layoutMap(nodes, new Map(), "FB", "portrait");
+    const first = views.find((view) => view.node.id === "first")!;
+    const spanX = Math.max(...views.map((view) => view.x + view.width / 2))
+      - Math.min(...views.map((view) => view.x - view.width / 2));
+    const spanY = Math.max(...views.map((view) => view.y + view.height / 2))
+      - Math.min(...views.map((view) => view.y - view.height / 2));
+
+    expect(first.x).toBeCloseTo(0, 6);
+    expect(first.y).toBeGreaterThan(0);
+    expect(spanY).toBeGreaterThan(spanX);
+    expect(views.map((view) => [view.width, view.height])).toEqual([[120, 44], [120, 44]]);
+    expectPortraitClearance(views);
+    expect(JSON.stringify(nodes)).toBe(before);
+  });
+
+  it("keeps a simple four-node portrait layout separated", () => {
+    const nodes = [
+      n({ id: "root", label: "Workspace overview" }),
+      n({ id: "a", parent_id: "root", rank: 0, label: "Research" }),
+      n({ id: "b", parent_id: "root", rank: 1, label: "A longer planning note" }),
+      n({ id: "c", parent_id: "root", rank: 2, label: "Tasks" }),
+    ];
+    const before = JSON.stringify(nodes);
+    const views = layoutMap(nodes, new Map(), "FB", "portrait");
+
+    expect(views).toHaveLength(4);
+    expectPortraitClearance(views);
+    expect(JSON.stringify(nodes)).toBe(before);
+  });
+
+  it("keeps a varied 24-node branched portrait map collision-free", () => {
+    const nodes = [n({ id: "root", ref_kind: "page", ref_id: "p1", label: "A broad working title" })];
+    const childCounts = [5, 5, 5, 4];
+    for (const [branchIndex, childCount] of childCounts.entries()) {
+      const branchId = `branch-${branchIndex}`;
+      nodes.push(n({
+        id: branchId,
+        parent_id: "root",
+        rank: branchIndex,
+        label: ["Short", "A considerably longer branch label", "Reference", "Ideas"][branchIndex],
+      }));
+      for (let childIndex = 0; childIndex < childCount; childIndex++) {
+        const label = childIndex % 3 === 0
+          ? `A long note title for branch ${branchIndex}, item ${childIndex}`
+          : childIndex % 3 === 1 ? `Note ${branchIndex}-${childIndex}` : "Quick fact";
+        nodes.push(n({
+          id: `${branchId}-item-${childIndex}`,
+          parent_id: branchId,
+          rank: childIndex,
+          label,
+        }));
+      }
+    }
+    const before = JSON.stringify(nodes);
+    const views = layoutMap(nodes, new Map(), "FB", "portrait");
+    expect(views).toHaveLength(24);
+    expectPortraitClearance(views);
+    expect(views.map((view) => view.node.id).sort()).toEqual(nodes.map((node) => node.id).sort());
+    expect(views.every((view) => nodes.includes(view.node))).toBe(true);
+    expect(JSON.stringify(nodes)).toBe(before);
+  });
+
+  it("keeps a deep, wide tree with varied labels separated", () => {
+    const nodes = [n({ id: "root", label: "A workspace with a very long project title" })];
+    let rank = 0;
+    for (let branch = 0; branch < 3; branch++) {
+      const branchId = `branch-${branch}`;
+      nodes.push(n({
+        id: branchId,
+        parent_id: "root",
+        rank: branch,
+        label: ["Short", "A considerably longer research and planning branch", "Archive"][branch],
+      }));
+      for (let section = 0; section < 2; section++) {
+        const sectionId = `${branchId}-section-${section}`;
+        nodes.push(n({
+          id: sectionId,
+          parent_id: branchId,
+          rank: section,
+          label: section === 0 ? "Current priorities" : "Historical references and supporting evidence",
+        }));
+        for (let item = 0; item < 2; item++) {
+          nodes.push(n({
+            id: `${sectionId}-item-${item}`,
+            parent_id: sectionId,
+            rank: item,
+            label: item === 0
+              ? `A detailed note about branch ${branch}, section ${section}`
+              : "Fact",
+          }));
+          rank++;
+        }
+      }
+    }
+    // Add two more leaves to exercise uneven branch density as well as depth.
+    nodes.push(n({ id: "extra-a", parent_id: "branch-0", rank: rank++, label: "An extra broad note" }));
+    nodes.push(n({ id: "extra-b", parent_id: "branch-2", rank, label: "Tiny" }));
+    const before = JSON.stringify(nodes);
+    const views = layoutMap(nodes, new Map(), "FB", "portrait");
+
+    expect(views).toHaveLength(24);
+    expectPortraitClearance(views);
+    expect(JSON.stringify(nodes)).toBe(before);
+  });
+
+  it.each([
+    { nodes: [
+      n({ id: "root", placed: true, x: 12, y: 20 }),
+      n({ id: "a", parent_id: "root", rank: 0, placed: true, x: 140, y: 34 }),
+      n({ id: "b", parent_id: "root", rank: 1, placed: true, x: -150, y: 45 }),
+    ] },
+    { nodes: [
+      n({ id: "root" }),
+      n({ id: "placed", parent_id: "root", rank: 0, placed: true, x: 900, y: -800 }),
+      n({ id: "floating", parent_id: "root", rank: 1 }),
+      n({ id: "also-floating", parent_id: "placed", rank: 0 }),
+    ] },
+  ])("preserves fully or partially placed layouts byte-for-byte", ({ nodes }) => {
+    const before = JSON.stringify(nodes);
+    const landscape = layoutMap(nodes, new Map(), "FB", "landscape");
+    const portrait = layoutMap(nodes, new Map(), "FB", "portrait");
+
+    expect(portrait).toEqual(landscape);
+    expect(JSON.stringify(nodes)).toBe(before);
+  });
+
+  it("treats placed flags without finite coordinates as unplaced", () => {
+    const nodes = [
+      n({ id: "root", label: "Workspace" }),
+      n({ id: "bad", parent_id: "root", placed: true, x: Number.NaN, y: Number.POSITIVE_INFINITY }),
+    ];
+    const views = layoutMap(nodes, new Map(), "FB", "portrait");
+    const bad = views.find((view) => view.node.id === "bad")!;
+
+    expect(Number.isFinite(bad.x)).toBe(true);
+    expect(Number.isFinite(bad.y)).toBe(true);
+    expect(bad.y).toBeGreaterThan(0);
+  });
+
   it("uses stored coordinates for placed nodes and the layout slot otherwise", () => {
     const nodes = [
       n({ id: "root", ref_kind: "page", ref_id: "p1" }),

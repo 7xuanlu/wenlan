@@ -26,7 +26,7 @@ async function emptySpot(page: Page): Promise<{ x: number; y: number }> {
 }
 
 async function named(page: Page, label: string): Promise<void> {
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
   await field.fill(label);
   await field.press("Enter");
@@ -47,7 +47,11 @@ test.describe("canvas CRUD", () => {
     await named(page, "Write path");
 
     await expect(box(page, "Write path")).toBeVisible();
-    expect(created(controller)).toHaveLength(1);
+    const ideas = created(controller) as { args: { body: { ref_kind: string } } }[];
+    expect(ideas).toHaveLength(1);
+    expect(ideas[0].args.body.ref_kind).toBe("idea");
+    expect(controller.calls().some((call) => call.command === "patch_page_map_node")).toBe(false);
+    expect(controller.calls().some((call) => call.command === "update_page")).toBe(false);
     expect(browserErrors.pageErrors).toEqual([]);
   });
 
@@ -90,12 +94,15 @@ test.describe("canvas CRUD", () => {
     await named(page, "Cache layer");
     await expect(box(page, "Cache layer")).toBeVisible();
 
-    const calls = created(controller) as { args: { body: { parent_id: string } } }[];
+    const calls = created(controller) as { args: { body: { parent_id: string; ref_kind: string } } }[];
     expect(calls).toHaveLength(2);
     // Inside means a child of the box that was selected; beside means a sibling,
-    // so it hangs off that box's own parent.
-    expect(calls[0].args.body.parent_id).toBe("n_storage");
-    expect(calls[1].args.body.parent_id).toBe("n_root");
+    // so it hangs off that box's own parent. Both are independent ideas, never
+    // section or page-body edits.
+    expect(calls[0].args.body).toMatchObject({ parent_id: "n_storage", ref_kind: "idea" });
+    expect(calls[1].args.body).toMatchObject({ parent_id: "n_root", ref_kind: "idea" });
+    expect(controller.calls().some((call) => call.command === "patch_page_map_node")).toBe(false);
+    expect(controller.calls().some((call) => call.command === "update_page")).toBe(false);
   });
 
   test("Delete removes the selected box, and Escape first drops the selection", async ({ page }) => {
@@ -136,9 +143,11 @@ test.describe("canvas CRUD", () => {
     await page.mouse.click(spot.x, spot.y, { button: "right" });
 
     const menu = page.getByRole("menu", { name: "Canvas actions" });
-    await expect(menu.getByRole("menuitem", { name: "New box here" })).toBeVisible();
-    await expect(menu.getByRole("menuitem", { name: "Select all" })).toBeVisible();
-    await expect(menu.getByRole("menuitem", { name: "Fit to view" })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "New node", exact: true })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Generate", exact: true })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Select all", exact: true })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Fit to view" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Fit all (Shift 1)", exact: true })).toBeVisible();
 
     await page.keyboard.press("Escape");
     await expect(menu).toHaveCount(0);
@@ -152,7 +161,7 @@ test.describe("canvas CRUD", () => {
     await box(page, "Storage layer").click({ button: "right" });
     const menu = page.getByRole("menu", { name: "Canvas actions" });
     await expect(menu.getByRole("menuitem", { name: "Delete, with everything inside" })).toBeVisible();
-    await expect(menu.getByRole("menuitem", { name: "Add box inside" })).toBeVisible();
+    await expect(menu.getByRole("menuitem", { name: "Add child node", exact: true })).toBeVisible();
     await expect(menu.getByRole("menuitem", { name: "Rename" })).toBeVisible();
     // A section is a heading in the body — there is nothing behind it to open.
     await expect(menu.getByRole("menuitem", { name: "Open" })).toHaveCount(0);
@@ -239,14 +248,14 @@ test.describe("canvas Escape", () => {
     const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
     await expect(editor).toBeEditable();
     await expect(editor).toBeFocused();
-    await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toHaveCount(0);
 
     // Writing retains its own Escape/flush layer before page navigation.
     await editor.press("Escape");
     await expect(editor).toHaveCount(0);
     await expect(page.getByTestId("page-document-reading")).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
   });
 });
 
@@ -334,6 +343,13 @@ test.describe("canvas viewport and keys", () => {
     await openCanvas(page);
 
     const target = box(page, "Query path");
+    const sibling = box(page, "Storage layer");
+    const siblingPosition = () => sibling.evaluate((element) => {
+      const node = element.closest<HTMLElement>(".react-flow__node")!;
+      const transform = new DOMMatrixReadOnly(getComputedStyle(node).transform);
+      return { x: transform.m41, y: transform.m42, centerX: transform.m41 + node.offsetWidth / 2, centerY: transform.m42 + node.offsetHeight / 2 };
+    });
+    const siblingBefore = await siblingPosition();
     const from = await target.boundingBox();
     if (!from) throw new Error("box has no position");
     await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
@@ -350,5 +366,16 @@ test.describe("canvas viewport and keys", () => {
     // And it must not snap back once the map is refetched.
     await page.waitForTimeout(1200);
     await expect.poll(async () => (await target.boundingBox())?.x).not.toBe(from.x);
+    // The first saved drag must preserve the automatic positions of untouched siblings.
+    // Auto-pan changes screen coordinates; the untouched node must retain its
+    // world position and the same persisted center after layout readback.
+    const siblingAfter = await siblingPosition();
+    expect(siblingAfter.x).toBeCloseTo(siblingBefore.x, 0);
+    expect(siblingAfter.y).toBeCloseTo(siblingBefore.y, 0);
+    const layout = controller.calls().filter((call) => call.command === "put_page_map_layout").at(-1)?.args as { body: { positions: Array<{ node_id: string; x: number; y: number }> } };
+    const savedSibling = layout.body.positions.find((position) => position.node_id === "n_storage");
+    expect(savedSibling).toBeDefined();
+    expect(savedSibling!.x).toBeCloseTo(siblingBefore.centerX, 0);
+    expect(savedSibling!.y).toBeCloseTo(siblingBefore.centerY, 0);
   });
 });

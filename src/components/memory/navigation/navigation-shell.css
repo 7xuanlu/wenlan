@@ -3,8 +3,208 @@
 }
 
 .memory-shell {
+  --workspace-document-background: var(--mem-bg);
+  --workspace-sidebar-width: 240px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 52px minmax(0, 1fr);
   overflow-x: hidden;
 }
+
+html[data-theme="light"] .memory-shell {
+  --workspace-document-background: var(--mem-surface);
+  --workspace-sidebar-background: var(--mem-bg);
+}
+
+.memory-shell[data-sidebar-layout="icons"] {
+  --workspace-sidebar-width: 64px;
+  --workspace-sidebar-background: var(--mem-bg);
+}
+.memory-shell[data-sidebar-layout="labels"] { --workspace-sidebar-width: var(--workspace-labels-width, 240px); }
+.memory-shell[data-sidebar-layout="zero"] { --workspace-sidebar-width: 0px; }
+.memory-shell[data-sidebar-layout="overlay"] { --workspace-sidebar-width: 240px; }
+.memory-shell::before {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: var(--workspace-sidebar-width);
+  width: 1px;
+  background: var(--mem-border);
+  content: "";
+  pointer-events: none;
+}
+.memory-shell[data-sidebar-layout="icons"]::before { display: none; }
+.memory-shell[data-sidebar-layout="zero"]::before,
+.memory-shell[data-sidebar-layout="overlay"]::before { display: none; }
+
+.memory-workspace-header {
+  z-index: 10;
+  grid-column: 1;
+  grid-row: 1;
+  isolation: isolate;
+  min-width: 0;
+  width: 100%;
+}
+
+.workspace-header-sidebar-backdrop {
+  position: absolute;
+  z-index: -1;
+  inset: 0 auto 0 0;
+  pointer-events: none;
+  background: var(--workspace-sidebar-background, var(--mem-sidebar));
+}
+.workspace-header-sidebar-backdrop { width: var(--workspace-sidebar-width, 240px); }
+.memory-shell[data-sidebar-layout="icons"] .workspace-header-sidebar-backdrop,
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-zero,
+.workspace-header-sidebar-backdrop.is-sidebar-backdrop-overlay { width: 0; }
+
+.memory-shell-content {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.workspace-pane-host {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+.workspace-pane-host:empty { display: none; }
+
+.workspace-header-container {
+  container-name: workspace-header;
+  container-type: inline-size;
+}
+
+.workspace-header-search-fallback { display: inline-flex; }
+
+.notes-workspace-sidebar { display: flex; flex-direction: column; }
+.notes-sidebar-search { flex: 0 0 auto; padding: 12px 5px 0; }
+.notes-sidebar-search--compact { display: flex; justify-content: center; }
+.notes-sidebar-search + .notes-icon-rail .notes-rail-nav { padding-top: 6px; }
+
+.notes-search-entry {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font: 14px var(--mem-font-body);
+  gap: 11px;
+  min-height: 44px;
+  padding: 0 12px;
+  text-align: left;
+  transition: background-color 150ms, color 150ms;
+  width: 100%;
+}
+
+.notes-search-entry:hover { background: var(--mem-hover); color: var(--mem-text); }
+.notes-search-entry:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+.notes-search-entry > svg { color: currentColor; flex: 0 0 22px; width: 22px; height: 22px; }
+.notes-search-entry > svg path { stroke-width: 1.5px; vector-effect: non-scaling-stroke; }
+.notes-search-entry-label { flex: 1; }
+.notes-search-entry-shortcut {
+  align-items: center;
+  border: 1px solid var(--mem-border);
+  border-radius: 4px;
+  color: var(--mem-text-secondary);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: 12px/1 var(--mem-font-mono);
+  min-height: 22px;
+  opacity: 0;
+  padding: 0 5px;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+}
+.notes-search-entry:focus-visible .notes-search-entry-shortcut { opacity: 1; }
+@media (hover: hover) {
+  .notes-search-entry:hover .notes-search-entry-shortcut { opacity: 1; }
+}
+.notes-search-entry--compact { justify-content: center; padding: 0; width: 44px; }
+
+.settings-sidebar-search { padding: 10px 8px 6px; }
+.settings-sidebar-search .notes-search-entry { gap: 12px; }
+.settings-sidebar-search--icons { display: flex; justify-content: center; padding: 10px 5px 6px; }
+
+@media (min-width: 768px) and (pointer: fine) {
+  .notes-sidebar-search .notes-search-entry:not(.notes-search-entry--compact) { min-height: 40px; }
+  .notes-sidebar-search + .notes-icon-rail .notes-rail-nav--labels { padding-top: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .notes-search-entry, .notes-search-entry-shortcut { transition: none; }
+}
+
+.search-results-heading {
+  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-mono);
+  font-size: 11px;
+  margin: 0;
+}
+
+.search-result-button {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: inherit;
+  cursor: pointer;
+  display: block;
+  font: inherit;
+  padding: 10px 12px;
+  text-align: left;
+  transition: background-color 150ms;
+  width: 100%;
+}
+
+.search-result-match { background: color-mix(in srgb, var(--mem-accent-page) 15%, transparent); border-radius: 2px; color: inherit; }
+.search-result-meta:empty { display: none; }
+
+.search-result-button:hover { background-color: var(--mem-hover); }
+.search-result-button:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+.search-result-line { align-items: center; display: flex; gap: 10px; }
+.search-result-dot { background: var(--mem-accent-page); border-radius: 50%; height: 8px; width: 8px; }
+.search-result-title { color: var(--mem-text); font-family: var(--mem-font-body); font-size: 13px; font-weight: 500; }
+.search-result-domain { color: var(--mem-text-tertiary); font-family: var(--mem-font-mono); font-size: 10px; }
+.search-result-summary { color: var(--mem-text-secondary); display: block; font-family: var(--mem-font-body); font-size: 12px; line-height: 1.5; margin: 4px 0 0 18px; }
+.search-result-kind { background: color-mix(in srgb, var(--mem-accent-sage) 15%, transparent); border-radius: 999px; color: var(--mem-accent-sage); font-size: 10px; padding: 2px 6px; }
+.search-result-snippet { color: var(--mem-text); display: block; font-family: var(--mem-font-body); font-size: 13px; line-height: 1.55; }
+.search-result-meta { align-items: center; color: var(--mem-text-tertiary); display: flex; flex-wrap: wrap; font-family: var(--mem-font-mono); font-size: 10px; gap: 8px; margin-top: 8px; }
+.search-recent-section { display: flex; flex-direction: column; gap: 9px; }
+.search-recent-list { display: flex; flex-direction: column; gap: 2px; }
+.search-recent-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+  display: flex;
+  font-family: var(--mem-font-body);
+  gap: 10px;
+  min-height: 38px;
+  padding: 5px 8px;
+  text-align: left;
+  width: 100%;
+}
+.search-recent-button > svg { color: var(--mem-text-tertiary); flex: 0 0 16px; }
+.search-recent-button:hover { background: var(--mem-hover); color: var(--mem-text); }
+.search-recent-button:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 1px; }
+.search-recent-title { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-recent-kind { color: var(--mem-text-tertiary); font-family: var(--mem-font-mono); font-size: 10px; white-space: nowrap; }
 
 .memory-main-content {
   min-width: 0;
@@ -13,7 +213,7 @@
 }
 
 .wiki-overview-header {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   flex-wrap: wrap;
   gap: 32px;
@@ -23,46 +223,9 @@
 
 .wiki-overview-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 12px;
-}
-
-.wiki-options-anchor {
-  position: relative;
-}
-
-.wiki-options-menu {
-  position: absolute;
-  z-index: 20;
-  top: calc(100% + 6px);
-  right: 0;
-  width: max-content;
-  max-width: calc(100vw - 32px);
-  padding: 4px;
-}
-
-.wiki-review-action {
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--mem-text-secondary);
-  cursor: pointer;
-  font-family: var(--mem-font-body);
-  font-size: var(--mem-text-control);
-  padding: 8px 12px;
-  width: 100%;
-  text-align: left;
-}
-
-.wiki-review-action:hover {
-  background: var(--mem-hover);
-  color: var(--mem-text);
-}
-
-.wiki-review-action:focus-visible {
-  outline: 2px solid var(--mem-accent-indigo);
-  outline-offset: 4px;
+  gap: 6px;
 }
 
 .wiki-overview-title-row {
@@ -86,7 +249,14 @@
 
 .wiki-new-page-action {
   flex: 0 0 auto;
-  margin-top: 2px;
+  height: 36px;
+  min-height: 36px;
+}
+
+.wiki-overview-actions .mem-icon-action {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
 }
 
 .wiki-overview-header h1 {
@@ -270,7 +440,7 @@
   font-weight: 400;
   min-height: 32px;
   min-width: 0;
-  max-width: 180px;
+  max-width: 172px;
   padding: 0 26px 0 6px;
   text-overflow: ellipsis;
   transition: background-color 150ms ease, color 150ms ease;
@@ -567,6 +737,17 @@
     font-size: 13px;
   }
 
+  .wiki-new-page-action {
+    height: 44px;
+    min-height: 44px;
+  }
+
+  .wiki-overview-actions .mem-icon-action {
+    flex-basis: 44px;
+    width: 44px;
+    height: 44px;
+  }
+
   .wiki-table {
     min-width: 0;
     table-layout: auto;
@@ -637,3 +818,21 @@
 @media (max-width: 639px) {
   .memory-workspace-header { --workspace-header-right-padding: 12px; gap: 4px; }
 }
+
+/* Collection routes share an entry baseline; Wiki and detail layouts keep theirs. */
+.memory-main-content.memory-main-content--collection { padding: 24px 40px 28px; }
+.memory-main-content--collection > .memory-list-shell { max-width: 1130px; margin: 0 auto; }
+.memory-collection-toolbar.collection-toolbar { margin-bottom: 8px; }
+.collection-toolbar-title { margin: 0; color: var(--mem-text-secondary); font: 500 14px/1.4 var(--mem-font-body); }
+@media (max-width: 700px) {
+  .memory-main-content.memory-main-content--collection { padding: 24px 24px 28px; }
+}
+
+/* The note inspector is a flush workspace column, not a floating card. */
+.workspace-pane-host:has(.page-info-drawer--inspector) { padding: 0; }
+.workspace-document-tools-host { display: flex; align-items: center; }
+.workspace-document-tools-host:empty { display: none; }
+
+/* Both panel controls share the surrounding header tools' glyph and ink. */
+.mem-icon-action.workspace-panel-toggle { color: var(--mem-text-secondary); }
+.mem-icon-action.workspace-panel-toggle svg { width: 18px; height: 18px; }

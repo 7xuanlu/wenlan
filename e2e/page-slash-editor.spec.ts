@@ -5,6 +5,7 @@ import type { Page as WenlanPage, UpdatePageInput } from "../src/lib/tauri";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import { installTauriMock, type TauriMockController } from "./tauriMock";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const PAGE_ID = "page-slash-editor-e2e";
 const PAGE_TITLE = "Slash editor fixture";
@@ -51,8 +52,7 @@ async function openEditor(page: Page, source = INITIAL_SOURCE) {
   });
   await page.goto("/");
   await openPrimaryDestination(page, "Wiki");
-  await page.locator(".wiki-overview")
-    .getByRole("button", { name: `Open ${PAGE_TITLE}`, exact: true }).click();
+  await openWikiNote(page, PAGE_TITLE);
   const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
   await expect(editor).toBeVisible();
   await expect(editor).toBeEditable();
@@ -171,6 +171,67 @@ test("keyboard slash selection replaces one slash and autosaves on the confirmed
   expect(await sameSession(editor)).toBe(true);
 });
 
+test("reopening slash after autosave keeps its final option visible and clickable", async ({ page }) => {
+  const { controller, editor } = await openEditor(page);
+  await page.mouse.move(0, 0);
+  const slashSource = `${INITIAL_SOURCE}/`;
+
+  for (let opening = 0; opening < 3; opening++) {
+    const menu = await typedMenu(page, editor);
+    await expectAutosaved(page, controller, slashSource);
+    expect(await editorSource(editor)).toBe(slashSource);
+    expect(await sameSession(editor)).toBe(true);
+
+    const finalOption = menu.getByRole("option", { name: labels.fencedCode, exact: true });
+    // Safari remeasures CodeMirror tooltips shortly after the canonical
+    // readback. Check settled geometry and the actual pointer hit target.
+    await page.waitForTimeout(150);
+    await expect.poll(async () => {
+      const box = await finalOption.boundingBox();
+      if (!box) return false;
+      const viewport = page.viewportSize()!;
+      const inViewport = box.x >= 0 && box.y >= 0
+        && box.x + box.width <= viewport.width
+        && box.y + box.height <= viewport.height;
+      if (!inViewport) return false;
+      return finalOption.evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        return hit === element || (hit !== null && element.contains(hit));
+      });
+    }, { timeout: 5_000, intervals: [100] }).toBe(true);
+    await expect(finalOption).toBeInViewport();
+
+    if (opening < 2) {
+      await editor.press("Escape");
+      await expect(menu).toHaveCount(0);
+      await expect(editor).toBeFocused();
+      expect(await editorSource(editor)).toBe(slashSource);
+      expect(await sameSession(editor)).toBe(true);
+      await editor.press("Backspace");
+      await expect.poll(() => editorSource(editor)).toBe(INITIAL_SOURCE);
+      await expectAutosaved(page, controller, INITIAL_SOURCE);
+      expect(await sameSession(editor)).toBe(true);
+      continue;
+    }
+
+    // This is a normal pointer action after explicit elementFromPoint hit
+    // testing; do not force the click through a clipped menu.
+    await finalOption.click();
+    await expect(menu).toHaveCount(0);
+    await expect(editor).toBeEditable();
+    await expect(editor).toBeFocused();
+    const codeBlock = `${INITIAL_SOURCE}\`\`\`\n\n\`\`\``;
+    await expect.poll(() => editorSource(editor)).toBe(codeBlock);
+    expect(await sameSession(editor)).toBe(true);
+    await page.keyboard.insertText('console.log("reopened");');
+    const finalSource = `${INITIAL_SOURCE}\`\`\`\nconsole.log("reopened");\n\`\`\``;
+    await expectAutosaved(page, controller, finalSource);
+    expect(await editorSource(editor)).toBe(finalSource);
+    expect(await sameSession(editor)).toBe(true);
+  }
+});
+
 test("an initial slash stays literal and Escape dismisses only the typed menu in the same editor", async ({ page }) => {
   const source = `${INITIAL_SOURCE}/`;
   const { controller, editor } = await openEditor(page, source);
@@ -268,7 +329,7 @@ test("a dark slash popup at the bottom of a long document fits a 375px viewport"
   ].join("\n");
   const { controller, editor } = await openEditor(page, source);
   await page.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
-  const main = page.locator("main.memory-main-content");
+  const main = page.locator(".wiki-workspace-content");
   await expect.poll(() => main.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
   const menu = await typedMenu(page, editor);
   await expect.poll(() => main.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);

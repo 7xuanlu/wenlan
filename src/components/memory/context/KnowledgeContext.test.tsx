@@ -20,4 +20,13 @@ describe("KnowledgeContext",()=>{
     expect(await screen.findByRole("alert")).toHaveTextContent("Could not load connections");
     expect(screen.queryByText("No direct connections in the currently visible knowledge.")).toBeNull();
   });
+  it("offers a keyboard graph entry even for a note without connections",async()=>{
+    vi.mocked(getKnowledgeGraph).mockResolvedValue({entities:[],relations:[],memory_links:[],memories:[],pages:[{id:"p",title:"Quiet note",space:null,creation_kind:"source",entity_id:null,last_modified:""}],page_links:[]});
+    const openGraph=vi.fn();
+    render(<QueryClientProvider client={new QueryClient({defaultOptions:{queries:{retry:false}}})}><KnowledgeContext standaloneGraph kind="page" id="p" title="Quiet note" onOpenGraph={openGraph}/></QueryClientProvider>);
+    const button=await screen.findByRole("button",{name:"Open in graph"});
+    button.focus();await userEvent.keyboard("{Enter}");
+    expect(openGraph).toHaveBeenCalledTimes(1);
+  });
+
 });

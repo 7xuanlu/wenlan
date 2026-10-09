@@ -5,9 +5,11 @@
 // footer brand treatment as the main Sidebar so the transition feels like
 // "the sidebar switched modes" rather than "a different layout loaded".
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
+import { House } from "@phosphor-icons/react";
+import { ICONS_SIDEBAR_WIDTH, type SidebarMode } from "../navigation/navigationPreferences";
 
 export type SettingsSection =
   | "sources"
@@ -108,41 +110,120 @@ export const SETTINGS_GROUPS: SettingsGroup[] = [
 ];
 
 interface SettingsSidebarProps {
-  collapsed: boolean;
+  hidden: boolean;
+  mode: SidebarMode;
   active: SettingsSection;
   onSelect: (section: SettingsSection) => void;
+  open?: boolean;
+  presentation?: "desktop" | "overlay";
+  onRequestClose?: () => void;
+  onNavigateHome?: () => void;
+  navigationDisabled?: boolean;
 }
 
 export default function SettingsSidebar({
-  collapsed,
+  hidden,
+  mode,
   active,
   onSelect,
+  open = !hidden,
+  presentation = "desktop",
+  onRequestClose,
+  onNavigateHome,
+  navigationDisabled = false,
 }: SettingsSidebarProps) {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>("");
+  const asideRef = useRef<HTMLElement>(null);
+  const overlay = presentation === "overlay";
+  const compact = !overlay && mode === "icons";
+  const sidebarVisible = overlay ? open : !hidden;
+  const contentInert = !sidebarVisible;
+
   useEffect(() => {
     getVersion().then(setAppVersion).catch(() => setAppVersion(""));
   }, []);
+  useEffect(() => {
+    if (!overlay || !open) return;
+    const first = asideRef.current?.querySelector<HTMLElement>(
+      "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    );
+    first?.focus();
+  }, [open, overlay]);
+
+  const trapFocus = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !overlay) return;
+    const focusable = asideRef.current?.querySelectorAll<HTMLElement>(
+      "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+    );
+    if (!focusable || focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <aside
-      className="flex-shrink-0 flex flex-col transition-[width] duration-200 ease-out"
-      style={{
-        width: collapsed ? 0 : 240,
-        backgroundColor: "var(--mem-sidebar)",
-        borderRight: collapsed ? "none" : "1px solid var(--mem-border)",
-        overflow: "hidden",
-      }}
-    >
+    <>
+      {overlay && open && (
+        <button
+          aria-label={t("sidebar.close")}
+          className="fixed inset-x-0 bottom-0 top-[52px] z-30 border-0 bg-black/40"
+          onClick={onRequestClose}
+          type="button"
+        />
+      )}
+      <aside
+        aria-hidden={!sidebarVisible}
+        aria-label={t("settings.title")}
+        className={`settings-sidebar flex-shrink-0 flex flex-col${compact ? " settings-sidebar--icons" : ""}`}
+        data-sidebar-overlay={overlay && open ? "true" : undefined}
+        inert={contentInert}
+        onKeyDown={trapFocus}
+        ref={asideRef}
+        style={{
+          width: overlay ? 240 : hidden ? 0 : compact ? ICONS_SIDEBAR_WIDTH : "var(--workspace-sidebar-width, 240px)",
+          backgroundColor: "var(--workspace-sidebar-background, var(--mem-sidebar))",
+          borderRight: "none",
+          bottom: overlay ? 0 : undefined,
+          height: overlay ? "auto" : "100%",
+          left: overlay ? 0 : undefined,
+          overflow: "hidden",
+          position: overlay ? "fixed" : "relative",
+          top: overlay ? 52 : undefined,
+          transform: overlay && !open ? "translateX(-100%)" : undefined,
+          visibility: overlay && !open ? "hidden" : "visible",
+          zIndex: overlay ? 40 : 2,
+        }}
+      >
       <div
         className="flex flex-col h-full transition-opacity duration-150"
         style={{
-          width: 240,
-          opacity: collapsed ? 0 : 1,
-          pointerEvents: collapsed ? "none" : "auto",
+          width: overlay ? 240 : compact ? ICONS_SIDEBAR_WIDTH : "var(--workspace-sidebar-width, 240px)",
+          opacity: contentInert ? 0 : 1,
+          pointerEvents: contentInert ? "none" : "auto",
         }}
       >
+        <div className={`settings-sidebar-search${compact ? " settings-sidebar-search--icons" : ""}`}>
+          <button
+            aria-label={t("settings.home")}
+            className={`notes-search-entry${compact ? " notes-search-entry--compact" : ""}`}
+            disabled={navigationDisabled || !onNavigateHome}
+            onClick={onNavigateHome}
+            title={compact ? t("settings.home") : undefined}
+            type="button"
+          >
+            <House aria-hidden="true" size={22} weight="regular" />
+            {!compact && <span className="notes-search-entry-label">{t("settings.home")}</span>}
+          </button>
+        </div>
         {/* Section caption */}
-        <div className="px-4 pt-4 pb-2">
+        <div className="settings-sidebar-heading px-4 pt-4 pb-2">
           <span
             style={{
               fontFamily: "var(--mem-font-mono)",
@@ -164,8 +245,10 @@ export default function SettingsSidebar({
             return (
               <button
                 key={group.id}
+                aria-label={t(group.labelKey)}
+                title={compact ? t(group.labelKey) : undefined}
                 onClick={() => onSelect(group.id)}
-                className={`group relative flex items-center gap-3 px-3 py-2 rounded-md transition-colors duration-150 text-left ${
+                className={`settings-sidebar-group group relative flex items-center gap-3 px-3 py-2 rounded-md transition-colors duration-150 text-left ${
                   isActive ? "" : "bg-transparent mem-row-hover"
                 }`}
                 style={{
@@ -175,22 +258,8 @@ export default function SettingsSidebar({
                   border: "none",
                 }}
               >
-                {/* Active accent bar */}
-                {isActive && (
-                  <span
-                    aria-hidden
-                    style={{
-                      position: "absolute",
-                      left: 0,
-                      top: "20%",
-                      bottom: "20%",
-                      width: 2,
-                      borderRadius: 2,
-                      backgroundColor: "var(--mem-accent-indigo)",
-                    }}
-                  />
-                )}
                 <span
+                  className="settings-sidebar-group-icon"
                   style={{
                     color: isActive
                       ? "var(--mem-accent-indigo)"
@@ -202,6 +271,7 @@ export default function SettingsSidebar({
                   {group.icon}
                 </span>
                 <span
+                  className="settings-sidebar-group-label"
                   style={{
                     fontFamily: "var(--mem-font-body)",
                     fontSize: "var(--mem-text-base)",
@@ -219,10 +289,7 @@ export default function SettingsSidebar({
             privacy note used to live here too, but it duplicated (and was
             worded more loosely than) the per-section footer in
             SettingsPage.tsx, so the claim now appears in exactly one place. */}
-        <div
-          className="px-4 pt-3 pb-4 flex-shrink-0"
-          style={{ borderTop: "1px solid var(--mem-border)" }}
-        >
+        <div className="settings-sidebar-footer px-4 pt-3 pb-4 flex-shrink-0">
           <div className="flex items-center justify-between gap-2">
             <span
               style={{
@@ -252,6 +319,7 @@ export default function SettingsSidebar({
           </div>
         </div>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

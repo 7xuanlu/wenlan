@@ -4,10 +4,10 @@ import type { SettingsSection } from "../settings/SettingsSidebar";
 export type View =
   | { readonly kind: "activity" }
   | { readonly kind: "connect-agent" }
-  | { readonly kind: "distill-review" }
+  | { readonly kind: "distill-review"; readonly reviewItemId?: string }
   | { readonly kind: "entities" }
   | { readonly kind: "entity"; readonly entityId: string }
-  | { readonly kind: "graph" }
+  | { readonly kind: "graph"; readonly focusPageId?: string }
   | { readonly kind: "home" }
   | { readonly kind: "first-use"; readonly showKnowledge?: boolean; readonly batchId?: string }
   | { readonly kind: "import"; readonly fromFirstUse?: boolean }
@@ -42,6 +42,7 @@ export function activeNavigationForView(view: View): GlobalNavigation | null {
     case "first-use":
       return "pages";
     case "activity":
+      return null;
     case "memory":
     case "recaps":
     case "stream":

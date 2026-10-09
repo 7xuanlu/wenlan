@@ -1,270 +1,132 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ActivityStatus from "./ActivityStatus";
-import type {
-  ActivityAssetKind,
-  ActivityAssetStatus,
-  ActivityResponse,
-} from "../../../lib/tauri";
+import type { ActivityResponse } from "../../../lib/tauri";
 
 const getActivityMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../../lib/tauri", () => ({
-  getActivity: getActivityMock,
-}));
-
-function asset(
-  kind: ActivityAssetKind,
-  fields: Partial<ActivityAssetStatus> = {},
-): ActivityAssetStatus {
-  return {
-    kind,
-    state: "idle",
-    done: 0,
-    total: 0,
-    blocked: 0,
-    steps: [],
-    ...fields,
-  };
-}
+vi.mock("../../../lib/tauri", () => ({ getActivity: getActivityMock }));
 
 function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
   return {
     state: "up_to_date",
     last_activity_at: null,
     assets: [],
-    everyday: {
-      job: "everyday",
-      lane: "on_device",
-      model: "a-model",
-      mode: "pinned",
-      available: true,
-    },
-    synthesis: {
-      job: "synthesis",
-      lane: "on_device",
-      model: "a-model",
-      mode: "pinned",
-      available: true,
-    },
+    everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+    synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
     refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     ...fields,
   };
 }
 
-function renderStatus(
-  onToggle = vi.fn(),
-  expanded = false,
-  props: { readonly current?: boolean; readonly onOpenActivity?: () => void } = {},
-) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  const view = render(
-    <QueryClientProvider client={queryClient}>
-      <ActivityStatus expanded={expanded} onToggle={onToggle} {...props} />
-    </QueryClientProvider>,
-  );
-  return { ...view, onToggle };
+function renderStatus(data: ActivityResponse, onOpenActivity = vi.fn()) {
+  getActivityMock.mockResolvedValue(data);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    onOpenActivity,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <>
+          <ActivityStatus onOpenActivity={onOpenActivity} />
+          <button>Outside</button>
+        </>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
-/** The trigger once the first read has landed and it carries a state. */
-async function loadedTrigger() {
-  const trigger = screen.getByTestId("activity-status");
-  await waitFor(() => expect(trigger).toHaveAttribute("data-state"));
-  return trigger;
-}
-
-beforeEach(() => {
-  getActivityMock.mockReset();
-});
+beforeEach(() => getActivityMock.mockReset());
 
 describe("ActivityStatus", () => {
-  it("is the plain Activity button until the first read lands", async () => {
-    // An icon claiming a state before asking would be a claim the app cannot
-    // back, and this sits on every page. Clicking still reaches Activity.
-    getActivityMock.mockReturnValue(new Promise(() => {}));
+  it("keeps a neutral Pulse for idle and unconfigured activity, and opens the summary before Activity", async () => {
     const onOpenActivity = vi.fn();
-    const { onToggle } = renderStatus(vi.fn(), false, { onOpenActivity });
+    renderStatus(activity({ state: "blocked" }), onOpenActivity);
 
-    const button = screen.getByRole("button", { name: "Activity" });
+    const button = await screen.findByRole("button", { name: "Activity" });
     expect(button).not.toHaveAttribute("data-state");
-    expect(button).not.toHaveAttribute("aria-haspopup");
-    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
-
+    expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-kind", "pulse");
     await userEvent.click(button);
-    expect(onOpenActivity).toHaveBeenCalledTimes(1);
-    expect(onToggle).not.toHaveBeenCalled();
-  });
-
-  it("stays quiet when up to date: a static pulse, the state in the name", async () => {
-    getActivityMock.mockResolvedValue(activity());
-    renderStatus();
-
-    const button = await loadedTrigger();
-    expect(button).toHaveAttribute("data-state", "up_to_date");
-    expect(button).toHaveAccessibleName("Activity, Up to date");
-    expect(button).toHaveAttribute("title", "Activity, Up to date");
-    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
-    expect(button.querySelector(".mem-activity-status-badge, .mem-activity-dot")).toBeNull();
-  });
-
-  it("shows an explicit Off state without a warning icon", async () => {
-    getActivityMock.mockResolvedValue(activity({ state: "off" }));
-    renderStatus();
-
-    const button = await loadedTrigger();
-    expect(button).toHaveAccessibleName("Activity, Off");
-    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
-  });
-
-  it("marks itself as the current page on the Activity view", async () => {
-    getActivityMock.mockResolvedValue(activity());
-    renderStatus(vi.fn(), false, { current: true });
-    expect(await loadedTrigger()).toHaveAttribute("aria-current", "page");
-  });
-
-  it("shows no number in any state", async () => {
-    // Memories, entities and pages count different things, so no one figure
-    // on the button is true for all three. The state is the icon's form.
-    for (const state of ["organizing", "blocked"] as const) {
-      getActivityMock.mockResolvedValue(
-        activity({
-          state,
-          assets: [
-            asset("memories", { blocked: 3, done: 7, total: 10 }),
-            asset("entities", { blocked: 8, done: 2, total: 10 }),
-            asset("pages", { done: 2, total: 4 }),
-          ],
-        }),
-      );
-      const { unmount } = renderStatus();
-      const button = await loadedTrigger();
-      expect(button).toHaveAttribute("data-state", state);
-      expect(button.textContent).toBe("");
-      unmount();
-    }
-  });
-
-  it("reports Blocked even when other assets are still steeping", async () => {
-    // The daemon decides the overall state; the button must not recompute it
-    // from the counts and quietly downgrade a blocked library to Steeping.
-    getActivityMock.mockResolvedValue(
-      activity({
-        state: "blocked",
-        assets: [
-          asset("memories", { done: 1, total: 9 }),
-          asset("entities", { blocked: 4, total: 4, done: 0 }),
-        ],
-      }),
-    );
-    renderStatus();
-
-    const line = await loadedTrigger();
-    expect(line).toHaveAttribute("data-state", "blocked");
-    expect(line).toHaveAccessibleName("Activity, Blocked");
-    expect(screen.getByTestId("activity-status-icon")).toHaveAttribute(
-      "data-icon-state",
-      "blocked",
-    );
-  });
-
-  it("animates the pulse only while steeping, and changes shape when blocked", async () => {
-    getActivityMock.mockResolvedValue(activity({ state: "organizing" }));
-    const { unmount } = renderStatus();
-    const steeping = await screen.findByTestId("activity-status-icon");
-    await waitFor(() => expect(steeping).toHaveAttribute("data-icon-state", "organizing"));
-    expect(steeping).toHaveClass("mem-activity-pulse-running");
-    expect(steeping).toHaveAttribute("data-icon-kind", "pulse");
-    unmount();
-
-    getActivityMock.mockResolvedValue(
-      activity({ state: "blocked", assets: [asset("pages", { blocked: 1, total: 1 })] }),
-    );
-    renderStatus();
-    await waitFor(() => {
-      expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-state", "blocked");
-    });
-    const blocked = screen.getByTestId("activity-status-icon");
-    expect(blocked).toHaveAttribute("data-icon-kind", "attention");
-    expect(blocked).not.toHaveClass("mem-activity-pulse-running");
-  });
-
-  it("keeps the pulse still while waiting for a quiet moment", async () => {
-    getActivityMock.mockResolvedValue(activity({ state: "waiting_for_idle" }));
-    renderStatus();
-
-    const button = await loadedTrigger();
-    await waitFor(() =>
-      expect(button).toHaveAccessibleName("Activity, Waiting for a quiet moment"),
-    );
-    expect(button).toHaveAttribute("data-state", "waiting_for_idle");
-    expect(button).toHaveAttribute("title", "Activity, Waiting for a quiet moment");
-    const icon = screen.getByTestId("activity-status-icon");
-    // Waiting keeps the pulse still; index.css tints it indigo.
-    expect(icon).toHaveAttribute("data-icon-state", "waiting_for_idle");
-    expect(icon).toHaveAttribute("data-icon-kind", "pulse");
-    expect(icon).not.toHaveClass("mem-activity-pulse-running");
-  });
-
-  it("keeps a plain icon but still opens the summary for a state from a newer daemon", async () => {
-    getActivityMock.mockResolvedValue(activity({ state: "unknown" }));
-    const onOpenActivity = vi.fn();
-    const { onToggle } = renderStatus(vi.fn(), false, { onOpenActivity });
-
-    const button = screen.getByRole("button", { name: "Activity" });
-    // aria-haspopup appears only once the read has landed, so the checks
-    // below run against the unknown response, not the pre-load button.
-    await waitFor(() => expect(button).toHaveAttribute("aria-haspopup", "dialog"));
-    expect(button).toHaveAccessibleName("Activity");
-    expect(button).not.toHaveAttribute("data-state");
-    expect(button).toHaveAttribute("title", "Activity");
-    expect(screen.getByTestId("activity-status-icon")).not.toHaveAttribute("data-icon-state");
-
-    await userEvent.click(button);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog")).toBeVisible();
     expect(onOpenActivity).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("activity-summary-open"));
+    expect(onOpenActivity).toHaveBeenCalledOnce();
   });
 
-  // An open flag the summary ignored would stay set in the parent and reopen
-  // it unasked once a known state came back.
-  it("shows the open summary for a state from a newer daemon", async () => {
-    getActivityMock.mockResolvedValue(activity({ state: "unknown" }));
-    renderStatus(vi.fn(), true);
+  it("uses the light pulse only when a real step is running", async () => {
+    renderStatus(activity({
+      state: "organizing",
+      assets: [{
+        kind: "memories",
+        state: "running",
+        done: 1,
+        total: 2,
+        blocked: 0,
+        steps: [{ name: "summarize", state: "running", done: 1, total: 2, failed: 0, job: "everyday" }],
+      }],
+    }));
 
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    const button = await screen.findByRole("button", { name: "Activity, Steeping" });
+    expect(button).toHaveAttribute("data-state", "organizing");
+    expect(screen.getByTestId("activity-status-icon")).toHaveClass("mem-activity-pulse-running");
+    expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-kind", "pulse");
   });
 
-  it("opens the popover on click and reports its expanded state", async () => {
-    getActivityMock.mockResolvedValue(activity());
-    const { onToggle } = renderStatus();
+  it("shows attention only for a failed step and still opens the summary before Activity", async () => {
+    const onOpenActivity = vi.fn();
+    renderStatus(activity({
+      state: "blocked",
+      assets: [{
+        kind: "pages",
+        state: "blocked",
+        done: 0,
+        total: 3,
+        blocked: 3,
+        steps: [{ name: "write", state: "blocked", done: 0, total: 3, failed: 2, job: "synthesis" }],
+      }],
+    }), onOpenActivity);
 
-    const line = await loadedTrigger();
-    expect(line).toHaveAttribute("aria-haspopup", "dialog");
-    expect(line).toHaveAttribute("aria-expanded", "false");
-
-    await userEvent.click(line);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    const button = await screen.findByRole("button", { name: "Activity, Failed" });
+    expect(button).toHaveAttribute("data-state", "failed");
+    expect(screen.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-kind", "attention");
+    await userEvent.click(button);
+    expect(screen.getByRole("dialog")).toBeVisible();
+    expect(onOpenActivity).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("activity-summary-open"));
+    expect(onOpenActivity).toHaveBeenCalledOnce();
   });
 
-  it("marks itself expanded when the popover is open", async () => {
-    getActivityMock.mockResolvedValue(activity());
-    renderStatus(vi.fn(), true);
-    expect(await loadedTrigger()).toHaveAttribute("aria-expanded", "true");
+
+  it("hands forward Tab from the open trigger to the summary action, but leaves Shift+Tab alone", async () => {
+    renderStatus(activity({ state: "blocked" }));
+    const trigger = await screen.findByRole("button", { name: "Activity" });
+    await userEvent.click(trigger);
+    await screen.findByRole("dialog");
+    expect(trigger).toHaveFocus();
+
+    expect(fireEvent.keyDown(trigger, { key: "Tab", shiftKey: true })).toBe(true);
+    expect(trigger).toHaveFocus();
+    expect(fireEvent.keyDown(trigger, { key: "Tab" })).toBe(false);
+    expect(screen.getByTestId("activity-summary-open")).toHaveFocus();
+
+    await userEvent.tab();
+    expect(screen.getByRole("button", { name: "Outside" })).toHaveFocus();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("closes when the user clicks outside it", async () => {
-    getActivityMock.mockResolvedValue(activity());
-    const { onToggle } = renderStatus(vi.fn(), true);
-    await loadedTrigger();
+  it("hands forward Tab to the retry action when activity loading failed", async () => {
+    getActivityMock.mockRejectedValueOnce(new Error("offline"));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={queryClient}><ActivityStatus onOpenActivity={vi.fn()} /></QueryClientProvider>);
 
-    await userEvent.click(screen.getByRole("dialog"));
-    expect(onToggle).not.toHaveBeenCalled();
-
-    await userEvent.click(document.body);
-    expect(onToggle).toHaveBeenCalledTimes(1);
+    const trigger = await screen.findByTestId("activity-status");
+    await userEvent.click(trigger);
+    await screen.findByRole("alert");
+    const retry = screen.getByRole("button", { name: "Read again" });
+    expect(fireEvent.keyDown(trigger, { key: "Tab" })).toBe(false);
+    expect(retry).toHaveFocus();
   });
+
 });

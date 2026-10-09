@@ -17,7 +17,7 @@ for (const width of [1280, 375]) {
     await openPrimaryDestination(page, "Spaces");
     await expect(page.getByRole("heading", { name: "Spaces", exact: true })).toBeVisible();
     await back.click();
-    await expect(page.getByRole("heading", { name: "Wiki", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Open a note", exact: true })).toBeVisible();
     await forward.press("Enter");
     await expect(page.getByRole("heading", { name: "Spaces", exact: true })).toBeVisible();
     await openPrimaryDestination(page, "Memories");

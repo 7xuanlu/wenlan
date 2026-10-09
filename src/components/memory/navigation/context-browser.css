@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.context-browser-anchor { position: relative; flex: 0 0 auto; }
+.context-browser-trigger {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--mem-control-radius);
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 13px var(--mem-font-body);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.context-browser-trigger:hover,
+.context-browser-trigger[aria-expanded="true"] { background: var(--mem-hover); color: var(--mem-text); }
+.context-browser-trigger:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+.context-browser-trigger svg { flex: 0 0 auto; }
+.context-browser-panel {
+  position: fixed;
+  z-index: 50;
+  box-sizing: border-box;
+  display: flex;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(560px, calc(100vh - 76px));
+  overflow: hidden;
+  border: 1px solid var(--mem-border);
+  border-radius: 12px;
+  background: var(--mem-surface);
+  color: var(--mem-text);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--mem-text) 14%, transparent);
+}
+.context-browser-panel[hidden] { display: none; }
+.context-browser-panel > .notes-list-panel { width: 100%; min-width: 0; }
+.context-browser-anchor:focus-visible { outline: none; }
+.context-browser-panel :focus-visible { outline-offset: -2px; }
+
+@media (max-width: 899px) {
+  .context-browser-trigger {
+    width: 44px;
+    min-height: 44px;
+    padding: 0;
+  }
+  .context-browser-trigger span { display: none; }
+}

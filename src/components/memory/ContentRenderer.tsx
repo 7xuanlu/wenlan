@@ -8,6 +8,8 @@ import {
   normalizeContent,
 } from "../../lib/contentClassifier";
 import { CITATION_ANCHOR_PREFIX } from "../../lib/pageCitations";
+import { ReferenceLink } from "./links/ReferenceLink";
+import { referenceTargetFromHref } from "./links/referenceTypes";
 
 interface ContentRendererProps {
   content: string;
@@ -83,24 +85,18 @@ const markdownComponents = {
     </ol>
   ),
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a
-      href={href}
-      className={href?.startsWith("#concept:") ? "content-page-link" : undefined}
-      target={href?.startsWith("#") ? undefined : "_blank"}
-      rel="noopener noreferrer"
-      style={{
-        color: "var(--mem-accent-indigo)",
-        textDecoration: "none",
-      }}
-      onMouseEnter={(e) => {
-        if (!href?.startsWith("#concept:")) e.currentTarget.style.textDecoration = "underline";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.textDecoration = "none";
-      }}
-    >
-      {children}
-    </a>
+    referenceTargetFromHref(href)
+      ? <ReferenceLink href={href!}>{children}</ReferenceLink>
+      : <a
+          href={href}
+          target={href?.startsWith("#") ? undefined : "_blank"}
+          rel="noopener noreferrer"
+          style={{ color: "var(--mem-accent-indigo)", textDecoration: "none" }}
+          onMouseEnter={(e) => { e.currentTarget.style.textDecoration = "underline"; }}
+          onMouseLeave={(e) => { e.currentTarget.style.textDecoration = "none"; }}
+        >
+          {children}
+        </a>
   ),
   h1: ({ children }: { children?: React.ReactNode }) => (
     <h1

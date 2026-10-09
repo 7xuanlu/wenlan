@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
+import { FileText } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import type {
   MemoryItem,
@@ -10,6 +11,7 @@ import type {
 } from "../../../lib/tauri";
 import type { CitationState } from "../../../lib/pageCitations";
 import { prettyAgent, relativeMs } from "./format";
+import "./NoteInfo.css";
 
 interface PageInfoProps {
   /** Render inside PageDetail's single expandable information section. */
@@ -18,6 +20,9 @@ interface PageInfoProps {
   sources: PageSourceWithMemory[] | undefined;
   inbound: PageLinkInbound[];
   revisions: PageChangelogEntry[];
+  revisionsLoading?: boolean;
+  revisionsError?: boolean;
+  onRetryRevisions?: () => void;
   citations: PageCitation[] | undefined;
   citationState: CitationState;
   onMemoryClick: (sourceId: string) => void;
@@ -80,6 +85,9 @@ export default function PageInfo({
   sources,
   inbound,
   revisions,
+  revisionsLoading = false,
+  revisionsError = false,
+  onRetryRevisions,
   citations,
   citationState,
   onMemoryClick,
@@ -101,6 +109,12 @@ export default function PageInfo({
   const visibleRevisions = showAllRevisions
     ? revisionsDesc
     : revisionsDesc.slice(0, REVISIONS_SHOWN);
+  const seenInboundIds = new Set<string>();
+  const uniqueInbound = inbound.filter((link) => {
+    if (seenInboundIds.has(link.source_page_id)) return false;
+    seenInboundIds.add(link.source_page_id);
+    return true;
+  });
   const unverifiedLocators = new Set(
     (citations ?? []).filter((c) => c.status === "unverified").map((c) => c.locator),
   );
@@ -137,7 +151,7 @@ export default function PageInfo({
   return (
     <Wrapper
       aria-label={embedded ? undefined : t("pageInfo.label")}
-      className="rounded-lg"
+      className={embedded ? "note-info-page-groups" : "rounded-lg"}
       style={{ border: embedded ? "none" : "1px solid var(--mem-border)" }}
     >
       {!embedded && <summary
@@ -153,24 +167,25 @@ export default function PageInfo({
       >
         <span>{t("pageInfo.label")}</span>
         <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>
-          {t("pageInfo.backlinks", { count: inbound.length })} ·{" "}
+          {t("pageInfo.backlinks", { count: uniqueInbound.length })} ·{" "}
           {t("pageInfo.revisions", { count: revisions.length })} ·{" "}
           {t("pageInfo.sources", { count: sourceCount })}
         </span>
       </summary>}
       <div className={embedded ? "flex flex-col gap-4" : "flex flex-col gap-4 px-4 pb-4"}>
-        {inbound.length > 0 && (
+        {uniqueInbound.length > 0 && (
           <div>
-            <h4 className="mb-1" style={groupHeading}>
+            <h4 className={embedded ? "note-info-section-heading" : "mb-1"} style={embedded ? undefined : groupHeading}>
               {t("pageInfo.backlinks")}
             </h4>
-            <div className="flex flex-wrap gap-1.5">
-              {inbound.map((link, idx) => (
+            <div className={embedded ? "note-info-link-list" : "flex flex-wrap gap-1.5"}>
+              {uniqueInbound.map((link) => (
                 <button
-                  key={`${link.source_page_id}-${idx}`}
+                  key={link.source_page_id}
+                  type="button"
                   onClick={() => onPageClick?.(link.source_page_id)}
-                  className="rounded-md px-2.5 py-1.5 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)]"
-                  style={{
+                  className={embedded ? "note-info-link-row" : "rounded-md px-2.5 py-1.5 transition-colors duration-150 cursor-pointer hover:bg-[var(--mem-hover)]"}
+                  style={embedded ? undefined : {
                     backgroundColor: "var(--mem-surface)",
                     border: "1px solid var(--mem-border)",
                     fontFamily: "var(--mem-font-body)",
@@ -179,106 +194,85 @@ export default function PageInfo({
                     color: "var(--mem-text)",
                   }}
                 >
-                  {link.label}
+                  {embedded ? (
+                    <span className="note-info-link-copy">
+                      <FileText size={16} weight="regular" aria-hidden="true" />
+                      <span className="note-info-link-label">{link.label}</span>
+                    </span>
+                  ) : link.label}
                 </button>
               ))}
             </div>
           </div>
         )}
-        {revisions.length > 0 && (
+        {(revisions.length > 0 || revisionsLoading || revisionsError) && (
           <div>
-            <h4 className="mb-1" style={groupHeading}>
+            <h4 className={embedded ? "note-info-section-heading" : "mb-1"} style={embedded ? undefined : groupHeading}>
               {t("pageInfo.revisions")}
             </h4>
             <div className="flex flex-col gap-1.5">
-              {visibleRevisions.map((entry) => {
-                const incomingCount = entry.incoming_source_ids?.length ?? 0;
-                return (
-                  <div
-                    key={`${entry.version}-${entry.at}`}
-                    className="rounded-lg px-3 py-2"
-                    style={{
-                      backgroundColor: "var(--mem-surface)",
-                      border: "1px solid var(--mem-border)",
-                    }}
-                  >
-                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                      <span
-                        style={{
-                          fontFamily: "var(--mem-font-mono)",
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          color: "var(--mem-accent-page)",
-                        }}
-                      >
-                        v{entry.version}
-                      </span>
-                      <span
-                        style={{
-                          fontFamily: "var(--mem-font-body)",
-                          fontSize: "12px",
-                          color: "var(--mem-text-secondary)",
-                        }}
-                      >
-                        {entry.edited_by}
-                      </span>
-                      <span
-                        style={{
-                          fontFamily: "var(--mem-font-mono)",
-                          fontSize: "10px",
-                          color: "var(--mem-text-tertiary)",
-                        }}
-                      >
-                        {relativeMs(entry.at * 1000, relativeLocale)}
-                      </span>
-                      {incomingCount > 0 && (
-                        <span
-                          style={{
-                            fontFamily: "var(--mem-font-mono)",
-                            fontSize: "10px",
-                            color: "var(--mem-text-tertiary)",
-                          }}
-                        >
-                          {t("pageInfo.incoming", { count: incomingCount })}
+              {revisionsError && (
+                <div
+                  role="alert"
+                  className="flex items-center gap-2 flex-wrap"
+                  style={{
+                    fontFamily: "var(--mem-font-body)",
+                    fontSize: "13px",
+                    color: "var(--mem-text-secondary)",
+                  }}
+                >
+                  <span>{t("pageInfo.revisionsError")}</span>
+                  <button type="button" disabled={revisionsLoading} style={{ ...showAllStyle, fontFamily: "var(--mem-font-body)", fontSize: "13px" }} onClick={onRetryRevisions}>
+                    {t("pageInfo.retryRevisions")}
+                  </button>
+                </div>
+              )}
+              {!revisionsError && revisions.length === 0 && revisionsLoading && (
+                <p
+                  style={{
+                    fontFamily: "var(--mem-font-body)",
+                    fontSize: "13px",
+                    color: "var(--mem-text-tertiary)",
+                  }}
+                >
+                  {t("pageInfo.revisionsLoading")}
+                </p>
+              )}
+              <ol className="note-revision-list" aria-label={t("pageInfo.revisions")}>
+                {visibleRevisions.map((entry) => {
+                  const incomingCount = entry.incoming_source_ids?.length ?? 0;
+                  return (
+                    <li key={`${entry.version}-${entry.at}`} className="note-revision-entry">
+                      <div className="note-revision-meta">
+                        <span className="note-revision-version">v{entry.version}</span>
+                        <span>{entry.edited_by}</span>
+                        <span className="note-revision-time">
+                          {relativeMs(entry.at * 1000, relativeLocale)}
                         </span>
+                      </div>
+                      {entry.delta_summary && (
+                        <p className="note-revision-summary">{entry.delta_summary}</p>
                       )}
-                      {entry.citations_summary && (
-                        <span
-                          style={{
-                            fontFamily: "var(--mem-font-mono)",
-                            fontSize: "10px",
-                            color: "var(--mem-text-tertiary)",
-                            background: "var(--mem-hover)",
-                            padding: "1px 5px",
-                            borderRadius: "3px",
-                          }}
-                        >
-                          {entry.citations_summary}
-                        </span>
+                      {(incomingCount > 0 || entry.citations_summary) && (
+                        <div className="note-revision-provenance">
+                          {incomingCount > 0 && <span>{t("pageInfo.incoming", { count: incomingCount })}</span>}
+                          {entry.citations_summary && <span>{entry.citations_summary}</span>}
+                        </div>
                       )}
-                    </div>
-                    {entry.delta_summary && (
-                      <p
-                        style={{
-                          fontFamily: "var(--mem-font-body)",
-                          fontSize: "13px",
-                          color: "var(--mem-text)",
-                          lineHeight: "1.5",
-                        }}
-                      >
-                        {entry.delta_summary}
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-              {revisions.length > REVISIONS_SHOWN && !showAllRevisions && (
+                    </li>
+                  );
+                })}
+              </ol>
+              {revisions.length > REVISIONS_SHOWN && (
                 <button
                   type="button"
-                  style={showAllStyle}
-                  onClick={() => setShowAllRevisions(true)}
+                  className="note-revision-toggle"
+                  aria-expanded={showAllRevisions}
+                  onClick={() => setShowAllRevisions((shown) => !shown)}
                 >
-                  {t("pageInfo.showAllRevisions", { count: revisions.length })}
+                  {showAllRevisions
+                    ? t("pageInfo.showLessRevisions")
+                    : t("pageInfo.showAllRevisions", { count: revisions.length })}
                 </button>
               )}
             </div>
@@ -286,10 +280,10 @@ export default function PageInfo({
         )}
         {rows.length > 0 && (
           <div>
-            <h4 className="mb-1" style={groupHeading}>
+            <h4 className={embedded ? "note-info-section-heading" : "mb-1"} style={embedded ? undefined : groupHeading}>
               {t("pageInfo.sources")}
             </h4>
-            <ul>
+            <ul className={embedded ? "note-info-source-list" : undefined}>
               {visibleRows.map((row, idx) => {
                 const mem = row.memory!;
                 const locator = row.source.memory_source_id;
@@ -300,7 +294,7 @@ export default function PageInfo({
                     className="py-2 px-2 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
                     style={{
                       borderBottom:
-                        idx === visibleRows.length - 1
+                        embedded || idx === visibleRows.length - 1
                           ? "none"
                           : "1px solid color-mix(in srgb, var(--mem-border) 60%, transparent)",
                       cursor: "pointer",

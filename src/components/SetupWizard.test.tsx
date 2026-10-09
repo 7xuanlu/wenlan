@@ -171,6 +171,7 @@ function renderWizard(
     initialPendingModelId?: string | null;
     initialPendingImportPick?: { sourceType: "obsidian" | "directory"; path: string; label: string } | null;
     daemonGateErrored?: boolean;
+    embedded?: boolean;
   } = {},
 ) {
   const queryClient = new QueryClient({
@@ -189,6 +190,7 @@ function renderWizard(
           initialPendingModelId={props.initialPendingModelId}
           initialPendingImportPick={props.initialPendingImportPick}
           daemonGateErrored={props.daemonGateErrored}
+          embedded={props.embedded}
         />
       </QueryClientProvider>,
     ),
@@ -1073,10 +1075,24 @@ describe("SetupWizard", () => {
     const continueButton = screen.getByText("Continue");
     const scrollMain = screen.getByTestId("wizard-scroll-main");
     const actionBar = screen.getByTestId("wizard-action-bar");
+    const shell = scrollMain.parentElement;
 
     expect(scrollMain.contains(actionBar)).toBe(false);
     expect(actionBar.contains(continueButton)).toBe(true);
     expect(scrollMain.contains(continueButton)).toBe(false);
+    expect(shell).toHaveStyle({ height: "100vh" });
+    expect(shell?.querySelector(":scope > [data-tauri-drag-region]")).not.toBeNull();
+  });
+
+  it("uses the parent height without adding a drag strip when embedded", async () => {
+    renderWizard({ initialStep: "intelligence-choice", embedded: true });
+
+    const scrollMain = screen.getByTestId("wizard-scroll-main");
+    const shell = scrollMain.parentElement;
+    expect(shell).toHaveStyle({ height: "100%" });
+    expect(shell?.querySelector(":scope > [data-tauri-drag-region]")).toBeNull();
+    expect(scrollMain.tagName).toBe("DIV");
+    expect(screen.getByTestId("wizard-action-bar")).not.toBeNull();
   });
 
   // (a) The bug this redesign fixes: an already-configured client's checkbox

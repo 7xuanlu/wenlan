@@ -61,8 +61,8 @@ export function listAllDraftPages(): Promise<Page[]> {
 }
 
 /**
- * Explicit-browse siblings for the Wiki overview screen, the one place a
- * person deliberately browses the full page list. Every other caller of
+ * Explicit-browse siblings for the Wiki overview and visible Wiki file tree,
+ * where a person deliberately browses their pages. Every other caller of
  * {@link listAllActivePages}/{@link listAllDraftPages} (sidebar recents, the
  * home feed, space page counts) is a background or ambient read and must
  * keep using the automatic functions above.

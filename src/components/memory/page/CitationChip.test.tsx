@@ -4,6 +4,7 @@ import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { invoke } from "@tauri-apps/api/core";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { MemoryItem, PageCitation } from "../../../lib/tauri";
 import CitationChip from "./CitationChip";
 import { citationFilePath } from "./CitationPopover";
@@ -38,15 +39,18 @@ const memory = (over: Partial<MemoryItem> = {}): MemoryItem => ({
 
 function renderChip(over: Partial<React.ComponentProps<typeof CitationChip>> = {}) {
   const onOpenMemory = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const utils = render(
-    <CitationChip
-      occurrence={1}
-      citation={cite()}
-      sourceMemory={memory()}
-      sourcesLoading={false}
-      onOpenMemory={onOpenMemory}
-      {...over}
-    />,
+    <QueryClientProvider client={client}>
+      <CitationChip
+        occurrence={1}
+        citation={cite()}
+        sourceMemory={memory()}
+        sourcesLoading={false}
+        onOpenMemory={onOpenMemory}
+        {...over}
+      />
+    </QueryClientProvider>,
   );
   return { onOpenMemory, ...utils };
 }
@@ -61,6 +65,18 @@ afterEach(() => {
 });
 
 describe("CitationChip", () => {
+  it("keeps touch in the preview even when focus has already opened it", () => {
+    const { onOpenMemory } = renderChip();
+    const chip = screen.getByRole("button", { name: /Memory/ });
+    const down = new MouseEvent("pointerdown", { bubbles: true, button: 0 });
+    Object.defineProperty(down, "pointerType", { value: "touch" });
+    fireEvent(chip, down);
+    fireEvent.focus(chip);
+    fireEvent.click(chip);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Design decision");
+    expect(onOpenMemory).not.toHaveBeenCalled();
+  });
+
   it("renders a focusable button with localized source kind and occurrence superscript", () => {
     renderChip();
     const chip = screen.getByRole("button", { name: /Memory/ });
@@ -107,19 +123,22 @@ describe("CitationChip", () => {
   it("portals the popover out of article prose and keeps keyboard focus open", async () => {
     const user = userEvent.setup();
     const onOpenMemory = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
-      <p data-testid="article-prose">
-        A cited sentence
-        <CitationChip
-          occurrence={1}
-          citation={cite()}
-          sourceMemory={memory()}
-          sourcesLoading={false}
-          onOpenMemory={onOpenMemory}
-        />
-        .
-        <button>Next article action</button>
-      </p>,
+      <QueryClientProvider client={client}>
+        <p data-testid="article-prose">
+          A cited sentence
+          <CitationChip
+            occurrence={1}
+            citation={cite()}
+            sourceMemory={memory()}
+            sourcesLoading={false}
+            onOpenMemory={onOpenMemory}
+          />
+          .
+          <button>Next article action</button>
+        </p>
+      </QueryClientProvider>,
     );
 
     const article = screen.getByTestId("article-prose");

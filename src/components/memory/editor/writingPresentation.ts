@@ -23,6 +23,7 @@ import {
 import { tags } from "@lezer/highlight";
 
 export const setWritingCompositionActive = StateEffect.define<boolean>();
+const refreshWritingPresentation = StateEffect.define<null>();
 
 const writingCompositionActive = StateField.define<boolean>({
   create: () => false,
@@ -33,6 +34,8 @@ const writingCompositionActive = StateField.define<boolean>({
     return value;
   },
 });
+
+
 
 interface WritingRanges {
   decorations: DecorationSet;
@@ -364,6 +367,10 @@ const writingTheme = EditorView.theme({
 export function writingPresentation(): Extension {
   return [
     writingCompositionActive,
+    // Let CodeMirror synchronize the DOM selection before revealing its syntax.
+    EditorView.focusChangeEffect.of(() =>
+      refreshWritingPresentation.of(null),
+    ),
     EditorView.editorAttributes.of({
       "data-editor-presentation-mode": "writing",
     }),
@@ -384,6 +391,8 @@ function buildWritingRanges(view: EditorView): WritingRanges {
   const markKeys = new Set<string>();
   const state = view.state;
   const compositionActive = state.field(writingCompositionActive, false) ?? false;
+  const contentFocused =
+    view.contentDOM === view.contentDOM.ownerDocument.activeElement;
   const frontmatterEnd = findFrontmatterEnd(state);
 
   const addConcealment = (
@@ -458,7 +467,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
           const closingLabel = marks[1];
           if (!url || !opening || !closingLabel || marks.length < 4) return;
           const source = safeRemoteImageSource(state.sliceDoc(url.from, url.to));
-          if (!source || constructIsRevealed(state, node.from, node.to)) return;
+          if (!source || constructIsRevealed(state, node.from, node.to, contentFocused)) return;
           addConcealment(
             node.from,
             node.to,
@@ -475,9 +484,10 @@ function buildWritingRanges(view: EditorView): WritingRanges {
           const opening = marks[0];
           const closingLabel = marks[1];
           const closing = marks[marks.length - 1];
+          if (url && /^#(?:concept|memory):[^\s#]+$/.test(state.sliceDoc(url.from, url.to))) return;
           if (url && marks.length >= 4 && opening && closingLabel && closing) {
             addMarkClass(opening.to, closingLabel.from, "cm-writing-link");
-            if (!constructIsRevealed(state, node.from, node.to)) {
+            if (!constructIsRevealed(state, node.from, node.to, contentFocused)) {
               addConcealment(opening.from, opening.to);
               addConcealment(closingLabel.from, closing.to);
             }
@@ -486,7 +496,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
         }
         if (node.name === "HorizontalRule") {
           if (node.to <= frontmatterEnd) return;
-          if (!lineConstructIsRevealed(state, node.from, node.from, node.to)) {
+          if (!lineConstructIsRevealed(state, node.from, node.from, node.to, contentFocused)) {
             addConcealment(node.from, node.to, new HorizontalRuleWidget());
           }
           return;
@@ -507,7 +517,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
             fenceMarks.length >= 2 &&
             openingFence &&
             closingFence &&
-            !constructIsRevealed(state, node.from, node.to)
+            !constructIsRevealed(state, node.from, node.to, contentFocused)
           ) {
             addConcealment(
               openingFence.from,
@@ -525,7 +535,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
           const markerTo = markerWithSeparatorEnd(state, node.to, parent.to);
           const task = directChildrenNamed(parent, "Task")[0];
           addLineClass(state.doc.lineAt(node.from).from, "cm-writing-list-item");
-          if (lineConstructIsRevealed(state, node.from, parent.from, parent.to)) {
+          if (lineConstructIsRevealed(state, node.from, parent.from, parent.to, contentFocused)) {
             return;
           }
           if (task) {
@@ -547,7 +557,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
         }
 
         if (node.name === "TaskMarker" && parent.name === "Task") {
-          if (lineConstructIsRevealed(state, node.from, parent.from, parent.to)) {
+          if (lineConstructIsRevealed(state, node.from, parent.from, parent.to, contentFocused)) {
             return;
           }
           addConcealment(
@@ -584,6 +594,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
               node.from,
               blockquote.from,
               blockquote.to,
+              contentFocused,
             )
           ) {
             return;
@@ -606,7 +617,7 @@ function buildWritingRanges(view: EditorView): WritingRanges {
           return;
         }
 
-        if (constructIsRevealed(state, parent.from, parent.to)) return;
+        if (constructIsRevealed(state, parent.from, parent.to, contentFocused)) return;
 
         if (node.name === "HeaderMark" && /^ATXHeading[1-6]$/.test(parent.name)) {
           if (node.from === parent.from) {
@@ -742,7 +753,9 @@ function lineConstructIsRevealed(
   linePosition: number,
   constructFrom: number,
   constructTo: number,
+  contentFocused: boolean,
 ): boolean {
+  if (!contentFocused) return false;
   const line = state.doc.lineAt(linePosition);
   return state.selection.ranges.some((range) => {
     if (range.empty) return range.head >= line.from && range.head <= line.to;
@@ -754,7 +767,9 @@ function constructIsRevealed(
   state: EditorView["state"],
   constructFrom: number,
   constructTo: number,
+  contentFocused: boolean,
 ): boolean {
+  if (!contentFocused) return false;
   const firstLine = state.doc.lineAt(constructFrom);
   const lastLine = state.doc.lineAt(
     Math.max(constructFrom, constructTo - 1),

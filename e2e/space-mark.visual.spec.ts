@@ -89,7 +89,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
     tertiaryToken: "#5D687A",
     viewBox: "0 0 24 24",
   });
-  expect(lightDefault.box).toMatchObject({ height: 18, width: 18 });
+  expect(lightDefault.box).toMatchObject({ height: 22, width: 22 });
   screenshots.push(await capture(page, "space-mark-wiki-default-light-1280x900"));
 
   await defaultButton.click();
@@ -132,7 +132,11 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   await page.keyboard.press("Tab");
   await expect(navigation.getByRole("button", { name: "Graph", exact: true })).toBeFocused();
   await page.keyboard.press("Tab");
+  await expect(navigation.getByRole("button", { name: "Sources", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
   await expect(navigation.getByRole("button", { name: "More", exact: true })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(navigation.getByRole("button", { name: "Sources", exact: true })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(navigation.getByRole("button", { name: "Graph", exact: true })).toBeFocused();
   await page.keyboard.press("Shift+Tab");
@@ -171,17 +175,17 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   const dpr2DefaultMark = spacesButton(dpr2Page).locator(markSelector);
   const dpr2DefaultPath = path.join(evidenceDir, "space-mark-default-light-dpr2.png");
   await dpr2DefaultMark.screenshot({ path: dpr2DefaultPath });
-  expect(await pngDimensions(dpr2DefaultPath)).toEqual({ width: 36, height: 36 });
+  expect(await pngDimensions(dpr2DefaultPath)).toEqual({ width: 44, height: 44 });
   screenshots.push(dpr2DefaultPath);
   await spacesButton(dpr2Page).click();
   const dpr2SelectedMark = spacesButton(dpr2Page).locator(markSelector);
   const dpr2SelectedPath = path.join(evidenceDir, "space-mark-selected-light-dpr2.png");
   await dpr2SelectedMark.screenshot({ path: dpr2SelectedPath });
-  expect(await pngDimensions(dpr2SelectedPath)).toEqual({ width: 36, height: 36 });
+  expect(await pngDimensions(dpr2SelectedPath)).toEqual({ width: 44, height: 44 });
   screenshots.push(dpr2SelectedPath);
   expect(await markState(dpr2SelectedMark)).toMatchObject({
     ariaHidden: "true",
-    box: { height: 18, width: 18 },
+    box: { height: 22, width: 22 },
     color: "rgb(26, 26, 46)",
     viewBox: "0 0 24 24",
   });

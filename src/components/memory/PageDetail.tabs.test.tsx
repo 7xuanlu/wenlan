@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import PageDetail from "./PageDetail";
@@ -122,41 +122,52 @@ function renderDetail() {
 beforeEach(() => vi.clearAllMocks());
 afterEach(() => cleanup());
 
-async function selectTool(user: ReturnType<typeof userEvent.setup>, name: string) {
-  await user.click(screen.getByRole("button", { name: i18n.t("pageDetail.actions") }));
-  await user.click(screen.getByRole("menuitem", { name }));
+async function openInspector(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: i18n.t("pageInspector.open") }));
+  return screen.queryByRole("dialog", { name: i18n.t("pageInspector.label") })
+    ?? screen.getByRole("complementary", { name: i18n.t("pageInspector.label") });
 }
 
-describe("PageDetail optional map panel", () => {
-  it("opens with document tools beside the title and no persistent view or information controls", async () => {
+async function selectInspectorTab(user: ReturnType<typeof userEvent.setup>, name: string) {
+  if (!screen.queryByRole("tablist")) await openInspector(user);
+  await user.click(await screen.findByRole("tab", { name }));
+}
+
+describe("PageDetail note inspector", () => {
+  it("opens the dedicated note sidebar with Info selected and no inspector actions in the overflow menu", async () => {
     const { user, container } = renderDetail();
     await screen.findByText("libSQL Architecture");
     expect(container.querySelector(".page-detail-top-row")).toBeNull();
-    expect(screen.queryByRole("button", { name: i18n.t("pageCanvas.tabCanvas") })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Page info" })).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("pageInspector.open") })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Page actions" }).closest(".page-document-title-row")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Page actions" }));
-    expect(screen.getByRole("menuitem", { name: "Page info" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: i18n.t("pageInspector.info") })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: i18n.t("pageCanvas.tabCanvas") })).toBeNull();
+    await user.keyboard("{Escape}");
+    await openInspector(user);
+    const tablist = screen.getByRole("tablist", { name: i18n.t("pageInspector.label") });
+    expect(within(tablist).getByRole("tab", { name: i18n.t("pageInspector.info") })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel")).toHaveAttribute("aria-labelledby", expect.stringContaining("-info"));
+    expect(screen.getByRole("button", { name: i18n.t("pageInspector.close") })).toHaveAttribute("aria-expanded", "true");
   });
 
   it("opens the map beside the reading note and returns through the panel close button", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
-    await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
-    const panel = await screen.findByRole("dialog", { name: i18n.t("pageCanvas.tabCanvas") });
+    await selectInspectorTab(user, i18n.t("pageCanvas.tabCanvas"));
+    const panel = await screen.findByRole("dialog", { name: i18n.t("pageInspector.label") });
     expect(await screen.findByRole("region", { name: "Canvas for libSQL Architecture" })).toBeTruthy();
     expect(screen.getByText("More prose here.")).toBeTruthy();
     expect(screen.getByTestId("page-document-reading")).not.toHaveAttribute("contenteditable");
     await user.click(panel.querySelector<HTMLButtonElement>(".page-info-drawer-close")!);
     expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Page actions" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: i18n.t("pageInspector.open") })).toHaveFocus();
   });
 
   it("resolves node labels from the page and sources already loaded", async () => {
     const { user } = renderDetail();
     await screen.findByText("libSQL Architecture");
-    await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
+    await selectInspectorTab(user, i18n.t("pageCanvas.tabCanvas"));
     await screen.findByTestId("react-flow");
     expect(screen.getAllByText("libSQL Architecture").length).toBeGreaterThan(1);
     expect(screen.getByText("libSQL stores vectors")).toBeTruthy();
@@ -168,13 +179,17 @@ describe("PageDetail optional map panel", () => {
     try {
       const { user } = renderDetail();
       await screen.findByText("libSQL Architecture");
-      await selectTool(user, "Page info");
-      expect(screen.getByRole("complementary", { name: "Page info" })).toBeTruthy();
-      await selectTool(user, i18n.t("pageCanvas.tabCanvas"));
-      expect(await screen.findByRole("complementary", { name: i18n.t("pageCanvas.tabCanvas") })).toBeTruthy();
-      expect(screen.queryByRole("complementary", { name: "Page info" })).toBeNull();
-      await selectTool(user, "Page info");
-      expect(screen.getByRole("complementary", { name: "Page info" })).toBeTruthy();
+      await openInspector(user);
+      const panel = screen.getByRole("complementary", { name: i18n.t("pageInspector.label") });
+      const infoTab = screen.getByRole("tab", { name: i18n.t("pageInspector.info") });
+      expect(infoTab).toHaveAttribute("aria-selected", "true");
+      expect(screen.queryByRole("tab", { name: i18n.t("knowledgeContext.localGraph") })).toBeNull();
+      expect(within(panel).getAllByRole("tab")).toHaveLength(2);
+      await user.click(screen.getByRole("tab", { name: i18n.t("pageCanvas.tabCanvas") }));
+      expect(screen.getByRole("complementary", { name: i18n.t("pageInspector.label") })).toBe(panel);
+      expect(await screen.findByRole("region", { name: "Canvas for libSQL Architecture" })).toBeTruthy();
+      await user.click(infoTab);
+      expect(screen.getByRole("complementary", { name: i18n.t("pageInspector.label") })).toBe(panel);
       expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
     } finally { window.matchMedia = original; }
   });

@@ -6,13 +6,13 @@ import { EditorView, keymap, showTooltip, tooltips, type Tooltip } from "@codemi
 import { setWritingCompositionActive } from "./writingPresentation";
 
 export const slashItems = [
-  { id: "heading1", insert: "# ", caret: 2 },
-  { id: "heading2", insert: "## ", caret: 3 },
-  { id: "bulletList", insert: "- ", caret: 2 },
-  { id: "numberedList", insert: "1. ", caret: 3 },
-  { id: "taskList", insert: "- [ ] ", caret: 6 },
-  { id: "blockquote", insert: "> ", caret: 2 },
-  { id: "fencedCode", insert: "```\n\n```", caret: 4 },
+  { id: "heading1", insert: "# ", caret: 2, syntax: "#" },
+  { id: "heading2", insert: "## ", caret: 3, syntax: "##" },
+  { id: "bulletList", insert: "- ", caret: 2, syntax: "-" },
+  { id: "numberedList", insert: "1. ", caret: 3, syntax: "1." },
+  { id: "taskList", insert: "- [ ] ", caret: 6, syntax: "- [ ]" },
+  { id: "blockquote", insert: "> ", caret: 2, syntax: ">" },
+  { id: "fencedCode", insert: "```\n\n```", caret: 4, syntax: "```" },
 ] as const;
 export type SlashItemId = typeof slashItems[number]["id"];
 export type SlashLabels = Record<SlashItemId | "label", string>;
@@ -124,9 +124,15 @@ export function createSlashEditing(options: {
       dom.setAttribute("role", "listbox");
       const rows = slashItems.map((item, index) => {
         const row = document.createElement("div");
+        const label = document.createElement("span");
+        const syntax = document.createElement("span");
         row.id = `${menuId}-${item.id}`;
         row.className = "cm-slash-option";
         row.setAttribute("role", "option");
+        syntax.className = "cm-slash-option-syntax";
+        syntax.setAttribute("data-syntax", item.syntax);
+        syntax.setAttribute("aria-hidden", "true");
+        row.append(label, syntax);
         row.addEventListener("pointerenter", () => {
           const menu = view.state.field(state).menu;
           if (!options.blocked(view) && menu && menu.active !== index) view.dispatch({ effects: selectSlashItem.of(index) });
@@ -137,7 +143,7 @@ export function createSlashEditing(options: {
           accept(view);
         });
         dom.append(row);
-        return row;
+        return { row, label };
       });
       const retainFocus = (event: Event) => event.preventDefault();
       dom.addEventListener("pointerdown", retainFocus);
@@ -146,8 +152,10 @@ export function createSlashEditing(options: {
         const labels = options.labels();
         dom.setAttribute("aria-label", labels.label);
         const active = view.state.field(state).menu?.active;
-        rows.forEach((row, index) => {
-          row.textContent = labels[slashItems[index].id];
+        rows.forEach(({ row, label }, index) => {
+          const accessibleLabel = labels[slashItems[index].id];
+          label.textContent = accessibleLabel;
+          row.setAttribute("aria-label", accessibleLabel);
           row.setAttribute("aria-selected", String(index === active));
         });
       };
@@ -179,7 +187,9 @@ export function createSlashEditing(options: {
       EditorView.domEventHandlers({ blur: (_event, view) => { close(view); return false; } }),
       EditorView.theme({
         ".cm-slash-menu": { padding: "4px", border: "1px solid var(--mem-border)", borderRadius: "var(--mem-radius-md)", backgroundColor: "var(--mem-detail-surface)", color: "var(--mem-text)", boxShadow: "0 6px 24px rgba(0,0,0,0.12)", width: "220px", maxWidth: "calc(100vw - 16px)", maxHeight: "min(320px, calc(100vh - 76px))", overflowY: "auto", fontFamily: "var(--mem-font-body, system-ui, sans-serif)", fontSize: "var(--mem-text-sm)", zIndex: "1200" },
-        ".cm-slash-option": { padding: "8px 10px", borderRadius: "var(--mem-radius-sm)", cursor: "pointer" },
+        ".cm-slash-option": { display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", padding: "8px 10px", borderRadius: "var(--mem-radius-sm)", cursor: "pointer" },
+        ".cm-slash-option-syntax": { flex: "0 0 auto", fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-label)", color: "var(--mem-text-tertiary)" },
+        ".cm-slash-option-syntax::after": { content: "attr(data-syntax)" },
         '.cm-slash-option[aria-selected="true"]': { backgroundColor: "var(--mem-indigo-bg)", color: "var(--mem-accent-page)", outline: "1px solid var(--mem-accent-page)", outlineOffset: "-1px" },
       }),
     ],

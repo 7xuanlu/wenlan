@@ -2,13 +2,15 @@
 import { returnToPageReading } from "./helpers/pageReading";
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { createReviewDecisionFixture } from "./fixtures/reviewDecisions";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 async function openFixturePage(page: Page): Promise<void> {
   await page.goto("/");
   const navigation = page.getByRole("navigation", { name: "Primary navigation" });
   await navigation.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
+  await openWikiNote(page, "Fixture architecture");
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
   await returnToPageReading(page);
 }
@@ -26,8 +28,8 @@ test("deletes a Wiki Page and removes it from the inventory", async ({ page }) =
 
   await requestDelete(page);
 
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Fixture architecture" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
+  await expect(page.locator(".wiki-workspace-directory").getByText("Fixture architecture", { exact: true })).toHaveCount(0);
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });
@@ -44,8 +46,42 @@ test("keeps a failed Wiki Page deletion visible and retryable", async ({ page })
   await expect(page.getByRole("heading", { level: 1, name: "Fixture architecture" })).toBeVisible();
 
   await requestDelete(page);
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open Fixture architecture" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
+  await expect(page.locator(".wiki-workspace-directory").getByText("Fixture architecture", { exact: true })).toHaveCount(0);
+  expect(browserErrors.pageErrors).toEqual([]);
+  expect(browserErrors.consoleErrors).toEqual([]);
+});
+
+test("deleting a Page from the right group removes only that tab", async ({ page }) => {
+  const browserErrors = collectBrowserErrors(page);
+  await installTauriMock(page, {
+    fixture: createReviewDecisionFixture("wiki-folders"),
+    locale: "en",
+    rawActions: [],
+  });
+  await page.goto("/");
+  await openWikiNote(page, "Fixture architecture");
+  await openWikiNote(page, "Why fixtures stay deterministic");
+
+  const primary = page.locator('[data-note-group-id="primary"]');
+  const secondary = page.locator('[data-note-group-id="secondary"]');
+  const rightPage = primary.getByRole("tab", { name: "Why fixtures stay deterministic", exact: true });
+  await rightPage.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Move to right group", exact: true }).click();
+  await expect(secondary.getByRole("tab", { name: "Why fixtures stay deterministic", exact: true })).toBeVisible();
+  await expect(primary.getByRole("tab", { name: "Fixture architecture", exact: true })).toBeVisible();
+
+  const editor = secondary.getByRole("textbox", { name: "Page editor", exact: true });
+  await expect(editor).toBeVisible();
+  await editor.press("Escape");
+  await expect(editor).toHaveCount(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await secondary.getByRole("button", { name: "Page actions" }).click();
+  await secondary.getByRole("menuitem", { name: "Delete page" }).click();
+
+  await expect(secondary).toHaveCount(0);
+  await expect(primary.getByRole("tab", { name: "Fixture architecture", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Why fixtures stay deterministic", exact: true })).toHaveCount(0);
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });

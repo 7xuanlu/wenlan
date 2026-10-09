@@ -19,6 +19,7 @@
   min-width: 0;
   overflow: hidden;
   border-left: 1px solid var(--mem-border);
+  border-radius: var(--workspace-radius);
   background: var(--mem-sidebar);
   color: var(--mem-text);
   box-shadow: var(--mem-shadow-overlay);
@@ -64,6 +65,30 @@
   outline-offset: 2px;
 }
 
+.page-info-drawer-workspace-toggle {
+  display: flex;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: var(--mem-control-radius);
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+}
+
+.page-info-drawer-workspace-toggle:hover {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.page-info-drawer-workspace-toggle:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
 .page-info-drawer-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -83,3 +108,274 @@
 .page-info-drawer--canvas .page-info-drawer-content { display: flex; padding: 0; overflow: hidden; }
 .page-info-drawer--canvas .page-canvas { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; padding: 0; }
 .page-info-drawer--canvas .page-canvas-surface { flex: 1 1 auto; width: 100%; height: 100%; min-height: 0; border: 0; border-radius: 0; background-color: var(--mem-sidebar); }
+.page-info-drawer--canvas .page-canvas-surface:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--mem-sidebar) 72%, var(--mem-accent-page));
+  outline-offset: -2px;
+}
+
+@media (forced-colors: active) {
+  .page-info-drawer--canvas .page-canvas-surface:focus-visible {
+    outline-color: Highlight;
+  }
+}
+
+.page-info-drawer--canvas .page-canvas-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 20px);
+}
+
+.page-info-drawer-hosted {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  display: flex;
+  width: 360px;
+  height: 100%;
+  justify-content: stretch;
+  background: transparent;
+  pointer-events: auto;
+}
+
+.page-info-drawer-hosted--canvas { width: clamp(360px, 32vw, 460px); }
+.page-info-drawer-hosted .page-info-drawer {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  border: 0;
+  border-radius: var(--workspace-radius);
+  box-shadow: none;
+  background: var(--mem-sidebar);
+}
+.page-info-drawer-hosted .page-info-drawer-content {
+  background: var(--mem-sidebar);
+}
+.page-info-drawer-hosted .page-info-drawer-header {
+  min-height: 52px;
+  box-sizing: border-box;
+  padding: 0 16px 0 20px;
+}
+
+/* The map workspace portal is reparented into the note column without
+   changing its React tree. It fills that column and has no sidebar chrome. */
+.page-info-drawer-expanded-workspace {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: stretch;
+  background: var(--mem-bg);
+}
+
+/* A note-group overlay is anchored to that group frame and has no backdrop. */
+.page-info-drawer-group-overlay {
+  position: absolute;
+  inset: 52px 0 0;
+  z-index: 50;
+  width: 100%;
+  height: auto;
+  background: transparent;
+  pointer-events: none;
+}
+
+.page-info-drawer-group-overlay-panel {
+  position: relative;
+  box-sizing: border-box;
+  width: min(320px, 100%);
+  max-width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: auto;
+  box-shadow: var(--mem-shadow-overlay);
+}
+
+.page-info-drawer-group-overlay-panel.page-info-drawer--inspector .page-info-drawer-header,
+.page-info-drawer-expanded-group .page-info-drawer.page-info-drawer--inspector .page-info-drawer-header {
+  position: absolute;
+  z-index: 6;
+  top: -52px;
+  right: 0;
+  box-sizing: border-box;
+  width: var(--note-inspector-header-width, 320px);
+}
+
+.page-info-drawer-group-overlay-panel.page-info-drawer--inspector .page-info-drawer-header,
+.page-info-drawer-expanded-group .page-info-drawer.page-info-drawer--inspector .page-info-drawer-header {
+  gap: 3px;
+  padding-inline: 3px;
+}
+
+.page-info-drawer-group-overlay-body-reserved .page-info-drawer-group-overlay-panel.page-info-drawer--inspector .page-info-drawer-header {
+  left: -1px;
+  right: auto;
+  width: calc(100% + 1px);
+  border-left: 1px solid var(--mem-border);
+  border-top-left-radius: 12px;
+}
+
+/* A subtle rounded end softens the seam without separating the two regions. */
+.page-info-drawer-group-overlay-body-reserved .page-info-drawer-group-overlay-panel.page-info-drawer--inspector {
+  border-bottom-left-radius: 12px;
+}
+
+.page-info-drawer-group-overlay-body-reserved .page-info-drawer-content {
+  border-bottom-left-radius: inherit;
+}
+
+.page-info-drawer-expanded-group .page-info-drawer.page-info-drawer--inspector {
+  position: relative;
+  overflow: visible;
+}
+
+.page-info-drawer-group-overlay .sidebar-resize-handle--right {
+  left: calc(100% - var(--note-inspector-panel-width, 320px) - 4px);
+  pointer-events: auto;
+}
+
+.page-info-drawer-expanded-group {
+  position: absolute;
+  inset: 52px 0 0;
+  z-index: 50;
+  width: auto;
+  height: auto;
+}
+
+.page-info-drawer-expanded-workspace .page-info-drawer.page-info-drawer--inspector {
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.page-info-drawer-expanded-workspace .page-info-drawer-header {
+  border-bottom: 1px solid var(--mem-border);
+}
+
+.page-info-drawer-expanded-workspace .page-info-drawer-content,
+.page-info-drawer-expanded-workspace .note-inspector-panel {
+  min-height: 0;
+}
+
+
+/* The note inspector is a connected workspace pane, independent of content variant. */
+.page-info-drawer--inspector {
+  --mem-detail-surface: var(--workspace-sidebar-background, var(--mem-bg));
+  background: var(--workspace-sidebar-background, var(--mem-bg));
+  border: 0;
+  border-left: 1px solid var(--mem-border);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.page-info-drawer.page-info-drawer--inspector {
+  width: clamp(360px, 32vw, 460px);
+  max-width: 100vw;
+}
+
+.page-info-drawer--inspector .page-info-drawer-header {
+  box-sizing: border-box;
+  gap: 8px;
+  height: 52px;
+  min-height: 52px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--mem-border);
+}
+
+.page-info-drawer--inspector .page-info-drawer-content {
+  background: var(--workspace-sidebar-background, var(--mem-bg));
+}
+
+.page-info-drawer--inspector .page-info-drawer-close {
+  flex-basis: 36px;
+  height: 36px;
+  width: 36px;
+}
+
+.page-info-drawer-hosted--inspector {
+  width: clamp(360px, 32vw, 460px);
+}
+
+.page-info-drawer-hosted .page-info-drawer.page-info-drawer--inspector {
+  width: 100%;
+  max-width: none;
+  border: 0;
+  border-left: 1px solid var(--mem-border);
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--workspace-sidebar-background, var(--mem-bg));
+}
+
+@media (pointer: coarse) {
+  .page-info-drawer--inspector .page-info-drawer-close {
+    flex-basis: 44px;
+    height: 44px;
+    width: 44px;
+  }
+}
+
+
+.page-info-drawer-docked .page-info-drawer--inspector {
+  border-left: 1px solid var(--mem-border);
+}
+
+.page-info-drawer--inspector .page-canvas-surface {
+  background-color: var(--workspace-sidebar-background, var(--mem-bg));
+}
+
+.page-info-drawer--inspector .page-canvas-surface .page-canvas-badge {
+  background-color: var(--workspace-sidebar-background, var(--mem-bg));
+}
+
+.page-info-drawer--inspector .knowledge-local-map-center,
+.page-info-drawer--inspector .knowledge-local-map-node {
+  background: var(--workspace-sidebar-background, var(--mem-bg));
+}
+
+.note-inspector-panel {
+  min-width: 0;
+}
+
+.note-inspector-panel--canvas {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* A note's connected inspector follows the central document surface. */
+.page-info-drawer--inspector:has(.note-inspector-tabs) {
+  --workspace-document-background: var(--mem-bg);
+  --mem-detail-surface: var(--workspace-document-background, var(--mem-bg));
+}
+
+.page-info-drawer--inspector:has(.note-inspector-tabs) .page-info-drawer-header {
+  border-bottom: 0;
+  overflow: visible;
+  background: color-mix(in srgb, var(--mem-text) 3%, var(--mem-bg));
+}
+
+.page-info-drawer--inspector:has(.note-inspector-tabs) .page-info-drawer-content,
+.page-info-drawer--inspector:has(.note-inspector-tabs) .note-inspector-panel {
+  background: var(--workspace-document-background, var(--mem-bg));
+}
+
+.page-info-drawer--inspector:has(.note-inspector-tabs) .page-canvas-surface,
+.page-info-drawer--inspector:has(.note-inspector-tabs) .page-canvas-surface .page-canvas-badge,
+.page-info-drawer--inspector:has(.note-inspector-tabs) .knowledge-local-map-center,
+.page-info-drawer--inspector:has(.note-inspector-tabs) .knowledge-local-map-node {
+  background: var(--workspace-document-background, var(--mem-bg));
+}
+
+/* Modal inspectors portal outside the workspace and need the same light surface. */
+html[data-theme="light"] .page-info-drawer--inspector:has(.note-inspector-tabs) {
+  --workspace-document-background: var(--mem-surface);
+}
+
+html[data-theme="light"] .page-info-drawer--inspector:has(.note-inspector-tabs) .page-info-drawer-header {
+  background: var(--mem-bg);
+}

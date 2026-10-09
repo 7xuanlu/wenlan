@@ -25,6 +25,7 @@
 // leaving it out, so Retry waits for the daemon work.
 
 export const enActivityStatus = {
+  title: "Activity",
   // ── Tier 0, the toolbar Activity button ────────────────────────────────
   state: {
     up_to_date: "Up to date",
@@ -33,6 +34,7 @@ export const enActivityStatus = {
     // Steeping that cannot run yet (ActivityState waiting_for_idle).
     waiting_for_idle: "Waiting for a quiet moment",
     blocked: "Blocked",
+    failed: "Failed",
   },
   statusLabel: "Background activity",
   // The toolbar button's accessible name: its visible word plus the state,
@@ -56,6 +58,7 @@ export const enActivityStatus = {
     entities: "Entities",
     pages: "Pages",
   },
+  rowAsset: { memories: "Memories", entities: "Entities", pages: "Notes" },
   assetOff: {
     memories: "Your notes remain available.",
     entities: "Entity detection is off.",
@@ -126,7 +129,42 @@ export const enActivityStatus = {
   neverActive: "Nothing has run yet",
 
   // ── Tier 2, the Now section on the Activity page ───────────────────────
-  nowTitle: "Now",
+  nowTitle: "Background organization",
+  nowLoading: "Checking current work…",
+  nowError: "Could not read current work.",
+  nowIdle: "No work is currently in progress.",
+  nowOff: "Background organization is off.",
+  nowRunning: "Background organization is running.",
+  nowBlocked: "Background organization is blocked.",
+  nowWaiting: "Waiting for your computer to be idle.",
+  nowPaused: "Background organization is paused.",
+  nowUnknown: "Current work status is temporarily unavailable.",
+  eventsLoading: "Loading recent activity…",
+  eventsError: "Could not load recent activity.",
+  readAgain: "Read again",
+  runningStep: {
+    store: "Storing memories.",
+    summarize: "Organizing memory summaries.",
+    link: "Linking related memories.",
+    detect: "Identifying topics in memories.",
+    confirm: "Confirming topics.",
+    write: "Updating notes.",
+  },
+  failedStep: {
+    store_one: "{{count}} memory could not be stored.",
+    store_other: "{{count}} memories could not be stored.",
+    summarize_one: "{{count}} memory could not be summarized.",
+    summarize_other: "{{count}} memories could not be summarized.",
+    link_one: "{{count}} memory could not be linked.",
+    link_other: "{{count}} memories could not be linked.",
+    detect_one: "{{count}} memory could not be scanned for topics.",
+    detect_other: "{{count}} memories could not be scanned for topics.",
+    confirm_one: "{{count}} entity could not be confirmed.",
+    confirm_other: "{{count}} entities could not be confirmed.",
+    write_one: "{{count}} page could not be updated.",
+    write_other: "{{count}} pages could not be updated.",
+  },
+  failedUnknown: "Some background work has failed.",
   showSteps: "Show steps",
   hideSteps: "Hide steps",
   step: {
@@ -149,7 +187,18 @@ export const enActivityStatus = {
     idle: "Idle",
     running: "Running",
     blocked: "Blocked",
+    unknown: "Status unavailable",
   },
+  stepComplete: "Complete",
+  compactStepCount: {
+    memories_one: "{{done}} / {{count}} memory",
+    memories_other: "{{done}} / {{count}} memories",
+    entities_one: "{{done}} / {{count}} entity",
+    entities_other: "{{done}} / {{count}} entities",
+    pages_one: "{{done}} / {{count}} note",
+    pages_other: "{{done}} / {{count}} notes",
+  },
+  moreDetails: "Details",
   // Per step, in that step's unit: Detect counts memories, Confirm entities.
   stepCount: {
     memories_one: "{{done}} of {{count}} memory",
@@ -196,9 +245,9 @@ export const enActivityStatus = {
 
   // ── Import handoff ────────────────────────────────────────────────────
   importHandoff_one:
-    "{{count}} memory stored and searchable now. Wenlan keeps steeping it in the background. Follow along from Activity in the toolbar.",
+    "{{count}} memory stored and searchable now. Wenlan keeps steeping it in the background. See further progress on Activity.",
   importHandoff_other:
-    "{{count}} memories stored and searchable now. Wenlan keeps steeping them in the background. Follow along from Activity in the toolbar.",
+    "{{count}} memories stored and searchable now. Wenlan keeps steeping them in the background. See further progress on Activity.",
 
   // ── Settings, Appearance ──────────────────────────────────────────────
   layoutSetting: "Activity summary placement",
@@ -212,6 +261,7 @@ export const enActivityStatus = {
 };
 
 export const hansActivityStatus = {
+  title: "动态",
   state: {
     up_to_date: "已就绪",
     off: "已关闭",
@@ -219,6 +269,7 @@ export const hansActivityStatus = {
     // Not 暂停: that word is Blocked in this locale.
     waiting_for_idle: "等电脑空闲",
     blocked: "已暂停",
+    failed: "失败",
   },
   statusLabel: "后台工作",
   buttonLabel: "活动，{{state}}",
@@ -234,6 +285,7 @@ export const hansActivityStatus = {
     entities: "实体",
     pages: "页面",
   },
+  rowAsset: { memories: "记忆", entities: "实体", pages: "笔记" },
   assetOff: {
     memories: "笔记仍可正常使用。",
     entities: "实体识别已关闭。",
@@ -283,7 +335,42 @@ export const hansActivityStatus = {
   jobSeparator: "和",
   lastActivity: "最近活动于{{time}}",
   neverActive: "尚未运行过",
-  nowTitle: "当前",
+  nowTitle: "后台整理",
+  nowLoading: "正在查看当前工作…",
+  nowError: "无法读取当前工作。",
+  nowIdle: "目前没有进行中的工作。",
+  nowOff: "后台整理已关闭。",
+  nowRunning: "后台整理正在运行。",
+  nowBlocked: "后台整理受阻。",
+  nowWaiting: "等待电脑空闲时继续。",
+  nowPaused: "后台整理已暂停。",
+  nowUnknown: "目前工作状态暂时无法读取。",
+  eventsLoading: "正在加载最近动态…",
+  eventsError: "无法加载最近动态。",
+  readAgain: "重新读取",
+  runningStep: {
+    store: "正在存入记忆。",
+    summarize: "正在整理记忆摘要。",
+    link: "正在关联相关记忆。",
+    detect: "正在识别记忆中的主题。",
+    confirm: "正在确认主题。",
+    write: "正在更新笔记。",
+  },
+  failedStep: {
+    store_one: "有 {{count}} 条记忆未能存入。",
+    store_other: "有 {{count}} 条记忆未能存入。",
+    summarize_one: "有 {{count}} 条记忆未能生成摘要。",
+    summarize_other: "有 {{count}} 条记忆未能生成摘要。",
+    link_one: "有 {{count}} 条记忆未能关联相关内容。",
+    link_other: "有 {{count}} 条记忆未能关联相关内容。",
+    detect_one: "有 {{count}} 条记忆未能完成主题识别。",
+    detect_other: "有 {{count}} 条记忆未能完成主题识别。",
+    confirm_one: "有 {{count}} 个实体未能确认。",
+    confirm_other: "有 {{count}} 个实体未能确认。",
+    write_one: "有 {{count}} 个页面未能更新。",
+    write_other: "有 {{count}} 个页面未能更新。",
+  },
+  failedUnknown: "部分后台工作失败。",
   showSteps: "展开步骤",
   hideSteps: "收起步骤",
   step: {
@@ -306,7 +393,18 @@ export const hansActivityStatus = {
     idle: "待机",
     running: "进行中",
     blocked: "已暂停",
+    unknown: "状态暂不可用",
   },
+  stepComplete: "完成",
+  compactStepCount: {
+    memories_one: "{{done}} / {{count}} 条记忆",
+    memories_other: "{{done}} / {{count}} 条记忆",
+    entities_one: "{{done}} / {{count}} 个实体",
+    entities_other: "{{done}} / {{count}} 个实体",
+    pages_one: "{{done}} / {{count}} 篇笔记",
+    pages_other: "{{done}} / {{count}} 篇笔记",
+  },
+  moreDetails: "详情",
   stepCount: {
     memories_one: "{{count}} 条记忆中已完成 {{done}} 条",
     memories_other: "{{count}} 条记忆中已完成 {{done}} 条",
@@ -343,9 +441,9 @@ export const hansActivityStatus = {
     notReady_other: "{{count}} 条尚未进入审阅",
   },
   importHandoff_one:
-    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可从工具栏的「活动」查看进度。",
+    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可在「动态」查看后续进度。",
   importHandoff_other:
-    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可从工具栏的「活动」查看进度。",
+    "已存入 {{count}} 条记忆，现在即可搜索。文澜会在后台继续沉淀。可在「动态」查看后续进度。",
   layoutSetting: "动态摘要的位置",
   layoutSettingHelp: "「当前」摘要在动态页面中的位置。仅保存在本设备。",
   layout: {
@@ -356,6 +454,7 @@ export const hansActivityStatus = {
 };
 
 export const hantActivityStatus = {
+  title: "活動",
   state: {
     up_to_date: "已就緒",
     off: "已關閉",
@@ -363,6 +462,7 @@ export const hantActivityStatus = {
     // Not 暫停: that word is Blocked in this locale.
     waiting_for_idle: "等電腦閒置",
     blocked: "已暫停",
+    failed: "失敗",
   },
   statusLabel: "背景工作",
   buttonLabel: "活動，{{state}}",
@@ -378,6 +478,7 @@ export const hantActivityStatus = {
     entities: "實體",
     pages: "頁面",
   },
+  rowAsset: { memories: "記憶", entities: "實體", pages: "筆記" },
   assetOff: {
     memories: "筆記仍可正常使用。",
     entities: "實體辨識已關閉。",
@@ -427,7 +528,42 @@ export const hantActivityStatus = {
   jobSeparator: "和",
   lastActivity: "最近活動於{{time}}",
   neverActive: "尚未執行過",
-  nowTitle: "目前",
+  nowTitle: "背景整理",
+  nowLoading: "正在查看目前工作…",
+  nowError: "無法讀取目前工作。",
+  nowIdle: "目前沒有進行中的工作。",
+  nowOff: "背景整理已關閉。",
+  nowRunning: "背景整理正在執行。",
+  nowBlocked: "背景整理受阻。",
+  nowWaiting: "等待電腦閒置時繼續。",
+  nowPaused: "背景整理已暫停。",
+  nowUnknown: "目前工作狀態暫時無法讀取。",
+  eventsLoading: "正在載入最近活動…",
+  eventsError: "無法載入最近活動。",
+  readAgain: "重新讀取",
+  runningStep: {
+    store: "正在儲存記憶。",
+    summarize: "正在整理記憶摘要。",
+    link: "正在連結相關內容。",
+    detect: "正在辨識記憶中的主題。",
+    confirm: "正在確認主題。",
+    write: "正在更新筆記。",
+  },
+  failedStep: {
+    store_one: "有 {{count}} 則記憶未能存入。",
+    store_other: "有 {{count}} 則記憶未能存入。",
+    summarize_one: "有 {{count}} 則記憶未能產生摘要。",
+    summarize_other: "有 {{count}} 則記憶未能產生摘要。",
+    link_one: "有 {{count}} 則記憶未能連結相關內容。",
+    link_other: "有 {{count}} 則記憶未能連結相關內容。",
+    detect_one: "有 {{count}} 則記憶未能完成主題辨識。",
+    detect_other: "有 {{count}} 則記憶未能完成主題辨識。",
+    confirm_one: "有 {{count}} 個實體未能確認。",
+    confirm_other: "有 {{count}} 個實體未能確認。",
+    write_one: "有 {{count}} 個頁面未能更新。",
+    write_other: "有 {{count}} 個頁面未能更新。",
+  },
+  failedUnknown: "部分背景工作失敗。",
   showSteps: "展開步驟",
   hideSteps: "收合步驟",
   step: {
@@ -450,7 +586,18 @@ export const hantActivityStatus = {
     idle: "待機",
     running: "進行中",
     blocked: "已暫停",
+    unknown: "狀態暫時無法取得",
   },
+  stepComplete: "完成",
+  compactStepCount: {
+    memories_one: "{{done}} / {{count}} 則記憶",
+    memories_other: "{{done}} / {{count}} 則記憶",
+    entities_one: "{{done}} / {{count}} 個實體",
+    entities_other: "{{done}} / {{count}} 個實體",
+    pages_one: "{{done}} / {{count}} 篇筆記",
+    pages_other: "{{done}} / {{count}} 篇筆記",
+  },
+  moreDetails: "詳細資料",
   stepCount: {
     memories_one: "{{count}} 則記憶中已完成 {{done}} 則",
     memories_other: "{{count}} 則記憶中已完成 {{done}} 則",
@@ -487,9 +634,9 @@ export const hantActivityStatus = {
     notReady_other: "{{count}} 則尚未進入審閱",
   },
   importHandoff_one:
-    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可從工具列的「活動」查看進度。",
+    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可在「活動」查看後續進度。",
   importHandoff_other:
-    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可從工具列的「活動」查看進度。",
+    "已存入 {{count}} 則記憶，現在即可搜尋。文瀾會在背景繼續沉澱。可在「活動」查看後續進度。",
   layoutSetting: "動態摘要的位置",
   layoutSettingHelp: "「目前」摘要在動態頁面中的位置。僅儲存在本裝置。",
   layout: {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { i18n } from "../../i18n";
@@ -395,22 +395,6 @@ describe("AtlasView", () => {
     expect(entityLayer).toHaveAttribute("aria-pressed", "false");
     expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: false, entity: true, memory: false });
     expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).not.toEqual({ page: false, entity: false, memory: false });
-  });
-
-  it("offsets a narrow-screen selection above the bottom inspector", async () => {
-    mockDimensions = { width: 375, height: 600 };
-    mockConnectedPair();
-    renderWithQuery(<AtlasView />);
-    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-
-    const instance = capturedSigmaInstances[0];
-    act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
-
-    await waitFor(() => expect(instance.camera.animate).toHaveBeenCalled());
-    const [target, options] = instance.camera.animate.mock.calls.at(-1)!;
-    expect(target).toEqual({ x: 0.42, y: expect.any(Number), ratio: 0.4 });
-    expect(target.y).toBeCloseTo(81.84);
-    expect(options).toEqual({ duration: 450 });
   });
 
   it("keeps the graph available when a handoff page no longer exists", async () => {
@@ -2653,18 +2637,20 @@ describe("AtlasView", () => {
     const user = userEvent.setup();
     const instance = capturedSigmaInstances[0];
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
-    const aliceHeading = await screen.findByRole("heading", { name: "Alice" });
-    await waitFor(() => expect(aliceHeading).toHaveFocus());
-    expect(screen.getByRole("complementary", { name: "Graph selection" })).toBeInTheDocument();
+    const aliceDrawer = await screen.findByRole("dialog", { name: "Alice" });
+    const returnButton = within(aliceDrawer).getByRole("button", { name: i18n.t("atlas.returnToMap") });
+    await waitFor(() => expect(returnButton).toHaveFocus());
     act(() => instance.handlers.get("leaveNode")?.({ node: "e1" }));
     expect(instance.settings.nodeReducer("e1", instance.graph.getNodeAttributes("e1")).highlighted).toBe(true);
-    const bobConnection = screen.getByRole("button", { name: "Bob" });
-    bobConnection.focus();
+    const bobConnection = within(aliceDrawer).getByRole("button", { name: "Bob" });
+    await user.tab();
+    expect(bobConnection).toHaveFocus();
     await user.keyboard("{Enter}");
-    const bobHeading = await screen.findByRole("heading", { name: "Bob" });
-    await waitFor(() => expect(bobHeading).toHaveFocus());
+    const bobDrawer = await screen.findByRole("dialog", { name: "Bob" });
+    const bobReturnButton = within(bobDrawer).getByRole("button", { name: i18n.t("atlas.returnToMap") });
+    await waitFor(() => expect(bobReturnButton).toHaveFocus());
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("complementary", { name: "Graph selection" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Bob" })).not.toBeInTheDocument();
   });
 
 });

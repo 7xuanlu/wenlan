@@ -36,7 +36,7 @@ test("keeps the box dragged out of a connector standing after the pointer is rel
 
   await dragConnectorToEmptySpace(page);
 
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
   // The regression: the field mounted, React Flow took focus back for the pane,
   // and the empty blur deleted the box a beat later. Wait past that beat.
@@ -55,14 +55,19 @@ test("names the dragged-out box and keeps it on the canvas", async ({ page }) =>
 
   await dragConnectorToEmptySpace(page);
 
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
   await field.fill("Design notes");
   await field.press("Enter");
 
   await expect(page.getByRole("button", { name: "Design notes" })).toBeVisible();
-  const created = controller.calls().filter((call) => call.command === "create_page_map_node");
+  const created = controller.calls().filter((call) => call.command === "create_page_map_node") as {
+    args: { body: { ref_kind: string } };
+  }[];
   expect(created).toHaveLength(1);
+  expect(created[0].args.body.ref_kind).toBe("idea");
+  expect(controller.calls().some((call) => call.command === "patch_page_map_node")).toBe(false);
+  expect(controller.calls().some((call) => call.command === "update_page")).toBe(false);
 
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
@@ -80,7 +85,7 @@ test("keeps the box and its line on screen while a slow daemon catches up", asyn
   await openCanvas(page);
 
   await dragConnectorToEmptySpace(page);
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
 
   // A line joins the box to the one it was dragged from, from the moment the
@@ -109,10 +114,12 @@ test("drops the dragged-out box on Escape", async ({ page }) => {
   await openCanvas(page);
 
   await dragConnectorToEmptySpace(page);
-  const field = page.getByRole("textbox", { name: "Section name" });
+  const field = page.getByRole("textbox", { name: "Name this node" });
   await expect(field).toBeVisible();
   await field.press("Escape");
 
   await expect(field).toHaveCount(0);
   expect(controller.calls().some((call) => call.command === "create_page_map_node")).toBe(false);
+  expect(controller.calls().some((call) => call.command === "patch_page_map_node")).toBe(false);
+  expect(controller.calls().some((call) => call.command === "update_page")).toBe(false);
 });

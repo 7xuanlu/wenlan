@@ -791,7 +791,7 @@ describe("DistillReviewPanel review queue", () => {
       within(dialog).getByRole("heading", { name: "Temporal page refresh" }),
     ).toBeInTheDocument();
     expect(within(dialog).getByText("New page")).toBeInTheDocument();
-    expect(within(dialog).getByText(/next compile pass/)).toBeInTheDocument();
+    expect(within(dialog).getByText("These sources could form a note. No note has been created, and this is not a running job.")).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Approve" })).toBeNull();
     expect(within(dialog).queryByRole("button", { name: "Dismiss" })).toBeNull();
     // 1 stale page + 2 page candidates + 1 topic; the stale page comes first.

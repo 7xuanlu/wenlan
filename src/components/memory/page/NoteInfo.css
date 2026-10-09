@@ -1,0 +1,253 @@
+/* Shared presentation for the note Info inspector. */
+.note-inspector-info {
+  min-width: 0;
+}
+
+.note-info-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.note-info-summary > .document-kind-label {
+  margin: 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.note-info-summary > .flex:empty {
+  display: none;
+}
+
+.note-info-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+  margin-top: 20px;
+}
+
+.note-info-summary > .note-info-dateline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.note-info-summary .page-detail-dateline-item {
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.note-info-sections > .flex.flex-col.gap-4,
+.note-info-page-groups > .flex.flex-col.gap-4 {
+  gap: 20px;
+}
+
+.note-info-page-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+
+.note-inspector-info .memory-detail-rail-title,
+.note-info-section-heading {
+  border: 0;
+  padding: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  margin: 0 0 8px;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.note-info-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.note-info-link-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.note-info-link-row:hover {
+  color: var(--mem-text);
+  background: var(--mem-hover);
+}
+
+.note-info-link-row:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 2px;
+}
+
+.note-info-link-row.is-unresolved {
+  color: var(--mem-text-secondary);
+  cursor: default;
+}
+
+.note-info-link-row.is-unresolved:hover {
+  background: transparent;
+}
+
+.note-info-link-copy {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.note-info-link-row.is-unresolved .note-info-link-copy {
+  width: auto;
+  flex: 1;
+}
+
+.note-info-link-copy > svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--mem-text-secondary);
+}
+
+.note-info-link-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.note-info-link-status {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--mem-text-tertiary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.note-info-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (pointer: coarse) {
+  .note-info-link-row { min-height: 44px; }
+}
+
+.page-info-drawer-expanded-workspace .note-inspector-info {
+  width: 100%;
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.note-inspector-info .knowledge-local-map {
+  margin: 0;
+}
+
+.note-inspector-info .knowledge-context {
+  margin-bottom: 0;
+}
+
+/* One quiet history list in either note group's Info inspector. */
+.note-revision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.note-revision-entry {
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  overflow-wrap: anywhere;
+}
+
+.note-revision-meta,
+.note-revision-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  color: var(--mem-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.note-revision-version { font-weight: 600; }
+.note-revision-time { color: var(--mem-text-tertiary); }
+
+.note-revision-summary {
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.note-revision-provenance {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--mem-text-tertiary);
+}
+
+.note-revision-toggle {
+  align-self: flex-start;
+  min-height: 32px;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-revision-toggle:hover { color: var(--mem-text); }
+.note-revision-toggle:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 3px;
+}
+
+@media (pointer: coarse) {
+  .note-revision-toggle { min-height: 44px; }
+}
