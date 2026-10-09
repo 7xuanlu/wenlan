@@ -71,14 +71,14 @@ function contrastRatio(foreground: string | null, background: string | null): nu
 
 describe("dark theme brand tokens", () => {
   it("uses a deep logo-ink scale instead of orange or flat graphite gray", () => {
-    expect(rootToken("--bg-primary")).toBe("#11131A");
-    expect(rootToken("--bg-secondary")).toBe("#171A23");
-    expect(rootToken("--border")).toBe("#2B3140");
+    expect(rootToken("--bg-primary")).toBe("#191C24");
+    expect(rootToken("--bg-secondary")).toBe("#202430");
+    expect(rootToken("--border")).toBe("#333A4B");
 
-    expect(darkToken("--mem-bg")).toBe("#11131A");
-    expect(darkToken("--mem-surface")).toBe("#171A23");
-    expect(darkToken("--mem-sidebar")).toBe("#0E1017");
-    expect(darkToken("--mem-border")).toBe("#2B3140");
+    expect(darkToken("--mem-bg")).toBe("#191C24");
+    expect(darkToken("--mem-surface")).toBe("#202430");
+    expect(darkToken("--mem-sidebar")).toBe("#161920");
+    expect(darkToken("--mem-border")).toBe("#333A4B");
     expect(darkToken("--mem-brand-text")).toBe("#ECEAF3");
   });
 

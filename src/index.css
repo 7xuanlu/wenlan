@@ -352,7 +352,7 @@ html[data-theme="dark"] {
   --mem-text: #F1EFE8;
   --mem-text-secondary: #C9C8D1;
   --mem-text-tertiary: #969BAD;
-  --mem-text-meta-aa: #969BAD;
+  --mem-text-meta-aa: #A0A5B7;
   --mem-brand-text: #ECEAF3;
   --mem-accent-warm: #BB8967;
   --mem-accent-warm-text: #D1AF95;
@@ -368,7 +368,7 @@ html[data-theme="dark"] {
   --mem-border: #333A4B;
   --mem-card-surface: #20232A;
   --mem-card-hover: #262A33;
-  --mem-control-border: #687084;
+  --mem-control-border: #70788C;
   --mem-hover: rgba(143, 179, 234, 0.09);
   --mem-hover-strong: rgba(143, 179, 234, 0.15);
   --mem-confirm-bg: rgba(189, 137, 103, 0.14);
