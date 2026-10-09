@@ -190,12 +190,12 @@ describe("EntitiesView browse", () => {
   it("debounces search and distinguishes a filtered no-match from an empty library", async () => {
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-    await user.type(screen.getByRole("searchbox", { name: "Search topics" }), "unmatched");
+    await user.type(screen.getByRole("searchbox", { name: "Filter topics" }), "unmatched");
     expect(loadActiveTopicsPage).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("No matching topics")).toBeInTheDocument();
     expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "unmatched", type: "all", memories: "any" }, undefined);
     fixture = [];
-    await user.clear(screen.getByRole("searchbox", { name: "Search topics" }));
+    await user.clear(screen.getByRole("searchbox", { name: "Filter topics" }));
     expect(await screen.findByText("No topics yet")).toBeInTheDocument();
   });
 
@@ -285,7 +285,7 @@ describe("EntitiesView browse", () => {
       .mockResolvedValueOnce(page([fixture[1]]));
     const { user } = renderView();
     await screen.findByText("Ada Lovelace");
-    const search = screen.getByRole("searchbox", { name: "Search topics" });
+    const search = screen.getByRole("searchbox", { name: "Filter topics" });
     await user.type(search, "Ada");
     await waitFor(() => expect(loadActiveTopicsPage).toHaveBeenCalledTimes(2));
     await user.clear(search);

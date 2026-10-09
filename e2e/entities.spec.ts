@@ -29,7 +29,7 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
   // Lifecycle belongs to detail. Each exact-name filter keeps unrelated topics
   // out of the current action, and persisted state proves they remain untouched.
   for (const entity of matching) {
-    await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
+    await overview.getByRole("searchbox", { name: "Filter topics" }).fill(entity.name);
     await expect(overview.getByRole("row")).toHaveCount(2);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
     let menu = await openTopicMenu(page);
@@ -46,7 +46,7 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
   expect(archived.filter(entity => others.some(other => other.id === entity.id))).toEqual(others);
   expect(archived.filter(entity => matching.some(match => match.id === entity.id)).map(entity => ({ ...entity, status: original.find(item => item.id === entity.id)!.status }))).toEqual(matching);
 
-  await overview.getByRole("searchbox", { name: "Search topics" }).fill("");
+  await overview.getByRole("searchbox", { name: "Filter topics" }).fill("");
   await overview.getByRole("button", { name: "Topic options" }).click();
   await page.getByRole("menuitem", { name: "View archived topics" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Archived topics" })).toBeVisible();
@@ -56,7 +56,7 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
       await overview.getByRole("button", { name: "Topic options" }).click();
       await page.getByRole("menuitem", { name: "View archived topics" }).click();
     }
-    await overview.getByRole("searchbox", { name: "Search topics" }).fill(entity.name);
+    await overview.getByRole("searchbox", { name: "Filter topics" }).fill(entity.name);
     await expect(overview.getByRole("row")).toHaveCount(2);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
     let menu = await openTopicMenu(page);
@@ -68,7 +68,7 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
     await page.getByRole("button", { name: "Back", exact: true }).click();
   }
   // A detail return opens active Topics; archived remains accessible from More.
-  await overview.getByRole("searchbox", { name: "Search topics" }).fill("");
+  await overview.getByRole("searchbox", { name: "Filter topics" }).fill("");
   await overview.getByRole("button", { name: "Topic options" }).click();
   await page.getByRole("menuitem", { name: "View archived topics" }).click();
   await expect(page.getByText("No archived items", { exact: true })).toBeVisible();

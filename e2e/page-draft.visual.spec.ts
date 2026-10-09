@@ -29,7 +29,7 @@ async function openPrimaryDestination(
   await expect(page.getByRole("heading", { level: 1, name: destination })).toBeVisible();
 }
 
-async function controlMetrics(page: Page, name: "New page" | "New space") {
+async function controlMetrics(page: Page, name: "New page" | "New") {
   return page.getByRole("button", { name, exact: true }).evaluate((element) => {
     const style = getComputedStyle(element);
     const rect = element.getBoundingClientRect();
@@ -76,7 +76,7 @@ test("captures direct Page authoring from Wiki and Space with one control gramma
 
   await openPrimaryDestination(page, "Spaces");
   await settle(page);
-  const newSpaceMetrics = await controlMetrics(page, "New space");
+  const newSpaceMetrics = await controlMetrics(page, "New");
   expect(newSpaceMetrics).toEqual(newPageMetrics);
   await page.screenshot({
     path: path.join(evidenceDir, "spaces-1280x900.png"),

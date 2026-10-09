@@ -61,6 +61,7 @@ export function SpaceCard(props: SpaceCardProps) {
         </>
       )}
       onOpen={() => props.onSelect(props.space.name)}
+      openArea="card"
       openLabel={t("spaces.overview.card.open", { name: props.space.name })}
     >
       <div className="space-card-head">

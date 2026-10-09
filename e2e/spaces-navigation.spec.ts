@@ -46,14 +46,16 @@ test("Wiki -> Spaces -> Space -> Page -> back and Space -> global Topics -> Topi
   await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
 
   await primaryNavigation.getByRole("button", { name: "Spaces", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBe(0);
   await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
   await wenlanRow.getByRole("button", { name: "Wenlan", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
   const spaces = primaryNavigation.getByRole("button", { name: "Spaces", exact: true });
   await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);

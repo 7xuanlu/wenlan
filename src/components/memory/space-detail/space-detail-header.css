@@ -250,7 +250,10 @@
   top: 44px;
   right: 0;
   display: grid;
-  width: 154px;
+  box-sizing: border-box;
+  width: max-content;
+  min-width: 196px;
+  max-width: calc(100vw - 24px);
   padding: 4px;
   border: 1px solid var(--mem-popover-border);
   border-radius: var(--mem-popover-radius);
@@ -260,11 +263,17 @@
 
 .space-dossier-menu button {
   width: 100%;
+  min-width: 0;
   min-height: var(--mem-control-height);
   border-radius: var(--mem-control-radius);
   font: 500 var(--mem-control-font-size)/1 var(--mem-font-body);
   padding: 0 9px;
   text-align: left;
+  white-space: nowrap;
+}
+
+@media (max-width: 240px) {
+  .space-dossier-menu button { white-space: normal; }
 }
 
 .space-dossier-menu-danger {
@@ -281,4 +290,11 @@
 
 .space-dossier-error {
   color: var(--mem-status-warning-text);
+}
+
+/* Keep the narrow action row and its menu aligned to the reading pane edge,
+   independent of the localized New label or title width. */
+@media (max-width: 639px) {
+  .space-dossier-actions { width: 100%; justify-content: flex-end; }
+  .space-dossier-menu { left: auto; right: 0; max-width: calc(100vw - 48px); }
 }

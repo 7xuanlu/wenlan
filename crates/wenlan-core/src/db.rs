@@ -60,6 +60,7 @@ mod okf_concepts;
 mod onboarding_milestones;
 mod page_drafts;
 pub mod page_map;
+pub mod page_map_independent;
 mod page_rename;
 mod page_summary_backfill;
 mod presence_review;
@@ -1426,8 +1427,11 @@ pub const EMBEDDING_DIM: usize = 768;
 /// entity absorbing a recurring mention instead of a duplicate being created
 /// beside it (#708). Migration 131 adds `okf_concepts` and
 /// `okf_concept_links`, the provenance and concept links of pages imported
-/// from an OKF bundle source. Migration 133 adds page titles to immutable
-/// version history, backfilling only the exact snapshot matching a live page.
+/// from an OKF bundle source. Migration 132 records immutable first placement
+/// for page drafts. Migration 133 adds page titles to immutable version
+/// history, backfilling only the exact snapshot matching a live page.
+/// Migration 134 extends Page Map nodes with independent, map-owned ideas and
+/// reconciles both schema-133 lineages.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1435,7 +1439,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 133;
+pub const SCHEMA_VERSION: u32 = 134;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10317,6 +10321,15 @@ impl MemoryDB {
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("m133 bump: {e}")))?;
                 log::info!("[migration] Migration 133 applied: exact current page-history titles");
+            }
+
+            // Migration 134 reconciles both schema-133 lineages: immutable
+            // history titles and map-owned idea nodes.
+            if ceiling < 134 {
+                return Ok(());
+            }
+            if version < 134 {
+                self.migrate_134_page_map_ideas().await?;
             }
         }
 

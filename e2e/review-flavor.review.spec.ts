@@ -231,7 +231,7 @@ test("creates a Space and navigates to its rendered detail", async ({ page }) =>
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
 
-  await page.getByRole("button", { name: "New space", exact: true }).click();
+  await page.getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("Review Lane");
   await page.getByRole("textbox", { name: "Description", exact: true }).fill(
     "Created by the Review-flavor Playwright lane.",

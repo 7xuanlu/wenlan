@@ -49,6 +49,23 @@
   border-style: dashed;
 }
 
+/* The title remains the sole open control; only its pointer target is stretched. */
+.asset-card--open-area-card {
+  isolation: isolate;
+  position: relative;
+}
+
+.asset-card--open-area-card .asset-card-open {
+  position: static;
+}
+
+.asset-card--open-area-card .asset-card-open::after {
+  border-radius: inherit;
+  content: "";
+  inset: 0;
+  position: absolute;
+}
+
 .asset-card-open {
   background: transparent;
   border: 0;

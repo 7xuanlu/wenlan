@@ -110,7 +110,7 @@ test("empty sources retains its library shell and offers clear localized add cho
   await expect(page.getByRole("heading", { name: "把你的來源放在一起" })).toBeVisible();
   await expect(page.getByRole("searchbox", { name: "搜尋來源" })).toBeVisible();
   await capture(page, "sources-after-empty-light.png");
-  await page.getByRole("button", { name: "新增來源", exact: true }).first().click();
+  await page.getByRole("button", { name: "新增", exact: true }).first().click();
   const menu = page.getByRole("dialog", { name: "加入來源", exact: true });
   await expect(menu.getByRole("button", { name: /加入檔案/ })).toBeVisible();
   await expect(menu.getByRole("button", { name: /連接資料夾/ })).toBeVisible();
@@ -128,7 +128,7 @@ test("a web excerpt can be saved then reopened at 375px in dark mode", async ({ 
   const state = await setup(page, false, true);
   await page.setViewportSize({ width: 375, height: 812 });
   await capture(page, "sources-after-library-dark-narrow.png");
-  await page.getByRole("button", { name: "新增來源", exact: true }).click();
+  await page.getByRole("button", { name: "新增", exact: true }).click();
   await page.getByRole("button", { name: /加入網頁摘錄/ }).click();
   const form = page.getByRole("dialog", { name: "加入網頁摘錄", exact: true });
   await form.getByLabel("網頁網址", { exact: true }).fill("https://example.org/book?chapter=2");
@@ -148,7 +148,7 @@ test("a web excerpt can be saved then reopened at 375px in dark mode", async ({ 
 
 test("another excerpt from the same URL requires explicit replacement", async ({ page }) => {
   const state = await setup(page);
-  await page.getByRole("button", { name: "新增來源", exact: true }).click();
+  await page.getByRole("button", { name: "新增", exact: true }).click();
   await page.getByRole("button", { name: /加入網頁摘錄/ }).click();
   const dialog = page.getByRole("dialog", { name: "加入網頁摘錄", exact: true });
   await dialog.getByLabel("網頁網址", { exact: true }).fill("https://example.org/article");
@@ -166,7 +166,7 @@ test("another excerpt from the same URL requires explicit replacement", async ({
 
 test("a concurrent first save preserves the winning excerpt until explicit replacement", async ({ page }) => {
   const state = await setup(page);
-  await page.getByRole("button", { name: "新增來源", exact: true }).click();
+  await page.getByRole("button", { name: "新增", exact: true }).click();
   await page.getByRole("button", { name: /加入網頁摘錄/ }).click();
   const dialog = page.getByRole("dialog", { name: "加入網頁摘錄", exact: true });
   const url = "https://example.org/concurrent";
@@ -253,8 +253,10 @@ test("occasional people and topics stay in More on a narrow dark workspace", asy
   await expect(nav.getByRole("button", { name: "主題", exact: true })).toBeVisible();
   await capture(page, "navigation-more-dark-narrow.png");
   await nav.getByRole("button", { name: "主題", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "主題", exact: true })).toBeVisible();
-  await expect(page.getByText("瀏覽筆記中提到的人物、組織、地點與主題。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "主題", exact: true })).toHaveClass(/sr-only/);
+  const topicsToolbar = page.locator(".entities-toolbar");
+  await expect(topicsToolbar).toBeVisible();
+  await expect(topicsToolbar.getByRole("searchbox", { name: "篩選主題", exact: true })).toBeVisible();
   await expect(page.getByText("Ada Lovelace", { exact: true })).toBeVisible();
   await capture(page, "people-topics-dark-narrow.png");
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

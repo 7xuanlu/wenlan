@@ -12,6 +12,8 @@ import {
 } from "../../../lib/tauri";
 import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
 import { listAllActivePages } from "../pages/listAllPages";
+import { Funnel } from "@phosphor-icons/react";
+import { AssetLensToggle } from "../assets/AssetLensToggle";
 import { ConfirmedSpaces } from "./ConfirmedSpaces";
 import { SpaceEditor } from "./SpaceEditor";
 import { SuggestedSpaces } from "./SuggestedSpaces";
@@ -156,9 +158,21 @@ export function SpacesOverview(props: SpacesOverviewProps) {
 
   return (
     <div className="spaces-overview">
-      <header className="spaces-overview-header">
-        <h1>{props.labels.title}</h1>
-        <div className="spaces-header-actions">
+      <header className="spaces-overview-header collection-toolbar">
+        <h1 className="sr-only">{props.labels.title}</h1>
+        <label className="spaces-filter collection-search">
+          <Funnel size={18} aria-hidden="true" />
+          <input
+            className="collection-search-input"
+            type="search"
+            aria-label={props.labels.filterLabel}
+            value={filter}
+            placeholder={props.labels.filterPlaceholder}
+            onChange={(event) => setFilter(event.currentTarget.value)}
+          />
+        </label>
+        <div className="spaces-header-actions collection-toolbar-actions">
+          <AssetLensToggle value={lens} onChange={handleLensChange} />
           <SuggestedSpaces
             spaces={suggested}
             labels={props.labels}
@@ -167,7 +181,7 @@ export function SpacesOverview(props: SpacesOverviewProps) {
             onKeep={(space) => submit({ kind: "confirm", space })}
             onDiscard={(space) => submit({ kind: "delete", space })}
           />
-          <button type="button" className="page-create-action spaces-new-action" onClick={() => setCreating(true)}>
+          <button type="button" className="page-create-action spaces-new-action collection-control collection-control--primary" onClick={() => setCreating(true)}>
             {props.labels.newSpace}
           </button>
         </div>
@@ -198,12 +212,10 @@ export function SpacesOverview(props: SpacesOverviewProps) {
             allSpaces={allSpaces}
             labels={props.labels}
             filter={filter}
-            onFilterChange={setFilter}
             noResults={noResults}
             pageCounts={pageCounts}
             pendingIds={pendingIds}
             lens={lens}
-            onLensChange={handleLensChange}
             onSelect={props.onSelectSpace}
             onStar={(space) => submit({ kind: "star", space })}
             onRename={(space, value) => submit({ kind: "rename", space, value })}

@@ -9,7 +9,8 @@ async function openSpaces(page: Page): Promise<void> {
     .getByRole("navigation", { name: "Primary navigation" })
     .getByRole("button", { name: "Spaces", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 }
 
 async function openSpace(page: Page, name = "Wenlan"): Promise<void> {
@@ -53,7 +54,8 @@ test("opens Spaces by stable id, prunes missing history, and preserves selection
   await expectNoIndexLabel(page);
 
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces", exact: true })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await openSpaces(page);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
   await wenlanRow.getByRole("button", { name: "Actions for Wenlan" }).click();
@@ -158,7 +160,8 @@ test("keeps and discards suggested Spaces through their dossier controls", async
   await expect(page.getByTestId("space-row-space-suggested-2")).toBeVisible();
   await page.getByTestId("space-row-space-suggested-2").getByRole("button", { name: "Product Signals" }).click();
   await page.getByRole("button", { name: "Discard", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await expect(page.getByTestId("space-row-space-suggested-2")).toHaveCount(0);
   expect(controller.calls().filter(({ command }) => command === "confirm_space")).toHaveLength(1);
   expect(controller.calls().filter(({ command }) => command === "delete_space")).toHaveLength(1);
@@ -179,7 +182,8 @@ test("saves Space title and description through one keyboard-only dossier mutati
   await titleEditor.fill("Wenlan Detail");
   await descriptionEditor.fill("Updated through keyboard");
   await descriptionEditor.press("Meta+Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await page
     .getByTestId("space-row-space-wenlan")
     .getByRole("button", { name: "Wenlan Detail", exact: true })

@@ -62,7 +62,7 @@ describe("SpacesOverview cards lens", () => {
     expect(within(workCard).queryByText("★")).not.toBeInTheDocument();
 
     expect(within(workCard).getByText("Projects and planning")).toBeInTheDocument();
-    expect(within(workCard).getByTestId("space-card-pages")).toHaveTextContent("2 pages");
+    expect(within(workCard).getByTestId("space-card-pages")).toHaveTextContent("2 notes");
     expect(within(workCard).queryByTestId("space-card-memories")).not.toBeInTheDocument();
     expect(within(workCard).queryByTestId("space-card-entities")).not.toBeInTheDocument();
     expect(workCard.querySelector("time")).toBeNull();
@@ -127,13 +127,14 @@ describe("SpacesOverview cards lens", () => {
     await waitFor(() => expect(api.reorderSpace).toHaveBeenCalledWith("Work", 1));
   });
 
-  it("toggling to Rows persists the preference and restores the table", async () => {
+  it("toggling to Rows persists the preference and restores the labelled list", async () => {
     renderOverview({}, undefined, { lens: "cards" });
     await screen.findByTestId("spaces-cards");
 
     fireEvent.click(screen.getByRole("button", { name: "Rows" }));
 
-    expect(await screen.findByRole("columnheader", { name: labels.pages })).toBeInTheDocument();
+    expect(await screen.findByTestId("space-row-work")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
     expect(screen.queryByTestId("spaces-cards")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("wenlan-spaces-view-mode")).toBe("rows");
     expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "true");
@@ -168,7 +169,7 @@ describe("SpacesOverview cards lens", () => {
     expect(card.querySelector("time")).toBeNull();
     expect(within(card).queryByTestId("space-card-memories")).not.toBeInTheDocument();
     expect(within(card).queryByTestId("space-card-entities")).not.toBeInTheDocument();
-    expect(within(card).getByTestId("space-card-pages")).toHaveTextContent("0 pages");
+    expect(within(card).getByTestId("space-card-pages")).toHaveTextContent("0 notes");
   });
 
   it("filters cards by name", async () => {

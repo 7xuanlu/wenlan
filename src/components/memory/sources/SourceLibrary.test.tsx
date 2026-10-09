@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { getActiveImportBatches, listIndexedFiles, listRegisteredSources, type IndexedFileInfo, type RegisteredSource } from "../../../lib/tauri";
 import SourceLibrary, { type SourceLibraryProps, type SourceLibraryState } from "./SourceLibrary";
@@ -17,7 +17,7 @@ const folder = (patch: Partial<RegisteredSource> = {}): RegisteredSource => ({
 });
 
 function renderLibrary(options: Partial<SourceLibraryProps> = {}) {
-  const props = { onAdd: vi.fn(), onManageSources: vi.fn(), onBrowseFolder: vi.fn(), onOpenDocument: vi.fn(), ...options };
+  const props = { onAdd: vi.fn(), onBrowseFolder: vi.fn(), onOpenDocument: vi.fn(), ...options };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><SourceLibrary {...props} /></QueryClientProvider>);
   return props;
@@ -91,6 +91,21 @@ describe("SourceLibrary", () => {
     expect(screen.queryByText("Bring your sources together")).not.toBeInTheDocument();
   });
 
+  it("switches the shared inventory between rows and cards and keeps New reachable", async () => {
+    vi.mocked(listIndexedFiles).mockResolvedValue([file()]);
+    const props = renderLibrary();
+    expect(await screen.findByText("Design study")).toBeInTheDocument();
+    const initialRows = screen.getAllByRole("button").filter((button) => button.classList.contains("source-library-row"));
+    fireEvent.click(screen.getByRole("button", { name: "Cards" }));
+    expect(screen.getByRole("button", { name: "Rows" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
+    const cards = document.querySelector('.source-library-list[data-lens="cards"]');
+    expect(cards?.querySelectorAll(".source-library-row")).toHaveLength(initialRows.length);
+    expect(screen.queryByRole("button", { name: "More source actions" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
+    expect(props.onAdd).toHaveBeenCalledOnce();
+  });
+
   it("includes imported source kinds and excludes normal agent memories and recaps even with URLs", async () => {
     vi.mocked(listIndexedFiles).mockResolvedValue([
       file({ source: "directory", source_id: "dir::/notes/a.md", title: "Directory document" }),
@@ -120,9 +135,7 @@ describe("SourceLibrary", () => {
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "/notes/" } });
     fireEvent.click(research);
     expect(props.onBrowseFolder).toHaveBeenCalledWith("folder-notes");
-    fireEvent.click(screen.getByRole("button", { name: "Manage sources" }));
-    fireEvent.click(screen.getByRole("button", { name: "Add source" }));
-    expect(props.onManageSources).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "New" }));
     expect(props.onAdd).toHaveBeenCalledOnce();
   });
 
@@ -160,13 +173,16 @@ describe("SourceLibrary", () => {
     expect(screen.queryByText("Design study")).not.toBeInTheDocument();
   });
 
-  it("keeps the library shell and supported-file copy when truly empty", async () => {
-    renderLibrary();
+  it("keeps a central New action and supported-file copy when truly empty", async () => {
+    const props = renderLibrary();
     expect(await screen.findByText("Bring your sources together")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Sources", level: 1 })).toBeInTheDocument();
     expect(screen.getByRole("searchbox")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folders" })).toBeInTheDocument();
     expect(screen.getByText("Supported files: PDF, Markdown and TXT.")).toBeInTheDocument();
+    const emptyState = screen.getByText("Bring your sources together").parentElement!;
+    fireEvent.click(within(emptyState).getByRole("button", { name: "New" }));
+    expect(props.onAdd).toHaveBeenCalledOnce();
     expect(screen.queryByRole("button", { name: "Clear search and filters" })).not.toBeInTheDocument();
   });
 

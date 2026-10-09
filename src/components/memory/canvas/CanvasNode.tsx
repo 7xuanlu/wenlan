@@ -16,6 +16,7 @@ const SLOT_BY_REF_KIND: Record<PageMapRefKind, GraphSlot> = {
   page: "project",
   memory: "neutral",
   entity: "concept",
+  idea: "concept",
   section: "tool",
 };
 

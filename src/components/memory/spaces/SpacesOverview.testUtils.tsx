@@ -9,7 +9,7 @@ export const labels: SpacesOverviewLabels = {
   title: "Spaces",
   newSpace: "New space",
   filterLabel: "Filter spaces",
-  filterPlaceholder: "Filter by name or description",
+  filterPlaceholder: "Filter spaces",
   suggestedHeading: "Suggested",
   confirmedHeading: "All spaces",
   pages: "Pages",

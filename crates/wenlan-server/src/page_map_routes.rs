@@ -17,6 +17,7 @@ use wenlan_core::db::page_map::{
     CreateEdgeOutcome, CreateNodeOutcome, EdgePatch, NodeLayout, NodePatch, PageMapData,
     PageMapEdge as CoreEdge, PageMapNode as CoreNode,
 };
+use wenlan_core::db::page_map_independent::canonical_idea_id;
 use wenlan_core::db::MemoryDB;
 use wenlan_core::truth_contract::TruthGrant;
 use wenlan_types::page_map::{
@@ -142,6 +143,9 @@ async fn compute_ref_state(
             },
             None => false,
         },
+        // Ideas are owned by the map itself; a valid UUID is the backing
+        // identity and must never trigger a note/page lookup or write.
+        "idea" => uuid::Uuid::parse_str(ref_id).is_ok(),
         _ => false,
     };
     Ok(if live {
@@ -210,6 +214,7 @@ async fn build_map_response(
         viewport,
         nodes,
         edges,
+        independent_ideas: true,
     })
 }
 
@@ -248,6 +253,7 @@ pub async fn handle_get_page_map(
             viewport: None,
             nodes: vec![],
             edges: vec![],
+            independent_ideas: true,
         },
     };
     Ok(Json(response))
@@ -330,6 +336,22 @@ pub async fn handle_create_map_node(
         .ref_id
         .as_deref()
         .ok_or_else(|| ServerError::BadRequest("ref_id is required".to_string()))?;
+
+    // Reject invalid input before `init_page_map` can create a map row.
+    if !matches!(ref_kind, "memory" | "entity" | "page" | "section" | "idea") {
+        return Err(ServerError::BadRequest(format!(
+            "unknown ref_kind '{ref_kind}'"
+        )));
+    }
+    let canonical_idea_id = if ref_kind == "idea" {
+        Some(
+            canonical_idea_id(ref_id, req.label.as_deref())
+                .map_err(|message| ServerError::BadRequest(message.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let ref_id = canonical_idea_id.as_deref().unwrap_or(ref_id);
 
     let (map, created) = db.init_page_map(&page_id).await?;
     let parent_id = match req.parent_id.clone() {
@@ -562,6 +584,7 @@ pub async fn handle_improve_page_map(
             viewport: None,
             nodes: vec![],
             edges: vec![],
+            independent_ideas: true,
         },
     };
     Ok(Json(response))
@@ -691,7 +714,7 @@ mod tests {
     async fn get_page_map_returns_empty_shape_for_absent_map() {
         let (db, _tmp) = new_test_db().await;
         let page_id = seed_test_page(&db, "Absent Map Page").await;
-        let state = state_with_db(db);
+        let state = state_with_db(db.clone());
 
         let Json(response) = handle_get_page_map(
             State(state),
@@ -706,6 +729,8 @@ mod tests {
         assert_eq!(response.revision, 0);
         assert!(response.nodes.is_empty());
         assert!(response.edges.is_empty());
+        assert!(response.independent_ideas);
+        assert!(db.get_page_map(&page_id, true).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -824,6 +849,83 @@ mod tests {
         assert_eq!(response.revision, 2);
         assert_eq!(response.node.ref_kind, "memory");
         assert_eq!(response.node.ref_state, RefState::Live);
+    }
+
+    #[tokio::test]
+    async fn independent_idea_is_live_and_advertised_without_backing_note_lookup() {
+        let (db, _tmp) = new_test_db().await;
+        let page_id = seed_test_page(&db, "Independent Idea Page").await;
+        let state = state_with_db(db.clone());
+        let idea_id = uuid::Uuid::new_v4().to_string();
+
+        let Json(created) = handle_create_map_node(
+            State(state.clone()),
+            Path(page_id.clone()),
+            Json(CreateMapNodeRequest {
+                base_revision: 0,
+                parent_id: None,
+                ref_kind: Some("idea".to_string()),
+                ref_id: Some(idea_id.clone()),
+                label: Some("Map-owned idea".to_string()),
+                rank: 0.0,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(created.node.ref_kind, "idea");
+        assert_eq!(created.node.ref_state, RefState::Live);
+        assert_eq!(created.node.ref_id, idea_id);
+        assert_eq!(created.node.label.as_deref(), Some("Map-owned idea"));
+        assert_eq!(
+            db.get_page_map(&page_id, true)
+                .await
+                .unwrap()
+                .unwrap()
+                .map
+                .map_schema,
+            2
+        );
+
+        let Json(full_map) = handle_get_page_map(
+            State(state),
+            Path(page_id),
+            crate::truth_guard::TruthView::automatic(),
+            Query(MapIncludeQuery { include: None }),
+        )
+        .await
+        .unwrap();
+        assert!(full_map.independent_ideas);
+    }
+
+    #[tokio::test]
+    async fn invalid_idea_and_unknown_kind_do_not_initialize_map() {
+        let (db, _tmp) = new_test_db().await;
+        let page_id = seed_test_page(&db, "Invalid Independent Idea Page").await;
+        let state = state_with_db(db.clone());
+        let valid_uuid = uuid::Uuid::new_v4().to_string();
+
+        for (ref_kind, ref_id, label) in [
+            ("unknown", valid_uuid.as_str(), Some("idea")),
+            ("idea", "not-a-uuid", Some("idea")),
+            ("idea", valid_uuid.as_str(), None),
+            ("idea", valid_uuid.as_str(), Some("  ")),
+        ] {
+            let result = handle_create_map_node(
+                State(state.clone()),
+                Path(page_id.clone()),
+                Json(CreateMapNodeRequest {
+                    base_revision: 0,
+                    parent_id: None,
+                    ref_kind: Some(ref_kind.to_string()),
+                    ref_id: Some(ref_id.to_string()),
+                    label: label.map(str::to_string),
+                    rank: 0.0,
+                }),
+            )
+            .await;
+            assert!(matches!(result, Err(ServerError::BadRequest(_))));
+            assert!(db.get_page_map(&page_id, true).await.unwrap().is_none());
+        }
     }
 
     #[tokio::test]

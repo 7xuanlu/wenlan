@@ -44,6 +44,25 @@ describe("Space notes and sources", () => {
     expect(listIndexedFiles).toHaveBeenCalledExactlyOnceWith(a.name);
     expect(screen.queryByText("capture")).not.toBeInTheDocument(); expect(screen.queryByText("conversation")).not.toBeInTheDocument();
   });
+  it("keeps the selected lens across Notes and Sources for the same Space", async () => {
+    vi.mocked(listPages).mockResolvedValue([{
+      id: "note-1", title: "Project note", summary: "A useful summary", content: "Body", entity_id: null,
+      domain: a.name, source_memory_ids: [], version: 1, status: "active", created_at: "2026-07-01T00:00:00Z",
+      last_compiled: "2026-07-01T00:00:00Z", last_modified: "2026-07-01T00:00:00Z",
+    }]);
+    vi.mocked(listIndexedFiles).mockResolvedValue([source("Readme.md")]);
+    workspace();
+    await screen.findByRole("button", { name: /Project note/ });
+    fireEvent.click(screen.getByRole("button", { name: "Cards" }));
+    expect(document.querySelector(".space-dossier-page-list")).toHaveAttribute("data-lens", "cards");
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    await screen.findByText("Readme.md");
+    expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".space-project-sources")).toHaveAttribute("data-lens", "cards");
+    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(await screen.findByRole("button", { name: /Project note/ })).toBeInTheDocument();
+    expect(document.querySelector(".space-dossier-page-list")).toHaveAttribute("data-lens", "cards");
+  });
   it("keeps loading, failed and empty inventory distinct and retries the same Space", async () => {
     const pending = deferred<IndexedFileInfo[]>();
     vi.mocked(listIndexedFiles).mockReturnValueOnce(pending.promise).mockResolvedValueOnce([]);

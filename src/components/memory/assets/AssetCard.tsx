@@ -16,6 +16,8 @@ interface AssetCardBase {
   readonly children?: ReactNode;
   /** Visual modifier. `detected` renders a dashed edge for not-yet-kept entities. */
   readonly variant?: "detected";
+  /** Expands the title button hit area across the card surface. */
+  readonly openArea?: "title" | "card";
 }
 
 export type AssetCardProps = AssetCardBase & OpenProps;
@@ -39,10 +41,17 @@ export function AssetCard({
   testId,
   children,
   variant,
+  openArea = "title",
 }: AssetCardProps) {
+  const classes = [
+    "asset-card",
+    variant === "detected" ? "asset-card--detected" : "",
+    onOpen && openArea === "card" ? "asset-card--open-area-card" : "",
+  ].filter(Boolean).join(" ");
+
   return (
     <article
-      className={variant === "detected" ? "asset-card asset-card--detected" : "asset-card"}
+      className={classes}
       data-testid={testId}
     >
       {children}

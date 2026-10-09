@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Space } from "../../../lib/tauri";
 import { SpaceActionsMenu } from "./SpaceActionsMenu";
 import { SpaceEditor } from "./SpaceEditor";
@@ -18,12 +20,16 @@ type SpaceRowProps = {
   readonly onMoveUp: (space: Space) => void;
   readonly onMoveDown: (space: Space) => void;
   readonly onDelete: (space: Space) => void;
-  readonly onDragStart: (space: Space, pointerId: number) => void;
+  readonly onDragStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  readonly dragDisabled?: boolean;
+  readonly dragActive?: boolean;
 };
 
 export function SpaceRow(props: SpaceRowProps) {
+  const { t } = useTranslation();
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const dragUnavailable = props.dragDisabled === true;
 
   if (renaming) {
     return (
@@ -46,15 +52,21 @@ export function SpaceRow(props: SpaceRowProps) {
   }
 
   return (
-    <div className="spaces-row" data-testid={`space-row-${props.space.id}`} aria-busy={props.pending}>
+    <div className={`spaces-row${props.dragActive === true ? " spaces-row-dragging" : ""}`} data-testid={`space-row-${props.space.id}`} aria-busy={props.pending}>
       <button
         type="button"
         className="mem-icon-action spaces-drag-handle"
         data-space-column="drag"
         aria-label={props.labels.dragSpace(props.space.name)}
+        title={props.labels.dragSpace(props.space.name)}
+        aria-disabled={dragUnavailable}
         onPointerDown={(event) => {
-          event.preventDefault();
-          props.onDragStart(props.space, event.pointerId);
+          if (!dragUnavailable) props.onDragStart(event);
+        }}
+        onKeyDown={(event) => {
+          if (dragUnavailable) return;
+          if (event.key === "ArrowUp" && props.canMoveUp) { event.preventDefault(); props.onMoveUp(props.space); }
+          if (event.key === "ArrowDown" && props.canMoveDown) { event.preventDefault(); props.onMoveDown(props.space); }
         }}
       >
         <svg aria-hidden="true" width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
@@ -75,13 +87,12 @@ export function SpaceRow(props: SpaceRowProps) {
         </span>
         {props.space.description === null ? null : <span className="spaces-row-description">{props.space.description}</span>}
       </button>
-      <span className="spaces-row-pages" data-space-column="pages" data-testid="space-pages">{props.pageCount}</span>
-      <dl className="spaces-mobile-metadata" data-testid="space-mobile-metadata">
+      <span className="spaces-row-pages" data-space-column="pages" data-testid="space-pages">{t("spaces.overview.card.pages", { count: props.pageCount })}</span>
+      <div className="spaces-mobile-metadata" data-testid="space-mobile-metadata">
         <div data-testid="space-mobile-pages">
-          <dt>{props.labels.pages}</dt>
-          <dd>{props.pageCount}</dd>
+          <span>{t("spaces.overview.card.pages", { count: props.pageCount })}</span>
         </div>
-      </dl>
+      </div>
       <div className="spaces-menu-anchor" data-space-column="menu">
         <SpaceActionsMenu
           space={props.space}

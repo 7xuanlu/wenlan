@@ -251,7 +251,7 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await expect(suggested).toBeHidden();
   const mobileMetadata = page.getByTestId("space-row-space-wenlan").getByTestId("space-mobile-metadata");
   await expect(mobileMetadata).toBeVisible();
-  await expect(mobileMetadata.getByText("Pages", { exact: true })).toBeVisible();
+  await expect(mobileMetadata.getByTestId("space-mobile-pages")).toHaveText(/^\d+ notes?$/i);
   await expect(mobileMetadata.getByText("Memories", { exact: true })).toHaveCount(0);
   await expect(mobileMetadata.getByText("Updated", { exact: true })).toHaveCount(0);
   await expect(page.locator("main")).toHaveCSS("padding-left", "32px");
@@ -357,7 +357,8 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
   await expect(spaces).toBeFocused();
   await assertFocusOutline(page);
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 
   const wenlan = spaceOverviewButton(page);
   await tabTo(page, wenlan);
@@ -365,7 +366,8 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 });
 
 test("reaches management, dossier, graph, ledger, observation, and linked-memory controls by Tab", async ({ page }) => {
@@ -466,7 +468,8 @@ test("records the durable keyboard focus sequence and representative captures", 
   sequence.push(await focusedElementEvidence(page, "primary navigation Spaces"));
   await page.screenshot({ path: path.join(screenshotEvidenceDir, "focus-primary-navigation-spaces.png"), fullPage: false });
   await page.keyboard.press("Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 
   const filter = page.getByLabel("Filter spaces");
   await tabTo(page, filter);
@@ -646,7 +649,7 @@ test("removes non-essential transitions under reduced motion", async ({ page }) 
   await page.getByTitle("Show sidebar").click();
   await expect(page.locator("aside")).toHaveCSS("transition-duration", "0s");
   await openSpaces(page);
-  const newSpace = page.getByRole("button", { name: "New space", exact: true });
+  const newSpace = page.getByRole("button", { name: "New", exact: true });
   await expect(newSpace).toHaveClass(/spaces-new-action/);
   await expect(newSpace).not.toHaveClass(/spaces-primary-action/);
   await expect(newSpace).toHaveCSS("transition-duration", "0s");

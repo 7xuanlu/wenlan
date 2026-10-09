@@ -101,7 +101,7 @@ export default function SourcesView({ onManageSources, libraryState, onLibrarySt
   const [document, setDocument] = useState<IndexedFileInfo | null>(null);
   return <>
     <div hidden={folder !== null} style={{ height: "100%" }}>
-      <SourceLibrary onAdd={() => setAdding(true)} onManageSources={onManageSources} onBrowseFolder={setFolder} onOpenDocument={setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
+      <SourceLibrary onAdd={() => setAdding(true)} onBrowseFolder={setFolder} onOpenDocument={setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
     </div>
     {folder !== null && <div className="source-folder-workspace">
       <button type="button" className="page-editor-action source-folder-back" onClick={() => setFolder(null)}>{t("sourceAccess.back")}</button>

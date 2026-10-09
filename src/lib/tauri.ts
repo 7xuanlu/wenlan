@@ -3310,7 +3310,7 @@ export async function cancelGuardedQuitRequest(
 // sent (see the note in app/src/api.rs), which makes these interfaces the only
 // typing the UI gets — keep them in step with that file field for field.
 
-export type PageMapRefKind = "memory" | "entity" | "page" | "section";
+export type PageMapRefKind = "memory" | "entity" | "page" | "section" | "idea";
 export type PageMapStatus = "suggested" | "active" | "dismissed";
 
 export interface PageMapNode {
@@ -3350,6 +3350,8 @@ export interface PageMap {
   page_id: string;
   revision: number;
   map_schema: number;
+  /** Missing on runtimes before independent idea nodes were introduced. */
+  independent_ideas?: boolean;
   viewport?: PageMapViewport | null; // omitted by the daemon when unset
   nodes: PageMapNode[];
   edges: PageMapEdge[];

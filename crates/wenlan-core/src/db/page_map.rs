@@ -12,6 +12,7 @@
 // `PageMapEdge` / the create outcomes as real cross-crate types, not just
 // methods on `MemoryDB`.
 
+use super::page_map_independent::{canonical_idea_id, validate_idea_label};
 use super::{commit_or_rollback, MemoryDB};
 use crate::WenlanError;
 
@@ -796,11 +797,20 @@ impl MemoryDB {
         label: Option<&str>,
         rank: f64,
     ) -> Result<CreateNodeOutcome, WenlanError> {
-        if !matches!(ref_kind, "memory" | "entity" | "page" | "section") {
+        if !matches!(ref_kind, "memory" | "entity" | "page" | "section" | "idea") {
             return Err(WenlanError::Validation(format!(
                 "unknown ref_kind '{ref_kind}'"
             )));
         }
+        let canonical_idea_id = if ref_kind == "idea" {
+            Some(
+                canonical_idea_id(ref_id, label)
+                    .map_err(|message| WenlanError::Validation(message.to_string()))?,
+            )
+        } else {
+            None
+        };
+        let ref_id = canonical_idea_id.as_deref().unwrap_or(ref_id);
         validate_ref_component(ref_kind, ref_id)?;
         let conn = self.conn.lock().await;
         conn.execute("BEGIN", ())
@@ -864,6 +874,16 @@ impl MemoryDB {
             }
 
             bump_revision(&conn, page_id, current_revision).await?;
+            if ref_kind == "idea" {
+                conn.execute(
+                    "UPDATE page_maps SET map_schema = 2 WHERE page_id = ?1 AND map_schema < 2",
+                    libsql::params![page_id],
+                )
+                .await
+                .map_err(|e| {
+                    WenlanError::VectorDb(format!("create_map_node idea schema upgrade: {e}"))
+                })?;
+            }
             let created = read_map_node(&conn, page_id, &node_id)
                 .await?
                 .ok_or_else(|| {
@@ -1032,6 +1052,19 @@ impl MemoryDB {
             let node = read_map_node(&conn, page_id, node_id)
                 .await?
                 .ok_or_else(|| WenlanError::NotFound(format!("node {node_id} not found")))?;
+            if node.ref_kind == "idea" {
+                if let Some(label) = &patch.label {
+                    match label {
+                        Some(value) => validate_idea_label(Some(value))
+                            .map_err(|message| WenlanError::Validation(message.to_string()))?,
+                        None => {
+                            return Err(WenlanError::Validation(
+                                "idea label must be non-empty".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
             if node.status == "dismissed" {
                 return Err(WenlanError::Validation(
                     "node is dismissed and cannot be modified".to_string(),

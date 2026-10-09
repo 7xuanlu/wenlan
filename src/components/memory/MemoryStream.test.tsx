@@ -118,6 +118,98 @@ describe("MemoryStream", () => {
     expect(onSelectMemory).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the Memories heading accessible without showing a duplicate and toggles the same collection into cards", () => {
+    const memories = [
+      makeMemory({ source_id: "one", title: "First memory", content: "First readable memory", domain: "Wenlan" }),
+      makeMemory({ source_id: "two", title: "Second memory", content: "Second readable memory", domain: "Research" }),
+    ];
+
+    renderWithQuery(
+      <MemoryStream memories={memories} selectedDomain={null} presentation="parent-list" />,
+    );
+
+    const heading = screen.getByRole("heading", { name: "Memories" });
+    expect(heading).not.toBeVisible();
+    expect(screen.getByRole("region", { name: "Memory list" })).toContainElement(heading);
+    expect(screen.getByTestId("asset-lens-rows")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("First readable memory")).toBeVisible();
+    expect(screen.getByText("Second readable memory")).toBeVisible();
+
+    fireEvent.click(screen.getByTestId("asset-lens-cards"));
+
+    expect(screen.getByTestId("asset-lens-cards")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("First readable memory")).toBeVisible();
+    expect(screen.getByText("Second readable memory")).toBeVisible();
+    expect(document.querySelectorAll(".memory-collection-card")).toHaveLength(2);
+    const cardRow = screen.getByRole("article", { name: "First memory" });
+    fireEvent.click(within(cardRow).getByRole("button", { name: "Memory actions" }));
+    expect(within(cardRow).getByRole("menuitem", { name: "Delete memory" })).toBeVisible();
+    expect(localStorage.getItem("wenlan-memory-view-mode")).toBe("grid");
+  });
+
+  it("filters parent-list memories by trimmed, case-insensitive title and content", () => {
+    const memories = [
+      makeMemory({ source_id: "title", title: "Quarterly Planning", content: "A private note" }),
+      makeMemory({ source_id: "content", title: "Research notes", content: "Discussed Project ORBIT" }),
+      makeMemory({ source_id: "other", title: "Unrelated", content: "Something else" }),
+    ];
+
+    renderWithQuery(<MemoryStream memories={memories} selectedDomain={null} presentation="parent-list" />);
+
+    const filter = screen.getByRole("searchbox", { name: "Filter memories" });
+    fireEvent.change(filter, { target: { value: "  QUARTERLY  " } });
+    expect(screen.getByText("A private note")).toBeVisible();
+    expect(screen.queryByText("Discussed Project ORBIT")).not.toBeInTheDocument();
+
+    fireEvent.change(filter, { target: { value: "  orbit " } });
+    expect(screen.getByText("Discussed Project ORBIT")).toBeVisible();
+    expect(screen.queryByText("A private note")).not.toBeInTheDocument();
+  });
+
+  it("uses the same filtered memories in row and card layouts and can recover from no matches", () => {
+    const memories = [
+      makeMemory({ source_id: "one", title: "Needle memory", content: "Readable needle content" }),
+      makeMemory({ source_id: "two", title: "Other memory", content: "Other readable content" }),
+    ];
+
+    renderWithQuery(<MemoryStream memories={memories} selectedDomain={null} presentation="parent-list" />);
+    const filter = screen.getByRole("searchbox", { name: "Filter memories" });
+    fireEvent.change(filter, { target: { value: "needle" } });
+    expect(screen.getByText("Readable needle content")).toBeVisible();
+    expect(screen.queryByText("Other readable content")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("asset-lens-cards"));
+    expect(screen.getByText("Readable needle content")).toBeVisible();
+    expect(screen.queryByText("Other readable content")).not.toBeInTheDocument();
+    expect(document.querySelectorAll(".memory-collection-card")).toHaveLength(1);
+
+    fireEvent.change(filter, { target: { value: "missing" } });
+    expect(screen.getByText("No memories match this view")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Clear filter" })).toBeVisible();
+    expect(screen.getByTestId("asset-lens-cards")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Clear filter" }));
+    expect(screen.getByText("Readable needle content")).toBeVisible();
+    expect(screen.getByText("Other readable content")).toBeVisible();
+  });
+
+  it("keeps the collection filter available when the library is empty", () => {
+    renderWithQuery(<MemoryStream memories={[]} selectedDomain={null} presentation="parent-list" />);
+
+    expect(screen.getByRole("searchbox", { name: "Filter memories" })).toBeVisible();
+    expect(screen.getByText("No memories yet")).toBeVisible();
+  });
+
+  it("leaves embedded memory view mode behavior unchanged", () => {
+    localStorage.setItem("wenlan-memory-view-mode", "grid");
+    const memories = [makeMemory({ source_id: "one", title: "Embedded memory" })];
+
+    renderWithQuery(<MemoryStream memories={memories} selectedDomain={null} />);
+
+    expect(screen.queryByTestId("asset-lens-rows")).not.toBeInTheDocument();
+    expect(screen.getByTitle("Switch to list view")).toBeInTheDocument();
+    expect(screen.queryByRole("searchbox", { name: "Filter memories" })).not.toBeInTheDocument();
+  });
+
   it("imports the legacy Origin view-mode preference into the Wenlan key", () => {
     localStorage.setItem("origin-memory-view-mode", "list");
     const memories = [makeMemory({ source_id: "a", title: "First" })];
