@@ -81,7 +81,7 @@ function renderGeneralSection() {
  * click a real user action rather than a race.
  */
 async function clickRunAtLoginOnce(): Promise<HTMLElement> {
-  const toggle = await screen.findByLabelText("Run Wenlan in background at login");
+  const toggle = await screen.findByRole("button", { name: "Run Wenlan in background at login" });
   await waitFor(() => expect(toggle).not.toBeDisabled());
   fireEvent.click(toggle);
   return toggle;
@@ -199,16 +199,16 @@ describe("GeneralSection run-at-login refusal", () => {
     renderGeneralSection();
     await screen.findByText(/could not read whether this is on/i);
 
-    const toggle = screen.getByLabelText("Run Wenlan in background at login");
-    expect(toggle).toBeDisabled();
-    // Not `aria-pressed="false"` — that is a measurement claim we cannot make.
-    expect(toggle).not.toHaveAttribute("aria-pressed");
+    const unknownStatus = screen.getByRole("status", { name: "Run Wenlan in background at login" });
+    expect(unknownStatus).toHaveTextContent("Unavailable");
+    expect(unknownStatus.tagName).toBe("SPAN");
+    expect(screen.queryByRole("button", { name: "Run Wenlan in background at login" })).not.toBeInTheDocument();
 
     // Counted rather than `not.toHaveBeenCalled()`: the module mock is shared
     // across this file and is not cleared between tests, so an absolute
     // assertion here would be measuring earlier tests' calls, not this click.
     const callsBefore = vi.mocked(setRunAtLogin).mock.calls.length;
-    fireEvent.click(toggle);
+    fireEvent.click(unknownStatus);
     expect(vi.mocked(setRunAtLogin).mock.calls.length).toBe(callsBefore);
   });
 
@@ -230,7 +230,7 @@ describe("GeneralSection run-at-login refusal", () => {
     await queryClient.invalidateQueries({ queryKey: ["runAtLogin"] });
 
     await waitFor(() => {
-      const row = screen.getByLabelText("Run Wenlan in background at login").closest(".px-5");
+      const row = screen.getByRole("status", { name: "Run Wenlan in background at login" }).closest(".px-5");
       expect(row?.textContent).toMatch(/could not read whether this is on/i);
       expect(row?.textContent).toContain("still holds the port");
     });
@@ -256,6 +256,19 @@ describe("GeneralSection run-at-login refusal", () => {
 // values are staged, because they fail in opposite directions: a retained
 // `false` sends `mutate(true)`, a retained `true` sends `mutate(false)`. Both
 // of these fail against the old guard, where the toggle stays enabled.
+describe("GeneralSection unknown control states", () => {
+  it("shows loading until the run-at-login setting has been measured", async () => {
+    let resolveRead!: (value: boolean) => void;
+    vi.mocked(isRunAtLoginEnabled).mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+    renderGeneralSection();
+
+    expect(screen.getByRole("status", { name: "Run Wenlan in background at login" })).toHaveTextContent("Loading");
+    expect(screen.queryByRole("button", { name: "Run Wenlan in background at login" })).not.toBeInTheDocument();
+    resolveRead(true);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Run Wenlan in background at login" })).toHaveAttribute("aria-pressed", "true"));
+  });
+});
+
 describe("GeneralSection run-at-login value retained across a failed refresh", () => {
   const runAtLoginToggle = () =>
     screen.getByLabelText("Run Wenlan in background at login");
@@ -285,16 +298,16 @@ describe("GeneralSection run-at-login value retained across a failed refresh", (
       await measureThenFailRefresh(measured);
 
       // The switch must stop claiming the stale reading is a measurement.
-      await waitFor(() => expect(runAtLoginToggle()).toBeDisabled());
-      // Not `aria-pressed="false"`/`"true"` — either is a claim nobody read.
-      expect(runAtLoginToggle()).not.toHaveAttribute("aria-pressed");
+      await waitFor(() => expect(screen.getByRole("status", { name: "Run Wenlan in background at login" })).toBeInTheDocument());
+      expect(screen.getByRole("status", { name: "Run Wenlan in background at login" })).toHaveTextContent("Unavailable");
+      expect(screen.queryByRole("button", { name: "Run Wenlan in background at login" })).not.toBeInTheDocument();
 
       // And it must not ACT on it: the complement of a stale reading is a
       // write to launchd derived from an earlier instant.
       // Counted rather than `not.toHaveBeenCalled()` — the module mock is
       // shared across this file and never cleared.
       const callsBefore = vi.mocked(setRunAtLogin).mock.calls.length;
-      fireEvent.click(runAtLoginToggle());
+      fireEvent.click(screen.getByRole("status", { name: "Run Wenlan in background at login" }));
       expect(vi.mocked(setRunAtLogin).mock.calls.length).toBe(callsBefore);
     },
   );
@@ -308,6 +321,17 @@ describe("GeneralSection optional usage stats consent", () => {
     pending_operations,
   });
 
+  it("shows loading while the usage-stats setting is being read, then the measured value", async () => {
+    let resolveRead!: (value: { enabled: boolean; available: boolean; pending_operations: number }) => void;
+    vi.mocked(getTelemetryStatus).mockImplementationOnce(() => new Promise((resolve) => { resolveRead = resolve; }));
+    renderGeneralSection();
+
+    expect(screen.getByRole("status", { name: "Share optional usage stats" })).toHaveTextContent("Loading");
+    expect(screen.queryByRole("button", { name: "Share optional usage stats" })).not.toBeInTheDocument();
+    resolveRead(status(false));
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "false"));
+  });
+
   it("keeps the toggle unknown and inert when the status cannot be read", async () => {
     vi.mocked(getTelemetryStatus).mockRejectedValueOnce(new Error("daemon unavailable"));
 
@@ -316,10 +340,11 @@ describe("GeneralSection optional usage stats consent", () => {
     expect(
       await screen.findByText(/could not read the usage-stats setting/i),
     ).toBeInTheDocument();
-    expect(telemetryToggle()).toBeDisabled();
-    expect(telemetryToggle()).not.toHaveAttribute("aria-pressed");
+    const status = screen.getByRole("status", { name: "Share optional usage stats" });
+    expect(status).toHaveTextContent("Unavailable");
+    expect(screen.queryByRole("button", { name: "Share optional usage stats" })).not.toBeInTheDocument();
     const callsBefore = vi.mocked(setTelemetryEnabled).mock.calls.length;
-    fireEvent.click(telemetryToggle());
+    fireEvent.click(status);
     expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
   });
 
@@ -378,18 +403,58 @@ describe("GeneralSection optional usage stats consent", () => {
   });
 
   it("keeps an unavailable build disabled without claiming that telemetry is off", async () => {
-    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(false, false));
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce({ enabled: false, available: false, pending_operations: 0 });
 
     renderGeneralSection();
 
     expect(
       await screen.findByText(/unavailable in this build or environment/i),
     ).toBeInTheDocument();
-    expect(telemetryToggle()).toBeDisabled();
-    expect(telemetryToggle()).not.toHaveAttribute("aria-pressed");
+    const unknownStatus = screen.getByRole("status", { name: "Share optional usage stats" });
+    expect(unknownStatus).toHaveTextContent("Unavailable");
+    expect(screen.queryByRole("button", { name: "Share optional usage stats" })).not.toBeInTheDocument();
     const callsBefore = vi.mocked(setTelemetryEnabled).mock.calls.length;
-    fireEvent.click(telemetryToggle());
+    fireEvent.click(unknownStatus);
     expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsBefore);
+  });
+
+  it("allows turning off existing consent when telemetry is unavailable", async () => {
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(true, false));
+    renderGeneralSection();
+
+    await screen.findByLabelText("Share optional usage stats");
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+    fireEvent.click(telemetryToggle());
+    await waitFor(() => expect(vi.mocked(setTelemetryEnabled)).toHaveBeenCalledWith(false, expect.anything()));
+  });
+
+  it("reports saving while the consent change is pending", async () => {
+    vi.mocked(getTelemetryStatus).mockResolvedValueOnce(status(false)).mockResolvedValueOnce(status(true));
+    let resolveSave!: (value: ReturnType<typeof status>) => void;
+    vi.mocked(setTelemetryEnabled).mockImplementationOnce(() => new Promise((resolve) => { resolveSave = resolve; }));
+    renderGeneralSection();
+
+    await screen.findByLabelText("Share optional usage stats");
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "false"));
+    const toggle = telemetryToggle();
+    toggle.focus();
+    fireEvent.click(toggle);
+    const saving = await screen.findByRole("status", { name: "Saving" });
+    expect(saving).toHaveTextContent("Saving");
+    expect(telemetryToggle()).toBe(toggle);
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("aria-busy", "true");
+    expect(toggle).toHaveFocus();
+
+    const callsDuringSave = vi.mocked(setTelemetryEnabled).mock.calls.length;
+    fireEvent.click(toggle);
+    expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsDuringSave);
+    expect(toggle).toHaveFocus();
+
+    resolveSave(status(true));
+    await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+    expect(telemetryToggle()).toBe(toggle);
+    expect(toggle).toHaveFocus();
   });
 
   it("surfaces pending operations without adding an automatic opt-in", async () => {

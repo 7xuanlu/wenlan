@@ -8,14 +8,16 @@ import ProfileAvatar from "./ProfileAvatar";
 import "./IdentityCard.css";
 
 interface IdentityCardProps {
+  compact?: boolean;
   onOpenDetail: (entityId: string) => void;
   onOpenSettings?: () => void;
   onOpenAbout?: () => void;
 }
 
-export default function IdentityCard({ onOpenDetail, onOpenSettings, onOpenAbout }: IdentityCardProps) {
+export default function IdentityCard({ compact = true, onOpenDetail, onOpenSettings, onOpenAbout }: IdentityCardProps) {
   const { t } = useTranslation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [keyboardNavigation, setKeyboardNavigation] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -53,23 +55,30 @@ export default function IdentityCard({ onOpenDetail, onOpenSettings, onOpenAbout
         aria-label={triggerLabel}
         aria-haspopup="menu"
         aria-expanded={menuOpen}
-        className="notes-rail-button identity-menu-trigger"
-        onClick={() => setMenuOpen((open) => !open)}
+        className={`${compact ? "notes-rail-button" : "notes-primary-link"} identity-menu-trigger`}
+        onClick={(event) => {
+          // Virtual/keyboard activation has no pointer click count.
+          setKeyboardNavigation(event.detail === 0);
+          setMenuOpen((open) => !open);
+        }}
         ref={triggerRef}
         title={labelText}
         type="button"
       >
         {displayName ? (
-          <ProfileAvatar avatarPath={profile?.avatar_path} displayName={displayName} size={22} fontSize={9} tone="muted" />
+          <ProfileAvatar avatarPath={profile?.avatar_path} displayName={displayName} size={32} fontSize={13} tone="muted" />
         ) : (
           <span aria-hidden="true" className="notes-navigation-glyph"><User /></span>
         )}
+        {!compact && <span>{labelText}</span>}
       </button>
       {menuOpen && (
         <div
           aria-label={triggerLabel}
           className="identity-rail-menu"
+          data-keyboard-navigation={keyboardNavigation ? "true" : "false"}
           onKeyDown={(event) => {
+            setKeyboardNavigation(true);
             if (event.key === "Tab") {
               setMenuOpen(false);
               return;
@@ -85,9 +94,8 @@ export default function IdentityCard({ onOpenDetail, onOpenSettings, onOpenAbout
           ref={menuRef}
           role="menu"
         >
-          <div className="identity-menu-name">{labelText}</div>
           <button
-            className="notes-more-item"
+            className="identity-menu-item"
             onClick={() => {
               setMenuOpen(false);
               if (onOpenSettings) onOpenSettings();
@@ -100,7 +108,7 @@ export default function IdentityCard({ onOpenDetail, onOpenSettings, onOpenAbout
             {t("identityCard.settings")}
           </button>
           <button
-            className="notes-more-item"
+            className="identity-menu-item"
             onClick={() => { setMenuOpen(false); onOpenAbout?.(); }}
             role="menuitem"
             type="button"

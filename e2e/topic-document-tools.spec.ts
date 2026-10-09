@@ -79,7 +79,10 @@ for (const width of [1280, 375]) test(`nested Atlas filters remain visible and k
   await context.getByRole("button", { name: "Full screen", exact: true }).click();
   const graph = page.getByRole("dialog", { name: "Full screen", exact: true });
   await graph.getByRole("group", { name: "Graph view", exact: true }).getByRole("button", { name: "Atlas", exact: true }).click();
-  const filter = graph.getByRole("button", { name: "Filter topic types", exact: true });
+  const displayTrigger = graph.getByRole("button", { name: "Display", exact: true });
+  await displayTrigger.click();
+  const display = graph.getByRole("group", { name: "Show in graph", exact: true });
+  const filter = display.getByRole("button", { name: "Filter topic types", exact: true });
   await filter.click();
   const types = graph.getByRole("dialog", { name: "Topic types", exact: true });
   await expect(types).toBeVisible();
@@ -99,8 +102,10 @@ for (const width of [1280, 375]) test(`nested Atlas filters remain visible and k
   await page.keyboard.press("Escape");
   await expect(types).toHaveCount(0);
   await expect(filter).toBeFocused();
-  await expect(graph).toBeVisible();
+  await expect(display).toBeVisible();
   await page.keyboard.press("Escape");
+  // The enclosing full-screen dialog owns Escape once the nested filter has
+  // closed, even while Display is still expanded.
   await expect(graph).toHaveCount(0);
   await expect(context.getByRole("button", { name: "Full screen", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");

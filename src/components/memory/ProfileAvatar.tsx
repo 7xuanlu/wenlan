@@ -68,10 +68,11 @@ export default function ProfileAvatar({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        fontFamily: "var(--mem-font-heading)",
+        fontFamily: "var(--mem-font-body)",
         fontSize,
         color: tone === "muted" ? "var(--mem-text-secondary)" : "white",
-        fontWeight: 500,
+        fontWeight: 600,
+        lineHeight: 1,
       }}
       aria-label={displayName ? `${displayName} initials` : "Profile initials"}
     >

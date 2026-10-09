@@ -111,7 +111,7 @@ function ProviderRow({
       {/* Mouse click anywhere on the header toggles; keyboard flows through the
           name <button>. No eslint here, and the a11y contract is unchanged from
           when the whole row was one button (chip/chevron were never focusable). */}
-      <div className="w-full flex items-center gap-3 px-5 py-4" onClick={onToggle}>
+      <div className="settings-provider-row w-full flex items-center gap-3 px-5 py-4" onClick={onToggle}>
         <button
           type="button"
           onClick={(e) => {
@@ -133,18 +133,20 @@ function ProviderRow({
             {meta}
           </p>
         </button>
-        {tip && <InfoTip title={tip.title} body={tip.body} />}
-        <StatusChip state={chipState} label={chipLabel} />
-        <svg
-          className="w-3 h-3 shrink-0 transition-transform"
-          style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", color: "var(--mem-text-tertiary)" }}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-        </svg>
+        <div className="settings-provider-state flex shrink-0 items-center gap-3">
+          {tip && <InfoTip title={tip.title} body={tip.body} />}
+          <StatusChip state={chipState} label={chipLabel} />
+          <svg
+            className="w-3 h-3 shrink-0 transition-transform"
+            style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)", color: "var(--mem-text-tertiary)" }}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </div>
       </div>
       {expanded && <div className="px-5 pb-4">{children}</div>}
     </div>
@@ -561,42 +563,45 @@ export default function IntelligenceSection({ delay }: { delay: number }) {
 
   return (
     <section className="mem-fade-up" style={{ animationDelay: `${delay}ms` }}>
-      <div className="flex flex-col gap-3">
-        <Card padding="rows">
-          <label className="flex items-center justify-between gap-4 px-5 py-4">
-            <span>
-              <span className="block" style={labelStyle}>{t("intelligence.backgroundAiTitle")}</span>
-              <span className="block" style={captionStyle}>{t("intelligence.backgroundAiDescription")}</span>
-            </span>
-            <input
-              type="checkbox"
-              aria-label={t("intelligence.backgroundAiTitle")}
-              checked={backgroundAi.data === true}
-              disabled={backgroundAi.data === undefined || savingBackgroundAi}
-              onChange={async (event) => {
-                const enabled = event.target.checked;
-                setSavingBackgroundAi(true);
-                setBackgroundAiError(false);
-                try {
-                  await setBackgroundAiEnabled(enabled);
-                  if (enabled) await fillUnsetPinsWithRetry();
-                  await Promise.all([
-                    queryClient.invalidateQueries({ queryKey: ["backgroundAiEnabled"] }),
-                    queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] }),
-                    queryClient.invalidateQueries({ queryKey: ["activity"] }),
-                  ]);
-                } catch {
-                  setBackgroundAiError(true);
-                } finally {
-                  setSavingBackgroundAi(false);
-                }
-              }}
-            />
-          </label>
-          {(backgroundAiError || backgroundAi.isError) && (
-            <p className="px-5 pb-4" role="alert" style={amberStyle}>{t("intelligence.backgroundAiSaveError")}</p>
-          )}
-        </Card>
+      <div className="flex flex-col gap-6">
+        <div>
+          <SectionHeader label={t("intelligence.backgroundAiTitle")} />
+          <Card padding="rows">
+            <label className="flex items-start justify-between gap-4 px-5 py-4">
+              <span>
+                <span className="block" style={captionStyle}>{t("intelligence.backgroundAiDescription")}</span>
+              </span>
+              <input
+                type="checkbox"
+                className="mt-1 shrink-0"
+                aria-label={t("intelligence.backgroundAiTitle")}
+                checked={backgroundAi.data === true}
+                disabled={backgroundAi.data === undefined || savingBackgroundAi}
+                onChange={async (event) => {
+                  const enabled = event.target.checked;
+                  setSavingBackgroundAi(true);
+                  setBackgroundAiError(false);
+                  try {
+                    await setBackgroundAiEnabled(enabled);
+                    if (enabled) await fillUnsetPinsWithRetry();
+                    await Promise.all([
+                      queryClient.invalidateQueries({ queryKey: ["backgroundAiEnabled"] }),
+                      queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] }),
+                      queryClient.invalidateQueries({ queryKey: ["activity"] }),
+                    ]);
+                  } catch {
+                    setBackgroundAiError(true);
+                  } finally {
+                    setSavingBackgroundAi(false);
+                  }
+                }}
+              />
+            </label>
+            {(backgroundAiError || backgroundAi.isError) && (
+              <p className="px-5 pb-4" role="alert" style={amberStyle}>{t("intelligence.backgroundAiSaveError")}</p>
+            )}
+          </Card>
+        </div>
         <div className="mem-fade-up" style={{ animationDelay: `${delay + 30}ms` }}>
           <SectionHeader label={t("intelligence.modelsTitle")} />
           <Card padding="rows">

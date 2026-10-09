@@ -349,7 +349,12 @@ test("a missing model leads the popover, in units that match each row", async ({
 
   await turnOn.click();
   await expect(popover).toBeHidden();
-  await expect(page.getByText("On-device and routed models")).toBeVisible();
+  // The link lands in the dedicated Intelligence group, which owns the
+  // background AI and model controls. Keep the assertion on the real
+  // destination instead of the old general-settings summary copy.
+  await expect(page.getByRole("heading", { level: 1, name: "Intelligence" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Background AI organization" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
 
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);

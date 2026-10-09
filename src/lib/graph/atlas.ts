@@ -120,7 +120,7 @@ export function buildAtlasGraph(model: GraphModel, palette: GraphPalette): Graph
       // Kept on the edge so the hover reducer can read the verb without
       // re-reading the model.
       edgeType: edge.type,
-      // Rendered 1:1 in CSS px (AtlasView pins zoomToSizeRatioFunction to 1).
+      // AtlasView's edge program keeps this width in CSS pixels at every zoom.
       // Needs minEdgeThickness lowered in AtlasView — sigma's default floor
       // (1.7) silently bumps a hairline back up.
       size: edgeSizeFor(edge.type),

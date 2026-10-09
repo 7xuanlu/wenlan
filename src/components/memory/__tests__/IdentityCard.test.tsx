@@ -97,7 +97,7 @@ describe("IdentityCard", () => {
     await user.click(await screen.findByRole("button", { name: /Lucian account menu/ }));
 
     expect(screen.getByRole("menu")).toHaveClass("identity-rail-menu");
-    expect(screen.getByText("Lucian")).toBeInTheDocument();
+    expect(screen.queryByText("Lucian")).not.toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Settings" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "About Wenlan" })).toBeInTheDocument();
     expect(screen.queryByText("Profile settings")).not.toBeInTheDocument();

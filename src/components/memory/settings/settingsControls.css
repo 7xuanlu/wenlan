@@ -1,0 +1,212 @@
+/* Settings-only control and heading rules. The primitives are shared by other
+   surfaces, so their presentation changes only under SettingsPage's root. */
+.settings-page .settings-section-header {
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 8px;
+  margin-bottom: 12px;
+}
+
+.settings-page .settings-section-header > div:first-child {
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.settings-page .settings-section-heading {
+  font-family: var(--mem-font-body) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  line-height: 1.4 !important;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  color: var(--mem-text) !important;
+}
+
+.settings-page .settings-section-header > :last-child {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
+.settings-page .settings-row-content {
+  min-width: 0;
+}
+
+.settings-page .settings-row-copy {
+  flex: 1 1 18rem;
+}
+
+.settings-page .settings-row-control {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-page .settings-row-control-custom {
+  flex: 0 1 auto;
+}
+
+.settings-page .settings-row-control-custom > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-page .settings-row-control-custom [role="group"] > button {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 auto;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-row-control-custom .settings-control-select,
+.settings-page .settings-row-control-custom .settings-control-input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-page .settings-control-select-wrap {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-page .settings-control-button {
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 26px;
+  height: auto;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.settings-page .settings-control-button-md {
+  min-height: 32px;
+}
+
+.settings-page .settings-control-button-label {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-control-button svg {
+  flex: 0 0 auto;
+}
+
+.settings-page .settings-control-input {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 32px;
+  height: 32px;
+  padding-block: 0;
+}
+
+.settings-page .settings-control-select {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.settings-page .settings-row > p[id$="-error"] {
+  word-break: normal !important;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-row > .flex p {
+  min-width: 0;
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-profile-row-content {
+  min-width: 0;
+}
+
+.settings-page .settings-profile-row-content > :first-child {
+  min-width: 0;
+  flex: 1 1 12rem;
+}
+
+.settings-page .settings-profile-controls {
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+}
+
+.settings-page .settings-profile-input {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+
+@container (max-width: 480px) {
+  .settings-page .settings-row-content:has(.settings-row-control-custom) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-page .settings-row-content:has(.settings-row-control-custom) .settings-row-copy,
+  .settings-page .settings-row-content:has(.settings-row-control-custom) .settings-row-control {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .settings-page .settings-row-control-custom {
+    width: 100%;
+  }
+
+  .settings-page .settings-row-control-custom > * {
+    max-width: 100%;
+  }
+
+  .settings-page .settings-row-control-custom .settings-control-button {
+    max-width: 100%;
+  }
+
+  .settings-page .settings-profile-row-content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-page .settings-profile-row-content > :first-child,
+  .settings-page .settings-profile-controls {
+    width: 100%;
+    flex-basis: auto;
+  }
+
+  .settings-page .settings-profile-controls {
+    flex-wrap: wrap;
+  }
+
+  .settings-page .settings-profile-input {
+    width: min(200px, 100%) !important;
+  }
+}
+
+.settings-page .settings-import-row > :first-child { min-width: 0; }
+@container (max-width: 480px) {
+  .settings-page .settings-import-row { flex-direction: column; align-items: flex-start; }
+}
+
+.settings-page .settings-provider-row > button { overflow-wrap: anywhere; }
+.settings-page [data-testid="diagnostics-step"],
+.settings-page [data-testid^="diagnostics-route-"] {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+.settings-page [data-testid="diagnostics-step"] > *,
+.settings-page [data-testid^="diagnostics-route-"] > * { min-width: 0; overflow-wrap: anywhere; }
+@container (max-width: 480px) {
+  .settings-page .settings-provider-row { flex-direction: column; align-items: stretch; gap: 10px; }
+  .settings-page .settings-provider-state { justify-content: flex-end; }
+  .settings-page [data-testid="diagnostics-step"],
+  .settings-page [data-testid^="diagnostics-route-"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; margin-bottom: 12px; }
+  .settings-page [data-testid^="diagnostics-route-"] > :first-child { grid-column: 1 / -1; }
+  .settings-page [data-testid^="diagnostics-route-"] > :last-child { grid-column: 1 / -1; justify-self: start; }
+}

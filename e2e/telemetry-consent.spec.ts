@@ -30,7 +30,10 @@ for (const state of ["unknown", "unavailable", "save-failure"]) {
       await expect(page.getByText(/could not persist/i)).toBeVisible();
       await expect(toggle).toHaveAttribute("aria-pressed", "false");
     } else {
-      await expect(toggle).toBeDisabled();
+      const status = page.getByRole("status", {name: /usage stats/i});
+      await expect(status).toBeVisible();
+      await expect(status).toHaveAttribute("data-state", "unavailable");
+      await expect(toggle).toHaveCount(0);
     }
   });
 }
@@ -40,6 +43,9 @@ test("known consent can be revoked even when collection is unavailable", async (
   await expect(toggle).toBeEnabled();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await toggle.click();
-  await expect(toggle).toBeDisabled();
+  const status = page.getByRole("status", {name: /usage stats/i});
+  await expect(status).toBeVisible();
+  await expect(status).toHaveAttribute("data-state", "unavailable");
+  await expect(page.getByRole("button", {name: /usage stats/i})).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as {__telemetryFixtureCalls: string[]}).__telemetryFixtureCalls.filter(c => c === "set_telemetry_enabled").length)).toBe(1);
 });

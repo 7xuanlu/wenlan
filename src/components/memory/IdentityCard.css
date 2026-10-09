@@ -12,20 +12,57 @@
   bottom: 0;
   left: 43px;
   z-index: 10;
+  display: flex;
+  box-sizing: border-box;
   width: 224px;
   max-width: calc(100vw - 64px);
+  flex-direction: column;
+  gap: 2px;
   padding: 6px;
   border: 1px solid var(--mem-popover-border);
   border-radius: 9px;
   background: var(--mem-popover);
-  box-shadow: var(--mem-shadow-toast);
+  box-shadow: var(--mem-popover-shadow);
 }
 
-.identity-menu-name {
-  overflow: hidden;
-  padding: 7px 10px 9px;
+.identity-menu-item {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 13px var(--mem-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.identity-menu-item:hover {
+  background: var(--mem-hover);
   color: var(--mem-text);
-  font: 13px/1.5 var(--mem-font-body);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.identity-menu-item:focus {
+  outline: none;
+}
+
+.identity-rail-menu[data-keyboard-navigation="true"] .identity-menu-item:focus {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: -2px;
+}
+
+.identity-menu-item .notes-navigation-glyph {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
+.identity-menu-item .notes-navigation-glyph > svg {
+  width: 16px;
+  height: 16px;
 }
