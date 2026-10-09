@@ -9,7 +9,8 @@ async function openSpaces(page: Page): Promise<void> {
     .getByRole("navigation", { name: "Primary navigation" })
     .getByRole("button", { name: "Spaces", exact: true })
     .click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 }
 
 async function openWenlan(page: Page): Promise<void> {
@@ -40,7 +41,8 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await expect(page.getByTitle("Show sidebar")).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 
   await page.getByRole("button", { name: "Wenlan", exact: true }).click();
   await page.getByTitle("Show sidebar").click();

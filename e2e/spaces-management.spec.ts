@@ -4,7 +4,8 @@ import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 async function openOverview(page: Page): Promise<void> {
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 }
 
 function confirmedSpaceRow(page: Page, id: string) {
@@ -23,7 +24,7 @@ test("manages Spaces, cleans MRU, and preserves data after a rejected mutation",
 
   // When create, filter, star, reorder, rename, failure, suggestions, and delete run.
   await openOverview(page);
-  await page.getByRole("button", { name: "New space", exact: true }).click();
+  await page.getByRole("button", { name: "New", exact: true }).click();
   const createName = page.getByRole("textbox", { name: "Name", exact: true });
   await expect(createName).toBeFocused();
   await createName.fill("Journey Space");

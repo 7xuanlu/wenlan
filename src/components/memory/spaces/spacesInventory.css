@@ -38,7 +38,6 @@
   color: var(--mem-text);
   font: 400 14px/1.3 var(--mem-font-body);
   height: auto;
-  outline: none;
   padding: 0;
 }
 

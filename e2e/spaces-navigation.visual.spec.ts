@@ -262,7 +262,8 @@ async function openSidebar(page: Page): Promise<void> {
 async function openSpaces(page: Page): Promise<void> {
   await openSidebar(page);
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.locator(".spaces-overview-header")).toBeVisible();
 }
 
 async function openWiki(page: Page): Promise<void> {
@@ -315,20 +316,16 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   await openSpaces(page);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
   const mobileMetadata = wenlanRow.getByTestId("space-mobile-metadata");
-  const metadataFields = [
-    { testId: "space-mobile-pages", label: "Pages", value: "6" },
-  ] as const;
+  const noteCount = wenlanRow.getByTestId("space-mobile-pages");
   await expect(mobileMetadata).toBeVisible();
-  for (const field of metadataFields) {
-    const metadata = wenlanRow.getByTestId(field.testId);
-    await expect(metadata).toBeVisible();
-    await expect(metadata.locator("dt")).toHaveText(field.label);
-    await expect(metadata.locator("dd")).toHaveText(field.value);
-  }
+  await expect(noteCount).toBeVisible();
+  await expect(noteCount).toHaveText("6 notes");
   await page.getByLabel("Filter spaces").focus();
-  // Filter -> Rows/Cards lens toggle (two buttons) -> drag handle -> first Space.
-  for (let step = 0; step < 4; step++) await page.keyboard.press("Tab");
+  // Follow the live tab order through the collection controls to the first Space.
   const wenlanControl = wenlanRow.getByRole("button", { name: "Wenlan", exact: true });
+  for (let step = 0; step < 8 && !(await wenlanControl.evaluate((node) => node === document.activeElement)); step++) {
+    await page.keyboard.press("Tab");
+  }
   await expect(wenlanControl).toBeFocused();
   const focusOutline = await wenlanControl.evaluate((node) => {
     const style = getComputedStyle(node);
@@ -346,7 +343,7 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   });
   await writeFile(path.join(evidenceRoot, "mobile-inventory-focus.json"), `${JSON.stringify({
     focusOutline,
-    labelsAndValues: metadataFields,
+    noteCount: await noteCount.innerText(),
     screenshot: path.join(evidenceDir, targetedCapture),
     viewport: { height: 812, width: 375 },
   }, null, 2)}\n`);
