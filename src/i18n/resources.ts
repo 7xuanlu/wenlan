@@ -1,3 +1,4 @@
+import { enKnowledgeCheck, hansKnowledgeCheck, hantKnowledgeCheck } from "../components/memory/activity/knowledgeCheckCopy";
 export const supportedAppLocales = ["en", "zh-Hans", "zh-Hant"] as const;
 
 import { enFirstUse, hansFirstUse, hantFirstUse } from "../components/onboarding/firstUseCopy";
@@ -11,6 +12,7 @@ import {
 import { enSourceAccess, hansSourceAccess, hantSourceAccess } from "../components/memory/sources/sourceAccessCopy";
 
 const en = {
+  knowledgeCheck: enKnowledgeCheck,
   noteReview: {
     "pending_one": "{{count}} item needs review",
     "pending_other": "{{count}} items need review",
@@ -2405,6 +2407,7 @@ const en = {
 };
 
 const zhHans = {
+  knowledgeCheck: hansKnowledgeCheck,
   noteReview: {
     "pending_one": "有 {{count}} 项待审阅",
     "pending_other": "有 {{count}} 项待审阅",
@@ -4740,6 +4743,7 @@ const zhHans = {
 };
 
 const zhHant = {
+  knowledgeCheck: hantKnowledgeCheck,
   noteReview: {
     "pending_one": "有 {{count}} 項待審閱",
     "pending_other": "有 {{count}} 項待審閱",

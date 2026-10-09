@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, NotePencil } from "@phosphor-icons/react";
+import { ArrowRight, NotePencil, ShieldCheck } from "@phosphor-icons/react";
 import type { TFunction } from "i18next";
 import {
   listAgentActivity,
@@ -14,11 +14,15 @@ import { relativeTime } from "../../lib/relativeTime";
 import ActivityNow from "./activity/ActivityNow";
 import ActivityDiscoveries from "./activity/ActivityDiscoveries";
 import "./activity/activityVisual.css";
+import "./activity/KnowledgeCheck.css";
 import { Select } from "./settings/primitives";
+
+const KnowledgeCheck = lazy(() => import("./activity/KnowledgeCheck"));
 
 interface ActivityFeedProps {
   onNavigateMemory: (sourceId: string) => void;
-  onOpenReview?: () => void;
+  onOpenReview?: (reviewId?: string) => void;
+  onOpenPage?: (id: string) => void;
   /** Navigates to Settings, Intelligence from the Now section's models line. */
   onOpenIntelligence?: () => void;
 }
@@ -369,9 +373,11 @@ function FilterSelect({
 export default function ActivityFeed({
   onNavigateMemory,
   onOpenReview,
+  onOpenPage,
   onOpenIntelligence,
 }: ActivityFeedProps) {
   const { t, i18n } = useTranslation();
+  const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const activityQuery = useQuery({
     queryKey: ["agentActivity"],
     queryFn: () => listAgentActivity(100),
@@ -473,12 +479,19 @@ export default function ActivityFeed({
     </h1>
   );
   const pageReview = onOpenReview ? (
-    <button type="button" className="mem-activity-review-link" onClick={onOpenReview}>
+    <button type="button" className="mem-activity-review-link" onClick={() => onOpenReview()}>
       <NotePencil aria-hidden="true" size={18} />
       <span>{t("home.reviewPageChanges")}</span>
       <ArrowRight aria-hidden="true" size={16} />
     </button>
   ) : null;
+  const knowledgeEntry = (
+    <button type="button" className="mem-activity-knowledge-link" onClick={() => setKnowledgeOpen(true)}>
+      <ShieldCheck aria-hidden="true" size={18} />
+      <span>{t("knowledgeCheck.title")}</span>
+      <ArrowRight aria-hidden="true" size={16} />
+    </button>
+  );
   const background = <div className="mem-activity-background"><ActivityNow onOpenIntelligence={onOpenIntelligence} /><ActivityDiscoveries /></div>;
   const recentTitle = <h2 className="mem-activity-section-title">{t("activityDiscoveries.recent")}</h2>;
   const eventsError = activityQuery.isError ? (
@@ -490,11 +503,23 @@ export default function ActivityFeed({
     </div>
   ) : null;
 
+  if (knowledgeOpen) {
+    return <Suspense fallback={<p role="status">{t("activityStatus.eventsLoading")}</p>}>
+      <KnowledgeCheck
+        onBack={() => setKnowledgeOpen(false)}
+        onOpenReview={onOpenReview}
+        onOpenPage={onOpenPage}
+        onNavigateMemory={onNavigateMemory}
+      />
+    </Suspense>;
+  }
+
   if (activityQuery.isLoading && activityQuery.data === undefined) {
     return (
       <div className="flex flex-col">
         {pageTitle}
         {pageReview}
+        {knowledgeEntry}
         {background}
         {recentTitle}
         <p role="status">{t("activityStatus.eventsLoading")}</p>
@@ -507,6 +532,7 @@ export default function ActivityFeed({
       <div className="flex flex-col">
         {pageTitle}
         {pageReview}
+        {knowledgeEntry}
         {background}
         {recentTitle}
         {eventsError}
@@ -523,6 +549,7 @@ export default function ActivityFeed({
       <div className="flex flex-col">
         {pageTitle}
         {pageReview}
+        {knowledgeEntry}
         {background}
         {recentTitle}
         {eventsError}
@@ -672,6 +699,7 @@ export default function ActivityFeed({
     <div className="flex flex-col">
       {pageTitle}
       {pageReview}
+        {knowledgeEntry}
       {background}
         {recentTitle}
       {eventsError}
