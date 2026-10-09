@@ -160,16 +160,17 @@ test("Graph keeps app search focused and canvas controls reachable", async ({ pa
   await expect(jump).toBeVisible();
   await jump.click();
   await page.evaluate(async () => {
-    await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "toggle-spotlight", payload: null });
+    await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "focus-search", payload: null });
   });
-  const search = page.getByRole("dialog", { name: "Search", exact: true });
-  const input = search.getByPlaceholder("Search pages, memories, sources...");
+  const input = page.getByPlaceholder("Search pages, memories, sources...");
   await expect(input).toBeFocused();
   await input.press("Meta+k");
   await expect(input).toBeFocused();
   await page.keyboard.press("Escape");
-  await expect(search).toHaveCount(0);
-  await expect(jump).toBeFocused();
+  // This slice retains the desktop header search; the later workspace slice
+  // adds the search dialog and restores focus to the graph when it closes.
+  await expect(input).toBeFocused();
+  await expect(jump).toBeVisible();
   for (const name of ["Zoom in", "Zoom out", "Reset view", "Fit entire graph"]) {
     await page.getByRole("button", { name, exact: true }).click();
   }
