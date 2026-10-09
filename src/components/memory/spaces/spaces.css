@@ -208,6 +208,11 @@
   user-select: none;
 }
 
+.spaces-drag-handle[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .spaces-row-dragging .spaces-drag-handle {
   cursor: grabbing;
 }
