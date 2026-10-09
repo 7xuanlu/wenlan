@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DistillReviewPanel from "./DistillReviewPanel";
@@ -904,8 +904,27 @@ describe("DistillReviewPanel review filter", () => {
       JSON.stringify([{ key: "topic:Ghost topic", label: "Ghost topic", kind: "topic", at: Date.now() }]),
     );
     vi.mocked(distillReview).mockResolvedValue(emptyDistill);
+    let resolveRefinements!: (
+      response: Awaited<ReturnType<typeof listRefinements>>,
+    ) => void;
+    const pendingRefinements = new Promise<Awaited<ReturnType<typeof listRefinements>>>(
+      (resolve) => {
+        resolveRefinements = resolve;
+      },
+    );
     vi.mocked(listRefinements)
-      .mockResolvedValueOnce({
+      .mockReturnValueOnce(pendingRefinements)
+      .mockResolvedValue({ proposals: [] });
+    const { user } = renderPanel();
+
+    // Recent changes are independent from the review queue; hold proposals to
+    // prove the conflict filter appears only when its own query has resolved.
+    expect(await screen.findByRole("heading", { name: "Recent revisions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Conflicts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /1 hidden/ })).toBeNull();
+
+    await act(async () => {
+      resolveRefinements({
         proposals: [
           {
             id: "prop_conflict",
@@ -924,16 +943,11 @@ describe("DistillReviewPanel review filter", () => {
             created_at: "2026-07-09T00:00:00Z",
           },
         ],
-      })
-      .mockResolvedValue({ proposals: [] });
-    const { user } = renderPanel();
+      });
+    });
 
-    // Under "all": recent revisions show, while Activity owns this hidden topic.
-    expect(await screen.findByRole("heading", { name: "Recent revisions" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /1 hidden/ })).toBeNull();
-
-    const group = screen.getByRole("group", { name: "Filter reviews" });
-    await user.click(within(group).getByRole("button", { name: /^Conflicts/ }));
+    const group = await screen.findByRole("group", { name: "Filter reviews" });
+    await user.click(await within(group).findByRole("button", { name: /^Conflicts/ }));
 
     expect(screen.getByRole("heading", { name: "Contradictions & conflicts" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Memory revisions" })).toBeNull();
