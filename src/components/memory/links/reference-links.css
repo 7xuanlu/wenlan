@@ -1,0 +1,60 @@
+.reference-link {
+  color: var(--mem-accent-indigo);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reference-link > svg {
+  display: inline-block;
+  vertical-align: -0.08em;
+  margin-right: 0.18em;
+  flex: none;
+}
+
+.reference-link--source[data-status="unverified"] {
+  color: var(--mem-text-tertiary);
+  text-decoration-color: var(--mem-accent-amber);
+  text-decoration-style: dashed;
+}
+
+.reference-link--unverified,
+.cm-wiki-page-link.reference-link--unverified,
+.cm-wiki-page-link[data-reference-status="unverified"] {
+  color: var(--mem-text-tertiary);
+  text-decoration-color: var(--mem-accent-amber);
+  text-decoration-style: dashed;
+  border-bottom: 1px dashed var(--mem-accent-amber);
+}
+
+.cm-wiki-page-link.reference-link--page::before,
+.cm-wiki-page-link.reference-link--memory::before,
+.cm-wiki-page-link.reference-link--source::before {
+  content: "";
+  display: inline-block;
+  width: 0.86em;
+  height: 0.86em;
+  margin-right: 0.18em;
+  vertical-align: -0.08em;
+  background-color: currentColor;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: contain;
+}
+
+.cm-wiki-page-link.reference-link--source::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M6 3.5h8l4 4V20H6z M14 3.5V8h4 M9 12h6 M9 15.5h6'/%3E%3C/svg%3E");
+}
+
+.cm-wiki-page-link.reference-link--page::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M4 5.5c3.2-1.2 5.9-.7 8 1.2v13c-2.1-1.9-4.8-2.4-8-1.2z M20 5.5c-3.2-1.2-5.9-.7-8 1.2v13c2.1-1.9 4.8-2.4 8-1.2z M12 7v12.7'/%3E%3C/svg%3E");
+}
+
+.cm-wiki-page-link.reference-link--memory::before {
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M12 4.5a4 4 0 0 0-7 2.6A3.5 3.5 0 0 0 5 14a3.5 3.5 0 0 0 4 5.5V8a3 3 0 0 1 6 0v11.5a3.5 3.5 0 0 0 4-5.5 3.5 3.5 0 0 0 0-6.9 4 4 0 0 0-7-2.6z M9 11h3 M15 11h-3 M9 15h3 M15 15h-3'/%3E%3C/svg%3E");
+}
+
+.reference-preview button:focus-visible,
+.reference-preview a:focus-visible {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 2px;
+}

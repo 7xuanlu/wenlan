@@ -10,6 +10,7 @@ import {
 } from "../../../lib/activityNowLayout";
 import {
   assetSentence,
+  blockedCauses,
   knownAssets,
   knownLane,
   knownState,
@@ -24,7 +25,7 @@ import {
   type KnownActivityAssetKind,
   type KnownActivityStep,
 } from "../../../lib/activitySentence";
-import { ASSET_ORDER, BlockedCauses } from "./ActivitySummaryPopover";
+import { ACTIVITY_ASSET_ORDER as ASSET_ORDER } from "./activityPresentation";
 
 /**
  * Tier 2: the Now section on the Activity page.
@@ -82,6 +83,39 @@ const ASSET_COLOR: Record<KnownActivityAssetKind, string> = {
   entities: "var(--mem-accent-sage)",
   pages: "var(--mem-accent-warm)",
 };
+
+function BlockedCauses({
+  activity,
+  testId,
+  onTurnOnModel,
+}: {
+  readonly activity: ActivityResponse;
+  readonly testId: string;
+  readonly onTurnOnModel?: () => void;
+}) {
+  const { t } = useTranslation();
+  const causes = blockedCauses(activity);
+  if (causes.length === 0) return null;
+  return (
+    <div data-testid={testId} className="mem-activity-causes">
+      <div className="mem-activity-causes-text">
+        {causes.map((cause) => (
+          <p key={cause.key}>{t(cause.key)}</p>
+        ))}
+      </div>
+      {onTurnOnModel !== undefined && (
+        <button
+          type="button"
+          className="mem-activity-popover-action"
+          data-testid={`${testId}-action`}
+          onClick={onTurnOnModel}
+        >
+          {t("activityStatus.turnOnModel")}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function StepRow({
   activity,

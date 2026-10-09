@@ -538,16 +538,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
       // Ratio only ever shrinks (zooms in) — landing further out than the
       // current view would read as the map running away from the match.
       const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, openingRatioRef.current / 2.5) };
-      const { width, height } = renderer.getDimensions();
-      if (width <= 640) {
-        // The narrow inspector occupies the lower canvas. Keep the selected
-        // neighborhood above it, using Sigma's projection (also handles rotation).
-        const center = renderer.viewportToFramedGraph({ x: width / 2, y: height / 2 });
-        const target = renderer.viewportToFramedGraph({ x: width / 2, y: height * 0.16 });
-        const scale = state.ratio / camera.ratio;
-        state.x += (center.x - target.x) * scale;
-        state.y += (center.y - target.y) * scale;
-      }
       if (prefersReducedMotion()) camera.setState(state);
       else camera.animate(state, { duration: 450 });
     }

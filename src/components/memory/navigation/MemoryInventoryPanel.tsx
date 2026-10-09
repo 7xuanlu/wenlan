@@ -2,6 +2,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { Funnel } from "@phosphor-icons/react";
 import { getMemoryDetail, listMemoriesRich } from "../../../lib/tauri";
 
 type MemoryInventoryPanelProps = {
@@ -43,10 +44,11 @@ export function MemoryInventoryPanel({
       <p className="notes-memory-hint">{t("knowledgeContext.memoryHint")}</p>
       <label className="notes-list-filter">
         <span className="sr-only">{t("knowledgeContext.filterMemories")}</span>
-        <svg aria-hidden="true" fill="none" height="14" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24" width="14"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 5 5" /></svg>
+        <Funnel size={18} aria-hidden="true" />
         <input
           aria-label={t("knowledgeContext.filterMemories")}
           onChange={(event) => setFilter(event.target.value)}
+          placeholder={t("knowledgeContext.filterMemories")}
           type="search"
           value={filter}
         />

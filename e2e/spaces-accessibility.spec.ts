@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 import { getSpaceEntityButton, openSpaceEntity } from "./helpers/spaceEntity";
 import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
@@ -79,6 +80,8 @@ async function assertNoPageOverflow(page: Page): Promise<void> {
   expect(overflow.document).toBeLessThanOrEqual(1);
   expect(overflow.main).toBeLessThanOrEqual(1);
 }
+
+function zoomLayoutWidth(page: Page): number { return page.viewportSize()?.width ?? 0; }
 
 async function assertNotClipped(locator: Locator): Promise<void> {
   await locator.scrollIntoViewIfNeeded();
@@ -254,12 +257,12 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   await expect(mobileMetadata.getByTestId("space-mobile-pages")).toHaveText(/^\d+ notes?$/i);
   await expect(mobileMetadata.getByText("Memories", { exact: true })).toHaveCount(0);
   await expect(mobileMetadata.getByText("Updated", { exact: true })).toHaveCount(0);
-  await expect(page.locator("main")).toHaveCSS("padding-left", "32px");
+  await expect(page.locator("main")).toHaveCSS("padding-left", "24px");
   await page.setViewportSize({ width: 639, height: 900 });
-  await expect(page.locator("main")).toHaveCSS("padding-left", "20px");
+  await expect(page.locator("main")).toHaveCSS("padding-left", "24px");
 
   await page.setViewportSize({ width: 900, height: 900 });
-  await expect(page.locator("main")).toHaveCSS("padding-left", "72px");
+  await expect(page.locator("main")).toHaveCSS("padding-left", "40px");
   await spaceOverviewButton(page).click();
   const dossierGrid = page.locator(".space-dossier-content");
   await expect(dossierGrid).toHaveCSS("display", "flex");
@@ -332,15 +335,16 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
   await page.setViewportSize({ width: 375, height: 812 });
   await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
-  await expect(page.locator('[data-primary-navigation-active-marker="true"]')).toHaveCount(1);
-  await expect(page.locator('[aria-current="page"] [data-primary-navigation-active-marker="true"]')).toHaveCount(1);
+  const primaryNavigation = page.getByRole("navigation", { name: "Primary navigation" });
   const toggle = page.getByTitle("Show sidebar");
   await toggle.focus();
   await page.keyboard.press("Enter");
-  const aside = page.locator("aside");
+  const aside = page.locator('aside[aria-label="Primary navigation"]');
   await expect(aside).toHaveAttribute("aria-hidden", "false");
+  await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+  const search = aside.getByRole("button", { name: "Search", exact: true });
   const wiki = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true });
-  await expect(wiki).toBeFocused();
+  await expect(search).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(aside).toHaveAttribute("aria-hidden", "true");
   await expect(page.getByTitle("Show sidebar")).toBeFocused();
@@ -352,6 +356,8 @@ test("supports keyboard-only drawer and dossier navigation with visible focus", 
 
   await page.keyboard.press("Enter");
   const spaces = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true });
+  await expect(search).toBeFocused();
+  await page.keyboard.press("Tab");
   await expect(wiki).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(spaces).toBeFocused();
@@ -546,10 +552,22 @@ test("preserves the Entity signature and CJK dossiers at 200 percent zoom", asyn
   await zoomPage.goto("/");
   await openSidebar(zoomPage, "顯示側邊欄");
   await zoomPage.getByRole("navigation", { name: "主要導覽" }).getByRole("button", { name: "Wiki", exact: true }).click();
-  const pagesHeading = zoomPage.getByRole("heading", { level: 1, name: "Wiki" });
+  const pagesHeading = zoomPage.getByRole("heading", { level: 1, name: "Independent research" });
+  await openWikiNote(zoomPage, "Independent research");
   await expect(pagesHeading).toBeVisible();
-  await assertNotClipped(pagesHeading);
-  await assertNotClipped(zoomPage.getByRole("button", { name: "開啟 Independent research" }));
+  const selectedNoteTab = zoomPage.getByRole("tab", { name: "Independent research", exact: true });
+  await expect(selectedNoteTab).toBeVisible();
+  await assertNotClipped(selectedNoteTab);
+  const pageEditor = zoomPage.getByRole("textbox", { name: "頁面編輯器", exact: true });
+  await expect(pageEditor).toBeVisible();
+  await expect(pageEditor).toContainText("Independent research");
+  const editorBounds = await pageEditor.evaluate((node) => { const box = node.getBoundingClientRect(); const element = node as HTMLElement; return { left: box.left, right: box.right, scrollWidth: element.scrollWidth, clientWidth: element.clientWidth }; });
+  expect(editorBounds.left).toBeGreaterThanOrEqual(-1);
+  expect(editorBounds.right).toBeLessThanOrEqual(zoomLayoutWidth(zoomPage) + 1);
+  expect(editorBounds.scrollWidth - editorBounds.clientWidth).toBeLessThanOrEqual(2);
+  const visibleTitleLine = pageEditor.locator(".cm-line").filter({ hasText: "Independent research" });
+  await expect(visibleTitleLine).toBeVisible();
+  await assertNotClipped(visibleTitleLine);
   await assertNoPageOverflow(zoomPage);
   await openSpaces(zoomPage, { navigation: "主要導覽", spaces: "空間", show: "顯示側邊欄" });
   await spaceOverviewButton(zoomPage).click();
@@ -647,7 +665,7 @@ test("removes non-essential transitions under reduced motion", async ({ page }) 
   await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await page.getByTitle("Show sidebar").click();
-  await expect(page.locator("aside")).toHaveCSS("transition-duration", "0s");
+  await expect(page.locator('aside[aria-label="Primary navigation"]')).toHaveCSS("transition-duration", "0s");
   await openSpaces(page);
   const newSpace = page.getByRole("button", { name: "New", exact: true });
   await expect(newSpace).toHaveClass(/spaces-new-action/);

@@ -4,6 +4,7 @@ import { expect, test, type Page as BrowserPage } from "@playwright/test";
 import type { MilestoneRecord, Page } from "../src/lib/tauri";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const title = (page: BrowserPage) => page.getByRole("textbox", { name: "Title", exact: true });
 const content = (page: BrowserPage) => page.getByRole("textbox", { name: "Content", exact: true });
@@ -39,7 +40,7 @@ async function storedPage(page: BrowserPage, id: string) {
 }
 
 for (const persisted of [false, true]) {
-  test(`New note separates a ${persisted ? "persisted" : "not-yet-persisted"} draft's content and identity`, async ({ page }) => {
+  test(`New page separates a ${persisted ? "persisted" : "not-yet-persisted"} draft's content and identity`, async ({ page }) => {
     await mkdir(test.info().outputDir, { recursive: true });
     const errors = collectBrowserErrors(page);
     const originalId = "page_00000000-0000-4000-8000-000000000001";
@@ -53,16 +54,16 @@ for (const persisted of [false, true]) {
     await page.goto("/");
     await checkShell(page);
     if (persisted) {
-      await page.locator(".wiki-overview").getByRole("button", { name: "Open Original synthetic note · Draft", exact: true }).click();
+      await openWikiNote(page, "Original synthetic note");
       await expect(title(page)).toHaveValue(original.title);
     } else {
-      await sidebar(page).getByRole("button", { name: "New note", exact: true }).click();
+      await page.getByRole("button", { name: "New page", exact: true }).click();
       await title(page).fill(original.title);
       await content(page).fill(original.content);
       // Click before the debounce: the transition itself must flush this editor.
       expect(controller.calls().filter(call => call.command === "create_page_draft")).toHaveLength(0);
     }
-    await sidebar(page).getByRole("button", { name: "New note", exact: true }).click();
+    await page.getByRole("button", { name: "New page", exact: true }).click();
     await expect(title(page)).toHaveValue("");
     await expect(content(page)).toHaveValue("");
     await expect(title(page)).toBeFocused();
@@ -86,7 +87,7 @@ for (const persisted of [false, true]) {
 }
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 375, height: 812 }]) {
-  test(`More and account Escape retain the draft and drawer at ${viewport.width}px`, async ({ page }) => {
+  test(`More and account Escape retain the page draft and drawer at ${viewport.width}px`, async ({ page }) => {
     await mkdir(test.info().outputDir, { recursive: true });
     const errors = collectBrowserErrors(page);
     const controller = await installTauriMock(page, {
@@ -97,7 +98,11 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 375, height: 812 
     await page.goto("/");
     await checkShell(page);
     await showSidebar(page);
-    await sidebar(page).getByRole("button", { name: "New note", exact: true }).click();
+    if (await sidebar(page).getAttribute("data-sidebar-overlay") === "true") {
+      await page.locator('[data-sidebar-toggle="true"]').click();
+      await expect(sidebar(page)).toHaveAttribute("aria-hidden", "true");
+    }
+    await page.getByRole("button", { name: "New page", exact: true }).click();
     await title(page).fill("Popup Escape synthetic draft");
     await content(page).fill("The writing session stays here.");
     await showSidebar(page);
@@ -166,7 +171,7 @@ test("late first-page milestone resolves only its passive target after an empty 
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   await checkShell(page);
-  await expect(page.getByRole("heading", { name: "Wiki", exact: true, level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Open a note", exact: true, level: 1 })).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const initialExplicit = controller.calls().filter(call => call.command.endsWith("_explicit_browse")).length;
   await page.screenshot({ path: test.info().outputPath("milestone-before-empty-wiki.png") });

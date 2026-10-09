@@ -49,15 +49,37 @@ test("closes the 899px drawer before history and moves focus safely at the 900px
   const drawerDestination = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true });
   await drawerDestination.focus();
   await page.setViewportSize({ width: 900, height: 900 });
-  // Desktop collapse retains the accessible icon rail; the notes panel closes.
-  await expect(primarySidebar).toHaveAttribute("aria-hidden", "false");
-  await expect(primarySidebar).toHaveCSS("width", "48px");
-  await expect(primarySidebar.locator(".notes-workspace-panel")).toBeHidden();
-  await expect.poll(() => page.evaluate(() => document.querySelector('aside[aria-label="Primary navigation"]')?.contains(document.activeElement))).toBe(false);
+  // A legacy collapsed preference migrates to a hidden labels sidebar.
+  await expect(primarySidebar).toHaveAttribute("aria-hidden", "true");
+  await expect(primarySidebar).toHaveCSS("width", "0px");
+  await expect(drawerDestination).toBeHidden();
   await expect(page.getByTitle("Show sidebar")).toBeFocused();
-  expect(await page.evaluate(() => localStorage.getItem("wenlan-sidebar-collapsed"))).toBe("true");
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("wenlan-navigation-v1")!))).toMatchObject({ sidebar: { visible: false, mode: "labels" } });
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);
+});
+
+test("an explicitly visible icon sidebar preserves destination focus at 900px", async ({ page }) => {
+  await page.setViewportSize({ width: 899, height: 900 });
+  await installTauriMock(page, {
+    locale: "en",
+    rawActions: [],
+    localStorage: { "wenlan-navigation-v1": JSON.stringify({ version: 1, visible: ["pages", "spaces", "sources"], sidebar: { visible: true, mode: "icons" } }) },
+  });
+  await page.goto("/");
+  const sidebar = page.locator('aside[aria-label="Primary navigation"]');
+  const toggle = page.getByTitle("Show sidebar");
+  await toggle.click();
+  const destination = page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true });
+  await destination.focus();
+  await expect(destination).toBeFocused();
+  await page.setViewportSize({ width: 900, height: 900 });
+  await expect(sidebar).toHaveAttribute("aria-hidden", "false");
+  await expect(sidebar).toHaveCSS("width", "64px");
+  await expect(destination).toBeVisible();
+  await expect(destination).toBeFocused();
+  await expect(page.getByTitle("Hide sidebar")).toBeVisible();
+  expect(JSON.parse(await page.evaluate(() => localStorage.getItem("wenlan-navigation-v1")!))).toMatchObject({ sidebar: { visible: true, mode: "icons" } });
 });
 
 test("turns a non-Error Spaces rejection into a recoverable inline failure", async ({ page }) => {

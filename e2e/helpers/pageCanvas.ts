@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, type Locator, type Page } from "@playwright/test";
 import { openPageTool } from "./pageTools";
+import { openWikiNote } from "./wikiWorkspace";
 
 /** Open the "Fixture architecture" page and its mind map pane. */
 export async function openCanvas(page: Page): Promise<void> {
@@ -9,7 +10,7 @@ export async function openCanvas(page: Page): Promise<void> {
     .getByRole("navigation", { name: "Primary navigation" })
     .getByRole("button", { name: "Wiki", exact: true })
     .click();
-  await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+  await openWikiNote(page, "Fixture architecture");
   await expect(page.getByRole("textbox", { name: "Page editor", exact: true })).toBeVisible();
   await openPageTool(page, "Mind map");
   await expect(page.getByRole("region", { name: "Canvas for Fixture architecture" })).toBeVisible();

@@ -1,0 +1,135 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.note-group-frame {
+  position: relative;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--workspace-document-background, var(--mem-bg));
+}
+
+.note-group-document {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.note-group-header {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  box-sizing: border-box;
+  padding-inline-end: 12px;
+  flex: 0 0 52px;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 52px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--mem-text) 3%, var(--mem-bg));
+}
+
+.note-group-tabs {
+  display: flex;
+  flex: 1 1 0;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.note-group-document-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-width: 0;
+}
+
+.note-group-frame:has(.page-info-drawer-group-overlay) .note-group-header,
+.note-group-frame:has(.page-info-drawer-expanded-group) .note-group-header {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  padding-inline-end: calc(var(--note-group-inspector-header-width, 320px) + 8px);
+}
+
+.note-group-content {
+  container: note-content / inline-size;
+  flex: 1 1 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.note-group-frame:has(.page-info-drawer-group-overlay-body-reserved) .note-group-content {
+  width: calc(100% - var(--note-group-inspector-header-width, 0px));
+}
+
+.note-group-inspector-host {
+  display: flex;
+  flex: 0 0 0;
+  width: 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.note-group-inspector-host:has(.page-info-drawer-hosted) {
+  flex: 0 0 auto;
+  width: fit-content;
+}
+
+/* Local hosts already reserve the docked inspector's width. The legacy
+   document-wide gutter must never squeeze a note under a local overlay. */
+.note-group-frame .page-detail.document-context-host.document-context-open,
+.note-group-frame .page-detail.document-context-host.page-document-map-open { padding-right:0; }
+.note-group-frame { container-name:note-group; container-type:inline-size; }
+@container note-group (max-width:600px) {
+  .page-detail-document { padding:28px 20px 40px; }
+  .note-tabs { gap:4px; padding-inline:10px 4px; }
+  .note-tabs-list { gap:8px; }
+}
+.note-group-global-tools { display:flex; align-items:center; flex:0 0 auto; }
+.note-group-header > * { pointer-events:auto; }
+html[data-theme="light"] .note-group-header { background:var(--mem-bg); }
+
+/* Size reading margins and the title to the actual note lane, not the window. */
+@container note-content (max-width: 320px) {
+  .page-detail-document { padding: 24px 16px 40px; }
+  .page-document-title-row { gap: 8px; }
+  .page-document-title-row .page-detail-title { font-size: 24px; text-wrap: wrap; }
+}
+
+/* Keep scroll thumbs inside the reading lane, clear of the inspector seam. */
+.note-group-content,
+.note-group-frame .page-info-drawer-content {
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+.note-group-content::-webkit-scrollbar,
+.note-group-frame .page-info-drawer-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.note-group-content::-webkit-scrollbar-track,
+.note-group-frame .page-info-drawer-content::-webkit-scrollbar-track {
+  margin: 12px;
+  background: transparent;
+}
+.note-group-content::-webkit-scrollbar-thumb,
+.note-group-frame .page-info-drawer-content::-webkit-scrollbar-thumb {
+  min-height: 24px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mem-text-secondary) 28%, transparent);
+  background-clip: padding-box;
+}
+.note-group-content::-webkit-scrollbar-thumb:hover,
+.note-group-frame .page-info-drawer-content::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--mem-text-secondary) 48%, transparent);
+}
+.note-group-content::-webkit-scrollbar-corner,
+.note-group-frame .page-info-drawer-content::-webkit-scrollbar-corner {
+  background: transparent;
+}

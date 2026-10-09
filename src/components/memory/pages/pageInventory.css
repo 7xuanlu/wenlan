@@ -11,7 +11,8 @@
 .notes-inventory-collection-row {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 0;
+  border-radius: 8px;
 }
 
 .notes-inventory-scope,
@@ -29,12 +30,15 @@
 .notes-inventory-scope {
   flex: 1;
   min-width: 0;
-  min-height: 32px;
+  min-height: 36px;
   gap: 8px;
   padding: 6px 8px;
-  font-size: 12px;
+  font-size: 14px;
+  line-height: 20px;
   text-align: left;
 }
+
+.notes-inventory-scope > svg { width: 18px; height: 18px; }
 
 .notes-inventory-scope > span:not(.notes-inventory-count) {
   overflow: hidden;
@@ -57,7 +61,7 @@
   flex: 0 0 18px;
   justify-content: center;
   width: 18px;
-  min-height: 28px;
+  min-height: 36px;
   padding: 0;
 }
 
@@ -70,14 +74,42 @@
   flex: 0 0 auto;
 }
 
-.notes-inventory-scope:hover,
-.notes-inventory-disclosure:hover:not(:disabled) {
+.notes-inventory-scope:hover {
   background: var(--mem-hover);
   color: var(--mem-text);
 }
 
 .notes-inventory-scope[data-active="true"] {
   background: var(--mem-indigo-bg);
+  color: var(--mem-text);
+}
+
+/* Folder disclosure, icon and label share one rounded visual row. */
+.notes-inventory-collection-row:hover,
+.notes-inventory-collection-row:focus-within {
+  background: var(--mem-hover);
+}
+
+.notes-inventory-collection-row[data-active="true"] {
+  background: var(--mem-indigo-bg);
+}
+
+.notes-inventory-collection-row > .notes-inventory-scope,
+.notes-inventory-collection-row > .notes-inventory-disclosure {
+  background: transparent;
+}
+
+.notes-inventory-collection-row > .notes-inventory-disclosure {
+  border-radius: 8px 0 0 8px;
+}
+
+.notes-inventory-collection-row > .notes-inventory-scope {
+  border-radius: 0 8px 8px 0;
+}
+
+.notes-inventory-collection-row:hover > button,
+.notes-inventory-collection-row:focus-within > button,
+.notes-inventory-collection-row[data-active="true"] > button {
   color: var(--mem-text);
 }
 
@@ -102,7 +134,7 @@
 
 .notes-inventory-panel .notes-inventory-page {
   justify-content: flex-start;
-  gap: 7px;
+  gap: 8px;
   padding-left: 8px;
 }
 .notes-folder-create { padding: 0 8px 12px; display:flex;flex-direction:column;gap:7px;color:var(--mem-text-secondary);font-size:12px; }
@@ -111,3 +143,59 @@
 .notes-folder-create button:hover { background:var(--mem-hover); }
 .notes-folder-create button:disabled,.notes-list-create:disabled { opacity:.4;cursor:default; }
 .notes-folder-parent { color:var(--mem-text-tertiary);font-size:11px;overflow-wrap:anywhere;padding:2px 8px; }
+
+.notes-inventory-folder-action {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  opacity: 0;
+  cursor: pointer;
+}
+.notes-inventory-collection-row:hover .notes-inventory-folder-action,
+.notes-inventory-collection-row:focus-within .notes-inventory-folder-action { opacity: 1; }
+.notes-inventory-folder-action:hover:not(:disabled) { color: var(--mem-text); }
+.notes-inventory-folder-action:focus-visible { opacity: 1; outline: 2px solid var(--mem-text-secondary); outline-offset: -2px; }
+.notes-inventory-folder-action:disabled { cursor: default; }
+.notes-folder-context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 176px;
+  padding: 4px;
+}
+.notes-folder-context-menu > [role="menuitem"] {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mem-text);
+  font: 13px/18px var(--mem-font-body);
+  text-align: left;
+  cursor: pointer;
+}
+.notes-folder-context-menu > [role="menuitem"]:hover:not([aria-disabled="true"]),
+.notes-folder-context-menu > [role="menuitem"]:focus-visible:not([aria-disabled="true"]) { background: var(--mem-hover); }
+.notes-folder-context-menu > [role="menuitem"][aria-disabled="true"] { opacity: .45; cursor: default; }
+.notes-folder-create { margin: 4px 0 8px 18px; padding: 8px; border: 1px solid var(--mem-border); border-radius: 6px; background: var(--mem-surface); }
+
+@media (pointer: coarse) {
+  .notes-inventory-scope,
+  .notes-inventory-disclosure { min-height: 44px; }
+  .notes-inventory-folder-action { flex-basis: 44px; width: 44px; height: 44px; opacity: 1; }
+}
+
+.notes-inventory-disclosure-spacer { flex: 0 0 18px; width: 18px; }
+
+.notes-inventory-panel--file-tree .notes-inventory-pages { margin-left: 33px; }
+.notes-inventory-root-pages { margin-left: 0; }
+.notes-inventory-panel--file-tree .notes-inventory-page { min-width: 0; font-size: 14px; line-height: 20px; min-height: 36px; }
+.notes-inventory-panel--file-tree .notes-inventory-page > svg { width: 16px; height: 16px; }
+@media (pointer: coarse) { .notes-inventory-panel--file-tree .notes-inventory-page { min-height: 44px; } }

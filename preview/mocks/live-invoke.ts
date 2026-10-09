@@ -181,6 +181,18 @@ function sanitizeIngressContent(content: string): string {
     .trimEnd();
 }
 
+function generatedDraftTitle(content: string): string {
+  for (const line of content.split(/\r?\n/u)) {
+    let title = line.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+      .replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+    const heading = /^(#{1,6})(?=\p{White_Space})/u.exec(title);
+    if (heading) title = title.slice(heading[0].length);
+    title = title.split(/\p{White_Space}+/u).filter(Boolean).join(" ");
+    if (title) return Array.from(title).slice(0, 80).join("");
+  }
+  return "Untitled note";
+}
+
 function normalizedSpace(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
@@ -588,30 +600,40 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
     }
     const draft = previewDraft(id);
     assertPreviewDraftVersion(draft, expectedVersion);
-    const title = String(draft.title ?? "");
+    const suppliedTitle = String(draft.title ?? "").trim();
     const content = sanitizeIngressContent(String(draft.content ?? ""));
-    if (!title.trim() || !content.trim()) {
+    const generatedTitle = suppliedTitle.length === 0;
+    if (generatedTitle && !content.trim()) {
       return Promise.reject(new Error(JSON.stringify({
         code: "invalid_page_draft",
-        error: "Title and content are required",
+        error: "A Page draft needs a title or content",
       })));
     }
+    let title = generatedTitle ? generatedDraftTitle(content) : suppliedTitle;
     const space = normalizedSpace(draft.space);
     const remotePages = await listAllRemotePages("active", space);
-    const conflict = [...PREVIEW_AUTHORED_PAGES.values(), ...remotePages].find(
-      (page) => page.id !== draft.id && samePreviewPageScope(page, title, space),
-    );
-    if (conflict) {
-      return Promise.reject(new Error(JSON.stringify({
-        code: "page_title_conflict",
-        error: "A Page with this title already exists",
-        existing_page_id: conflict.id,
-        existing_page_title: conflict.title,
-      })));
+    const activePages = [...PREVIEW_AUTHORED_PAGES.values(), ...remotePages];
+    if (generatedTitle) {
+      const occupiedTitles = new Set(activePages
+        .filter((page) => page.id !== draft.id && page.status === "active" && normalizedSpace(page.space) === space)
+        .map((page) => String(page.title ?? "").trim().toLowerCase()));
+      const base = title;
+      let suffix = 2;
+      while (occupiedTitles.has(title.toLowerCase())) title = `${base} (${suffix++})`;
+    } else {
+      const conflict = activePages.find((page) => page.id !== draft.id && samePreviewPageScope(page, title, space));
+      if (conflict) {
+        return Promise.reject(new Error(JSON.stringify({
+          code: "page_title_conflict",
+          error: "A Page with this title already exists",
+          existing_page_id: conflict.id,
+          existing_page_title: conflict.title,
+        })));
+      }
     }
     const published = {
       ...draft,
-      title: title.trim(),
+      title,
       content,
       status: "active",
       review_status: "unconfirmed",

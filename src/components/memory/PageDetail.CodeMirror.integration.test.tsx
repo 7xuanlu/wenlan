@@ -87,6 +87,33 @@ afterEach(() => {
 });
 
 describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
+  it("opens an existing note in reading-first mode without focusing or writing", async () => {
+    const source = "# Heading\n\n> quoted block\n\n[link](https://example.com)\n";
+    tauriMocks.getPage.mockResolvedValue({ ...PAGE, content: source });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <PageDetail
+          pageId={PAGE.id}
+          initialMode="edit"
+          initialSelection={{ anchor: 0, head: source.length }}
+          onBack={vi.fn()}
+          onMemoryClick={vi.fn()}
+          onPageClick={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    const textbox = await screen.findByRole("textbox", { name: "Page editor" });
+    const view = editorViewFromTextbox(textbox);
+
+    expect(view.contentDOM).not.toHaveFocus();
+    expect(view.contentDOM.textContent).not.toContain("# Heading");
+    expect(view.contentDOM.textContent).not.toContain("> quoted block");
+    expect(view.contentDOM.textContent).not.toContain("[link](");
+    expect(tauriMocks.updatePage).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["macos", "Cmd", "Ctrl"],
     ["windows", "Ctrl", "Cmd"],
@@ -556,6 +583,7 @@ describe("PageDetail with the real MarkdownEditor and CodeMirror", () => {
       });
       expect(tauriMocks.updatePage).toHaveBeenCalledTimes(1);
 
+      view.focus();
       act(() => pressKey(textbox, "z", { ctrlKey: true }));
       expect(view.state.doc.toString()).toBe(PAGE.content);
       expect(screen.getByRole("status")).toHaveTextContent("Unsaved changes");
@@ -890,8 +918,8 @@ it("refreshes an open context graph after a page autosave persists new links", a
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><PageDetail pageId={PAGE.id} initialMode="edit" onBack={vi.fn()} onMemoryClick={vi.fn()} onPageClick={vi.fn()} /></QueryClientProvider>);
   const textbox = await screen.findByRole("textbox", { name: "Page editor" });
-  await userEvent.click(screen.getByRole("button", { name: "Page actions" }));
-  await userEvent.click(screen.getByRole("menuitem", { name: "Page info" }));
+  await userEvent.click(screen.getByRole("button", { name: "Open note sidebar" }));
+  await userEvent.click(screen.getByRole("tab", { name: "Info" }));
   await screen.findByText("No direct connections in the currently visible knowledge.");
   const priorSave = tauriMocks.updatePage.getMockImplementation()!;
   tauriMocks.updatePage.mockImplementationOnce(async (input) => {

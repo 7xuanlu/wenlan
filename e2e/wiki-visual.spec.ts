@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page as BrowserPage } from "@playwright/test";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
-const evidenceDirectory = ".omo/evidence/wiki-implementation";
+const evidenceDirectory = process.env.WENLAN_UI_EVIDENCE_DIR || "/private/tmp/wenlan-wiki-ui-evidence";
 
 function wikiPages() {
   const defaults = createSpacesNavigationFixture().pages;
@@ -45,103 +46,36 @@ async function openWiki(page: BrowserPage, locale: "en" | "zh-Hant", theme: "dar
   }
   const primaryNavigation = page.getByRole("navigation", { name: locale === "zh-Hant" ? "主要導覽" : "Primary navigation" });
   await primaryNavigation.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: locale === "zh-Hant" ? "開啟筆記" : "Open a note" })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) < 900) await page.waitForTimeout(250);
   return browserErrors;
 }
 
-test("Wiki desktop light matches the approved inventory and its controls work", async ({ page }) => {
-  await page.setViewportSize({ width: 1487, height: 1058 });
-  const browserErrors = await openWiki(page, "en", "light", "rows");
 
-  await expect(page.getByRole("columnheader", { name: "Page" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Space" })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "Updated" })).toBeVisible();
-  await expect(page.locator(".wiki-page-row")).toHaveCount(7);
-  await expect(page.getByTestId("page-space-page-errors")).toHaveText("Wenlan");
-  await expect(page.getByTestId("page-space-page-cjk")).toBeEmpty();
-  await expect(page.getByText("Independent", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Optional", { exact: true })).toHaveCount(0);
-  await expect(page.getByText("Browse by type", { exact: true })).toHaveCount(0);
-  await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("7 pages");
-  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
-  const lensGroup = page.getByRole("group", { name: "Note view", exact: true });
-  await expect(lensGroup.getByRole("button", { name: "List", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "New page", exact: true })).toBeVisible();
-
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Nash Su/ })).not.toBeVisible();
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: /Open Grace Hopper/ })).not.toBeVisible();
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true })).toBeVisible();
-  await page.locator(".notes-list-panel").getByRole("button", { name: "Research", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Research", exact: true })).toBeVisible();
-  await expect(page.locator(".wiki-page-row")).toHaveCount(1);
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Memory provenance", exact: true })).toBeVisible();
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Local-first architecture", exact: true })).toHaveCount(0);
-  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
-  await page.getByRole("navigation", { name: "Browse notes", exact: true }).getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.locator(".wiki-page-row")).toHaveCount(7);
-
-  await lensGroup.getByRole("button", { name: "Cards", exact: true }).click();
-  await expect(lensGroup.getByRole("button", { name: "Cards", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".asset-card")).toHaveCount(7);
-  expect(await page.evaluate(() => localStorage.getItem("wenlan-wiki-view-mode"))).toBe("cards");
-  await page.reload();
-  await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.locator(".asset-card")).toHaveCount(7);
-  await expect(page.getByRole("group", { name: "Note view", exact: true }).getByRole("button", { name: "Cards", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".wiki-pagination")).toHaveCount(0);
-
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-light-1487x1058.png`, fullPage: true });
-
-  const firstPageLink = page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true });
-  await firstPageLink.hover();
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-light-link-hover-mid-1487x1058.png`, fullPage: true });
-  await page.waitForTimeout(175);
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-light-link-hover-settled-1487x1058.png`, fullPage: true });
-  expect(browserErrors.pageErrors).toEqual([]);
-  expect(browserErrors.consoleErrors).toEqual([]);
-});
-
-test("Wiki renders in dark mode", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 1024 });
-  const browserErrors = await openWiki(page, "en", "dark", "rows");
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-dark-1440x1024.png`, fullPage: true });
-  expect(browserErrors.pageErrors).toEqual([]);
-  expect(browserErrors.consoleErrors).toEqual([]);
-});
-
-test("Wiki keeps Traditional Chinese controls precise at tablet and mobile widths", async ({ page }) => {
-  await page.setViewportSize({ width: 768, height: 900 });
-  const tabletErrors = await openWiki(page, "zh-Hant", "light", "rows");
-  const tabletLens = page.getByRole("group", { name: "筆記檢視", exact: true });
-  await expect(tabletLens).toBeVisible();
-  await expect(tabletLens.getByRole("button", { name: "清單", exact: true })).toBeVisible();
-  await expect(tabletLens.getByRole("button", { name: "卡片", exact: true })).toBeVisible();
-  await expect(page.locator(".wiki-overview").getByRole("button", { name: "新增頁面", exact: true })).toBeVisible();
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-768x900.png`, fullPage: true });
-  expect(tabletErrors.pageErrors).toEqual([]);
-  expect(tabletErrors.consoleErrors).toEqual([]);
-
-  await page.setViewportSize({ width: 375, height: 812 });
-  await page.reload();
-  await page.getByTitle("顯示側邊欄").click();
-  await page.waitForTimeout(250);
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-overlay-open-375x812.png`, fullPage: true });
-  const navigation = page.getByRole("navigation", { name: "主要導覽" });
-  await navigation.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await page.waitForTimeout(250);
-
-  const mobileSearch = page.getByRole("button", { name: "搜尋", exact: true });
-  await mobileSearch.click();
-  await expect(mobileSearch).toHaveAttribute("aria-expanded", "true");
-  await expect(page.getByPlaceholder("搜尋頁面、記憶、來源...")).toBeFocused();
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-search-open-375x812.png`, fullPage: true });
-  await page.keyboard.press("Escape");
-  await expect(mobileSearch).toHaveAttribute("aria-expanded", "false");
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-375x812.png`, fullPage: true });
-  expect(tabletErrors.pageErrors).toEqual([]);
-  expect(tabletErrors.consoleErrors).toEqual([]);
+for(const locale of ["en","zh-Hant"] as const)for(const theme of ["light","dark"] as const)for(const width of [1280,375])test(`Wiki reading workspace ${locale} ${theme} ${width}`,async({page},info)=>{
+ await page.setViewportSize({width,height:900});const errors=await openWiki(page,locale,theme,"cards");
+ const right=page.locator(".wiki-workspace-reading"),tree=page.locator(".wiki-workspace-directory");
+ await expect(right.locator(".wiki-table, .asset-card, .wiki-folder-lenses")).toHaveCount(0);
+ await expect(page.locator(".note-tab-create")).toBeVisible();
+ if(!(await tree.isVisible()))await page.locator(".wiki-workspace-folders-toggle").click();
+ const inventoryMode=tree.getByRole("combobox");
+ await inventoryMode.selectOption("folders");
+ await expect(inventoryMode).toHaveValue("folders");
+ await tree.getByRole("button",{name:"Research",exact:true}).click();
+ await expect(tree.getByTitle("Memory provenance",{exact:true})).toBeVisible();
+ await expect(tree.getByTitle("Local-first architecture",{exact:true})).toHaveCount(0);
+ await expect(right).not.toContainText("Memory provenance");
+ await tree.getByRole("button",{name:"Notes",exact:true}).click();
+ await expect(tree.getByTitle("Local-first architecture",{exact:true})).toBeVisible();
+ await expect(tree.getByTitle("Nash Su",{exact:true})).toHaveCount(0);
+ await expect(tree.getByTitle("Grace Hopper",{exact:true})).toHaveCount(0);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ await page.screenshot({path:info.outputPath("reading-start.png")});
+ await openWikiNote(page,"Local-first architecture");
+ await expect(page.getByRole("heading",{level:1,name:"Local-first architecture",exact:true})).toBeVisible();
+ await expect(page.getByRole("tab",{name:"Local-first architecture",exact:true})).toHaveAttribute("aria-selected","true");
+ await page.screenshot({path:info.outputPath("reading-note.png")});
+ expect(errors.pageErrors).toEqual([]);expect(errors.consoleErrors).toEqual([]);
 });
 
 test("Cmd+K event opens the responsive global search instead of focusing a hidden input", async ({ page }) => {
@@ -157,90 +91,10 @@ test("Cmd+K event opens the responsive global search instead of focusing a hidde
   const searchInput = page.getByPlaceholder("搜尋頁面、記憶、來源...");
   await expect(searchInput).toBeVisible();
   await expect(searchInput).toBeFocused();
-  const searchShell = searchInput.locator("..");
-  await expect(searchShell).toHaveCSS("outline-style", "solid");
-  await expect(searchShell).toHaveCSS("outline-width", "2px");
-  await expect(searchShell).toHaveCSS("outline-offset", "2px");
+  await expect(page.getByRole("dialog", { name: "搜尋", exact: true })).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator(".memory-workspace-header input")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "搜尋", exact: true })).toHaveAttribute("aria-expanded", "true");
   await page.screenshot({ path: `${evidenceDirectory}/wiki-zh-hant-shortcut-search-375x812.png`, fullPage: true });
-  expect(browserErrors.pageErrors).toEqual([]);
-  expect(browserErrors.consoleErrors).toEqual([]);
-});
-
-test("Wiki cards lens stays inside the viewport at every width", async ({ context }) => {
-  const passes = [
-    [1487, 1058, "light"],
-    [1280, 900, "light"],
-    [768, 900, "light"],
-    [375, 812, "light"],
-    [375, 812, "dark"],
-  ] as const;
-  for (const [width, height, theme] of passes) {
-    // A fresh page per width: the Tauri mock binding can only be registered once per page.
-    const page = await context.newPage();
-    await page.setViewportSize({ width, height });
-    const browserErrors = await openWiki(page, "en", theme, "cards");
-
-    await expect(page.getByTestId("wiki-cards")).toBeVisible();
-    await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("7 pages");
-    await expect(page.locator(".wiki-pagination")).toHaveCount(0);
-    await expect(page.locator(".asset-card")).toHaveCount(7);
-
-    const lensGroup = page.getByRole("group", { name: "Note view", exact: true });
-    await expect(lensGroup.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
-    await expect(lensGroup.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "false");
-
-    const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
-    expect(fitsViewport).toBe(true);
-    const cardBoxes = await Promise.all((await page.locator(".asset-card").all()).map((card) => card.boundingBox()));
-    expect(cardBoxes).toHaveLength(7);
-    for (const box of cardBoxes) {
-      expect(box).not.toBeNull();
-      expect(box!.x).toBeGreaterThanOrEqual(0);
-      expect(box!.x + box!.width).toBeLessThanOrEqual(width);
-    }
-
-    await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-${theme}-${width}x${height}.png`, fullPage: true });
-
-    await expect(page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true })).toBeVisible();
-    await page.locator(".wiki-overview").getByRole("button", { name: "Open Wenlan product principles", exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "Wenlan product principles" })).toBeVisible();
-
-    expect(browserErrors.pageErrors).toEqual([]);
-    expect(browserErrors.consoleErrors).toEqual([]);
-    await page.close();
-  }
-});
-
-test("Wiki cards lens keeps Traditional Chinese titles inside the card", async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 812 });
-  const browserErrors = await openWiki(page, "zh-Hant", "light", "cards");
-
-  const lensGroup = page.getByRole("group", { name: "筆記檢視", exact: true });
-  await expect(lensGroup).toBeVisible();
-  await expect(page.getByTestId("wiki-cards")).toBeVisible();
-
-  const cards = page.locator(".asset-card");
-  const cardCount = await cards.count();
-  expect(cardCount).toBeGreaterThan(0);
-  for (let index = 0; index < cardCount; index += 1) {
-    const cardBox = await cards.nth(index).boundingBox();
-    const titleBox = await cards.nth(index).locator(".asset-card-title").boundingBox();
-    expect(cardBox).not.toBeNull();
-    expect(titleBox).not.toBeNull();
-    expect(titleBox!.x).toBeGreaterThanOrEqual(cardBox!.x - 1);
-    expect(titleBox!.y).toBeGreaterThanOrEqual(cardBox!.y - 1);
-    expect(titleBox!.x + titleBox!.width).toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 1);
-    expect(titleBox!.y + titleBox!.height).toBeLessThanOrEqual(cardBox!.y + cardBox!.height + 1);
-  }
-
-  await page.screenshot({ path: `${evidenceDirectory}/wiki-cards-zh-hant-375x812.png`, fullPage: true });
-
-  await lensGroup.getByRole("button", { name: "清單" }).click();
-  await expect(lensGroup.getByRole("button", { name: "清單" })).toHaveAttribute("aria-pressed", "true");
-  await expect(lensGroup.getByRole("button", { name: "卡片" })).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByRole("table")).toBeVisible();
-
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });

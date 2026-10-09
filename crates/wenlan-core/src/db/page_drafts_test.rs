@@ -1095,7 +1095,7 @@ async fn publish_flips_draft_to_active_and_replays_idempotently() {
 }
 
 #[tokio::test]
-async fn publish_rejects_stale_missing_and_incomplete_drafts() {
+async fn publish_rejects_stale_missing_and_accepts_partial_notes() {
     let (db, _tmp) = test_db().await;
 
     assert!(matches!(
@@ -1113,26 +1113,109 @@ async fn publish_rejects_stale_missing_and_incomplete_drafts() {
         PageDraftPublishOutcome::VersionConflict { current_version: 1 }
     ));
 
-    // Publishing requires BOTH a trimmed title and non-empty content; a
-    // title-only or body-only draft (legal to save) cannot publish, and the
-    // failed attempt must not mutate the row.
+    // A title or body is enough for an ordinary note; its exact content survives.
     let title_only = db
         .create_page_draft("Title only", "", None, None)
         .await
         .unwrap();
     let body_only = db
-        .create_page_draft("  \t", "Body only", None, None)
+        .create_page_draft("  \t", "Body only\nMore text", None, None)
         .await
         .unwrap();
-    for draft in [&title_only, &body_only] {
-        assert!(matches!(
-            db.publish_page_draft(&draft.id, 1).await,
-            Err(WenlanError::Validation(_))
-        ));
-        let (status, _, _) = page_status_kind_and_embedding(&db, &draft.id).await;
-        assert_eq!(status, "draft");
-        assert_eq!(page_version_and_modified(&db, &draft.id).await.0, 1);
+    for (draft, expected_title) in [(&title_only, "Title only"), (&body_only, "Body only")] {
+        let PageDraftPublishOutcome::Published(saved) =
+            db.publish_page_draft(&draft.id, 1).await.unwrap()
+        else {
+            panic!("note should finalize");
+        };
+        assert_eq!(saved.status, "active");
+        assert_eq!(saved.title, expected_title);
+        assert_eq!(saved.content, draft.content);
+        assert!(saved.user_edited);
+        assert_eq!(saved.version, 2);
     }
+    let duplicate = db
+        .create_page_draft("", "Body only\nDifferent text", None, None)
+        .await
+        .unwrap();
+    let PageDraftPublishOutcome::Published(saved) =
+        db.publish_page_draft(&duplicate.id, 1).await.unwrap()
+    else {
+        panic!("generated title should be unique");
+    };
+    assert_eq!(saved.title, "Body only (2)");
+    let PageDraftPublishOutcome::Published(replayed) =
+        db.publish_page_draft(&duplicate.id, 1).await.unwrap()
+    else {
+        panic!("retry should replay");
+    };
+    assert_eq!(replayed.title, saved.title);
+    assert_eq!(replayed.version, saved.version);
+    assert!(db.create_page_draft(" ", "\n", None, None).await.is_err());
+}
+
+#[tokio::test]
+async fn publish_generated_title_sanitizes_only_its_first_line() {
+    let (db, _tmp) = test_db().await;
+    let body = "\t###\tUnicode 🧠\u{0001}\tfirst  line\nSecond\tline stays\n";
+    let draft = db.create_page_draft(" \t", body, None, None).await.unwrap();
+    let PageDraftPublishOutcome::Published(published) =
+        db.publish_page_draft(&draft.id, 1).await.unwrap()
+    else {
+        panic!("body-only note should publish");
+    };
+    assert_eq!(published.title, "Unicode 🧠 first line");
+    assert_eq!(
+        published.content, body,
+        "title derivation must not rewrite the body"
+    );
+
+    // A hash run is an ATX prefix only when it is 1–6 hashes followed by
+    // whitespace; the generated title keeps a seven-hash run and a tight hash.
+    for (index, body, expected) in [
+        ("f101", "#No space heading", "#No space heading"),
+        ("f102", "####### Heading", "####### Heading"),
+    ] {
+        let id = format!("page_00000000-0000-4000-8000-00000000{index}");
+        let draft = db
+            .create_page_draft_with_id(&id, "", body, None, None)
+            .await
+            .unwrap();
+        let PageDraftPublishOutcome::Published(published) =
+            db.publish_page_draft(&draft.id, 1).await.unwrap()
+        else {
+            panic!("generated-title note should publish");
+        };
+        assert_eq!(published.title, expected);
+        assert_eq!(published.content, body);
+    }
+
+    let long_body = "界".repeat(81);
+    let long_draft = db
+        .create_page_draft("", &long_body, None, None)
+        .await
+        .unwrap();
+    let PageDraftPublishOutcome::Published(long_page) =
+        db.publish_page_draft(&long_draft.id, 1).await.unwrap()
+    else {
+        panic!("long body-only note should publish");
+    };
+    assert_eq!(long_page.title.chars().count(), 80);
+    assert_eq!(long_page.title, "界".repeat(80));
+    assert_eq!(long_page.content, long_body);
+
+    let control_only = "\u{0001}\t";
+    let fallback_draft = db
+        .create_page_draft("", control_only, None, None)
+        .await
+        .unwrap();
+    let PageDraftPublishOutcome::Published(fallback_page) =
+        db.publish_page_draft(&fallback_draft.id, 1).await.unwrap()
+    else {
+        panic!("control-only body-only note should publish");
+    };
+    assert_eq!(fallback_page.title, "Untitled note");
+    assert_eq!(fallback_page.content, control_only);
 }
 
 #[tokio::test]

@@ -31,6 +31,7 @@ import type {
   MarkdownEditorStatus,
 } from "./MarkdownEditor";
 import { runMarkdownCommand } from "./markdownCommands";
+import { createWikiLinkEditing, setResolvedWikiLinkTargets, setEditorReferenceContext } from "./wikiLinkEditing";
 import {
   setWritingCompositionActive,
   writingPresentation,
@@ -68,6 +69,11 @@ export const CodeMirrorMarkdownEditor = forwardRef<
     onCancel: props.onCancel,
     onConstructionFailure: props.onConstructionFailure,
     onStatusChange: props.onStatusChange,
+    onReferenceActivate: props.onReferenceActivate,
+    onReferencePreview: props.onReferencePreview,
+    onWikiPageActivate: props.onWikiPageActivate,
+    onWikiLinkPreview: props.onWikiLinkPreview,
+    onWikiLinkPreviewLeave: props.onWikiLinkPreviewLeave,
   });
 
   const publishStatus = (view: EditorView): void => {
@@ -145,6 +151,11 @@ export const CodeMirrorMarkdownEditor = forwardRef<
       onCancel: props.onCancel,
       onConstructionFailure: props.onConstructionFailure,
       onStatusChange: props.onStatusChange,
+      onReferenceActivate: props.onReferenceActivate,
+      onReferencePreview: props.onReferencePreview,
+      onWikiPageActivate: props.onWikiPageActivate,
+      onWikiLinkPreview: props.onWikiLinkPreview,
+      onWikiLinkPreviewLeave: props.onWikiLinkPreviewLeave,
     };
   }, [
     props.onCancel,
@@ -153,6 +164,11 @@ export const CodeMirrorMarkdownEditor = forwardRef<
     props.onSelectionChange,
     props.onSave,
     props.onStatusChange,
+    props.onReferenceActivate,
+    props.onReferencePreview,
+    props.onWikiPageActivate,
+    props.onWikiLinkPreview,
+    props.onWikiLinkPreviewLeave,
     props.sessionId,
   ]);
 
@@ -195,7 +211,8 @@ export const CodeMirrorMarkdownEditor = forwardRef<
               ]),
             ),
             EditorView.theme({
-              "&": {
+              // Tooltip wrappers inherit theme classes; keep editor layout off that portal.
+              "&.cm-editor": {
                 boxSizing: "border-box",
                 width: "100%",
                 minHeight: "300px",
@@ -225,12 +242,31 @@ export const CodeMirrorMarkdownEditor = forwardRef<
               ".cm-cursor": {
                 borderLeftColor: "var(--mem-accent-indigo)",
               },
+              ".cm-wiki-page-link": {
+                color: "var(--mem-accent-indigo)",
+                textDecoration: "underline",
+                textDecorationColor: "var(--mem-border)",
+                textUnderlineOffset: "2px",
+                cursor: "pointer",
+              },
+              ".cm-wiki-page-link:focus-visible": {
+                outline: "2px solid var(--mem-accent-indigo)",
+                outlineOffset: "1px",
+                borderRadius: "2px",
+              },
               ".cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection": {
                 backgroundColor: "var(--mem-indigo-bg)",
               },
             }),
             writingPresentation(),
             createSlashEditing({ labels: () => slashLabelsRef.current, blocked: actionsBlocked }).extension,
+            createWikiLinkEditing(props.wikiLinkTargets ?? new Map(), {
+              onActivate: (pageId, anchor) => callbacksRef.current.onWikiPageActivate?.(pageId, anchor),
+              onPreview: (pageId, anchor, keyboard) => callbacksRef.current.onWikiLinkPreview?.(pageId, anchor, keyboard),
+              onPreviewLeave: () => callbacksRef.current.onWikiLinkPreviewLeave?.(),
+              onReferenceActivate: (target, anchor) => callbacksRef.current.onReferenceActivate?.(target, anchor),
+              onReferencePreview: (target, anchor, keyboard) => callbacksRef.current.onReferencePreview?.(target, anchor, keyboard),
+            }, props.referenceContext),
             EditorView.domEventHandlers({
               compositionstart: (_event, currentView) => {
                 if (viewRef.current !== currentView) return false;
@@ -322,6 +358,12 @@ export const CodeMirrorMarkdownEditor = forwardRef<
     // EditorView lifetime is intentionally keyed only by the edit session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.sessionId]);
+
+  useLayoutEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    view.dispatch({ effects: [setResolvedWikiLinkTargets(props.wikiLinkTargets ?? new Map()), setEditorReferenceContext(props.referenceContext ?? {})] });
+  }, [props.wikiLinkTargets, props.referenceContext, props.sessionId]);
 
   useLayoutEffect(() => {
     const view = viewRef.current;

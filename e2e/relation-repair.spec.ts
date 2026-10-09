@@ -3,6 +3,7 @@ import { test, expect } from "@playwright/test";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import { installTauriMock, collectBrowserErrors } from "./tauriMock";
 import { resources, supportedAppLocales } from "../src/i18n/resources";
+import { openPrimaryDestination } from "./helpers/primaryNavigation";
 
 // Browser rendering/selection proof only. Durable apply is covered by the
 // core integration test and must also be exercised against an isolated app.
@@ -21,7 +22,13 @@ for (const locale of supportedAppLocales) {
     const mock = await installTauriMock(page, { locale, rawActions: [], fixture });
     await page.setViewportSize(locale === "en" ? { width: 1280, height: 900 } : { width: 1000, height: 800 });
     await page.goto("/");
-    await page.getByRole("button", { name: copy.pages.overview.options, exact: true }).click();
+    await openPrimaryDestination(page, copy.sidebar.spaces, copy.sidebar.more);
+    await page.getByRole("button", {
+      name: copy.spaces.overview.card.open.replace("{{name}}", "Wenlan"),
+      exact: true,
+    }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: copy.spaces.overview.actionsFor.replace("{{name}}", "Wenlan"), exact: true }).click();
     await page.getByRole("menuitem", { name: copy.home.reviewPageChanges, exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: copy.review.title })).toBeVisible();
     await page.getByRole("button", { name: copy.review.openItem.replace("{{title}}", copy.review.kindLintRepair), exact: true }).click();

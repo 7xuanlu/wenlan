@@ -1,46 +1,37 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { forwardRef, useEffect, useRef } from "react";
+import { SidebarSimple } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
-import { GearSix } from "@phosphor-icons/react";
-import type { Page, Space } from "../../lib/tauri";
 import IdentityCard from "./IdentityCard";
 import { PrimaryNavigation } from "./navigation/PrimaryNavigation";
 import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
+import { SearchEntry } from "./SearchEntry";
+import ActivityStatus from "./activity/ActivityStatus";
 import type { GlobalNavigation } from "./navigation/viewState";
-import { MemoryInventoryPanel } from "./navigation/MemoryInventoryPanel";
-import type { WikiInventoryScope } from "./pages/pageInventory";
-import { PageInventoryPanel } from "./pages/PageInventoryPanel";
+import { ICONS_SIDEBAR_WIDTH, type SidebarMode } from "./navigation/navigationPreferences";
 import "./navigation/notes-sidebar.css";
 
 interface SidebarProps {
   readonly activeNavigation?: GlobalNavigation | null;
-  readonly collapsed: boolean;
-  readonly inventoryScope?: WikiInventoryScope;
-  readonly browsingPages?: boolean;
-  readonly onBrowsePages?: (scope: WikiInventoryScope) => void;
-  readonly currentPageId?: string | null;
-  readonly currentMemoryId?: string | null;
-  readonly currentSpaceId?: string | null;
-  readonly onCreatePage?: (folderPath?: string) => void;
+  readonly hidden: boolean;
+  readonly mode: SidebarMode;
   readonly onEntityClick: (entityId: string) => void;
   readonly onNavigateEntities?: () => void;
   readonly onNavigateGraph?: () => void;
-  readonly onNavigateHome?: () => void;
   readonly onNavigateLog?: () => void;
+  readonly onNavigateActivity?: () => void;
+  readonly activityCurrent?: boolean;
   readonly onNavigatePages?: () => void;
   readonly onNavigateSettings?: () => void;
   readonly onNavigateSources?: () => void;
   readonly onNavigateSpaces?: (create: boolean) => void;
   readonly onOpenAbout?: () => void;
+  readonly onOpenSearch?: (trigger: HTMLButtonElement) => void;
+  readonly searchOpen?: boolean;
+  readonly searchDisabled?: boolean;
   readonly onRequestClose?: () => void;
-  readonly onSelectDraft?: (draftId: string, space: string | null) => void;
-  readonly onSelectPage?: (page: Page) => void;
-  readonly onSelectMemory?: (sourceId: string) => void;
-  readonly onSelectSpace: (space: Space) => void;
   readonly open?: boolean;
   readonly presentation?: "desktop" | "overlay";
-  readonly recentPagesRevision?: number;
-  readonly recentSpacesRevision?: number;
 }
 
 function closeAfterNavigation<Arguments extends readonly unknown[]>(
@@ -64,35 +55,32 @@ function closeAfterNavigation<Arguments extends readonly unknown[]>(
 
 export default function Sidebar({
   activeNavigation = null,
-  collapsed,
-  inventoryScope = "all",
-  browsingPages = false,
-  onBrowsePages,
-  currentPageId = null,
-  currentMemoryId = null,
-  onCreatePage,
+  hidden,
+  mode,
   onEntityClick,
   onNavigateEntities,
   onNavigateGraph,
   onNavigateLog,
+  onNavigateActivity,
+  activityCurrent = false,
   onNavigatePages,
   onNavigateSettings,
   onNavigateSources,
   onNavigateSpaces = () => {},
   onOpenAbout,
+  onOpenSearch,
+  searchOpen = false,
+  searchDisabled = false,
   onRequestClose,
-  onSelectDraft,
-  onSelectPage,
-  onSelectMemory,
-  open = !collapsed,
+  open = !hidden,
   presentation = "desktop",
 }: SidebarProps) {
   const { t } = useTranslation();
   const asideRef = useRef<HTMLElement>(null);
   const overlay = presentation === "overlay";
+  const compact = !overlay && mode === "icons";
   const closeOverlay = overlay ? onRequestClose : undefined;
-  const listVisible = open;
-  const sidebarVisible = !overlay || open;
+  const sidebarVisible = overlay ? open : !hidden;
 
   useEffect(() => {
     if (!overlay || !open) return;
@@ -129,27 +117,37 @@ export default function Sidebar({
         aria-hidden={!sidebarVisible}
         aria-label={t("sidebar.navigation")}
         className="memory-sidebar notes-workspace-sidebar"
+        data-collapsed={hidden}
+        data-open={sidebarVisible}
+        data-presentation={presentation}
         data-sidebar-overlay={overlay && open ? "true" : undefined}
         inert={!sidebarVisible}
         onKeyDown={trapFocus}
         ref={asideRef}
         style={{
-          backgroundColor: "var(--mem-sidebar)",
+          backgroundColor: "var(--workspace-sidebar-background, var(--mem-sidebar))",
           borderRight: "none",
+          boxSizing: "border-box",
           bottom: overlay ? 0 : undefined,
           height: overlay ? "auto" : "100%",
           left: overlay ? 0 : undefined,
           position: overlay ? "fixed" : "relative",
           top: overlay ? 52 : undefined,
           transform: overlay && !open ? "translateX(-100%)" : undefined,
-          visibility: overlay && !open ? "hidden" : "visible",
-          width: overlay ? 264 : listVisible ? 264 : 48,
+          visibility: !sidebarVisible ? "hidden" : "visible",
+          width: overlay ? 240 : hidden ? 0 : compact ? ICONS_SIDEBAR_WIDTH : "var(--workspace-sidebar-width, 240px)",
           zIndex: overlay ? 40 : 2,
         }}
       >
+        {onOpenSearch && (
+          <div className={`notes-sidebar-search${compact ? " notes-sidebar-search--compact" : ""}`}>
+            <SearchEntry compact={compact} disabled={searchDisabled} expanded={searchOpen} onOpen={onOpenSearch} />
+          </div>
+        )}
         <div className="notes-icon-rail">
           <PrimaryNavigation
             active={activeNavigation}
+            compact={compact}
             labels={{
               entities: t("sidebar.entities"),
               graph: t("sidebar.graph"),
@@ -157,12 +155,10 @@ export default function Sidebar({
               more: t("sidebar.more"),
               navigation: t("sidebar.navigation"),
               pages: t("sidebar.pages"),
+              pinToSidebar: (name) => t("sidebar.pinToSidebar", { name }),
               sources: t("sidebar.sources"),
               spaces: t("sidebar.spaces"),
-              customize: t("sidebar.customize"),
-              customizationHint: t("sidebar.customizationHint"),
-              resetNavigation: t("sidebar.resetNavigation"),
-              backToMore: t("sidebar.backToMore"),
+              unpinFromSidebar: (name) => t("sidebar.unpinFromSidebar", { name }),
             }}
             onNavigateEntities={closeAfterNavigation(onNavigateEntities, closeOverlay)}
             onNavigateGraph={closeAfterNavigation(onNavigateGraph, closeOverlay)}
@@ -171,44 +167,23 @@ export default function Sidebar({
             onNavigateSources={closeAfterNavigation(onNavigateSources, closeOverlay)}
             onNavigateSpaces={closeAfterNavigation(onNavigateSpaces, closeOverlay)}
           />
-          <div className="notes-rail-utilities">
-            <button
-              aria-label={t("settings.title")}
-              className="notes-rail-button"
-              onClick={closeAfterNavigation(onNavigateSettings, closeOverlay)}
-              title={t("settings.title")}
-              type="button"
-            >
-              <span aria-hidden="true" className="notes-navigation-glyph"><GearSix /></span>
-            </button>
-            <IdentityCard
-              onOpenDetail={closeAfterNavigation(onEntityClick, closeOverlay)}
-              onOpenSettings={closeAfterNavigation(onNavigateSettings, closeOverlay)}
-              onOpenAbout={closeAfterNavigation(onOpenAbout, closeOverlay)}
-            />
-          </div>
         </div>
-          <div className="notes-workspace-panel" hidden={!listVisible} inert={!listVisible} style={{ display: listVisible ? undefined : "none" }}>
-            {activeNavigation === "memories" && listVisible ? (
-              <MemoryInventoryPanel
-                currentMemoryId={currentMemoryId}
-                onOpenMemory={closeAfterNavigation(onSelectMemory, closeOverlay)}
-              />
-            ) : (
-              <PageInventoryPanel
-                inventoryScope={inventoryScope}
-                browsing={browsingPages}
-                onBrowse={closeAfterNavigation(onBrowsePages, closeOverlay)}
-                currentPageId={currentPageId}
-                onCreatePage={closeAfterNavigation(onCreatePage, closeOverlay)}
-                onOpenDraft={closeAfterNavigation(onSelectDraft, closeOverlay)}
-                onOpenPage={closeAfterNavigation(onSelectPage, closeOverlay)}
-              />
-            )}
-            <div className="notes-workspace-footer">
-              <ReviewEnvironmentBadge />
-            </div>
-          </div>
+        <div className={`notes-rail-utilities${compact ? " notes-rail-utilities--icons" : ""}`}>
+          {sidebarVisible && onNavigateActivity && (
+            <ActivityStatus
+              compact={compact}
+              current={activityCurrent}
+              onOpenActivity={closeAfterNavigation(onNavigateActivity, closeOverlay)}
+            />
+          )}
+          <ReviewEnvironmentBadge compact />
+          <IdentityCard
+            compact={compact}
+            onOpenDetail={closeAfterNavigation(onEntityClick, closeOverlay)}
+            onOpenSettings={closeAfterNavigation(onNavigateSettings, closeOverlay)}
+            onOpenAbout={closeAfterNavigation(onOpenAbout, closeOverlay)}
+          />
+        </div>
       </aside>
     </>
   );
@@ -221,31 +196,14 @@ export const SidebarToggleButton = forwardRef<HTMLButtonElement, { readonly coll
     <button
       aria-label={collapsed ? t("sidebar.show") : t("sidebar.hide")}
       data-sidebar-toggle="true"
+      aria-expanded={!collapsed}
       ref={ref}
       onClick={onToggle}
-      className="flex items-center justify-center rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover-strong)]"
-      style={{
-        width: 28,
-        height: 28,
-        color: "var(--mem-text-tertiary)",
-      }}
+      className="mem-icon-action workspace-panel-toggle"
       title={collapsed ? t("sidebar.show") : t("sidebar.hide")}
       type="button"
     >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        style={{ transition: "transform 200ms", transform: collapsed ? "scaleX(-1)" : "none" }}
-      >
-        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-        <line x1="9" y1="3" x2="9" y2="21" />
-      </svg>
+      <SidebarSimple aria-hidden="true" size={18} />
     </button>
   );
 });

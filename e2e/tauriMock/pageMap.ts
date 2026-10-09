@@ -70,6 +70,7 @@ export class PageMapStore {
       page_id: pageId,
       revision: 1,
       map_schema: 1,
+      independent_ideas: true,
       viewport: null,
       nodes: [
         node("n_root", null, 0, "page", null),
@@ -114,6 +115,7 @@ export class PageMapStore {
       height: null,
       ref_state: "live",
     };
+    if (node.ref_kind === "idea") map.map_schema = 2;
     map.nodes.push(node);
     map.revision += 1;
     return { revision: map.revision, node: structuredClone(node) };

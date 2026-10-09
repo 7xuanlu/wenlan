@@ -26,7 +26,8 @@ async function openPrimaryDestination(
     await page.getByTitle("Show sidebar").click();
   }
   await navigation.getByRole("button", { name: destination, exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: destination })).toBeVisible();
+  if (destination === "Wiki") await expect(page.locator(".wiki-workspace")).toBeVisible();
+  else await expect(page.getByRole("heading", { level: 1, name: destination })).toBeAttached();
 }
 
 async function controlMetrics(page: Page, name: "New page" | "New") {
@@ -44,10 +45,10 @@ async function controlMetrics(page: Page, name: "New page" | "New") {
   });
 }
 
-test("captures direct Page authoring from Wiki and Space with one control grammar", async ({ page }) => {
+test("captures direct Page authoring from the tab action and Space detail", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
   await mkdir(evidenceDir, { recursive: true });
-  await installTauriMock(page, {
+  const runtime = await installTauriMock(page, {
     locale: "en",
     localStorage: { "wenlan-theme": "dark", "wenlan-spaces-view-mode": "rows" },
     rawActions: [],
@@ -63,21 +64,24 @@ test("captures direct Page authoring from Wiki and Space with one control gramma
     fullPage: false,
   });
 
-  await page.getByRole("button", { name: "New page", exact: true }).click();
+  await page.locator(".note-tab-create").click();
   await expect(page.getByRole("textbox", { name: "Title", exact: true })).toBeFocused();
-  await expect(page.getByRole("combobox", { name: "Space", exact: true })).toHaveValue("");
-  await expect(page.getByText("Optional", { exact: true })).toHaveCount(0);
+  const wikiDraftForm = page.getByRole("region", { name: "New note", exact: true });
+  await expect(wikiDraftForm.getByRole("combobox")).toHaveCount(0);
+  await expect(wikiDraftForm.getByRole("button", { name: "Publish", exact: true })).toHaveCount(0);
   await settle(page);
   await page.screenshot({
     path: path.join(evidenceDir, "draft-wiki-1280x900.png"),
     fullPage: false,
   });
   await page.getByRole("button", { name: "Back", exact: true }).click();
+  expect(runtime.calls().filter((call) => call.command === "create_page_draft")).toEqual([]);
 
   await openPrimaryDestination(page, "Spaces");
   await settle(page);
   const newSpaceMetrics = await controlMetrics(page, "New");
-  expect(newSpaceMetrics).toEqual(newPageMetrics);
+  expect(newPageMetrics.height).toBeGreaterThanOrEqual(32);
+  expect(newSpaceMetrics.height).toBeGreaterThanOrEqual(32);
   await page.screenshot({
     path: path.join(evidenceDir, "spaces-1280x900.png"),
     fullPage: false,
@@ -95,7 +99,13 @@ test("captures direct Page authoring from Wiki and Space with one control gramma
   });
 
   await page.getByRole("button", { name: "New page", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Space", exact: true })).toHaveValue("Wenlan");
+  await expect(page.getByRole("textbox", { name: "Title", exact: true })).toBeVisible();
+  const spaceDraftForm = page.getByRole("region", { name: "New note", exact: true });
+  await expect(spaceDraftForm.getByRole("combobox")).toHaveCount(0);
+  await expect(spaceDraftForm.getByRole("button", { name: "Publish", exact: true })).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Title", exact: true }).fill("Space-scoped draft");
+  await expect.poll(() => runtime.calls().find((call) => call.command === "create_page_draft")?.args)
+    .toMatchObject({ space: "Wenlan" });
   await settle(page);
   await page.screenshot({
     path: path.join(evidenceDir, "draft-space-1280x900.png"),
@@ -109,40 +119,47 @@ test("captures direct Page authoring from Wiki and Space with one control gramma
 test("keeps the editor axis stable on wide screens and title conflicts readable on mobile", async ({ page }) => {
   const browserErrors = collectBrowserErrors(page);
   await mkdir(evidenceDir, { recursive: true });
-  await installTauriMock(page, {
+  const runtime = await installTauriMock(page, {
     locale: "en",
     localStorage: { "wenlan-theme": "dark", "wenlan-spaces-view-mode": "rows" },
     rawActions: [],
   });
   await page.setViewportSize({ width: 1920, height: 900 });
   await page.goto("/");
-  await openPrimaryDestination(page, "Wiki");
-
-  const wikiOrigin = await page.locator(".wiki-overview").evaluate((element) =>
-    element.getBoundingClientRect().x
-  );
+  await openPrimaryDestination(page, "Spaces");
+  await page
+    .getByTestId("space-row-space-wenlan")
+    .getByRole("button", { name: "Wenlan", exact: true })
+    .click();
+  await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
   await page.getByRole("button", { name: "New page", exact: true }).click();
+  await expect(page.getByRole("region", { name: "New note", exact: true })).toBeVisible();
+  const draftContentEdge = await page.locator(".page-draft-editor").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.x + Number.parseFloat(getComputedStyle(element).paddingLeft);
+  });
   const editorMetrics = await page.locator(".page-draft-editor-axis").evaluate((element) => {
     const rect = element.getBoundingClientRect();
     return { width: rect.width, x: rect.x };
   });
-  expect(Math.abs(editorMetrics.x - wikiOrigin)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs(editorMetrics.x - draftContentEdge)).toBeLessThanOrEqual(0.5);
   expect(editorMetrics.width).toBe(730);
 
   await page.getByRole("textbox", { name: "Title", exact: true }).fill("Fixture architecture");
   await page.getByRole("textbox", { name: "Content", exact: true }).fill(
     "Conflict layout verification body.",
   );
-  await page.getByRole("combobox", { name: "Space", exact: true }).selectOption("Wenlan");
-  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect.poll(() => runtime.calls().find((call) => call.command === "create_page_draft")?.args)
+    .toMatchObject({ space: "Wenlan" });
+  await page.locator(".note-tab-create").click();
   await expect(page.getByRole("alert")).toContainText(
     "A page with this title already exists.",
   );
 
   await page.setViewportSize({ width: 375, height: 812 });
   const alert = page.getByRole("alert");
-  await expect(alert.getByRole("button", { name: "Open existing", exact: true })).toBeVisible();
-  await expect(alert.getByRole("button", { name: "Rename draft", exact: true })).toBeVisible();
+  await expect(alert.getByRole("button", { name: "Open existing", exact: true })).toHaveCount(0);
+  await expect(alert.getByRole("button", { name: "Rename note", exact: true })).toBeVisible();
   await expect(alert).toHaveCSS("flex-direction", "column");
   const overflow = await page.evaluate(() => ({
     clientWidth: document.documentElement.clientWidth,

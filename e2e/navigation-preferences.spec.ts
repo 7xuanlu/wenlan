@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const languages = [
-  { locale: "en", theme: "light", spaces: "Spaces", graph: "Graph", sources: "Sources", more: "More", customize: "Customize navigation", reset: "Reset defaults" },
-  { locale: "zh-Hant", theme: "dark", spaces: "空間", graph: "圖譜", sources: "來源", more: "更多", customize: "自訂導覽", reset: "恢復預設" },
-  { locale: "zh-Hans", theme: "light", spaces: "空间", graph: "图谱", sources: "来源", more: "更多", customize: "自定义导航", reset: "恢复默认" },
+  { locale: "en", theme: "light", spaces: "Spaces", graph: "Graph", sources: "Sources", memories: "Memories", topics: "Topics", more: "More", pin: (name: string) => `Pin ${name} to sidebar`, unpin: (name: string) => `Unpin ${name} from sidebar` },
+  { locale: "zh-Hant", theme: "dark", spaces: "空間", graph: "圖譜", sources: "來源", memories: "記憶", topics: "主題", more: "更多", pin: (name: string) => `將 ${name} 釘選至側邊欄`, unpin: (name: string) => `取消釘選 ${name}` },
+  { locale: "zh-Hans", theme: "light", spaces: "空间", graph: "图谱", sources: "来源", memories: "记忆", topics: "主题", more: "更多", pin: (name: string) => `将 ${name} 固定到侧边栏`, unpin: (name: string) => `从侧边栏取消固定 ${name}` },
 ] as const;
 
 async function capture(page: Page, name: string) {
@@ -31,8 +32,14 @@ async function expectPanelWithinViewport(page: Page) {
   }).toBe(true);
 }
 
+async function panelPosition(page: Page) {
+  const panel = await page.locator(".notes-more-panel").boundingBox();
+  if (!panel) throw new Error("More panel is not open");
+  return { x: panel.x, y: panel.y };
+}
+
 for (const copy of languages) {
-  test(`${copy.locale} navigation customization persists and stays reachable at every size`, async ({ page }) => {
+  test(`${copy.locale} More pins destinations in place and persists across sizes`, async ({ page }) => {
     const errors = collectBrowserErrors(page);
     await page.setViewportSize({ width: 1280, height: 800 });
     await installTauriMock(page, {
@@ -43,91 +50,114 @@ for (const copy of languages) {
     });
     await page.goto("/");
     const nav = page.locator(".notes-rail-nav");
-    const more = nav.getByRole("button", { name: copy.more, exact: true });
-    const railNames = () => nav.locator(".notes-rail-button").evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label")));
-    const defaults = ["Wiki", copy.spaces, copy.graph, copy.more];
+    const moreButton = nav.getByRole("button", { name: copy.more, exact: true });
+    const railNames = () => nav.locator(".notes-primary-link, .notes-rail-button").evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label")));
+    const morePanel = page.getByRole("group", { name: copy.more, exact: true });
+    const row = (name: string) => morePanel.locator(".notes-more-destination").filter({ has: page.getByRole("button", { name, exact: true }) });
+    const pin = (name: string) => row(name).getByRole("button", { name: copy.pin(name), exact: true });
+    const unpin = (name: string) => row(name).getByRole("button", { name: copy.unpin(name), exact: true });
+    const revealPin = async (name: string) => row(name).hover();
+    const defaults = ["Wiki", copy.spaces, copy.graph, copy.sources, copy.more];
     await expect.poll(railNames).toEqual(defaults);
     await nav.getByRole("button", { name: "Wiki", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Wiki", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: copy.locale === "en" ? "Open a note" : copy.locale === "zh-Hant" ? "開啟筆記" : "打开笔记", level: 1 })).toBeVisible();
     await capture(page, `${copy.locale}-${copy.theme}-default`);
 
-    await more.click();
-    await nav.getByRole("button", { name: copy.sources, exact: true }).click();
-    await expect(page.getByRole("heading", { name: copy.sources, exact: true })).toBeVisible();
-    await expect(more).toHaveAttribute("aria-current", "page");
-    await more.click();
-    await nav.getByRole("button", { name: copy.customize, exact: true }).click();
-    const customize = page.getByRole("group", { name: copy.customize, exact: true });
-    await expect(customize.getByRole("checkbox")).toHaveCount(6);
-    await expect(customize.getByRole("checkbox", { name: /^(Home|首頁|首页)$/ })).toHaveCount(0);
-    await customize.getByRole("checkbox", { name: copy.sources, exact: true }).check();
-    await customize.getByRole("checkbox", { name: copy.graph, exact: true }).uncheck();
-    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.sources, copy.more]);
+    await moreButton.click();
+    const moreRows = morePanel.locator(".notes-more-destination");
+    await expect(moreRows).toHaveCount(2);
+    expect(await morePanel.locator(".notes-more-destination-link").evaluateAll(buttons => buttons.map(button => button.getAttribute("aria-label"))))
+      .toEqual([copy.memories, copy.topics]);
+    await morePanel.getByRole("button", { name: copy.memories, exact: true }).click();
+    await expect(page.getByRole("heading", { name: copy.memories, exact: true })).toBeVisible();
+    await moreButton.click();
+    const openedPosition = await panelPosition(page);
+    await revealPin(copy.memories);
+    await expect(pin(copy.memories)).toHaveAttribute("aria-pressed", "false");
+    await pin(copy.memories).click();
+    await expect.poll(() => panelPosition(page)).toEqual(openedPosition);
+    await expect(unpin(copy.memories)).toBeFocused();
+    await expect(unpin(copy.memories)).toHaveAttribute("aria-pressed", "true");
+    await expect(morePanel).toBeVisible();
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.memories, copy.more]);
     await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
-    await expect(nav.getByRole("button", { name: copy.sources, exact: true })).toHaveAttribute("aria-current", "page");
-    await expectPanelWithinViewport(page);
-    await capture(page, `${copy.locale}-${copy.theme}-customize`);
-    await page.keyboard.press("Escape");
-    await expect(customize).toHaveCount(0);
-    await expect(more).toBeFocused();
 
-    // A real reload must retain the user's choice, not reseed it through the fixture.
+    await unpin(copy.memories).click();
+    await expect.poll(() => panelPosition(page)).toEqual(openedPosition);
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.more]);
+    await expect(morePanel.getByRole("button", { name: copy.memories, exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+    await expectPanelWithinViewport(page);
+    await capture(page, `${copy.locale}-${copy.theme}-direct-pin`);
+    await revealPin(copy.memories);
+    await pin(copy.memories).click();
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.memories, copy.more]);
+    await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await expect(morePanel).toHaveCount(0);
+    await expect(moreButton).toBeFocused();
+    await expect(moreButton).not.toHaveAttribute("aria-current");
+
+    // A real reload must retain the user's choices, not reseed them through the fixture.
     await page.reload();
-    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.sources, copy.more]);
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("wenlan-navigation-v1")!))).toEqual({ version: 1, visible: ["pages", "spaces", "sources"] });
-    await more.click();
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.memories, copy.more]);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("wenlan-navigation-v1")!))).toEqual({ version: 1, visible: ["pages", "spaces", "graph", "sources", "memories"], sidebar: { visible: true, mode: "labels" } });
     await nav.getByRole("button", { name: copy.graph, exact: true }).click();
     await expect(page.getByTestId("atlas-view")).toBeVisible();
-    await expect(more).toHaveAttribute("aria-current", "page");
+    await expect(nav.locator(`.notes-primary-link[aria-label="${copy.graph}"]`)).toHaveAttribute("aria-current", "page");
 
-    await more.click();
-    await nav.getByRole("button", { name: copy.customize, exact: true }).click();
-    for (const checkbox of await customize.getByRole("checkbox").all()) await checkbox.check();
-    await expect(nav.locator(".notes-rail-button")).toHaveCount(7);
+    await moreButton.click();
+    await revealPin(copy.memories);
+    await expect(unpin(copy.memories)).toHaveAttribute("aria-pressed", "true");
+    await revealPin(copy.topics);
+    await pin(copy.topics).click();
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.memories, copy.topics, copy.more]);
     await page.setViewportSize({ width: 1280, height: 600 });
     await expectPanelWithinViewport(page);
     await capture(page, `${copy.locale}-${copy.theme}-all-pinned-short`);
 
     await page.keyboard.press("Escape");
     await page.setViewportSize({ width: 375, height: 812 });
-    // The sidebar becomes a drawer at this width. Its toggle stays in its existing place.
     await expect(page.locator(".notes-workspace-sidebar")).toHaveAttribute("aria-hidden", "true");
     await page.locator("[data-sidebar-toggle]").click();
-    await more.click();
-    await nav.getByRole("button", { name: copy.customize, exact: true }).click();
+    await moreButton.click();
     await expectPanelWithinViewport(page);
     await capture(page, `${copy.locale}-${copy.theme}-all-pinned-narrow`);
-    for (const checkbox of await customize.getByRole("checkbox").all()) await checkbox.uncheck();
-    await expect.poll(railNames).toEqual([copy.more]);
-    await expectPanelWithinViewport(page);
+    for (const name of [copy.memories, copy.topics]) {
+      await unpin(name).click();
+    }
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.more]);
     await expect(nav.locator('[aria-current="page"]')).toHaveCount(1);
-    await capture(page, `${copy.locale}-${copy.theme}-all-hidden-narrow`);
+    await expectPanelWithinViewport(page);
+    await capture(page, `${copy.locale}-${copy.theme}-all-unpinned-narrow`);
     await page.keyboard.press("Escape");
-    await expect(more).toBeFocused();
+    await expect(moreButton).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".notes-workspace-sidebar")).toHaveAttribute("aria-hidden", "true");
+    await page.locator("[data-sidebar-toggle]").click();
+    await moreButton.click();
+    await revealPin(copy.memories);
+    await pin(copy.memories).click();
+    await expect.poll(railNames).toEqual(["Wiki", copy.spaces, copy.graph, copy.sources, copy.memories, copy.more]);
+    await expect(morePanel).toBeVisible();
+    await capture(page, `${copy.locale}-${copy.theme}-narrow-direct-pin`);
+    await page.keyboard.press("Escape");
+    await expect(moreButton).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(page.locator(".notes-workspace-sidebar")).toHaveAttribute("aria-hidden", "true");
     await expect(page.locator("[data-sidebar-toggle]")).toBeFocused();
     await page.locator("[data-sidebar-toggle]").click();
-    await more.click();
-    await expect(nav.getByRole("button", { name: "Wiki", exact: true })).toBeVisible();
-    await nav.getByRole("button", { name: copy.customize, exact: true }).click();
-    await customize.getByRole("button", { name: copy.reset, exact: true }).click();
-    await expect.poll(railNames).toEqual(defaults);
-    await page.keyboard.press("Escape");
-    await nav.getByRole("button", { name: "Wiki", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Wiki", level: 1 })).toBeVisible();
+    await nav.locator('.notes-primary-link[aria-label="Wiki"]').click();
+    await expect(page.getByRole("heading", { name: copy.locale === "en" ? "Open a note" : copy.locale === "zh-Hant" ? "開啟筆記" : "打开笔记", level: 1 })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
     await page.setViewportSize({ width: 1280, height: 800 });
-    await expect(more).toBeVisible();
-    await more.click();
-    await nav.getByRole("button", { name: copy.customize, exact: true }).click();
-    await capture(page, `${copy.locale}-${copy.theme}-default-customize`);
+    await expect(moreButton).toBeVisible();
     expect(errors.pageErrors).toEqual([]);
     expect(errors.consoleErrors).toEqual([]);
   });
 }
 
-test("closing navigation customization keeps the note in its writing session", async ({ page }) => {
+test("closing More keeps the note in its writing session", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   await page.setViewportSize({ width: 1280, height: 800 });
   await installTauriMock(page, { locale: "en", rawActions: [] });
@@ -135,9 +165,7 @@ test("closing navigation customization keeps the note in its writing session", a
   const nav = page.locator(".notes-rail-nav");
   const more = nav.getByRole("button", { name: "More", exact: true });
   await nav.getByRole("button", { name: "Wiki", exact: true }).click();
-  const wiki = page.locator(".wiki-overview");
-  await expect(wiki.getByRole("button", { name: "Open Fixture architecture", exact: true })).toBeVisible();
-  await wiki.getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+  await openWikiNote(page, "Fixture architecture");
   const editor = page.locator(".cm-content[contenteditable='true']");
   await expect(editor).toBeVisible();
   await expect(editor).toContainText("Fixture architecture");
@@ -149,10 +177,9 @@ test("closing navigation customization keeps the note in its writing session", a
       await page.locator("[data-sidebar-toggle]").click();
     }
     await more.click();
-    await nav.getByRole("button", { name: "Customize navigation", exact: true }).click();
-    await expect(nav.getByRole("button", { name: "Back to More", exact: true })).toBeFocused();
+    await expect(page.getByRole("group", { name: "More", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("group", { name: "Customize navigation", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("group", { name: "More", exact: true })).toHaveCount(0);
     await expect(more).toBeFocused();
     await expect(editor).toBeVisible();
     await expect(editor).toContainText("Fixture architecture");

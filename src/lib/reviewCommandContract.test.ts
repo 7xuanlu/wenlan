@@ -106,7 +106,6 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "move_space",
   "on_device_model_download_bytes",
   "open_file",
-  "open_quick_capture",
   "open_search_result",
   "position_quick_capture",
   "quick_capture",

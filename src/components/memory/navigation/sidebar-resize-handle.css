@@ -1,0 +1,54 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.sidebar-resize-handle {
+  position: absolute;
+  z-index: 12;
+  top: 52px;
+  bottom: 0;
+  left: calc(var(--workspace-sidebar-width, 240px) - 4px);
+  width: 8px;
+  cursor: col-resize;
+  outline: none;
+  touch-action: auto;
+}
+
+.sidebar-resize-handle--right {
+  right: auto;
+  left: -4px;
+}
+.sidebar-resize-handle--right::after { left: auto; right: 2.5px; }
+
+/* The shell owns the continuous seam; feedback stays on a small grip. */
+.sidebar-resize-handle::after {
+  position: absolute;
+  top: calc(50% - 20px);
+  left: 2.5px;
+  width: 3px;
+  height: 40px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--mem-text-tertiary) 55%, transparent);
+  content: "";
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.sidebar-resize-handle:hover:not(.is-hover-suppressed)::after,
+.sidebar-resize-handle.is-resizing::after {
+  opacity: 1;
+}
+
+.sidebar-resize-handle:focus-visible:not(.is-hover-suppressed):not(.is-pointer-focused)::after {
+  opacity: 1;
+  background: var(--mem-text-secondary);
+  outline: 2px solid var(--mem-text-secondary);
+  outline-offset: 2px;
+}
+
+.sidebar-resize-handle.is-resizing {
+  touch-action: none;
+}
+
+body.sidebar-resize-active,
+body.sidebar-resize-active * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}

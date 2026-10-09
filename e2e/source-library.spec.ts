@@ -4,6 +4,7 @@ import { installTauriMock, collectBrowserErrors } from "./tauriMock";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import type { IndexedFileInfo } from "../src/lib/tauri";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 async function capture(page: Page, filename: string) {
   await page.evaluate(async () => {
@@ -98,7 +99,7 @@ test("imported documents remain browsable without any registered folder", async 
   await page.getByRole("button", { name: "開啟原始網頁", exact: true }).click();
   expect(state.opens).toEqual([{ url: "https://example.org/article" }]);
   await page.keyboard.press("Escape");
-  await page.getByRole("searchbox", { name: "搜尋來源", exact: true }).fill("找不到的項目");
+  await page.getByRole("searchbox", { name: "篩選來源", exact: true }).fill("找不到的項目");
   await expect(page.getByRole("heading", { name: "沒有符合的來源" })).toBeVisible();
   await page.getByRole("button", { name: "清除搜尋與篩選" }).click();
   await expect(library.getByRole("button")).toHaveCount(3);
@@ -108,7 +109,7 @@ test("imported documents remain browsable without any registered folder", async 
 test("empty sources retains its library shell and offers clear localized add choices", async ({ page }) => {
   const state = await setup(page, true);
   await expect(page.getByRole("heading", { name: "把你的來源放在一起" })).toBeVisible();
-  await expect(page.getByRole("searchbox", { name: "搜尋來源" })).toBeVisible();
+  await expect(page.getByRole("searchbox", { name: "篩選來源" })).toBeVisible();
   await capture(page, "sources-after-empty-light.png");
   await page.getByRole("button", { name: "新增", exact: true }).first().click();
   const menu = page.getByRole("dialog", { name: "加入來源", exact: true });
@@ -191,34 +192,33 @@ test("a concurrent first save preserves the winning excerpt until explicit repla
 test("navigation destinations keep one primary workspace and restore note context", async ({ page }) => {
   const state = await setup(page);
   const sidebar = page.locator(".notes-workspace-sidebar");
-  await expect(sidebar).toHaveCSS("width", "48px");
-  await expect(page.getByRole("button", { name: "更多", exact: true })).toHaveAttribute("aria-current", "page");
-  await expect(page.locator(".notes-list-panel")).toBeHidden();
+  await expect(sidebar).toHaveCSS("width", "240px");
+  await expect(page.getByRole("navigation", { name: "主要導覽" }).locator('[aria-current="page"]')).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "來源", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(page.locator("#workspace-context-browser")).toHaveCount(0);
   await page.getByRole("button", { name: "連結", exact: true }).click();
-  await page.getByRole("searchbox", { name: "搜尋來源", exact: true }).fill("知識");
+  await page.getByRole("searchbox", { name: "篩選來源", exact: true }).fill("知識");
   await capture(page, "navigation-sources-light.png");
 
   await page.getByRole("button", { name: "Wiki", exact: true }).click();
-  const notes = page.locator(".notes-list-panel");
-  await notes.getByRole("searchbox").fill("History");
-  await notes.getByRole("button", { name: /History semantics/ }).click();
+  await openWikiNote(page, "History semantics");
   const editor = page.locator(".cm-content[contenteditable=true]");
   await expect(editor).toBeVisible();
   await editor.evaluate(element => {
     const view = (element as any).cmTile.root.view;
     view.dispatch({ selection: { anchor: 300, head: 315 } });
   });
-  const main = page.locator("main");
+  const main = page.locator(".wiki-workspace-content");
+  await expect(main).toHaveCSS("overflow-y", "auto");
   await main.evaluate(element => { element.scrollTop = 600; });
   await expect.poll(() => main.evaluate(element => element.scrollTop)).toBe(600);
   await openPrimaryDestination(page, "來源", "更多");
-  await expect(page.getByRole("searchbox", { name: "搜尋來源", exact: true })).toHaveValue("知識");
+  await expect(page.getByRole("searchbox", { name: "篩選來源", exact: true })).toHaveValue("知識");
   await expect(page.getByRole("button", { name: "連結", exact: true })).toHaveAttribute("aria-pressed", "true");
-  await expect(sidebar).toHaveCSS("width", "48px");
+  await expect(sidebar).toHaveCSS("width", "240px");
 
   await page.getByRole("button", { name: "Wiki", exact: true }).click();
   await expect(editor).toBeVisible();
-  await expect(notes.getByRole("searchbox")).toHaveValue("History");
   await expect.poll(() => editor.evaluate(element => {
     const selection = (element as any).cmTile.root.view.state.selection.main;
     return { anchor: selection.anchor, head: selection.head };
@@ -227,25 +227,27 @@ test("navigation destinations keep one primary workspace and restore note contex
   await capture(page, "navigation-note-restored-light.png");
 
   await page.getByRole("button", { name: "空間", exact: true }).click();
-  await expect(page.locator(".notes-list-panel")).toBeHidden();
-  await expect(sidebar).toHaveCSS("width", "48px");
+  await expect(page.locator("#workspace-context-browser")).toHaveCount(0);
+  await expect(sidebar).toHaveCSS("width", "240px");
   await capture(page, "navigation-spaces-light.png");
   await openPrimaryDestination(page, "來源", "更多");
-  await expect(page.getByRole("searchbox", { name: "搜尋來源", exact: true })).toHaveValue("知識");
-  // The toggle remains usable, and explicit expansion keeps the note filter.
+  await expect(page.getByRole("searchbox", { name: "篩選來源", exact: true })).toHaveValue("知識");
+  // The global toggle hides navigation, while page context remains independent.
   await page.locator("[data-sidebar-toggle]").click();
-  await expect(notes.getByRole("searchbox")).toHaveValue("History");
-  await expect(sidebar).toHaveCSS("width", "264px");
+  await expect(sidebar).toHaveCSS("width", "0px");
+  await page.locator("[data-sidebar-toggle]").click();
+  await page.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(editor).toBeVisible();
   expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
 });
 
 
-test("occasional people and topics stay in More on a narrow dark workspace", async ({ page }) => {
+test("Sources stays pinned while occasional people and topics stay in More on a narrow dark workspace", async ({ page }) => {
   const state = await setup(page, false, true);
   await page.setViewportSize({ width: 375, height: 812 });
   await page.locator("[data-sidebar-toggle]").click();
   const nav = page.getByRole("navigation", { name: "主要導覽", exact: true });
-  await expect(nav.getByRole("button", { name: "來源", exact: true })).toHaveCount(0);
+  await expect(nav.getByRole("button", { name: "來源", exact: true })).toBeVisible();
   await expect(nav.getByRole("button", { name: "圖譜", exact: true })).toBeVisible();
   await expect(nav.getByRole("button", { name: "空間", exact: true })).toBeVisible();
   await expect(nav.getByRole("button", { name: "主題", exact: true })).toHaveCount(0);
@@ -261,7 +263,7 @@ test("occasional people and topics stay in More on a narrow dark workspace", asy
   await capture(page, "people-topics-dark-narrow.png");
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 1280, height: 800 });
-  await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "48px");
+  await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "240px");
   await expect(nav.getByRole("button", { name: "Wiki", exact: true })).toBeVisible();
   await capture(page, "people-topics-dark.png");
   expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
@@ -271,14 +273,14 @@ test("occasional people and topics stay in More on a narrow dark workspace", asy
 test("the Notes entry reopens a newly saved draft after browsing sources", async ({ page }) => {
   const state = await setup(page);
   await page.getByRole("button", { name: "Wiki", exact: true }).click();
-  await page.locator(".notes-list-panel").getByRole("button", { name: "新增筆記", exact: true }).click();
+  await page.locator(".note-tab-create").click();
   await page.locator(".page-draft-title").fill("A note to return to");
   await page.locator(".page-draft-content").fill("Keep this draft when I look at sources.");
   // Leave before the debounce: navigation must flush and remember the assigned id.
   await openPrimaryDestination(page, "來源", "更多");
   await expect(page.getByRole("heading", { name: "來源", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.locator(".page-draft-title")).toHaveValue("A note to return to");
-  await expect(page.locator(".page-draft-content")).toHaveValue("Keep this draft when I look at sources.");
+  await expect(page.getByRole("heading", { name: "A note to return to", exact: true })).toBeVisible();
+  await expect(page.locator(".cm-content[contenteditable=true]")).toContainText("Keep this draft when I look at sources.");
   expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
 });

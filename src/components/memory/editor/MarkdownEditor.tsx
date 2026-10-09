@@ -12,6 +12,9 @@ import type { ComponentType, RefAttributes } from "react";
 import { NativeMarkdownEditor } from "./NativeMarkdownEditor";
 import { loadCodeMirrorEditor } from "./loadCodeMirrorEditor";
 
+import type { EditorReferenceContext } from "./wikiLinkEditing";
+import type { ReferenceTarget } from "../links/referenceTypes";
+
 export interface MarkdownEditorHandle {
   focus(): void;
   runCommand(command: MarkdownEditorCommand): boolean;
@@ -62,6 +65,13 @@ export interface MarkdownEditorProps {
   onCancel(): void;
   onFallback(reason: "load" | "construction"): void;
   onStatusChange?(status: MarkdownEditorStatus): void;
+  wikiLinkTargets?: ReadonlyMap<string, string>;
+  referenceContext?: EditorReferenceContext;
+  onReferenceActivate?(target: ReferenceTarget, anchor: HTMLAnchorElement): void;
+  onReferencePreview?(target: ReferenceTarget, anchor: HTMLAnchorElement, keyboard: boolean): void;
+  onWikiPageActivate?(pageId: string, anchor: HTMLAnchorElement): void;
+  onWikiLinkPreview?(pageId: string, anchor: HTMLAnchorElement, keyboard: boolean): void;
+  onWikiLinkPreviewLeave?(): void;
 }
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(

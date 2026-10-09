@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PageCitation } from "../../lib/tauri";
 import PageDetail from "./PageDetail";
+import { i18n } from "../../i18n";
 
 const tauriMocks = vi.hoisted(() => ({
   getPage: vi.fn(),
@@ -117,6 +118,11 @@ beforeEach(() => {
   tauriMocks.getTruthStatus.mockResolvedValue(null);
 });
 
+async function openPageInfo(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: i18n.t("pageInspector.open") }));
+  return screen.getByRole("dialog", { name: i18n.t("pageInspector.label") });
+}
+
 describe("PageDetail citations", () => {
   it("renders one chip per citation and no raw markers in the body", async () => {
     renderPage();
@@ -154,8 +160,7 @@ describe("PageDetail citations", () => {
     expect(screen.getByText(/It uses libSQL\./)).toBeInTheDocument();
     expect(screen.queryByText(/\[2\]/)).toBeNull();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    await openPageInfo(user);
     expect(
       screen.getByText("Citations cleared by edit — re-distill to restore"),
     ).toBeInTheDocument();
@@ -167,8 +172,7 @@ describe("PageDetail citations", () => {
     expect(await screen.findByText("Cited Page")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     expect(screen.queryByText(/\[1\]/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Page info" }));
+    await openPageInfo(user);
     expect(
       screen.getByText("Citation data mismatched — re-distill to repair"),
     ).toBeInTheDocument();

@@ -5,8 +5,8 @@
 // The import used to show six phases and then a trailing bill of what the
 // background still owed. This proves the new contract: the import surface
 // shows the two phases that end in something the user can use, says plainly
-// that those memories are searchable now, and points at the sidebar status
-// line, which by then is reporting the rest.
+// that those memories are searchable now, and points to Activity for the
+// background work that continues after the import.
 //
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
@@ -27,8 +27,8 @@ declare global {
 
 /**
  * One stateful mock for both surfaces, because the point of this spec is that
- * they agree: the moment the import stops reporting background work, the
- * toolbar Activity button starts. `get_activity` therefore answers from the same counter
+ * they agree: once memories are stored, Activity reports the work continuing
+ * in the background. `get_activity` therefore answers from the same counter
  * the batch status does, rather than from a fixed fixture.
  */
 async function installHandoffMock(page: Page): Promise<void> {
@@ -42,7 +42,11 @@ async function installHandoffMock(page: Page): Promise<void> {
       state: string,
       done: number,
       total: number,
-    ) => ({ kind, state, done, total, blocked: 0, steps: [] });
+    ) => ({
+      kind, state, done, total, blocked: 0,
+      // The rail reflects measured running steps, not the aggregate state alone.
+      steps: [{ name: kind === "memories" ? "summarize" : kind === "entities" ? "detect" : "write", state, done, total, failed: 0, job: kind === "pages" ? "synthesis" : "everyday" }],
+    });
 
     internals.invoke = (async (command: string, args?: unknown) => {
       const params = (args ?? {}) as { batchId?: string | null; content?: unknown };
@@ -115,6 +119,8 @@ async function installHandoffMock(page: Page): Promise<void> {
               refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
             }
           : {
+              // The fixture begins up to date; the Activity rail renders its
+              // existing neutral label for this idle state.
               state: "up_to_date",
               last_activity_at: null,
               assets: [
@@ -133,7 +139,7 @@ async function installHandoffMock(page: Page): Promise<void> {
   });
 }
 
-test("an import shows Ingest and Store, then hands the rest to the toolbar Activity button", async ({ page }) => {
+test("an import hands background work to Activity after returning to the workspace", async ({ page }) => {
   const errors = collectBrowserErrors(page);
 
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -141,10 +147,10 @@ test("an import shows Ingest and Store, then hands the rest to the toolbar Activ
   await installHandoffMock(page);
   await page.goto("/");
 
-  // Nothing has been given to Wenlan yet, so the button says so.
+  // The idle Activity rail stays neutral before the import begins.
   const statusLine = page.getByTestId("activity-status");
-  await expect(statusLine).toHaveAttribute("data-state", "up_to_date");
-  await expect(statusLine).toHaveAccessibleName("Activity, Up to date");
+  await expect(statusLine).toHaveAccessibleName("Activity");
+  await expect(statusLine).not.toHaveAttribute("data-state");
 
   // Account menu → Settings → Sources → Import memories.
   await page.getByRole("button", { name: /account menu/i }).click();
@@ -170,17 +176,7 @@ test("an import shows Ingest and Store, then hands the rest to the toolbar Activ
 
   // ── The handoff sentence, naming the number stored ──
   await expect(page.getByText(/3 memories stored and searchable now/)).toBeVisible();
-  await expect(
-    page.getByText(/Follow along from Activity in the toolbar/),
-  ).toBeVisible();
-
-  // ── And the button it points at is doing the reporting ──
-  await expect(statusLine).toHaveAttribute("data-state", "organizing", { timeout: 15_000 });
-  await expect(statusLine).toHaveAccessibleName("Activity, Steeping");
-  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute(
-    "data-icon-state",
-    "organizing",
-  );
+  await expect(page.getByText(/See further progress on Activity/)).toBeVisible();
 
   // The background phases stay gone on the summary too, along with the
   // trailing figures that used to read as an unpaid bill.
@@ -190,7 +186,29 @@ test("an import shows Ingest and Store, then hands the rest to the toolbar Activ
   await expect(page.getByText(/detected entities/)).toHaveCount(0);
   await expect(page.getByText(/related pages/)).toHaveCount(0);
 
-  // The detail the import stopped showing is one click away, not gone.
+  // Settings has no Activity rail. Use the shell's actual Back history to
+  // return through Sources and General to the primary Wiki workspace first.
+  const historyBack = page
+    .getByRole("group", { name: "History navigation" })
+    .getByRole("button", { name: "Back", exact: true });
+  await historyBack.click();
+  const settingsHeading = page.getByRole("heading", { level: 1, name: "Sources", exact: true });
+  await expect(settingsHeading).toHaveClass(/sr-only/);
+  await expect(page.getByRole("heading", { name: "Import Memories", exact: true })).toBeVisible();
+  await historyBack.click();
+  await expect(page.getByRole("heading", { level: 1, name: "General", exact: true })).toHaveClass(/sr-only/);
+  await expect(page.getByRole("heading", { name: "App", exact: true })).toBeVisible();
+  await historyBack.click();
+  await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();
+
+  // The sidebar's Activity status now reflects the background work handed off
+  // by this import. Its summary preserves the actual memory count and units.
+  await expect(statusLine).toHaveAttribute("data-state", "organizing", { timeout: 15_000 });
+  await expect(statusLine).toHaveAccessibleName("Activity, Steeping");
+  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute(
+    "data-icon-state",
+    "organizing",
+  );
   await statusLine.click();
   const popover = page.getByRole("dialog", { name: "Background activity" });
   await expect(popover).toBeVisible();

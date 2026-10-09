@@ -174,3 +174,30 @@ test("renders the empty parent memory list", async ({ page }) => {
   expect(consoleErrors).toEqual([]);
   await writeConsoleEvidence(pageErrors, consoleErrors);
 });
+
+
+test("filters Memories in the shared toolbar without duplicate navigation and retains the query on return", async ({page}, info) => {
+  await page.setViewportSize({width:1280,height:840});
+  const runtime=await installTauriMock(page,{locale:"en",rawActions:[],memories:memoryFixtures});
+  await page.goto("/");await openPrimaryDestination(page,"Memories");
+  const list=page.getByRole("region",{name:"Memory list",exact:true});
+  const filter=list.getByRole("searchbox",{name:"Filter memories",exact:true});
+  await expect(filter).toBeVisible();
+  await expect(page.getByRole("button",{name:"Recaps",exact:true})).toHaveCount(0);
+  await expect(page.getByRole("button",{name:"Recent memories",exact:true})).toHaveCount(0);
+  await filter.fill("  DARK MODE  ");await expect(list.getByRole("article")).toHaveCount(1);
+  await expect(list.getByRole("article",{name:"Prefers dark mode"})).toBeVisible();
+  await page.getByTestId("asset-lens-cards").click();await expect(list.locator(".memory-collection-card")).toHaveCount(1);
+  await filter.fill("compile checks");await expect(list.getByRole("article")).toHaveCount(1);
+  await expect(list.getByRole("article",{name:"CI placeholder sidecars are compile-time only"})).toBeVisible();
+  await page.getByTestId("asset-lens-rows").click();
+  expect(runtime.calls().filter(c=>["search","search_memories"].includes(c.command))).toHaveLength(0);
+  await list.getByRole("button",{name:"Open memory",exact:true}).click();
+  await expect(page.getByRole("main",{name:"Memory dossier"})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Recent memories",exact:true})).toBeVisible();
+  await page.keyboard.press("Escape");await expect(filter).toHaveValue("compile checks");await expect(list.getByRole("article")).toHaveCount(1);
+  await filter.fill("no-matching-memory");await expect(list.getByRole("article")).toHaveCount(0);await expect(list.getByText("No memories match this view",{exact:true})).toBeVisible();
+  await list.getByRole("button",{name:"Clear filter",exact:true}).click();await expect(filter).toHaveValue("");await expect(list.getByRole("article")).toHaveCount(3);
+  await page.screenshot({path:info.outputPath("memories-filter.png")});
+  expect(runtime.calls().filter(c=>["search","search_memories"].includes(c.command) && ["  DARK MODE  ","compile checks","no-matching-memory"].includes(String((c.args as Record<string, unknown>)?.query)))).toHaveLength(0);
+});

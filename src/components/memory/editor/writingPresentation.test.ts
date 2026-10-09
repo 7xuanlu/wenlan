@@ -25,6 +25,7 @@ function makeView(
   options: {
     selection?: EditorSelection;
     language?: boolean;
+    focused?: boolean;
     onDocumentUpdate?: () => void;
   } = {},
 ): EditorView {
@@ -58,8 +59,13 @@ function makeView(
       extensions,
     }),
   });
+  if (options.focused !== false) view.focus();
   liveViews.push(view);
   return view;
+}
+
+function settleFocusChange(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 15));
 }
 
 interface PresentationRange {
@@ -183,7 +189,7 @@ describe("writingPresentation", () => {
       .toHaveTextContent("strike");
   });
 
-  it("reveals every construct on the active line and restores concealment without a document update", () => {
+  it("reveals every construct on the active line and restores concealment without a document update", async () => {
     const source = "# Heading\n\n**bold** and *italic*\naway";
     const onDocumentUpdate = vi.fn();
     const view = makeView(source, {
@@ -192,6 +198,7 @@ describe("writingPresentation", () => {
     });
     const initial = concealedDecorationRanges(view);
     const inlineLine = source.indexOf("bold") + 2;
+    await settleFocusChange();
 
     view.dispatch({ selection: EditorSelection.single(inlineLine) });
 
@@ -207,11 +214,12 @@ describe("writingPresentation", () => {
     expect(onDocumentUpdate).not.toHaveBeenCalled();
   });
 
-  it("reveals complete constructs intersected by a selection", () => {
+  it("reveals complete constructs intersected by a selection", async () => {
     const source = "# Heading\n\n**bold** and *italic*\naway";
     const view = makeView(source, {
       selection: EditorSelection.single(source.length),
     });
+    await settleFocusChange();
 
     view.dispatch({
       selection: EditorSelection.single(
@@ -224,7 +232,34 @@ describe("writingPresentation", () => {
     expect(view.state.doc.toString()).toBe(source);
   });
 
-  it("reveals the active quoted line without exposing neighboring Markdown", () => {
+  it("reveals selected source only while the editor content is focused", async () => {
+    const source = "# Heading\n\n> quoted\n\n[link](https://example.com)\naway";
+    const selection = EditorSelection.single(0, source.indexOf("\naway"));
+    const onDocumentUpdate = vi.fn();
+    const view = makeView(source, { selection, focused: false, onDocumentUpdate });
+    const originalSelection = view.state.selection;
+    const originalRanges = concealedDecorationRanges(view);
+
+    expect(originalRanges).not.toEqual([]);
+
+    view.focus();
+    await settleFocusChange();
+
+    expect(concealedDecorationRanges(view)).toEqual([]);
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.eq(originalSelection)).toBe(true);
+    expect(onDocumentUpdate).not.toHaveBeenCalled();
+
+    view.contentDOM.blur();
+    await settleFocusChange();
+
+    expect(concealedDecorationRanges(view)).toEqual(originalRanges);
+    expect(view.state.doc.toString()).toBe(source);
+    expect(view.state.selection.eq(originalSelection)).toBe(true);
+    expect(onDocumentUpdate).not.toHaveBeenCalled();
+  });
+
+  it("reveals the active quoted line without exposing neighboring Markdown", async () => {
     const source = [
       "> first",
       "> second",
@@ -240,6 +275,7 @@ describe("writingPresentation", () => {
     const view = makeView(source, {
       selection: EditorSelection.single(secondQuote + 4),
     });
+    await settleFocusChange();
 
     expect(concealedDecorationRanges(view)).toEqual([
       { from: 0, to: 2 },
@@ -402,12 +438,13 @@ describe("writingPresentation", () => {
     expect(view.state.doc.toString()).toBe(source);
   });
 
-  it("reveals fenced-code source when the caret is on its closing line", () => {
+  it("reveals fenced-code source when the caret is on its closing line", async () => {
     const source = "```ts\nconst value = 1;\n```\naway";
     const closingFence = source.lastIndexOf("```");
     const view = makeView(source, {
       selection: EditorSelection.single(closingFence + 1),
     });
+    await settleFocusChange();
 
     expect(concealedDecorationRanges(view)).toEqual([]);
     expect(view.contentDOM.textContent).toContain("```ts");

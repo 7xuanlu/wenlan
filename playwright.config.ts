@@ -58,7 +58,7 @@ export default defineConfig({
     },
     // The app ships inside WKWebView, and pointer-driven canvas behaviour is
     // where WebKit and Chromium are most likely to disagree — a connector drag
-    // that holds in Chromium could still drop its box in the real window. Off by
+    // or editor popup that holds in Chromium may fail in the real window. Off by
     // default because CI installs Chromium only: run it with
     // `pnpm exec playwright install webkit && E2E_WEBKIT=1 pnpm test:e2e`.
     ...(process.env.E2E_WEBKIT
@@ -68,7 +68,7 @@ export default defineConfig({
             // Glob, not a regex: a project-level regex testMatch silently
             // matched nothing here, and the run reported "No tests found",
             // which reads a lot like the suite having passed.
-            testMatch: "**/page-canvas-*.spec.ts",
+            testMatch: ["**/page-canvas-*.spec.ts", "**/page-slash-editor.spec.ts", "**/page-wikilinks.spec.ts", "**/editor-references.spec.ts", "**/reference-links.spec.ts"],
             use: {
               ...devices["Desktop Safari"],
               timezoneId: "America/Los_Angeles",

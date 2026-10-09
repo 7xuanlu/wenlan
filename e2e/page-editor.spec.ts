@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import type {
   Page as WenlanPage,
@@ -49,9 +50,7 @@ function pageFixture(content = INITIAL_SOURCE): WenlanPage {
 }
 
 async function openFromWiki(page: Page, title = PAGE_TITLE): Promise<void> {
-  await page
-    .locator("main").getByRole("button", { name: `Open ${title}`, exact: true })
-    .click();
+  await openWikiNote(page, title);
   await expect(page.locator(".page-detail")).toBeVisible();
 }
 
@@ -528,7 +527,7 @@ test("keeps the local draft when the daemon falls below the save floor", async (
 
 test("falls back to the basic editor and autosaves exact source after module load failure", async ({ page }) => {
   await page.route(
-    "**/src/components/memory/editor/CodeMirrorMarkdownEditor.tsx*",
+    /\/(?:src\/components\/memory\/editor\/CodeMirrorMarkdownEditor\.tsx|assets\/CodeMirrorMarkdownEditor-[^/]+\.js)(?:\?|$)/,
     (route) => route.abort("failed"),
   );
   const controller = await openPage(page);
@@ -566,7 +565,7 @@ test("falls back to the basic editor and autosaves exact source after module loa
   ).toEqual([{ event: "editor_fallback", reason: "load" }]);
 });
 
-test("gives a long document main-content scrolling without a formatting toolbar or overflow", async ({ page }) => {
+test("gives a long document workspace scrolling without a formatting toolbar or overflow", async ({ page }) => {
   const longSource = [
     "# Browser editor fixture",
     "",
@@ -579,14 +578,14 @@ test("gives a long document main-content scrolling without a formatting toolbar 
   // CodeMirror virtualizes lines; assert the document model, not 180 DOM rows.
   await openedEditor(page, longSource);
 
-  const main = page.locator("main.memory-main-content");
-  await expect.poll(() => main.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
-  await main.evaluate((element) => {
+  const workspace = page.locator(".wiki-workspace-content");
+  await expect.poll(() => workspace.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(0);
+  await workspace.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  await expect.poll(() => main.evaluate((element) => element.scrollTop))
+  await expect.poll(() => workspace.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
-  await main.evaluate((element) => {
+  await workspace.evaluate((element) => {
     element.scrollTop = 0;
   });
 
@@ -610,15 +609,15 @@ test("gives a long document main-content scrolling without a formatting toolbar 
   expect(geometry.scrollHeight).toBeLessThanOrEqual(geometry.clientHeight + 1);
   expect(geometry.scrollTop).toBe(0);
 
-  await main.evaluate((element) => {
+  await workspace.evaluate((element) => {
     element.scrollTop = 240;
   });
-  await expect.poll(() => main.evaluate((element) => element.scrollTop))
+  await expect.poll(() => workspace.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
 
   await expect(page.getByRole("toolbar", { name: "Formatting", exact: true })).toHaveCount(0);
   await expect(page.getByRole("group", { name: "Formatting", exact: true })).toHaveCount(0);
-  expect(await main.evaluate((element) => element.scrollWidth - element.clientWidth))
+  expect(await workspace.evaluate((element) => element.scrollWidth - element.clientWidth))
     .toBeLessThanOrEqual(1);
   const actions = page.getByRole("button", { name: "Page actions", exact: true });
   await expect(actions).toBeEnabled();
@@ -692,12 +691,12 @@ test("renders a borderless dark editor while page-actions focus stays visible", 
     return {
       accent: window.getComputedStyle(document.documentElement)
         .getPropertyValue("--mem-accent-page")
-        .trim(),
+        .trim().toLowerCase(),
       outlineColor: style.outlineColor,
       outlineVisible: style.outlineStyle !== "none" && style.outlineWidth !== "0px",
     };
   })).toEqual({
-    accent: "#8FB3EA",
+    accent: "#8fb3ea",
     outlineColor: "rgb(143, 179, 234)",
     outlineVisible: true,
   });
@@ -719,11 +718,11 @@ test("uses opaque light-theme focus indicators on page actions and tasks", async
     return {
       accent: window.getComputedStyle(document.documentElement)
         .getPropertyValue("--mem-accent-page")
-        .trim(),
+        .trim().toLowerCase(),
       outlineColor: style.outlineColor,
     };
   })).toEqual({
-    accent: "#5E58C8",
+    accent: "#5e58c8",
     outlineColor: "rgb(94, 88, 200)",
   });
 

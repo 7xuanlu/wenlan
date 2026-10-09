@@ -1,66 +1,42 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ComponentProps } from "react";
+import { useState } from "react";
 import { i18n } from "../../i18n";
-import { type KnowledgeFoldersResponse, type Page } from "../../lib/tauri";
 import Sidebar, { SidebarToggleButton } from "./Sidebar";
-
-const { listAllActivePagesMock, listAllDraftPagesMock, knowledgeFoldersListMock } = vi.hoisted(() => ({
-  listAllActivePagesMock: vi.fn().mockResolvedValue([]),
-  listAllDraftPagesMock: vi.fn().mockResolvedValue([]),
-  knowledgeFoldersListMock: vi.fn(),
-}));
-
-vi.mock("./pages/listAllPages", () => ({
-  listAllActivePages: listAllActivePagesMock,
-  listAllDraftPages: listAllDraftPagesMock,
-}));
-vi.mock("../../lib/tauri", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../lib/tauri")>()),
-  knowledgeFoldersList: knowledgeFoldersListMock,
-}));
 vi.mock("./IdentityCard", () => ({
   default: ({ onOpenAbout, onOpenDetail, onOpenSettings }: {
     readonly onOpenAbout?: () => void;
     readonly onOpenDetail: (entityId: string) => void;
     readonly onOpenSettings?: () => void;
-  }) => (
-    <div data-testid="identity-card">
-      <button onClick={() => onOpenDetail("person-1")} type="button">Open identity detail</button>
-      <button onClick={onOpenSettings} type="button">Open identity settings</button>
-      <button onClick={onOpenAbout} type="button">Open identity about</button>
-    </div>
-  ),
+  }) => {
+    const [open, setOpen] = useState(false);
+    return <div data-testid="identity-card">
+      <button aria-label="Account menu" onClick={() => setOpen((value) => !value)} type="button">Account</button>
+      {open && <div role="menu">
+        <button role="menuitem" onClick={onOpenSettings} type="button">Settings</button>
+        <button role="menuitem" onClick={() => onOpenDetail("person-1")} type="button">Open identity detail</button>
+        <button role="menuitem" onClick={onOpenAbout} type="button">Open identity about</button>
+      </div>}
+    </div>;
+  },
 }));
-
-function page(id: string, title: string, status = "active"): Page {
-  return {
-    id, title, status,
-    summary: null, content: "", entity_id: null, domain: null,
-    source_memory_ids: [], version: 1,
-    created_at: "2026-07-16T00:00:00Z",
-    last_compiled: "2026-07-16T00:00:00Z",
-    last_modified: "2026-07-16T00:00:00Z",
-  };
-}
 
 function renderSidebar(extraProps: Partial<ComponentProps<typeof Sidebar>> = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <Sidebar
-        collapsed={false}
-        onSelectSpace={() => {}}
+        hidden={false}
+        mode="labels"
         onEntityClick={() => {}}
-        onNavigateHome={() => {}}
         onNavigateLog={() => {}}
         onNavigateGraph={() => {}}
         onNavigatePages={() => {}}
         onNavigateSpaces={() => {}}
-        onSelectPage={() => {}}
         {...extraProps}
       />
     </QueryClientProvider>,
@@ -69,133 +45,115 @@ function renderSidebar(extraProps: Partial<ComponentProps<typeof Sidebar>> = {})
 
 describe("Sidebar workspace", () => {
   beforeEach(async () => {
-    listAllActivePagesMock.mockReset().mockResolvedValue([]);
-    listAllDraftPagesMock.mockReset().mockResolvedValue([]);
-    knowledgeFoldersListMock.mockReset().mockResolvedValue({
-      folders: [],
-      truncated: false,
-    } satisfies KnowledgeFoldersResponse);
     localStorage.clear();
     await i18n.changeLanguage("en");
   });
 
-  it("gives the default desktop workspace a 48px rail and 216px page panel", () => {
+  it("shows the 240px labels navigation without an inventory panel", () => {
     const { container } = renderSidebar();
     const aside = screen.getByRole("complementary", { name: "Primary navigation" });
-    expect(aside).toHaveStyle({ width: "264px" });
+    expect(aside).toHaveStyle({ width: "var(--workspace-sidebar-width, 240px)" });
     expect(container.querySelector(".notes-icon-rail")).toBeInTheDocument();
-    expect(container.querySelector(".notes-workspace-panel")).toBeInTheDocument();
+    expect(container.querySelector(".notes-workspace-panel")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Wiki" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Spaces" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Graph" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
   });
 
-  it("keeps the rail operable when the desktop page list is collapsed", async () => {
+  it("keeps the icon-only navigation operable", async () => {
     const user = userEvent.setup();
     const onNavigatePages = vi.fn();
-    renderSidebar({ collapsed: true, open: false, onNavigatePages });
+    renderSidebar({ mode: "icons", onNavigatePages });
 
     const aside = screen.getByRole("complementary", { name: "Primary navigation" });
-    expect(aside).toHaveStyle({ width: "48px" });
+    expect(aside).toHaveStyle({ width: "64px" });
     expect(aside).not.toHaveAttribute("aria-hidden", "true");
     expect(screen.queryByRole("region", { name: "Notes" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Wiki" }));
     expect(onNavigatePages).toHaveBeenCalledTimes(1);
   });
 
-  it("omits Home from More and customization even when a legacy callback is supplied", async () => {
+  it("omits Home and keeps pin controls only beside optional destinations in More", async () => {
     const user = userEvent.setup();
-    const onNavigateHome = vi.fn();
-    renderSidebar({ onNavigateHome, onNavigateSources: vi.fn(), onNavigateEntities: vi.fn() });
+    renderSidebar({ onNavigateSources: vi.fn(), onNavigateEntities: vi.fn() });
     await user.click(screen.getByRole("button", { name: "More" }));
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Customize navigation" }));
-    expect(screen.getAllByRole("checkbox")).toHaveLength(6);
-    expect(screen.queryByRole("checkbox", { name: "Home" })).not.toBeInTheDocument();
-    expect(onNavigateHome).not.toHaveBeenCalled();
+    const more = screen.getByRole("group", { name: "More" });
+    expect(more.querySelectorAll(".notes-more-destination")).toHaveLength(2);
+    expect(more.querySelectorAll(".notes-more-destination-link")).toHaveLength(2);
+    expect(more.querySelectorAll(".notes-more-pin")).toHaveLength(2);
+    for (const name of ["Wiki", "Spaces", "Graph", "Sources"]) expect(within(more).queryByRole("button", { name })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Customize navigation/ })).not.toBeInTheDocument();
   });
 
-  it("routes active pages, drafts and creation through the supplied Main callbacks", async () => {
-    const active = page("active-1", "Project plan");
-    active.storage_path = `${active.id}.md`;
-    const draft = page("draft-1", "Rough note", "draft");
-    draft.space = "Work";
-    draft.folder_path = "";
-    listAllActivePagesMock.mockResolvedValue([active]);
-    listAllDraftPagesMock.mockResolvedValue([draft]);
-    const user = userEvent.setup();
-    const onSelectPage = vi.fn();
-    const onSelectDraft = vi.fn();
-    const onCreatePage = vi.fn();
-    renderSidebar({ onSelectPage, onSelectDraft, onCreatePage });
-
-    await user.click(await screen.findByRole("button", { name: "Open Project plan" }));
-    await user.click(await screen.findByRole("button", { name: "Open Rough note" }));
-    await user.click(screen.getByRole("button", { name: "New note" }));
-    expect(onSelectPage).toHaveBeenCalledWith(active);
-    expect(onSelectDraft).toHaveBeenCalledWith("draft-1", "Work");
-    expect(onCreatePage).toHaveBeenCalledTimes(1);
+  it("keeps page and memory inventory out of global navigation", () => {
+    const { container } = renderSidebar();
+    expect(container.querySelector(".notes-inventory-panel")).not.toBeInTheDocument();
+    expect(container.querySelector(".notes-memory-panel")).not.toBeInTheDocument();
   });
 
-  it("keeps Sources in More and Settings directly in the rail", async () => {
+  it("keeps Sources fixed in navigation and Settings in the account menu", async () => {
     const user = userEvent.setup();
     const onNavigateSources = vi.fn();
     const onNavigateSettings = vi.fn();
     renderSidebar({ onNavigateSources, onNavigateSettings, activeNavigation: "sources" });
 
     const more = screen.getByRole("button", { name: "More" });
-    expect(more).toHaveAttribute("aria-current", "page");
-    await user.click(more);
+    expect(more).not.toHaveAttribute("aria-current");
     await user.click(screen.getByRole("button", { name: "Sources", current: "page" }));
     expect(onNavigateSources).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "Settings" }).closest(".notes-rail-utilities")).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "Account menu" }));
+    await user.click(screen.getByRole("menuitem", { name: "Settings" }));
     expect(onNavigateSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("closes the narrow drawer after navigation from More and the page list", async () => {
-    const active = page("page-1", "One note");
-    active.storage_path = `${active.id}.md`;
-    listAllActivePagesMock.mockResolvedValue([active]);
+  it("closes the narrow drawer after navigation from More", async () => {
     const user = userEvent.setup();
     const onRequestClose = vi.fn();
-    const onSelectPage = vi.fn();
-    const onNavigateGraph = vi.fn();
+    const onNavigateLog = vi.fn();
     renderSidebar({
       open: true,
       presentation: "overlay",
       onRequestClose,
-      onSelectPage,
-      onNavigateGraph,
+      onNavigateLog,
     });
 
-    await user.click(await screen.findByRole("button", { name: "Open One note" }));
     await user.click(screen.getByRole("button", { name: "More" }));
-    await user.click(screen.getByRole("button", { name: "Graph" }));
-    expect(onSelectPage).toHaveBeenCalledWith(active);
-    expect(onNavigateGraph).toHaveBeenCalledTimes(1);
-    expect(onRequestClose).toHaveBeenCalledTimes(2);
+    await user.click(within(screen.getByRole("group", { name: "More" })).getByRole("button", { name: "Memories" }));
+    expect(onNavigateLog).toHaveBeenCalledTimes(1);
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the closed narrow drawer out of the accessibility tree", () => {
-    renderSidebar({ collapsed: true, open: false, presentation: "overlay" });
+    renderSidebar({ hidden: true, open: false, presentation: "overlay" });
     expect(screen.queryByRole("button", { name: "Wiki" })).not.toBeInTheDocument();
   });
 
-  it("keeps account controls in the rail even when the note list is collapsed", async () => {
+  it("removes hidden desktop navigation from the focusable accessibility surface", () => {
+    const { container } = renderSidebar({ hidden: true, mode: "icons" });
+    const aside = container.querySelector(".notes-workspace-sidebar");
+    expect(aside).toHaveAttribute("aria-hidden", "true");
+    expect(aside).toHaveAttribute("inert");
+    expect(screen.queryByRole("button", { name: "Wiki" })).not.toBeInTheDocument();
+  });
+
+  it("keeps account controls in the bottom utilities", async () => {
     const user = userEvent.setup();
     const onOpenAbout = vi.fn();
-    renderSidebar({ onOpenAbout, collapsed: true, open: false });
-    await user.click(screen.getByRole("button", { name: "Open identity about" }));
+    renderSidebar({ onOpenAbout, mode: "icons" });
+    await user.click(screen.getByRole("button", { name: "Account menu" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open identity about" }));
     expect(onOpenAbout).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("identity-card").closest(".notes-rail-utilities")).not.toBeNull();
   });
 
-  it("keeps the fixed-size header toggle named in both states", () => {
+  it("keeps the shared header toggle named and expanded in both states", () => {
     const { rerender } = render(<SidebarToggleButton collapsed={false} onToggle={() => {}} />);
-    expect(screen.getByRole("button", { name: "Hide sidebar" })).toHaveStyle({ width: "28px", height: "28px" });
+    expect(screen.getByRole("button", { name: "Hide sidebar" })).toHaveClass("mem-icon-action", "workspace-panel-toggle");
+    expect(screen.getByRole("button", { name: "Hide sidebar" })).toHaveAttribute("aria-expanded", "true");
     rerender(<SidebarToggleButton collapsed onToggle={() => {}} />);
     expect(screen.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("data-sidebar-toggle", "true");
+    expect(screen.getByRole("button", { name: "Show sidebar" })).toHaveAttribute("aria-expanded", "false");
   });
 });

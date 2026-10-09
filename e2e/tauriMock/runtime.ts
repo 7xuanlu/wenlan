@@ -56,6 +56,18 @@ function sanitizeIngressContent(content: string): string {
     .trimEnd();
 }
 
+function generatedDraftTitle(content: string): string {
+  for (const line of content.split(/\r?\n/u)) {
+    let title = line.replace(/[\u0000-\u001f\u007f-\u009f]/gu, " ")
+      .replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+    const heading = /^(#{1,6})(?=\p{White_Space})/u.exec(title);
+    if (heading) title = title.slice(heading[0].length);
+    title = title.split(/\p{White_Space}+/u).filter(Boolean).join(" ");
+    if (title) return Array.from(title).slice(0, 80).join("");
+  }
+  return "Untitled note";
+}
+
 function nextFixtureTimestamp(previous: string | null | undefined): string {
   const floor = Date.parse("2026-07-10T12:34:00Z");
   const previousMs = typeof previous === "string" ? Date.parse(previous) : Number.NaN;
@@ -422,7 +434,20 @@ export class TauriMockRuntime {
   private reorderSpace(args: unknown): null {
     const name = requiredString("reorder_space", args, "name");
     const newOrder = requiredNumber("reorder_space", args, "newOrder");
-    this.spaces = this.spaces.map((space) => space.name === name ? { ...space, sort_order: newOrder } : space);
+    // Mirror the daemon's transactional range shift, not just the moved rank.
+    const source = this.spaces.find((space) => space.name === name);
+    if (!source || source.sort_order === newOrder) return null;
+    const oldOrder = source.sort_order;
+    this.spaces = this.spaces.map((space) => {
+      if (space.name === name) return { ...space, sort_order: newOrder };
+      if (newOrder < oldOrder && space.sort_order >= newOrder && space.sort_order < oldOrder) {
+        return { ...space, sort_order: space.sort_order + 1 };
+      }
+      if (newOrder > oldOrder && space.sort_order > oldOrder && space.sort_order <= newOrder) {
+        return { ...space, sort_order: space.sort_order - 1 };
+      }
+      return space;
+    });
     return null;
   }
 
@@ -849,28 +874,37 @@ export class TauriMockRuntime {
     }
     const { page, index } = this.draftFor(command, args);
     this.assertDraftVersion(command, args, page);
-    const title = page.title.trim();
+    const suppliedTitle = page.title.trim();
     const content = sanitizeIngressContent(page.content);
-    if (!title || !content.trim()) {
+    const generatedTitle = suppliedTitle.length === 0;
+    if (generatedTitle && !content.trim()) {
       throw new Error(JSON.stringify({
         code: "invalid_page_draft",
-        error: "Title and content are required",
+        error: "A Page draft needs a title or content",
       }));
     }
+    let title = generatedTitle ? generatedDraftTitle(content) : suppliedTitle;
     const space = page.space?.trim() || null;
-    const conflict = this.pages.find((candidate) =>
+    const sameScopeActive = this.pages.filter((candidate) =>
       candidate.id !== page.id
       && candidate.status === "active"
-      && candidate.title.trim().toLowerCase() === title.toLowerCase()
       && (candidate.space?.trim() || null) === space
     );
-    if (conflict) {
-      throw new Error(JSON.stringify({
-        code: "page_title_conflict",
-        error: "A Page with this title already exists",
-        existing_page_id: conflict.id,
-        existing_page_title: conflict.title,
-      }));
+    if (generatedTitle) {
+      const occupiedTitles = new Set(sameScopeActive.map((candidate) => candidate.title.trim().toLowerCase()));
+      const base = title;
+      let suffix = 2;
+      while (occupiedTitles.has(title.toLowerCase())) title = `${base} (${suffix++})`;
+    } else {
+      const conflict = sameScopeActive.find((candidate) => candidate.title.trim().toLowerCase() === title.toLowerCase());
+      if (conflict) {
+        throw new Error(JSON.stringify({
+          code: "page_title_conflict",
+          error: "A Page with this title already exists",
+          existing_page_id: conflict.id,
+          existing_page_title: conflict.title,
+        }));
+      }
     }
     const published: KnowledgePage = {
       ...page,

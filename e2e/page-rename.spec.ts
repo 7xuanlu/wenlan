@@ -2,6 +2,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const recentChanges = [{
   page_id: "page-architecture",
@@ -11,13 +12,12 @@ const recentChanges = [{
 }];
 
 async function openFixturePage(page: Page, title = "Fixture architecture"): Promise<void> {
-  await page.goto("/");
-  const navigation = page.getByRole("navigation", { name: "Primary navigation" });
-  await navigation.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await page.getByRole("button", { name: "Page options" }).click();
-  await page.getByRole("menuitem", { name: "Review page changes" }).click();
-  await page.getByRole("button", { name: new RegExp(`${title} revised`) }).click();
+  if (page.url() === "about:blank") await page.goto("/");
+  await openWikiNote(page, title);
+  const editor = page.getByRole("textbox", { name: "Page editor", exact: true });
+  await expect(editor).toBeVisible();
+  await editor.press("Escape");
+  await expect(editor).toHaveCount(0);
   await expect(page.getByRole("heading", { level: 1, name: title })).toBeVisible();
 }
 
@@ -93,10 +93,8 @@ test("renames an active page while preserving its identity and body after revisi
   expect(controller.calls().some((call) => call.command === "rename_page")).toBe(true);
 
   await page.getByRole("button", { name: "Back" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Review" })).toBeVisible();
-  await page.getByRole("button", { name: "Back" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await page.getByRole("button", { name: "Open Renamed architecture" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
+  await openWikiNote(page, "Renamed architecture");
   await expect(page.getByRole("heading", { level: 1, name: "Renamed architecture" })).toBeVisible();
   const revisited = await page.evaluate(async () =>
     window.__TAURI_INTERNALS__!.invoke("get_page", { id: "page-architecture" }),

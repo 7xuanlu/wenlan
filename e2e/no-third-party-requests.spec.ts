@@ -40,7 +40,12 @@ test("loads the whole app without a single request leaving the origin", async ({
   const sidebar = page.getByRole("navigation", { name: "Primary navigation" });
   for (const destination of ["Wiki", "Spaces"]) {
     await sidebar.getByRole("button", { name: destination, exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name: destination })).toBeVisible();
+    if (destination === "Wiki") {
+      await expect(page.locator(".wiki-workspace")).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Open a note", exact: true })).toBeVisible();
+    } else {
+      await expect(page.getByRole("heading", { level: 1, name: destination, exact: true })).toBeVisible();
+    }
   }
 
   expect(offOrigin).toEqual([]);

@@ -133,4 +133,13 @@ describe("ContentRenderer citation links", () => {
     );
     expect(container.querySelector('a[href="#citation:1"]')).not.toBeNull();
   });
+
+  it("gives canonical page links a visible type cue", () => {
+    const { container } = render(
+      <ContentRenderer content="See [the city plan](#concept:page-17)." variant="detail" />,
+    );
+    const link = container.querySelector('a[href="#concept:page-17"]');
+    expect(link).toHaveAttribute("data-reference-kind", "page");
+    expect(link?.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
+  });
 });

@@ -38,10 +38,6 @@ beforeEach(async () => { await i18n.changeLanguage("en"); });
 describe("AtlasInspector", () => {
   it("groups connections in page, entity, memory order and shows directional relation context", () => {
     renderInspector();
-    const summary = screen.getByRole("navigation", { name: "Connections" });
-    expect(within(summary).getByRole("button", { name: "Wiki pages 1" })).toBeInTheDocument();
-    expect(within(summary).getByRole("button", { name: "Topics 1" })).toBeInTheDocument();
-    expect(within(summary).getByRole("button", { name: "Memories 1" })).toBeInTheDocument();
     const sections = screen.getAllByRole("region");
     expect(sections.map((section) => within(section).getByRole("heading").textContent?.replace(/\s+\d+$/, ""))).toEqual([
       "Wiki pages", "Topics", "Memories",
@@ -50,6 +46,32 @@ describe("AtlasInspector", () => {
     expect(within(sections[1]).getByText("inspired")).toBeInTheDocument();
     expect(screen.getByText("Person")).toBeInTheDocument();
     expect(within(sections[2]).getByText("mentions")).toBeInTheDocument();
+  });
+
+  it("keeps the single-group heading accessible without a redundant jump summary", () => {
+    const many = Array.from({ length: 13 }, (_, index) => node(`entity-${index}`, "entity", `Person ${index}`, "person"));
+    renderInspector({ neighbors: many, edges: [] });
+    expect(screen.getByRole("heading", { name: "Connections 13", level: 3 })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Connections" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Topics 13", level: 4 })).toBeInTheDocument();
+    expect(screen.getByText("Person")).toBeInTheDocument();
+  });
+
+  it("shows group jump links for a large mixed result and keeps the group order", () => {
+    const many = [
+      ...Array.from({ length: 5 }, (_, index) => node(`page-${index}`, "page", `Page ${index}`)),
+      ...Array.from({ length: 5 }, (_, index) => node(`entity-${index}`, "entity", `Person ${index}`, "person")),
+      ...Array.from({ length: 5 }, (_, index) => node(`memory-${index}`, "memory", `Memory ${index}`)),
+    ];
+    renderInspector({ neighbors: many, edges: [] });
+    const summary = screen.getByRole("navigation", { name: "Connections" });
+    expect(within(summary).getByRole("button", { name: "Wiki pages 5" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Topics 5" })).toBeInTheDocument();
+    expect(within(summary).getByRole("button", { name: "Memories 5" })).toBeInTheDocument();
+    const sections = screen.getAllByRole("region");
+    expect(sections.map((section) => within(section).getByRole("heading").textContent?.replace(/\s+\d+$/, ""))).toEqual([
+      "Wiki pages", "Topics", "Memories",
+    ]);
   });
 
   it("filters by relation type and keeps neighbor button names stable", async () => {
@@ -63,6 +85,12 @@ describe("AtlasInspector", () => {
     expect(screen.queryByRole("button", { name: "Person 0" })).not.toBeInTheDocument();
   });
 
+  it("selects a connection through the existing callback", async () => {
+    const { user, onSelect } = renderInspector();
+    await user.click(screen.getByRole("button", { name: "Ada Lovelace" }));
+    expect(onSelect).toHaveBeenCalledWith("entity-1");
+  });
+
   it("reveals twelve more rows per group", async () => {
     const many = Array.from({ length: 25 }, (_, index) => node(`entity-${index}`, "entity", `Person ${index}`, "person"));
     const { user } = renderInspector({ neighbors: many });
@@ -70,5 +98,21 @@ describe("AtlasInspector", () => {
     expect(within(entitySection).getAllByRole("button")).toHaveLength(13);
     await user.click(within(entitySection).getByRole("button", { name: "Show more" }));
     expect(within(entitySection).getAllByRole("button")).toHaveLength(25);
+  });
+
+  it("uses the shared drawer title and a single return-to-map close control", async () => {
+    const onOpen = vi.fn();
+    const { user, onClose } = renderInspector({ onOpen });
+
+    expect(screen.getByRole("dialog", { name: "Selected" })).toBeInTheDocument();
+    const close = screen.getByRole("button", { name: "Return to full map" });
+    expect(screen.getAllByRole("button", { name: "Return to full map" })).toHaveLength(1);
+    const details = screen.getByRole("button", { name: "Open details" });
+    expect(details.parentElement?.className).toContain("atlas-inspector-metadata");
+
+    await user.click(details);
+    expect(onOpen).toHaveBeenCalledOnce();
+    await user.click(close);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 });

@@ -1,0 +1,324 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.memory-main-content.memory-main-content--wiki {
+  container-name: wiki-main;
+  container-type: inline-size;
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.wiki-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.wiki-workspace-folders-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  margin: 8px 20px 0;
+  padding: 0 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 7px;
+  background: var(--mem-surface);
+  color: var(--mem-text-secondary);
+  font: 13px var(--mem-font-body);
+  cursor: pointer;
+}
+
+.wiki-workspace-folders-toggle:hover,
+.wiki-workspace-folders-toggle[aria-expanded="true"] {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.wiki-workspace-folders-toggle:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.wiki-workspace-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wiki-workspace-directory {
+  display: flex;
+  flex: 0 0 240px;
+  flex-direction: column;
+  width: 240px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  margin: 0 0 0 8px;
+  padding: 12px 0 24px;
+  box-sizing: border-box;
+  border-right: 1px solid color-mix(in srgb, var(--mem-border) 55%, transparent);
+  background: transparent;
+}
+
+.wiki-workspace-mode-row {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 48px;
+  box-sizing: border-box;
+  gap: 4px;
+  padding: 0 10px 8px 8px;
+}
+
+.wiki-workspace-mode {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 40px;
+  box-sizing: border-box;
+  padding: 0;
+}
+
+.wiki-workspace-mode > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.wiki-workspace-mode select {
+  display: block;
+  width: 100%;
+  height: 32px;
+  appearance: none;
+  padding: 0 30px 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  font: 14px var(--mem-font-body);
+  cursor: pointer;
+}
+
+.wiki-workspace-mode > svg {
+  position: absolute;
+  right: 8px;
+  top: 20px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--mem-text-secondary);
+}
+
+.wiki-workspace-new-folder {
+  display: grid;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+}
+
+.wiki-workspace-new-folder:hover:not(:disabled) { background: var(--mem-hover); color: var(--mem-text); }
+.wiki-workspace-new-folder:focus-visible { outline: 2px solid var(--mem-accent-page); outline-offset: 1px; }
+.wiki-workspace-new-folder:disabled { opacity: .45; cursor: default; }
+
+@media (pointer: coarse) {
+  .wiki-workspace-mode-row { min-height: 52px; }
+  .wiki-workspace-mode { min-height: 44px; }
+  .wiki-workspace-mode select { height: 44px; }
+  .wiki-workspace-mode > svg { top: 22px; }
+  .wiki-workspace-new-folder { flex-basis: 44px; width: 44px; height: 44px; }
+}
+
+.wiki-workspace-mode select:hover,
+.wiki-workspace-mode select:focus-visible {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.wiki-workspace-mode select:focus-visible {
+  outline: 2px solid var(--mem-text-secondary);
+  outline-offset: -2px;
+}
+
+/* Extend the directory boundary through the shared titlebar. The container
+   mirrors the Wiki main width, including when a right pane takes space. */
+.workspace-header-wiki-boundary {
+  position: absolute;
+  inset: 0 0 0 var(--workspace-sidebar-width, 240px);
+  container-name: wiki-header-main;
+  container-type: inline-size;
+  pointer-events: none;
+}
+
+.memory-shell[data-sidebar-layout="overlay"] .workspace-header-wiki-boundary {
+  left: 0;
+}
+
+.workspace-header-wiki-boundary > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* 8px directory inset + 240px border-box width - its 1px border. */
+  left: 247px;
+  width: 1px;
+  background: color-mix(in srgb, var(--mem-border) 55%, transparent);
+}
+
+/* Share the titlebar on desktop. Only the scrollable tab labels accept
+   pointer events; the surrounding strip remains a window drag surface. */
+.workspace-wiki-tabs {
+  position: absolute;
+  inset: 0 0 0 248px;
+  padding-right: var(--workspace-tab-actions-space, 104px);
+  background: color-mix(in srgb, var(--mem-text) 3%, var(--mem-bg));
+}
+
+/* When the left sidebar is hidden, Search joins the same action group. */
+.memory-workspace-header:has(.workspace-header-search-fallback) {
+  --workspace-tab-actions-space: 138px;
+}
+
+html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
+
+.workspace-wiki-tabs .note-tabs { pointer-events: auto; }
+
+@container wiki-header-main (max-width: 700px) {
+  .workspace-header-wiki-boundary > span { display: none; }
+  .workspace-wiki-tabs {
+    inset: 52px 0 auto;
+    height: 52px;
+    padding-right: 0;
+  }
+}
+
+.wiki-workspace-directory > .notes-list-panel {
+  width: 100%;
+  min-width: 0;
+  padding-top: 0;
+  padding-inline: 8px;
+}
+
+.wiki-workspace-directory .notes-list-scroll > .notes-inventory-collections {
+  margin-top: 0;
+}
+
+.wiki-workspace-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 40px 32px 28px;
+}
+
+.wiki-workspace-content--full-bleed {
+  padding: 0;
+}
+
+.wiki-workspace-content .wiki-overview-header {
+  column-gap: 20px;
+  row-gap: 12px;
+}
+
+.wiki-workspace-content .wiki-overview-heading {
+  flex: 1 1 180px;
+}
+
+.wiki-workspace-content .wiki-overview-header h1 {
+  font: 600 20px/1.3 var(--mem-font-body);
+  letter-spacing: normal;
+}
+
+@container wiki-main (max-width: 700px) {
+  .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
+    box-sizing: border-box;
+    padding-top: 52px;
+  }
+
+  .wiki-workspace-folders-toggle {
+    display: inline-flex;
+    flex: 0 0 auto;
+  }
+
+  .wiki-workspace-body {
+    flex-direction: column;
+  }
+
+  .wiki-workspace-directory {
+    display: none;
+    flex: 0 0 auto;
+    width: auto;
+    align-self: stretch;
+    max-height: min(42%, 320px);
+    margin: 24px 12px 8px;
+    padding: 0;
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  .wiki-workspace-mode-row { padding: 0 0 8px; }
+  .wiki-workspace-mode > svg { right: 8px; }
+
+  .wiki-workspace-body.is-folder-open .wiki-workspace-directory {
+    display: flex;
+  }
+
+  .wiki-workspace-content {
+    padding: 24px 20px;
+  }
+
+  .wiki-workspace-content--full-bleed {
+    padding: 0;
+  }
+}
+
+.wiki-workspace-reading { display:flex;flex-direction:column;flex:1 1 auto;min-width:0;min-height:0;overflow:hidden;background:var(--workspace-document-background, var(--mem-bg)); }
+
+/* Align the panel selector with the Search target in the compact rail. */
+.memory-shell[data-sidebar-layout="icons"] .wiki-workspace-mode select { height: 44px; }
+
+/* The shared inventory opens notes in the focused document group. */
+.wiki-workspace-reading { flex-direction: row; }
+.wiki-primary-note-group, .wiki-secondary-note-group { display:flex; flex:1 1 0; min-width:0; min-height:0; }
+.wiki-secondary-note-group { border-left:1px solid var(--mem-border); }
+.wiki-secondary-note-group[hidden] { display:none; }
+.secondary-note-group-mount, .secondary-note-group-root { display:flex; flex:1; min-width:0; min-height:0; height:100%; }
+.note-group-content { overflow:auto; padding:0; }
+.note-group-content > .wiki-overview { padding:28px; }
+.wiki-primary-note-group:not(.is-full-bleed) .note-group-content > .page-draft-editor { padding:24px; }
+@container wiki-main (max-width: 640px) {
+  .wiki-workspace-reading.is-split { flex-direction:column; }
+  .wiki-workspace-reading.is-split > div { flex:1 1 50%; max-height:50%; }
+  .wiki-secondary-note-group { border-left:0; border-top:1px solid var(--mem-border); }
+}
+/* On desktop the group headers share the existing window titlebar. The
+   library and global navigation keep their original vertical positions. */
+@media (min-width:1100px) {
+  .memory-shell[data-note-workspace] .memory-shell-content { grid-row:1 / span 2; padding-top:52px; }
+  .memory-shell[data-note-workspace] .memory-main-content--wiki { margin-top:-52px; }
+  .memory-shell[data-note-workspace] .memory-workspace-header { width:calc(var(--workspace-sidebar-width) + 248px); }
+  .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
+}
+
+.note-owner-notice { position:absolute; z-index:1200; bottom:24px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:12px; max-width:calc(100% - 32px); padding:10px 12px; border:1px solid var(--mem-border); border-radius:8px; background:var(--mem-surface); color:var(--mem-text); box-shadow:var(--mem-shadow-overlay); font:13px/1.5 var(--mem-font-body); }
+.note-owner-notice > span { min-width:0; }
+.note-owner-notice > button { flex:0 0 auto; min-height:32px; border:0; border-radius:5px; background:transparent; color:var(--mem-accent-page); cursor:pointer; font:inherit; }
+.note-owner-notice > button:hover { background:var(--mem-hover); }
+.note-owner-notice > button:focus-visible { outline:2px solid var(--mem-accent-page); }
+.note-owner-notice-dismiss { display:flex; align-items:center; justify-content:center; width:32px; }

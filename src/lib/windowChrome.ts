@@ -59,7 +59,7 @@ export const MACOS_TRAFFIC_LIGHT_X = 16;
 export const MACOS_TRAFFIC_LIGHT_CENTER_Y = MAIN_HEADER_HEIGHT / 2;
 
 /** Room for the overlaid traffic lights, matched to their x=16 origin. */
-export const MACOS_TRAFFIC_LIGHT_INSET = 82;
+export const MACOS_TRAFFIC_LIGHT_INSET = 104;
 
 /** The inset used everywhere else, matched to the top bars' right padding. */
 export const NATIVE_TITLE_BAR_INSET = 20;
@@ -79,7 +79,7 @@ export const NATIVE_TITLE_BAR_INSET = 20;
  * and destructive.
  *
  * Wrong as "macOS" on Windows or Linux: `MACOS_TRAFFIC_LIGHT_INSET -
- * NATIVE_TITLE_BAR_INSET` = 62px of extra padding at the left of a header that
+ * NATIVE_TITLE_BAR_INSET` = 84px of extra padding at the left of a header that
  * spans the window anyway. Nothing is covered, nothing is unreachable, the row
  * is just indented. Cosmetic.
  *

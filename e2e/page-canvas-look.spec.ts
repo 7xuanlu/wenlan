@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { installTauriMock } from "./tauriMock";
 import { box, openCanvas, seedLargeMap } from "./helpers/pageCanvas";
 import { openPageTool } from "./helpers/pageTools";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 /**
  * The canvas's control surface in every state, both themes, photographed to
@@ -85,8 +86,8 @@ for (const theme of THEMES) {
       await page.locator(".page-canvas").screenshot({ path: `shots/${theme}-9-large.png` });
 
       // Every box as the browser actually measured it: no two may overlap, and
-      // the map has to use the wide axis. Two branches once landed at 90 and 270
-      // degrees, which is a legal radial layout and an unreadable mind map.
+      // the current portrait layout must use the tall axis of the inspector.
+      // Expanding the inspector preserves the same map and node geometry.
       const boxes = await page.locator(".react-flow__node").evaluateAll((els) =>
         els.map((el) => el.getBoundingClientRect()).map((r) => ({
           left: r.left, right: r.right, top: r.top, bottom: r.bottom,
@@ -104,7 +105,7 @@ for (const theme of THEMES) {
       }
       const spanX = Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left));
       const spanY = Math.max(...boxes.map((b) => b.bottom)) - Math.min(...boxes.map((b) => b.top));
-      expect(spanX).toBeGreaterThan(spanY);
+      expect(spanY).toBeGreaterThan(spanX);
       await page.getByRole("button", { name: /suggestion/ }).click();
       await page.waitForTimeout(400);
       await page.locator(".page-canvas").screenshot({ path: `shots/${theme}-9-large-suggested.png` });
@@ -161,7 +162,7 @@ for (const theme of THEMES) {
         .getByRole("navigation", { name: "Primary navigation" })
         .getByRole("button", { name: "Wiki", exact: true })
         .click();
-      await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+      await openWikiNote(page, "Fixture architecture");
       await returnToPageReading(page);
       await openPageTool(page, "Mind map");
       await expect(page.getByText("Loading canvas")).toBeVisible();
@@ -180,7 +181,7 @@ for (const theme of THEMES) {
         .getByRole("navigation", { name: "Primary navigation" })
         .getByRole("button", { name: "Wiki", exact: true })
         .click();
-      await page.locator(".wiki-overview").getByRole("button", { name: "Open Fixture architecture", exact: true }).click();
+      await openWikiNote(page, "Fixture architecture");
       await returnToPageReading(page);
       await openPageTool(page, "Mind map");
       await expect(page.getByText("Could not load the canvas")).toBeVisible();

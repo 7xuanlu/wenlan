@@ -16,8 +16,8 @@ const SLOT_BY_REF_KIND: Record<PageMapRefKind, GraphSlot> = {
   page: "project",
   memory: "neutral",
   entity: "concept",
-  idea: "concept",
   section: "tool",
+  idea: "concept",
 };
 
 export interface CanvasNodeData extends Record<string, unknown> {
@@ -44,10 +44,12 @@ export interface CanvasNodeData extends Record<string, unknown> {
   editing: boolean;
   /** Prompt for the name field; the draft box has no label to show yet. */
   placeholder?: string;
+  nameInputLabel?: string;
+  onNameChange?: (label: string) => void;
   onOpen: () => void;
   onAccept: () => void;
   onDismiss: () => void;
-  onCommit: (label: string) => void;
+  onCommit: (label: string) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -99,6 +101,7 @@ function CanvasNode({
     height,
     editing,
     placeholder,
+    nameInputLabel,
   } = data;
 
   const slotColor = palette[SLOT_BY_REF_KIND[refKind]];
@@ -149,6 +152,8 @@ function CanvasNode({
         <NodeNameInput
           value={label}
           placeholder={placeholder}
+          ariaLabel={nameInputLabel}
+          onNameChange={data.onNameChange}
           color={palette.label}
           onCommit={data.onCommit}
           onCancel={data.onCancel}
@@ -243,27 +248,50 @@ function CanvasNode({
 /**
  * The name field, mounted only while a box is being named.
  *
- * Blur is the single commit path — Enter and clicking away both route through
- * it — so one name can never fire two creates. Escape records the intent, then
- * blurs. Because the field mounts fresh for each edit, `cancelled` starts false
- * on its own and nothing has to remember to reset it.
+ * Blur only moves focus. A box is created or renamed after an explicit Enter
+ * or pointer confirmation, so opening a sidebar cannot commit half-finished
+ * text. The one-shot guard keeps Enter and the confirm control from racing.
  */
 function NodeNameInput({
   value,
   placeholder,
+  ariaLabel,
+  onNameChange,
   color,
   onCommit,
   onCancel,
 }: {
   value: string;
   placeholder?: string;
+  ariaLabel?: string;
+  onNameChange?: (label: string) => void;
   color: string;
-  onCommit: (label: string) => void;
+  onCommit: (label: string) => void | Promise<void>;
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
   const cancelled = useRef(false);
+  const committed = useRef(false);
   const ref = useRef<HTMLInputElement>(null);
+  const confirm = () => {
+    if (committed.current) return;
+    committed.current = true;
+    try {
+      const pending = onCommit(ref.current?.value ?? value);
+      if (pending) {
+        void pending.catch(() => {
+          committed.current = false;
+        });
+      }
+    } catch {
+      committed.current = false;
+    }
+  };
+  const cancel = () => {
+    if (committed.current || cancelled.current) return;
+    cancelled.current = true;
+    onCancel();
+  };
 
   // React Flow mounts a freshly added node with visibility:hidden while it
   // measures it, and a field that isn't visible cannot take focus — so React's
@@ -286,41 +314,54 @@ function NodeNameInput({
   }, []);
 
   return (
-    <input
-      ref={ref}
-      // Without these, React Flow drags the box and pans the canvas while the
-      // user is trying to type into it.
-      className="nodrag nopan nowheel"
-      defaultValue={value}
-      placeholder={placeholder}
-      aria-label={t("pageCanvas.nameSectionLabel")}
-      onKeyDown={(e) => {
-        // Canvas shortcuts must not fire while a name is being typed.
-        e.stopPropagation();
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          cancelled.current = true;
-          e.currentTarget.blur();
-        }
-      }}
-      onBlur={(e) =>
-        cancelled.current ? onCancel() : onCommit(e.currentTarget.value)
-      }
-      style={{
-        flex: 1,
-        minWidth: 0,
-        background: "none",
-        border: "none",
-        outline: "none",
-        padding: 0,
-        color,
-        fontFamily: "var(--mem-font-body)",
-        fontSize: 12,
-      }}
-    />
+    <div className="page-canvas-node-name">
+      <input
+        ref={ref}
+        // Without these, React Flow drags the box and pans the canvas while the
+        // user is trying to type into it.
+        className="nodrag nopan nowheel"
+        defaultValue={value}
+        placeholder={placeholder}
+        aria-label={ariaLabel ?? t("pageCanvas.nameSectionLabel")}
+        onChange={(event) => {
+          committed.current = false;
+          onNameChange?.(event.currentTarget.value);
+        }}
+        onKeyDown={(e) => {
+          // Canvas shortcuts must not fire while a name is being typed.
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            e.preventDefault();
+            confirm();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            cancel();
+          }
+        }}
+        // Moving focus to the sidebar or another canvas tool is not a commit.
+        style={{
+          flex: 1,
+          minWidth: 0,
+          background: "none",
+          border: "none",
+          outline: "none",
+          padding: 0,
+          color,
+          fontFamily: "var(--mem-font-body)",
+          fontSize: 12,
+        }}
+      />
+      <button type="button" className="page-canvas-name-confirm nodrag nopan"
+        aria-label={t("pageCanvas.confirmName")} title={t("pageCanvas.confirmName")}
+        onClick={(event) => { event.stopPropagation(); confirm(); }}>
+        <span aria-hidden="true">✓</span>
+      </button>
+      <button type="button" className="page-canvas-name-cancel nodrag nopan"
+        aria-label={t("pageCanvas.cancelName")} title={t("pageCanvas.cancelName")}
+        onClick={(event) => { event.stopPropagation(); cancel(); }}>
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
   );
 }
 

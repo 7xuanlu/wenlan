@@ -2,16 +2,21 @@
 import { expect, test } from "@playwright/test";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openSpaceEntity } from "./helpers/spaceEntity";
+import { openWikiNote } from "./helpers/wikiWorkspace";
+import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 test("Wiki -> Spaces -> Space -> Page -> back and Space -> global Topics -> Topic -> back", async ({ page }) => {
-  // Keep the six-row Wiki long enough to exercise real scrolling and reset.
+  // Keep the selected Wiki note long enough to exercise reading-pane scrolling.
   await page.setViewportSize({ width: 1280, height: 500 });
   // Given a clean fixture and browser error capture.
   const browserErrors = collectBrowserErrors(page);
   // Rows lens: this journey asserts the Wiki page scrolls and resets on
   // navigation, and the default Cards grid fits the fixture inside the viewport.
-  await installTauriMock(page, { locale: "en", localStorage: { "wenlan-wiki-view-mode": "rows", "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
+  const fixture = createSpacesNavigationFixture();
+  const longNote = fixture.pages.find((item) => item.id === "page-architecture")!;
+  longNote.content = "# Fixture architecture\n\n" + Array.from({ length: 70 }, (_, index) => `Paragraph ${index}: a long note makes the current Wiki reading pane scrollable.\n\n`).join("");
+  await installTauriMock(page, { fixture, locale: "en", localStorage: { "wenlan-wiki-view-mode": "rows", "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
 
   // When the two primary hierarchy journeys are driven through the rendered shell.
@@ -32,23 +37,23 @@ test("Wiki -> Spaces -> Space -> Page -> back and Space -> global Topics -> Topi
   await expect(more).not.toHaveAttribute("aria-current");
 
   await primaryNavigation.getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
-  await expect(page.locator("main").getByRole("button", { name: "Open Independent research" })).toContainText("Independent");
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
   await expect(primaryNavigation.getByRole("button", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
-  await page.locator("main").getByRole("button", { name: "Open Independent research" }).click();
+  await openWikiNote(page, "Independent research");
   await expect(page.getByRole("heading", { level: 1, name: "Independent research" })).toBeVisible();
   await expect(primaryNavigation.getByRole("button", { name: "Wiki" })).toHaveAttribute("aria-current", "page");
   await page.getByRole("group", { name: "History navigation" }).getByRole("button", { name: "Back", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
 
-  const main = page.locator("main");
-  await main.evaluate((node) => { node.scrollTop = node.scrollHeight; });
-  await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
+  await openWikiNote(page, "Fixture architecture");
+  const wikiContent = page.locator(".wiki-workspace-content");
+  await wikiContent.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+  await expect.poll(() => wikiContent.evaluate((node) => node.scrollTop)).toBeGreaterThan(0);
 
   await primaryNavigation.getByRole("button", { name: "Spaces", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
   await expect(page.locator(".spaces-overview-header")).toBeVisible();
-  await expect.poll(() => main.evaluate((node) => node.scrollTop)).toBe(0);
+  await expect.poll(() => page.locator("main").evaluate((node) => node.scrollTop)).toBe(0);
   await expect(page.getByRole("navigation", { name: "Recent spaces" })).toHaveCount(0);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
   await wenlanRow.getByRole("button", { name: "Wenlan", exact: true }).click();

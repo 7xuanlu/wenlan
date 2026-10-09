@@ -6,8 +6,7 @@
   color: var(--mem-text-secondary); font: 500 13px/1.4 var(--mem-font-body); cursor: pointer;
 }
 .atlas-action:hover, .atlas-icon-button:hover { background: var(--mem-hover); color: var(--mem-text); }
-.atlas-action:focus-visible, .atlas-icon-button:focus-visible,
-.atlas-connection-list button:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
+.atlas-action:focus-visible, .atlas-icon-button:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }
 .atlas-camera-controls {
   position: absolute; right: 14px; bottom: 12px; z-index: 12;
   display: inline-flex; align-items: center; gap: 0;
@@ -27,34 +26,10 @@
   border-left: 0;
 }
 .atlas-cartography-alert { display: inline-flex; align-items: center; padding: 0 2px; color: var(--mem-danger); font: 400 10px/1.4 var(--mem-font-mono); }
-.atlas-inspector {
-  position: absolute; top: 72px; right: 16px; z-index: 11; width: 280px; max-width: calc(100% - 32px);
-  max-height: calc(100% - 128px); overflow: hidden; display: flex; flex-direction: column;
-  padding: 16px; border: 1px solid var(--mem-control-border); border-radius: 8px;
-  background: var(--mem-surface); box-shadow: 0 8px 28px #0002; color: var(--mem-text);
-  font: 400 13px/1.5 var(--mem-font-body);
-}
-.atlas-inspector-heading { display: flex; align-items: flex-start; gap: 8px; }
-.atlas-inspector h2 { flex: 1; margin: 0; font: 600 18px/1.3 var(--mem-font-body); overflow-wrap: anywhere; }
 .atlas-icon-button { flex: none; border: none; min-height: 24px; padding: 3px; }
-.atlas-inspector-kind { margin: 6px 0 12px; color: var(--mem-text-secondary); font-size: 12px; }
-.atlas-inspector h3 { margin: 20px 0 6px; font: 500 12px/1.5 var(--mem-font-body); color: var(--mem-text-secondary); }
-.atlas-inspector h3 span { margin-left: 6px; color: var(--mem-text-secondary); font-variant-numeric: tabular-nums; }
-.atlas-connection-list { overflow-y: auto; min-height: 0; }
-.atlas-connection-list button { display: flex; width: 100%; align-items: center; gap: 8px; border: none; border-bottom: 1px solid var(--mem-border); background: transparent; color: var(--mem-text); padding: 10px 0; text-align: left; cursor: pointer; font: 400 13px/1.4 var(--mem-font-body); }
-.atlas-connection-list button:hover { color: var(--mem-accent-indigo); }
-.atlas-connection-list button span { flex: 1; overflow-wrap: anywhere; }
-.atlas-connection-list button svg { flex: none; }
-.atlas-connection-filter { border: 1px solid var(--mem-control-border); border-radius: 5px; background: var(--mem-bg); color: var(--mem-text); padding: 7px 9px; margin-bottom: 5px; font: 400 12px/1.4 var(--mem-font-body); width: 100%; }
-.atlas-open-detail { margin-top: 16px; color: var(--mem-accent-indigo); border-color: var(--mem-accent-indigo-border); flex-shrink: 0; }
 @media (max-width: 640px) {
   .atlas-camera-controls { top: 12px; right: 12px; bottom: auto; }
-  .atlas-inspector { top: auto; bottom: 42px; left: 12px; right: 12px; width: auto; max-width: none; max-height: 65%; padding: 12px; }
-  .atlas-inspector > .atlas-action:not(.atlas-open-detail) { display: none; }
-  .atlas-inspector h3 { margin-top: 10px; }
 }
-
-.atlas-inspector h2:focus { outline: none; }
 
 .atlas-filter-empty { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; align-items: center; justify-content: center; color: var(--mem-text-secondary); font: 400 13px/1.5 var(--mem-font-body); pointer-events: none; }
 .atlas-filter-empty button { pointer-events: auto; }

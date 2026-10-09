@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -56,6 +56,8 @@ export type WizardStep =
   | "setting-up"
   | "done";
 
+const EmbeddedSetupWizardContext = createContext(false);
+
 interface SetupWizardProps {
   // May return a promise: the Done step awaits it and, on a rejection, stays
   // put with an inline alert so the user can try again.
@@ -73,6 +75,8 @@ interface SetupWizardProps {
   // fail-closed scaffolding around a connection problem, not a first run, and
   // it says so instead of greeting a configured user as brand new.
   daemonGateErrored?: boolean;
+  /** The wizard occupies an existing app surface rather than its own window. */
+  embedded?: boolean;
 }
 
 // Exported so the preview harness can drive the wizard by step without keeping
@@ -144,21 +148,23 @@ function StepShell({
   alert?: string | null;
   children: React.ReactNode;
 }) {
+  const embedded = useContext(EmbeddedSetupWizardContext);
+  const ScrollElement = embedded ? "div" : "main";
   return (
     <div
       className="flex flex-col"
-      style={{ height: "100vh", backgroundColor: "var(--mem-bg)" }}
+      style={{ height: embedded ? "100%" : "100vh", backgroundColor: "var(--mem-bg)" }}
     >
-      <div data-tauri-drag-region style={{ height: dragStripHeight(), flexShrink: 0 }} />
+      {!embedded && <div data-tauri-drag-region style={{ height: dragStripHeight(), flexShrink: 0 }} />}
 
-      <main
+      <ScrollElement
         data-testid="wizard-scroll-main"
         className="flex-1 overflow-y-auto"
       >
         <div className="max-w-xl mx-auto" style={{ padding: "0 24px 32px" }}>
           {children}
         </div>
-      </main>
+      </ScrollElement>
 
       {alert && (
         <p
@@ -2488,7 +2494,7 @@ export function DoneStep({
 
 // ── SetupWizard ─────────────────────────────────────────────────────────
 
-export function SetupWizard({
+function SetupWizardFlow({
   onComplete,
   initialStep,
   initialPendingModelId = null,
@@ -2599,6 +2605,15 @@ export function SetupWizard({
       connectedAgents={connectedAgents}
       onComplete={onComplete}
     />
+  );
+}
+
+export function SetupWizard(props: SetupWizardProps) {
+  const { embedded = false, ...flowProps } = props;
+  return (
+    <EmbeddedSetupWizardContext.Provider value={embedded}>
+      <SetupWizardFlow {...flowProps} />
+    </EmbeddedSetupWizardContext.Provider>
   );
 }
 

@@ -8,9 +8,10 @@ import { i18n } from "../../i18n";
 import { RECENT_PAGES_STORAGE_KEY } from "../../lib/recentPages";
 import { RECENT_SPACES_STORAGE_KEY } from "../../lib/recentSpaces";
 import type { Page, SearchResult, Space } from "../../lib/tauri";
-import { createPageDraft, getPage, updatePageDraft } from "../../lib/tauri";
+import { createPageDraft, getPage, publishPageDraft, updatePageDraft } from "../../lib/tauri";
 import { clearPendingPairingCode } from "../../lib/pairingLink";
 import Main from "./Main";
+import ActivityStatus from "./activity/ActivityStatus";
 
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
@@ -26,16 +27,28 @@ const draftFlushMock = vi.hoisted(
   () => vi.fn<() => Promise<boolean>>(),
 );
 const draftIdentityMock = vi.hoisted(
-  () => vi.fn<() => { readonly draftId: string | null; readonly version: number | null }>(),
+  () => vi.fn<() => {
+    readonly draftId: string | null;
+    readonly version: number | null;
+    readonly publishedPage?: Page;
+    readonly projectionIssue?: { readonly expectedVersion: number };
+  }>(),
 );
 const realDraftEditor = vi.hoisted(() => ({ enabled: false }));
 const setSearchQueryMock = vi.hoisted(() => vi.fn());
 const takeRemotePairingLinkMock = vi.hoisted(() => vi.fn<() => Promise<string | null>>());
-const useSearchMock = vi.hoisted(() => vi.fn(() => ({
+const useSearchMock = vi.hoisted(() => vi.fn((): {
+  query: string;
+  setQuery: typeof setSearchQueryMock;
+  debouncedQuery: string;
+  results: SearchResult[];
+  isLoading?: boolean;
+  error?: unknown;
+} => ({
   query: "",
   setQuery: setSearchQueryMock,
   debouncedQuery: "",
-  results: [] as SearchResult[],
+  results: [],
 })));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -72,7 +85,7 @@ vi.mock("../../lib/tauri", () => ({
 
 vi.mock("./ActivityFeed", () => ({ default: () => <div data-testid="activity-feed" /> }));
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
-vi.mock("./MemoryStream", () => ({ default: () => <div /> }));
+vi.mock("./MemoryStream", () => ({ default: ({ toolbarActions }: { toolbarActions?: import("react").ReactNode }) => <div><h2>Memories</h2>{toolbarActions}</div> }));
 vi.mock("./AtlasView", () => ({
   default: (props: {
     onBack?: () => void;
@@ -147,49 +160,48 @@ vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div data-testid="client-s
 vi.mock("./Sidebar", () => ({
   default: (props: {
     activeNavigation?: string | null;
-    collapsed: boolean;
-    currentPageId?: string | null;
-    currentSpaceId?: string | null;
+    hidden: boolean;
+    mode: "icons" | "labels";
     open?: boolean;
     onEntityClick: (entityId: string) => void;
-    onCreatePage?: () => void;
-    onSelectDraft?: (draftId: string, space: string | null) => void;
     onNavigateLog?: () => void;
+    onNavigateActivity?: () => void;
+    activityCurrent?: boolean;
     onNavigateGraph?: () => void;
     onNavigatePages?: () => void;
     onNavigateSettings?: () => void;
     onNavigateSpaces?: (create: boolean) => void;
+    onOpenSearch?: (trigger: HTMLButtonElement) => void;
     onRequestClose?: () => void;
-    onSelectPage?: (page: Page) => void;
-    onSelectSpace?: (space: { readonly id: string; readonly name: string }) => void;
+    searchDisabled?: boolean;
+    searchOpen?: boolean;
     presentation?: string;
   }) => (
     <aside
       data-active={props.activeNavigation ?? "none"}
-      data-collapsed={props.collapsed ? "true" : "false"}
-      data-current-page={props.currentPageId ?? "none"}
-      data-current-space={props.currentSpaceId ?? "none"}
+      data-collapsed={props.hidden ? "true" : "false"}
+      data-mode={props.mode}
       data-open={props.open ? "true" : "false"}
       data-presentation={props.presentation ?? "desktop"}
     >
+      <button
+        aria-expanded={props.searchOpen ?? false}
+        disabled={props.searchDisabled}
+        onClick={(event) => props.onOpenSearch?.(event.currentTarget)}
+        type="button"
+      >
+        {i18n.t("main.searchButton")}
+      </button>
       <button type="button" onClick={() => props.onEntityClick("__create_profile__")}>
         Open avatar menu destination
       </button>
+      <ActivityStatus onOpenActivity={props.onNavigateActivity ?? (() => {})} current={props.activityCurrent} />
       <button type="button" onClick={props.onNavigateLog}>Open memories</button>
       <button type="button" onClick={props.onNavigatePages}>Open wiki</button>
       <button type="button" onClick={props.onNavigateSettings}>Open settings</button>
       <button type="button" onClick={props.onNavigateGraph}>Open graph</button>
-      <button type="button" onClick={props.onCreatePage}>New sidebar note</button>
-      <button type="button" onClick={() => props.onSelectDraft?.("draft-a", null)}>Select draft A</button>
-      <button type="button" onClick={() => props.onSelectDraft?.("draft-b", null)}>Select draft B</button>
       <button type="button" onClick={() => props.onNavigateSpaces?.(false)}>Open spaces</button>
       <button type="button" onClick={() => props.onNavigateSpaces?.(true)}>Create space</button>
-      <button type="button" onClick={() => props.onSelectPage?.({ id: "page-1", status: "active", title: "Recent page" } as Page)}>
-        Open recent page
-      </button>
-      <button type="button" onClick={() => props.onSelectSpace?.({ id: "space-1", name: "Work" })}>
-        Open recent space
-      </button>
       {props.presentation === "overlay" && props.open && (
         <button type="button" aria-label="Close sidebar" onClick={props.onRequestClose} />
       )}
@@ -200,6 +212,40 @@ vi.mock("./Sidebar", () => ({
   ),
   SidebarHeaderDivider: (props: { visible: boolean }) => (
     props.visible ? <div data-sidebar-header-divider="true" /> : null
+  ),
+}));
+vi.mock("./navigation/ContextBrowser", () => ({
+  ContextBrowser: (props: {
+    currentPageId: string | null;
+    onCreatePage: () => void;
+    onSelectDraft: (draftId: string, space: string | null) => void;
+    onSelectPage: (page: Page) => void;
+  }) => (
+    <div data-current-page={props.currentPageId ?? "none"} data-testid="context-browser">
+      <button type="button" onClick={props.onCreatePage}>New context note</button>
+      <button type="button" onClick={() => props.onSelectDraft("draft-a", null)}>Select draft A</button>
+      <button type="button" onClick={() => props.onSelectDraft("draft-b", null)}>Select draft B</button>
+      <button type="button" onClick={() => props.onSelectPage({ id: "page-1", status: "active", title: "Recent page" } as Page)}>Open recent page</button>
+    </div>
+  ),
+}));
+vi.mock("./pages/WikiWorkspace", () => ({
+  WikiWorkspace: (props: {
+    children: React.ReactNode;
+    tabs?: React.ReactNode;
+    currentPageId?: string | null;
+    onCreatePage: () => void;
+    onOpenDraft: (draftId: string, space: string | null) => void;
+    onOpenPage: (page: Page) => void;
+  }) => (
+    <div data-current-page={props.currentPageId ?? "none"} data-testid="wiki-workspace">
+      {props.tabs}{props.children}
+      <button type="button" onClick={() => props.onCreatePage()}>New context note</button>
+      <button type="button" onClick={() => props.onOpenDraft("draft-a", null)}>Select draft A</button>
+      <button type="button" onClick={() => props.onOpenDraft("draft-b", null)}>Select draft B</button>
+      <button type="button" onClick={() => props.onOpenDraft("draft-new", null)}>Open saved draft</button>
+      <button type="button" onClick={() => props.onOpenPage({ id: "page-1", status: "active", title: "Recent page" } as Page)}>Open recent page</button>
+    </div>
   ),
 }));
 vi.mock("./pages/PagesOverview", () => ({
@@ -230,6 +276,7 @@ vi.mock("./pages/PageDraftEditor", async () => {
     PageDraftEditor: React.forwardRef((props: {
       draftId?: string;
       onBack: () => void;
+      onDraftIdentity?: (draftId: string) => void;
       onEscapeBeforeLeave?: () => boolean;
       onOpenExisting: (pageId: string) => void;
       onPublished: (pageId: string) => void;
@@ -238,7 +285,12 @@ vi.mock("./pages/PageDraftEditor", async () => {
       if (realDraftEditor.enabled) return <actual.PageDraftEditor {...props} ref={ref as React.Ref<import("./pages/PageDraftEditor").PageDraftEditorHandle>} />;
       const requestBack = () => draftRequestBackMock(props.onBack);
       React.useImperativeHandle(ref, () => ({
-        flush: draftFlushMock,
+        flush: async () => {
+          const saved = await draftFlushMock();
+          const identity = draftIdentityMock();
+          if (saved && identity.draftId) props.onDraftIdentity?.(identity.draftId);
+          return saved;
+        },
         getIdentity: draftIdentityMock,
         requestBack,
       }));
@@ -361,6 +413,10 @@ function draftPage(id: string, title: string, content: string): Page {
   };
 }
 
+function activePage(page: Page, version = page.version + 1): Page {
+  return { ...page, status: "active", version };
+}
+
 function space(id: string, name: string): Space {
   return {
     id,
@@ -416,6 +472,11 @@ function renderMain(props: ComponentProps<typeof Main> = {}) {
   };
 }
 
+async function openManagedSpace(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Open spaces" }));
+  await user.click(screen.getByRole("button", { name: "Open managed space" }));
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((next) => {
@@ -424,11 +485,19 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function getSearchInput() {
+  if (!screen.queryByRole("dialog")) {
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("main.searchButton") }));
+  }
+  return screen.getByPlaceholderText(i18n.t("main.searchPlaceholder"));
+}
+
 describe("Main search", () => {
   beforeEach(async () => {
     realDraftEditor.enabled = false;
     vi.mocked(createPageDraft).mockReset();
     vi.mocked(getPage).mockReset();
+    vi.mocked(publishPageDraft).mockReset();
     vi.mocked(updatePageDraft).mockReset();
     eventListeners.clear();
     importCompletion.imported = 1;
@@ -455,6 +524,12 @@ describe("Main search", () => {
     await i18n.changeLanguage("en");
   });
 
+  it("keeps the Wiki directory inside the workspace instead of the header", () => {
+    renderMain();
+    expect(screen.getByTestId("wiki-workspace")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Notes and folders" })).not.toBeInTheDocument();
+  });
+
   it("traverses Wiki, Spaces, and Page in both directions without resetting root history", async () => {
     const user = userEvent.setup();
     renderMain();
@@ -465,9 +540,12 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
     expect(back()).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
     await user.click(screen.getByRole("button", { name: "Open recent page" }));
     expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "page-1");
-    expect(screen.getByRole("main")).toHaveClass("memory-main-content--page");
+    expect(screen.getByRole("main")).toHaveClass("memory-main-content--wiki");
+    await user.click(back());
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
     await user.click(back());
     expect(screen.getByTestId("spaces-overview")).toBeVisible();
     await user.click(back());
@@ -475,6 +553,8 @@ describe("Main search", () => {
     expect(back()).toBeDisabled();
     await user.click(forward());
     expect(screen.getByTestId("spaces-overview")).toBeVisible();
+    await user.click(forward());
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
     await user.click(forward());
     expect(screen.getByTestId("page-detail")).toBeVisible();
     expect(forward()).toBeDisabled();
@@ -484,6 +564,7 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
     await user.click(screen.getByRole("button", { name: "Activity" }));
+    await user.click(screen.getByTestId("activity-summary-open"));
     expect(screen.getByTestId("activity-feed")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Open memories" }));
     expect(screen.getByRole("heading", { name: "Memories" })).toBeVisible();
@@ -515,6 +596,7 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
     await user.click(screen.getByRole("button", { name: "Open spaces" }));
+    await user.click(screen.getByRole("button", { name: "Open wiki" }));
     await user.click(screen.getByRole("button", { name: "Open recent page" }));
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
     expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeEnabled();
@@ -568,18 +650,18 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
     await user.click(screen.getByRole("button", { name: "Open spaces" }));
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const search = getSearchInput();
     await user.click(screen.getByRole("button", { name: "Search" }));
     await user.type(search, "architecture");
-    expect(screen.queryByTestId("spaces-overview")).not.toBeInTheDocument();
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
-    expect(search).toHaveValue("");
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByTestId("pages-overview")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Search" }));
-    await user.type(search, "new query");
+    await user.type(getSearchInput(), "new query");
     await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
-    expect(search).toHaveValue("");
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByTestId("spaces-overview")).toBeVisible();
   });
@@ -592,10 +674,10 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
     await user.click(screen.getByRole("button", { name: "Search" }));
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const search = getSearchInput();
     await user.type(search, "architecture");
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
-    expect(search).toHaveValue("");
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
     expect(screen.getByTestId("pages-overview")).toBeVisible();
     expect(screen.getByRole("button", { name: "Search" })).toHaveAttribute("aria-expanded", "false");
     expect(screen.getByRole("button", { name: i18n.t("main.back") })).toBeDisabled();
@@ -628,7 +710,7 @@ describe("Main search", () => {
     renderMain();
     await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
     await user.click(screen.getByRole("button", { name: "Search" }));
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const search = getSearchInput();
     await user.type(search, "architecture");
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
     await act(async () => flush.resolve(false));
@@ -641,11 +723,11 @@ describe("Main search", () => {
   it("replaces a deleted Space with its parent so Back cannot reopen the deleted destination", async () => {
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
     await user.click(screen.getByRole("button", { name: "Complete Space deletion" }));
     expect(screen.getByTestId("spaces-overview")).toBeVisible();
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
-    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.getByTestId("spaces-overview")).toBeVisible();
     expect(screen.queryByTestId("space-detail")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: i18n.t("main.forward") }));
     expect(screen.getByTestId("spaces-overview")).toBeVisible();
@@ -692,21 +774,17 @@ describe("Main search", () => {
     expect(screen.getByTestId("pages-overview")).toBeVisible();
   });
 
-  it("keeps recaps reachable from the Memories screen", async () => {
+  it("keeps the Memories collection free of retired Recaps and duplicate recent-memory navigation", async () => {
     const user = userEvent.setup();
     renderMain();
-
     await user.click(screen.getByRole("button", { name: "Open memories" }));
-    await user.click(screen.getByRole("button", { name: "Recaps" }));
-
-    expect(screen.getByTestId("recaps-list")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Recaps back" }));
     expect(screen.getByRole("heading", { name: "Memories" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Recaps" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("context-browser")).not.toBeInTheDocument();
   });
 
-  it("reads and updates the persisted desktop sidebar preference", async () => {
-    // Given a persisted collapsed desktop sidebar
+  it("migrates the legacy collapsed preference to hidden labels", async () => {
+    // Given a legacy collapsed value, Main preserves its hidden state in the current two-state model
     localStorage.setItem("wenlan-sidebar-collapsed", "true");
     const user = userEvent.setup();
 
@@ -714,11 +792,12 @@ describe("Main search", () => {
     renderMain();
     const sidebar = screen.getByRole("complementary");
     expect(sidebar).toHaveAttribute("data-collapsed", "true");
+    expect(sidebar).toHaveAttribute("data-mode", "labels");
     await user.click(screen.getByRole("button", { name: "Toggle sidebar" }));
 
-    // Then the desktop state and preference both become expanded
+    // Then the sidebar is hidden without losing the selected icon mode
     expect(sidebar).toHaveAttribute("data-collapsed", "false");
-    expect(localStorage.getItem("wenlan-sidebar-collapsed")).toBe("false");
+    await waitFor(() => expect(JSON.parse(localStorage.getItem("wenlan-navigation-v1")!).sidebar).toEqual({ visible: true, mode: "labels" }));
   });
 
   it("keeps the top bar uninterrupted when the sidebar toggles", async () => {
@@ -749,16 +828,16 @@ describe("Main search", () => {
     // Given a recent Space opened from Wiki
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
 
     // When Escape is pressed
     fireEvent.keyDown(window, { key: "Escape" });
 
-    // Then pushed history returns Wiki
-    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
+    // Then pushed history returns the Spaces overview that launched the detail
+    expect(screen.getByTestId("spaces-overview")).toBeInTheDocument();
 
     // Given the Space is opened again and its parent is used
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
     await user.click(screen.getByRole("button", { name: "Space parent" }));
 
     // Then the parent always replaces with the Spaces overview
@@ -767,7 +846,7 @@ describe("Main search", () => {
 
   it("closes a narrow drawer without mutating desktop preference and returns focus", async () => {
     // Given a narrow viewport and a collapsed desktop preference
-    localStorage.setItem("wenlan-sidebar-collapsed", "true");
+    localStorage.setItem("wenlan-navigation-v1", JSON.stringify({ version: 1, visible: ["pages", "spaces", "graph"], sidebar: { visible: false, mode: "icons" } }));
     stubResponsiveViewport(true);
     const user = userEvent.setup();
     renderMain();
@@ -780,7 +859,7 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Close sidebar" }));
 
     // Then the desktop preference is untouched and focus returns to the toggle
-    expect(localStorage.getItem("wenlan-sidebar-collapsed")).toBe("true");
+    expect(JSON.parse(localStorage.getItem("wenlan-navigation-v1")!).sidebar).toEqual({ visible: false, mode: "icons" });
     expect(toggle).toHaveFocus();
   });
 
@@ -789,7 +868,7 @@ describe("Main search", () => {
     stubResponsiveViewport(true);
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
     const toggle = screen.getByRole("button", { name: "Toggle sidebar" });
     await user.click(toggle);
     expect(screen.getByRole("complementary")).toHaveAttribute("data-open", "true");
@@ -805,13 +884,13 @@ describe("Main search", () => {
     // When Escape is pressed again after the drawer has closed
     fireEvent.keyDown(window, { key: "Escape" });
 
-    // Then the pushed history returns Wiki
-    expect(screen.getByTestId("pages-overview")).toBeInTheDocument();
+    // Then the pushed history returns the Spaces overview that launched the detail
+    expect(screen.getByTestId("spaces-overview")).toBeInTheDocument();
   });
 
   it("returns focus when 899px overlay content becomes a collapsed 900px desktop sidebar", async () => {
     // Given a persisted collapsed desktop sidebar with overlay focus at 899px
-    localStorage.setItem("wenlan-sidebar-collapsed", "true");
+    localStorage.setItem("wenlan-navigation-v1", JSON.stringify({ version: 1, visible: ["pages", "spaces", "graph"], sidebar: { visible: false, mode: "icons" } }));
     const viewport = stubResponsiveViewport(true);
     const user = userEvent.setup();
     renderMain();
@@ -828,7 +907,7 @@ describe("Main search", () => {
     expect(screen.getByRole("complementary")).toHaveAttribute("data-presentation", "desktop");
     expect(screen.getByRole("complementary")).toHaveAttribute("data-open", "false");
     expect(toggle).toHaveFocus();
-    expect(localStorage.getItem("wenlan-sidebar-collapsed")).toBe("true");
+    expect(JSON.parse(localStorage.getItem("wenlan-navigation-v1")!).sidebar).toEqual({ visible: false, mode: "icons" });
   });
 
   it("prunes a missing MRU id on the next unrelated successful Space visit", async () => {
@@ -844,7 +923,7 @@ describe("Main search", () => {
     }));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
 
     // When an unrelated current Space finishes loading and records its visit
     await user.click(screen.getByRole("button", { name: "Finish loading space" }));
@@ -871,7 +950,7 @@ describe("Main search", () => {
     }));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
 
     // When the selected Space finishes loading first, followed by the inventory
     await user.click(screen.getByRole("button", { name: "Finish loading space" }));
@@ -905,7 +984,7 @@ describe("Main search", () => {
     }));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
 
     await user.click(screen.getByRole("button", { name: "Rename loaded space" }));
 
@@ -937,7 +1016,7 @@ describe("Main search", () => {
     }));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
 
     await user.click(screen.getByRole("button", { name: "Delete loaded space" }));
 
@@ -958,14 +1037,15 @@ describe("Main search", () => {
     listSpacesMock.mockResolvedValue([current]);
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
-    expect(screen.getByRole("complementary")).toHaveAttribute("data-current-space", current.id);
+    await openManagedSpace(user);
+    await user.click(screen.getByRole("button", { name: "Finish loading space" }));
+    expect(JSON.parse(localStorage.getItem(RECENT_SPACES_STORAGE_KEY)!).entries[0]).toMatchObject({ id: current.id, name: current.name });
 
     // When the loaded Space is renamed under the same id
     await user.click(screen.getByRole("button", { name: "Rename loaded space" }));
 
     // Then selection remains on that id while the detail route refreshes its name
-    expect(screen.getByRole("complementary")).toHaveAttribute("data-current-space", current.id);
+    expect(JSON.parse(localStorage.getItem(RECENT_SPACES_STORAGE_KEY)!).entries[0]).toMatchObject({ id: current.id, name: "Renamed Work" });
     expect(screen.getByTestId("space-detail")).toHaveAttribute("data-space-name", "Renamed Work");
   });
 
@@ -973,7 +1053,7 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain({ initialPageId: "page-1" });
 
-    expect(screen.getByRole("complementary")).toHaveAttribute("data-current-page", "page-1");
+    expect(screen.getByTestId("wiki-workspace")).toHaveAttribute("data-current-page", "page-1");
     expect(localStorage.getItem(RECENT_PAGES_STORAGE_KEY)).toBeNull();
     await user.click(screen.getByRole("button", { name: "Finish loading page" }));
 
@@ -1009,15 +1089,20 @@ describe("Main search", () => {
       saved.push(draft);
       return draft;
     });
+    vi.mocked(publishPageDraft).mockImplementation(async (request) => {
+      const draft = saved.find((candidate) => candidate.id === request.id);
+      if (!draft) throw new Error(`Missing saved draft ${request.id}`);
+      return activePage(draft, request.expectedVersion + 1);
+    });
     const user = userEvent.setup();
     const { rerenderMain } = renderMain();
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New context note" }));
     await user.type(await screen.findByRole("textbox", { name: "Title" }), "Original");
     await user.type(screen.getByRole("textbox", { name: "Content" }), "Keep this body");
     rerenderMain();
     expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue("Original");
 
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New context note" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(""));
     expect(saved).toHaveLength(1);
     await user.type(screen.getByRole("textbox", { name: "Title" }), "Second");
@@ -1030,31 +1115,56 @@ describe("Main search", () => {
     expect(saved[1]).toMatchObject({ title: "Second", content: "Separate body" });
     expect(saved[0].id).not.toBe(saved[1].id);
     expect(updatePageDraft).not.toHaveBeenCalled();
+    expect(publishPageDraft).toHaveBeenCalledTimes(2);
+    expect(publishPageDraft).toHaveBeenNthCalledWith(1, {
+      id: saved[0]!.id,
+      expectedVersion: saved[0]!.version,
+    });
+    expect(publishPageDraft).toHaveBeenNthCalledWith(2, {
+      id: saved[1]!.id,
+      expectedVersion: saved[1]!.version,
+    });
   });
 
   it("starts a distinct session even when both old and new drafts have no persisted id", async () => {
     realDraftEditor.enabled = true;
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New context note" }));
     const oldTitle = await screen.findByRole("textbox", { name: "Title" });
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New context note" }));
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Title" })).not.toBe(oldTitle));
     expect(createPageDraft).not.toHaveBeenCalled();
   });
 
-  it("preserves the mounted session and persisted identity through ordinary saves and rerenders", async () => {
+  it("keeps the autosaved note mounted while typing, then finalizes it once on quit", async () => {
     realDraftEditor.enabled = true;
-    vi.mocked(createPageDraft).mockImplementation(async (request) => draftPage(request.clientDraftId, request.title, request.content));
-    vi.mocked(updatePageDraft).mockImplementation(async (request) => draftPage(request.id, request.title, request.content));
+    const saved = new Map<string, Page>();
+    let published: Page | null = null;
+    vi.mocked(createPageDraft).mockImplementation(async (request) => {
+      const draft = draftPage(request.clientDraftId, request.title, request.content);
+      saved.set(draft.id, draft);
+      return draft;
+    });
+    vi.mocked(updatePageDraft).mockImplementation(async (request) => {
+      const draft = { ...draftPage(request.id, request.title, request.content), version: request.expectedVersion + 1 };
+      saved.set(draft.id, draft);
+      return draft;
+    });
+    vi.mocked(publishPageDraft).mockImplementation(async (request) => {
+      const draft = saved.get(request.id);
+      if (!draft) throw new Error(`Missing saved draft ${request.id}`);
+      published = activePage(draft, request.expectedVersion + 1);
+      return published;
+    });
     let quitGuard: (() => Promise<boolean>) | null = null;
     const props = { onRegisterQuitGuard: (guard: (() => Promise<boolean>) | null) => { quitGuard = guard; } };
     const user = userEvent.setup();
     const { rerenderMain } = renderMain(props);
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New context note" }));
     const title = await screen.findByRole("textbox", { name: "Title" });
     await user.type(title, "Stable note");
-    await act(async () => { expect(await quitGuard!()).toBe(true); });
+    await waitFor(() => expect(createPageDraft).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     rerenderMain(props);
     expect(screen.getByRole("textbox", { name: "Title" })).toBe(title);
     expect(title).toHaveValue("Stable note");
@@ -1065,14 +1175,41 @@ describe("Main search", () => {
       id: vi.mocked(createPageDraft).mock.calls[0][0].clientDraftId,
       title: "Stable note", content: "More content",
     }));
+    const draftId = vi.mocked(createPageDraft).mock.calls[0]![0].clientDraftId;
+    expect(publishPageDraft).toHaveBeenCalledTimes(1);
+    expect(publishPageDraft).toHaveBeenCalledWith({ id: draftId, expectedVersion: 2 });
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", draftId);
+    // The canonical Page keeps the draft id; Main's test renderer does not
+    // mount the tab strip, so this also proves the same note was promoted.
+    expect(published).toMatchObject({
+      id: draftId,
+      title: "Stable note",
+      content: "More content",
+      status: "active",
+      version: 3,
+    });
+    expect(saved.get(draftId)).toMatchObject({ title: "Stable note", content: "More content", version: 2 });
   });
 
   it("remounts an existing draft A to cached draft B instead of retaining A's autosave identity", async () => {
     realDraftEditor.enabled = true;
-    vi.mocked(getPage).mockImplementation(async (id) => id === "draft-a"
-      ? draftPage("draft-a", "A title", "A body")
-      : draftPage("draft-b", "B title", "B body"));
-    vi.mocked(updatePageDraft).mockImplementation(async (request) => draftPage(request.id, request.title, request.content));
+    const saved = new Map<string, Page>([
+      ["draft-a", draftPage("draft-a", "A title", "A body")],
+      ["draft-b", draftPage("draft-b", "B title", "B body")],
+    ]);
+    vi.mocked(getPage).mockImplementation(async (id) => saved.get(id) ?? null);
+    vi.mocked(updatePageDraft).mockImplementation(async (request) => {
+      const draft = { ...draftPage(request.id, request.title, request.content), version: request.expectedVersion + 1 };
+      saved.set(draft.id, draft);
+      return draft;
+    });
+    vi.mocked(publishPageDraft).mockImplementation(async (request) => {
+      const draft = saved.get(request.id);
+      if (!draft) throw new Error(`Missing saved draft ${request.id}`);
+      const page = activePage(draft, request.expectedVersion + 1);
+      saved.set(page.id, page);
+      return page;
+    });
     const user = userEvent.setup();
     const { queryClient } = renderMain();
     queryClient.setQueryData(["page-draft", "draft-b"], draftPage("draft-b", "B title", "B body"));
@@ -1092,10 +1229,10 @@ describe("Main search", () => {
     vi.mocked(createPageDraft).mockRejectedValue(new Error("offline"));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New page" }));
     const oldTitle = await screen.findByRole("textbox", { name: "Title" });
     await user.type(oldTitle, "Unsaved original");
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New page" }));
     await screen.findByRole("alert");
     expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
     expect(oldTitle).toHaveValue("Unsaved original");
@@ -1105,13 +1242,16 @@ describe("Main search", () => {
     realDraftEditor.enabled = true;
     const saving = deferred<Page>();
     vi.mocked(createPageDraft).mockReturnValue(saving.promise);
+    vi.mocked(publishPageDraft).mockResolvedValue(
+      activePage(draftPage("draft-original", "Pending original", ""), 2),
+    );
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New page" }));
     const oldTitle = await screen.findByRole("textbox", { name: "Title" });
     await user.type(oldTitle, "Pending original");
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
-    await user.click(screen.getByRole("button", { name: "New sidebar note" }));
+    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New page" }));
     expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
     expect(oldTitle).toHaveValue("Pending original");
     expect(createPageDraft).toHaveBeenCalledTimes(1);
@@ -1178,7 +1318,7 @@ describe("Main search", () => {
     );
   });
 
-  it("flushes and promotes a new draft before the first global search query unmounts it", async () => {
+  it("flushes a new draft before its first global search query while keeping the editor mounted", async () => {
     const flush = deferred<boolean>();
     draftFlushMock.mockReturnValue(flush.promise);
     useSearchMock.mockImplementation(() => {
@@ -1198,33 +1338,40 @@ describe("Main search", () => {
 
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
     await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
+    const originalEditor = screen.getByTestId("page-draft-editor");
     await user.type(
-      screen.getByPlaceholderText("Search pages, memories, sources..."),
+      getSearchInput(),
       "architecture",
     );
 
     expect(draftFlushMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("page-draft-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("page-draft-editor")).toBe(originalEditor);
     await act(async () => {
       flush.resolve(true);
       await flush.promise;
     });
 
-    expect(screen.queryByTestId("page-draft-editor")).not.toBeInTheDocument();
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    expect(screen.getByTestId("page-draft-editor")).toBeInTheDocument();
+    const search = getSearchInput();
     expect(search).toHaveValue(
       "architecture",
     );
     await user.clear(search);
-    expect(await screen.findByTestId("page-draft-editor")).toHaveAttribute(
-      "data-draft-id",
-      "draft-new",
-    );
+    expect(await screen.findByTestId("page-draft-editor")).toBe(originalEditor);
+    expect(originalEditor).toHaveAttribute("data-draft-id", "new");
+    await user.click(screen.getByRole("button", { name: "Open saved draft" }));
+    expect(screen.getAllByTestId("page-draft-editor")).toHaveLength(1);
+    expect(screen.getByTestId("page-draft-editor")).toBe(originalEditor);
   });
 
   it("cancels a pending draft search without resurrecting it or promoting the mounted editor", async () => {
     const flush = deferred<boolean>();
     draftFlushMock.mockReturnValue(flush.promise);
+    draftIdentityMock.mockReturnValue({
+      draftId: "draft-new",
+      version: 1,
+      publishedPage: activePage(draftPage("draft-new", "Untitled note", ""), 2),
+    });
     useSearchMock.mockImplementation(() => {
       const [query, setLocalQuery] = useState("");
       return {
@@ -1241,7 +1388,7 @@ describe("Main search", () => {
     renderMain();
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
     await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const search = getSearchInput();
 
     await user.type(search, "architecture");
     await user.clear(search);
@@ -1254,7 +1401,9 @@ describe("Main search", () => {
     });
 
     expect(search).toHaveValue("");
-    expect(screen.getByTestId("page-draft-editor")).toHaveAttribute("data-draft-id", "new");
+    expect(screen.queryByTestId("search-results")).not.toBeInTheDocument();
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "draft-new");
+    expect(screen.queryByTestId("page-draft-editor")).not.toBeInTheDocument();
   });
 
   it("keeps a new draft editor visible when its first global search query cannot flush", async () => {
@@ -1277,12 +1426,12 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
     await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
     await user.type(
-      screen.getByPlaceholderText("Search pages, memories, sources..."),
+      getSearchInput(),
       "architecture",
     );
 
     expect(await screen.findByTestId("page-draft-editor")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Search pages, memories, sources...")).toHaveValue(
+    expect(getSearchInput()).toHaveValue(
       "architecture",
     );
   });
@@ -1341,6 +1490,11 @@ describe("Main search", () => {
   ) => {
     const flush = deferred<boolean>();
     draftFlushMock.mockReturnValue(flush.promise);
+    draftIdentityMock.mockReturnValue({
+      draftId: "draft-new",
+      version: 1,
+      publishedPage: activePage(draftPage("draft-new", "Untitled note", ""), 2),
+    });
     const user = userEvent.setup();
     const view = renderMain();
     await user.click(screen.getByRole("button", { name: "Open wiki" }));
@@ -1353,8 +1507,13 @@ describe("Main search", () => {
       await flush.promise;
     });
 
-    expect(screen.queryByTestId(destinationTestId)).not.toBeInTheDocument();
-    expect(screen.getByTestId("page-draft-editor")).toHaveAttribute("data-draft-id", "new");
+    if (destinationTestId === "memory-detail") {
+      expect(screen.queryByTestId(destinationTestId)).not.toBeInTheDocument();
+    } else {
+      expect(screen.getByTestId(destinationTestId)).not.toHaveAttribute("data-page-id", "page-1");
+    }
+    expect(screen.getByTestId("page-detail")).toHaveAttribute("data-page-id", "draft-new");
+    expect(screen.queryByTestId("page-draft-editor")).not.toBeInTheDocument();
   });
 
   it("clears a discarded resumed draft identity before putting it in navigation history", async () => {
@@ -1397,7 +1556,7 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
 
-    await user.click(screen.getByRole("button", { name: "Open recent space" }));
+    await openManagedSpace(user);
     await user.click(screen.getByRole("button", { name: "Create Space draft" }));
     expect(screen.getByTestId("page-draft-editor")).toHaveAttribute("data-space", "Work");
     expect(screen.getByRole("complementary")).toHaveAttribute("data-active", "pages");
@@ -1443,7 +1602,7 @@ describe("Main search", () => {
   it("labels the global search around pages, memories, and sources", () => {
     renderMain();
 
-    expect(screen.getByPlaceholderText("Search pages, memories, sources...")).toBeInTheDocument();
+    expect(getSearchInput()).toBeInTheDocument();
     expect(useSearchMock).toHaveBeenCalledWith();
     expect(useSearchMock).not.toHaveBeenCalledWith("memory");
   });
@@ -1453,16 +1612,78 @@ describe("Main search", () => {
     renderMain();
 
     const searchAction = screen.getByRole("button", { name: "Search" });
-    const searchInput = screen.getByPlaceholderText(
-      "Search pages, memories, sources...",
-    );
     expect(searchAction).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByPlaceholderText("Search pages, memories, sources...")).not.toBeInTheDocument();
     await user.click(searchAction);
+    const searchInput = screen.getByPlaceholderText("Search pages, memories, sources...");
 
     expect(searchAction).toHaveAttribute("aria-expanded", "true");
     expect(searchInput).toHaveFocus();
     fireEvent.keyDown(searchInput, { key: "Escape" });
     expect(searchAction).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens a portal dialog, makes the background inert, and restores focus", async () => {
+    const user = userEvent.setup();
+    renderMain();
+    const trigger = screen.getByRole("button", { name: "Search" });
+    await user.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "Search" });
+    const shell = document.querySelector(".memory-shell");
+    const input = screen.getByPlaceholderText("Search pages, memories, sources...");
+    expect(shell).toHaveAttribute("inert");
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    expect(dialog).not.toBeInTheDocument();
+    expect(shell).not.toHaveAttribute("inert");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("shows loading and search errors without claiming there are no matches", () => {
+    useSearchMock.mockReturnValue({
+      query: "offline",
+      debouncedQuery: "offline",
+      setQuery: setSearchQueryMock,
+      results: [],
+      isLoading: true,
+      error: null,
+    });
+    const firstRender = renderMain();
+    getSearchInput();
+    expect(screen.getByRole("status")).toHaveTextContent("Searching");
+    expect(screen.queryByText(/0 results for/)).not.toBeInTheDocument();
+
+    firstRender.unmount();
+    useSearchMock.mockReturnValue({
+      query: "offline",
+      debouncedQuery: "offline",
+      setQuery: setSearchQueryMock,
+      results: [],
+      isLoading: false,
+      error: new Error("offline"),
+    });
+    renderMain();
+    getSearchInput();
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+    expect(screen.queryByText(/0 results for/)).not.toBeInTheDocument();
+  });
+
+  it("shows recent pages in an empty search and opens the selected page", async () => {
+    localStorage.setItem(RECENT_PAGES_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      entries: [{ id: "page-recent", title: "Research notes", visitedAt: Date.now() }],
+    }));
+    const user = userEvent.setup();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Search" }));
+
+    expect(await screen.findByText("Recently opened")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open Page: Research notes" }));
+    expect(await screen.findByTestId("page-detail")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
   });
 
   it("opens URL-backed source search results through the file bridge", async () => {
@@ -1485,7 +1706,8 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
 
-    await user.click(screen.getByText("Source credibility notes"));
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: "Source credibility notes" }));
 
     expect(openSearchResultMock).toHaveBeenCalledWith("/tmp/source.md");
   });
@@ -1510,7 +1732,8 @@ describe("Main search", () => {
     const user = userEvent.setup();
     renderMain();
 
-    await user.click(screen.getByText("Source credibility notes"));
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await user.click(await screen.findByRole("button", { name: "Source credibility notes" }));
 
     expect(openSearchResultMock).toHaveBeenCalledWith("file:///tmp/source.md");
   });
@@ -1521,6 +1744,7 @@ describe("Main search", () => {
 
     expect(screen.queryByRole("button", { name: "Home" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Activity" }));
+    await user.click(screen.getByTestId("activity-summary-open"));
 
     expect(await screen.findByTestId("activity-feed")).toBeInTheDocument();
   });
@@ -1553,9 +1777,7 @@ describe("Main search", () => {
     await i18n.changeLanguage("zh-Hant");
     renderMain();
 
-    const searchInput = screen.getByPlaceholderText(
-      "搜尋頁面、記憶、來源...",
-    );
+    const searchInput = getSearchInput();
     const searchAction = screen.getByRole("button", { name: "搜尋" });
     act(() => eventListeners.get("focus-search")?.());
 

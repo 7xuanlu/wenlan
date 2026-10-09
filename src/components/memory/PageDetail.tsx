@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
-import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useContext, useId } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ArrowLeft } from "@phosphor-icons/react";
+import { createPortal } from "react-dom";
+import { WorkspaceDocumentToolsHostContext, WorkspaceNoteGroupContext } from "./navigation/WorkspacePaneHost";
+import { NoteInspectorTabs, type NoteInspectorTab } from "./page/NoteInspectorTabs";
+import { ArrowLeft, SidebarSimple } from "@phosphor-icons/react";
 import {
   getPage,
   getPageLinks,
@@ -46,6 +49,9 @@ import { RailPanelTitle } from "./MemoryDetailPrimitives";
 import { processCitations, stripCitationLinks } from "../../lib/pageCitations";
 import { stripLedeLabel } from "../../lib/pageLede";
 import CitationChip from "./page/CitationChip";
+import { ReferencePreview } from "./links/ReferencePreview";
+import { ReferenceNavigationProvider } from "./links/ReferenceNavigationContext";
+import type { ReferencePreviewRequest, ReferenceTarget } from "./links/referenceTypes";
 import PageCanvas from "./PageCanvas";
 import {
   prepareMarkdownSource,
@@ -79,9 +85,11 @@ interface PageDetailProps {
   onSelectionChange?: (selection: MarkdownEditorSelection) => void;
   onEditorReady?: () => void;
   onBack: () => void;
+  onDeleted?: (pageId: string) => void;
   onMemoryClick: (sourceId: string) => void;
   onPageClick?: (pageId: string) => void;
   onEntityClick?: (entityId: string) => void;
+  onOpenGraph?: (pageId: string) => void;
   onDismissAttachedPageNotice?: () => void;
   onPageLoaded?: (page: Pick<Page, "id" | "status" | "title">) => void;
   onSavePendingChange?: (pending: boolean) => void;
@@ -169,7 +177,7 @@ function focusMenuBoundary(
   boundary: MenuInitialFocus,
 ): void {
   const items = enabledMenuItems(menu);
-  items[boundary === "first" ? 0 : items.length - 1]?.focus();
+  (items[boundary === "first" ? 0 : items.length - 1] ?? menu)?.focus();
 }
 
 function handleMenuKeyDown(
@@ -217,9 +225,11 @@ export default function PageDetail({
   onSelectionChange,
   onEditorReady,
   onBack,
+  onDeleted,
   onMemoryClick,
   onPageClick,
   onEntityClick,
+  onOpenGraph,
   onDismissAttachedPageNotice,
   onPageLoaded,
   onSavePendingChange,
@@ -229,10 +239,10 @@ export default function PageDetail({
 }: PageDetailProps) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [copied, setCopied] = useState(false);
+  const [wikiLinkPreview, setWikiLinkPreview] = useState<ReferencePreviewRequest | null>(null);
+  const wikiLinkPreviewLeaveTimerRef = useRef<number | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [exported, setExported] = useState(false);
-  const [copying, setCopying] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [editing, setEditing] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -241,7 +251,48 @@ export default function PageDetail({
   const [renameError, setRenameError] = useState(false);
   const [renameNeedsReview, setRenameNeedsReview] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
-  useEffect(() => setInfoOpen(false), [pageId]);
+  const [canvasWorkspaceExpanded, setCanvasWorkspaceExpanded] = useState(false);
+  const [canvasWorkspaceHost, setCanvasWorkspaceHost] = useState<HTMLDivElement | null>(null);
+  const [canvasWorkspaceSupported, setCanvasWorkspaceSupported] = useState(false);
+  const pageDetailRootRef = useRef<HTMLDivElement | null>(null);
+  const canvasWorkspaceExpandedRef = useRef(false);
+  const canvasWorkspaceScrollRef = useRef<{ pageId: string; element: HTMLElement; scrollTop: number } | null>(null);
+  const canvasWorkspaceRestoreRef = useRef<{ pageId: string; element: HTMLElement; scrollTop: number } | null>(null);
+  const inspectorId = useId();
+  const documentToolsHost = useContext(WorkspaceDocumentToolsHostContext);
+  const noteGroup = useContext(WorkspaceNoteGroupContext);
+  const setPageDetailRootRef = useCallback((node: HTMLDivElement | null) => {
+    pageDetailRootRef.current = node;
+    setCanvasWorkspaceSupported(node?.parentElement?.closest(".wiki-workspace-content") != null);
+  }, []);
+  const changeCanvasWorkspaceExpanded = useCallback((expanded: boolean) => {
+    if (expanded) {
+      const wikiWorkspace = pageDetailRootRef.current?.parentElement?.closest<HTMLElement>(".wiki-workspace-content");
+      canvasWorkspaceScrollRef.current = wikiWorkspace
+        ? { pageId, element: wikiWorkspace, scrollTop: wikiWorkspace.scrollTop }
+        : null;
+      canvasWorkspaceRestoreRef.current = null;
+    } else if (canvasWorkspaceExpandedRef.current) {
+      canvasWorkspaceRestoreRef.current = canvasWorkspaceScrollRef.current;
+    }
+    canvasWorkspaceExpandedRef.current = expanded;
+    setCanvasWorkspaceExpanded(expanded);
+  }, [pageId]);
+  canvasWorkspaceExpandedRef.current = canvasWorkspaceExpanded;
+  useLayoutEffect(() => {
+    if (canvasWorkspaceScrollRef.current?.pageId !== pageId) {
+      canvasWorkspaceScrollRef.current = null;
+      canvasWorkspaceRestoreRef.current = null;
+    }
+  }, [pageId]);
+  useLayoutEffect(() => {
+    if (canvasWorkspaceExpanded) return;
+    const snapshot = canvasWorkspaceRestoreRef.current;
+    canvasWorkspaceRestoreRef.current = null;
+    canvasWorkspaceScrollRef.current = null;
+    if (!snapshot || snapshot.pageId !== pageId || !snapshot.element.isConnected) return;
+    snapshot.element.scrollTop = snapshot.scrollTop;
+  }, [canvasWorkspaceExpanded, pageId]);
   const [editDirty, setEditDirty] = useState(false);
   const [editInitialDocument, setEditInitialDocument] = useState("");
   const [editHasMatchingTitle, setEditHasMatchingTitle] = useState(false);
@@ -271,6 +322,13 @@ export default function PageDetail({
     id: string;
     epoch: number;
   } | null>(null);
+  const editorFocusIntentRef = useRef<{
+    pageId: string;
+    beginEditAttempt: number;
+    epoch: number | null;
+    focus: boolean;
+  } | null>(null);
+  const focusedEditorSessionRef = useRef<number | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // Set only alongside a delete-blocked-by-entity actionError, so the "Open
   // the entity" link renders next to that message and nowhere else.
@@ -287,6 +345,8 @@ export default function PageDetail({
   const [reviewNotice, setReviewNotice] = useState<PageReviewNotice | null>(null);
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasSwitchPending, setCanvasSwitchPending] = useState(false);
+  const [storedActionPending, setStoredActionPending] = useState(false);
+  const storedActionRef = useRef<object | null>(null);
   const canvasSwitchAttemptRef = useRef(0);
   const canvasSwitchPendingRef = useRef(false);
   const canvasReturnToEditorRef = useRef(false);
@@ -295,6 +355,7 @@ export default function PageDetail({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      storedActionRef.current = null;
       canvasSwitchAttemptRef.current += 1;
     };
   }, []);
@@ -316,6 +377,7 @@ export default function PageDetail({
   const editorPageRef = useRef<Page | null>(null);
   const backAttemptRef = useRef(0);
   const actionMenuTriggerRef = useRef<HTMLButtonElement>(null);
+  const inspectorToggleRef = useRef<HTMLButtonElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
   const actionMenuListRef = useRef<HTMLDivElement>(null);
   const actionMenuInitialFocusRef = useRef<MenuInitialFocus>("first");
@@ -372,7 +434,7 @@ export default function PageDetail({
     retry: false,
   });
 
-  const { data: pageRevisions } = useQuery({
+  const { data: pageRevisions, isFetching: revisionsLoading, isError: revisionsError, refetch: refetchRevisions } = useQuery({
     queryKey: ["page-revisions", pageId],
     queryFn: () => getPageRevisions(pageId),
     enabled: !!pageId,
@@ -389,6 +451,42 @@ export default function PageDetail({
     }
     return map;
   }, [pageLinks]);
+  const editorWikiLinkTargets = useMemo(() => new Map(
+    [...outboundTargetByLabel]
+      .filter(([, target]) => target.id !== pageId)
+      .map(([label, target]) => [label, target.id] as const),
+  ), [outboundTargetByLabel, pageId]);
+
+  const showWikiLinkPreview = useCallback((targetId: string, anchor: HTMLAnchorElement, keyboard: boolean) => {
+    if (wikiLinkPreviewLeaveTimerRef.current !== null) {
+      window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+      wikiLinkPreviewLeaveTimerRef.current = null;
+    }
+    setWikiLinkPreview({ target: { kind: "page", id: targetId }, anchor, keyboard });
+  }, []);
+  const showReferencePreview = useCallback((target: ReferenceTarget, anchor: HTMLAnchorElement, keyboard: boolean) => {
+    if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+    wikiLinkPreviewLeaveTimerRef.current = null;
+    setWikiLinkPreview({ target, anchor, keyboard });
+  }, []);
+  const leaveWikiLinkPreview = useCallback(() => {
+    if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+    wikiLinkPreviewLeaveTimerRef.current = window.setTimeout(() => {
+      wikiLinkPreviewLeaveTimerRef.current = null;
+      setWikiLinkPreview(null);
+    }, 120);
+  }, []);
+  const dismissWikiLinkPreview = useCallback(() => {
+    if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+    wikiLinkPreviewLeaveTimerRef.current = null;
+    setWikiLinkPreview(null);
+  }, []);
+  useEffect(() => {
+    dismissWikiLinkPreview();
+    return () => {
+      if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+    };
+  }, [dismissWikiLinkPreview, editing, pageId]);
 
   const { data: registeredSources = [] } = useQuery({
     queryKey: ["registeredSources"],
@@ -401,11 +499,24 @@ export default function PageDetail({
     [registeredSources],
   );
 
-  const { data: pageSources } = useQuery({
+  const { data: pageSources, isPending: pageSourcesLoading } = useQuery({
     queryKey: ["page-sources", pageId],
     queryFn: () => getPageSources(pageId),
     enabled: !!pageId,
   });
+
+  const editorReferenceContext = useMemo(() => ({
+    citations: page?.citations,
+    sourceMemories: new Map((pageSources ?? []).flatMap((source) => source.memory
+      ? [[source.source.memory_source_id, source.memory] as const] : [])),
+    sourcesLoading: pageSourcesLoading,
+    labels: { page: t("references.page"), memory: t("citation.kind.memory"), source: t("references.source"),
+      authored: t("citation.kind.authored"), unverified: t("citation.unverified") },
+  }), [page?.citations, pageSources, pageSourcesLoading, t]);
+  useEffect(() => {
+    // A save can clear or replace the evidence map. Never keep a stale citation open.
+    setWikiLinkPreview((current) => current?.target.kind === "citation" ? null : current);
+  }, [page?.citations]);
 
   // Entities on this page = the page's own anchor entity plus the anchor
   // entities of its source memories. These are enrichment links, not search.
@@ -465,14 +576,16 @@ export default function PageDetail({
     setRenameExpectedVersion(null);
     setRenameError(false);
     setRenameNeedsReview(false);
+    storedActionRef.current = null;
+    setStoredActionPending(false);
     autosaveRef.current?.reset(null);
     editorPageRef.current = null;
     autoEditIntentRef.current = null;
     setRedistillNotice(null);
+    setReviewNotice(null);
     setActionErrorMessage(null);
-    setCopied(false);
     setExported(false);
-    setCanvasOpen(false);
+    // Inspector open/selected state belongs to the workspace, not this note.
     setCanvasSwitchPending(false);
     canvasSwitchPendingRef.current = false;
     canvasReturnToEditorRef.current = false;
@@ -560,7 +673,9 @@ export default function PageDetail({
   }, [autosave, t, updateEditDirty, updateSaveState]);
   useEffect(() => () => autosave.dispose(), [autosave]);
 
-  const flushEditor = useCallback(() => autosave.flush(), [autosave]);
+  const flushEditor = useCallback(() => storedActionRef.current
+    ? Promise.resolve(false)
+    : autosave.flush(), [autosave]);
   useEffect(() => {
     onRegisterFlush?.(flushEditor);
     return () => onRegisterFlush?.(null);
@@ -641,8 +756,13 @@ export default function PageDetail({
       queryClient.invalidateQueries({ queryKey: ["page-links", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["page-revisions", id], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["page-sources", id], refetchType: "none" });
+      onDeleted?.(id);
       if (activePageIdRef.current !== id) return;
       setActionErrorMessage(null);
+      // Release the action gate before Main requests its navigation flush.
+      closeEditor();
+      storedActionRef.current = null;
+      setStoredActionPending(false);
       void requestBack();
     },
     onError: (error, id) => {
@@ -764,45 +884,6 @@ export default function PageDetail({
     },
   });
 
-  const pageHasUserEdits = Boolean(page?.user_edited || pageRevisions?.user_edited);
-  const handleRedistillClick = () => {
-    if (
-      pageHasUserEdits &&
-      !confirm("Re-distill this edited page? The current version stays in page history for recovery.")
-    ) {
-      return;
-    }
-    redistillMutation.mutate(pageId);
-  };
-
-  const copyAsContext = useCallback(async () => {
-    if (!page) return;
-    const originPageId = page.id;
-    const space = page.domain ? `**Space:** ${page.domain}` : "";
-    const version = `**Version:** ${page.version}`;
-    const compiled = `**Last compiled:** ${page.last_compiled}`;
-    const meta = [space, version, compiled].filter(Boolean).join("\n");
-    const text = [
-      `## ${page.title}`,
-      meta,
-      "",
-      page.content,
-    ].join("\n");
-    setActionErrorMessage(null);
-    setCopying(true);
-    try {
-      await clipboardWrite(text);
-      if (activePageIdRef.current !== originPageId) return;
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      if (activePageIdRef.current !== originPageId) return;
-      setActionErrorMessage(t("pageDetail.copyError"));
-    } finally {
-      setCopying(false);
-    }
-  }, [page, t]);
-
   const handleExportToVault = useCallback(
     async (vaultPath: string) => {
       const originPageId = pageId;
@@ -831,6 +912,8 @@ export default function PageDetail({
     editorPageRef.current = null;
     activeEditorSessionRef.current = null;
     beginEditAttemptRef.current += 1;
+    editorFocusIntentRef.current = null;
+    focusedEditorSessionRef.current = null;
     editorSessionEpochRef.current += 1;
     editDocumentRef.current = "";
     editPageTitleRef.current = "";
@@ -858,6 +941,12 @@ export default function PageDetail({
   const openPageSourceForEditing = (sourcePage: Page, automatic = false) => {
     if (activePageIdRef.current !== sourcePage.id) return;
 
+    editorFocusIntentRef.current = {
+      pageId: sourcePage.id,
+      beginEditAttempt: beginEditAttemptRef.current,
+      epoch: null,
+      focus: !automatic,
+    };
     autosave.reset(sourcePage);
     editorPageRef.current = sourcePage;
     const prepared = prepareMarkdownSource(sourcePage.content);
@@ -866,6 +955,12 @@ export default function PageDetail({
     const sessionToken = {
       id: sessionId,
       epoch: editorSessionEpochRef.current,
+    };
+    editorFocusIntentRef.current = {
+      pageId: sourcePage.id,
+      beginEditAttempt: beginEditAttemptRef.current,
+      epoch: sessionToken.epoch,
+      focus: !automatic,
     };
     activeEditorSessionRef.current = sessionToken;
     setEditorSessionToken(sessionToken);
@@ -917,6 +1012,12 @@ export default function PageDetail({
     canvasReturnToEditorRef.current = false;
     const originPageId = page.id;
     const beginEditAttempt = ++beginEditAttemptRef.current;
+    editorFocusIntentRef.current = {
+      pageId: originPageId,
+      beginEditAttempt,
+      epoch: null,
+      focus: !automatic,
+    };
     const isActiveBeginEdit = () =>
       activePageIdRef.current === originPageId &&
       beginEditAttemptRef.current === beginEditAttempt;
@@ -990,7 +1091,7 @@ export default function PageDetail({
       autoEditIntentRef.current = { pageId, mode: "read" };
       return;
     }
-    if (!page || page.id !== pageId || page.status !== "active") return;
+    if (!page || page.id !== pageId || page.status !== "active" || canvasOpen) return;
     const attempted = autoEditIntentRef.current;
     if (attempted?.pageId === pageId && attempted.mode === "edit") return;
     autoEditIntentRef.current = { pageId, mode: "edit" };
@@ -998,7 +1099,7 @@ export default function PageDetail({
     // The intent key, not the page query object, controls this one-shot gate.
     // Refetches and successful saves must not open or reset the editor.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialMode, pageId, page?.id, page?.status]);
+  }, [initialMode, pageId, page?.id, page?.status, canvasOpen]);
 
   const handleNormalizeAndEdit = () => {
     if (editGate.kind !== "normalize") return;
@@ -1021,6 +1122,7 @@ export default function PageDetail({
   };
 
   const handleDocumentChange = (content: string) => {
+    if (content !== editDocumentRef.current) setReviewNotice(null);
     editDocumentRef.current = content;
     setEditHasMatchingTitle(leadingMarkdownH1MatchesTitle(content, editPageTitleRef.current));
     if (sourceProfile) autosave.setSource(serializeMarkdownSource(content, sourceProfile));
@@ -1038,6 +1140,7 @@ export default function PageDetail({
   }, [autosave, editing, editGate.kind, canonicalPage]);
 
   const requestCloseEditor = async () => {
+    if (storedActionRef.current) return;
     const originPageId = pageId;
     if (!await flushEditor() || activePageIdRef.current !== originPageId) return;
     closeEditor();
@@ -1086,16 +1189,35 @@ export default function PageDetail({
 
   const requestPageInfo = async () => {
     if (canvasSwitchPendingRef.current) return;
+    // Keep the same pane mounted while the map yields back to document editing.
+    setInfoOpen(true);
     if (showCanvas) {
       // Switching tools closes the map writer before the editor can resume.
       await requestToggleCanvas();
     }
-    setInfoOpen(true);
+  };
+
+  const selectInspectorTab = (tab: NoteInspectorTab) => {
+    if (tab === "canvas") {
+      if (!showCanvas) void requestToggleCanvas();
+    } else {
+      void requestPageInfo();
+    }
+  };
+  const closeInspector = () => {
+    const returningToEditor = showCanvas && canvasReturnToEditorRef.current;
+    changeCanvasWorkspaceExpanded(false);
+    if (showCanvas) void requestToggleCanvas();
+    else setInfoOpen(false);
+    // Each group owns its return target. A map opened while writing resumes
+    // that editor; otherwise closing the inspector returns to its own toggle.
+    if (!returningToEditor) inspectorToggleRef.current?.focus({ preventScroll: true });
   };
 
   useEffect(() => {
     if (!editing || infoOpen || actionMenuOpen) return;
     const captureUnfocusedEditorEscape = (event: KeyboardEvent) => {
+      if (noteGroup && !noteGroup.element?.contains(event.target as Node)) return;
       if (
         event.defaultPrevented ||
         event.isComposing ||
@@ -1108,7 +1230,7 @@ export default function PageDetail({
         event.target.closest(
           // Navigation owns Escape while its popover or narrow drawer is open.
           // Dismissing those layers must not flush and leave the writing view.
-          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-sidebar-escape-scope], [data-sidebar-overlay="true"], [role="menu"]',
+          'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-sidebar-escape-scope], [data-sidebar-overlay="true"], [data-page-link-preview], [data-reference-preview], [role="menu"]',
         )
       ) {
         return;
@@ -1124,7 +1246,7 @@ export default function PageDetail({
         captureUnfocusedEditorEscape,
         true,
       );
-  }, [editing, infoOpen, actionMenuOpen, requestCloseEditor]);
+  }, [editing, infoOpen, actionMenuOpen, requestCloseEditor, noteGroup]);
 
   const requestBack = async () => {
     // Main owns navigation ordering when the flush handle is registered. Queue
@@ -1240,12 +1362,75 @@ export default function PageDetail({
     }
   };
 
-  const requestDelete = () => {
+  const requestStoredPageAction = async (kind: "redistill" | "review" | "delete") => {
+    if (storedActionRef.current || renaming || renameMutation.isPending || canvasSwitchPendingRef.current || showCanvas ||
+        (editing && (editGate.kind !== "editor" || !editorStatus?.ready || editorStatus.compositionActive)) ||
+        (kind === "review" && !reviewSupported)) return;
+    const originPageId = pageId;
+    const originSession = activeEditorSessionRef.current;
+    const wasEditing = editing;
+    const token = {};
+    storedActionRef.current = token;
+    setStoredActionPending(true);
     setActionMenuOpen(false);
-    if (saveStateRef.current.phase === "pending") return;
-    if (confirm(t("pageDetail.deleteConfirm"))) {
-      setActionErrorMessage(null);
-      deleteMutation.mutate(pageId);
+    const ownsAction = () => mountedRef.current && activePageIdRef.current === originPageId &&
+      storedActionRef.current === token;
+    let editorClosed = false;
+    try {
+      // Keep the editor mounted and its draft intact until this exact session
+      // has drained. Main's navigation flush remains blocked for this action.
+      if (!await autosave.flush() || !ownsAction() ||
+          activeEditorSessionRef.current !== originSession) return;
+      const snapshot = autosave.snapshot();
+      if (snapshot.dirty || snapshot.state.phase !== "idle") return;
+      const saved = queryClient.getQueryData<Page | null>(["page", originPageId]) ?? page;
+      if (!saved || saved.id !== originPageId) return;
+      const content = snapshot.baseline?.content ?? saved.content;
+      if (kind === "review") {
+        setRedistillNotice(null);
+        setReviewNotice(null);
+        await reviewMutation.mutateAsync({ id: originPageId, content });
+      } else if (kind === "delete") {
+        if (!confirm(t("pageDetail.deleteConfirm")) || !ownsAction()) return;
+        setActionErrorMessage(null);
+        await deleteMutation.mutateAsync(originPageId);
+      } else {
+        if ((saved.user_edited || pageRevisions?.user_edited) &&
+            !confirm(t("pageDetail.redistillEditedConfirm"))) return;
+        if (!ownsAction()) return;
+        setReviewNotice(null);
+        setRedistillNotice(null);
+        // A rebuild changes the saved body. Retire the old autosave session
+        // before the request; it must never overwrite the rebuilt result.
+        if (wasEditing) { closeEditor(); editorClosed = true; }
+        await redistillMutation.mutateAsync(originPageId);
+      }
+    } catch {
+      // Mutation callbacks own error notices. Failed flushes leave the draft
+      // and their existing save/conflict recovery controls mounted.
+    } finally {
+      if (editorClosed && ownsAction()) {
+        try {
+          const fresh = await getPage(originPageId, "explicit");
+          if (ownsAction() && fresh === null) queryClient.setQueryData(["page", originPageId], null);
+          if (ownsAction() && fresh?.id === originPageId) {
+            const cached = queryClient.getQueryData<Page | null>(["page", originPageId]);
+            const latest = cached && cached.version > fresh.version ? cached : fresh;
+            queryClient.setQueryData(["page", originPageId], latest);
+            if (latest.status === "active") {
+              setEditing(true);
+              openPageSourceForEditing(latest, true);
+            }
+          }
+        } catch {
+          // Never reopen a possibly stale source after an uncertain rebuild.
+          if (ownsAction()) setActionErrorMessage(t("pageDetail.loadError"));
+        }
+      }
+      if (ownsAction()) {
+        storedActionRef.current = null;
+        setStoredActionPending(false);
+      }
     }
   };
 
@@ -1284,7 +1469,7 @@ export default function PageDetail({
     if (
       e.target instanceof Element &&
       e.target.closest(
-        'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+        'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-page-link-preview]',
       )
     ) {
       return;
@@ -1295,10 +1480,21 @@ export default function PageDetail({
   };
 
   useEffect(() => {
-    if (editing && editGate.kind === "editor" && editorSessionId) {
+    const focusIntent = editorFocusIntentRef.current;
+    if (
+      editing &&
+      editGate.kind === "editor" &&
+      editorSessionId &&
+      focusIntent?.focus &&
+      focusIntent.pageId === pageId &&
+      focusIntent.beginEditAttempt === beginEditAttemptRef.current &&
+      focusIntent.epoch === editorSessionEpoch &&
+      focusedEditorSessionRef.current !== editorSessionEpoch
+    ) {
+      focusedEditorSessionRef.current = editorSessionEpoch;
       editorRef.current?.focus();
     }
-  }, [editing, editGate.kind, editorSessionId]);
+  }, [editing, editGate.kind, editorSessionEpoch, editorSessionId, pageId]);
 
   useEffect(() => {
     if (!actionMenuOpen) return;
@@ -1436,7 +1632,7 @@ export default function PageDetail({
         occurrence={k}
         citation={c}
         sourceMemory={sourceMemoryByLocator.get(c.locator) ?? null}
-        sourcesLoading={pageSources === undefined}
+        sourcesLoading={pageSourcesLoading}
         onOpenMemory={onMemoryClick}
       />
     );
@@ -1445,7 +1641,7 @@ export default function PageDetail({
   // Intercept page/memory link clicks in rendered content (capture phase beats target="_blank")
   const handleContentClick = (e: React.MouseEvent) => {
     const anchor = (e.target as HTMLElement).closest("a");
-    if (!anchor) return;
+    if (!anchor || anchor.hasAttribute("data-reference-link")) return;
     const href = anchor.getAttribute("href") || "";
     if (href.startsWith(PAGE_LINK_ANCHOR_PREFIX)) {
       e.preventDefault();
@@ -1462,11 +1658,13 @@ export default function PageDetail({
   const inboundLinks = pageLinks?.inbound ?? [];
   const pageRevisionEntries = pageRevisions?.entries ?? [];
 
+  const storedActionBlocked = storedActionPending || renaming || renameMutation.isPending || showCanvas || canvasSwitchPending ||
+    (editing && (editGate.kind !== "editor" || !editorStatus?.ready || editorStatus.compositionActive));
   const hasRail = pageEntities.length > 0 || outboundLinks.length > 0;
   const canRenamePage = page.status === "active" &&
     page.creation_kind !== "entity" && page.creation_kind !== "source" &&
     page.creation_kind !== "imported";
-  const renameDisabled = editing || editDirty || saveState.phase !== "idle" ||
+  const renameDisabled = storedActionPending || canvasSwitchPending || editing || editDirty || saveState.phase !== "idle" ||
     !!editorStatus?.compositionActive || renameMutation.isPending;
 
   const startRename = () => {
@@ -1517,8 +1715,21 @@ export default function PageDetail({
   const hideOuterTitleWhileEditing =
     editing && editGate.kind === "editor" && editHasMatchingTitle;
 
+  const inspectorToggle = <button ref={inspectorToggleRef} type="button" className="mem-icon-action workspace-panel-toggle note-inspector-toggle"
+    aria-label={t(infoOpen || showCanvas ? "pageInspector.close" : "pageInspector.open")}
+    title={t(infoOpen || showCanvas ? "pageInspector.close" : "pageInspector.open")}
+    aria-expanded={infoOpen || showCanvas} disabled={canvasSwitchPending}
+    onClick={(event) => {
+      // WebKit pointer clicks do not focus buttons; give the pane a stable return target.
+      event.currentTarget.focus({ preventScroll: true });
+      if (infoOpen || showCanvas) closeInspector(); else void requestPageInfo();
+    }}>
+    <SidebarSimple aria-hidden="true" size={18} style={{transform:"scaleX(-1)"}} />
+  </button>;
+
   const documentTools = (
     <div className="page-document-tools">
+      {!documentToolsHost && inspectorToggle}
       <WorkspaceBackButton
           aria-label={t("main.back")}
           className="mem-icon-action"
@@ -1566,18 +1777,11 @@ export default function PageDetail({
                     }}
                     ref={actionMenuListRef}
                     role="menu"
+                    tabIndex={-1}
                   >
-                    <button type="button" role="menuitem" disabled={!inventoryPageFilename(page) || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive} onClick={() => { closeActionMenu(); setMoveOpen(true); }}>{t("pages.folders.move")}</button>
-                    <button type="button" role="menuitem" disabled={canvasSwitchPending} onClick={() => {
-                      closeActionMenu();
-                      void requestPageInfo();
-                    }}>{t("pageInfo.label")}</button>
-                    <button type="button" role="menuitem" disabled={canvasSwitchPending} onClick={() => {
-                      closeActionMenu();
-                      if (!showCanvas) void requestToggleCanvas();
-                    }}>{t("pageCanvas.tabCanvas")}</button>
+                    <button type="button" role="menuitem" disabled={storedActionPending || !inventoryPageFilename(page) || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive} onClick={() => { closeActionMenu(); setMoveOpen(true); }}>{t("pages.folders.move")}</button>
                     {!editing && !showCanvas ? (
-                      <button type="button" role="menuitem" disabled={renaming || renameMutation.isPending} onClick={() => { setActionMenuOpen(false); void beginEditing(); }}>
+                      <button type="button" role="menuitem" disabled={storedActionPending || renaming || renameMutation.isPending} onClick={() => { setActionMenuOpen(false); void beginEditing(); }}>
                         {t("pageDetail.editPage")}
                       </button>
                     ) : null}
@@ -1594,14 +1798,13 @@ export default function PageDetail({
                         {t("pageDetail.renamePage")}
                       </button>
                     ) : null}
-                    {!editing && !showCanvas ? (
-                      <button
+                    <button
                         className="page-detail-mobile-menu-item"
-                        disabled={redistillMutation.isPending}
+                        disabled={storedActionBlocked || redistillMutation.isPending}
                         aria-busy={redistillMutation.isPending}
                         onClick={() => {
                           setActionMenuOpen(false);
-                          handleRedistillClick();
+                          void requestStoredPageAction("redistill");
                         }}
                         role="menuitem"
                         type="button"
@@ -1609,19 +1812,6 @@ export default function PageDetail({
                         {redistillMutation.isPending
                           ? t("pageDetail.redistillingPage")
                           : t("pageDetail.redistillPage")}
-                      </button>
-                    ) : null}
-                    <button
-                      className="page-detail-mobile-menu-item"
-                      disabled={copying || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive}
-                      onClick={() => {
-                        setActionMenuOpen(false);
-                        void copyAsContext();
-                      }}
-                      role="menuitem"
-                      type="button"
-                    >
-                      {copied ? t("pageDetail.copied") : t("pageDetail.copyAsContext")}
                     </button>
                     {obsidianSources.length === 0 ? (
                       <button
@@ -1636,7 +1826,7 @@ export default function PageDetail({
                       obsidianSources.map((source) => (
                         <button
                           className="page-detail-mobile-menu-item"
-                          disabled={exporting || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive}
+                          disabled={storedActionPending || exporting || editDirty || saveState.phase !== "idle" || editorStatus?.compositionActive}
                           key={source.id}
                           onClick={() => {
                             setActionMenuOpen(false);
@@ -1651,28 +1841,12 @@ export default function PageDetail({
                         </button>
                       ))
                     )}
-                    {/* Lives in the overflow menu at every width, like Delete,
-                        rather than mirroring an icon-row button — this is a
-                        low-frequency action that writes a durable record, and
-                        the icon row is already full of things you reach for
-                        constantly.
-
-                        Visible but disabled before the daemon's truth cutover is
-                        live, following the page editor's daemon-floor gate
-                        rather than the hide-it convention used for provider
-                        presets: this is an editorial action on the page in front
-                        of you, and a control that silently disappears reads as a
-                        feature that was taken away. The title says why.
-
-                        Gone while editing, matching Canvas and Re-distill: the
-                        mark attests the stored text, which is not what an open
-                        editor is showing. (M5 App PR, D2/D7.) */}
-                    {!editing && !showCanvas ? (
-                      <button
-                        disabled={!reviewSupported || reviewMutation.isPending}
+                    {/* Review the flushed source, including in seamless editing. */}
+                    <button
+                        disabled={storedActionBlocked || !reviewSupported || reviewMutation.isPending}
                         onClick={() => {
                           setActionMenuOpen(false);
-                          reviewMutation.mutate({ id: pageId, content: page.content });
+                          void requestStoredPageAction("review");
                         }}
                         role="menuitem"
                         title={
@@ -1683,15 +1857,13 @@ export default function PageDetail({
                         type="button"
                       >
                         {t("pageDetail.markPageReviewed")}
-                      </button>
-                    ) : null}
+                    </button>
                     <button
                       className="page-detail-menu-danger"
                       disabled={
-                        editing || showCanvas || renaming || renameMutation.isPending || deleteMutation.isPending ||
-                        saveState.phase === "pending"
+                        storedActionBlocked || renaming || renameMutation.isPending || deleteMutation.isPending
                       }
-                      onClick={requestDelete}
+                      onClick={() => void requestStoredPageAction("delete")}
                       role="menuitem"
                       type="button"
                     >
@@ -1705,7 +1877,8 @@ export default function PageDetail({
 
 
   return (
-    <div className={`page-detail document-context-host${infoOpen || showCanvas ? " document-context-open" : ""}${showCanvas ? " page-document-map-open" : ""}`} onKeyDown={handlePageDetailKeyDown}>
+    <div className={`page-detail document-context-host${infoOpen || showCanvas ? " document-context-open" : ""}${showCanvas ? " page-document-map-open" : ""}${canvasWorkspaceExpanded && (infoOpen || showCanvas) ? " page-detail--workspace-expanded" : ""}`} onKeyDown={handlePageDetailKeyDown} ref={setPageDetailRootRef}>
+      {documentToolsHost && createPortal(inspectorToggle, documentToolsHost)}
       <div className="page-detail-document">
         {!hideOuterTitleWhileEditing && (
           <div className="page-document-title-row">
@@ -1761,6 +1934,7 @@ export default function PageDetail({
             {documentTools}
           </div>
         )}
+
 
         {projectionIssue && !inventoryPageFilename(page) && <PageProjectionNotice key={`${pageId}:${projectionIssue.expectedVersion}`} pageId={pageId} issue={projectionIssue} disabled={editDirty || saveState.phase !== "idle" || !!editorStatus?.compositionActive} onResolved={onProjectionResolved} />}
 
@@ -2112,10 +2286,26 @@ export default function PageDetail({
                   initialSelection={initialSelection}
                   onSelectionChange={onSelectionChange}
                   sessionId={editorSessionId}
-                  disabled={false}
+                  disabled={storedActionPending}
                   seamless
                   ariaLabel={t("pageDetail.editor.label")}
                   describedBy="page-markdown-editor-description"
+                  wikiLinkTargets={editorWikiLinkTargets}
+                  referenceContext={editorReferenceContext}
+                  onReferenceActivate={(target, anchor) => {
+                    if (target.kind === "page") { dismissWikiLinkPreview(); onPageClick?.(target.id); }
+                    else if (target.kind === "memory") { dismissWikiLinkPreview(); onMemoryClick(target.id); }
+                    else if (target.citation.source_kind === "memory" && target.sourceMemory) {
+                      dismissWikiLinkPreview(); onMemoryClick(target.citation.locator);
+                    } else showReferencePreview(target, anchor, false);
+                  }}
+                  onReferencePreview={showReferencePreview}
+                  onWikiPageActivate={(targetId) => {
+                    dismissWikiLinkPreview();
+                    onPageClick?.(targetId);
+                  }}
+                  onWikiLinkPreview={showWikiLinkPreview}
+                  onWikiLinkPreviewLeave={leaveWikiLinkPreview}
                   onDocumentChange={handleDocumentChange}
                   onSave={saveDocument}
                   onCancel={requestCloseEditor}
@@ -2135,12 +2325,30 @@ export default function PageDetail({
                     )
                   }
                 />
+                <ReferencePreview
+                  dataPageLinkPreview
+                  request={wikiLinkPreview?.target.kind === "citation" ? {
+                    ...wikiLinkPreview,
+                    target: { ...wikiLinkPreview.target,
+                      sourceMemory: editorReferenceContext.sourceMemories.get(wikiLinkPreview.target.citation.locator) ?? null,
+                      sourcesLoading: pageSourcesLoading },
+                  } : wikiLinkPreview}
+                  onDismiss={dismissWikiLinkPreview}
+                  onOpenPage={(targetId) => onPageClick?.(targetId)}
+                  onOpenMemory={onMemoryClick}
+                  onPointerEnter={() => {
+                    if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
+                    wikiLinkPreviewLeaveTimerRef.current = null;
+                  }}
+                  onPointerLeave={leaveWikiLinkPreview}
+                />
                 </div>
               )}
             </div>
           )
         ) : (
           <div>
+            <ReferenceNavigationProvider onOpenPage={onPageClick} onOpenMemory={onMemoryClick}>
             <div className="page-detail-prose" data-testid="page-document-reading" onClickCapture={handleContentClick}>
               {ledeText && (
                 <div className="page-detail-lede">
@@ -2161,53 +2369,38 @@ export default function PageDetail({
                 renderCitation={renderCitation}
               />
             </div>
+            </ReferenceNavigationProvider>
           </div>
         )}
       </div>
 
+      <div aria-hidden={!canvasWorkspaceExpanded} className="page-detail-canvas-workspace-host" ref={setCanvasWorkspaceHost} />
+
       <PageInfoDrawer
-        docked
-        variant="canvas"
-        open={showCanvas}
-        onClose={() => { void requestToggleCanvas(); }}
-        title={t("pageCanvas.tabCanvas")}
+        docked inspector
+        variant={showCanvas ? "canvas" : "info"}
+        expanded={canvasWorkspaceExpanded}
+        expandedHost={canvasWorkspaceHost}
+        onExpandedChange={canvasWorkspaceSupported ? changeCanvasWorkspaceExpanded : undefined}
+        expandLabel={t("pageCanvas.expandWorkspace")}
+        restoreLabel={t("pageCanvas.restoreSidebar")}
+        open={infoOpen || showCanvas}
+        onClose={closeInspector}
+        title={t("pageInspector.label")}
         closeLabel={t("common.close")}
+        headerContent={<>
+          <NoteInspectorTabs idPrefix={inspectorId} active={showCanvas ? "canvas" : "info"}
+            onSelect={selectInspectorTab} disabled={canvasSwitchPending} />
+        </>}
       >
-        <PageCanvas
-          pageId={pageId}
-          pageTitle={page.title}
-          labelOverrides={labelOverrides}
-          onMemoryClick={onMemoryClick}
-          onPageClick={onPageClick}
-          onEntityClick={onEntityClick}
-        />
-      </PageInfoDrawer>
-      <PageInfoDrawer
-        docked
-        open={infoOpen && !showCanvas}
-        onClose={() => setInfoOpen(false)}
-        title={t("pageInfo.label")}
-        closeLabel={t("common.close")}
-      >
+        <div id={`${inspectorId}-panel`} role="tabpanel" aria-labelledby={`${inspectorId}-${showCanvas ? "canvas" : "info"}`}
+          className={`note-inspector-panel${showCanvas ? " note-inspector-panel--canvas" : ""}`}>
+          {showCanvas ? <PageCanvas key={pageId} pageId={pageId} pageTitle={page.title} labelOverrides={labelOverrides}
+            onMemoryClick={onMemoryClick} onPageClick={onPageClick} onEntityClick={onEntityClick} />
+            : <div className="note-inspector-info">
+          <div className="note-info-summary">
           <p className="document-kind-label">{t("knowledgeContext.noteKind")}</p>
-          <p className="document-kind-description">{t("knowledgeContext.noteHint")}</p>
-          <KnowledgeContext key={pageId} kind="page" id={pageId} title={page.title}
-            onNavigateMemory={(id) => { setInfoOpen(false); onMemoryClick(id); }}
-            onNavigatePage={onPageClick ? (id) => { setInfoOpen(false); onPageClick(id); } : undefined}
-            onNavigateEntity={onEntityClick ? (id) => { setInfoOpen(false); onEntityClick(id); } : undefined}
-          />
-          <div className="flex flex-wrap gap-2">
-            {page.stale_reason && <span style={{ color: "var(--mem-accent-amber)" }}>
-              {page.stale_reason === "source_conflict"
-                ? t("pageDetail.dateline.needsReview")
-                : page.refresh_blocked_reason
-                  ? t("pageDetail.dateline.updateBlocked")
-                  : t("pageDetail.dateline.updating")}
-            </span>}
-            <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
-          </div>
-          <div className="flex flex-col gap-5 pt-4">
-            <div className="page-detail-dateline" style={{ marginTop: 0 }}>
+            <div className="note-info-dateline">
               <span className="page-detail-dateline-item">
                 {page.creation_kind === "source" || page.creation_kind === "imported"
                   ? t("pageDetail.dateline.lastUpdated", {
@@ -2217,10 +2410,28 @@ export default function PageDetail({
                       time: relativeTimeFromISO(page.last_compiled, t),
                     })}
               </span>
-              <span className="page-detail-dateline-item">
+              {sourceCount > 0 && <span className="page-detail-dateline-item">
                 {t("pageDetail.dateline.sourceMemories", { count: sourceCount })}
-              </span>
+              </span>}
             </div>
+          <div className="flex flex-wrap gap-2">
+            {page.stale_reason && <span style={{ color: "var(--mem-accent-amber)" }}>
+              {page.stale_reason === "source_conflict"
+                ? t("pageDetail.dateline.needsReview")
+                : page.refresh_blocked_reason
+                  ? t("pageDetail.dateline.updateBlocked")
+                  : t("noteReview.sourceUpdated")}
+            </span>}
+            <PageTruthBadges cutoverLive={cutoverLive} truth={page.truth} />
+          </div>
+          </div>
+          <div className="note-info-sections">
+            <KnowledgeContext standaloneGraph diagramOnly key={pageId} kind="page" id={pageId} title={page.title}
+              onOpenGraph={onOpenGraph ? () => onOpenGraph(pageId) : undefined}
+              onNavigateMemory={(id) => { setInfoOpen(false); onMemoryClick(id); }}
+              onNavigatePage={onPageClick}
+              onNavigateEntity={onEntityClick ? (id) => { setInfoOpen(false); onEntityClick(id); } : undefined}
+            />
             {hasRail && (
               <div className="flex flex-col gap-4">
                 {pageEntities.length > 0 && (
@@ -2241,7 +2452,7 @@ export default function PageDetail({
                     </div>
                   </section>
                 )}
-                <RelatedPages outbound={outboundLinks} onPageClick={(id) => { setInfoOpen(false); onPageClick?.(id); }} />
+                <RelatedPages outbound={outboundLinks} onPageClick={onPageClick} />
               </div>
             )}
             <PageInfo
@@ -2250,12 +2461,17 @@ export default function PageDetail({
               sources={pageSources}
               inbound={inboundLinks}
               revisions={pageRevisionEntries}
+              revisionsLoading={revisionsLoading}
+              revisionsError={revisionsError}
+              onRetryRevisions={() => void refetchRevisions()}
               citations={page.citations}
               citationState={processed.state}
               onMemoryClick={(id) => { setInfoOpen(false); onMemoryClick(id); }}
-              onPageClick={(id) => { setInfoOpen(false); onPageClick?.(id); }}
+              onPageClick={onPageClick}
             />
           </div>
+            </div>}
+        </div>
       </PageInfoDrawer>
     </div>
   );

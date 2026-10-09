@@ -171,10 +171,10 @@ vi.mock("@xyflow/react", async () => {
 vi.mock("../../lib/tauri", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../lib/tauri")>()),
   getPageMap: vi.fn(),
-  improvePageMap: vi.fn(),
   patchPageMapNode: vi.fn(),
   putPageMapLayout: vi.fn(),
   createPageMapNode: vi.fn(),
+  improvePageMap: vi.fn(),
   deletePageMapNode: vi.fn(),
   getPage: vi.fn(),
   updatePage: vi.fn(),
@@ -270,13 +270,23 @@ async function revealSuggestions(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await screen.findByRole("button", { name: "1 suggestion" }));
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  if (typeof HTMLDialogElement !== "undefined") {
+    if (!HTMLDialogElement.prototype.showModal) {
+      HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
+    }
+    if (!HTMLDialogElement.prototype.close) {
+      HTMLDialogElement.prototype.close = function () { this.removeAttribute("open"); };
+    }
+  }
+});
 afterEach(() => cleanup());
 
 describe("PageCanvas", () => {
   it.each(["Enter", " ", "Tab"])("leaves %s to a focused page control", async (key) => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     renderCanvas();
     await screen.findByText("Page One");
     render(<button type="button">Back to note</button>);
@@ -284,12 +294,12 @@ describe("PageCanvas", () => {
     control.focus();
 
     expect(fireEvent.keyDown(control, { key })).toBe(true);
-    expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
+    expect(document.querySelector(".page-canvas-node-name input")).toBeNull();
   });
 
   it("leaves selected nodes untouched by neighboring page menus and note shortcuts", async () => {
     const { getPageMap, deletePageMapNode, patchPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     (deletePageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const { user } = renderCanvas();
     await user.click(await screen.findByRole("button", { name: "select n_sec" }));
@@ -308,7 +318,7 @@ describe("PageCanvas", () => {
     expect(fireEvent.keyDown(document.body, { key: "Delete" })).toBe(true);
     expect(node).toHaveAttribute("data-x", position.x);
     expect(node).toHaveAttribute("data-y", position.y);
-    expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
+    expect(document.querySelector(".page-canvas-node-name input")).toBeNull();
     expect(deletePageMapNode).not.toHaveBeenCalled();
     expect(patchPageMapNode).not.toHaveBeenCalled();
 
@@ -323,10 +333,10 @@ describe("PageCanvas", () => {
 
   it("preserves native control focus on pointer reentry and ignores composing map keys", async () => {
     const { getPageMap, deletePageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
     await user.click(await screen.findByRole("button", { name: "select n_sec" }));
-    const control = screen.getByRole("button", { name: "Improve" });
+    const control = surface();
     control.focus();
     fireEvent.pointerDown(control);
     expect(control).toHaveFocus();
@@ -343,7 +353,7 @@ describe("PageCanvas", () => {
 
   it("renders one node per live map node, resolving labels the daemon left null", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
     await revealSuggestions(user);
 
@@ -355,9 +365,193 @@ describe("PageCanvas", () => {
     expect(screen.getAllByTestId("rf-node")).toHaveLength(5);
   });
 
+  it("adds a first independent idea without writing the page body", async () => {
+    const { getPageMap, createPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 0,
+      map_schema: 1,
+      independent_ideas: true,
+      nodes: [],
+      edges: [],
+    }));
+    (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({
+      revision: 1,
+      node: node({ id: "idea-1", ref_kind: "idea", label: "Question" }),
+    });
+    const { user } = renderCanvas();
+
+    await screen.findByText("Start a mind map");
+    const region = screen.getByRole("region", { name: "Canvas for Page One" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    fireEvent.pointerDown(region);
+    expect(region).toHaveFocus();
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { altKey: true }, { shiftKey: true }, { isComposing: true }]) {
+      fireEvent.keyDown(region, { key: "n", ...modifiers });
+      expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    }
+    fireEvent.keyDown(region, { key: "n" });
+    expect(screen.getByRole("textbox", { name: "Node name" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: /new node/i })).toBeNull();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    fireEvent.keyDown(surface(), { key: "n" });
+    const input = screen.getByRole("textbox", { name: "Node name" });
+    expect(input).toHaveFocus();
+    await user.type(input, "Question");
+    await user.click(screen.getByRole("button", { name: "Add node" }));
+
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(1));
+    const [targetPageId, body] = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(targetPageId).toBe("p1");
+    expect(body).toEqual({
+      base_revision: 0,
+      ref_kind: "idea",
+      ref_id: expect.any(String),
+      label: "Question",
+    });
+    expect(body).not.toHaveProperty("parent_id");
+    expect(updatePage).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull());
+  });
+
+  it("opens node entry on demand and dismisses it with Escape or Cancel", async () => {
+    const { getPageMap, createPageMapNode } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 0,
+      map_schema: 1,
+      independent_ideas: true,
+      nodes: [],
+      edges: [],
+    }));
+    const { user } = renderCanvas();
+
+    await screen.findByText("Start a mind map");
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    fireEvent.keyDown(surface(), { key: "n" });
+    const input = screen.getByRole("textbox", { name: "Node name" });
+    expect(input).toHaveFocus();
+    await user.type(input, "Discard this draft");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    expect(surface()).toHaveFocus();
+
+    fireEvent.keyDown(surface(), { key: "n" });
+    await user.type(screen.getByRole("textbox", { name: "Node name" }), "Cancel this draft");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    expect(createPageMapNode).not.toHaveBeenCalled();
+  });
+
+  it("reuses an idea draft ref id after an uncertain create response", async () => {
+    const { getPageMap, createPageMapNode, patchPageMapNode, updatePage } = await tauri();
+    const emptyMap = makeMap({
+      revision: 0,
+      map_schema: 1,
+      independent_ideas: true,
+      nodes: [],
+      edges: [],
+    });
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(emptyMap);
+    (createPageMapNode as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({ revision: 2, node: node({ id: "idea-1", ref_kind: "idea", ref_id: "placeholder", label: "Question" }) });
+    (patchPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({
+      revision: 3,
+      node: node({ id: "idea-1", ref_kind: "idea", ref_id: "placeholder", label: "Edited question" }),
+    });
+    const { user } = renderCanvas();
+
+    await screen.findByText("Start a mind map");
+    fireEvent.keyDown(surface(), { key: "n" });
+    const input = screen.getByRole("textbox", { name: "Node name" });
+    await user.type(input, "Question");
+    await user.click(screen.getByRole("button", { name: "Add node" }));
+    await screen.findByRole("alert");
+    expect(input).toHaveValue("Question");
+    const firstRefId = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[0]![1].ref_id;
+    await user.clear(input);
+    await user.type(input, "Edited question");
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 1,
+      map_schema: 1,
+      independent_ideas: true,
+      nodes: [
+        node({ id: "n_root", ref_kind: "page", ref_id: "p1" }),
+        node({ id: "idea-1", parent_id: "n_root", ref_kind: "idea", ref_id: firstRefId, label: "Question" }),
+      ],
+      edges: [],
+    }));
+
+    await user.click(screen.getByRole("button", { name: "Add node" }));
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(2));
+    const first = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    const second = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[1]![1];
+    expect(first.ref_id).toBe(second.ref_id);
+    expect(second.label).toBe("Edited question");
+    expect(patchPageMapNode).toHaveBeenCalledWith("p1", "idea-1", {
+      base_revision: 2,
+      label: "Edited question",
+    });
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull());
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
+  it("preserves an uncertain idea draft and ref id when entry is dismissed", async () => {
+    const { getPageMap, createPageMapNode } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 0,
+      map_schema: 1,
+      independent_ideas: true,
+      nodes: [],
+      edges: [],
+    }));
+    (createPageMapNode as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({ revision: 2, node: node({ id: "idea-1", ref_kind: "idea", label: "Question" }) });
+    const { user } = renderCanvas();
+
+    await screen.findByText("Start a mind map");
+    fireEvent.keyDown(surface(), { key: "n" });
+    const input = screen.getByRole("textbox", { name: "Node name" });
+    await user.type(input, "Question");
+    await user.click(screen.getByRole("button", { name: "Add node" }));
+    await screen.findByRole("alert");
+    const firstRefId = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[0]![1].ref_id;
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    expect(surface()).toHaveFocus();
+    fireEvent.keyDown(surface(), { key: "n" });
+    const reopenedInput = screen.getByRole("textbox", { name: "Node name" });
+    expect(reopenedInput).toHaveValue("Question");
+    await user.click(screen.getByRole("button", { name: "Add node" }));
+
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(2));
+    expect((createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[1]![1].ref_id).toBe(firstRefId);
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull());
+  });
+
+  it("explains when the runtime cannot store independent ideas", async () => {
+    const { getPageMap, createPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 0,
+      nodes: [],
+      edges: [],
+    }));
+    renderCanvas();
+
+    await screen.findByText("Start a mind map");
+    expect(screen.queryByRole("textbox", { name: "Node name" })).toBeNull();
+    fireEvent.keyDown(surface(), { key: "n" });
+    expect(await screen.findByText("New nodes require a newer Wenlan runtime.")).toBeTruthy();
+    expect(createPageMapNode).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
   it("derives tree edges under a tree- prefix and drops cross-links with a missing endpoint", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
     await revealSuggestions(user);
 
@@ -393,24 +587,24 @@ describe("PageCanvas", () => {
     expect(await screen.findByText("Memory one")).toBeTruthy();
   });
 
-  it("offers Generate canvas when the page has no map yet", async () => {
-    const { getPageMap, improvePageMap } = await tauri();
+  it("keeps an empty map manually startable without persistent actions", async () => {
+    const { getPageMap } = await tauri();
     (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(
-      makeMap({ revision: 0, nodes: [], edges: [] }),
+      makeMap({ revision: 0, independent_ideas: true, nodes: [], edges: [] }),
     );
-    const { user } = renderCanvas();
+    renderCanvas();
 
-    await user.click(await screen.findByRole("button", { name: "Generate canvas" }));
-    expect(improvePageMap).toHaveBeenCalledWith("p1");
+    expect(await screen.findByRole("region", { name: "Canvas for Page One" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /new node|generate|improve/i })).toBeNull();
   });
 
   it("renders a newer map schema read-only, with every mutation control gone", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ map_schema: 2 }));
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ map_schema: 3 }));
     renderCanvas();
 
     expect(await screen.findByText("Read-only")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Improve" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /new node/i })).toBeNull();
     expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
     // The shortcuts are hidden too: advertising keys that do nothing is worse
@@ -422,7 +616,7 @@ describe("PageCanvas", () => {
 
   it("accepts a suggestion against the map's current revision", async () => {
     const { getPageMap, patchPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     (patchPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const { user } = renderCanvas();
     await revealSuggestions(user);
@@ -470,7 +664,7 @@ describe("PageCanvas", () => {
 
   it("says out loud when the object behind a node is gone", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     renderCanvas();
 
     expect(
@@ -502,7 +696,7 @@ describe("PageCanvas", () => {
 
   it("offers a counted way back to the suggestions it is hiding", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
 
     const chip = await screen.findByRole("button", { name: "1 suggestion" });
@@ -524,7 +718,7 @@ describe("PageCanvas", () => {
     );
     renderCanvas();
 
-    expect(await screen.findByRole("button", { name: "Improve" })).toBeTruthy();
+    expect(await screen.findByRole("region", { name: "Canvas for Page One" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /suggestion/ })).toBeNull();
   });
 
@@ -544,7 +738,7 @@ describe("PageCanvas", () => {
     expect(hints.textContent).toContain("F2");
     expect(hints.textContent).toContain("Rename");
     // The one thing the keys themselves cannot tell you.
-    expect(hints.textContent).toContain("New boxes become sections of the page.");
+    expect(hints.textContent).toContain("Nodes stay in this mind map without changing the note.");
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
   });
 
@@ -564,7 +758,7 @@ describe("PageCanvas", () => {
 
   it("opens and closes the shortcut panel on Shift+/", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     renderCanvas();
     await screen.findByText("Page One");
     expect(screen.queryByRole("note", { name: "Canvas shortcuts" })).toBeNull();
@@ -605,7 +799,7 @@ describe("PageCanvas", () => {
 
   it("frames only what is selected on Shift+2", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
     await screen.findByText("Page One");
 
@@ -633,89 +827,115 @@ describe("PageCanvas", () => {
     });
   });
 
-  it("adds a box by writing the heading first, then pointing a node at it", async () => {
-    const { getPageMap, getPage, updatePage, createPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
-    (getPage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "p1",
-      content: "# Page One\n\nBody.",
-      version: 3,
-    });
-    (updatePage as ReturnType<typeof vi.fn>).mockResolvedValue({ outcome: "saved" });
-    (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
+  it.each(["Tab", "Enter"] as const)(
+    "creates an independent idea through the %s canvas path without writing the note",
+    async (key) => {
+    const { getPageMap, createPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({ revision: 8, node: node({ id: "new-idea", ref_kind: "idea" }) });
+    const { user } = renderCanvas();
+
+    await screen.findByText("Page One");
+    if (key === "Tab") {
+      fireEvent.keyDown(surface(), { key });
+    } else {
+      // Enter starts a sibling draft from a selected child, attached to the
+      // child's parent (the page root).
+      await user.click(screen.getByRole("button", { name: "select n_sec" }));
+      fireEvent.keyDown(surface(), { key });
+    }
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
+    await user.type(field, "New thought{Enter}");
+
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(1));
+    expect(createPageMapNode).toHaveBeenCalledWith("p1", expect.objectContaining({
+      base_revision: 7,
+      parent_id: "n_root",
+      ref_kind: "idea",
+      ref_id: expect.stringMatching(/^[0-9a-f-]{36}$/u),
+      label: "New thought",
+    }));
+    expect(updatePage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an empty idea draft local until it has a non-empty name", async () => {
+    const { getPageMap, createPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
 
     await screen.findByText("Page One");
     fireEvent.keyDown(surface(), { key: "Tab" });
-    const field = await screen.findByRole("textbox", { name: "Section name" });
-    await user.type(field, "Next steps{Enter}");
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
+    await user.type(field, "   {Enter}");
 
-    // Order matters: the daemon recomputes a section's liveness from the page's
-    // headings, so the heading has to land before the node that points at it.
-    // The version goes with the write — the guarded update refuses on a stale
-    // one, which is what keeps this from clobbering an edit made elsewhere.
-    await waitFor(() =>
-      expect(updatePage).toHaveBeenCalledWith({
-        id: "p1",
-        content: "# Page One\n\nBody.\n\n## Next steps\n",
-        expectedVersion: 3,
-        callerId: "wenlan-app",
-        operationId: expect.any(String),
-      }),
-    );
-    await waitFor(() =>
-      expect(createPageMapNode).toHaveBeenCalledWith("p1", {
-        base_revision: 7,
-        parent_id: "n_root",
-        ref_kind: "section",
-        ref_id: "p1#next-steps",
-        label: "Next steps",
-      }),
-    );
+    expect(screen.getByRole("textbox", { name: "Name this node" })).toBeTruthy();
+    expect(createPageMapNode).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
   });
 
-  it("refuses a name that would slugify to nothing instead of creating a dead box", async () => {
-    const { getPageMap, createPageMapNode, updatePage } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+  it("reuses a canvas idea draft ref id after a create error", async () => {
+    const { getPageMap, createPageMapNode, patchPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    (createPageMapNode as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockResolvedValueOnce({ revision: 8, node: node({ id: "retry-idea", ref_kind: "idea", ref_id: "placeholder", label: "Retry this thought" }) });
+    (patchPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({
+      revision: 9,
+      node: node({ id: "retry-idea", ref_kind: "idea", ref_id: "placeholder", label: "Edited thought" }),
+    });
     const { user } = renderCanvas();
 
     await screen.findByText("Page One");
     fireEvent.keyDown(surface(), { key: "Tab" });
-    const field = await screen.findByRole("textbox", { name: "Section name" });
-    await user.type(field, "???{Enter}");
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
+    await user.type(field, "Retry this thought{Enter}");
+    await screen.findByText("That change could not be saved.");
+    const firstRefId = (createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[0]![1].ref_id;
+    await user.clear(screen.getByRole("textbox", { name: "Name this node" }));
+    await user.type(screen.getByRole("textbox", { name: "Name this node" }), "Edited thought");
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({
+      revision: 8,
+      independent_ideas: true,
+      nodes: [
+        node({ id: "n_root", ref_kind: "page", ref_id: "p1" }),
+        node({ id: "retry-idea", parent_id: "n_root", ref_kind: "idea", ref_id: firstRefId, label: "Retry this thought" }),
+      ],
+      edges: [],
+    }));
 
-    expect(
-      await screen.findByText("Give the section a name with letters or numbers in it."),
-    ).toBeTruthy();
-    expect(createPageMapNode).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(2));
+    expect((createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[1]![1].ref_id).toBe(firstRefId);
+    expect((createPageMapNode as ReturnType<typeof vi.fn>).mock.calls[1]![1].label).toBe("Edited thought");
+    expect(patchPageMapNode).toHaveBeenCalledWith("p1", "retry-idea", {
+      base_revision: 8,
+      label: "Edited thought",
+    });
     expect(updatePage).not.toHaveBeenCalled();
   });
 
   it("adds under the selected box, not the root", async () => {
     const { getPageMap, getPage, updatePage, createPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
-    (getPage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "p1",
-      content: "",
-      version: 1,
-    });
-    (updatePage as ReturnType<typeof vi.fn>).mockResolvedValue({ outcome: "saved" });
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const { user } = renderCanvas();
 
     await user.click(await screen.findByRole("button", { name: "select n_sec" }));
     fireEvent.keyDown(surface(), { key: "Tab" });
     await user.type(
-      await screen.findByRole("textbox", { name: "Section name" }),
+      await screen.findByRole("textbox", { name: "Name this node" }),
       "Deeper{Enter}",
     );
 
     await waitFor(() =>
       expect(createPageMapNode).toHaveBeenCalledWith(
         "p1",
-        expect.objectContaining({ parent_id: "n_sec" }),
+        expect.objectContaining({ parent_id: "n_sec", ref_kind: "idea", ref_id: expect.any(String) }),
       ),
     );
+    expect(getPage).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
   });
 
   it("renames the selected box on F2 without touching its ref", async () => {
@@ -733,6 +953,35 @@ describe("PageCanvas", () => {
     expect(patchPageMapNode).toHaveBeenCalledWith("p1", "n_sec", {
       base_revision: 7,
       label: "Still open",
+    });
+  });
+
+  it("keeps a rename draft on blur and after a failed explicit save", async () => {
+    const { getPageMap, patchPageMapNode } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (patchPageMapNode as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
+    const { user } = renderCanvas();
+
+    await user.click(await screen.findByRole("button", { name: "select n_sec" }));
+    fireEvent.keyDown(surface(), { key: "F2" });
+    const field = await screen.findByRole("textbox", { name: "Section name" });
+    await user.clear(field);
+    await user.type(field, "Still here");
+    fireEvent.blur(field);
+
+    expect(patchPageMapNode).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Section name" })).toHaveValue("Still here");
+
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(patchPageMapNode).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("textbox", { name: "Section name" })).toHaveValue("Still here");
+
+    field.focus();
+    fireEvent.keyDown(field, { key: "Enter" });
+    await waitFor(() => expect(patchPageMapNode).toHaveBeenCalledTimes(2));
+    expect(patchPageMapNode).toHaveBeenLastCalledWith("p1", "n_sec", {
+      base_revision: 7,
+      label: "Still here",
     });
   });
 
@@ -874,32 +1123,53 @@ describe("PageCanvas", () => {
     // That blur is not the user saying "never mind" — dropping the draft here
     // is what made a dragged-out box vanish the instant it appeared.
     const { getPageMap, createPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     renderCanvas();
 
     await screen.findByText("Page One");
     fireEvent.keyDown(surface(), { key: "Tab" });
-    const field = await screen.findByRole("textbox", { name: "Section name" });
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
     fireEvent.blur(field, { target: { value: "" } });
 
     expect(
-      screen.queryByRole("textbox", { name: "Section name" }),
+      screen.queryByRole("textbox", { name: "Name this node" }),
     ).toBeTruthy();
     expect(createPageMapNode).not.toHaveBeenCalled();
   });
 
-  it("drops the draft box on Escape without writing anything", async () => {
+  it("keeps a named draft on blur and commits only after explicit confirmation", async () => {
     const { getPageMap, createPageMapNode, updatePage } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const { user } = renderCanvas();
 
     await screen.findByText("Page One");
     fireEvent.keyDown(surface(), { key: "Tab" });
-    const field = await screen.findByRole("textbox", { name: "Section name" });
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
+    await user.type(field, "Draft survives");
+    fireEvent.blur(field);
+
+    expect(createPageMapNode).not.toHaveBeenCalled();
+    expect(screen.getByRole("textbox", { name: "Name this node" })).toHaveValue("Draft survives");
+
+    await user.click(screen.getByRole("button", { name: "Save name" }));
+    await waitFor(() => expect(createPageMapNode).toHaveBeenCalledTimes(1));
+    expect(createPageMapNode).toHaveBeenCalledWith("p1", expect.objectContaining({ label: "Draft survives" }));
+    expect(updatePage).not.toHaveBeenCalled();
+  });
+
+  it("drops the draft box on Escape without writing anything", async () => {
+    const { getPageMap, createPageMapNode, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    const { user } = renderCanvas();
+
+    await screen.findByText("Page One");
+    fireEvent.keyDown(surface(), { key: "Tab" });
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
     await user.type(field, "Never mind{Escape}");
 
     await waitFor(() =>
-      expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull(),
+      expect(screen.queryByRole("textbox", { name: "Name this node" })).toBeNull(),
     );
     expect(createPageMapNode).not.toHaveBeenCalled();
     expect(updatePage).not.toHaveBeenCalled();
@@ -908,8 +1178,9 @@ describe("PageCanvas", () => {
 
 describe("PageCanvas direct manipulation", () => {
   // root -> branch -> leaf, so a delete has something to cascade through.
-  function nestedMap(): PageMap {
+  function nestedMap(options: Partial<PageMap> = {}): PageMap {
     return makeMap({
+      independent_ideas: true,
       nodes: [
         node({ id: "n_root", ref_kind: "page", ref_id: "p1" }),
         node({
@@ -928,6 +1199,7 @@ describe("PageCanvas direct manipulation", () => {
         }),
       ],
       edges: [],
+      ...options,
     });
   }
 
@@ -937,17 +1209,76 @@ describe("PageCanvas direct manipulation", () => {
       .map((b) => b.textContent);
   }
 
+  it("opens a compact canvas menu from Shift+F10 and starts a node draft without a toolbar", async () => {
+    const { getPageMap } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    const { user } = renderCanvas();
+    await screen.findByText("Page One");
+
+    expect(screen.queryByRole("button", { name: /new node|improve|generate/i })).toBeNull();
+    fireEvent.keyDown(surface(), { key: "F10", shiftKey: true });
+    await screen.findByRole("menu", { name: "Canvas actions" });
+    expect(menuItems()).toEqual(["New node", "Generate", "Select all"]);
+    expect(screen.queryByRole("menuitem", { name: /fit/i })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "New node" }));
+    expect(await screen.findByRole("textbox", { name: "Name this node" })).toHaveFocus();
+  });
+
+  it("moves keyboard focus through the menu and restores it on Escape", async () => {
+    const { getPageMap } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
+    renderCanvas();
+    await screen.findByText("Page One");
+    fireEvent.keyDown(surface(), { key: "ContextMenu" });
+    await screen.findByRole("menu");
+    const items = screen.getAllByRole("menuitem");
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0]!, { key: "ArrowDown" });
+    expect(items[1]).toHaveFocus();
+    fireEvent.keyDown(items[1]!, { key: "Home" });
+    expect(items[0]).toHaveFocus();
+    fireEvent.keyDown(items[0]!, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    await waitFor(() => expect(surface()).toHaveFocus());
+  });
+
+  it("offers page-scoped Generate in an empty-map context menu", async () => {
+    const { getPageMap, improvePageMap, updatePage } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(
+      makeMap({ revision: 0, independent_ideas: true, nodes: [], edges: [] }),
+    );
+    (improvePageMap as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const { user } = renderCanvas();
+    const region = await screen.findByRole("region", { name: "Canvas for Page One" });
+    fireEvent.contextMenu(region, { clientX: 100, clientY: 80 });
+    await user.click(await screen.findByRole("menuitem", { name: "Generate" }));
+    await waitFor(() => expect(improvePageMap).toHaveBeenCalledWith("p1"));
+    expect(updatePage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /generate|improve/i })).toBeNull();
+  });
+
+  it("keeps Generate available from a populated map context menu", async () => {
+    const { getPageMap, improvePageMap } = await tauri();
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (improvePageMap as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const { user } = renderCanvas();
+    await screen.findByText("Page One");
+    await user.click(screen.getByLabelText("pane contextmenu"));
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await waitFor(() => expect(improvePageMap).toHaveBeenCalledWith("p1"));
+  });
+
   it("draws a box where the canvas was double-clicked", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(makeMap({ independent_ideas: true }));
     const { user } = renderCanvas();
     await screen.findByTestId("react-flow");
 
-    expect(screen.queryByLabelText("Section name")).toBeNull();
+    expect(screen.queryByLabelText("Name this node")).toBeNull();
     await user.dblClick(screen.getByRole("region", { name: /Canvas for/ }));
 
     // The draft box is local until it is named — nothing has been created yet.
-    expect(await screen.findByLabelText("Section name")).toBeTruthy();
+    expect(await screen.findByLabelText("Name this node")).toBeTruthy();
     const { createPageMapNode } = await tauri();
     expect(createPageMapNode).not.toHaveBeenCalled();
   });
@@ -970,18 +1301,18 @@ describe("PageCanvas direct manipulation", () => {
     await screen.findByTestId("react-flow");
 
     await user.click(screen.getByLabelText("contextmenu n_leaf"));
-    expect(menuItems()).toEqual(["Add box inside", "Rename", "Delete"]);
+    expect(menuItems()).toEqual(["Add child node", "Rename", "Delete"]);
 
     await user.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
 
     await user.click(screen.getByLabelText("pane contextmenu"));
-    expect(menuItems()).toEqual(["New box here", "Select all", "Fit to view"]);
+    expect(menuItems()).toEqual(["New node", "Generate", "Select all"]);
   });
 
   it("says so in the menu when deleting takes the boxes underneath too", async () => {
     const { getPageMap } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(nestedMap());
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(nestedMap({ independent_ideas: undefined }));
     const { user } = renderCanvas();
     await screen.findByTestId("react-flow");
 
@@ -1050,29 +1381,18 @@ describe("PageCanvas direct manipulation", () => {
     expect(notice.textContent).toContain("1 left alone");
   });
 
-  it("tells the user the page moved when the heading write hits a conflict", async () => {
+  it("does not fall back to a page write on runtimes without independent idea support", async () => {
     const { getPageMap, getPage, updatePage, createPageMapNode } = await tauri();
-    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(nestedMap());
-    (getPage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "p1",
-      content: "# Page One\n\nBody.",
-      version: 3,
-    });
-    (updatePage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      outcome: "conflict",
-    });
+    (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(nestedMap({ independent_ideas: undefined }));
     const { user } = renderCanvas();
     await screen.findByTestId("react-flow");
 
     await user.click(screen.getByLabelText("connectend empty n_branch"));
-    const field = await screen.findByRole("textbox", { name: "Section name" });
-    await user.type(field, "Offshoot{Enter}");
-
-    // A conflict is not a generic failure: the markdown never changed, and the
-    // fix is to reload rather than to retry.
     const notice = await screen.findByRole("status");
-    expect(notice.textContent).toContain("Reload the page and try again.");
+    expect(notice.textContent).toContain("New nodes require a newer Wenlan runtime.");
     expect(createPageMapNode).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
+    expect(getPage).not.toHaveBeenCalled();
   });
 
   it("keeps double-click for drawing and hands panning to scroll", async () => {
@@ -1091,18 +1411,12 @@ describe("PageCanvas direct manipulation", () => {
   it("grows a child where the connector was let go on empty canvas", async () => {
     const { getPageMap, getPage, updatePage, createPageMapNode } = await tauri();
     (getPageMap as ReturnType<typeof vi.fn>).mockResolvedValue(nestedMap());
-    (getPage as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "p1",
-      content: "# Page One\n\nBody.",
-      version: 3,
-    });
-    (updatePage as ReturnType<typeof vi.fn>).mockResolvedValue({ outcome: "saved" });
     (createPageMapNode as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const { user } = renderCanvas();
     await screen.findByTestId("react-flow");
 
     await user.click(screen.getByLabelText("connectend empty n_branch"));
-    const field = await screen.findByRole("textbox", { name: "Section name" });
+    const field = await screen.findByRole("textbox", { name: "Name this node" });
     await user.type(field, "Offshoot{Enter}");
 
     // The box hangs off the one the drag started from, not off the selection
@@ -1110,9 +1424,11 @@ describe("PageCanvas direct manipulation", () => {
     await waitFor(() =>
       expect(createPageMapNode).toHaveBeenCalledWith(
         "p1",
-        expect.objectContaining({ parent_id: "n_branch", label: "Offshoot" }),
+        expect.objectContaining({ parent_id: "n_branch", label: "Offshoot", ref_kind: "idea" }),
       ),
     );
+    expect(getPage).not.toHaveBeenCalled();
+    expect(updatePage).not.toHaveBeenCalled();
   });
 
   it("does nothing when the connector is dropped onto another box", async () => {
@@ -1124,7 +1440,7 @@ describe("PageCanvas direct manipulation", () => {
     // Re-parenting by drag is deliberately not a thing yet, so a landed
     // connection must not quietly draw a box on top of the target either.
     await user.click(screen.getByLabelText("connectend onto box n_branch"));
-    expect(screen.queryByRole("textbox", { name: "Section name" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "Name this node" })).toBeNull();
   });
 
   it("nudges the selected box with the arrow keys", async () => {

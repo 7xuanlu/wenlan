@@ -54,7 +54,7 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
     expect(root).toMatch(/\.mem-popover-surface\s*\{[^}]*border-radius:\s*var\(--mem-popover-radius\);[^}]*box-shadow:\s*var\(--mem-popover-shadow\);/s);
     expect(actions).toMatch(/min-height:\s*var\(--mem-control-height\);/);
     expect(actions).toMatch(/border-radius:\s*var\(--mem-control-radius\);/);
-    expect(draft).toMatch(/font:\s*400 var\(--mem-control-font-size\)\/1 var\(--mem-font-body\);/);
+    expect(draft).toMatch(/font:\s*500 var\(--mem-control-font-size\)\/1 var\(--mem-font-body\);/);
     // Wiki's compact inline filters use the approved 32px height.
     expect(navigation).toMatch(/\.wiki-filters select\s*\{[^}]*min-height:\s*32px;/s);
     expect(spaces).toMatch(/\.spaces-filter input,[\s\S]*?height:\s*var\(--mem-control-height\);/);
@@ -81,9 +81,9 @@ describe("Wiki, Space, and Page microcontrol contract", () => {
     );
   });
 
-  it("owns the New Page copy under the live overview namespace", () => {
+  it("owns the New Page copy in the tab creation action and Space toolbar", () => {
     const overview = readFileSync(
-      resolve("src/components/memory/pages/PagesOverview.tsx"),
+      resolve("src/components/memory/pages/NoteTabs.tsx"),
       "utf8",
     );
     const dossier = readFileSync(

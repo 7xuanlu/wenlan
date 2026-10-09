@@ -681,15 +681,12 @@ describe("MemoryDetail enrichment status", () => {
     await waitFor(() => expect(tauri.unpinMemory).toHaveBeenCalledWith("mem-1"));
   });
 
-  it("retains recap copy context on the compact header", async () => {
+  it("removes recap copy context from the compact header", async () => {
     vi.mocked(tauri.getMemoryDetail).mockResolvedValue({ ...memory, memory_type: "recap", is_recap: true, domain: "work", source_agent: "codex" });
-    vi.mocked(tauri.clipboardWrite).mockResolvedValue();
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Edit memory" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Copy as context" }));
-    await waitFor(() => expect(tauri.clipboardWrite).toHaveBeenCalledWith(expect.stringContaining("### Content\nA memory")));
-    expect(screen.getByText("Copied!")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Copy as context" })).toBeNull();
   });
 
   it("keeps recap source memories separate from semantic similarity", async () => {

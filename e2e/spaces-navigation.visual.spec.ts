@@ -29,16 +29,9 @@ async function settle(page: Page): Promise<void> {
   await expect(page.locator("main")).toBeVisible();
   const sidebar = page.locator('aside[aria-label="Primary navigation"]');
   if (await sidebar.getAttribute("aria-hidden") === "false") {
-    const overlay = await page.evaluate(() => window.matchMedia("(max-width: 899px)").matches);
-    const panel = sidebar.locator(".notes-workspace-panel");
-    const expanded = await panel.isVisible();
-    await expect(sidebar).toHaveCSS("width", overlay || expanded ? "264px" : "48px");
-    await expect(sidebar.locator(".notes-icon-rail")).toHaveCSS("width", "48px");
+    await expect(sidebar).toHaveCSS("width", "240px");
+    await expect(sidebar.locator(".notes-icon-rail")).toHaveCSS("width", "240px");
     await expect(sidebar.locator(".notes-icon-rail")).toHaveCSS("opacity", "1");
-    if (expanded) {
-      await expect(panel).toHaveCSS("width", "216px");
-      await expect(panel).toHaveCSS("opacity", "1");
-    }
   }
 }
 
@@ -58,50 +51,20 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
   expect(overflow.page).toBeLessThanOrEqual(1);
   expect(overflow.main).toBeLessThanOrEqual(1);
   if (wikiLibrary) {
-    await expect(page.getByRole("heading", { level: 1, name: "Wiki", exact: true })).toBeVisible();
-    const cards = page.getByTestId("wiki-cards").locator('[data-testid^="wiki-card-"]');
-    await expect(cards).toHaveCount(6);
-    await expect(cards.first()).toContainText("Fixture architecture summary");
-    await expect(cards.first().getByRole("button", { name: "Open Fixture architecture", exact: true })).toBeVisible();
-    await expect(page.locator(".wiki-overview")).not.toContainText("[[");
-    const titleFonts = await cards.locator(".asset-card-title").evaluateAll((nodes) => nodes.map((node) => Number.parseFloat(getComputedStyle(node).fontSize)));
-    for (const font of titleFonts) expect(font, "Wiki page titles must remain readable").toBeGreaterThanOrEqual(14);
-    const noteView = page.getByRole("group", { name: "Note view", exact: true });
-    await expect(noteView).toBeVisible();
-    await expect(noteView.getByRole("button", { name: "Cards", exact: true })).toBeVisible();
-    await expect(noteView.getByRole("button", { name: "List", exact: true })).toBeVisible();
-    await expect(page.locator(".wiki-new-page-action")).toBeVisible();
-    await expect(page.locator(".wiki-overview-title-row .sr-only")).toHaveText("6 pages");
-    await expect(page.locator(".wiki-pagination")).toHaveCount(0);
-    const controls = page.locator(".wiki-folder-lenses button, .wiki-new-page-action");
-    await expect(controls).toHaveCount(3);
-    const controlBounds = await controls.evaluateAll((nodes) => nodes.map((node) => {
-      const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, height: box.height, fontSize: Number.parseFloat(getComputedStyle(node).fontSize) };
-    }));
-    for (const box of controlBounds) {
-      expect(box.fontSize, "Wiki controls must use the readable control role").toBeGreaterThanOrEqual(14);
-      expect(box.height).toBeGreaterThanOrEqual(32);
-      expect(box.left).toBeGreaterThanOrEqual(0);
-      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
-    }
-    const cardBounds = await cards.evaluateAll((nodes) => nodes.map((node) => {
-      const box = node.getBoundingClientRect();
-      return { left: box.left, right: box.right, width: box.width, height: box.height, scrollWidth: node.scrollWidth };
-    }));
-    for (const box of cardBounds) {
-      expect(box.width).toBeGreaterThan(0);
-      expect(box.height).toBeGreaterThanOrEqual(44);
-      expect(box.left).toBeGreaterThanOrEqual(0);
-      expect(box.right).toBeLessThanOrEqual(viewport.width + 1);
-      expect(box.scrollWidth).toBeLessThanOrEqual(box.width + 1);
-    }
-    const contrast = await renderedContrast(page, [
-      { selector: ".wiki-overview h1", label: "Wiki title", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".wiki-folder-lenses button, .wiki-new-page-action", label: "Wiki view and creation controls", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".wiki-overview .asset-card-title", label: "Wiki page title", foregroundProperty: "color", minimum: 4.5 },
+    const reading=page.locator(".wiki-workspace-reading");
+    await expect(reading.getByRole("heading", { level: 1, name: "Open a note", exact: true })).toBeVisible();
+    await expect(reading.locator(".asset-card, .wiki-table, .wiki-folder-lenses")).toHaveCount(0);
+    await expect(reading).not.toContainText("Fixture architecture");
+    const control=page.locator(".note-tab-create");
+    await expect(control).toBeVisible();
+    const box=await control.evaluate(el=>{const r=el.getBoundingClientRect();return {left:r.left,right:r.right,height:r.height,width:r.width};});
+    expect(box.left).toBeGreaterThanOrEqual(0);expect(box.right).toBeLessThanOrEqual(viewport.width+1);
+    expect(box.height).toBeGreaterThanOrEqual(32);expect(box.width).toBeGreaterThanOrEqual(32);
+    const contrast=await renderedContrast(page,[
+      {selector:".wiki-overview h1",label:"Workspace title",foregroundProperty:"color",minimum:4.5},
+      {selector:".note-tab-create",label:"New note icon",foregroundProperty:"color",minimum:4.5},
     ]);
-    for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
+    for(const result of contrast)expect(result.ratio,result.label).toBeGreaterThanOrEqual(result.minimum);
   } else if (entityPage) {
     // The readability update intentionally changes these pixels. Preserve
     // content, legibility, contrast and responsive containment as live contracts
@@ -262,14 +225,14 @@ async function openSidebar(page: Page): Promise<void> {
 async function openSpaces(page: Page): Promise<void> {
   await openSidebar(page);
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Spaces", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
+  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toBeVisible();
   await expect(page.locator(".spaces-overview-header")).toBeVisible();
 }
 
 async function openWiki(page: Page): Promise<void> {
   await openSidebar(page);
   await page.getByRole("navigation", { name: "Primary navigation" }).getByRole("button", { name: "Wiki", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Wiki" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
 }
 
 async function captureFourSurfaces(page: Page, label: string): Promise<void> {

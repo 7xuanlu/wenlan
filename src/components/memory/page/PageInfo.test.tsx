@@ -95,7 +95,7 @@ describe("PageInfo", () => {
     const headings = screen.getAllByRole("heading", { level: 4 });
     expect(headings.map((h) => h.textContent)).toEqual([
       "Backlinks",
-      "Revisions",
+      "Revision history",
       "Sources",
     ]);
   });
@@ -128,6 +128,9 @@ describe("PageInfo", () => {
       screen.getByRole("button", { name: "Show all 5 revisions" }),
     );
     expect(screen.getByText("Delta v1")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Show latest 3" }));
+    expect(screen.queryByText("Delta v1")).not.toBeInTheDocument();
+    expect(screen.getByText("Delta v5")).toBeInTheDocument();
   });
 
   it("is collapsed by default and expands on summary click", async () => {
@@ -190,6 +193,51 @@ describe("PageInfo", () => {
     expect(screen.getByText("v2")).toBeInTheDocument();
     expect(screen.getByText("Added backlinks")).toBeInTheDocument();
     expect(screen.getByText("3 verified, 1 unverified")).toBeInTheDocument();
+  });
+
+  it("shows a compact loading line while history has no entries yet", async () => {
+    const { user } = renderInfo({ revisionsLoading: true });
+    expect(screen.getByRole("heading", { name: "Revision history" })).toBeInTheDocument();
+    expect(screen.getByText("Loading revision history…")).toBeInTheDocument();
+    await user.click(screen.getByText("Page info"));
+    expect(screen.getByText("Loading revision history…")).toBeVisible();
+  });
+
+  it("keeps stale revisions readable and retries a failed history load", async () => {
+    const onRetryRevisions = vi.fn();
+    const { user } = renderInfo({
+      revisions: [revision({ delta_summary: "Previously loaded change" })],
+      revisionsError: true,
+      onRetryRevisions,
+    });
+
+    await user.click(screen.getByText("Page info"));
+    expect(screen.getByText("Previously loaded change")).toBeVisible();
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not load revision history.",
+    );
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetryRevisions).toHaveBeenCalledOnce();
+  });
+
+  it("shows a failed empty history as an error section, while successful empty history stays quiet", () => {
+    const { rerender } = renderInfo({ revisionsError: true });
+    expect(screen.getByRole("heading", { name: "Revision history" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+
+    rerender(
+      <PageInfo
+        sourceCount={0}
+        sources={[]}
+        inbound={[]}
+        revisions={[]}
+        citations={undefined}
+        citationState="none"
+        onMemoryClick={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("heading", { name: "Revision history" })).toBeNull();
   });
 
   it("shows the citation count diagnosability line", async () => {

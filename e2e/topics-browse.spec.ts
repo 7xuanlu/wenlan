@@ -47,7 +47,7 @@ for (const copy of cases) test(`${copy.locale} topics browse before managing`, a
   await expect(overview.getByRole("article")).toHaveCount(1);
   await overview.getByRole("button", { name: copy.openAda, exact: true }).click();
   await expect(page.getByRole("heading", { name: "Ada Lovelace", exact: true })).toBeVisible();
-  await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "48px");
+  await expect(page.locator(".notes-workspace-sidebar")).toHaveCSS("width", "240px");
   await expect(page.getByRole("button", { name: copy.more, exact: true })).toHaveAttribute("aria-current", "page");
   expect(controller.calls().filter(call => /^(confirm_entity|archive_entities|restore_entities)_cmd$/.test(call.command))).toEqual([]);
   let menu = await openTopicMenu(page, copy.locale);
