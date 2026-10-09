@@ -74,6 +74,7 @@ import { MovePageDialog } from "./pages/MovePageDialog";
 import { PageProjectionNotice } from "./pages/PageProjectionNotice";
 import { inventoryPageFilename, type PageProjectionIssue } from "./pages/pageInventory";
 import { PageAutosave } from "./editor/pageAutosave";
+import { NoteReviewNotice } from "./page/NoteReviewNotice";
 
 interface PageDetailProps {
   pageId: string;
@@ -90,6 +91,7 @@ interface PageDetailProps {
   onPageClick?: (pageId: string) => void;
   onEntityClick?: (entityId: string) => void;
   onOpenGraph?: (pageId: string) => void;
+  onOpenReview?: (itemId?: string) => void;
   onDismissAttachedPageNotice?: () => void;
   onPageLoaded?: (page: Pick<Page, "id" | "status" | "title">) => void;
   onSavePendingChange?: (pending: boolean) => void;
@@ -230,6 +232,7 @@ export default function PageDetail({
   onPageClick,
   onEntityClick,
   onOpenGraph,
+  onOpenReview,
   onDismissAttachedPageNotice,
   onPageLoaded,
   onSavePendingChange,
@@ -1935,6 +1938,12 @@ export default function PageDetail({
           </div>
         )}
 
+
+        {onOpenReview && <NoteReviewNotice key={pageId} page={page}
+          onReview={onOpenReview}
+          onShowSources={() => void requestPageInfo()}
+          disabled={storedActionPending || canvasSwitchPending || !!editorStatus?.compositionActive}
+        />}
 
         {projectionIssue && !inventoryPageFilename(page) && <PageProjectionNotice key={`${pageId}:${projectionIssue.expectedVersion}`} pageId={pageId} issue={projectionIssue} disabled={editDirty || saveState.phase !== "idle" || !!editorStatus?.compositionActive} onResolved={onProjectionResolved} />}
 

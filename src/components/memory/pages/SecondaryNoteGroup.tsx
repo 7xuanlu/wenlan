@@ -243,6 +243,7 @@ export const SecondaryNoteGroup = forwardRef<SecondaryNoteGroupHandle, Props>(fu
           onRegisterFlush={registerFlush} onEditDirtyChange={reportDirty} onSavePendingChange={reportSaving}
           onBack={() => { const tab = tabsRef.current.find(tab => matchesNote(tab, view)); if (tab) void close(tab); }}
           onPageLoaded={pageLoaded}
+          onOpenReview={reviewItemId => void globalNavigate({ kind: "distill-review", reviewItemId })}
           onPageClick={pageId => onOpenNote({ kind: "page", pageId })} onMemoryClick={sourceId => void globalNavigate({ kind: "memory", sourceId })}
           onEntityClick={entityId => {
             if (entityId.startsWith("page:")) onOpenNote({ kind: "page", pageId: entityId.slice(5) });

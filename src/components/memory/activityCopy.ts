@@ -58,7 +58,7 @@ export const enActivityStatus = {
     entities: "Entities",
     pages: "Pages",
   },
-  rowAsset: { memories: "Memories", entities: "Entities", pages: "Notes" },
+  rowAsset: { memories: "Memories", entities: "Entities", pages: "Pages" },
   assetOff: {
     memories: "Your notes remain available.",
     entities: "Entity detection is off.",
@@ -100,14 +100,14 @@ export const enActivityStatus = {
   // stopped and why; the button carries the fix. turnOnModel repeats Home's
   // empty-state button word for word: one action, one name.
   blockedCause: {
-    everyday: "Steeping is paused: no everyday model is chosen.",
-    synthesis: "Page writing is paused: no page-writing model is chosen.",
+    everyday: "Background organization is paused because no model is set up.",
+    synthesis: "Page updates are paused because no writing model is set up.",
   },
   // A model was chosen but is not serving: still loading, or its server is
   // down. The fix is the same page, so turnOnModel still applies.
   blockedCauseUnavailable: {
-    everyday: "Steeping is paused: the everyday model is not available.",
-    synthesis: "Page writing is paused: the page-writing model is not available.",
+    everyday: "Background organization is paused because its model is unavailable.",
+    synthesis: "Page updates are paused because their model is unavailable.",
   },
   turnOnModel: "Turn on a model",
   assetBlockedFailed: {
@@ -195,10 +195,11 @@ export const enActivityStatus = {
     memories_other: "{{done}} / {{count}} memories",
     entities_one: "{{done}} / {{count}} entity",
     entities_other: "{{done}} / {{count}} entities",
-    pages_one: "{{done}} / {{count}} note",
-    pages_other: "{{done}} / {{count}} notes",
+    pages_one: "{{done}} / {{count}} page",
+    pages_other: "{{done}} / {{count}} pages",
   },
   moreDetails: "Details",
+  processingDetails: "Models and privacy",
   // Per step, in that step's unit: Detect counts memories, Confirm entities.
   stepCount: {
     memories_one: "{{done}} of {{count}} memory",
@@ -228,7 +229,7 @@ export const enActivityStatus = {
     everyday: "everyday work",
     synthesis: "page writing",
   },
-  openIntelligence: "Settings, Intelligence",
+  openSettings: "Open settings",
   trustLocal: "Runs on this machine. Nothing leaves your device.",
   trustCloud:
     "{{jobs}} runs on {{vendor}}; the text for that step leaves your device. Everything else stays on this machine.",
@@ -285,7 +286,7 @@ export const hansActivityStatus = {
     entities: "实体",
     pages: "页面",
   },
-  rowAsset: { memories: "记忆", entities: "实体", pages: "笔记" },
+  rowAsset: { memories: "记忆", entities: "实体", pages: "页面" },
   assetOff: {
     memories: "笔记仍可正常使用。",
     entities: "实体识别已关闭。",
@@ -317,12 +318,12 @@ export const hansActivityStatus = {
     pages_other: "{{count}} 个页面等待更新",
   },
   blockedCause: {
-    everyday: "沉淀已暂停：尚未选择日常模型。",
-    synthesis: "页面撰写已暂停：尚未选择写页面的模型。",
+    everyday: "后台整理已暂停，因为尚未设置模型。",
+    synthesis: "页面更新已暂停，因为尚未设置撰写模型。",
   },
   blockedCauseUnavailable: {
-    everyday: "沉淀已暂停：日常模型目前无法使用。",
-    synthesis: "页面撰写已暂停：写页面的模型目前无法使用。",
+    everyday: "后台整理已暂停，因为模型暂时无法使用。",
+    synthesis: "页面更新已暂停，因为撰写模型暂时无法使用。",
   },
   turnOnModel: "启用模型",
   assetBlockedFailed: {
@@ -401,10 +402,11 @@ export const hansActivityStatus = {
     memories_other: "{{done}} / {{count}} 条记忆",
     entities_one: "{{done}} / {{count}} 个实体",
     entities_other: "{{done}} / {{count}} 个实体",
-    pages_one: "{{done}} / {{count}} 篇笔记",
-    pages_other: "{{done}} / {{count}} 篇笔记",
+    pages_one: "{{done}} / {{count}} 个页面",
+    pages_other: "{{done}} / {{count}} 个页面",
   },
   moreDetails: "详情",
+  processingDetails: "模型与隐私",
   stepCount: {
     memories_one: "{{count}} 条记忆中已完成 {{done}} 条",
     memories_other: "{{count}} 条记忆中已完成 {{done}} 条",
@@ -430,7 +432,7 @@ export const hansActivityStatus = {
     everyday: "日常工作",
     synthesis: "写页面",
   },
-  openIntelligence: "设置 - 智能",
+  openSettings: "打开设置",
   trustLocal: "在本机运行，数据不会离开你的设备。",
   trustCloud: "{{jobs}}在 {{vendor}} 上运行，该步骤的文本会离开你的设备。其余全部留在本机。",
   suggestions: {
@@ -478,7 +480,7 @@ export const hantActivityStatus = {
     entities: "實體",
     pages: "頁面",
   },
-  rowAsset: { memories: "記憶", entities: "實體", pages: "筆記" },
+  rowAsset: { memories: "記憶", entities: "實體", pages: "頁面" },
   assetOff: {
     memories: "筆記仍可正常使用。",
     entities: "實體辨識已關閉。",
@@ -510,12 +512,12 @@ export const hantActivityStatus = {
     pages_other: "{{count}} 個頁面等待更新",
   },
   blockedCause: {
-    everyday: "沉澱已暫停：尚未選擇日常模型。",
-    synthesis: "頁面撰寫已暫停：尚未選擇寫頁面的模型。",
+    everyday: "背景整理已暫停，因為尚未設定模型。",
+    synthesis: "頁面更新已暫停，因為尚未設定撰寫模型。",
   },
   blockedCauseUnavailable: {
-    everyday: "沉澱已暫停：日常模型目前無法使用。",
-    synthesis: "頁面撰寫已暫停：寫頁面的模型目前無法使用。",
+    everyday: "背景整理已暫停，因為模型暫時無法使用。",
+    synthesis: "頁面更新已暫停，因為撰寫模型暫時無法使用。",
   },
   turnOnModel: "啟用模型",
   assetBlockedFailed: {
@@ -594,10 +596,11 @@ export const hantActivityStatus = {
     memories_other: "{{done}} / {{count}} 則記憶",
     entities_one: "{{done}} / {{count}} 個實體",
     entities_other: "{{done}} / {{count}} 個實體",
-    pages_one: "{{done}} / {{count}} 篇筆記",
-    pages_other: "{{done}} / {{count}} 篇筆記",
+    pages_one: "{{done}} / {{count}} 個頁面",
+    pages_other: "{{done}} / {{count}} 個頁面",
   },
   moreDetails: "詳細資料",
+  processingDetails: "模型與隱私",
   stepCount: {
     memories_one: "{{count}} 則記憶中已完成 {{done}} 則",
     memories_other: "{{count}} 則記憶中已完成 {{done}} 則",
@@ -623,7 +626,7 @@ export const hantActivityStatus = {
     everyday: "日常工作",
     synthesis: "寫頁面",
   },
-  openIntelligence: "設定 - 智慧",
+  openSettings: "開啟設定",
   trustLocal: "在本機執行，資料不會離開你的裝置。",
   trustCloud: "{{jobs}}在 {{vendor}} 上執行，該步驟的文字會離開你的裝置。其餘全部留在本機。",
   suggestions: {

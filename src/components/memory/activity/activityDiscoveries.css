@@ -1,0 +1,21 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.mem-activity-background { margin-bottom: 28px; }
+.mem-activity-background .mem-activity-now-surface { border: 0; border-radius: 0; background: transparent; padding: 0; font: 14px/1.65 var(--mem-font-body); }
+.mem-activity-discoveries { color: var(--mem-text); font: 14px/1.55 var(--mem-font-body); min-width: 0; }
+.mem-activity-discoveries-body { display: grid; gap: 18px; }
+.mem-activity-discoveries h3 { color: var(--mem-text); font: 600 16px/1.35 var(--mem-font-body); margin: 0 0 8px; }
+.mem-activity-discoveries h4 { color: var(--mem-text); font: 500 14px/1.45 var(--mem-font-body); margin: 0 0 4px; }
+.mem-activity-discoveries ul { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 16px; }
+.mem-activity-discoveries li { overflow-wrap: anywhere; min-width: 0; }
+.mem-activity-discoveries li > p { margin: 4px 0 8px; }
+.mem-activity-discovery-hint { color: var(--mem-text-secondary); font-size: 14px; margin: 0; }
+.mem-activity-discovery-source { white-space: pre-wrap; font-size: 14px; padding-inline-start: 12px; border-inline-start: 1px solid var(--mem-border); }
+.mem-activity-source-preview,
+.mem-activity-hidden-results { color: var(--mem-text-secondary); }
+.mem-activity-source-preview summary,
+.mem-activity-hidden-results summary { cursor: pointer; width: fit-content; max-width: 100%; padding: 4px 0; }
+.mem-activity-source-preview summary:focus-visible,
+.mem-activity-hidden-results summary:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 3px; border-radius: 3px; }
+.mem-activity-hidden-results > ul { margin-top: 8px; }
+.mem-activity-hidden-results > ul li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mem-activity-discoveries [role="alert"] p { margin: 0 0 8px; }

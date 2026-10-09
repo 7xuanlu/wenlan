@@ -128,6 +128,17 @@ describe("useSuppressedReviewItems", () => {
     expect(stored).toHaveLength(0);
   });
 
+  it("restores a scoped set of keys without removing other surface hides", () => {
+    const { result } = renderHook(() => useSuppressedReviewItems());
+    act(() => result.current.hide(topicItem("Activity topic")));
+    act(() => result.current.hide(staleItem("page-1", "Review page")));
+
+    act(() => result.current.restoreMany(["stale:page-1"]));
+
+    expect(result.current.hiddenKeys.has("stale:page-1")).toBe(false);
+    expect(result.current.hiddenKeys.has("topic:Activity topic")).toBe(true);
+  });
+
   it("hides and restores an example item, keyed and labeled by reviewExamples.ts", () => {
     const [coffee] = EXAMPLE_REVIEW_ITEMS;
     const { result } = renderHook(() => useSuppressedReviewItems());

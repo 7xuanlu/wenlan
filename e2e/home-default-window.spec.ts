@@ -156,3 +156,35 @@ test("the Space review action opens Review and Back returns to the Space", async
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
 });
+
+// PR4 Activity-to-Review navigation remains alongside PR3's Space action path.
+// Review is opt-in from Activity; Back returns to the activity page.
+test("review opens from Activity and Back returns to Activity", async ({ page }) => {
+  await page.setViewportSize({ ...DEFAULT_WINDOW });
+  const browserErrors = await openWiki(page, createSpacesNavigationFixture());
+  await expect(page.getByTestId("wiki-page-updates")).toHaveCount(0);
+  await expect(page.getByTestId("wiki-context-rail")).toHaveCount(0);
+
+  const primaryNavigation = page.getByRole("navigation", { name: "Primary navigation" });
+  await primaryNavigation.getByRole("button", { name: "Wiki", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Open a note" })).toBeVisible();
+
+  await expect(page.getByRole("button", { name: "Review page changes" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Page options", exact: true })).toHaveCount(0);
+  await page.getByTestId("activity-status").click();
+  await page.getByTestId("activity-summary-open").click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+  const reviewEntry = page.getByRole("button", { name: "Review page changes", exact: true });
+  await reviewEntry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Review" })).toBeVisible();
+  // The review is still scoped to the note library; navigation history remembers Activity.
+  await expect(primaryNavigation.getByRole("button", { name: "Wiki", exact: true })).toHaveAttribute("aria-current", "page");
+  await expect(primaryNavigation.locator('[aria-current="page"]')).toHaveCount(1);
+
+  await page.getByRole("button", { name: "Back" }).first().click();
+  await expect(page.getByRole("heading", { level: 1, name: "Activity" })).toBeVisible();
+
+  expect(browserErrors.pageErrors).toEqual([]);
+  expect(browserErrors.consoleErrors).toEqual([]);
+});
