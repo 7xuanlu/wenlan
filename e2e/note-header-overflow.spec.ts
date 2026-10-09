@@ -61,7 +61,7 @@ test("many tabs keep create and inspector reachable while direct move preserves 
   await expect(frame(page).getByRole("alert")).toBeVisible();
   await expect(frame(page, "secondary")).toHaveCount(0);
   await frame(page).getByRole("button", { name: "Retry", exact: true }).click();
-  await expect(frame(page).locator(".page-detail").getByRole("status")).toHaveText("Saved");
+  await expect(frame(page).locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
   await frame(page).getByRole("tab", { name: "Layout note 18", exact: true }).click({ button: "right" });
   await page.getByRole("menuitem", { name: "Move to right group", exact: true }).click();
   await expect(frame(page, "secondary").getByRole("tab", { name: "Layout note 18", exact: true })).toHaveAttribute("aria-selected", "true");
