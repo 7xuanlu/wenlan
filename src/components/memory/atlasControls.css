@@ -29,7 +29,7 @@
 .atlas-cartography-alert { display: inline-flex; align-items: center; padding: 0 2px; color: var(--mem-danger); font: 400 10px/1.4 var(--mem-font-mono); }
 .atlas-inspector {
   position: absolute; top: 72px; right: 16px; z-index: 11; width: 280px; max-width: calc(100% - 32px);
-  max-height: calc(100% - 88px); overflow: hidden; display: flex; flex-direction: column;
+  max-height: calc(100% - 128px); overflow: hidden; display: flex; flex-direction: column;
   padding: 16px; border: 1px solid var(--mem-control-border); border-radius: 8px;
   background: var(--mem-surface); box-shadow: 0 8px 28px #0002; color: var(--mem-text);
   font: 400 13px/1.5 var(--mem-font-body);
