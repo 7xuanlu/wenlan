@@ -436,10 +436,25 @@ describe("GeneralSection optional usage stats consent", () => {
 
     await screen.findByLabelText("Share optional usage stats");
     await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "false"));
-    fireEvent.click(telemetryToggle());
-    expect(await screen.findByRole("status", { name: "Share optional usage stats" })).toHaveTextContent("Saving");
+    const toggle = telemetryToggle();
+    toggle.focus();
+    fireEvent.click(toggle);
+    const saving = await screen.findByRole("status", { name: "Saving" });
+    expect(saving).toHaveTextContent("Saving");
+    expect(telemetryToggle()).toBe(toggle);
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("aria-busy", "true");
+    expect(toggle).toHaveFocus();
+
+    const callsDuringSave = vi.mocked(setTelemetryEnabled).mock.calls.length;
+    fireEvent.click(toggle);
+    expect(vi.mocked(setTelemetryEnabled).mock.calls.length).toBe(callsDuringSave);
+    expect(toggle).toHaveFocus();
+
     resolveSave(status(true));
     await waitFor(() => expect(telemetryToggle()).toHaveAttribute("aria-pressed", "true"));
+    expect(telemetryToggle()).toBe(toggle);
+    expect(toggle).toHaveFocus();
   });
 
   it("surfaces pending operations without adding an automatic opt-in", async () => {

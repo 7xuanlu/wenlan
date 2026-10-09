@@ -21,7 +21,8 @@ export function Toggle({
   "aria-describedby"?: string;
 }) {
   const { t } = useTranslation();
-  if (valueUnknown) {
+  const saving = valueUnknown && unknownState === "saving";
+  if (valueUnknown && !saving) {
     return (
       <span
         role="status"
@@ -34,13 +35,15 @@ export function Toggle({
       </span>
     );
   }
-  return (
+  const toggle = (
     <button
-      onClick={onToggle}
+      onClick={() => { if (!saving) onToggle(); }}
       aria-pressed={enabled}
+      aria-disabled={saving || undefined}
+      aria-busy={saving || undefined}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedby}
-      className={`relative w-11 h-[26px] rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2 ${
+      className={`relative w-11 h-[26px] rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2 ${saving ? "cursor-wait opacity-70" : ""} ${
         enabled ? "bg-[var(--mem-accent-indigo)]" : "bg-[var(--mem-hover-strong)]"
       }`}
     >
@@ -50,6 +53,22 @@ export function Toggle({
         }`}
       />
     </button>
+  );
+  return (
+    <span className="inline-flex min-h-[26px] items-center gap-2">
+      {toggle}
+      {saving && (
+        <span
+          role="status"
+          aria-label={t("settings.controlState.saving")}
+          aria-describedby={ariaDescribedby}
+          data-state="saving"
+          className="inline-flex min-h-[26px] items-center text-[length:var(--mem-text-sm)] text-[var(--mem-text-secondary)]"
+        >
+          {t("settings.controlState.saving")}
+        </span>
+      )}
+    </span>
   );
 }
 

@@ -117,7 +117,6 @@ describe("Toggle", () => {
 
   it.each([
     ["loading", "Loading"],
-    ["saving", "Saving"],
     ["unavailable", "Unavailable"],
   ] as const)("renders unknown %s as a named noninteractive status", (state, label) => {
     const onToggle = vi.fn();
@@ -134,6 +133,32 @@ describe("Toggle", () => {
     expect(status.className).not.toContain("border");
     fireEvent.click(status);
     expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("keeps the focused switch mounted and inert while saving", () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(<Toggle enabled={false} valueUnknown unknownState="saving" onToggle={onToggle}
+      aria-label="Share optional usage stats" aria-describedby="telemetry-detail" />);
+
+    const toggle = screen.getByRole("button", { name: "Share optional usage stats" });
+    const status = screen.getByRole("status", { name: "Saving" });
+    toggle.focus();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    expect(toggle).toHaveAttribute("aria-busy", "true");
+    expect(status).toHaveTextContent("Saving");
+    expect(status).toHaveAttribute("aria-describedby", "telemetry-detail");
+    expect(toggle).toHaveFocus();
+
+    fireEvent.click(toggle);
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Share optional usage stats" })).toBe(toggle);
+    expect(toggle).toHaveFocus();
+
+    rerender(<Toggle enabled onToggle={onToggle} aria-label="Share optional usage stats" />);
+    expect(screen.getByRole("button", { name: "Share optional usage stats" })).toBe(toggle);
+    expect(toggle).toHaveFocus();
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
   });
 });
 

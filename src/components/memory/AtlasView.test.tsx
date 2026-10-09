@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { i18n } from "../../i18n";
 
 vi.mock("../../lib/tauri", async () => {
@@ -19,6 +20,7 @@ vi.mock("../../lib/tauri", async () => {
 // the drawn graph itself is verified live in preview. This test only proves
 // the three states, retry, mount/teardown, and the click handoff.
 const capturedSigmaInstances = vi.hoisted(() => [] as any[]);
+const rendererLifecycle = vi.hoisted(() => [] as string[]);
 vi.mock("sigma/rendering", () => ({
   // WebGL programs are exercised by the real browser graph checks.
   EdgeRectangleProgram: class { setUniforms() {} },
@@ -43,8 +45,10 @@ vi.mock("sigma", () => {
       public container: any,
       public settings: any,
     ) {
+      rendererLifecycle.push("construct");
       capturedSigmaInstances.push(this);
     }
+    kill = vi.fn(() => { rendererLifecycle.push("kill"); });
     on(event: string, handler: (payload: any) => void) {
       this.handlers.set(event, handler);
       return this;
@@ -117,7 +121,6 @@ vi.mock("sigma", () => {
       this.handlers.get("afterRender")?.({});
     }
     setSetting(_key: string, _value: unknown) {}
-    kill() {}
   }
   return { default: SigmaMock };
 });
@@ -309,7 +312,7 @@ describe("AtlasView", () => {
     expect(canvas.parentElement).toHaveClass("atlas-canvas-shell");
     expect(screen.queryByRole("button", { name: "Regions" })).not.toBeInTheDocument();
 
-    const trigger = screen.getByRole("button", { name: "Show in graph" });
+    const trigger = screen.getByRole("button", { name: "Display" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -321,7 +324,7 @@ describe("AtlasView", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("focuses a page in the whole graph, retaining distant nodes and links without replacing saved preferences", async () => {
+  it("focuses a page in the whole graph while preserving and explicitly updating saved layer preferences", async () => {
     const savedLayers = JSON.stringify({ page: false, entity: true, memory: true });
     window.localStorage.setItem("atlas.layers", savedLayers);
     const center = makePage({ id: "center", title: "Center page" });
@@ -364,7 +367,50 @@ describe("AtlasView", () => {
     expect(screen.getByRole("button", { name: i18n.t("atlas.layer.entity") })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: i18n.t("atlas.layer.memory") })).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: i18n.t("atlas.layer.memory") }));
+    expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: false, entity: true, memory: false });
+
+    // The page layer is temporarily on to honor this handoff. Toggling it is
+    // an explicit preference change, so the user's choice is persisted.
+    const pageLayer = screen.getByRole("button", { name: i18n.t("atlas.layer.page") });
+    fireEvent.click(pageLayer);
+    expect(pageLayer).toHaveAttribute("aria-pressed", "false");
+    expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: false, entity: true, memory: false });
+    fireEvent.click(pageLayer);
+    expect(pageLayer).toHaveAttribute("aria-pressed", "true");
     expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: true, entity: true, memory: false });
+  });
+
+  it("keeps a temporary page layer onscreen without writing an invalid all-off preference", async () => {
+    const savedLayers = JSON.stringify({ page: false, entity: true, memory: false });
+    window.localStorage.setItem("atlas.layers", savedLayers);
+    mockConnectedPair();
+    renderWithQuery(<AtlasView focusPageId="not-in-this-graph" />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+
+    openDisplayControls();
+    const entityLayer = screen.getByRole("button", { name: i18n.t("atlas.layer.entity") });
+    expect(screen.getByRole("button", { name: i18n.t("atlas.layer.page") })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(entityLayer);
+
+    expect(entityLayer).toHaveAttribute("aria-pressed", "false");
+    expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: false, entity: true, memory: false });
+    expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).not.toEqual({ page: false, entity: false, memory: false });
+  });
+
+  it("offsets a narrow-screen selection above the bottom inspector", async () => {
+    mockDimensions = { width: 375, height: 600 };
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+
+    const instance = capturedSigmaInstances[0];
+    act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
+
+    await waitFor(() => expect(instance.camera.animate).toHaveBeenCalled());
+    const [target, options] = instance.camera.animate.mock.calls.at(-1)!;
+    expect(target).toEqual({ x: 0.42, y: expect.any(Number), ratio: 0.4 });
+    expect(target.y).toBeCloseTo(81.84);
+    expect(options).toEqual({ duration: 450 });
   });
 
   it("keeps the graph available when a handoff page no longer exists", async () => {
@@ -381,6 +427,7 @@ describe("AtlasView", () => {
     await i18n.changeLanguage("en");
     vi.clearAllMocks();
     capturedSigmaInstances.length = 0;
+    rendererLifecycle.length = 0;
     mockDimensions = { width: 400, height: 600 };
     entitiesSource = async () => [];
     detailSource = async (id: string) => ({
@@ -1399,6 +1446,21 @@ describe("AtlasView", () => {
     // query passes even if the cleanup leaks the canvas (mutation-proven).
     expect(container.querySelector('canvas[data-testid="atlas-region-names"]')).toBeNull();
     expect(container.querySelector('canvas[data-testid="atlas-community-areas"]')).toBeNull();
+  });
+
+  it("disposes the current renderer before mounting a replacement graph", async () => {
+    mockPairWithPages();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    const current = capturedSigmaInstances[0];
+    const kill = vi.spyOn(current, "kill").mockImplementation(() => { rendererLifecycle.push("kill"); });
+    rendererLifecycle.length = 0;
+
+    fireEvent.click(displayControl("Memories"));
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(2));
+
+    expect(kill).toHaveBeenCalledOnce();
+    expect(rendererLifecycle).toEqual(["kill", "construct"]);
   });
 
   it("repaints the place-name overlay on every sigma afterRender, names over the nodes", async () => {
@@ -2575,7 +2637,7 @@ describe("AtlasView", () => {
     mockConnectedPair();
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    const trigger = screen.getByRole("button", { name: "Show in graph" });
+    const trigger = screen.getByRole("button", { name: "Display" });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("button", { name: "Regions" })).not.toBeInTheDocument();
     const regions = displayControl("Regions");
@@ -2588,13 +2650,19 @@ describe("AtlasView", () => {
     mockConnectedPair();
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    const user = userEvent.setup();
     const instance = capturedSigmaInstances[0];
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
+    const aliceHeading = await screen.findByRole("heading", { name: "Alice" });
+    await waitFor(() => expect(aliceHeading).toHaveFocus());
     expect(screen.getByRole("complementary", { name: "Graph selection" })).toBeInTheDocument();
     act(() => instance.handlers.get("leaveNode")?.({ node: "e1" }));
     expect(instance.settings.nodeReducer("e1", instance.graph.getNodeAttributes("e1")).highlighted).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Bob" }));
-    expect(screen.getByRole("heading", { name: "Bob" })).toBeInTheDocument();
+    const bobConnection = screen.getByRole("button", { name: "Bob" });
+    bobConnection.focus();
+    await user.keyboard("{Enter}");
+    const bobHeading = await screen.findByRole("heading", { name: "Bob" });
+    await waitFor(() => expect(bobHeading).toHaveFocus());
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("complementary", { name: "Graph selection" })).not.toBeInTheDocument();
   });

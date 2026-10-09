@@ -205,6 +205,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
   const palette = useGraphPalette();
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
+  const rendererDisposeRef = useRef<(() => void) | null>(null);
   const viewpointRef = useRef<{ scope: string | null; view: AtlasViewpoint; body: Map<string, { x: number; y: number }> } | null>(null);
   const graphRef = useRef<Graph | null>(null);
   const simRef = useRef<AtlasSimulation | null>(null);
@@ -277,22 +278,34 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
   // Which node kinds are drawn. Wiki pages and entities on, memories off by
   // default: memories outnumber everything else and bury the map. Persisted
   // across reloads; a malformed stored value falls back to the default.
-  const [layers, setLayers] = useState<GraphLayers>(() => {
-    if (typeof window === "undefined") return DEFAULT_LAYERS;
-    try {
-      const stored = readStoredLayers(window.localStorage.getItem(LAYERS_STORAGE_KEY));
-      return focusPageId ? { ...stored, page: true } : stored;
-    } catch {
-      return DEFAULT_LAYERS;
+  const storedLayersRef = useRef<GraphLayers | null>(null);
+  if (storedLayersRef.current === null) {
+    let stored = DEFAULT_LAYERS;
+    if (typeof window !== "undefined") {
+      try {
+        stored = readStoredLayers(window.localStorage.getItem(LAYERS_STORAGE_KEY));
+      } catch {
+        stored = DEFAULT_LAYERS;
+      }
     }
-  });
+    storedLayersRef.current = stored;
+  }
+  const [layers, setLayers] = useState<GraphLayers>(() =>
+    focusPageId ? { ...storedLayersRef.current!, page: true } : storedLayersRef.current!,
+  );
   const toggleLayer = (key: keyof GraphLayers) => {
     const next = { ...layers, [key]: !layers[key] };
     // The last lit chip can't be turned off — an empty map is not a view.
     if (!next.entity && !next.page && !next.memory) return;
     setLayers(next);
+    const preferences = { ...storedLayersRef.current!, [key]: next[key] };
+    // focusPageId temporarily turns on the page layer for this view. If an
+    // explicit layer change would serialize every stored layer as off, retain
+    // the previous valid preference rather than persist an unusable state.
+    if (!preferences.page && !preferences.entity && !preferences.memory) return;
+    storedLayersRef.current = preferences;
     try {
-      window.localStorage.setItem(LAYERS_STORAGE_KEY, JSON.stringify(next));
+      window.localStorage.setItem(LAYERS_STORAGE_KEY, JSON.stringify(preferences));
     } catch {
       // Private mode / quota: the choice still applies for this session.
     }
@@ -525,6 +538,16 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
       // Ratio only ever shrinks (zooms in) — landing further out than the
       // current view would read as the map running away from the match.
       const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, openingRatioRef.current / 2.5) };
+      const { width, height } = renderer.getDimensions();
+      if (width <= 640) {
+        // The narrow inspector occupies the lower canvas. Keep the selected
+        // neighborhood above it, using Sigma's projection (also handles rotation).
+        const center = renderer.viewportToFramedGraph({ x: width / 2, y: height / 2 });
+        const target = renderer.viewportToFramedGraph({ x: width / 2, y: height * 0.16 });
+        const scale = state.ratio / camera.ratio;
+        state.x += (center.x - target.x) * scale;
+        state.y += (center.y - target.y) * scale;
+      }
       if (prefersReducedMotion()) camera.setState(state);
       else camera.animate(state, { duration: 450 });
     }
@@ -693,6 +716,12 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
   // remounting the whole renderer. Dispose before the canvas leaves the DOM;
   // a focus animation can otherwise render into a detached, zero-width host.
   useLayoutEffect(() => {
+    // Dispose the current imperative renderer before React mutates or detaches
+    // its host. Mount/rebuild stays passive so large layouts do not block paint.
+    return () => rendererDisposeRef.current?.();
+  }, [visibleModel]);
+
+  useEffect(() => {
     const container = containerRef.current;
     // Guarded on the FULL model, not the drawn one: a graph whose components
     // are all smaller than MIN_COMPONENT_SIZE draws nothing but must still
@@ -1258,7 +1287,10 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
       camera.setState(renderer.getViewportZoomedState({ x: e.x, y: e.y }, newRatio));
     });
 
-    return () => {
+    let disposed = false;
+    const dispose = () => {
+      if (disposed) return;
+      disposed = true;
       containerSizeObserver?.disconnect();
       // Sigma only detaches its own camera listener; release our listener too.
       camera.off("updated", onCameraUpdated);
@@ -1279,7 +1311,10 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
       areas.remove();
       overlayRef.current = null;
       areasRef.current = null;
+      if (rendererDisposeRef.current === dispose) rendererDisposeRef.current = null;
     };
+    rendererDisposeRef.current = dispose;
+    return dispose;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visibleModel]);
 
@@ -1483,7 +1518,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
           ref={displayTriggerRef}
           type="button"
           className="collection-control atlas-display-trigger"
-          aria-label={t("atlas.graphContent")}
+          aria-label={t("atlas.display")}
           aria-expanded={displayOpen}
           aria-controls={displayOpen ? "atlas-display-panel" : undefined}
           onClick={() => setDisplayOpen((open) => !open)}
@@ -1594,7 +1629,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onB
       {filteredModel.nodes.length === 0 && excludedTypes.size > 0 && <div className="atlas-filter-empty">
         <p>{t("atlas.noTypeMatches")}</p><button type="button" className="atlas-action" onClick={() => setExcludedTypes(new Set())}>{t("atlas.allEntityTypes")}</button>
       </div>}
-      {selectedNode && <AtlasInspector node={selectedNode} neighbors={selectedNeighbors}
+      {selectedNode && <AtlasInspector key={selectedNode.id} node={selectedNode} neighbors={selectedNeighbors}
         edges={filteredModel.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)}
         onSelect={focusEntity} onClose={returnToMap}
         onOpen={onNodeClick ? () => onNodeClick(targetForNode(selectedNode.id)) : undefined} />}

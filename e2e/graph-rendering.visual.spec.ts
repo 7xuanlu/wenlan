@@ -36,7 +36,7 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   await expect(ours).toHaveCount(2);
   const canvas = graph.getByTestId("atlas-region-names");
   const areas = graph.getByTestId("atlas-community-areas");
-  const display = page.getByRole("button", { name: "Show in graph", exact: true });
+  const display = page.getByRole("button", { name: "Display", exact: true });
   await display.click();
   const regions = page.getByRole("button", { name: "Regions", exact: true });
   await expect(regions).toHaveAttribute("aria-pressed", "false");
