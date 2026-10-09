@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Masonry from "react-masonry-css";
+import { Funnel } from "@phosphor-icons/react";
 import MemoryCard from "./MemoryCard";
 import MemoryListSurface from "./MemoryListSurface";
+import { AssetLensToggle } from "./assets/AssetLensToggle";
+import type { AssetLens } from "../../lib/assetLens";
 import type { MemoryItem } from "../../lib/tauri";
 import { setStability, deleteFileChunks, getVersionChain, pinMemory, unpinMemory } from "../../lib/tauri";
 import { readPreference, writePreference } from "../../lib/preferenceStorage";
+import "./assets/collectionToolbar.css";
+import "./memoryCollection.css";
 
 export type SortMode = "curated" | "recent" | "oldest";
 export type ViewMode = "grid" | "list";
@@ -16,8 +21,8 @@ export type MemoryStreamPresentation = "embedded" | "parent-list";
 const VIEW_MODE_KEY = "wenlan-memory-view-mode";
 const LEGACY_VIEW_MODE_KEY = "origin-memory-view-mode";
 
-function getStoredViewMode(): ViewMode {
-  return (readPreference(VIEW_MODE_KEY, LEGACY_VIEW_MODE_KEY) as ViewMode) || "grid";
+function getStoredViewMode(fallback: ViewMode): ViewMode {
+  return (readPreference(VIEW_MODE_KEY, LEGACY_VIEW_MODE_KEY) as ViewMode) || fallback;
 }
 
 interface MemoryStreamProps {
@@ -31,6 +36,9 @@ interface MemoryStreamProps {
   onSelectMemory?: (sourceId: string) => void;
   cardVariant?: "full" | "insight";
   presentation?: MemoryStreamPresentation;
+  toolbarActions?: ReactNode;
+  filter?: string;
+  onFilterChange?: (filter: string) => void;
 }
 
 const STABILITY_RANK: Record<string, number> = { confirmed: 3, learned: 2, new: 1 };
@@ -72,16 +80,30 @@ export default function MemoryStream({
   onSelectMemory,
   cardVariant,
   presentation = "embedded",
+  toolbarActions,
+  filter,
+  onFilterChange,
 }: MemoryStreamProps) {
   const queryClient = useQueryClient();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [undoItem, setUndoItem] = useState<{ sourceId: string; timer: number } | null>(null);
   const [expandedChain, setExpandedChain] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>(getStoredViewMode);
+  const [viewMode, setViewMode] = useState<ViewMode>(() =>
+    getStoredViewMode(presentation === "parent-list" ? "list" : "grid"),
+  );
   const [sortOpen, setSortOpen] = useState(false);
+  const [localFilter, setLocalFilter] = useState("");
+  const collectionFilter = filter ?? localFilter;
+  const isCollection = presentation === "parent-list";
 
   const toggleViewMode = () => {
     const next = viewMode === "grid" ? "list" : "grid";
+    setViewMode(next);
+    writePreference(VIEW_MODE_KEY, next);
+  };
+
+  const handleCollectionLensChange = (lens: AssetLens) => {
+    const next = lens === "rows" ? "list" : "grid";
     setViewMode(next);
     writePreference(VIEW_MODE_KEY, next);
   };
@@ -96,10 +118,23 @@ export default function MemoryStream({
     if (stabilityFilter) {
       filtered = filtered.filter((m) => (m.stability ?? (m.confirmed ? "confirmed" : "new")) === stabilityFilter);
     }
-    // Recaps live on Home only — Log shows individual memories
+    // This collection shows individual memories; retired recap data stays excluded.
     const regular = filtered.filter((m) => !m.is_recap);
     return sortMemories(regular, sortMode);
   }, [memories, selectedDomain, sortMode, agentFilter, stabilityFilter]);
+
+  const collectionNeedle = isCollection ? collectionFilter.trim().toLocaleLowerCase(i18n.language) : "";
+  const visibleMemories = useMemo(() => {
+    if (!collectionNeedle) return regularMemories;
+    return regularMemories.filter((memory) =>
+      `${memory.title} ${memory.content}`.toLocaleLowerCase(i18n.language).includes(collectionNeedle),
+    );
+  }, [regularMemories, collectionNeedle, i18n.language]);
+
+  const updateCollectionFilter = (next: string) => {
+    if (filter === undefined) setLocalFilter(next);
+    onFilterChange?.(next);
+  };
 
   const confirmMutation = useMutation({
     mutationFn: ({ sourceId, confirmed, prevStability }: { sourceId: string; confirmed: boolean; prevStability?: string }) =>
@@ -185,9 +220,9 @@ export default function MemoryStream({
   );
 
   const hasActiveFilter =
-    !!stabilityFilter || !!agentFilter || !!selectedDomain;
+    !!stabilityFilter || !!agentFilter || !!selectedDomain || !!collectionNeedle;
   const filteredToEmpty =
-    memories.length > 0 && regularMemories.length === 0 && hasActiveFilter;
+    memories.length > 0 && visibleMemories.length === 0 && hasActiveFilter;
 
   // Combined toolbar: sort + view toggle — single row.
   // Always render when there are any memories so users can CLEAR filters that
@@ -200,77 +235,141 @@ export default function MemoryStream({
   // the backend for decay + ranking — they just aren't useful as a user-
   // facing filter. If confirm-queue UX gets real use, reinstate as a proper
   // "nurture / needs review" surface rather than a select dropdown.
-  const toolbar = memories.length > 0 && (
-    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px", position: "relative" }}>
-      {/* Sort dropdown */}
-      {onSortChange && (
-        <>
-          <button
-            onClick={() => setSortOpen(!sortOpen)}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-            style={{ color: sortMode !== "curated" ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer" }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M6 12h12M9 18h6" /></svg>
-            <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "12px" }}>
-              {t(`memoryList.sort.${sortMode}`)}
-            </span>
-          </button>
-          {sortOpen && (
-            <div
-              className="absolute right-0 top-full mt-1 rounded-lg shadow-lg overflow-hidden z-10"
-              style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)", minWidth: 140 }}
-            >
-              {([
-                { value: "curated" as SortMode, label: t("memoryList.sort.curated") },
-                { value: "recent" as SortMode, label: t("memoryList.sort.recent") },
-                { value: "oldest" as SortMode, label: t("memoryList.sort.oldest") },
-              ]).map(({ value, label }) => (
-                <button
-                  key={value}
-                  className="w-full text-left px-3 py-2 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-                  style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: sortMode === value ? "var(--mem-text)" : "var(--mem-text-secondary)" }}
-                  onClick={() => { onSortChange(value); setSortOpen(false); }}
-                >
-                  {sortMode === value && <span className="mr-1.5">&#10003;</span>}
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-        </>
-      )}
-      {/* View toggle */}
-      {presentation !== "parent-list" && (
-        <button
-          onClick={toggleViewMode}
-          className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-          style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
-          title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
+  const toolbar = (memories.length > 0 || isCollection) && (
+    <div
+      className={isCollection ? "collection-toolbar memory-collection-toolbar" : undefined}
+      style={isCollection ? undefined : {
+        display: "flex",
+        justifyContent: "flex-end",
+        alignItems: "center",
+        gap: "8px",
+        position: "relative",
+      }}
+    >
+      {isCollection && (
+        <h2
+          style={{
+            position: "absolute",
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: "hidden",
+            clip: "rect(0, 0, 0, 0)",
+            whiteSpace: "nowrap",
+            border: 0,
+            opacity: 0,
+          }}
         >
-          {viewMode === "grid" ? (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <circle cx="4" cy="6" r="1" fill="currentColor" /><line x1="9" y1="6" x2="21" y2="6" />
-              <circle cx="4" cy="12" r="1" fill="currentColor" /><line x1="9" y1="12" x2="21" y2="12" />
-              <circle cx="4" cy="18" r="1" fill="currentColor" /><line x1="9" y1="18" x2="21" y2="18" />
-            </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
-              <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
-            </svg>
-          )}
-        </button>
+          {t("main.memories")}
+        </h2>
       )}
+      {isCollection && (
+        <label className="collection-search memory-collection-search">
+          <Funnel size={18} aria-hidden="true" />
+          <input
+            className="collection-search-input"
+            type="search"
+            value={collectionFilter}
+            onChange={(event) => updateCollectionFilter(event.target.value)}
+            placeholder={t("memoryList.filterLabel")}
+            aria-label={t("memoryList.filterLabel")}
+          />
+        </label>
+      )}
+      <div className={isCollection ? "collection-toolbar-actions" : "flex items-center gap-2"}>
+        {/* Sort dropdown */}
+        {onSortChange && memories.length > 0 && (
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={() => setSortOpen(!sortOpen)}
+              className={isCollection ? "collection-control" : "flex items-center gap-1.5 px-2 py-1 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"}
+              aria-expanded={sortOpen}
+              style={isCollection ? undefined : {
+                color: sortMode !== "curated" ? "var(--mem-accent-indigo)" : "var(--mem-text-tertiary)",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 6h18M6 12h12M9 18h6" /></svg>
+              <span style={{ fontFamily: "var(--mem-font-body)", fontSize: isCollection ? "14px" : "12px" }}>
+                {t(`memoryList.sort.${sortMode}`)}
+              </span>
+            </button>
+            {sortOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 rounded-lg shadow-lg overflow-hidden z-10"
+                style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)", minWidth: 140 }}
+              >
+                {([
+                  { value: "curated" as SortMode, label: t("memoryList.sort.curated") },
+                  { value: "recent" as SortMode, label: t("memoryList.sort.recent") },
+                  { value: "oldest" as SortMode, label: t("memoryList.sort.oldest") },
+                ]).map(({ value, label }) => (
+                  <button
+                    key={value}
+                    className="w-full text-left px-3 py-2 transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+                    style={{ fontFamily: "var(--mem-font-body)", fontSize: "13px", color: sortMode === value ? "var(--mem-text)" : "var(--mem-text-secondary)" }}
+                    onClick={() => { onSortChange(value); setSortOpen(false); }}
+                  >
+                    {sortMode === value && <span className="mr-1.5">&#10003;</span>}
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+        {toolbarActions}
+        {isCollection && (
+          <AssetLensToggle
+            value={viewMode === "list" ? "rows" : "cards"}
+            onChange={handleCollectionLensChange}
+          />
+        )}
+        {/* View toggle */}
+        {presentation !== "parent-list" && (
+          <button
+            onClick={toggleViewMode}
+            className="p-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
+            style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}
+            title={viewMode === "grid" ? "Switch to list view" : "Switch to grid view"}
+          >
+            {viewMode === "grid" ? (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <circle cx="4" cy="6" r="1" fill="currentColor" /><line x1="9" y1="6" x2="21" y2="6" />
+                <circle cx="4" cy="12" r="1" fill="currentColor" /><line x1="9" y1="12" x2="21" y2="12" />
+                <circle cx="4" cy="18" r="1" fill="currentColor" /><line x1="9" y1="18" x2="21" y2="18" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" />
+                <rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 
   if (presentation === "parent-list") {
+    const renderCollectionMemory = (mem: MemoryItem, i: number) => {
+      const row = renderCard(mem, i);
+      return viewMode === "grid"
+        ? <div className="memory-collection-card" key={mem.source_id}>{row}</div>
+        : row;
+    };
+
     return (
       <MemoryListSurface
         toolbar={toolbar}
-        memories={regularMemories}
+        memories={visibleMemories}
         filteredToEmpty={filteredToEmpty}
-        renderMemory={renderCard}
+        filterActive={!!collectionNeedle}
+        onClearFilter={() => updateCollectionFilter("")}
+        renderMemory={renderCollectionMemory}
         undoPending={undoItem !== null}
         onUndo={handleUndo}
       />

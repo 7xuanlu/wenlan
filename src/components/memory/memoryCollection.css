@@ -1,0 +1,30 @@
+/* The Memories collection uses the same content-first row in either lens. */
+.memory-list-rows:has(> .memory-collection-card) {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  gap: 12px;
+}
+
+.memory-collection-card {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background: var(--mem-detail-surface);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.memory-collection-card:hover,
+.memory-collection-card:focus-within {
+  border-color: color-mix(in srgb, var(--mem-accent-page) 30%, var(--mem-border));
+  background: var(--mem-detail-surface-raised);
+}
+
+.memory-collection-card .memory-list-row.memory-list-reading-row {
+  height: 100%;
+}
+
+@media (max-width: 639px) {
+  .memory-list-rows:has(> .memory-collection-card) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

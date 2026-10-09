@@ -38,6 +38,37 @@
   padding: 12px 8px;
 }
 
+.space-dossier-page-list[data-lens="cards"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+
+.space-dossier-page-list[data-lens="cards"] > button {
+  align-items: start;
+  min-height: 112px;
+  padding: 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background: var(--mem-surface);
+}
+
+.space-dossier-page-list[data-lens="cards"] > button:hover {
+  background: var(--mem-hover);
+}
+
+.space-dossier-page-list[data-lens="cards"] .space-dossier-page-text {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.space-dossier-page-summary {
+  color: var(--mem-text-secondary);
+  font: 13px/1.5 var(--mem-font-body);
+  overflow-wrap: anywhere;
+}
+
 .space-dossier-page-list > button:hover,
 .space-dossier-review-list > button:hover {
   background: var(--mem-hover);
@@ -213,10 +244,23 @@
   }
 }
 
+.space-project-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 12px;
+}
+
+.space-project-controls > .asset-lens-toggle {
+  flex: 0 0 auto;
+}
+
 .space-project-tabs {
   display: flex;
   gap: 24px;
-  margin: 20px 0 12px;
+  min-width: 0;
+  margin: 0;
 }
 .space-project-tabs > button {
   border: 0;
@@ -234,8 +278,31 @@
 }
 .space-project-sources { margin: 0; padding: 0; list-style: none; }
 
+.space-project-sources[data-lens="cards"] {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+  gap: 12px;
+}
+
 .space-project-sources li { border: 0; }
 .space-project-sources .source-library-icon { flex-basis: 22px; height: 24px; background: none; border: 0; }
 .space-project-sources .source-library-row { align-items: flex-start; min-height: 64px; padding: 12px 8px; gap: 12px; }
 .space-project-sources .source-library-row-title { font: 500 17px/1.4 var(--mem-font-heading); }
 .space-project-sources .source-library-row-meta { font: 14px/1.5 var(--mem-font-body); }
+
+.space-project-sources[data-lens="cards"] li { min-width: 0; }
+.space-project-sources[data-lens="cards"] .source-library-row {
+  align-items: flex-start;
+  min-height: 112px;
+  height: 100%;
+  padding: 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background: var(--mem-surface);
+}
+.space-project-sources[data-lens="cards"] .source-library-row:hover { background: var(--mem-hover); }
+
+@media (max-width: 480px) {
+  .space-project-controls { gap: 8px; }
+  .space-project-tabs { gap: 14px; }
+}

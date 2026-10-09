@@ -92,11 +92,9 @@ describe("SpacesOverview management", () => {
     fireEvent.pointerDown(inventorySection);
     expect(suggestedSection).not.toHaveAttribute("open");
     expect(within(inventorySection).queryByRole("heading", { name: labels.confirmedHeading })).not.toBeInTheDocument();
-    expect(within(inventorySection).getByLabelText(labels.filterLabel)).toBeInTheDocument();
-    expect(within(inventorySection).getByRole("columnheader", { name: labels.pages })).toBeInTheDocument();
-    expect(within(inventorySection).queryByRole("columnheader", { name: labels.memories })).not.toBeInTheDocument();
-    expect(within(inventorySection).queryByRole("columnheader", { name: labels.updated })).not.toBeInTheDocument();
-    expect(within(workRow).getByTestId("space-pages")).toHaveTextContent("2");
+    expect(within(document.querySelector(".spaces-overview-header") as HTMLElement).getByLabelText(labels.filterLabel)).toBeInTheDocument();
+    expect(within(inventorySection).queryByRole("columnheader")).not.toBeInTheDocument();
+    expect(within(workRow).getByTestId("space-pages")).toHaveTextContent(/2 notes?/i);
     expect(within(workRow).queryByTestId("space-memories")).not.toBeInTheDocument();
     expect(within(workRow).queryByTestId("space-updated")).not.toBeInTheDocument();
   });
@@ -111,15 +109,12 @@ describe("SpacesOverview management", () => {
     expect(screen.queryByText(labels.noSuggestions)).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["en", "Pages", "Memories", "Updated"],
-    ["zh-Hans", "页面", "记忆", "更新"],
-    ["zh-Hant", "頁面", "記憶", "更新"],
-  ] as const)(
-    "renders localized desktop and mobile metadata labels in %s",
-    async (locale, pagesLabel, memoriesLabel, updatedLabel) => {
+  it.each(["en", "zh-Hans", "zh-Hant"] as const)(
+    "renders localized self-labelled desktop and mobile counts in %s",
+    async (locale) => {
       // Given one confirmed space and labels built from the selected locale
       api.listSpaces.mockResolvedValue([work]);
+      await i18n.changeLanguage(locale);
       const localizedLabels = createSpacesOverviewLabels(i18n.getFixedT(locale));
 
       // When the overview renders both responsive metadata structures
@@ -129,11 +124,11 @@ describe("SpacesOverview management", () => {
       });
       const row = screen.getByTestId("space-row-work");
 
-      // Then desktop column headers and mobile definition labels are localized
-      expect(within(inventory).getByRole("columnheader", { name: pagesLabel })).toBeInTheDocument();
-      expect(within(inventory).queryByRole("columnheader", { name: memoriesLabel })).not.toBeInTheDocument();
-      expect(within(inventory).queryByRole("columnheader", { name: updatedLabel })).not.toBeInTheDocument();
-      expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(pagesLabel);
+      // Then both responsive counts use the localized note count and no table header remains
+      const count = i18n.getFixedT(locale)("spaces.overview.card.pages", { count: 0 });
+      expect(within(inventory).queryByRole("columnheader")).not.toBeInTheDocument();
+      expect(within(row).getByTestId("space-pages")).toHaveTextContent(count);
+      expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(count);
       expect(within(row).queryByTestId("space-mobile-memories")).not.toBeInTheDocument();
       expect(within(row).queryByTestId("space-mobile-updated")).not.toBeInTheDocument();
     },
@@ -204,13 +199,20 @@ describe("SpacesOverview management", () => {
     fireEvent.click(screen.getByRole("button", { name: labels.actionsFor("Personal") }));
     fireEvent.click(screen.getByRole("menuitem", { name: labels.moveUp }));
     await waitFor(() => expect(api.reorderSpace).toHaveBeenCalledWith("Personal", 0));
+    await waitFor(() => expect(screen.getByRole("button", { name: labels.actionsFor("Personal") })).toBeEnabled());
 
     // When dragging Work onto Personal
     const workRow = screen.getByTestId("space-row-work");
     const personalRow = screen.getByTestId("space-row-personal");
-    fireEvent.pointerDown(within(workRow).getByRole("button", { name: labels.dragSpace("Work") }));
-    fireEvent.pointerEnter(personalRow);
-    fireEvent.pointerUp(personalRow);
+    const workWrap = workRow.parentElement!;
+    const personalWrap = personalRow.parentElement!;
+    const rowRect = (top: number) => ({ x: 0, y: top, top, left: 0, right: 400, bottom: top + 64, width: 400, height: 64, toJSON: () => ({}) }) as DOMRect;
+    vi.spyOn(workWrap, "getBoundingClientRect").mockReturnValue(rowRect(0));
+    vi.spyOn(personalWrap, "getBoundingClientRect").mockReturnValue(rowRect(70));
+    vi.spyOn(workWrap.parentElement!, "getBoundingClientRect").mockReturnValue({ ...rowRect(0), bottom: 134, height: 134 });
+    fireEvent.pointerDown(within(workRow).getByRole("button", { name: labels.dragSpace("Work") }), { pointerId: 22, pointerType: "mouse", button: 0, isPrimary: true, clientY: 20 });
+    fireEvent.pointerMove(window, { pointerId: 22, clientX: 10, clientY: 30 });
+    fireEvent.pointerUp(window, { pointerId: 22, clientX: 10, clientY: 100 });
 
     // Then the same API path receives the target order, while group boundary moves stay disabled
     await waitFor(() => expect(api.reorderSpace).toHaveBeenLastCalledWith("Work", 1));

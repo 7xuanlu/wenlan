@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Page } from "../../../lib/tauri";
+import type { AssetLens } from "../../../lib/assetLens";
 import type { SpaceDetailCopy } from "./copy";
 import {
   PAGE_DISPLAY_STEP,
@@ -18,6 +19,7 @@ type SpaceDossierContentProps = {
   readonly copy: SpaceDetailCopy;
   readonly navigation: SpaceDossierNavigation;
   readonly pages: readonly Page[];
+  readonly lens: AssetLens;
 };
 
 function PageIcon() {
@@ -28,7 +30,7 @@ function PageIcon() {
   );
 }
 
-export function SpaceDossierContent({ copy, navigation, pages }: SpaceDossierContentProps) {
+export function SpaceDossierContent({ copy, navigation, pages, lens }: SpaceDossierContentProps) {
   const { t, i18n } = useTranslation();
   const [visiblePageCount, setVisiblePageCount] = useState(PAGE_DISPLAY_STEP);
   const sortedPages = useMemo(() => sortedSpacePages(pages), [pages]);
@@ -40,7 +42,7 @@ export function SpaceDossierContent({ copy, navigation, pages }: SpaceDossierCon
         {sortedPages.length === 0 ? (
           <p className="space-dossier-empty">{copy.noPages}</p>
         ) : (
-          <div className="space-dossier-page-list">
+          <div className="space-dossier-page-list" data-lens={lens}>
             {visiblePages.map((page) => (
               <button key={page.id} onClick={() => navigation.onSelectPage(page.id)} type="button">
                 <PageIcon />

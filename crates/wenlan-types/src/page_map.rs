@@ -68,6 +68,10 @@ pub struct PageMapResponse {
     pub viewport: Option<PageMapViewport>,
     pub nodes: Vec<PageMapNode>,
     pub edges: Vec<PageMapEdge>,
+    /// Server capability: clients may create map-owned ideas independently
+    /// of backing notes. Defaults off for older serialized responses.
+    #[serde(default)]
+    pub independent_ideas: bool,
 }
 
 /// `POST /api/pages/{id}/map/nodes`. `ref_kind`/`ref_id` are `Option` on the
@@ -261,8 +265,18 @@ mod tests {
             viewport: None,
             nodes: vec![],
             edges: vec![],
+            independent_ideas: false,
         };
         let json = serde_json::to_string(&response).unwrap();
         assert!(!json.contains("viewport"));
+    }
+
+    #[test]
+    fn page_map_response_defaults_independent_ideas_off_when_reading_older_payloads() {
+        let response: PageMapResponse = serde_json::from_str(
+            r#"{"page_id":"p1","revision":0,"map_schema":1,"nodes":[],"edges":[]}"#,
+        )
+        .unwrap();
+        assert!(!response.independent_ideas);
     }
 }

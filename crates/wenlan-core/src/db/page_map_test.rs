@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use super::super::tests::test_db;
+use super::super::tests::{test_db, test_db_at};
 use super::{CreateEdgeOutcome, CreateNodeOutcome, EdgePatch, MemoryDB, NodeLayout, NodePatch};
 
 async fn seed_page(db: &MemoryDB, page_id: &str) {
@@ -306,6 +306,721 @@ async fn root_invariants_reject_dismiss_delete_and_reparent() {
         .await
         .unwrap_err();
     assert!(matches!(err, crate::WenlanError::Validation(_)));
+}
+
+async fn page_content_and_version(db: &MemoryDB, page_id: &str) -> (String, i64) {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT content, version FROM pages WHERE id = ?1",
+            libsql::params![page_id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect("seeded page");
+    (row.get(0).unwrap(), row.get(1).unwrap())
+}
+
+async fn pragma_names(db: &MemoryDB, pragma: &str, column: i32) -> Vec<String> {
+    let conn = db.conn.lock().await;
+    let mut rows = conn.query(pragma, ()).await.unwrap();
+    let mut values = Vec::new();
+    while let Some(row) = rows.next().await.unwrap() {
+        values.push(row.get::<String>(column).unwrap());
+    }
+    values.sort();
+    values
+}
+
+async fn db_user_version(db: &MemoryDB) -> i64 {
+    let conn = db.conn.lock().await;
+    let mut rows = conn.query("PRAGMA user_version", ()).await.unwrap();
+    rows.next()
+        .await
+        .unwrap()
+        .expect("user_version row")
+        .get(0)
+        .unwrap()
+}
+
+async fn db_foreign_keys_enabled(db: &MemoryDB) -> bool {
+    let conn = db.conn.lock().await;
+    let mut rows = conn.query("PRAGMA foreign_keys", ()).await.unwrap();
+    rows.next()
+        .await
+        .unwrap()
+        .expect("foreign_keys row")
+        .get::<i64>(0)
+        .unwrap()
+        != 0
+}
+
+async fn page_history_has_title(db: &MemoryDB) -> bool {
+    pragma_names(db, "PRAGMA table_info('page_history')", 1)
+        .await
+        .iter()
+        .any(|column| column == "title")
+}
+
+async fn page_history_title(db: &MemoryDB, page_id: &str, version: i64) -> Option<String> {
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT title FROM page_history WHERE page_id=?1 AND version=?2",
+            libsql::params![page_id, version],
+        )
+        .await
+        .unwrap();
+    rows.next()
+        .await
+        .unwrap()
+        .expect("history row")
+        .get::<Option<String>>(0)
+        .unwrap()
+}
+
+async fn insert_history_without_title(
+    db: &MemoryDB,
+    page_id: &str,
+    version: i64,
+    content: &str,
+    source_memory_ids: &str,
+) {
+    let conn = db.conn.lock().await;
+    conn.execute(
+        "INSERT INTO page_history
+             (page_id,version,content,source_memory_ids,edited_by,created_at)
+         VALUES (?1,?2,?3,?4,'migration_134_fixture',1)",
+        libsql::params![page_id, version, content, source_memory_ids],
+    )
+    .await
+    .unwrap();
+}
+
+/// Build the private schema-133 map shape that shipped with the idea CHECK,
+/// including one idea node. That lineage had no `page_history.title` column.
+async fn install_private_133_page_map_ideas(db: &MemoryDB, page_id: &str, parent_id: &str) {
+    let conn = db.conn.lock().await;
+    conn.execute("PRAGMA foreign_keys = OFF", ()).await.unwrap();
+    conn.execute_batch(
+        "BEGIN IMMEDIATE;
+        CREATE TABLE page_map_nodes__fixture (
+            id TEXT PRIMARY KEY,
+            page_id TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+            parent_id TEXT REFERENCES page_map_nodes__fixture(id),
+            rank REAL NOT NULL DEFAULT 0,
+            ref_kind TEXT NOT NULL CHECK (ref_kind IN ('memory','entity','page','section','idea')),
+            ref_id TEXT NOT NULL,
+            label TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('suggested','active','dismissed')),
+            pinned INTEGER NOT NULL DEFAULT 0,
+            placed INTEGER NOT NULL DEFAULT 0,
+            collapsed INTEGER NOT NULL DEFAULT 0,
+            x REAL, y REAL, width REAL, height REAL,
+            fingerprint TEXT NOT NULL,
+            provenance TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now')),
+            CHECK (ref_kind <> 'idea' OR (label IS NOT NULL AND length(trim(label)) > 0))
+        );
+        INSERT INTO page_map_nodes__fixture SELECT * FROM page_map_nodes;
+        CREATE TABLE page_map_edges__fixture (
+            id TEXT PRIMARY KEY,
+            page_id TEXT NOT NULL REFERENCES page_maps(page_id) ON DELETE CASCADE,
+            from_node TEXT NOT NULL REFERENCES page_map_nodes__fixture(id) ON DELETE CASCADE,
+            to_node TEXT NOT NULL REFERENCES page_map_nodes__fixture(id) ON DELETE CASCADE,
+            kind TEXT NOT NULL DEFAULT 'link' CHECK (kind IN ('link','suggested')),
+            label TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('suggested','active','dismissed')),
+            provenance TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            CHECK (from_node <> to_node),
+            UNIQUE (page_id, from_node, to_node, kind)
+        );
+        INSERT INTO page_map_edges__fixture SELECT * FROM page_map_edges;
+        DROP TABLE page_map_edges;
+        DROP TABLE page_map_nodes;
+        ALTER TABLE page_map_nodes__fixture RENAME TO page_map_nodes;
+        ALTER TABLE page_map_edges__fixture RENAME TO page_map_edges;
+        CREATE UNIQUE INDEX idx_pmn_fp ON page_map_nodes(page_id, fingerprint);
+        CREATE INDEX idx_pmn_page ON page_map_nodes(page_id, status);
+        PRAGMA user_version = 133;
+        COMMIT;",
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "INSERT INTO page_map_nodes (
+             id,page_id,parent_id,rank,ref_kind,ref_id,label,status,pinned,placed,
+             collapsed,x,y,width,height,fingerprint,provenance,created_at,updated_at
+         ) VALUES ('private-idea',?1,?2,9,'idea',
+                   '2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2','Private idea','dismissed',
+                   1,1,1,12,13,140,50,'idea-fingerprint','private-provenance','c','u')",
+        libsql::params![page_id, parent_id],
+    )
+    .await
+    .unwrap();
+    conn.execute("PRAGMA foreign_keys = ON", ()).await.unwrap();
+}
+
+#[tokio::test]
+async fn independent_idea_lifecycle_never_changes_page_content_or_version() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-idea").await;
+    let (map, _) = db.init_page_map("page-idea").await.unwrap();
+    let root = root_id(&map.nodes);
+    let before = page_content_and_version(&db, "page-idea").await;
+    let idea_id = uuid::Uuid::new_v4().to_string();
+
+    let created = match db
+        .create_map_node(
+            "page-idea",
+            map.map.revision,
+            &root,
+            "idea",
+            &idea_id,
+            Some("First idea"),
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    assert_eq!(created.ref_kind, "idea");
+    assert_eq!(created.label.as_deref(), Some("First idea"));
+    let after_create = db.get_page_map("page-idea", true).await.unwrap().unwrap();
+    assert_eq!(after_create.map.map_schema, 2);
+    assert_eq!(page_content_and_version(&db, "page-idea").await, before);
+
+    let renamed = db
+        .patch_map_node(
+            "page-idea",
+            after_create.map.revision,
+            &created.id,
+            NodePatch {
+                label: Some(Some("Renamed idea".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(renamed.label.as_deref(), Some("Renamed idea"));
+    let after_rename = db.get_page_map("page-idea", true).await.unwrap().unwrap();
+    assert_eq!(page_content_and_version(&db, "page-idea").await, before);
+
+    let empty_rename = db
+        .patch_map_node(
+            "page-idea",
+            after_rename.map.revision,
+            &created.id,
+            NodePatch {
+                label: Some(Some("  ".to_string())),
+                ..Default::default()
+            },
+        )
+        .await;
+    assert!(matches!(
+        empty_rename,
+        Err(crate::WenlanError::Validation(_))
+    ));
+
+    let deleted = db
+        .delete_map_node("page-idea", after_rename.map.revision, &created.id)
+        .await
+        .unwrap();
+    assert_eq!(deleted.status, "dismissed");
+    assert_eq!(page_content_and_version(&db, "page-idea").await, before);
+    let deleted_map = db.get_page_map("page-idea", true).await.unwrap().unwrap();
+    assert_eq!(
+        db.create_map_node(
+            "page-idea",
+            deleted_map.map.revision,
+            &root,
+            "idea",
+            &idea_id,
+            Some("First idea"),
+            1.0,
+        )
+        .await
+        .unwrap(),
+        CreateNodeOutcome::Tombstoned
+    );
+    assert_eq!(page_content_and_version(&db, "page-idea").await, before);
+}
+
+#[tokio::test]
+async fn independent_idea_rejects_invalid_input_and_stale_cas() {
+    let (db, _tmp) = test_db().await;
+    seed_page(&db, "page-idea-invalid").await;
+    let (map, _) = db.init_page_map("page-idea-invalid").await.unwrap();
+    let root = root_id(&map.nodes);
+
+    for (ref_kind, ref_id, label) in [
+        ("unknown", "not-a-uuid", Some("label")),
+        ("idea", "not-a-uuid", Some("label")),
+        ("idea", "2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2", None),
+        ("idea", "2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2", Some("   ")),
+    ] {
+        let result = db
+            .create_map_node(
+                "page-idea-invalid",
+                map.map.revision,
+                &root,
+                ref_kind,
+                ref_id,
+                label,
+                0.0,
+            )
+            .await;
+        assert!(matches!(result, Err(crate::WenlanError::Validation(_))));
+    }
+
+    let stale = db
+        .create_map_node(
+            "page-idea-invalid",
+            map.map.revision - 1,
+            &root,
+            "idea",
+            "2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2",
+            Some("valid"),
+            0.0,
+        )
+        .await;
+    assert!(matches!(stale, Err(crate::WenlanError::Conflict(_))));
+    let unchanged = db
+        .get_page_map("page-idea-invalid", true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.map.map_schema, 1);
+    assert_eq!(unchanged.map.revision, map.map.revision);
+    assert_eq!(unchanged.nodes.len(), 1);
+}
+
+#[tokio::test]
+async fn migration_134_public_133_backfills_only_exact_snapshot_and_reopens_idempotently() {
+    let (db, dir) = test_db_at(133).await;
+    assert!(page_history_has_title(&db).await);
+    seed_page(&db, "public-133-history").await;
+    let (map, _) = db.init_page_map("public-133-history").await.unwrap();
+    let root = root_id(&map.nodes);
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET title='Current title', version=3, content='current body',
+                 source_memory_ids='[\"current-source\"]' WHERE id='public-133-history'",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO page_history
+                 (page_id,version,content,source_memory_ids,title,edited_by,created_at)
+             VALUES ('public-133-history',1,'old body','[\"old-source\"]',
+                     'Known historic title','fixture',1)",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    insert_history_without_title(
+        &db,
+        "public-133-history",
+        2,
+        "older body",
+        "[\"older-source\"]",
+    )
+    .await;
+    insert_history_without_title(
+        &db,
+        "public-133-history",
+        3,
+        "current body",
+        "[\"current-source\"]",
+    )
+    .await;
+
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&db).await, 134);
+    assert!(matches!(
+        db.create_map_node(
+            "public-133-history",
+            map.map.revision,
+            &root,
+            "idea",
+            "2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2",
+            Some("Public idea"),
+            0.0,
+        )
+        .await
+        .unwrap(),
+        CreateNodeOutcome::Created(_)
+    ));
+    assert_eq!(
+        page_history_title(&db, "public-133-history", 1)
+            .await
+            .as_deref(),
+        Some("Known historic title")
+    );
+    assert_eq!(
+        page_history_title(&db, "public-133-history", 2).await,
+        None,
+        "older history titles must not be inferred from the live page"
+    );
+    assert_eq!(
+        page_history_title(&db, "public-133-history", 3)
+            .await
+            .as_deref(),
+        Some("Current title")
+    );
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&db).await, 134);
+
+    drop(db);
+    let reopened = MemoryDB::open_for_repair(dir.path()).await.unwrap();
+    reopened.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&reopened).await, 134);
+    assert_eq!(
+        page_history_title(&reopened, "public-133-history", 3)
+            .await
+            .as_deref(),
+        Some("Current title")
+    );
+}
+
+#[tokio::test]
+async fn migration_134_private_133_adds_history_title_and_preserves_idea_rows() {
+    let (db, _tmp) = test_db_at(132).await;
+    seed_page(&db, "private-133-history").await;
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET title='Private current title', version=3, content='current body',
+                 source_memory_ids='[\"current-source\"]' WHERE id='private-133-history'",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    insert_history_without_title(
+        &db,
+        "private-133-history",
+        1,
+        "old body",
+        "[\"old-source\"]",
+    )
+    .await;
+    insert_history_without_title(
+        &db,
+        "private-133-history",
+        3,
+        "current body",
+        "[\"current-source\"]",
+    )
+    .await;
+    let (map, _) = db.init_page_map("private-133-history").await.unwrap();
+    let root = root_id(&map.nodes);
+    install_private_133_page_map_ideas(&db, "private-133-history", &root).await;
+    assert_eq!(db_user_version(&db).await, 133);
+    assert!(!page_history_has_title(&db).await);
+
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&db).await, 134);
+    assert!(page_history_has_title(&db).await);
+    assert_eq!(
+        page_history_title(&db, "private-133-history", 1).await,
+        None,
+        "the missing historical title must remain unknown"
+    );
+    assert_eq!(
+        page_history_title(&db, "private-133-history", 3)
+            .await
+            .as_deref(),
+        Some("Private current title")
+    );
+    {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT ref_kind,ref_id,label,status,pinned,placed,collapsed,x,y,width,height,provenance
+                   FROM page_map_nodes WHERE id='private-idea'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("private idea row");
+        assert_eq!(row.get::<String>(0).unwrap(), "idea");
+        assert_eq!(
+            row.get::<String>(1).unwrap(),
+            "2a1d7bb6-4d1f-4e63-9c0a-a6d7fda5f8b2"
+        );
+        assert_eq!(row.get::<String>(2).unwrap(), "Private idea");
+        assert_eq!(row.get::<String>(3).unwrap(), "dismissed");
+        assert_eq!(row.get::<i64>(4).unwrap(), 1);
+        assert_eq!(row.get::<i64>(5).unwrap(), 1);
+        assert_eq!(row.get::<i64>(6).unwrap(), 1);
+        assert_eq!(row.get::<f64>(7).unwrap(), 12.0);
+        assert_eq!(row.get::<f64>(8).unwrap(), 13.0);
+        assert_eq!(row.get::<f64>(9).unwrap(), 140.0);
+        assert_eq!(row.get::<f64>(10).unwrap(), 50.0);
+        assert_eq!(row.get::<String>(11).unwrap(), "private-provenance");
+    }
+    assert!(db_foreign_keys_enabled(&db).await);
+    assert!(
+        pragma_names(&db, "PRAGMA foreign_key_check(page_map_nodes)", 0)
+            .await
+            .is_empty()
+    );
+    assert!(
+        pragma_names(&db, "PRAGMA foreign_key_check(page_map_edges)", 0)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn migration_134_from_132_preserves_rows_edges_layout_fks_indexes_and_rolls_back() {
+    let (db, _tmp) = test_db_at(132).await;
+    seed_page(&db, "page-map-migration").await;
+    let (map, _) = db.init_page_map("page-map-migration").await.unwrap();
+    let root = root_id(&map.nodes);
+    let a = match db
+        .create_map_node(
+            "page-map-migration",
+            map.map.revision,
+            &root,
+            "memory",
+            "m-a",
+            None,
+            0.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let b = match db
+        .create_map_node(
+            "page-map-migration",
+            revision,
+            &root,
+            "entity",
+            "e-b",
+            None,
+            1.0,
+        )
+        .await
+        .unwrap()
+    {
+        CreateNodeOutcome::Created(node) => node,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let edge_a = match db
+        .create_map_edge(
+            "page-map-migration",
+            revision,
+            &root,
+            &a.id,
+            "link",
+            Some("active"),
+        )
+        .await
+        .unwrap()
+    {
+        CreateEdgeOutcome::Created(edge) => edge,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    let edge_b = match db
+        .create_map_edge(
+            "page-map-migration",
+            revision,
+            &root,
+            &b.id,
+            "link",
+            Some("dismissed"),
+        )
+        .await
+        .unwrap()
+    {
+        CreateEdgeOutcome::Created(edge) => edge,
+        other => panic!("expected Created, got {other:?}"),
+    };
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_edge("page-map-migration", revision, &edge_b.id)
+        .await
+        .unwrap();
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.delete_map_node("page-map-migration", revision, &b.id)
+        .await
+        .unwrap();
+    let revision = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap()
+        .map
+        .revision;
+    db.put_page_map_layout(
+        "page-map-migration",
+        revision,
+        Some(r#"{"x":12.0,"y":34.0,"zoom":1.5}"#),
+        &[
+            NodeLayout {
+                node_id: root.clone(),
+                x: 10.0,
+                y: 20.0,
+                width: 200.0,
+                height: 80.0,
+                collapsed: false,
+            },
+            NodeLayout {
+                node_id: a.id.clone(),
+                x: 50.0,
+                y: 60.0,
+                width: 120.0,
+                height: 48.0,
+                collapsed: true,
+            },
+            NodeLayout {
+                node_id: b.id.clone(),
+                x: 90.0,
+                y: 100.0,
+                width: 110.0,
+                height: 44.0,
+                collapsed: false,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    let before = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(before
+        .edges
+        .iter()
+        .any(|edge| edge.id == edge_a.id && edge.status == "active"));
+    assert!(before
+        .edges
+        .iter()
+        .any(|edge| edge.id == edge_b.id && edge.status == "dismissed"));
+
+    let node_indexes_before = pragma_names(&db, "PRAGMA index_list('page_map_nodes')", 1).await;
+    let edge_indexes_before = pragma_names(&db, "PRAGMA index_list('page_map_edges')", 1).await;
+    let node_fks_before = pragma_names(&db, "PRAGMA foreign_key_list('page_map_nodes')", 2).await;
+    let edge_fks_before = pragma_names(&db, "PRAGMA foreign_key_list('page_map_edges')", 2).await;
+
+    // Force failure after the staged node table has copied all rows.
+    // Transactional DDL must leave the original map intact and restore FK mode.
+    {
+        let conn = db.conn.lock().await;
+        conn.execute("CREATE TABLE page_map_edges__m134 (marker TEXT)", ())
+            .await
+            .unwrap();
+    }
+    assert!(db.migrate_134_page_map_ideas().await.is_err());
+    assert_eq!(db_user_version(&db).await, 132);
+    assert!(!page_history_has_title(&db).await);
+    assert!(db_foreign_keys_enabled(&db).await);
+    assert_eq!(
+        db.get_page_map("page-map-migration", true)
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
+    {
+        let conn = db.conn.lock().await;
+        conn.execute("DROP TABLE page_map_edges__m134", ())
+            .await
+            .unwrap();
+    }
+
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&db).await, 134);
+    assert!(db_foreign_keys_enabled(&db).await);
+    let after = db
+        .get_page_map("page-map-migration", true)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        after.map.map_schema, 1,
+        "migration alone must not opt maps in"
+    );
+    assert_eq!(
+        pragma_names(&db, "PRAGMA index_list('page_map_nodes')", 1).await,
+        node_indexes_before
+    );
+    assert_eq!(
+        pragma_names(&db, "PRAGMA index_list('page_map_edges')", 1).await,
+        edge_indexes_before
+    );
+    assert_eq!(
+        pragma_names(&db, "PRAGMA foreign_key_list('page_map_nodes')", 2).await,
+        node_fks_before
+    );
+    assert_eq!(
+        pragma_names(&db, "PRAGMA foreign_key_list('page_map_edges')", 2).await,
+        edge_fks_before
+    );
+    assert!(
+        pragma_names(&db, "PRAGMA foreign_key_check(page_map_nodes)", 0)
+            .await
+            .is_empty()
+    );
+    assert!(
+        pragma_names(&db, "PRAGMA foreign_key_check(page_map_edges)", 0)
+            .await
+            .is_empty()
+    );
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(
+        db.get_page_map("page-map-migration", true)
+            .await
+            .unwrap()
+            .unwrap(),
+        before
+    );
 }
 
 #[tokio::test]

@@ -13,18 +13,41 @@
 }
 
 .spaces-overview-header {
-  padding-bottom: 28px;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 0;
   border-bottom: 0;
 }
 
-.spaces-overview h1 {
-  font-size: var(--mem-destination-title-size);
-  letter-spacing: -0.03em;
-  line-height: 1.12;
+.spaces-overview-header .spaces-filter {
+  flex: 0 1 240px;
+  min-width: 0;
+  max-width: 240px;
+  margin: 0;
+}
+
+.spaces-overview .spaces-filter.collection-search {
+  display: flex;
+}
+
+.spaces-overview .spaces-filter input.collection-search-input {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--mem-text);
+  font: 400 14px/1.3 var(--mem-font-body);
+  height: auto;
+  outline: none;
+  padding: 0;
 }
 
 .spaces-overview-header .spaces-new-action {
-  align-self: flex-start;
+  flex: none;
+}
+
+.spaces-overview .spaces-confirmed-section {
+  padding-top: 0;
 }
 
 .spaces-suggestion-action {
@@ -46,20 +69,6 @@
   padding-right: 4px;
 }
 
-.spaces-inventory-header {
-  display: flex;
-  align-items: end;
-  justify-content: flex-start;
-  gap: 24px;
-  margin-bottom: 16px;
-}
-
-.spaces-inventory-header .spaces-filter {
-  width: min(340px, 100%);
-  margin: 0;
-}
-
-.spaces-table-head,
 .spaces-overview .spaces-row:not(.spaces-row-suggested):not(.spaces-row-edit) {
   display: grid;
   grid-template-columns: var(--spaces-desktop-columns);
@@ -85,27 +94,48 @@
   border-top: 0;
 }
 
-.spaces-table-head {
-  border-bottom: 0;
-  min-height: 38px;
-  color: var(--mem-text-tertiary);
-  font-family: var(--mem-font-mono);
-  font-size: var(--mem-text-meta);
-  text-transform: uppercase;
-}
-
-.spaces-table-head [data-space-column="name"] {
-  padding-inline: 8px;
-}
-
-.spaces-table-head [data-space-column="pages"],
-.spaces-table-head [data-space-column="memories"],
-.spaces-table-head [data-space-column="updated"] {
-  text-align: right;
-}
-
 .spaces-overview .spaces-row:not(.spaces-row-suggested) .spaces-row-main {
   padding-inline: 8px;
+}
+
+.spaces-row-wrap {
+  position: relative;
+  transition: transform 180ms cubic-bezier(.2, .75, .25, 1);
+}
+
+.spaces-row-wrap.is-dragging {
+  z-index: 2;
+  transition: none;
+}
+
+.spaces-row-wrap.is-settling {
+  z-index: 2;
+  transition-duration: 120ms;
+}
+
+.spaces-row-wrap .spaces-row {
+  border-radius: 8px;
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+.spaces-row-wrap:hover .spaces-row {
+  background: var(--mem-hover);
+}
+
+.spaces-row-wrap.is-dragging .spaces-row {
+  background: var(--mem-surface);
+  transition: box-shadow 140ms ease;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+}
+
+.spaces-row-wrap.is-settling .spaces-row {
+  background: var(--mem-surface);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 10%);
+}
+
+.spaces-row-pages,
+.spaces-mobile-metadata span {
+  white-space: nowrap;
 }
 
 .spaces-row-name {
@@ -129,18 +159,13 @@
 }
 
 @media (max-width: 699px) {
-  .spaces-inventory-header {
-    align-items: stretch;
-    flex-direction: column;
+  .spaces-overview-header .spaces-filter {
+    flex-basis: 100%;
+    max-width: none;
   }
 
-  .spaces-inventory-header .asset-lens-toggle {
-    align-self: flex-start;
-    margin-left: 0;
-  }
-
-  .spaces-table-head {
-    display: none;
+  .spaces-header-actions {
+    margin-left: auto;
   }
 
   .spaces-overview .spaces-rows {
@@ -198,17 +223,17 @@
     gap: 16px;
   }
 
-  .spaces-mobile-metadata dt,
-  .spaces-mobile-metadata dd {
-    margin: 0;
-  }
-
-  .spaces-mobile-metadata dt {
+  .spaces-mobile-metadata span {
     color: var(--mem-text-tertiary);
-  }
-
-  .spaces-mobile-metadata dd {
     font-family: var(--mem-font-mono);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spaces-row-wrap,
+  .spaces-row-wrap .spaces-row,
+  .spaces-row-wrap.is-settling {
+    transition: none;
   }
 }
 
@@ -255,44 +280,35 @@
     padding-inline: 8px;
   }
 
-  .spaces-confirmed-section {
-    padding-top: 18px;
-  }
-
-  .spaces-inventory-header {
-    gap: 12px;
-    margin-bottom: 12px;
-  }
 }
 
 /* A bounded review popover stays beside the inventory actions at any list size. */
 .spaces-overview-header {
-  position: sticky;
-  top: 0;
-  z-index: 12;
-  background: var(--mem-bg);
-  /* Cover the scroll container's top padding as rows pass beneath the header. */
-  box-shadow: 0 -32px 0 var(--mem-bg);
+  position: relative;
 }
 
 .spaces-header-actions {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .spaces-suggestions {
-  position: relative;
+  position: static;
 }
 
 .spaces-suggestions > summary {
+  align-items: center;
   cursor: pointer;
+  display: flex;
   list-style: none;
-  border: 1px solid var(--mem-control-border);
-  border-radius: 6px;
-  padding: 8px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 8px;
+  min-height: 36px;
+  padding: 0 12px;
   color: var(--mem-text-secondary);
-  font: 500 13px/1.3 var(--mem-font-body);
+  font: 500 14px/1.3 var(--mem-font-body);
   white-space: nowrap;
 }
 
@@ -317,9 +333,10 @@
 
 .spaces-suggestions > .spaces-rows {
   position: absolute;
+  z-index: 20;
   top: calc(100% + 10px);
   right: 0;
-  width: min(480px, calc(100vw - 48px));
+  width: min(480px, 100%);
   max-height: min(420px, 60vh);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -328,10 +345,6 @@
   border-radius: 10px;
   background: var(--mem-surface);
   box-shadow: var(--mem-shadow-toast);
-}
-
-.spaces-inventory-header .asset-lens-toggle {
-  margin-left: auto;
 }
 
 .space-card-head {
@@ -348,6 +361,27 @@
 
 .space-card-head .spaces-menu-anchor {
   margin-left: auto;
+}
+
+/* An open menu must sit above adjacent cards, including the next mobile row. */
+.asset-card--open-area-card:has(.spaces-menu-trigger[aria-expanded="true"]) {
+  z-index: 1;
+}
+
+.asset-card--open-area-card .spaces-menu-anchor,
+.asset-card--open-area-card .spaces-delete-confirmation {
+  position: relative;
+  z-index: 1;
+}
+
+.asset-card--open-area-card .spaces-delete-confirmation {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.asset-card--open-area-card .spaces-delete-confirmation button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .space-card-mark {
@@ -378,11 +412,6 @@
 }
 
 @media (max-width: 640px) {
-  .spaces-overview-header {
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-
   .spaces-suggestions > .spaces-rows {
     right: auto;
     left: 0;
@@ -392,13 +421,11 @@
 /* The search field stays quiet until interaction, like the Wiki controls. */
 .spaces-filter input {
   background: transparent;
-  border-color: var(--mem-border);
+  border: 0;
+  font: 400 14px/1.3 var(--mem-font-body);
+  height: auto;
+  outline: none;
+  padding: 0;
 }
 
-.spaces-filter input:hover {
-  background: var(--mem-hover);
-}
-
-.spaces-filter input:focus-visible {
-  border-color: var(--mem-accent-page);
-}
+@media (pointer: coarse), (max-width: 639px) { .spaces-suggestions > summary { min-height: 44px; } }

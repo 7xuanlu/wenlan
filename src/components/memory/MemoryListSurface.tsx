@@ -7,6 +7,8 @@ interface MemoryListSurfaceProps {
   toolbar: ReactNode;
   memories: readonly MemoryItem[];
   filteredToEmpty: boolean;
+  filterActive?: boolean;
+  onClearFilter?: () => void;
   renderMemory: (memory: MemoryItem, index: number) => ReactNode;
   undoPending: boolean;
   onUndo: () => void;
@@ -16,6 +18,8 @@ export default function MemoryListSurface({
   toolbar,
   memories,
   filteredToEmpty,
+  filterActive = false,
+  onClearFilter,
   renderMemory,
   undoPending,
   onUndo,
@@ -33,6 +37,11 @@ export default function MemoryListSurface({
       ) : filteredToEmpty ? (
         <div className="memory-list-empty">
           <span>{t("memoryList.noMemoriesMatch")}</span>
+          {filterActive && onClearFilter && (
+            <button className="collection-control" type="button" onClick={onClearFilter}>
+              {t("memoryList.clearFilter")}
+            </button>
+          )}
         </div>
       ) : (
         <div className="memory-list-empty">

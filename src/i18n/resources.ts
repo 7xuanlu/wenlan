@@ -50,7 +50,7 @@ const en = {
     "title": "Sources",
     "description": "The files, links and folders behind your knowledge.",
     "manage": "Manage sources",
-    "add": "Add source",
+    "add": "New",
     "filterLabel": "Filter sources",
     "filters": {
       "all": "All",
@@ -451,9 +451,9 @@ const en = {
   spaces: {
     overview: {
       title: "Spaces",
-      newSpace: "New space",
+      newSpace: "New",
       filterLabel: "Filter spaces",
-      filterPlaceholder: "Filter by name or description",
+      filterPlaceholder: "Filter spaces",
       suggestedHeading: "Suggested",
       confirmedHeading: "All spaces",
       pages: "Pages",
@@ -476,11 +476,11 @@ const en = {
       delete: "Delete",
       confirmDelete: "Confirm delete",
       actionsFor: "Actions for {{name}}",
-      dragSpace: "Drag {{name}}",
+      dragSpace: "Drag to reorder {{name}}",
       card: {
         open: "Open {{name}}",
-        pages_one: "1 page",
-        pages_other: "{{count}} pages",
+        pages_one: "1 note",
+        pages_other: "{{count}} notes",
         memories_one: "1 memory",
         memories_other: "{{count}} memories",
         entities_one: "1 topic",
@@ -874,6 +874,8 @@ const en = {
   },
   memoryList: {
     label: "Memory list",
+    filterLabel: "Filter memories",
+    clearFilter: "Clear filter",
     actions: "Memory actions",
     sort: { curated: "Curated first", recent: "Recent first", oldest: "Oldest first" },
     openMemory: "Open memory",
@@ -1248,8 +1250,8 @@ const en = {
       archived: "Archived",
     },
     search: {
-      label: "Search topics",
-      placeholder: "Search topics",
+      label: "Filter topics",
+      placeholder: "Filter topics",
     },
     filters: {
       typeLabel: "Type",
@@ -2351,7 +2353,7 @@ const zhHans = {
     "title": "来源",
     "description": "浏览知识背后的文件、链接与文件夹。",
     "manage": "管理来源",
-    "add": "添加来源",
+    "add": "新增",
     "filterLabel": "筛选来源",
     "filters": {
       "all": "全部",
@@ -2734,9 +2736,9 @@ const zhHans = {
   spaces: {
     overview: {
       title: "空间",
-      newSpace: "新增空间",
+      newSpace: "新增",
       filterLabel: "筛选空间",
-      filterPlaceholder: "按名称或描述筛选",
+      filterPlaceholder: "筛选空间",
       suggestedHeading: "建议",
       confirmedHeading: "所有空间",
       pages: "页面",
@@ -2759,11 +2761,11 @@ const zhHans = {
       delete: "删除",
       confirmDelete: "确认删除",
       actionsFor: "{{name}} 的操作",
-      dragSpace: "拖动 {{name}}",
+      dragSpace: "拖动以排序 {{name}}",
       card: {
         open: "打开 {{name}}",
-        pages_one: "{{count}} 个页面",
-        pages_other: "{{count}} 个页面",
+        pages_one: "{{count}} 篇笔记",
+        pages_other: "{{count}} 篇笔记",
         memories_one: "{{count}} 条记忆",
         memories_other: "{{count}} 条记忆",
         entities_one: "{{count}} 个主题",
@@ -3146,6 +3148,8 @@ const zhHans = {
   },
   memoryList: {
     label: "记忆列表",
+    filterLabel: "筛选记忆",
+    clearFilter: "清除筛选",
     actions: "记忆操作",
     sort: { curated: "优先精选", recent: "最近更新", oldest: "最早更新" },
     openMemory: "打开记忆",
@@ -3512,8 +3516,8 @@ const zhHans = {
       archived: "已归档",
     },
     search: {
-      label: "搜索主题",
-      placeholder: "搜索主题",
+      label: "筛选主题",
+      placeholder: "筛选主题",
     },
     filters: {
       typeLabel: "类型",
@@ -4593,7 +4597,7 @@ const zhHant = {
     "title": "來源",
     "description": "瀏覽知識背後的檔案、連結與資料夾。",
     "manage": "管理來源",
-    "add": "新增來源",
+    "add": "新增",
     "filterLabel": "篩選來源",
     "filters": {
       "all": "全部",
@@ -4976,9 +4980,9 @@ const zhHant = {
   spaces: {
     overview: {
       title: "空間",
-      newSpace: "新增空間",
+      newSpace: "新增",
       filterLabel: "篩選空間",
-      filterPlaceholder: "依名稱或描述篩選",
+      filterPlaceholder: "篩選空間",
       suggestedHeading: "建議",
       confirmedHeading: "所有空間",
       pages: "頁面",
@@ -5001,11 +5005,11 @@ const zhHant = {
       delete: "刪除",
       confirmDelete: "確認刪除",
       actionsFor: "{{name}} 的操作",
-      dragSpace: "拖曳 {{name}}",
+      dragSpace: "拖曳以排序 {{name}}",
       card: {
         open: "開啟 {{name}}",
-        pages_one: "{{count}} 個頁面",
-        pages_other: "{{count}} 個頁面",
+        pages_one: "{{count}} 篇筆記",
+        pages_other: "{{count}} 篇筆記",
         memories_one: "{{count}} 則記憶",
         memories_other: "{{count}} 則記憶",
         entities_one: "{{count}} 個主題",
@@ -5388,6 +5392,8 @@ const zhHant = {
   },
   memoryList: {
     label: "記憶列表",
+    filterLabel: "篩選記憶",
+    clearFilter: "清除篩選",
     actions: "記憶操作",
     sort: { curated: "優先精選", recent: "最近更新", oldest: "最早更新" },
     openMemory: "開啟記憶",
@@ -5754,8 +5760,8 @@ const zhHant = {
       archived: "已歸檔",
     },
     search: {
-      label: "搜尋主題",
-      placeholder: "搜尋主題",
+      label: "篩選主題",
+      placeholder: "篩選主題",
     },
     filters: {
       typeLabel: "類型",

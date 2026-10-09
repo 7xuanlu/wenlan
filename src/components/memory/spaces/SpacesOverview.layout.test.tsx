@@ -34,21 +34,22 @@ describe("SpacesOverview layout contract", () => {
     api.listPages.mockResolvedValue([]);
   });
 
-  it("shares one named desktop column contract between the header and confirmed rows", async () => {
+  it("keeps a compact self-labelled row with no visible column header", async () => {
     renderOverview();
     const inventory = await screen.findByRole("region", { name: labels.confirmedHeading });
-    const header = within(inventory).getByRole("row");
     const row = screen.getByTestId("space-row-work");
 
-    expect(directColumnNames(header)).toEqual(desktopColumns);
+    expect(within(inventory).queryByRole("row")).not.toBeInTheDocument();
+    expect(within(inventory).queryByRole("columnheader")).not.toBeInTheDocument();
     expect(directColumnNames(row)).toEqual(desktopColumns);
-    expect(header.querySelector('[data-space-column="updated"]')).toBeNull();
-    expect(header.querySelector('[data-space-column="menu"]')).not.toBeNull();
     expect(row.querySelector('[data-space-column="updated"]')).toBeNull();
     expect(row.querySelector('[data-space-column="menu"]')).not.toBeNull();
+    expect(within(row).getByTestId("space-pages")).toHaveTextContent(/\d+ notes?/i);
+    expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(/\d+ notes?/i);
 
     const css = readFileSync(resolve("src/components/memory/spaces/spacesInventory.css"), "utf8");
-    expect(css).toMatch(/--spaces-desktop-columns:/);
+    expect(css).not.toMatch(/spaces-table-head/);
+    expect(css).toMatch(/white-space:\s*nowrap/);
     expect(css).toMatch(/grid-template-columns:\s*var\(--spaces-desktop-columns\)/);
   });
 
@@ -71,7 +72,7 @@ describe("SpacesOverview layout contract", () => {
     const css = readFileSync(resolve("src/components/memory/spaces/spacesInventory.css"), "utf8");
     const baseCss = readFileSync(resolve("src/components/memory/spaces/spaces.css"), "utf8");
     expect(css).not.toMatch(/\.spaces-row-suggested\s+\.spaces-row-main::before/);
-    expect(css).toMatch(/\.spaces-overview-header \.spaces-new-action\s*\{[^}]*align-self:\s*flex-start/s);
+    expect(css).toMatch(/\.spaces-overview-header \.spaces-new-action\s*\{[^}]*flex:\s*none/s);
     expect(css).not.toMatch(/\.spaces-overview-header \.spaces-new-action\s*\{[^}]*background:/s);
     expect(baseCss).not.toMatch(/\.spaces-new-action\s*\{/);
     expect(baseCss).not.toMatch(/\.spaces-new-action:hover/);
@@ -104,9 +105,7 @@ describe("SpacesOverview layout contract", () => {
     expect(css).toMatch(
       /@media \(max-width:\s*599px\)\s*\{[\s\S]*?\.spaces-row-suggested \.spaces-row-decisions\s*\{[^}]*padding:\s*0 4px 0 0;/,
     );
-    expect(css).toMatch(
-      /@media \(max-width:\s*599px\)\s*\{[\s\S]*?\.spaces-confirmed-section\s*\{[^}]*padding-top:\s*18px;/,
-    );
+    expect(css).toMatch(/\.spaces-overview \.spaces-confirmed-section\s*\{[^}]*padding-top:\s*0;/);
   });
 
   it("gives the inline rename editor the full inventory width", async () => {

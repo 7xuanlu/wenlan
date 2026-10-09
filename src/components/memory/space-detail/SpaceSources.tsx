@@ -4,11 +4,12 @@ import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { FileText, Globe, CaretRight } from "@phosphor-icons/react";
 import { listIndexedFiles, type IndexedFileInfo } from "../../../lib/tauri";
+import type { AssetLens } from "../../../lib/assetLens";
 import { isLibraryDocument } from "../sources/SourceLibrary";
 import SourceDocumentPreview from "../sources/SourceDocumentPreview";
 import "../sources/SourceLibrary.css";
 
-export function SpaceSources({ spaceId, spaceName }: { spaceId: string; spaceName: string }) {
+export function SpaceSources({ spaceId, spaceName, lens }: { spaceId: string; spaceName: string; lens: AssetLens }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<IndexedFileInfo | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -26,7 +27,7 @@ export function SpaceSources({ spaceId, spaceName }: { spaceId: string; spaceNam
   if (query.isPending) return <p role="status" className="space-dossier-empty">{t("sourceAccess.previewLoading")}</p>;
   if (query.isError) return <div role="alert"><p className="space-dossier-empty">{t("spaceDetail.sourcesFailed")}</p><button className="page-editor-action" type="button" onClick={() => void query.refetch()}>{t("sourceAccess.retry")}</button></div>;
   return <>
-    {documents.length === 0 ? <p className="space-dossier-empty">{t("spaceDetail.noSources")}</p> : <ul className="source-library-list space-project-sources">
+    {documents.length === 0 ? <p className="space-dossier-empty">{t("spaceDetail.noSources")}</p> : <ul className="source-library-list space-project-sources" data-lens={lens}>
       {documents.map(file => {
         const link = file.source === "webpage";
         const name = file.source_id.split("::").pop()?.replace(/\\/g, "/").split("/").pop() ?? file.title;

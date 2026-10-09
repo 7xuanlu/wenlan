@@ -298,7 +298,7 @@ describe("translation resources", () => {
       resources.en.translation.spaces.overview.newSpace,
       resources["zh-Hans"].translation.spaces.overview.newSpace,
       resources["zh-Hant"].translation.spaces.overview.newSpace,
-    ]).toEqual(["New space", "新增空间", "新增空間"]);
+    ]).toEqual(["New", "新增", "新增"]);
     expect([
       resources.en.translation.spaceDetail.backToSpaces,
       resources["zh-Hans"].translation.spaceDetail.backToSpaces,

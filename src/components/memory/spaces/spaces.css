@@ -14,15 +14,6 @@
   border-bottom: 0;
 }
 
-.spaces-overview h1 {
-  margin: 0;
-  font-family: var(--mem-font-heading);
-  font-size: clamp(24px, 1.6vw + 14px, 30px);
-  font-weight: 500;
-  line-height: 1.22;
-  letter-spacing: -0.01em;
-}
-
 .spaces-section {
   padding-top: 28px;
 }
@@ -213,6 +204,12 @@
   border-color: transparent;
   color: var(--mem-text-tertiary);
   cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.spaces-row-dragging .spaces-drag-handle {
+  cursor: grabbing;
 }
 
 .spaces-menu-anchor {
@@ -242,8 +239,7 @@
 .spaces-menu button:hover,
 .spaces-quiet-action:hover,
 .spaces-suggestion-action:hover,
-.spaces-menu-trigger:hover,
-.spaces-row-main:hover {
+.spaces-menu-trigger:hover {
   background: var(--mem-hover);
   color: var(--mem-text);
 }

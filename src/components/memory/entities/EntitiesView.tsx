@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Funnel } from "@phosphor-icons/react";
 import { toast } from "sonner";
 import { queryEntities, type Entity } from "../../../lib/tauri";
 import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
@@ -145,24 +146,42 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
     : archived ? "entities.empty.archivedBody" : "entities.browse.emptyBody";
 
   return (
-    <section aria-labelledby="entities-title" className="entities-view">
-      <header className="entities-header">
+    <section aria-labelledby="entities-title" className={`entities-view${archived ? " entities-archived" : ""}`}>
+      <header className={`entities-header${archived ? " entities-archive-context" : ""}`}>
         <div>
-          <h1 id="entities-title">{t(archived ? "entities.browse.archivedTitle" : "entities.title")}</h1>
+          <h1 className={archived ? "" : "sr-only"} id="entities-title">{t(archived ? "entities.browse.archivedTitle" : "entities.title")}</h1>
           {archived ? (
             <button className="entities-ghost-btn entities-back" onClick={() => changeScope(false)} type="button">
               <span aria-hidden="true">← </span>{t("entities.browse.backToTopics")}
             </button>
-          ) : <p className="entities-subtitle">{t("entities.description")}</p>}
+          ) : null}
         </div>
-        {!archived && (
-          <div className="entities-options" ref={optionsRef}>
+      </header>
+
+      <div className="entities-toolbar collection-toolbar">
+        <label className="collection-search">
+          <Funnel size={18} aria-hidden="true" />
+          <input
+            aria-label={t("entities.search.label")}
+            className="collection-search-input"
+            onChange={(event) => setQueryInput(event.target.value)}
+            placeholder={t("entities.search.placeholder")}
+            type="search"
+            value={queryInput}
+          />
+        </label>
+        <div className="collection-toolbar-actions">
+          <AssetLensToggle onChange={(next) => {
+            setLens(next);
+            writeAssetLens("entities", next);
+          }} value={lens} />
+          {!archived && <div className="entities-options" ref={optionsRef}>
             <button
               aria-controls="entities-options-menu"
               aria-expanded={optionsOpen}
               aria-haspopup="menu"
               aria-label={t("entities.browse.options")}
-              className="entities-ghost-btn entities-options-button"
+              className="entities-ghost-btn entities-options-button collection-control"
               onClick={() => setOptionsOpen((current) => !current)}
               ref={optionsButtonRef}
               type="button"
@@ -182,25 +201,17 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
                 </button>
               </div>
             )}
-          </div>
-        )}
-      </header>
+          </div>}
+        </div>
+      </div>
 
-      <div className="entities-filters">
-        <input
-          aria-label={t("entities.search.label")}
-          className="entities-search"
-          onChange={(event) => setQueryInput(event.target.value)}
-          placeholder={t("entities.search.placeholder")}
-          type="search"
-          value={queryInput}
-        />
+      <div className="entities-filters collection-filter-row">
         <div className="entities-chip-group" role="group" aria-label={t("entities.filters.typeLabel")}>
           <span className="entities-chip-label">{t("entities.filters.typeLabel")}</span>
           {TYPE_CHIPS.map((value) => (
             <button
               aria-pressed={filters.type === value}
-              className="entities-chip"
+              className="entities-chip collection-control"
               key={value}
               onClick={() => setFilters((current) => ({ ...current, type: value }))}
               type="button"
@@ -209,12 +220,6 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
             </button>
           ))}
         </div>
-        <span className="entities-filters-side">
-            <AssetLensToggle onChange={(next) => {
-              setLens(next);
-              writeAssetLens("entities", next);
-            }} value={lens} />
-        </span>
       </div>
 
       {loading ? (

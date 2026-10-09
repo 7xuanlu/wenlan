@@ -1000,6 +1000,7 @@ carrying the authority of agreement.
 | `core/db/maintenance_duplicate_reads.rs::scan_near_duplicate_slice` | `pub(crate)` | no | no | — | — |
 | `core/db/maintenance_retro_scan.rs::scan_automatic_retro_stub_slice` | `pub(crate)` | no | no | — | — |
 | `core/db/page_drafts.rs::publish_page_draft` | `pub` | no | **yes** | `server/page_routes.rs::handle_publish_page_draft` | — |
+| `core/db/page_map_independent.rs::migrate_134_page_map_ideas` | `pub(crate)` | no | no | — | — |
 | `core/db/page_rename.rs::page_for_title_rename_on_connection` | `private` | no | no | — | — |
 | `core/db/page_rename.rs::rename_page` | `pub` | yes | no | — | — |
 | `core/db/page_summary_backfill.rs::backfill_page_summaries` | `pub` | no | **yes** | `server/main/startup.rs::prepare_startup_state` | — |
