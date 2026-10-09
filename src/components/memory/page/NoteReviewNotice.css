@@ -1,0 +1,98 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.note-review-notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--mem-border);
+  border-radius: 9px;
+  background: var(--mem-surface);
+  color: var(--mem-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.note-review-notice__content {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.note-review-notice__summary,
+.note-review-notice__categories,
+.note-review-notice__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.note-review-notice__summary {
+  font-weight: 600;
+}
+
+.note-review-notice__categories {
+  color: var(--mem-text-secondary, #666);
+  font-weight: 400;
+}
+
+.note-review-notice__categories > span + span::before {
+  content: "·";
+  margin-right: 8px;
+}
+
+.note-review-notice__message {
+  margin: 0;
+  color: var(--mem-text-secondary, #666);
+}
+
+.note-review-notice__actions {
+  justify-content: flex-end;
+  flex-shrink: 0;
+}
+
+.note-review-notice__button {
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--mem-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.note-review-notice__button--quiet {
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.note-review-notice__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 600px) {
+  .note-review-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .note-review-notice__actions {
+    justify-content: flex-start;
+  }
+}
+
+.note-review-notice--attention {
+  border-color: color-mix(in srgb, var(--mem-accent-amber) 34%, var(--mem-border));
+  background: color-mix(in srgb, var(--mem-accent-amber) 7%, var(--mem-surface));
+}
+.note-review-notice__button:hover { background: var(--mem-hover); }
+.note-review-notice__button:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { syntaxTree } from "@codemirror/language";
+import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { Prec, StateEffect, StateField, type Extension, type Range } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate } from "@codemirror/view";
 import { processCitations } from "../../../lib/pageCitations";
@@ -67,15 +67,13 @@ function normalized(label: string): string {
   return label.trim().toLowerCase();
 }
 
-function excludedRanges(view: EditorView): Array<{ from: number; to: number }> {
+function excludedRanges(source: string, tree: ReturnType<typeof syntaxTree>): Array<{ from: number; to: number }> {
   const ranges: Array<{ from: number; to: number }> = [];
-  const source = view.state.doc.toString();
   let frontmatter = source.startsWith("---\n") || source.startsWith("---\r\n");
   if (frontmatter) {
     const delimiter = /\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/.exec(source);
     ranges.push({ from: 0, to: delimiter ? delimiter.index + delimiter[0].length : source.length });
   }
-  const tree = syntaxTree(view.state);
   tree.iterate({ enter(node) {
     if (excludedNodeNames.has(node.name)) ranges.push({ from: node.from, to: node.to });
   } });
@@ -219,12 +217,23 @@ export function createWikiLinkEditing(
     };
     rebuild(): void {
       const source = this.view.state.doc.toString();
-      const excluded = excludedRanges(this.view);
+      const state = this.view.state;
+      const visibleTo = Math.max(0, ...this.view.visibleRanges.map((visible) => visible.to));
+      // Other extensions may finish parsing before the state snapshot receives the tree.
+      // Use the covering parser-context tree, or leave the source undecorated.
+      const tree = ensureSyntaxTree(state, visibleTo, 20);
+      if (!tree) {
+        this.references = new Map();
+        this.decorations = Decoration.none;
+        this.atomic = Decoration.none;
+        return;
+      }
+      const excluded = excludedRanges(source, tree);
       const currentContext = this.view.state.field(referenceContext);
       const resolvedLinks: ResolvedReferenceRange[] = parseResolvedWikiLinks(source, this.view.state.field(links))
         .map((range) => ({ ...range, target: { kind: "page", id: this.view.state.field(links).get(normalized(range.targetLabel))! }, key: `wiki:${range.tokenFrom}`, wiki: true }));
       // Use the Markdown parser, not title matching or guessed source IDs.
-      syntaxTree(this.view.state).iterate({ enter(node) {
+      tree.iterate({ enter(node) {
         if (node.name !== "Link") return;
         const marks = [];
         let url = null;

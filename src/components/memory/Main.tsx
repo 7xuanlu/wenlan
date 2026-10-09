@@ -1410,6 +1410,7 @@ export default function Main({
             <PageDetail
               pageId={view.pageId}
               onDeleted={handlePageDeleted}
+              onOpenReview={(reviewItemId) => navigateTo({ kind: "distill-review", reviewItemId })}
               projectionIssue={view.projectionIssue}
               onProjectionResolved={() => replaceView({ ...view, projectionIssue: undefined })}
               initialSelection={pageSelectionsRef.current.get(view.pageId)}
@@ -1430,6 +1431,8 @@ export default function Main({
           ) : view.kind === "distill-review" ? (
             <DistillReviewPanel
               onBack={navigateBack}
+              onOpenActivity={() => navigateTo({ kind: "activity" })}
+              initialReviewItemId={view.reviewItemId}
               onPageClick={(id) => navigateTo({ kind: "page", pageId: id, mode: "read" })}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
             />
@@ -1455,6 +1458,7 @@ export default function Main({
             />
           ) : view.kind === "activity" ? (
             <ActivityFeed
+              onOpenReview={() => navigateTo({ kind: "distill-review" })}
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />

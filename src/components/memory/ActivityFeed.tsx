@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { ArrowRight, NotePencil } from "@phosphor-icons/react";
 import type { TFunction } from "i18next";
 import {
   listAgentActivity,
@@ -10,11 +11,14 @@ import {
 } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
 import { relativeTime } from "../../lib/relativeTime";
-import ActivityNow, { useActivityNowPlacement } from "./activity/ActivityNow";
+import ActivityNow from "./activity/ActivityNow";
+import ActivityDiscoveries from "./activity/ActivityDiscoveries";
+import "./activity/activityVisual.css";
 import { Select } from "./settings/primitives";
 
 interface ActivityFeedProps {
   onNavigateMemory: (sourceId: string) => void;
+  onOpenReview?: () => void;
   /** Navigates to Settings, Intelligence from the Now section's models line. */
   onOpenIntelligence?: () => void;
 }
@@ -364,16 +368,17 @@ function FilterSelect({
 
 export default function ActivityFeed({
   onNavigateMemory,
+  onOpenReview,
   onOpenIntelligence,
 }: ActivityFeedProps) {
-  const nowPlacement = useActivityNowPlacement();
   const { t, i18n } = useTranslation();
-  const { data: activities = [] } = useQuery({
+  const activityQuery = useQuery({
     queryKey: ["agentActivity"],
     queryFn: () => listAgentActivity(100),
     refetchInterval: 15000,
     staleTime: 30000,
   });
+  const activities = activityQuery.data ?? [];
 
   // Connected Agents — used to resolve friendly display names. User overrides
   // here always beat the built-in KNOWN_CLIENTS registry.
@@ -454,28 +459,73 @@ export default function ActivityFeed({
     return true;
   });
 
-  const now = <ActivityNow onOpenIntelligence={onOpenIntelligence} />;
+  const pageTitle = (
+    <h1
+      style={{
+        color: "var(--mem-text)",
+        fontFamily: "var(--mem-font-body)",
+        fontSize: "24px",
+        fontWeight: 600,
+        margin: "0 0 20px",
+      }}
+    >
+      {t("activityStatus.title")}
+    </h1>
+  );
+  const pageReview = onOpenReview ? (
+    <button type="button" className="mem-activity-review-link" onClick={onOpenReview}>
+      <NotePencil aria-hidden="true" size={18} />
+      <span>{t("home.reviewPageChanges")}</span>
+      <ArrowRight aria-hidden="true" size={16} />
+    </button>
+  ) : null;
+  const background = <div className="mem-activity-background"><ActivityNow onOpenIntelligence={onOpenIntelligence} /><ActivityDiscoveries /></div>;
+  const recentTitle = <h2 className="mem-activity-section-title">{t("activityDiscoveries.recent")}</h2>;
+  const eventsError = activityQuery.isError ? (
+    <div role="alert" className="flex flex-col items-start gap-3">
+      <p>{t("activityStatus.eventsError")}</p>
+      <button type="button" onClick={() => void activityQuery.refetch()}>
+        {t("activityStatus.readAgain")}
+      </button>
+    </div>
+  ) : null;
 
-  // The rail is a sticky second column. `min-w-0` on the feed column keeps a
-  // long event sentence from pushing the rail off the right edge.
-  const withNow = (body: ReactNode) =>
-    nowPlacement === "rail" ? (
-      <div className="mem-activity-rail-shell">
-        <div className="min-w-0 flex-1">{body}</div>
-        <div className="mem-activity-rail">{now}</div>
+  if (activityQuery.isLoading && activityQuery.data === undefined) {
+    return (
+      <div className="flex flex-col">
+        {pageTitle}
+        {pageReview}
+        {background}
+        {recentTitle}
+        <p role="status">{t("activityStatus.eventsLoading")}</p>
       </div>
-    ) : (
-      body
     );
+  }
+
+  if (activityQuery.isError && activityQuery.data === undefined) {
+    return (
+      <div className="flex flex-col">
+        {pageTitle}
+        {pageReview}
+        {background}
+        {recentTitle}
+        {eventsError}
+      </div>
+    );
+  }
 
   // No agent has read from the library yet — but background work still has
   // something to say, and this is the page a new user lands on to find out
   // what Wenlan is doing. Returning the bare empty state here hid the Now
   // section exactly when it was the only thing worth reading.
   if (activities.length === 0) {
-    return withNow(
+    return (
       <div className="flex flex-col">
-        {nowPlacement !== "rail" && <div style={{ marginBottom: 20 }}>{now}</div>}
+        {pageTitle}
+        {pageReview}
+        {background}
+        {recentTitle}
+        {eventsError}
         <div
           className="flex flex-col items-center justify-center h-full"
           style={{ minHeight: 300 }}
@@ -493,7 +543,7 @@ export default function ActivityFeed({
             {t("activity.empty.noActivity")}
           </p>
         </div>
-      </div>,
+      </div>
     );
   }
 
@@ -521,9 +571,6 @@ export default function ActivityFeed({
 
   const feed = (
     <div className="flex flex-col">
-      {/* The Now section above the toolbar in the card layout. The rail keeps
-          it out of this column entirely; the timeline puts it in the groups. */}
-      {nowPlacement === "card" && <div style={{ marginBottom: 20 }}>{now}</div>}
       {/* Toolbar — right-aligned dropdowns, same pattern as MemoryStream. */}
       {showToolbar && (
         <div
@@ -588,7 +635,6 @@ export default function ActivityFeed({
         </div>
       ) : null}
       <div className="flex flex-col gap-8">
-      {nowPlacement === "timeline" && now}
       {grouped.map(([group, items]) => (
         <section key={group}>
           <h3
@@ -622,7 +668,16 @@ export default function ActivityFeed({
     </div>
   );
 
-  return withNow(feed);
+  return (
+    <div className="flex flex-col">
+      {pageTitle}
+      {pageReview}
+      {background}
+        {recentTitle}
+      {eventsError}
+      {feed}
+    </div>
+  );
 }
 
 function ActivityEntry({

@@ -84,6 +84,7 @@ export function useSuppressedReviewItems(): {
   hiddenEntries: HiddenReviewEntry[];
   hide: (item: ReviewItem) => void;
   restore: (key: string) => void;
+  restoreMany: (keys: readonly string[]) => void;
   restoreAll: () => void;
 } {
   const [entries, setEntries] = useState<HiddenReviewEntry[]>(() => readHiddenEntries());
@@ -113,11 +114,17 @@ export function useSuppressedReviewItems(): {
     persist(entries.filter((entry) => entry.key !== key));
   };
 
+  const restoreMany = (keys: readonly string[]) => {
+    if (keys.length === 0) return;
+    const restoring = new Set(keys);
+    persist(entries.filter((entry) => !restoring.has(entry.key)));
+  };
+
   const restoreAll = () => {
     persist([]);
   };
 
   const hiddenKeys = useMemo(() => new Set(entries.map((entry) => entry.key)), [entries]);
 
-  return { hiddenKeys, hiddenEntries: entries, hide, restore, restoreAll };
+  return { hiddenKeys, hiddenEntries: entries, hide, restore, restoreMany, restoreAll };
 }

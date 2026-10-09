@@ -49,7 +49,7 @@ test("failed save prevents tab switch and closing, with the same live editor",as
  await expect(editor).toHaveAttribute("data-session","retained");await expect(page.getByRole("tablist").getByRole("tab")).toHaveCount(2);
  await expect.poll(()=>source(editor)).toContain("Keep this unsaved text.");
  await page.getByRole("button",{name:"Retry",exact:true}).click();
- await expect(page.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(page.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  expect(runtime.calls().filter(c=>c.command==="update_page")).toHaveLength(2);
  await page.getByRole("button",{name:"Close Fixture architecture",exact:true}).click();
  await expect(page.getByRole("tab",{name:"Fixture architecture",exact:true})).toHaveCount(0);await expect(page.getByRole("tab",{name:"Why fixtures stay deterministic",exact:true})).toHaveAttribute("aria-selected","true");
@@ -87,7 +87,7 @@ test("closing a pending destination does not reopen it after the current save fi
  const editor=await append(page,"\nSaved while another tab closes.");
  await page.getByRole("tab",{name:"Why fixtures stay deterministic",exact:true}).click();
  await page.getByRole("button",{name:"Close Why fixtures stay deterministic",exact:true}).click();
- await expect(page.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(page.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await expect(page.getByRole("tab",{name:"Why fixtures stay deterministic",exact:true})).toHaveCount(0);
  await expect.poll(()=>source(editor)).toContain("Saved while another tab closes.");
 });
@@ -132,7 +132,7 @@ test("tab Plus waits for a successful save and preserves the selected folder", a
  await expect(page.getByRole("tablist").getByRole("tab")).toHaveCount(1);
  await expect.poll(()=>source(editor)).toContain("Preserve before creating a note.");
  await page.getByRole("button",{name:"Retry",exact:true}).click();
- await expect(page.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(page.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await page.getByRole("button",{name:"New page",exact:true}).click();
  await expect(page.getByRole("textbox",{name:"Title",exact:true})).toBeFocused();
  await expect(page.getByRole("tablist").getByRole("tab")).toHaveCount(2);

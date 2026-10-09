@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import DistillReviewPanel from "./DistillReviewPanel";
@@ -35,8 +35,8 @@ vi.mock("../../lib/tauri", async () => {
     getEntityDetail: vi.fn(),
     getPage: vi.fn(),
     getPageSources: vi.fn(),
-    redistillPage: vi.fn(),
     search: vi.fn(),
+    redistillPage: vi.fn(),
     listRecentChanges: vi.fn(),
   };
 });
@@ -56,8 +56,8 @@ import {
   getEntityDetail,
   getPage,
   getPageSources,
-  redistillPage,
   search,
+  redistillPage,
   listRecentChanges,
 } from "../../lib/tauri";
 
@@ -68,13 +68,14 @@ function renderPanel(props: Partial<React.ComponentProps<typeof DistillReviewPan
   const onBack = props.onBack ?? vi.fn();
   const onPageClick = props.onPageClick ?? vi.fn();
   const onMemoryClick = props.onMemoryClick ?? vi.fn();
+  const onOpenActivity = props.onOpenActivity ?? vi.fn();
   const user = userEvent.setup();
   render(
     <QueryClientProvider client={client}>
-      <DistillReviewPanel onBack={onBack} onPageClick={onPageClick} onMemoryClick={onMemoryClick} />
+      <DistillReviewPanel initialReviewItemId={props.initialReviewItemId} onBack={onBack} onPageClick={onPageClick} onMemoryClick={onMemoryClick} onOpenActivity={onOpenActivity} />
     </QueryClientProvider>,
   );
-  return { user, client, onBack, onPageClick, onMemoryClick };
+  return { user, client, onBack, onPageClick, onMemoryClick, onOpenActivity };
 }
 
 function truncateForTest(value: string, max: number): string {
@@ -240,27 +241,36 @@ describe("DistillReviewPanel", () => {
     expect(screen.getByRole("button", { name: /^refresh$/i })).toBeInTheDocument();
   });
 
-  it("renders page review sections after loading", async () => {
-    renderPanel();
+  it("keeps background discovery out of decisions and offers Activity as its destination", async () => {
+    const { user, onOpenActivity } = renderPanel();
 
-    expect(await screen.findByText("Temporal page refresh")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New page candidates" })).toBeInTheDocument();
+    expect(await screen.findByText("Retrieval Pipeline")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Pages with new sources" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "New topics" })).toBeInTheDocument();
-    expect(screen.getByText(/1 new source/)).toBeInTheDocument();
-    expect(screen.getByText(truncateForTest(fallbackSource, 72))).toBeInTheDocument();
     expect(screen.getByText("Retrieval Pipeline")).toBeInTheDocument();
     expect(screen.getByText(/first 10 stale pages/i)).toBeInTheDocument();
-    expect(screen.getByText("Vector clocks")).toBeInTheDocument();
-    expect(screen.getByText(/4 mentions/)).toBeInTheDocument();
+    expect(screen.getByText(/Background discoveries are available in Activity/)).toBeInTheDocument();
+    expect(screen.queryByText("Vector clocks")).toBeNull();
+    expect(screen.queryByRole("heading", { name: "New page candidates" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "New topics" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review Temporal page refresh" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review Vector clocks" })).toBeNull();
+    const filters = screen.getByRole("group", { name: "Filter reviews" });
+    expect(within(filters).getByRole("button", { name: /^All1$/ })).toBeInTheDocument();
+    expect(within(filters).queryByRole("button", { name: /^Candidates/ })).toBeNull();
+    expect(within(filters).queryByRole("button", { name: /^Topics/ })).toBeNull();
+    expect(screen.queryByText("Coffee routine")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open Activity" }));
+    expect(onOpenActivity).toHaveBeenCalledTimes(1);
+    expect(distillReview).toHaveBeenCalledTimes(1);
+    expect(acceptRefinement).not.toHaveBeenCalled();
   });
 
-  it("renders source previews even when a fallback label comes from the first source", async () => {
+  it("keeps candidate source previews out of review cards", async () => {
     renderPanel();
-
-    expect(await screen.findByText(truncateForTest(fallbackSource, 72))).toBeInTheDocument();
-    expect(screen.getByText(truncateForTest(fallbackSource, 140))).toBeInTheDocument();
-    expect(screen.getByText(fallbackSecondSource)).toBeInTheDocument();
+    expect(await screen.findByText("Retrieval Pipeline")).toBeInTheDocument();
+    expect(screen.queryByText(truncateForTest(fallbackSource, 72))).toBeNull();
+    expect(screen.queryByText(truncateForTest(fallbackSource, 140))).toBeNull();
+    expect(screen.queryByText(fallbackSecondSource)).toBeNull();
   });
 
   it("opens a stale page card and refreshes it through redistill", async () => {
@@ -291,18 +301,18 @@ describe("DistillReviewPanel", () => {
       .mockRejectedValueOnce(new Error("HTTP POST /api/distill returned 500"));
     const { user } = renderPanel();
 
-    expect(await screen.findByText("Temporal page refresh")).toBeInTheDocument();
+    expect(await screen.findByText("Retrieval Pipeline")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^refresh$/i }));
 
     expect(await screen.findByText(/HTTP POST \/api\/distill returned 500/)).toBeInTheDocument();
-    expect(screen.getByText("Temporal page refresh")).toBeInTheDocument();
+    expect(screen.getByText("Retrieval Pipeline")).toBeInTheDocument();
   });
 
   it("keeps manual refresh available after the initial load", async () => {
     const { user } = renderPanel();
 
-    await screen.findByText("Temporal page refresh");
+    await screen.findByText("Retrieval Pipeline");
     await user.click(screen.getByRole("button", { name: /^refresh$/i }));
 
     expect(distillReview).toHaveBeenCalledTimes(2);
@@ -325,10 +335,12 @@ describe("DistillReviewPanel review queue", () => {
     expect(await screen.findByRole("heading", { name: "All caught up" })).toBeInTheDocument();
   });
 
-  it("does not claim all-caught-up while discovery items exist", async () => {
+  it("shows no decisions waiting when only background discoveries remain", async () => {
+    vi.mocked(distillReview).mockResolvedValue({ ...reviewPayload, stale_pages: [], stale_truncated: false });
     renderPanel();
 
-    expect(await screen.findByText("Temporal page refresh")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "No decisions waiting" })).toBeInTheDocument();
+    expect(screen.getByText(/Background discoveries are available in Activity/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "All caught up" })).toBeNull();
   });
 
@@ -356,6 +368,37 @@ describe("DistillReviewPanel review queue", () => {
     await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(listRefinements).toHaveBeenCalledTimes(2);
     expect(distillReview).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an incomplete notice when the decision sources are capped with no actionable items", async () => {
+    vi.mocked(distillReview).mockResolvedValue({
+      pages_created: 0, scoped: false, created_ids: [], pending: [], stale_pages: [],
+      stale_truncated: false, orphan_topics: [],
+    });
+    vi.mocked(listRefinements).mockResolvedValue({ proposals: Array.from({ length: 50 }, (_, index) => ({
+      id: `unsupported-${index}`, action: "suggest_entity" as const, source_ids: ["a", "b"],
+      payload: { action: "suggest_entity" as const, name_hint: `Entity ${index}` },
+      confidence: 0.8, created_at: "2026-10-08 00:00:00",
+    })) });
+    renderPanel();
+
+    expect(await screen.findByText("Only part of the review list was checked.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "All caught up" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /to decide/ })).toBeNull();
+  });
+
+  it("hides stale pages locally and restores them without making a daemon decision", async () => {
+    const { user } = renderPanel();
+    await user.click(await screen.findByRole("button", { name: /Review Retrieval Pipeline/ }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "Hide" }));
+
+    expect(await screen.findByRole("button", { name: /1 hidden/ })).toBeInTheDocument();
+    expect(redistillPage).not.toHaveBeenCalled();
+    expect(rejectRefinement).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: /1 hidden/ }));
+    await user.click(screen.getByRole("button", { name: "Restore" }));
+    expect(await screen.findByRole("button", { name: /Review Retrieval Pipeline/ })).toBeInTheDocument();
   });
 
   it("shows the queue plus a quiet partial-load notice, no retry button, when items exist alongside a queue error", async () => {
@@ -392,7 +435,7 @@ describe("DistillReviewPanel review queue", () => {
     renderPanel();
 
     expect(await screen.findByRole("heading", { name: "Memory revisions" })).toBeInTheDocument();
-    expect(screen.getByText("1 to decide")).toBeInTheDocument();
+    expect(screen.getByText("2 to decide")).toBeInTheDocument();
     // The card titles itself with the target memory's real name once fetched.
     expect(await screen.findByRole("button", { name: /Review Target memory/ })).toBeInTheDocument();
   });
@@ -413,8 +456,8 @@ describe("DistillReviewPanel review queue", () => {
       expect([...dels].some((el) => el.textContent?.includes("npm"))).toBe(true);
       expect([...inss].some((el) => el.textContent?.includes("pnpm"))).toBe(true);
     });
-    // 1 revision + 1 stale page + 2 page candidates + 1 topic share the list.
-    expect(within(dialog).getByText("1 of 5")).toBeInTheDocument();
+    // The stale page remains actionable; candidate/topic discovery is excluded.
+    expect(within(dialog).getByText("1 of 2")).toBeInTheDocument();
   });
 
   it("approves the last revision and shows the caught-up pane when nothing else is queued", async () => {
@@ -445,12 +488,23 @@ describe("DistillReviewPanel review queue", () => {
     expect(within(dialog).getByText("You can close this review.")).toBeInTheDocument();
   });
 
-  it("advances into discovery items after the last decision resolves", async () => {
+  it("finishes after the last decision without advancing into unsupported or background items", async () => {
+    vi.mocked(distillReview).mockResolvedValue({ ...reviewPayload, stale_pages: [], stale_truncated: false });
     vi.mocked(listPendingRevisions)
       .mockResolvedValueOnce([
         revision({ target_source_id: "mem_target", revision_content: "Prefers pnpm for installs" }),
       ])
       .mockResolvedValue([]);
+    vi.mocked(listRefinements).mockResolvedValueOnce({
+      proposals: [{
+        id: "cross-space",
+        action: "cross_space_discovery",
+        source_ids: ["mem_target"],
+        payload: { action: "cross_space_discovery", memory_count: 1, spaces: ["Other"] },
+        confidence: 0.8,
+        created_at: "2026-09-13T10:00:00Z",
+      }],
+    }).mockResolvedValue({ proposals: [] });
     const { user } = renderPanel();
 
     await user.click(await screen.findByRole("button", { name: /Review Target memory/ }));
@@ -460,10 +514,10 @@ describe("DistillReviewPanel review queue", () => {
     await waitFor(() => {
       expect(acceptPendingRevision).toHaveBeenCalledWith("mem_target");
     });
-    // The stale page now precedes discovery items in the dialog list.
-    expect(
-      await within(dialog).findByRole("heading", { name: "Retrieval Pipeline" }),
-    ).toBeInTheDocument();
+    expect(await within(dialog).findByRole("heading", { name: "Review complete" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("heading", { name: "Vector clocks" })).toBeNull();
+    expect(within(dialog).queryByRole("heading", { name: "Temporal page refresh" })).toBeNull();
+    expect(acceptRefinement).not.toHaveBeenCalled();
   });
 
   it("dismisses a revision through the dialog", async () => {
@@ -497,8 +551,8 @@ describe("DistillReviewPanel review queue", () => {
     await user.click(await screen.findByRole("button", { name: /Review Title mem_a/ }));
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByRole("heading", { name: "Title mem_a" })).toBeInTheDocument();
-    // 2 revisions + 1 stale page + 2 page candidates + 1 topic share the list.
-    expect(within(dialog).getByText("1 of 6")).toBeInTheDocument();
+    // Two revisions and one stale page remain actionable.
+    expect(within(dialog).getByText("1 of 3")).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "Approve" }));
 
@@ -673,34 +727,6 @@ describe("DistillReviewPanel review queue", () => {
     await waitFor(() => expect(acceptRefinement).toHaveBeenCalledWith("ref-relation"));
   });
 
-  it("offers only dismiss for proposals the daemon cannot accept", async () => {
-    vi.mocked(listRefinements).mockResolvedValue({
-      proposals: [
-        {
-          id: "ref-suggest",
-          action: "suggest_entity",
-          source_ids: ["mem-a"],
-          payload: { action: "suggest_entity", name_hint: "Zed Editor" },
-          confidence: 0.7,
-          created_at: "2026-07-09T00:00:00Z",
-        },
-      ],
-    });
-    const { user } = renderPanel();
-
-    await user.click(await screen.findByRole("button", { name: /Zed Editor/ }));
-
-    const dialog = await screen.findByRole("dialog");
-    await within(dialog).findAllByText("Zed Editor");
-    expect(within(dialog).queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
-    // Enter must not fire the blocked accept verb either.
-    await user.keyboard("{Enter}");
-    expect(acceptRefinement).not.toHaveBeenCalled();
-
-    await user.click(within(dialog).getByRole("button", { name: "Dismiss" }));
-    await waitFor(() => expect(rejectRefinement).toHaveBeenCalledWith("ref-suggest"));
-  });
-
   it("walks the review queue revisions first, then conflicts, then page items", async () => {
     vi.mocked(distillReview).mockResolvedValue({
       ...reviewPayload,
@@ -771,85 +797,14 @@ describe("DistillReviewPanel review queue", () => {
     ]);
     renderPanel();
 
-    expect(await screen.findByText("Temporal page refresh")).toBeInTheDocument();
+    expect(await screen.findByText(/Background discoveries are available in Activity/)).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "New memories" })).toBeNull();
     expect(screen.queryByText("User prefers pnpm over npm")).toBeNull();
-    expect(screen.queryByText(/to decide/)).toBeNull();
     expect(confirmMemory).not.toHaveBeenCalled();
     expect(deleteMemory).not.toHaveBeenCalled();
   });
 
-  it("opens a read-only dialog from a new page candidate card", async () => {
-    const { user, onPageClick } = renderPanel();
-
-    await user.click(
-      await screen.findByRole("button", { name: "Review Temporal page refresh" }),
-    );
-
-    const dialog = await screen.findByRole("dialog");
-    expect(
-      within(dialog).getByRole("heading", { name: "Temporal page refresh" }),
-    ).toBeInTheDocument();
-    expect(within(dialog).getByText("New page")).toBeInTheDocument();
-    expect(within(dialog).getByText("These sources could form a note. No note has been created, and this is not a running job.")).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "Dismiss" })).toBeNull();
-    // 1 stale page + 2 page candidates + 1 topic; the stale page comes first.
-    expect(within(dialog).getByText("2 of 4")).toBeInTheDocument();
-
-    await user.click(within(dialog).getByRole("button", { name: "Open page" }));
-    expect(onPageClick).toHaveBeenCalledWith("page_temporal");
-  });
-
-  it("opens a read-only dialog from a new topic card", async () => {
-    const { user } = renderPanel();
-
-    await user.click(await screen.findByRole("button", { name: "Review Vector clocks" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("New topic")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText("4 mentions · no page covers it yet"),
-    ).toBeInTheDocument();
-    expect(
-      within(dialog).getByText("Mentioned across memories, but no page covers it yet."),
-    ).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Approve" })).toBeNull();
-    expect(within(dialog).queryByRole("button", { name: "Dismiss" })).toBeNull();
-    // No search hits (default mock) — the evidence pane says so honestly
-    // instead of rendering nothing.
-    expect(within(dialog).getByText("Mentioned in")).toBeInTheDocument();
-    expect(
-      await within(dialog).findByText("No related memories found."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows search evidence and its honesty caveat in a new topic dialog", async () => {
-    vi.mocked(search).mockResolvedValue([
-      {
-        id: "mem_vc-search",
-        content: "Vector clocks order events across replicas without a shared clock.",
-        source: "memory",
-        source_id: "mem_vc",
-        title: "Vector clocks note",
-        url: null,
-        chunk_index: 0,
-        last_modified: 1_760_000_000,
-        score: 0.9,
-      },
-    ]);
-    const { user } = renderPanel();
-
-    await user.click(await screen.findByRole("button", { name: "Review Vector clocks" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(await within(dialog).findByText("Vector clocks note")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/Found by search/),
-    ).toBeInTheDocument();
-  });
-
-  it("opens a read-only dialog from a new entity suggestion card and surfaces search evidence", async () => {
+  it("keeps unsupported proposals out of cards and opens Activity without resolving them", async () => {
     vi.mocked(listRefinements)
       .mockResolvedValueOnce({
         proposals: [
@@ -864,75 +819,27 @@ describe("DistillReviewPanel review queue", () => {
         ],
       })
       .mockResolvedValue({ proposals: [] });
-    vi.mocked(search).mockResolvedValue([
-      {
-        id: "mem_x-search",
-        content: "Tauri wraps a Rust backend with a web frontend.",
-        source: "memory",
-        source_id: "mem_x",
-        title: "Tauri overview",
-        url: null,
-        chunk_index: 0,
-        last_modified: 1_760_000_000,
-        score: 0.9,
-      },
-    ]);
-    const { user } = renderPanel();
+    const { user, onOpenActivity } = renderPanel();
 
-    await user.click(await screen.findByRole("button", { name: "Review Tauri" }));
-
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByRole("heading", { name: "Tauri" })).toBeInTheDocument();
-    expect(within(dialog).getByText("Entity suggestion")).toBeInTheDocument();
-    expect(await within(dialog).findByText("Tauri overview")).toBeInTheDocument();
-    expect(
-      within(dialog).getByText(/Found by search/),
-    ).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(await screen.findByText(/Background discoveries are available in Activity/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Review Tauri" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Open Activity" }));
+    expect(onOpenActivity).toHaveBeenCalledTimes(1);
+    expect(acceptRefinement).not.toHaveBeenCalled();
+    expect(rejectRefinement).not.toHaveBeenCalled();
   });
 
-  it("hides a topic through the dialog, persists it to localStorage, and keeps it hidden across a refresh", async () => {
-    const { user } = renderPanel();
-
-    await user.click(await screen.findByRole("button", { name: "Review Vector clocks" }));
-    const dialog = await screen.findByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: "Hide" }));
-
-    await waitFor(() => {
-      expect(screen.queryByRole("heading", { name: "New topics" })).toBeNull();
-    });
-    const stored = JSON.parse(localStorage.getItem("wenlan.review.hidden.v1") ?? "[]");
-    expect(stored).toHaveLength(1);
-    expect(stored[0]).toMatchObject({ key: "topic:Vector clocks", kind: "topic" });
-
-    // Refresh re-fetches the same distill payload — unlike resolvedStaleIds,
-    // the hide survives a fresh lastResult instead of resetting with it.
-    await user.click(screen.getByRole("button", { name: /^refresh$/i }));
-    await waitFor(() => {
-      expect(distillReview).toHaveBeenCalledTimes(2);
-    });
-    expect(screen.queryByRole("heading", { name: "New topics" })).toBeNull();
-  });
-
-  it("restores a hidden item from the Hidden footer", async () => {
+  it("keeps discovery hides out of Review's hidden footer", async () => {
     localStorage.setItem(
       "wenlan.review.hidden.v1",
       JSON.stringify([
         { key: "topic:Vector clocks", label: "Vector clocks", kind: "topic", at: Date.now() },
       ]),
     );
-    const { user } = renderPanel();
-
-    await screen.findByText("Temporal page refresh");
-    expect(screen.queryByRole("heading", { name: "New topics" })).toBeNull();
-
-    await user.click(await screen.findByRole("button", { name: /1 hidden/ }));
-    await user.click(await screen.findByRole("button", { name: "Restore" }));
-
-    expect(await screen.findByRole("heading", { name: "New topics" })).toBeInTheDocument();
-    expect(screen.getByText("Vector clocks")).toBeInTheDocument();
-    const stored = JSON.parse(localStorage.getItem("wenlan.review.hidden.v1") ?? "[]");
-    expect(stored).toHaveLength(0);
+    renderPanel();
+    await screen.findByText("Retrieval Pipeline");
+    expect(screen.queryByRole("button", { name: /1 hidden/ })).toBeNull();
+    expect(JSON.parse(localStorage.getItem("wenlan.review.hidden.v1") ?? "[]")).toHaveLength(1);
   });
 
   it("renders the revisions section's empty state when nothing is pending", async () => {
@@ -940,6 +847,7 @@ describe("DistillReviewPanel review queue", () => {
 
     await screen.findByRole("heading", { name: "Memory revisions" });
     expect(screen.getByText("Nothing waiting for approval.")).toBeInTheDocument();
+    expect(screen.queryByText("Coffee routine")).toBeNull();
     expect(
       screen.getByText(/before\/after diff lands here first/),
     ).toBeInTheDocument();
@@ -996,8 +904,27 @@ describe("DistillReviewPanel review filter", () => {
       JSON.stringify([{ key: "topic:Ghost topic", label: "Ghost topic", kind: "topic", at: Date.now() }]),
     );
     vi.mocked(distillReview).mockResolvedValue(emptyDistill);
+    let resolveRefinements!: (
+      response: Awaited<ReturnType<typeof listRefinements>>,
+    ) => void;
+    const pendingRefinements = new Promise<Awaited<ReturnType<typeof listRefinements>>>(
+      (resolve) => {
+        resolveRefinements = resolve;
+      },
+    );
     vi.mocked(listRefinements)
-      .mockResolvedValueOnce({
+      .mockReturnValueOnce(pendingRefinements)
+      .mockResolvedValue({ proposals: [] });
+    const { user } = renderPanel();
+
+    // Recent changes are independent from the review queue; hold proposals to
+    // prove the conflict filter appears only when its own query has resolved.
+    expect(await screen.findByRole("heading", { name: "Recent revisions" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Conflicts/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /1 hidden/ })).toBeNull();
+
+    await act(async () => {
+      resolveRefinements({
         proposals: [
           {
             id: "prop_conflict",
@@ -1016,16 +943,11 @@ describe("DistillReviewPanel review filter", () => {
             created_at: "2026-07-09T00:00:00Z",
           },
         ],
-      })
-      .mockResolvedValue({ proposals: [] });
-    const { user } = renderPanel();
+      });
+    });
 
-    // Under "all": recent revisions and the hidden footer both show.
-    expect(await screen.findByRole("heading", { name: "Recent revisions" })).toBeInTheDocument();
-    expect(await screen.findByRole("button", { name: /1 hidden/ })).toBeInTheDocument();
-
-    const group = screen.getByRole("group", { name: "Filter reviews" });
-    await user.click(within(group).getByRole("button", { name: /^Conflicts/ }));
+    const group = await screen.findByRole("group", { name: "Filter reviews" });
+    await user.click(await within(group).findByRole("button", { name: /^Conflicts/ }));
 
     expect(screen.getByRole("heading", { name: "Contradictions & conflicts" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Memory revisions" })).toBeNull();
@@ -1121,5 +1043,63 @@ describe("reviewExamples", () => {
       ]);
       expect(chain).toEqual({ current_source_id: sourceId, chain_depth: 0, entries: [] });
     }
+  });
+});
+
+
+describe("note-context review entry", () => {
+  it("opens the requested item even beyond the default queue cap", async () => {
+    vi.mocked(listPendingRevisions).mockImplementation(async limit => Array.from({length: 80}, (_, index) => revision({target_source_id: `mem_${index}`, revision_content: `Proposal ${index}`})).slice(0, limit));
+    vi.mocked(getMemoryDetail).mockImplementation(async id => memory({source_id: id, title: `Memory ${id}`, content: "Original text"}));
+    renderPanel({initialReviewItemId: "revision:mem_79"});
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("heading", {name: "Memory mem_79"})).toBeInTheDocument();
+    expect(listPendingRevisions).toHaveBeenCalledWith(500);
+    expect(listRefinements).toHaveBeenCalledWith(500);
+    expect(acceptPendingRevision).not.toHaveBeenCalled();
+  });
+  it("can open a known matching revision when the other queue source fails", async () => {
+    vi.mocked(listPendingRevisions).mockResolvedValue([revision({target_source_id: "mem_target", revision_content: "Proposal"})]);
+    vi.mocked(listRefinements).mockRejectedValue(new Error("offline"));
+    renderPanel({initialReviewItemId: "revision:mem_target"});
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+  it("explains a missing requested item without choosing another", async () => {
+    renderPanel({initialReviewItemId: "revision:handled"});
+    expect(await screen.findByText(/This item was not found in the loaded queue/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("does not focus an unsupported proposal from note context", async () => {
+    vi.mocked(listRefinements).mockResolvedValue({
+      proposals: [{
+        id: "cross-space",
+        action: "cross_space_discovery",
+        source_ids: ["mem_target"],
+        payload: { action: "cross_space_discovery", memory_count: 1, spaces: ["Other"] },
+        confidence: 0.8,
+        created_at: "2026-09-13T10:00:00Z",
+      }],
+    });
+    renderPanel({ initialReviewItemId: "refinement:cross-space" });
+
+    expect(await screen.findByText(/This item was not found in the loaded queue/)).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it.each([true, false])("resolving a revision clears both query scopes and refreshes note data (approve=%s)", async approve => {
+    const item = revision({target_source_id: "mem_target", revision_content: "Proposal"});
+    vi.mocked(listPendingRevisions).mockResolvedValueOnce([item]).mockResolvedValue([]);
+    const {user, client} = renderPanel({initialReviewItemId: "revision:mem_target"});
+    client.setQueryData(["pending-revisions"], [item]);
+    client.setQueryData(["page", "related-page"], {content: "Original"});
+    client.setQueryData(["page-revisions", "related-page"], {entries: []});
+    const dialog = await screen.findByRole("dialog");
+    const action = within(dialog).getByRole("button", {name: approve ? "Approve" : "Dismiss"});
+    await waitFor(() => expect(action).toBeEnabled());
+    await user.click(action);
+    await waitFor(() => expect(approve ? acceptPendingRevision : dismissPendingRevision).toHaveBeenCalledWith("mem_target"));
+    await waitFor(() => expect(client.getQueryData(["pending-revisions", "note-context"])).toEqual([]));
+    expect(client.getQueryData(["pending-revisions"])).toEqual([]);
+    expect(client.getQueryState(["page", "related-page"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["page-revisions", "related-page"])?.isInvalidated).toBe(true);
   });
 });

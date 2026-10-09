@@ -42,7 +42,7 @@ for (const mode of ["recent", "custom"]) test(`${mode} navigation honors failed 
  await dir.getByRole("button",{name:"Why fixtures stay deterministic",exact:true}).click();
  await expect(page.locator(".page-detail").getByRole("alert")).toBeVisible();await expect(editor).toHaveAttribute("data-proof","retained");
  await expect(page.getByRole("tab",{name:"Fixture architecture",exact:true})).toHaveAttribute("aria-selected","true");
- await page.getByRole("button",{name:"Retry",exact:true}).click();await expect(page.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await page.getByRole("button",{name:"Retry",exact:true}).click();await expect(page.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await dir.getByRole("button",{name:"Why fixtures stay deterministic",exact:true}).click();await expect(page.getByRole("tab",{name:"Why fixtures stay deterministic",exact:true})).toHaveAttribute("aria-selected","true");
  await page.locator(".note-tab-create").click();await page.getByRole("textbox",{name:"Title",exact:true}).fill("Unfiled recent note");await page.getByRole("textbox",{name:"Content",exact:true}).fill("A new note needs no folder decision.");
  await expect.poll(()=>runtime.calls().filter(c=>c.command==="create_page_draft").length).toBe(1);

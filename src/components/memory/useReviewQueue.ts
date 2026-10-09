@@ -141,18 +141,21 @@ export const REVIEW_QUEUE_LIMIT = 50;
  * refinement proposals. `resolve` approves or dismisses one item through the
  * matching daemon verb and removes it from the cached queue immediately.
  */
-export function useReviewQueue(enabled: boolean = true) {
+export function useReviewQueue(enabled: boolean = true, scope: "default" | "note-context" = "default") {
+  const decisionLimit = scope === "note-context" ? 500 : REVIEW_QUEUE_LIMIT;
+  const revisionsKey = scope === "note-context" ? [...REVISIONS_KEY, scope] : REVISIONS_KEY;
+  const refinementsKey = scope === "note-context" ? [...REFINEMENTS_KEY, scope] : REFINEMENTS_KEY;
   const queryClient = useQueryClient();
 
   const revisions = useQuery({
-    queryKey: REVISIONS_KEY,
-    queryFn: () => listPendingRevisions(REVIEW_QUEUE_LIMIT),
+    queryKey: revisionsKey,
+    queryFn: () => listPendingRevisions(decisionLimit),
     refetchInterval: 30_000,
     enabled,
   });
   const refinements = useQuery({
-    queryKey: REFINEMENTS_KEY,
-    queryFn: () => listRefinements(REVIEW_QUEUE_LIMIT),
+    queryKey: refinementsKey,
+    queryFn: () => listRefinements(decisionLimit),
     refetchInterval: 30_000,
     enabled,
   });
@@ -254,8 +257,8 @@ export function useReviewQueue(enabled: boolean = true) {
       // Drop the resolved item from the cache right away so the queue and any
       // open dialog advance without waiting for the refetch.
       if (item.kind === "revision") {
-        queryClient.setQueryData<PendingRevisionItem[]>(
-          REVISIONS_KEY,
+        queryClient.setQueriesData<PendingRevisionItem[]>(
+          { queryKey: REVISIONS_KEY },
           (old) =>
             old?.filter(
               (entry) => entry.target_source_id !== item.targetSourceId,
@@ -267,13 +270,19 @@ export function useReviewQueue(enabled: boolean = true) {
           (old) => old?.filter((entry) => entry.id !== item.id) ?? [],
         );
       } else {
-        queryClient.setQueryData<{ proposals: RefinementProposalSummary[] }>(
-          REFINEMENTS_KEY,
+        queryClient.setQueriesData<{ proposals: RefinementProposalSummary[] }>(
+          { queryKey: REFINEMENTS_KEY },
           (old) => ({
             proposals:
               old?.proposals.filter((entry) => entry.id !== item.id) ?? [],
           }),
         );
+      }
+      // Decisions entered from a note must refresh that note and its inline
+      // signal as well as every capped queue cache. Never leave approved text
+      // or a dismissed card looking pending on return.
+      for (const key of ["page", "pages", "page-revisions", "page-sources", "page-links", "space-pages", "memory-detail"]) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
       }
       queryClient.invalidateQueries({ queryKey: REVISIONS_KEY });
       queryClient.invalidateQueries({ queryKey: REFINEMENTS_KEY });
@@ -282,8 +291,8 @@ export function useReviewQueue(enabled: boolean = true) {
   });
 
   const decisionsTruncated =
-    (revisions.data?.length ?? 0) >= REVIEW_QUEUE_LIMIT ||
-    (refinements.data?.proposals.length ?? 0) >= REVIEW_QUEUE_LIMIT;
+    (revisions.data?.length ?? 0) >= decisionLimit ||
+    (refinements.data?.proposals.length ?? 0) >= decisionLimit;
   const capturesTruncated = (captures.data?.length ?? 0) >= REVIEW_QUEUE_LIMIT;
 
   // Re-fetch all three sources — used to retry after a failed queue load.

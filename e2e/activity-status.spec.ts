@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// PR3 Activity rail and compact summary contract. This intentionally covers
-// ActivityStatus/SummaryPopover only; ActivityFeed's ActivityNow appearance
-// belongs to the later PR4 visual contract.
+// Activity rail and compact summary behavior (PR3), plus the ActivityNow
+// neutral, failure, and editor-preservation contracts (PR4).
 import { expect, test, type Page } from "@playwright/test";
 import type { ActivityResponse } from "../src/lib/tauri";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
+import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const WIDTHS = [1487, 1280, 768, 375] as const;
 const VIEWS = ["Wiki", "Topics", "Spaces", "Graph", "Sources"] as const;
@@ -252,4 +252,98 @@ test("Activity summary is reachable by keyboard alone", async ({ page }) => {
   expect(unlabelledImages).toBe(0);
   await page.keyboard.press("Tab");
   await expect(popover.getByTestId("activity-summary-open")).toBeFocused();
+});
+
+// PR4 ActivityFeed and ActivityNow contracts, kept separate from the rail fixture above.
+const IDLE_ACTIVITY: ActivityResponse = {
+  state: "blocked",
+  last_activity_at: null,
+  assets: [],
+  everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+  synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
+  refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
+};
+
+async function installPr4ActivityFixture(page: Page, activity: ActivityResponse): Promise<void> {
+  await page.addInitScript((fixture) => {
+    const internals = window.__TAURI_INTERNALS__;
+    if (!internals) return;
+    const orig = internals.invoke.bind(internals);
+    internals.invoke = (async (command: string, args?: unknown) => {
+      if (command === "get_activity") return fixture;
+      return orig(command, args);
+    }) as typeof internals.invoke;
+  }, activity);
+}
+
+test("Activity status stays neutral without configured AI and keeps Activity sections visible", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
+  await installPr4ActivityFixture(page, IDLE_ACTIVITY);
+  await page.goto("/");
+
+  const button = page.getByTestId("activity-status");
+  await expect(button).toBeVisible();
+  await expect(button).toHaveAccessibleName("Activity");
+  await expect(button).not.toHaveAttribute("data-state");
+  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-kind", "pulse");
+  await button.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByTestId("activity-summary-open").click();
+
+  await expect(page.getByRole("heading", { name: "Activity", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Background organization", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Suggestions", level: 2 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent activity", level: 2 })).toBeVisible();
+  await expect(page.getByTestId("activity-now-blocked")).toBeVisible();
+  await expect(page.getByTestId("activity-now-idle")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText(/turn on model|choose a model|configure a model/i)).toHaveCount(0);
+  expect(errors.pageErrors).toEqual([]);
+  expect(errors.consoleErrors).toEqual([]);
+});
+
+test("a failed step is the only attention state on the Activity entry", async ({ page }) => {
+  await installTauriMock(page, { locale: "en", rawActions: [], memories: [] });
+  await installPr4ActivityFixture(page, {
+    ...IDLE_ACTIVITY,
+    assets: [{
+      kind: "pages",
+      state: "blocked",
+      done: 0,
+      total: 2,
+      blocked: 2,
+      steps: [{ name: "write", state: "blocked", done: 0, total: 2, failed: 2, job: "synthesis" }],
+    }],
+  });
+  await page.goto("/");
+
+  const button = page.getByTestId("activity-status");
+  await expect(button).toHaveAccessibleName("Activity, Failed");
+  await expect(page.getByTestId("activity-status-icon")).toHaveAttribute("data-icon-kind", "attention");
+  await button.click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.getByTestId("activity-summary-open").click();
+  await expect(page.getByTestId("activity-now-failed")).toHaveText("2 pages could not be updated.");
+});
+
+
+test("summary Escape keeps the note editor open and returns focus to Activity", async ({ page }) => {
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await installPr4ActivityFixture(page, IDLE_ACTIVITY);
+  await page.goto("/");
+  await openWikiNote(page, "Fixture architecture");
+  const editor = page.locator(".cm-content[contenteditable=true]");
+  await expect(editor).toBeVisible();
+  await editor.evaluate(el => el.setAttribute("data-summary-original", "true"));
+  const text = await editor.innerText();
+  const trigger = page.getByTestId("activity-status");
+  await trigger.click();
+  await page.getByTestId("activity-summary-open").focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await expect(editor).toHaveAttribute("data-summary-original", "true");
+  expect(await editor.innerText()).toBe(text);
 });

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { ensureSyntaxTree, forceParsing, syntaxTree, syntaxTreeAvailable } from "@codemirror/language";
 import { markdown } from "@codemirror/lang-markdown";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -25,10 +26,79 @@ function make(source: string, initialTargets: ReadonlyMap<string, string> = targ
     state: EditorState.create({ doc: source, extensions: [markdown(), createWikiLinkEditing(initialTargets, { onActivate, onPreview, onPreviewLeave, onReferenceActivate, onReferencePreview }, context)] }),
   });
   views.push(view);
+  expect(forceParsing(view, source.length, 1000)).toBe(true);
   return { view, onActivate, onPreview, onPreviewLeave, onReferenceActivate, onReferencePreview };
 }
 
 describe("wiki link editing", () => {
+  it("waits for a complete Markdown tree before exposing wiki links", () => {
+    const codeLinks = Array.from({ length: 400 }, () => "[[Target]]").join("\n");
+    const source = ["[[Target]]", "", "```md", codeLinks, "```"].join("\n");
+    let now = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 100;
+      return now;
+    });
+
+    let view: EditorView;
+    try {
+      const parent = document.body.appendChild(document.createElement("div"));
+      view = new EditorView({
+        parent,
+        state: EditorState.create({ doc: source, extensions: [markdown(), createWikiLinkEditing(targets, {
+          onActivate: vi.fn(), onPreview: vi.fn(), onPreviewLeave: vi.fn(),
+        })] }),
+      });
+      views.push(view);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(syntaxTreeAvailable(view!.state, source.length)).toBe(false);
+    expect(view!.contentDOM.querySelectorAll("a[data-wiki-page-id]")).toHaveLength(0);
+
+    forceParsing(view!, source.length, 1000);
+    expect(syntaxTreeAvailable(view!.state, source.length)).toBe(true);
+    expect([...view!.contentDOM.querySelectorAll<HTMLAnchorElement>("a[data-wiki-page-id]")].map((anchor) => anchor.textContent))
+      .toEqual(["Target"]);
+    expect(view!.state.doc.toString()).toBe(source);
+  });
+
+  it("uses the completed parser-context tree when the state snapshot is stale", () => {
+    const codeLinks = Array.from({ length: 80 }, () => "[[Target]]").join("\n");
+    const source = ["[[Target]]", "", "```md", codeLinks, "```"].join("\n");
+    const extension = createWikiLinkEditing(targets, {
+      onActivate: vi.fn(), onPreview: vi.fn(), onPreviewLeave: vi.fn(),
+    });
+    let now = 0;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 100;
+      return now;
+    });
+
+    let state: EditorState;
+    try {
+      state = EditorState.create({ doc: source, extensions: [markdown(), extension] });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    const stateTree = syntaxTree(state!);
+    expect(syntaxTreeAvailable(state!, source.length)).toBe(false);
+    const parsedTree = ensureSyntaxTree(state!, source.length, 1000);
+    expect(parsedTree).not.toBeNull();
+    expect(syntaxTreeAvailable(state!, source.length)).toBe(true);
+    expect(syntaxTree(state!)).toBe(stateTree);
+    expect(parsedTree).not.toBe(stateTree);
+
+    const parent = document.body.appendChild(document.createElement("div"));
+    const view = new EditorView({ parent, state: state! });
+    views.push(view);
+    expect([...view.contentDOM.querySelectorAll<HTMLAnchorElement>("a[data-wiki-page-id]")].map((anchor) => anchor.textContent))
+      .toEqual(["Target"]);
+    expect(view.state.doc.toString()).toBe(source);
+  });
+
   it("parses target, alias and heading while requiring an exact resolved map entry", () => {
     expect(parseResolvedWikiLinks("[[ Target #walk | Read this ]] [[Target]] [[Missing]]", targets)).toEqual([
       { from: 18, to: 27, tokenFrom: 0, tokenTo: 30, targetLabel: "Target", displayText: "Read this" },

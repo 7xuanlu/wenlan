@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
 import ActivityFeed from "./ActivityFeed";
@@ -8,12 +9,16 @@ import type { AgentActivityItem, AgentConnection } from "../../lib/tauri";
 
 const activityMock = vi.hoisted(() => vi.fn());
 const agentsMock = vi.hoisted(() => vi.fn());
-// The Now section mounts inside the feed and reads get_activity. Mock plumbing
-// only: no assertion in this file changes.
+const distillMock = vi.hoisted(() => vi.fn());
+const refinementsMock = vi.hoisted(() => vi.fn());
+// Activity's visible suggestions issue the same read-only queries as its page
+// component, so these fixtures keep the feed tests independent of those reads.
 const getActivityMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/tauri", () => ({
   getActivity: getActivityMock,
+  distillReview: distillMock,
+  listRefinements: refinementsMock,
   listAgentActivity: activityMock,
   listAgents: agentsMock,
 }));
@@ -43,11 +48,11 @@ const activity = (item: Partial<AgentActivityItem>): AgentActivityItem => ({
   memory_titles: item.memory_titles ?? [],
 });
 
-function renderActivityFeed() {
+function renderActivityFeed(onOpenReview?: () => void) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ActivityFeed onNavigateMemory={vi.fn()} />
+      <ActivityFeed onNavigateMemory={vi.fn()} onOpenReview={onOpenReview} />
     </QueryClientProvider>,
   );
 }
@@ -64,6 +69,11 @@ describe("ActivityFeed i18n", () => {
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     });
     await i18n.changeLanguage("zh-Hant");
+    distillMock.mockResolvedValue({
+      pages_created: 0, scoped: false, created_ids: [], pending: [], stale_pages: [],
+      stale_truncated: false, orphan_topics: [],
+    });
+    refinementsMock.mockResolvedValue({ proposals: [] });
     agentsMock.mockResolvedValue([
       agent("codex", "Codex"),
       agent("claude-code", "Claude Code"),
@@ -75,9 +85,46 @@ describe("ActivityFeed i18n", () => {
 
     renderActivityFeed();
 
+    expect(await screen.findByRole("heading", { level: 1, name: "活動" })).toBeInTheDocument();
     expect(
       await screen.findByText("你的 AI 工具與記憶互動時，會出現在這裡。"),
     ).toBeInTheDocument();
+  });
+
+  it("puts Review page changes directly under Activity and keeps its callback", async () => {
+    activityMock.mockResolvedValue([]);
+    const onOpenReview = vi.fn();
+
+    renderActivityFeed(onOpenReview);
+
+    const title = await screen.findByRole("heading", { level: 1, name: "活動" });
+    const review = screen.getByRole("button", { name: /審閱頁面變更/ });
+    const background = screen.getByTestId("activity-now");
+    expect(title.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(review.compareDocumentPosition(background) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await userEvent.click(review);
+    expect(onOpenReview).toHaveBeenCalledOnce();
+  });
+
+  it("shows loading instead of treating an unread event query as an empty feed", async () => {
+    activityMock.mockReturnValue(new Promise(() => {}));
+
+    renderActivityFeed();
+
+    expect(await screen.findByRole("status")).toHaveTextContent("正在載入最近活動…");
+    expect(screen.queryByText("你的 AI 工具與記憶互動時，會出現在這裡。")).toBeNull();
+  });
+
+  it("shows the read error and only offers a real reread", async () => {
+    activityMock.mockRejectedValueOnce(new Error("activity read failed"));
+    activityMock.mockResolvedValueOnce([]);
+
+    renderActivityFeed();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("無法載入最近活動。");
+    expect(screen.queryByText("你的 AI 工具與記憶互動時，會出現在這裡。")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
+    expect(await screen.findByText("你的 AI 工具與記憶互動時，會出現在這裡。")).toBeInTheDocument();
   });
 
   it("localizes visible activity chrome and event copy", async () => {

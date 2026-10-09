@@ -76,7 +76,7 @@ test("independent editors, local inspectors, and a failed save cannot lose a mov
  await expect(rightEditor).toHaveAttribute("data-editor-instance","right");
  await group(page,"secondary").getByRole("button",{name:"Close",exact:true}).click();
  await expect.poll(()=>source(rightEditor)).toContain("Right group edit remains.");
- await expect(group(page,"secondary").locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(group(page,"secondary").locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  runtime.failNext("update_page","save refused");
  await append(page,"secondary","\nUnsaved on failed move.");
  await move(page,"secondary");
@@ -84,7 +84,7 @@ test("independent editors, local inspectors, and a failed save cannot lose a mov
  await expect(rightEditor).toHaveAttribute("data-editor-instance","right");
  await expect.poll(()=>source(rightEditor)).toContain("Unsaved on failed move.");
  await group(page,"secondary").getByRole("button",{name:"Retry",exact:true}).click();
- await expect(group(page,"secondary").locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(group(page,"secondary").locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await page.screenshot({path:info.outputPath("split-notes.png"),fullPage:true});
  await move(page,"secondary");
  await expect(group(page,"secondary")).toHaveCount(0);
@@ -120,7 +120,7 @@ test("a saved draft moves, auto-finalizes, and retains durable content in the ri
  const right=group(page,"secondary");
  const editor=right.getByRole("textbox",{name:"Page editor",exact:true});
  await expect(editor).toBeVisible();
- await expect(right.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(right.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await expect.poll(()=>source(editor)).toContain("Draft transferred safely.");
 });
 
@@ -194,6 +194,6 @@ test("a newer right tab choice cancels a pending global graph navigation", async
  await right.getByRole("button",{name:"Open in graph",exact:true}).click();
  await right.getByRole("tab",{name:"Independent research",exact:true}).click();
  await expect(right.getByRole("tab",{name:"Independent research",exact:true})).toHaveAttribute("aria-selected","true");
- await expect(left.locator(".page-detail").getByRole("status")).toHaveText("Saved");
+ await expect(left.locator('.page-detail .sr-only[role="status"]')).toHaveText("Saved");
  await expect(page.locator(".atlas-view")).toHaveCount(0);
 });

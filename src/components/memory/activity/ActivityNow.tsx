@@ -1,487 +1,166 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import type { ActivityResponse } from "../../../lib/tauri";
-import { useActivity } from "../../../lib/useActivity";
-import {
-  ACTIVITY_RAIL_MIN_WIDTH,
-  useActivityNowLayout,
-  type ActivityNowLayout,
-} from "../../../lib/activityNowLayout";
+import { Brain, Shapes, FileText, Check, Clock, WarningCircle, CircleNotch } from "@phosphor-icons/react";
+import { Button } from "../settings/primitives";
 import {
   assetSentence,
   blockedCauses,
   knownAssets,
-  knownLane,
   knownState,
-  laneKey,
-  routeFor,
-  routeSentence,
-  ROUTE_JOBS,
-  stepCount,
-  suggestionLines,
-  trustSentence,
-  type KnownActivityAsset,
-  type KnownActivityAssetKind,
-  type KnownActivityStep,
+  STEP_UNIT,
 } from "../../../lib/activitySentence";
-import { ACTIVITY_ASSET_ORDER as ASSET_ORDER } from "./activityPresentation";
+import { useActivity } from "../../../lib/useActivity";
 
-/**
- * Tier 2: the Now section on the Activity page.
- *
- * Same three assets as the popover, one level deeper: each row expands into
- * its steps, and the section carries the models line and the trust sentence
- * that the popover only summarizes. The feed below is untouched.
- */
+const ROUTES = ["everyday", "synthesis"] as const;
+const ASSET_ICONS = { memories: Brain, entities: Shapes, pages: FileText };
+const displayState = (state: string) =>
+  state === "idle" || state === "running" || state === "blocked" ? state : "unknown";
 
-const RAIL_QUERY = `(min-width: ${ACTIVITY_RAIL_MIN_WIDTH}px)`;
-
-function subscribeToRailWidth(onChange: () => void): () => void {
-  if (typeof window.matchMedia !== "function") return () => {};
-  const media = window.matchMedia(RAIL_QUERY);
-  media.addEventListener("change", onChange);
-  return () => media.removeEventListener("change", onChange);
-}
-
-function railWidthSnapshot(): boolean {
-  return (
-    typeof window.matchMedia === "function" &&
-    window.matchMedia(RAIL_QUERY).matches
-  );
-}
-
-/**
- * The layout actually rendered. The rail has nowhere to sit on a narrow
- * window, so it becomes the card; the user's preference is untouched and comes
- * back when the window widens.
- */
-export function effectiveLayout(
-  preference: ActivityNowLayout,
-  wideEnoughForRail: boolean,
-): ActivityNowLayout {
-  return preference === "rail" && !wideEnoughForRail ? "card" : preference;
-}
-
-/**
- * The effective layout, for callers that must place the section rather than
- * render it. ActivityFeed needs this to decide between a two-column shell, a
- * card above the toolbar, and a group inside the feed.
- */
-export function useActivityNowPlacement(): ActivityNowLayout {
-  const [preference] = useActivityNowLayout();
-  const wideEnoughForRail = useSyncExternalStore(
-    subscribeToRailWidth,
-    railWidthSnapshot,
-    () => true,
-  );
-  return effectiveLayout(preference, wideEnoughForRail);
-}
-
-const ASSET_COLOR: Record<KnownActivityAssetKind, string> = {
-  memories: "var(--mem-accent-indigo)",
-  entities: "var(--mem-accent-sage)",
-  pages: "var(--mem-accent-warm)",
-};
-
-function BlockedCauses({
-  activity,
-  testId,
-  onTurnOnModel,
-}: {
-  readonly activity: ActivityResponse;
-  readonly testId: string;
-  readonly onTurnOnModel?: () => void;
-}) {
+export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenIntelligence?: () => void }) {
   const { t } = useTranslation();
-  const causes = blockedCauses(activity);
-  if (causes.length === 0) return null;
-  return (
-    <div data-testid={testId} className="mem-activity-causes">
-      <div className="mem-activity-causes-text">
-        {causes.map((cause) => (
-          <p key={cause.key}>{t(cause.key)}</p>
-        ))}
-      </div>
-      {onTurnOnModel !== undefined && (
-        <button
-          type="button"
-          className="mem-activity-popover-action"
-          data-testid={`${testId}-action`}
-          onClick={onTurnOnModel}
-        >
-          {t("activityStatus.turnOnModel")}
-        </button>
-      )}
-    </div>
-  );
-}
+  const query = useActivity();
 
-function StepRow({
-  activity,
-  kind,
-  step,
-}: {
-  readonly activity: ActivityResponse;
-  readonly kind: KnownActivityAssetKind;
-  readonly step: KnownActivityStep;
-}) {
-  const { t } = useTranslation();
-  // Store and Confirm run no model, so they carry no lane. `job` is the
-  // server's own answer to "which route does this step use"; a null one means
-  // the question does not apply, not that the lane is missing. A lane this
-  // build cannot name gets no chip rather than a raw key.
-  const lane = step.job === null ? undefined : knownLane(routeFor(activity, kind).lane);
-  const count = stepCount(step);
-
-  return (
-    <div
-      data-testid={`activity-step-${step.name}`}
-      style={{
-        alignItems: "baseline",
-        display: "flex",
-        gap: "8px",
-        paddingLeft: "16px",
-      }}
-    >
-      <span
-        style={{
-          color: "var(--mem-text-secondary)",
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "11px",
-          fontWeight: 500,
-          minWidth: "64px",
-        }}
-      >
-        {t(`activityStatus.step.${step.name}`)}
-      </span>
-      <span
-        style={{
-          color: "var(--mem-text-tertiary)",
-          flex: 1,
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "11px",
-          lineHeight: 1.45,
-          minWidth: 0,
-        }}
-      >
-        {t(`activityStatus.stepValue.${step.name}`)}
-      </span>
-      <span
-        data-testid={`activity-step-count-${step.name}`}
-        style={{
-          color: "var(--mem-text-tertiary)",
-          fontFamily: "var(--mem-font-mono)",
-          fontSize: "10px",
-          whiteSpace: "nowrap",
-        }}
-      >
-        {t(count.key, count.params)}
-      </span>
-      {lane !== undefined && (
-        <span
-          className="mem-activity-lane-chip"
-          data-testid={`activity-step-lane-${step.name}`}
-        >
-          {t(laneKey(lane))}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function AssetBlock({
-  activity,
-  asset,
-}: {
-  readonly activity: ActivityResponse;
-  readonly asset: KnownActivityAsset;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const phrase = assetSentence(activity, asset);
-
-  return (
-    <div data-testid={`activity-now-${asset.kind}`} style={{ display: "grid", gap: "5px" }}>
-      <div style={{ alignItems: "center", display: "flex", gap: "7px" }}>
-        <span
-          aria-hidden="true"
-          style={{
-            backgroundColor: ASSET_COLOR[asset.kind],
-            borderRadius: "2px",
-            flexShrink: 0,
-            height: "8px",
-            width: "8px",
-          }}
-        />
-        <span
-          style={{
-            color: "var(--mem-text)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            fontWeight: 500,
-          }}
-        >
-          {t(`activityStatus.asset.${asset.kind}`)}
-        </span>
-        {activity.state !== "off" && asset.steps.length > 0 && (
-          <button
-            type="button"
-            className="mem-activity-steps-toggle"
-            data-testid={`activity-steps-toggle-${asset.kind}`}
-            aria-expanded={open}
-            onClick={() => setOpen((value) => !value)}
-          >
-            {t(open ? "activityStatus.hideSteps" : "activityStatus.showSteps")}
-          </button>
-        )}
-      </div>
-      <p
-        style={{
-          color: "var(--mem-text-secondary)",
-          fontFamily: "var(--mem-font-body)",
-          fontSize: "11px",
-          lineHeight: 1.45,
-          margin: 0,
-          paddingLeft: "15px",
-        }}
-      >
-        {t(phrase.key, phrase.params)}
-      </p>
-      {activity.state !== "off" && open && (
-        <div
-          data-testid={`activity-steps-${asset.kind}`}
-          style={{ display: "grid", gap: "5px", paddingTop: "3px" }}
-        >
-          {asset.steps.map((step) => (
-            <StepRow
-              key={step.name}
-              activity={activity}
-              kind={asset.kind}
-              step={step}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Open refinement suggestions, after the assets. Quiet on purpose: a neutral
- * square, no state word, because these counts never change the state and
- * some of them never move on their own.
- */
-function SuggestionsBlock({ activity }: { readonly activity: ActivityResponse }) {
-  const { t } = useTranslation();
-  const lines = suggestionLines(activity);
-  if (lines.length === 0) return null;
-
-  return (
-    <div data-testid="activity-now-suggestions" style={{ display: "grid", gap: "5px" }}>
-      <div style={{ alignItems: "center", display: "flex", gap: "7px" }}>
-        <span
-          aria-hidden="true"
-          style={{
-            backgroundColor: "var(--mem-text-tertiary)",
-            borderRadius: "2px",
-            flexShrink: 0,
-            height: "8px",
-            width: "8px",
-          }}
-        />
-        <span
-          style={{
-            color: "var(--mem-text)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            fontWeight: 500,
-          }}
-        >
-          {t("activityStatus.suggestions.title")}
-        </span>
-      </div>
-      {lines.map((line) => (
-        <p
-          key={line.kind}
-          data-testid={`activity-now-suggestions-${line.kind}`}
-          style={{
-            color: "var(--mem-text-secondary)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "11px",
-            lineHeight: 1.45,
-            margin: 0,
-            paddingLeft: "15px",
-          }}
-        >
-          {t(line.key, line.params)}
-        </p>
-      ))}
-    </div>
-  );
-}
-
-function NowBody({
-  activity,
-  onOpenIntelligence,
-}: {
-  readonly activity: ActivityResponse;
-  readonly onOpenIntelligence?: () => void;
-}) {
-  const { t } = useTranslation();
-  const byKind = new Map(knownAssets(activity).map((asset) => [asset.kind, asset]));
-  const trust = trustSentence(activity);
-  const state = knownState(activity);
-  const trustText =
-    trust === undefined
-      ? undefined
-      : trust.kind === "local"
-      ? t(trust.key)
-      : t(trust.key, {
-          jobs: trust.jobKeys
-            .map((key) => t(key))
-            .join(t("activityStatus.jobSeparator")),
-          vendor: t(trust.vendorKey),
-        });
-
-  return (
-    <div style={{ display: "grid", gap: "12px" }}>
-      {state !== undefined && (
-        <p
-          data-testid="activity-now-headline"
-          style={{
-            color: "var(--mem-text)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "12px",
-            lineHeight: 1.45,
-            margin: 0,
-          }}
-        >
-          {t(`activityStatus.headline.${state}`)}
-        </p>
-      )}
-      <BlockedCauses activity={activity} testId="activity-now-causes" />
-
-      <div style={{ display: "grid", gap: "11px" }}>
-        {ASSET_ORDER.map((kind) => {
-          const asset = byKind.get(kind);
-          return asset ? (
-            <AssetBlock key={kind} activity={activity} asset={asset} />
-          ) : null;
-        })}
-      </div>
-
-      <SuggestionsBlock activity={activity} />
-
-      <div
-        style={{
-          borderTop: "1px solid var(--mem-border)",
-          display: "grid",
-          gap: "5px",
-          paddingTop: "10px",
-        }}
-      >
-        <p
-          data-testid="activity-now-models"
-          style={{
-            color: "var(--mem-text-tertiary)",
-            fontFamily: "var(--mem-font-body)",
-            fontSize: "10px",
-            lineHeight: 1.45,
-            margin: 0,
-          }}
-        >
-          {/* A route on a lane this build cannot name is left out: its
-              sentence would need a word for where the work runs. */}
-          {state !== "off" && ROUTE_JOBS.flatMap((job) => {
-            const route = activity[job];
-            const lane = knownLane(route.lane);
-            if (lane === undefined) return [];
-            const phrase = routeSentence(route);
-            return [
-              t(phrase.key, {
-                ...phrase.params,
-                job: t(`activityStatus.jobTitle.${job}`),
-                lane: t(laneKey(lane)),
-              }),
-            ];
-          }).join(" ")}
-          {onOpenIntelligence !== undefined && (
-            <>
-              {" "}
-              <button
-                type="button"
-                className="mem-activity-inline-link"
-                data-testid="activity-now-intelligence"
-                onClick={onOpenIntelligence}
-              >
-                {t("activityStatus.openIntelligence")}
-              </button>
-            </>
-          )}
-        </p>
-        {/* No trust line at all when a lane is unknown: see trustSentence. */}
-        {state !== "off" && trustText !== undefined && (
-          <p
-            data-testid="activity-now-trust"
-            style={{
-              color: "var(--mem-text-tertiary)",
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "10px",
-              lineHeight: 1.45,
-              margin: 0,
-            }}
-          >
-            {trustText}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-interface ActivityNowProps {
-  /** Navigates to Settings, Intelligence. Absent when the shell has no route. */
-  readonly onOpenIntelligence?: () => void;
-}
-
-/**
- * The Now section, in the layout the user chose in Settings.
- *
- * `rail` and `card` render the same body in a bordered surface; `timeline`
- * drops the surface and uses the feed's own section grammar so it reads as the
- * newest group rather than as a widget parked in the list.
- */
-export default function ActivityNow({ onOpenIntelligence }: ActivityNowProps) {
-  const { t } = useTranslation();
-  const { data: activity } = useActivity();
-  const layout = useActivityNowPlacement();
-
-  // Nothing until the first read lands, for the same reason as the status
-  // line: an invented headline is worse than an empty slot for one tick.
-  if (activity === undefined) return null;
-
-  const title = (
-    <h3 className="mem-activity-now-title">{t("activityStatus.nowTitle")}</h3>
-  );
-
-  if (layout === "timeline") {
+  if (query.isPending && query.data === undefined) {
     return (
-      <section data-testid="activity-now" data-layout="timeline">
-        {title}
-        <NowBody activity={activity} onOpenIntelligence={onOpenIntelligence} />
+      <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+        <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
+        <p>{t("activityStatus.nowLoading")}</p>
       </section>
     );
   }
 
+  if (query.isError) {
+    return (
+      <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+        <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
+        <p role="alert">{t("activityStatus.nowError")}</p>
+        <button type="button" onClick={() => void query.refetch()}>
+          {t("activityStatus.readAgain")}
+        </button>
+      </section>
+    );
+  }
+
+  const activity = query.data;
+  if (activity === undefined) return null;
+
+  const assets = knownAssets(activity);
+  const failed = assets.flatMap((asset) =>
+    asset.steps
+      .filter((step) => step.failed > 0)
+      .map((step) => ({ asset: asset.kind, step: step.name, count: step.failed })),
+  );
+  const anyFailed = activity.assets.some((asset) =>
+    asset.steps.some((step) => step.failed > 0),
+  );
+  const state = knownState(activity);
+  const unknown = state === undefined || activity.assets.some((asset) =>
+    asset.kind === "unknown" || asset.state === "unknown" || asset.steps.some((step) =>
+      step.name === "unknown" || step.state === "unknown",
+    ),
+  );
+
+  let summary: "unknown" | "off" | "waiting" | "running" | "blocked" | "idle";
+  if (unknown) summary = "unknown";
+  else if (state === "off") summary = "off";
+  else if (state === "waiting_for_idle") summary = "waiting";
+  else if (state === "organizing") summary = "running";
+  else if (state === "blocked") summary = "blocked";
+  else summary = "idle";
+
+  // blockedCauses names the configured/unavailable route behind blocked asset
+  // counts. When there are no asset rows yet, still describe the route state
+  // rather than implying the system is idle.
+  const causes = blockedCauses(activity);
+  if (summary === "blocked" && causes.length === 0) {
+    const unavailableJobs = ROUTES.filter((job) => activity[job].mode === "pinned_unavailable");
+    const jobs = unavailableJobs.length > 0
+      ? unavailableJobs
+      : ROUTES.filter((job) => activity[job].mode === "unconfigured");
+    for (const job of jobs) {
+      const route = activity[job];
+      if (route.mode === "unconfigured") {
+        causes.push({ key: `activityStatus.blockedCause.${job}` });
+      } else if (route.mode === "pinned_unavailable") {
+        causes.push({ key: `activityStatus.blockedCauseUnavailable.${job}` });
+      }
+    }
+  }
+
   return (
-    <section
-      className="mem-activity-now-surface"
-      data-testid="activity-now"
-      data-layout={layout}
-    >
-      {title}
-      <NowBody activity={activity} onOpenIntelligence={onOpenIntelligence} />
+    <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+        <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
+      <div className="mem-activity-now-content">
+        <p className="mem-activity-now-summary" data-testid={`activity-now-${summary}`}>
+          {t(({
+            unknown: "activityStatus.nowUnknown",
+            off: "activityStatus.nowOff",
+            waiting: "activityStatus.nowWaiting",
+            running: "activityStatus.nowRunning",
+            blocked: "activityStatus.nowBlocked",
+            idle: "activityStatus.nowIdle",
+          } as const)[summary])}
+        </p>
+
+        {causes.map((cause, index) => (
+          <p key={`${cause.key}-${index}`}>{t(cause.key, cause.params)}</p>
+        ))}
+        {summary === "blocked" && onOpenIntelligence && (
+          <Button type="button" variant="secondary" size="sm" className="mem-activity-settings-action" onClick={onOpenIntelligence}>
+            {t("activityStatus.openSettings")}
+          </Button>
+        )}
+        {failed.length > 0 ? failed.map((item, index) => (
+          <p key={`${item.asset}-${item.step}-${index}`} data-testid="activity-now-failed">
+            {t(`activityStatus.failedStep.${item.step}`, { count: item.count })}
+          </p>
+        )) : anyFailed ? (
+          <p data-testid="activity-now-failed">{t("activityStatus.failedUnknown")}</p>
+        ) : null}
+        {assets.length > 0 && (
+          <div className="mem-activity-asset-list">
+            {assets.map((asset) => {
+              const sentence = assetSentence(activity, asset);
+              const assetState = displayState(asset.state);
+              const AssetIcon = ASSET_ICONS[asset.kind];
+              return (
+                <section key={asset.kind} className="mem-activity-asset-row" aria-label={t(`activityStatus.asset.${asset.kind}`)}>
+                  <div className="mem-activity-asset-heading">
+                    <h3><AssetIcon size={17} aria-hidden="true" />{t(`activityStatus.rowAsset.${asset.kind}`)}</h3>
+                    <span className={`mem-activity-state mem-activity-state-${assetState}`}>
+                      {t(`activityStatus.stepState.${assetState}`)}
+                    </span>
+                  </div>
+                  <div className="mem-activity-step-list">
+                    {asset.steps.map((step) => {
+                      const count = { key: `activityStatus.compactStepCount.${STEP_UNIT[step.name]}` as const, params: { count: step.total, done: step.done } };
+                      const state = displayState(step.state);
+
+                      const measurable = Number.isFinite(step.total) && step.total > 0 && Number.isFinite(step.done) && step.done >= 0;
+                      const completed = measurable && step.done >= step.total;
+                      const stateLabel = state === "idle" && completed ? t("activityStatus.stepComplete") : t(`activityStatus.stepState.${state}`);
+                      const StatusIcon = state === "running" ? CircleNotch : state === "blocked" ? WarningCircle : state === "idle" && completed ? Check : Clock;
+                      return (
+                        <div key={step.name} className={`mem-activity-step mem-activity-state-${state}`} data-testid={state === "running" ? "activity-now-running-step" : undefined}>
+                          <span className="mem-activity-step-label">{t(`activityStatus.step.${step.name}`)}</span>
+                          <span className="mem-activity-step-progress">
+                            {measurable
+                              ? <span className="mem-activity-step-track" aria-hidden="true"><span style={{ width: `${Math.min(100, step.done / step.total * 100)}%` }} /></span>
+                              : <span aria-hidden="true">—</span>}
+                          </span>
+                          <span className="mem-activity-step-state"><StatusIcon size={13} aria-hidden="true" />{stateLabel}</span>
+                          <span className="mem-activity-step-count">{t(count.key, count.params)}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <p className="mem-activity-asset-context">{t(sentence.key, sentence.params)}</p>
+                </section>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </section>
   );
 }

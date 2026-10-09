@@ -1,99 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../../i18n";
-import ActivityNow, { effectiveLayout } from "./ActivityNow";
-import {
-  __resetActivityNowLayoutForTests,
-  setActivityNowLayout,
-} from "../../../lib/activityNowLayout";
-import type {
-  ActivityAssetKind,
-  ActivityAssetStatus,
-  ActivityLane,
-  ActivityResponse,
-  ActivityStep,
-  ActivityStepName,
-} from "../../../lib/tauri";
+import ActivityNow from "./ActivityNow";
+import type { ActivityResponse } from "../../../lib/tauri";
 
 const getActivityMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../../../lib/tauri", () => ({
-  getActivity: getActivityMock,
-}));
-
-/** jsdom has no matchMedia; give it one whose width the test controls. */
-function stubWidth(wide: boolean) {
-  vi.stubGlobal(
-    "matchMedia",
-    (query: string) =>
-      ({
-        matches: query.includes("min-width") ? wide : false,
-        media: query,
-        addEventListener: () => {},
-        removeEventListener: () => {},
-      }) as unknown as MediaQueryList,
-  );
-}
-
-function route(job: "everyday" | "synthesis", lane: ActivityLane, model: string | null) {
-  return {
-    job,
-    lane,
-    model,
-    mode: model === null ? "unconfigured" : "pinned",
-    available: model !== null,
-  };
-}
-
-function step(
-  name: ActivityStepName,
-  fields: Partial<ActivityStep> = {},
-): ActivityStep {
-  return { name, state: "idle", done: 0, total: 0, failed: 0, job: null, ...fields };
-}
-
-function asset(
-  kind: ActivityAssetKind,
-  fields: Partial<ActivityAssetStatus> = {},
-): ActivityAssetStatus {
-  return { kind, state: "idle", done: 0, total: 0, blocked: 0, steps: [], ...fields };
-}
+vi.mock("../../../lib/tauri", () => ({ getActivity: getActivityMock }));
 
 function activity(fields: Partial<ActivityResponse> = {}): ActivityResponse {
   return {
     state: "up_to_date",
     last_activity_at: null,
-    assets: [
-      asset("memories", {
-        done: 143,
-        total: 143,
-        steps: [
-          step("store", { done: 143, total: 143 }),
-          step("summarize", { done: 143, total: 143, job: "everyday" }),
-          step("link", { done: 143, total: 143, job: "everyday" }),
-        ],
-      }),
-      asset("entities", { done: 21, total: 21 }),
-      asset("pages", { done: 12, total: 12 }),
-    ],
-    everyday: route("everyday", "on_device", "qwen3-8b"),
-    synthesis: route("synthesis", "on_device", "qwen3-8b"),
+    assets: [],
+    everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+    synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
     refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     ...fields,
   };
 }
 
-function renderNow(
-  data: ActivityResponse = activity(),
-  onOpenIntelligence?: () => void,
-) {
-  getActivityMock.mockResolvedValue(data);
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
+function renderNow(data?: ActivityResponse | Promise<ActivityResponse>, onOpenIntelligence?: () => void) {
+  if (data !== undefined) getActivityMock.mockReturnValue(data);
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
       <ActivityNow onOpenIntelligence={onOpenIntelligence} />
@@ -103,275 +34,192 @@ function renderNow(
 
 beforeEach(async () => {
   getActivityMock.mockReset();
-  localStorage.clear();
-  __resetActivityNowLayoutForTests();
-  stubWidth(true);
   await i18n.changeLanguage("en");
 });
 
-describe("effectiveLayout", () => {
-  it("falls back from rail to card on a narrow window", () => {
-    expect(effectiveLayout("rail", false)).toBe("card");
-    expect(effectiveLayout("rail", true)).toBe("rail");
-  });
-
-  it("leaves the other two layouts alone at any width", () => {
-    expect(effectiveLayout("card", false)).toBe("card");
-    expect(effectiveLayout("timeline", false)).toBe("timeline");
-  });
-});
-
 describe("ActivityNow", () => {
-  it("keeps opted-out work quiet without showing pending model steps", async () => {
+  it("does not call an unconfigured blocked system idle", async () => {
     renderNow(activity({
-      state: "off",
-      everyday: route("everyday", "none", null),
-      synthesis: route("synthesis", "none", null),
-      assets: [asset("memories", {
-        total: 5,
-        blocked: 5,
-        steps: [step("summarize", { total: 5, job: "everyday" })],
-      })],
+      state: "blocked",
+      everyday: { job: "everyday", lane: "none", model: null, mode: "unconfigured", available: false },
+      synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
     }));
 
-    expect(await screen.findByTestId("activity-now-headline")).toHaveTextContent(
-      "Background AI organization is off. Your notes remain available.",
+    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent("Background organization is blocked.");
+    expect(screen.getByText(/Background organization is paused because no model is set up/i)).toBeInTheDocument();
+    expect(screen.getByText(/Page updates are paused because no writing model is set up/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-now-idle")).toBeNull();
+  });
+
+  it("shows only real running steps", async () => {
+    renderNow(activity({
+      state: "organizing",
+      assets: [{
+        kind: "memories",
+        state: "running",
+        done: 1,
+        total: 2,
+        blocked: 0,
+        steps: [{ name: "summarize", state: "running", done: 1, total: 2, failed: 0, job: "everyday" }],
+      }],
+    }));
+
+    expect(await screen.findByTestId("activity-now-running")).toHaveTextContent("Background organization is running.");
+    expect(screen.getByText("Summarize")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-now-running-step")).toHaveTextContent("Running");
+    expect(screen.queryByTestId("activity-now-idle")).toBeNull();
+  });
+
+  it("keeps a known organizing state while per-step detail has not arrived", async () => {
+    renderNow(activity({ state: "organizing" }));
+    expect(await screen.findByTestId("activity-now-running")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-now-running-step")).toBeNull();
+    expect(screen.queryByTestId("activity-now-unknown")).toBeNull();
+  });
+
+  it("does not expose model routing or privacy details on Activity", async () => {
+    renderNow(activity({ everyday: { job: "everyday", lane: "anthropic", model: "selected-model", mode: "pinned", available: true } }));
+    await screen.findByTestId("activity-now-idle");
+    expect(screen.queryByText("Models and privacy")).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected-model/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("activity-now-trust")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open settings" })).not.toBeInTheDocument();
+  });
+
+  it("offers a shared-styled settings action only when background work is blocked", async () => {
+    const open = vi.fn();
+    renderNow(activity({ state: "blocked" }), open);
+    const button = await screen.findByRole("button", { name: "Open settings" });
+    expect(button).toHaveClass("settings-control-button");
+    await userEvent.click(button);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the actual failed count with the unit counted by that step", async () => {
+    renderNow(activity({
+      state: "blocked",
+      assets: [{
+        kind: "pages",
+        state: "blocked",
+        done: 0,
+        total: 5,
+        blocked: 5,
+        steps: [{ name: "write", state: "blocked", done: 0, total: 5, failed: 2, job: "synthesis" }],
+      }],
+    }));
+
+    expect(await screen.findByTestId("activity-now-failed")).toHaveTextContent(
+      "2 pages could not be updated.",
     );
-    expect(screen.queryByTestId("activity-now-causes")).toBeNull();
-    expect(screen.queryByTestId("activity-steps-toggle-memories")).toBeNull();
-    expect(screen.getByTestId("activity-now-models")).not.toHaveTextContent("no model");
+    expect(screen.queryByTestId("activity-now-idle")).toBeNull();
   });
 
-  it("defaults to the rail", async () => {
-    renderNow();
-    expect(await screen.findByTestId("activity-now")).toHaveAttribute(
-      "data-layout",
-      "rail",
-    );
-  });
-
-  it("renders the card when Settings says card", async () => {
-    setActivityNowLayout("card");
-    renderNow();
-    expect(await screen.findByTestId("activity-now")).toHaveAttribute(
-      "data-layout",
-      "card",
-    );
-  });
-
-  it("renders the timeline group without the card surface", async () => {
-    setActivityNowLayout("timeline");
-    renderNow();
-    const section = await screen.findByTestId("activity-now");
-    expect(section).toHaveAttribute("data-layout", "timeline");
-    expect(section).not.toHaveClass("mem-activity-now-surface");
-  });
-
-  it("changes layout without a reload when Settings changes", async () => {
-    renderNow();
-    expect(await screen.findByTestId("activity-now")).toHaveAttribute(
-      "data-layout",
-      "rail",
-    );
-
-    act(() => {
-      setActivityNowLayout("timeline");
-    });
-
-    expect(screen.getByTestId("activity-now")).toHaveAttribute(
-      "data-layout",
-      "timeline",
-    );
-  });
-
-  it("renders the rail as a card on a narrow window", async () => {
-    stubWidth(false);
-    renderNow();
-    expect(await screen.findByTestId("activity-now")).toHaveAttribute(
-      "data-layout",
-      "card",
-    );
-  });
-
-  it("expands and collapses an asset's steps", async () => {
-    renderNow();
-    const toggle = await screen.findByTestId("activity-steps-toggle-memories");
-
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByTestId("activity-steps-memories")).toBeNull();
-
-    await userEvent.click(toggle);
-
-    expect(toggle).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByTestId("activity-steps-memories")).toBeInTheDocument();
-    expect(screen.getByTestId("activity-step-summarize")).toHaveTextContent(
-      "summary and tags so recall is accurate",
-    );
-    expect(screen.getByTestId("activity-step-count-summarize")).toHaveTextContent(
-      "143 of 143 memories",
-    );
-
-    await userEvent.click(toggle);
-    expect(screen.queryByTestId("activity-steps-memories")).toBeNull();
-  });
-
-  it("chips the lane only on steps that run a model", async () => {
-    renderNow();
-    await userEvent.click(
-      await screen.findByTestId("activity-steps-toggle-memories"),
-    );
-
-    // Store runs no model, so it carries no lane to name.
-    expect(screen.queryByTestId("activity-step-lane-store")).toBeNull();
-    expect(screen.getByTestId("activity-step-lane-summarize")).toHaveTextContent(
-      "on this machine",
-    );
-  });
-
-  it("offers no steps toggle for an asset the daemon sent no steps for", async () => {
-    renderNow();
-    await screen.findByTestId("activity-now");
-    expect(screen.queryByTestId("activity-steps-toggle-entities")).toBeNull();
-  });
-
-  it("drops only the headline for a state from a newer daemon", async () => {
-    renderNow(activity({ state: "unknown" }));
-    expect(await screen.findByTestId("activity-now-models")).toBeInTheDocument();
-    expect(screen.getByTestId("activity-now-trust")).toBeInTheDocument();
-    expect(screen.getByTestId("activity-steps-toggle-memories")).toBeInTheDocument();
-    expect(screen.queryByTestId("activity-now-headline")).toBeNull();
-  });
-
-  it("names both models and their lanes", async () => {
-    renderNow(
-      activity({ synthesis: route("synthesis", "anthropic", "claude-opus-5") }),
-    );
-    const models = await screen.findByTestId("activity-now-models");
-    expect(models).toHaveTextContent("qwen3-8b on this machine");
-    expect(models).toHaveTextContent("claude-opus-5 on Anthropic");
-  });
-
-  it("says no model is in use rather than printing null", async () => {
-    renderNow(activity({ synthesis: route("synthesis", "none", null) }));
-    expect(await screen.findByTestId("activity-now-models")).toHaveTextContent(
-      "no model in use",
-    );
-  });
-
-  it("links to Settings, Intelligence", async () => {
-    const onOpenIntelligence = vi.fn();
-    renderNow(activity(), onOpenIntelligence);
-    await userEvent.click(
-      await screen.findByTestId("activity-now-intelligence"),
-    );
-    expect(onOpenIntelligence).toHaveBeenCalledTimes(1);
-  });
-
-  it("names the cloud vendor in the trust line when one lane is cloud", async () => {
-    renderNow(
-      activity({ synthesis: route("synthesis", "anthropic", "claude-opus-5") }),
-    );
-    const trust = await screen.findByTestId("activity-now-trust");
-    expect(trust).toHaveTextContent("on Anthropic");
-    expect(trust).not.toHaveTextContent("Nothing leaves your device");
-  });
-
-  // A lane this app cannot name may be a cloud vendor, so claiming the work
-  // stays on the device would be false.
-  it("drops the trust line, chip and model for a lane from a newer daemon", async () => {
-    renderNow(activity({ everyday: route("everyday", "unknown", "new-model") }));
-    const models = await screen.findByTestId("activity-now-models");
-    expect(models).toHaveTextContent("qwen3-8b on this machine");
-    expect(models).not.toHaveTextContent("new-model");
-    expect(screen.queryByTestId("activity-now-trust")).toBeNull();
-
-    await userEvent.click(screen.getByTestId("activity-steps-toggle-memories"));
-    expect(screen.getByTestId("activity-step-summarize")).toBeInTheDocument();
-    expect(screen.queryByTestId("activity-step-lane-summarize")).toBeNull();
-  });
-
-  it("leaves out a step from a newer daemon", async () => {
-    const base = activity();
-    renderNow(
-      activity({
-        assets: [
-          {
-            ...base.assets[0],
-            steps: [...base.assets[0].steps, step("unknown", { done: 1, total: 1 })],
-          },
-          asset("unknown", { done: 3, total: 3 }),
+  it("keeps Detect counts in memories and Confirm counts in entities", async () => {
+    renderNow(activity({
+      state: "organizing",
+      assets: [{
+        kind: "entities", state: "running", done: 0, total: 4, blocked: 0,
+        steps: [
+          { name: "detect", state: "running", done: 1, total: 4, failed: 0, job: "everyday" },
+          { name: "confirm", state: "idle", done: 2, total: 2, failed: 0, job: null },
         ],
-      }),
-    );
-    await userEvent.click(await screen.findByTestId("activity-steps-toggle-memories"));
-    expect(screen.getByTestId("activity-step-summarize")).toBeInTheDocument();
-    expect(screen.queryByTestId("activity-step-unknown")).toBeNull();
+      }],
+      everyday: { job: "everyday", lane: "on_device", model: "local", mode: "pinned", available: true },
+    }));
+
+    expect(await screen.findByText("Detect")).toBeInTheDocument();
+    expect(screen.getByText("1 / 4 memories")).toBeInTheDocument();
+    expect(screen.getByText("Confirm")).toBeInTheDocument();
+    expect(screen.getByText("2 / 2 entities")).toBeInTheDocument();
   });
 
-  it("hides Suggestions when no suggestion is open", async () => {
+  it.each([
+    { language: "en", pages: "Pages", count: "0 / 0 pages", idle: "Idle" },
+    { language: "zh-Hans", pages: "页面", count: "0 / 0 个页面", idle: "待机" },
+    { language: "zh-Hant", pages: "頁面", count: "0 / 0 個頁面", idle: "待機" },
+  ])("localizes the always-visible Pages row and count in $language", async ({ language, pages, count, idle }) => {
+    await i18n.changeLanguage(language);
+    renderNow(activity({
+      assets: [{
+        kind: "pages", state: "idle", done: 0, total: 0, blocked: 0,
+        steps: [{ name: "write", state: "idle", done: 0, total: 0, failed: 0, job: "synthesis" }],
+      }],
+    }));
+
+    expect(await screen.findByRole("heading", { name: pages })).toBeInTheDocument();
+    expect(screen.getByText(count)).toBeInTheDocument();
+    expect(screen.getAllByText(idle)).toHaveLength(2);
+  });
+
+  it("says waiting for an idle computer without claiming work is running", async () => {
+    renderNow(activity({ state: "waiting_for_idle" }));
+    expect(await screen.findByTestId("activity-now-waiting")).toHaveTextContent(
+      "Waiting for your computer to be idle.",
+    );
+    expect(screen.queryByTestId("activity-now-running")).toBeNull();
+  });
+
+  it("uses neutral paused wording for a selected but unavailable model", async () => {
+    renderNow(activity({
+      state: "blocked",
+      everyday: { job: "everyday", lane: "external", model: "chosen", mode: "pinned_unavailable", available: false },
+    }));
+    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent("Background organization is blocked.");
+    expect(screen.getByText(/Background organization is paused because its model is unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no .* model|choose a model|turn on/i)).toBeNull();
+  });
+
+  it("shows useful asset context and aligned progress without hiding it in details", async () => {
+    renderNow(activity({
+      state: "organizing",
+      assets: [
+        {
+          kind: "memories", state: "running", done: 1, total: 2, blocked: 1,
+          steps: [
+            { name: "summarize", state: "running", done: 1, total: 2, failed: 0, job: "everyday" },
+            { name: "link", state: "blocked", done: 1, total: 2, failed: 1, job: "everyday" },
+          ],
+        },
+      ],
+      everyday: { job: "everyday", lane: "on_device", model: "local", mode: "pinned", available: true },
+    }));
+
+    expect(await screen.findByTestId("activity-now-running")).toBeInTheDocument();
+    expect(screen.getByTestId("activity-now-failed")).toHaveTextContent("1 memory could not be linked.");
+    expect(screen.getByRole("heading", { name: "Memories" })).toBeInTheDocument();
+    expect(screen.getByText("Summarize")).toBeInTheDocument();
+    expect(screen.getByText("Link")).toBeInTheDocument();
+    expect(screen.getAllByText("1 / 2 memories")).toHaveLength(2);
+    expect(screen.queryByText("Details")).not.toBeInTheDocument();
+    expect(screen.getByText(/still searchable/)).toBeInTheDocument();
+    expect(screen.getByTestId("activity-now-running-step").querySelector(".mem-activity-step-track")).toBeInTheDocument();
+    expect(screen.queryByText("Models and privacy")).not.toBeInTheDocument();
+  });
+
+  it("distinguishes the turned-off state from idle", async () => {
+    renderNow(activity({ state: "off" }));
+    expect(await screen.findByTestId("activity-now-off")).toHaveTextContent("Background organization is off.");
+    expect(screen.queryByTestId("activity-now-idle")).toBeNull();
+  });
+
+  it.each([
+    { kind: "unknown state", payload: activity({ state: "unknown" }) },
+    { kind: "unknown asset", payload: activity({ assets: [{ kind: "unknown", state: "idle", done: 0, total: 0, blocked: 0, steps: [] }] }) },
+    { kind: "unknown step state", payload: activity({ assets: [{ kind: "memories", state: "unknown", done: 0, total: 0, blocked: 0, steps: [] }] }) },
+    { kind: "unknown step", payload: activity({ assets: [{ kind: "memories", state: "idle", done: 0, total: 0, blocked: 0, steps: [{ name: "unknown", state: "idle", done: 0, total: 0, failed: 0, job: null }] }] }) },
+  ])("does not call $kind payload idle", async ({ payload }) => {
+    renderNow(payload);
+    expect(await screen.findByTestId("activity-now-unknown")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-now-idle")).toBeNull();
+  });
+
+  it("shows read errors and offers a real reread", async () => {
+    getActivityMock.mockRejectedValueOnce(new Error("read failed"));
+    getActivityMock.mockResolvedValueOnce(activity());
     renderNow();
-    await screen.findByTestId("activity-now");
-    expect(screen.queryByTestId("activity-now-suggestions")).toBeNull();
-  });
 
-  it("shows only the Suggestions lines whose count is not zero", async () => {
-    renderNow(
-      activity({ refinement: { ready_for_review: 0, not_ready: 3, groups: [] } }),
-    );
-    const block = await screen.findByTestId("activity-now-suggestions");
-    expect(block).toHaveTextContent("Suggestions");
-    expect(screen.queryByTestId("activity-now-suggestions-ready")).toBeNull();
-    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
-      "3 not yet ready for review",
-    );
-  });
-
-  it("counts Suggestions in the singular and plural", async () => {
-    renderNow(
-      activity({ refinement: { ready_for_review: 1, not_ready: 1, groups: [] } }),
-    );
-    expect(
-      await screen.findByTestId("activity-now-suggestions-ready"),
-    ).toHaveTextContent("1 waiting for your review");
-    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
-      "1 not yet ready for review",
-    );
-  });
-
-  it("words Suggestions per locale for one and for three", async () => {
-    await i18n.changeLanguage("zh-Hant");
-    const { unmount } = renderNow(
-      activity({ refinement: { ready_for_review: 1, not_ready: 3, groups: [] } }),
-    );
-    expect(await screen.findByTestId("activity-now-suggestions")).toHaveTextContent("建議");
-    expect(screen.getByTestId("activity-now-suggestions-ready")).toHaveTextContent(
-      "1 則等待你審閱",
-    );
-    expect(screen.getByTestId("activity-now-suggestions-not-ready")).toHaveTextContent(
-      "3 則尚未進入審閱",
-    );
-    unmount();
-
-    await i18n.changeLanguage("en");
-    renderNow(
-      activity({ refinement: { ready_for_review: 3, not_ready: 0, groups: [] } }),
-    );
-    expect(
-      await screen.findByTestId("activity-now-suggestions-ready"),
-    ).toHaveTextContent("3 waiting for your review");
-    expect(screen.queryByTestId("activity-now-suggestions-not-ready")).toBeNull();
-  });
-
-  it("renders nothing until the first read lands", () => {
-    getActivityMock.mockReturnValue(new Promise(() => {}));
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false } },
-    });
-    const { container } = render(
-      <QueryClientProvider client={queryClient}>
-        <ActivityNow />
-      </QueryClientProvider>,
-    );
-    expect(container).toBeEmptyDOMElement();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not read current work.");
+    await userEvent.click(screen.getByRole("button", { name: "Read again" }));
+    expect(await screen.findByTestId("activity-now-idle")).toBeInTheDocument();
   });
 });
