@@ -103,13 +103,19 @@ function ruleDeclaration(source: string, selector: string, property: string): st
     const bodyStart = source.indexOf("{", selectorStart);
     const bodyEnd = source.indexOf("}", bodyStart);
     if (bodyStart < 0 || bodyEnd < 0) break;
-    const body = source.slice(bodyStart + 1, bodyEnd);
-    const value = body.match(new RegExp(`${escapeRegex(property)}:\\s*([^;]+);`))?.[1]?.trim();
+    const body = source.slice(bodyStart + 1, bodyEnd).replace(/\/\*[\s\S]*?\*\//g, "");
+    const value = body.match(new RegExp(`(?:^|;)\\s*${escapeRegex(property)}:\\s*([^;]+);`))?.[1]?.trim();
     if (value) return value;
     searchFrom = bodyEnd + 1;
   }
   throw new Error(`Missing ${property} in ${selector}`);
 }
+
+it("reads an exact CSS property without matching a custom-property suffix", () => {
+  const css = ".menu { --mem-popover-border: var(--mem-control-border); /* menu boundary */ border: 1px solid var(--mem-popover-border); }";
+  expect(ruleDeclaration(css, ".menu", "border")).toBe("1px solid var(--mem-popover-border)");
+  expect(() => ruleDeclaration(".menu { --mem-popover-border: gray; }", ".menu", "border")).toThrow("Missing border");
+});
 
 function resolveDeclarationColor(theme: Theme, declaration: string): Color {
   const colorMix = declaration.match(/color-mix\(in srgb,\s*var\((?<foreground>--[\w-]+)\)\s*(?<share>\d+)%\s*,\s*var\((?<background>--[\w-]+)\)\)/);
