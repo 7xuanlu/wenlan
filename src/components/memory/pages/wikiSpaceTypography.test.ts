@@ -15,20 +15,22 @@ function declaration(source: string, selector: string, property: string): string
   return body?.match(new RegExp(`${property}:\\s*(?<value>[^;]+);`))?.groups?.value.trim();
 }
 
-describe("Wiki and Space editorial title scale", () => {
-  it("uses the Fable-converged fixed destination scale for Wiki and Spaces", () => {
+describe("Wiki destination and Page/Space editorial title scale", () => {
+  it("uses the Fable-converged fixed destination scale for Wiki", () => {
     expect(declaration(stylesheet("navigation/navigation-shell.css"), ".wiki-overview-header h1", "font-size"))
-      .toBe("var(--mem-destination-title-size)");
-    expect(declaration(stylesheet("spaces/spacesInventory.css"), ".spaces-overview h1", "font-size"))
       .toBe("var(--mem-destination-title-size)");
     expect(declaration(stylesheet("navigation/navigation-shell.css"), ".wiki-overview-header h1", "line-height"))
       .toBe("1.12");
-    expect(declaration(stylesheet("spaces/spacesInventory.css"), ".spaces-overview h1", "line-height"))
-      .toBe("1.12");
     expect(declaration(stylesheet("navigation/navigation-shell.css"), ".wiki-overview-header h1", "letter-spacing"))
       .toBe("-0.03em");
-    expect(declaration(stylesheet("spaces/spacesInventory.css"), ".spaces-overview h1", "letter-spacing"))
-      .toBe("-0.03em");
+  });
+
+  it("keeps the Spaces toolbar title accessible without rendering a duplicate visible heading", () => {
+    const overview = readSourceText(resolve(memoryDirectory, "spaces/SpacesOverview.tsx"));
+
+    expect(overview.match(/<h1\b/g) ?? []).toHaveLength(1);
+    expect(overview).toContain('<h1 className="sr-only">{props.labels.title}</h1>');
+    expect(stylesheet("spaces/spacesInventory.css")).not.toMatch(/\.spaces-overview(?:-header)?\s+h1\s*\{/);
   });
 
   it("uses the Page and Entity detail scale for the Space title and its editor", () => {
