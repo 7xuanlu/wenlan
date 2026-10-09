@@ -57,11 +57,11 @@
   max-height: min(360px, calc(100vh - 24px));
   padding: 8px;
   overflow: hidden;
-  border: 1px solid var(--mem-control-border);
+  border: 1px solid var(--mem-popover-border);
   border-radius: 10px;
   background: var(--mem-surface);
   color: var(--mem-text);
-  box-shadow: 0 12px 32px #0004;
+  box-shadow: var(--mem-popover-shadow);
 }
 
 .atlas-select--start .atlas-select-popup { left: 0; }

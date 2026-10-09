@@ -1005,14 +1005,14 @@ const en = {
       runAtLoginDescription:
         "Keeps the Wenlan service and tray icon running after you close the window, and starts them at login. To stop the service right now, use 'Quit and stop background service' in the tray menu.",
       runAtLoginUnreadable:
-        "Wenlan could not read whether this is on. launchctl did not answer. The switch below may not reflect the real setting.",
+        "Wenlan could not read whether this is on. launchctl did not answer, so the current setting is unavailable.",
       telemetryTitle: "Share optional usage stats",
       telemetryDescription:
         "Only fixed counts for saves, retrieval outcomes, wiki generation and errors, plus your platform and Wenlan version, go to wenlan.app. Never content, email, file paths, or IDs. Turning this off clears unsent counts; sent aggregate counts cannot be removed individually.",
       telemetryPending_one: "{{count}} usage event waiting to send",
       telemetryPending_other: "{{count}} usage events waiting to send",
       telemetryReadFailed:
-        "Wenlan could not read the usage-stats setting. The switch is disabled until it can be checked.",
+        "Wenlan could not read the usage-stats setting. Changes are unavailable until it can be checked.",
       telemetryUnavailable:
         "Optional usage stats are unavailable in this build or environment.",
       telemetrySaveFailed:
@@ -1194,6 +1194,7 @@ const en = {
     },
     footer:
       "Your memories stay on this machine unless you configure a feature that sends them, such as a cloud model or Remote Access. Optional usage stats are sent only with your permission; normal network metadata may still be visible to services you use.",
+    controlState: { loading: "Loading", saving: "Saving", unavailable: "Unavailable" },
   },
   sidebar: {
     customize: "Customize navigation",
@@ -1460,8 +1461,8 @@ const en = {
     moreConnections: "Show more",
     openDetails: "Open details",
 
-    searchPlaceholder: "Jump to anything…",
-    searchLabel: "Jump to a topic",
+    searchPlaceholder: "Filter nodes",
+    searchLabel: "Filter nodes",
     noMatches: "No matches",
     countPages_one: "{{count}} page",
     countPages_other: "{{count}} pages",
@@ -1538,6 +1539,8 @@ const en = {
     license: "Open source · AGPL-3.0",
     resources: "Wenlan resources",
     linkError: "Couldn’t open the link. Try again.",
+    unavailable: "Updates are disabled in this test session. Use the installed Wenlan app to check for updates.",
+    viewReleases: "View releases",
   },
   activity: {
     memory_one: "memory",
@@ -3274,14 +3277,14 @@ const zhHans = {
       runAtLoginDescription:
         "关闭窗口后，仍保持文澜服务与托盘图标运行，并在登录时启动。若要立即停止服务，请使用托盘菜单中的「Quit and stop background service」。",
       runAtLoginUnreadable:
-        "文澜无法读取该项是否已开启，launchctl 没有响应。下方开关可能与实际设置不符。",
+        "文澜无法读取该项当前是否开启。launchctl 没有响应，因此暂时无法确认当前设置。",
       telemetryTitle: "分享可选使用统计",
       telemetryDescription:
         "仅会将保存次数、检索结果、Wiki 生成与错误等固定计数，以及你的平台和文澜版本发送到 wenlan.app。不会发送内容、电子邮件、文件路径或 ID。关闭会清除待发送计数；已发送的汇总无法单独删除。",
       telemetryPending_one: "有 {{count}} 个使用事件等待发送",
       telemetryPending_other: "有 {{count}} 个使用事件等待发送",
       telemetryReadFailed:
-        "文澜无法读取使用统计设置。确认状态前，开关已停用。",
+        "文澜无法读取使用统计设置。确认状态前，暂时无法更改此设置。",
       telemetryUnavailable: "此版本或环境不支持可选使用统计。",
       telemetrySaveFailed:
         "文澜无法持久保存使用统计设置。请确认开关当前状态，并在重启文澜前重试。",
@@ -3455,6 +3458,7 @@ const zhHans = {
     },
     footer:
       "你的记忆会保留在这台设备上，除非你配置了会发送数据的功能，例如云端模型或远程访问。可选使用统计只有在你许可后才会发送；你使用的服务仍可能看到正常的网络元数据。",
+    controlState: { loading: "正在加载", saving: "正在保存", unavailable: "不可用" },
   },
   sidebar: {
     customize: "自定义导航",
@@ -3721,8 +3725,8 @@ const zhHans = {
     moreConnections: "显示更多",
     openDetails: "打开详情",
 
-    searchPlaceholder: "跳转到任意内容…",
-    searchLabel: "跳转到主题",
+    searchPlaceholder: "筛选节点",
+    searchLabel: "筛选节点",
     noMatches: "无匹配结果",
     countPages_one: "{{count}} 个页面",
     countPages_other: "{{count}} 个页面",
@@ -3799,6 +3803,8 @@ const zhHans = {
     license: "开源 · AGPL-3.0",
     resources: "文澜资源",
     linkError: "无法打开链接，请重试。",
+    unavailable: "此测试环境已停用更新检查。请在已安装的文澜中检查更新。",
+    viewReleases: "查看发布版本",
   },
   activity: {
     memory_one: "记忆",
@@ -5513,14 +5519,14 @@ const zhHant = {
       runAtLoginDescription:
         "關閉視窗後，仍保持文瀾服務與選單列圖示執行，並在登入時啟動。若要立即停止服務，請使用選單列中的「Quit and stop background service」。",
       runAtLoginUnreadable:
-        "文瀾無法讀取此項是否已開啟，launchctl 沒有回應。下方開關可能與實際設定不符。",
+        "文瀾無法讀取此項目前是否已開啟。launchctl 沒有回應，因此暫時無法確認目前設定。",
       telemetryTitle: "分享選用使用統計",
       telemetryDescription:
         "只會將儲存次數、檢索結果、Wiki 產生與錯誤等固定計數，以及你的平台和文瀾版本傳送到 wenlan.app。不會傳送內容、電子郵件、檔案路徑或 ID。關閉後會清除尚未傳送的計數；已傳送的彙總計數無法個別刪除。",
       telemetryPending_one: "有 {{count}} 個使用事件等待傳送",
       telemetryPending_other: "有 {{count}} 個使用事件等待傳送",
       telemetryReadFailed:
-        "文瀾無法讀取使用統計設定。確認狀態前，開關已停用。",
+        "文瀾無法讀取使用統計設定。確認狀態前，暫時無法變更此設定。",
       telemetryUnavailable: "此版本或環境不支援選用使用統計。",
       telemetrySaveFailed:
         "文瀾無法持久儲存使用統計設定。請確認開關目前狀態，並在重啟文瀾前重試。",
@@ -5694,6 +5700,7 @@ const zhHant = {
     },
     footer:
       "你的記憶會保留在這台裝置上，除非你設定了會傳送資料的功能，例如雲端模型或遠端存取。選用使用統計只有在你許可後才會傳送；你使用的服務仍可能看見正常的網路中繼資料。",
+    controlState: { loading: "載入中", saving: "儲存中", unavailable: "無法使用" },
   },
   sidebar: {
     customize: "自訂導覽",
@@ -5960,8 +5967,8 @@ const zhHant = {
     moreConnections: "顯示更多",
     openDetails: "開啟詳情",
 
-    searchPlaceholder: "跳轉到任意內容…",
-    searchLabel: "跳到主題",
+    searchPlaceholder: "篩選節點",
+    searchLabel: "篩選節點",
     noMatches: "無符合結果",
     countPages_one: "{{count}} 個頁面",
     countPages_other: "{{count}} 個頁面",
@@ -6038,6 +6045,8 @@ const zhHant = {
     license: "開源 · AGPL-3.0",
     resources: "文瀾資源",
     linkError: "無法開啟連結，請重試。",
+    unavailable: "此測試環境已停用更新檢查。請在已安裝的文瀾中檢查更新。",
+    viewReleases: "查看發布版本",
   },
   activity: {
     memory_one: "記憶",

@@ -8,6 +8,7 @@ import SourcesSection from "./settings/sections/SourcesSection";
 import AgentsSection from "./settings/sections/AgentsSection";
 import IntelligenceSection from "./settings/sections/IntelligenceSection";
 import DiagnosticsSection from "./settings/sections/DiagnosticsSection";
+import "./settings/settingsControls.css";
 
 interface SettingsPageProps {
   /** Which group to display. Driven by the Settings sidebar in Main.tsx. */
@@ -34,20 +35,14 @@ export default function SettingsPage({
   const activeGroup = SETTINGS_GROUPS.find((g) => g.id === section);
 
   return (
-    <div className="flex flex-col gap-6 max-w-2xl mx-auto py-4">
-      {/* Back + Heading. The heading now names the active group; the sidebar
-          handles navigating between groups. */}
-      <div>
-        <WorkspaceBackButton onClick={onBack} aria-label={t("main.back")} title={t("main.back")} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0, marginBottom: "12px" }}>
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-        </WorkspaceBackButton>
-        <h1 style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-2xl)", fontWeight: 500, lineHeight: 1.2, color: "var(--mem-text)" }}>
-          {activeGroup ? t(activeGroup.labelKey) : t("settings.title")}
-        </h1>
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "6px" }}>
-          {activeGroup ? t(activeGroup.hintKey) : t("settings.manageHint")}
-        </p>
-      </div>
+    <div className="settings-page flex flex-col gap-6 w-full min-w-0 max-w-2xl mx-auto py-4" style={{ containerType: "inline-size" }}>
+      {/* The sidebar names the category; the content starts with its first setting group. */}
+      <WorkspaceBackButton onClick={onBack} aria-label={t("main.back")} title={t("main.back")} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0, marginBottom: "12px" }}>
+        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+      </WorkspaceBackButton>
+      <h1 className="sr-only" style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-2xl)", fontWeight: 500, lineHeight: 1.2, color: "var(--mem-text)" }}>
+        {activeGroup ? t(activeGroup.labelKey) : t("settings.title")}
+      </h1>
 
       {section === "general" && <GeneralSection />}
       {section === "sources" && <SourcesSection onImport={onImport} />}

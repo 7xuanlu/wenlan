@@ -8,14 +8,13 @@ export default function SourcesSection({ onImport }: { onImport: () => void }) {
   const { t } = useTranslation();
   return (
     <>
-      {/* ── Import Memories — no eyebrow: the row inside carries the same
-          title, and a heading that repeats its only child's title is noise. */}
+      {/* The group title appears once, matching the other settings groups. */}
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
+        <SectionHeader label={t("settings.sources.importMemoriesTitle")} />
         <Card padding="rows">
           <div className="px-5 py-4">
-            <div className="flex items-center justify-between">
+            <div className="settings-import-row flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>{t("settings.sources.importMemoriesTitle")}</div>
                 <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
                   {t("settings.sources.importMemoriesDescription")}
                 </p>

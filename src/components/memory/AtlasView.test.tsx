@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
@@ -19,6 +19,10 @@ vi.mock("../../lib/tauri", async () => {
 // the drawn graph itself is verified live in preview. This test only proves
 // the three states, retry, mount/teardown, and the click handoff.
 const capturedSigmaInstances = vi.hoisted(() => [] as any[]);
+vi.mock("sigma/rendering", () => ({
+  // WebGL programs are exercised by the real browser graph checks.
+  EdgeRectangleProgram: class { setUniforms() {} },
+}));
 /** The mock viewport. Tests that watch the names of a far component widen
  *  it (see graphToViewport below). */
 let mockDimensions = { width: 400, height: 600 };
@@ -90,6 +94,7 @@ vi.mock("sigma", () => {
       getBoundedRatio: (r: number) => r,
       // The zoom level-of-detail listener (AtlasView mount) subscribes here.
       on: vi.fn(),
+      off: vi.fn(),
     };
     scaleSize(size: number) { return size; }
     getCamera() {
@@ -257,10 +262,12 @@ function foldGraph(entities: Entity[], details: EntityDetail[]): KnowledgeGraph 
 }
 
 function openDisplayControls() {
-  // Display controls are inline now; keep this helper as a no-op so the
-  // behavior tests below stay focused on the control they exercise.
+  const trigger = document.querySelector<HTMLButtonElement>(".atlas-display-trigger");
+  if (!trigger) throw new Error("Display controls trigger was not rendered");
+  if (trigger.getAttribute("aria-expanded") !== "true") fireEvent.click(trigger);
 }
 function displayControl(name: string) {
+  openDisplayControls();
   return screen.getByRole("button", { name });
 }
 
@@ -290,6 +297,86 @@ function makeEntity(overrides: Partial<import("../../lib/tauri").Entity> = {}): 
 }
 
 describe("AtlasView", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("keeps graph controls on the full-height canvas and closes the display disclosure on Escape", async () => {
+    mockConnectedPair();
+    renderWithQuery(<AtlasView />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+
+    const canvas = screen.getByTestId("atlas-view");
+    expect(canvas).toHaveClass("atlas-canvas");
+    expect(canvas.parentElement).toHaveClass("atlas-canvas-shell");
+    expect(screen.queryByRole("button", { name: "Regions" })).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole("button", { name: "Show in graph" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "Show in graph" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regions" })).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole("button", { name: "Regions" }), { key: "Escape" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(trigger).toHaveFocus();
+  });
+
+  it("focuses a page in the whole graph, retaining distant nodes and links without replacing saved preferences", async () => {
+    const savedLayers = JSON.stringify({ page: false, entity: true, memory: true });
+    window.localStorage.setItem("atlas.layers", savedLayers);
+    const center = makePage({ id: "center", title: "Center page" });
+    const direct = makePage({ id: "direct", title: "Direct page" });
+    const incoming = makePage({ id: "incoming", title: "Incoming page" });
+    const secondHop = makePage({ id: "second-hop", title: "Second hop" });
+    mockGetKnowledgeGraph.mockResolvedValue({
+      entities: [makeEntity({ id: "topic" })],
+      relations: [],
+      memories: [makeMemory({ source_id: "source" })],
+      memory_links: [],
+      pages: [center, direct, incoming, secondHop, makePage({ id: "unrelated" })],
+      page_links: [
+        { from: { kind: "page", id: "center" }, to: { kind: "page", id: "direct" }, link_type: "wikilink" },
+        { from: { kind: "page", id: "incoming" }, to: { kind: "page", id: "center" }, link_type: "wikilink" },
+        { from: { kind: "page", id: "center" }, to: { kind: "memory", id: "source" }, link_type: "cites" },
+        { from: { kind: "page", id: "center" }, to: { kind: "entity", id: "topic" }, link_type: "about" },
+        { from: { kind: "page", id: "direct" }, to: { kind: "page", id: "second-hop" }, link_type: "wikilink" },
+      ],
+    });
+    renderWithQuery(<AtlasView focusPageId="center" />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+
+    const instance = capturedSigmaInstances[0];
+    expect(instance.graph.hasNode("page:center")).toBe(true);
+    expect(instance.graph.hasNode("page:direct")).toBe(true);
+    expect(instance.graph.hasNode("page:incoming")).toBe(true);
+    expect(instance.graph.hasNode("page:second-hop")).toBe(true);
+    expect(instance.graph.hasNode("page:unrelated")).toBe(true);
+    expect(instance.graph.hasNode("topic")).toBe(true);
+    expect(instance.graph.hasNode("mem:source")).toBe(true);
+    expect(instance.graph.hasEdge("page:direct", "page:second-hop")).toBe(true);
+    expect(instance.camera.setState).toHaveBeenLastCalledWith({ x: 0.42, y: 0.24, ratio: 0.4 });
+    expect(instance.camera.animate).not.toHaveBeenCalled();
+    expect(screen.queryByText("Show full graph")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("atlas.layers")).toBe(savedLayers);
+
+    openDisplayControls();
+    expect(screen.getByRole("button", { name: i18n.t("atlas.layer.page") })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: i18n.t("atlas.layer.entity") })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: i18n.t("atlas.layer.memory") })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("atlas.layer.memory") }));
+    expect(JSON.parse(window.localStorage.getItem("atlas.layers")!)).toEqual({ page: true, entity: true, memory: false });
+  });
+
+  it("keeps the graph available when a handoff page no longer exists", async () => {
+    mockConnectedPairWithIsolate();
+    renderWithQuery(<AtlasView focusPageId="missing-page" />);
+    await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
+    expect(latestGraph().hasNode("e1")).toBe(true);
+    expect(latestGraph().hasNode("e3")).toBe(true);
+    expect(capturedSigmaInstances[0].camera.setState).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Show full graph")).not.toBeInTheDocument();
+  });
+
   beforeEach(async () => {
     await i18n.changeLanguage("en");
     vi.clearAllMocks();
@@ -488,6 +575,7 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
+    openDisplayControls();
     for (const label of ["Wiki pages", "Topics", "Memories"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
@@ -504,6 +592,7 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
+    openDisplayControls();
     const wikiPages = screen.getByRole("button", { name: "Wiki pages" });
     fireEvent.focus(wikiPages);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
@@ -672,6 +761,7 @@ describe("AtlasView", () => {
   });
 
   it("filters entity types without remounting or moving the map and clears a hidden selection", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     mockConnectedPair();
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
@@ -679,6 +769,7 @@ describe("AtlasView", () => {
     const positions = instance.graph.nodes().map((id: string) => [id, instance.graph.getNodeAttribute(id, "x"), instance.graph.getNodeAttribute(id, "y")]);
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
     expect(await screen.findByRole("heading", { name: "Alice" })).toBeInTheDocument();
+    openDisplayControls();
     const typesTrigger = screen.getByRole("button", { name: "Filter topic types" });
     fireEvent.click(typesTrigger);
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Topic types" }), { key: "Escape" });
@@ -700,6 +791,7 @@ describe("AtlasView", () => {
   });
 
   it("removes a hidden type from search and selected connections", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
     const entities = mockConnectedPair();
     entities[0].entity_type = "technology";
     entities[1].entity_type = "person";
@@ -707,11 +799,12 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     act(() => capturedSigmaInstances[0].handlers.get("clickNode")?.({ node: "e1" }));
     expect(await screen.findByRole("button", { name: "Bob" })).toBeInTheDocument();
+    openDisplayControls();
     fireEvent.click(screen.getByRole("button", { name: "Filter topic types" }));
     fireEvent.click(screen.getByRole("button", { name: "Person" }));
     expect(screen.queryByRole("button", { name: "Bob" })).not.toBeInTheDocument();
-    fireEvent.focus(screen.getByRole("combobox", { name: "Jump to a topic" }));
-    fireEvent.change(screen.getByRole("combobox", { name: "Jump to a topic" }), { target: { value: "Bob" } });
+    fireEvent.focus(screen.getByRole("combobox", { name: "Filter nodes" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Filter nodes" }), { target: { value: "Bob" } });
     expect(screen.queryByRole("option", { name: "Bob" })).not.toBeInTheDocument();
     expect(screen.getByText("No matches")).toBeInTheDocument();
   });
@@ -724,6 +817,7 @@ describe("AtlasView", () => {
     act(() => instance.handlers.get("clickNode")?.({ node: "e1" }));
     instance.camera.isAnimated.mockReturnValue(true);
     fireEvent.click(screen.getAllByRole("button", { name: "Return to full map" })[0]);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Filter nodes" })).toHaveFocus());
     expect(instance.camera.animate).toHaveBeenLastCalledWith(
       { x: instance.camera.x, y: instance.camera.y, ratio: instance.camera.ratio, angle: instance.camera.angle }, { duration: 1 },
     );
@@ -1291,8 +1385,15 @@ describe("AtlasView", () => {
     const areas = container.querySelector('canvas[data-testid="atlas-community-areas"]');
     expect(areas).toBe(container.firstChild);
     expect(overlay).toBe(container.lastChild);
+    const renderer = capturedSigmaInstances[0];
+    const listener = renderer.camera.on.mock.calls.find(([event]: [string]) => event === "updated")[1];
+    const kill = vi.spyOn(renderer, "kill").mockImplementation(() => {
+      expect(container.isConnected).toBe(true);
+      expect(renderer.camera.off).toHaveBeenCalledWith("updated", listener);
+    });
 
     unmount();
+    expect(kill).toHaveBeenCalledOnce();
     // Query the DETACHED container, not the document: React unmount removes
     // the whole subtree from the document either way, so a document-level
     // query passes even if the cleanup leaks the canvas (mutation-proven).
@@ -1435,7 +1536,7 @@ describe("AtlasView", () => {
 
     // The isolate starts outside the map (degree 0, see visibleModel), but
     // search reveals small groups and selects it in the rebuilt renderer.
-    const input = screen.getByPlaceholderText("Jump to anything…");
+    const input = screen.getByPlaceholderText("Filter nodes");
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: "isol" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -1445,17 +1546,21 @@ describe("AtlasView", () => {
     expect(await screen.findByRole("heading", { name: "Isolate" })).toBeInTheDocument();
   });
 
-  it("focuses the search input on ⌘K", async () => {
+  it("leaves Cmd/Ctrl+K to the application search instead of stealing focus", async () => {
     mockConnectedPair();
 
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    const input = screen.getByPlaceholderText("Jump to anything…");
+    const input = screen.getByPlaceholderText("Filter nodes");
     expect(document.activeElement).not.toBe(input);
 
-    fireEvent.keyDown(window, { key: "k", metaKey: true });
-    expect(document.activeElement).toBe(input);
+    for (const modifier of [{ metaKey: true }, { ctrlKey: true }]) {
+      const event = new KeyboardEvent("keydown", { key: "k", ...modifier, cancelable: true });
+      window.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(document.activeElement).not.toBe(input);
+    }
   });
 
   it("matches case-insensitively and Enter flies the camera to the match with hover emphasis", async () => {
@@ -1471,7 +1576,7 @@ describe("AtlasView", () => {
     const attrs = { color: "#abc", size: 4, entityType: "concept", confirmed: false };
     const before = settings.nodeReducer("e3", attrs);
 
-    const input = screen.getByPlaceholderText("Jump to anything…");
+    const input = screen.getByPlaceholderText("Filter nodes");
     fireEvent.focus(input);
     // Lowercase query against "Alice" — pins the case-insensitive match.
     fireEvent.change(input, { target: { value: "ali" } });
@@ -1494,7 +1599,7 @@ describe("AtlasView", () => {
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
 
-    const input = screen.getByPlaceholderText("Jump to anything…");
+    const input = screen.getByPlaceholderText("Filter nodes");
     // Closed dropdown → no dangling descendant reference.
     expect(input).not.toHaveAttribute("aria-activedescendant");
 
@@ -1804,6 +1909,7 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     expect(capturedSigmaInstances[0].graph.hasEdge("e1", "e2")).toBe(true);
 
+    openDisplayControls();
     fireEvent.click(screen.getByRole("combobox", { name: "Space" }));
     fireEvent.click(screen.getByRole("option", { name: "Work" }));
 
@@ -2076,7 +2182,7 @@ describe("AtlasView", () => {
       await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
       const instance = capturedSigmaInstances[0];
 
-      const input = screen.getByPlaceholderText("Jump to anything…");
+      const input = screen.getByPlaceholderText("Filter nodes");
       fireEvent.focus(input);
       fireEvent.change(input, { target: { value: "alice" } });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -2250,6 +2356,7 @@ describe("AtlasView", () => {
       graph.getNodeAttribute("e1", "size") as number,
     );
     expect(screen.getByText("3 topics · 1 memory · 1 region")).toBeInTheDocument();
+    openDisplayControls();
     expect(screen.getByRole("button", { name: "Memories" })).toHaveAttribute("aria-pressed", "true");
   });
 
@@ -2320,6 +2427,7 @@ describe("AtlasView", () => {
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
     expect(capturedSigmaInstances[0].graph.hasNode("mem:m1")).toBe(true);
 
+    openDisplayControls();
     fireEvent.click(screen.getByRole("combobox", { name: "Space" }));
     fireEvent.click(screen.getByRole("option", { name: "Work" }));
 
@@ -2463,11 +2571,13 @@ describe("AtlasView", () => {
 
     expect(onNodeClick).toHaveBeenCalledWith({ kind: "page", id: "p1" });
   });
-  it("keeps graph content controls inline without a Display menu", async () => {
+  it("keeps graph content controls tucked into the Display disclosure", async () => {
     mockConnectedPair();
     renderWithQuery(<AtlasView />);
     await waitFor(() => expect(capturedSigmaInstances).toHaveLength(1));
-    expect(screen.queryByRole("button", { name: "Display" })).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "Show in graph" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Regions" })).not.toBeInTheDocument();
     const regions = displayControl("Regions");
     expect(regions).toHaveAttribute("aria-pressed", "false");
     fireEvent.click(regions);

@@ -18,7 +18,7 @@ const pairing = { pairingId: "a".repeat(64), clientId: "synthetic-client", resou
 const connected = { status: "connected", tunnel_url: null, relay_url: pairing.resource };
 function panel(currentSpace?: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={client}><RemoteAccessPanel currentSpace={currentSpace} /></QueryClientProvider>);
+  return { ...render(<QueryClientProvider client={client}><RemoteAccessPanel currentSpace={currentSpace} /></QueryClientProvider>), client };
 }
 async function connectedPanel() {
   mocks.getRemoteAccessProfile.mockResolvedValue(profile);
@@ -76,12 +76,25 @@ describe("RemoteAccessPanel consent and connection", () => {
     expect(screen.queryByText(/only in Choose a Space/)).not.toBeInTheDocument();
   });
   it("unknown native settings do not appear as permission to enable", async () => {
-    mocks.getRemoteAccessProfile.mockRejectedValue(new Error("Storage unavailable"));
+    mocks.getRemoteAccessProfile.mockRejectedValueOnce(new Error("Storage unavailable"));
     panel();
     expect(await screen.findByRole("alert")).toHaveTextContent("Storage unavailable");
-    expect(screen.getByRole("button", { name: "Web access" })).toBeDisabled();
+    expect(screen.getByRole("status", { name: "Web access" })).toHaveTextContent("Unavailable");
+    expect(screen.queryByRole("button", { name: "Web access" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Stop access" }));
     await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(false));
+  });
+  it("replaces the unknown status after the failed read recovers", async () => {
+    mocks.getRemoteAccessProfile.mockRejectedValueOnce(new Error("Storage unavailable"));
+    mocks.getRemoteAccessStatus.mockResolvedValue(connected);
+    const { client } = panel();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Storage unavailable");
+    expect(screen.getByRole("status", { name: "Web access" })).toHaveTextContent("Unavailable");
+
+    mocks.getRemoteAccessProfile.mockResolvedValue(profile);
+    await client.invalidateQueries({ queryKey: ["remote-access-profile"] });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Web access" })).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.queryByRole("status", { name: "Web access" })).not.toBeInTheDocument();
   });
   it("Space lookup failure does not disable stopping an existing connection", async () => {
     mocks.listSpaces.mockRejectedValue(new Error("Daemon offline"));

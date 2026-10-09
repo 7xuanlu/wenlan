@@ -17,3 +17,27 @@
 .about-wenlan-panel :is(button, a):focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 3px; }
 .about-wenlan-license { margin: 22px 0 0; color: var(--mem-text-secondary); font-size: 11px; }
 @media (max-width: 480px) { .about-wenlan-panel { padding: 24px; } .about-wenlan-links { gap: 14px 18px; } }
+
+/* The persistent status above is the live announcement; this is its visual confirmation. */
+.about-wenlan-feedback {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  max-width: calc(100vw - 48px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border: 1px solid var(--mem-border);
+  border-radius: 10px;
+  background: var(--mem-surface);
+  color: var(--mem-text);
+  box-shadow: var(--mem-shadow-toast);
+  font: 400 14px/1.5 var(--mem-font-body);
+  pointer-events: none;
+  animation: mem-fade-up 160ms ease-out both;
+}
+.about-wenlan-feedback svg { flex: none; color: var(--mem-text-secondary); }
+@media (prefers-reduced-motion: reduce) {
+  .about-wenlan-feedback { animation: none; }
+}

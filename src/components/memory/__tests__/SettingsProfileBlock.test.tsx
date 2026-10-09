@@ -70,7 +70,7 @@ describe("SettingsPage profile display block", () => {
     expect(screen.getByDisplayValue("Lucian")).toBeInTheDocument();
     expect(screen.queryByText("Email")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Add email")).not.toBeInTheDocument();
-    expect(screen.getByText("Joined March 2024")).toBeInTheDocument();
+    expect(screen.queryByText("Joined March 2024")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Change photo" })).toBeInTheDocument();
     expect(screen.getByText("App")).toBeInTheDocument();
     expect(screen.getAllByText("General")).toHaveLength(1);

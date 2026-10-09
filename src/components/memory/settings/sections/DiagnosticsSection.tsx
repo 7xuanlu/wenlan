@@ -36,7 +36,7 @@ import {
   type KnownActivityAssetKind,
   type KnownActivityStep,
 } from "../../../../lib/activitySentence";
-import { ASSET_ORDER } from "../../activity/ActivitySummaryPopover";
+import { ACTIVITY_ASSET_ORDER } from "../../activity/activityPresentation";
 import { Button, Card, SectionHeader, Skeleton, StatusChip, type ProbeState } from "../primitives";
 
 /** A daemon from before `/api/activity` answers it with a plain 404. */
@@ -763,7 +763,7 @@ const BLOCKED_UNIT: Readonly<Record<KnownActivityAssetKind, "memories" | "pages"
 };
 
 function isKnownKind(kind: string): kind is KnownActivityAssetKind {
-  return (ASSET_ORDER as readonly string[]).includes(kind);
+  return (ACTIVITY_ASSET_ORDER as readonly string[]).includes(kind);
 }
 
 /** Known by `STEP_UNIT`, the one table that says what each step counts. */
@@ -960,7 +960,7 @@ function BackgroundWorkRows({ activity }: { activity: ActivityResponse }) {
   // Known assets in the order every Activity surface uses, then anything this
   // build cannot name, so an unknown asset is listed rather than dropped.
   const ordered = [
-    ...ASSET_ORDER.flatMap((kind) => activity.assets.filter((asset) => asset.kind === kind)),
+    ...ACTIVITY_ASSET_ORDER.flatMap((kind) => activity.assets.filter((asset) => asset.kind === kind)),
     ...activity.assets.filter((asset) => !isKnownKind(asset.kind)),
   ];
   return (
@@ -1032,12 +1032,6 @@ export default function DiagnosticsSection({ onSetupAgent }: { onSetupAgent?: ()
     <>
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <SectionHeader
-          icon={
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="7" width="12" height="10" rx="2" strokeWidth="1.5" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 3v4M15 3v4M9 21v-4M15 21v-4" />
-            </svg>
-          }
           label={t("settings.diagnostics.wiring.title")}
           action={wireQuery.data ? <CopyReportButton wire={wireQuery.data} /> : undefined}
         />
@@ -1050,13 +1044,6 @@ export default function DiagnosticsSection({ onSetupAgent }: { onSetupAgent?: ()
 
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <SectionHeader
-          icon={
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 19V5" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 19h16" />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 15l3-3 3 2 4-6" />
-            </svg>
-          }
           label={t("settings.diagnostics.backgroundTitle")}
           action={
             <Button variant="secondary" size="sm" onClick={() => activityQuery.refetch()}>

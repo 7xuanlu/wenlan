@@ -74,14 +74,6 @@ const THEME_OPTIONS: { value: Theme; labelKey: ThemeLabelKey; icon: React.ReactN
   },
 ];
 
-function formatProfileMonth(ts: number): string {
-  return new Intl.DateTimeFormat(undefined, {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(ts * 1000);
-}
-
 interface ProfileUpdateFields {
   name?: string;
   displayName?: string;
@@ -149,14 +141,14 @@ function ProfileSettingsBlock() {
       {/* No icon: in settings the sidebar owns iconography; eyebrows are type-only. */}
       <SectionHeader label={t("settings.profile.label")} />
       <Card padding="rows">
-        <div className="px-5 py-4">
-          <div className="flex items-start justify-between gap-4">
+        <div className="settings-profile-row px-5 py-4">
+          <div className="settings-profile-row-content flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
                 {t("settings.profile.photo")}
               </div>
             </div>
-            <div className="mt-0.5 flex items-center gap-2">
+            <div className="settings-profile-controls mt-0.5 flex items-center gap-2">
               <ProfileAvatar
                 avatarPath={profile.avatar_path}
                 displayName={displayName}
@@ -174,8 +166,8 @@ function ProfileSettingsBlock() {
             </div>
           </div>
         </div>
-        <div className="px-5 py-4">
-          <div className="flex items-start justify-between gap-4">
+        <div className="settings-profile-row px-5 py-4">
+          <div className="settings-profile-row-content flex items-start justify-between gap-4">
             <div className="min-w-0">
               <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
                 {t("settings.profile.displayName")}
@@ -194,22 +186,13 @@ function ProfileSettingsBlock() {
                     event.currentTarget.blur();
                   }
                 }}
+                className="settings-profile-input"
                 style={{ width: "200px" }}
               />
             </div>
           </div>
         </div>
       </Card>
-      <p
-        className="px-1 pt-2"
-        style={{
-          fontFamily: "var(--mem-font-mono)",
-          fontSize: "var(--mem-text-xs)",
-          color: "var(--mem-text-tertiary)",
-        }}
-      >
-        {t("settings.profile.joined", { date: formatProfileMonth(profile.created_at) })}
-      </p>
     </section>
   );
 }
@@ -399,6 +382,7 @@ export default function GeneralSection() {
             // or read at some earlier instant -- and the click below computes
             // its new value from that same fiction.
             valueUnknown={runAtLoginState === undefined}
+            unknownState={runAtLoginUnreadable ? "unavailable" : "loading"}
             onToggle={() => {
               // `!(undefined ?? false)` is `true` whatever launchd actually
               // holds, so an unread state must not reach `mutate` even if the
@@ -418,6 +402,11 @@ export default function GeneralSection() {
             description={t("settings.general.telemetryDescription")}
             enabled={telemetryStatus?.enabled ?? false}
             valueUnknown={telemetryUnknown}
+            unknownState={telemetryMutation.isPending
+              ? "saving"
+              : telemetryQuery.isPending
+                ? "loading"
+                : "unavailable"}
             onToggle={() => {
               if (telemetryMutation.isPending || !telemetryStatus) return;
               const nextEnabled = !telemetryStatus.enabled;

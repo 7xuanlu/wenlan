@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { emit, listen } from "@tauri-apps/api/event";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { ArrowSquareOut, X } from "@phosphor-icons/react";
+import { ArrowSquareOut, CheckCircle, X } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import "./aboutWenlan.css";
 
@@ -12,8 +12,9 @@ interface AboutWenlanDialogProps {
   onClose: () => void;
 }
 interface UpdateStatus {
-  state: "checking" | "current" | "available" | "error";
+  state: "checking" | "current" | "available" | "error" | "unavailable";
   version?: string;
+  error?: string;
 }
 
 export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogProps) {
@@ -22,21 +23,46 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
   const [version, setVersion] = useState<string>();
   const [status, setStatus] = useState<UpdateStatus>();
   const [linkFailed, setLinkFailed] = useState(false);
+  const manualCheckPending = useRef(false);
+  const [showCurrentNotice, setShowCurrentNotice] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!showCurrentNotice) return;
+    const timeout = window.setTimeout(() => setShowCurrentNotice(false), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [showCurrentNotice]);
+
+  useEffect(() => {
+    if (!open) {
+      setShowCurrentNotice(false);
+      return;
+    }
     let active = true;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     panel.current?.focus();
     void getVersion().then((value) => { if (active) setVersion(value); }).catch(() => {});
     const unlisten = listen<UpdateStatus>("updater://status", ({ payload }) => {
-      if (active) setStatus(payload);
+      if (!active) return;
+      // The running isolated native build predates a distinct unavailable state.
+      // Match its exact guard response; network/server errors remain retryable.
+      const nextStatus: UpdateStatus = payload.state === "error" && payload.error ===
+        "Update checks are disabled for development or custom data directories"
+        ? { ...payload, state: "unavailable" } : payload;
+      setStatus(nextStatus);
+      if (payload.state !== "checking") {
+        // A replay or automatic check may also report "current". Only confirm
+        // a check explicitly requested from this open About dialog.
+        const confirmCurrent = manualCheckPending.current && payload.state === "current";
+        manualCheckPending.current = false;
+        if (confirmCurrent) setShowCurrentNotice(true);
+      }
     });
     void unlisten.then(() => { if (active) return emit("updater://ui-ready"); }).catch(() => {
       if (active) setStatus({ state: "error" });
     });
     return () => {
       active = false;
+      manualCheckPending.current = false;
       void unlisten.then((stop) => stop()).catch(() => {});
       if (previous?.isConnected) previous.focus();
     };
@@ -45,9 +71,15 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
   if (!open) return null;
 
   const check = async () => {
+    if (manualCheckPending.current || status?.state === "unavailable") return;
+    manualCheckPending.current = true;
+    setShowCurrentNotice(false);
     setStatus({ state: "checking" });
     try { await emit("updater://check-now"); }
-    catch { setStatus({ state: "error" }); }
+    catch {
+      manualCheckPending.current = false;
+      setStatus({ state: "error" });
+    }
   };
   const statusText = status?.state === "available"
     ? t("aboutWenlan.available", { version: status.version })
@@ -83,8 +115,15 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
         <section className="about-wenlan-updates" aria-labelledby="about-updates-title">
           <h3 id="about-updates-title">{t("aboutWenlan.updates")}</h3>
           <p role="status">{statusText}</p>
-          <button type="button" className="about-wenlan-check" disabled={status?.state === "checking"}
-            onClick={() => void check()}>{t("aboutWenlan.check")}</button>
+          {status?.state === "unavailable" ? (
+            <button type="button" className="about-wenlan-check" onClick={() => {
+              setLinkFailed(false);
+              void openExternal("https://github.com/7xuanlu/wenlan/releases").catch(() => setLinkFailed(true));
+            }}>{t("aboutWenlan.viewReleases")}</button>
+          ) : (
+            <button type="button" className="about-wenlan-check" disabled={status?.state === "checking"}
+              onClick={() => void check()}>{t("aboutWenlan.check")}</button>
+          )}
         </section>
         <nav className="about-wenlan-links" aria-label={t("aboutWenlan.resources")}>
           {links.map(([key, href]) => <a key={key} href={href} target="_blank" rel="noopener noreferrer" onClick={(event) => {
@@ -95,6 +134,10 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
         {linkFailed && <p role="alert">{t("aboutWenlan.linkError")}</p>}
         <p className="about-wenlan-license">{t("aboutWenlan.license")}</p>
       </div>
+      {showCurrentNotice && <div className="about-wenlan-feedback" aria-hidden="true">
+        <CheckCircle size={20} />
+        <span>{t("aboutWenlan.current")}</span>
+      </div>}
     </div>
   );
 }

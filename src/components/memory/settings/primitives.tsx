@@ -6,44 +6,47 @@ export function Toggle({
   enabled,
   onToggle,
   valueUnknown = false,
+  unknownState = "unavailable",
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedby,
 }: {
   enabled: boolean;
   onToggle: () => void;
-  /**
-   * The current value could not be MEASURED — distinct from measuring it as
-   * `false`. A switch has no honest off-position for that: painting the knob
-   * left claims "off", and a click would compute the new value as the
-   * complement of a value nobody read. So an unknown switch sits in a third,
-   * centred position, is not clickable, and drops `aria-pressed` rather than
-   * announcing a state it does not have.
-   */
+  /** The current value could not be measured. Unknown values render as text
+   *  status instead of claiming either switch position. */
   valueUnknown?: boolean;
-  /** Required in practice: the switch renders only a decorative knob, so
-   *  without this a screen reader announces "button, pressed" and never says
-   *  WHAT is being toggled. Callers pass the visible row/panel title. */
+  unknownState?: "loading" | "saving" | "unavailable";
+  /** Callers pass the visible row or panel title as the status name. */
   "aria-label"?: string;
   "aria-describedby"?: string;
 }) {
+  const { t } = useTranslation();
+  if (valueUnknown) {
+    return (
+      <span
+        role="status"
+        aria-label={ariaLabel}
+        aria-describedby={ariaDescribedby}
+        data-state={unknownState}
+        className="inline-flex min-h-[26px] items-center text-[length:var(--mem-text-sm)] text-[var(--mem-text-secondary)]"
+      >
+        {t(`settings.controlState.${unknownState}`)}
+      </span>
+    );
+  }
   return (
     <button
-      onClick={valueUnknown ? undefined : onToggle}
-      disabled={valueUnknown}
-      aria-pressed={valueUnknown ? undefined : enabled}
+      onClick={onToggle}
+      aria-pressed={enabled}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedby}
       className={`relative w-11 h-[26px] rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2 ${
-        valueUnknown
-          ? "bg-[var(--mem-hover-strong)] opacity-50 cursor-not-allowed"
-          : enabled
-            ? "bg-[var(--mem-accent-indigo)]"
-            : "bg-[var(--mem-hover-strong)]"
+        enabled ? "bg-[var(--mem-accent-indigo)]" : "bg-[var(--mem-hover-strong)]"
       }`}
     >
       <span
         className={`absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${
-          valueUnknown ? "left-[12px]" : enabled ? "left-[22px]" : "left-[3px]"
+          enabled ? "left-[22px]" : "left-[3px]"
         }`}
       />
     </button>
@@ -73,32 +76,33 @@ type SettingRowBaseProps = {
 
 type SettingRowProps = SettingRowBaseProps &
   (
-    // Toggle row (today's API). `valueUnknown` is for the case where the
-    // current value could not be read at all — see `Toggle`.
-    | { enabled: boolean; onToggle: () => void; valueUnknown?: boolean; control?: never }
+    // Toggle row. `valueUnknown` is for the case where the current value
+    // could not be read at all — see `Toggle`.
+    | { enabled: boolean; onToggle: () => void; valueUnknown?: boolean; unknownState?: "loading" | "saving" | "unavailable"; control?: never }
     | { control: React.ReactNode; enabled?: never; onToggle?: never } // custom-control row
   );
 
 export function SettingRow(props: SettingRowProps) {
   const { title, description, statusLine, warning, error } = props;
   const rowId = useId();
+  const descriptionId = `${rowId}-description`;
   const errorId = `${rowId}-error`;
   const warningId = `${rowId}-warning`;
   const describedBy =
-    [error ? errorId : null, warning ? warningId : null].filter(Boolean).join(" ") || undefined;
+    [descriptionId, error ? errorId : null, warning ? warningId : null].filter(Boolean).join(" ");
 
   return (
-    <div className="px-5 py-4">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
+    <div className="settings-row px-5 py-4">
+      <div className={`settings-row-content flex items-start justify-between gap-4 ${"control" in props ? "max-sm:flex-col max-sm:items-stretch" : ""}`}>
+        <div className="settings-row-copy min-w-0">
           <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
             {title}
           </div>
-          <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
+          <p id={descriptionId} style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
             {description}
           </p>
         </div>
-        <div className="mt-0.5">
+        <div className={`settings-row-control mt-0.5 ${"control" in props ? "settings-row-control-custom min-w-0 max-w-full max-sm:w-full" : "shrink-0"}`}>
           {"control" in props ? (
             props.control
           ) : (
@@ -106,6 +110,7 @@ export function SettingRow(props: SettingRowProps) {
               enabled={props.enabled}
               onToggle={props.onToggle}
               valueUnknown={props.valueUnknown}
+              unknownState={props.unknownState}
               aria-label={title}
               aria-describedby={describedBy}
             />
@@ -146,7 +151,7 @@ export function SectionHeader({
   action?: React.ReactNode; // right-aligned slot, e.g. Diagnostics' Refresh button
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 mb-3 px-1">
+    <div className="settings-section-header flex items-center justify-between gap-2 mb-3 px-1">
       <div className="flex items-center gap-2">
         {icon && (
           <span aria-hidden="true" style={{ color: "var(--mem-text-tertiary)" }}>
@@ -154,6 +159,7 @@ export function SectionHeader({
           </span>
         )}
         <h3
+          className="settings-section-heading"
           style={{
             fontFamily: "var(--mem-font-mono)",
             fontSize: "var(--mem-text-2xs)",
@@ -218,9 +224,10 @@ export function Button({
         "transition-[background-color,border-color,color,transform] duration-[var(--mem-dur-fast)]",
         "active:scale-[0.98] motion-reduce:active:scale-100",
         "focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2",
-        "disabled:opacity-45 disabled:cursor-default",
+        "disabled:opacity-45 disabled:cursor-default settings-control-button",
         BUTTON_VARIANT_CLASS[variant],
         BUTTON_SIZE_CLASS[size],
+        `settings-control-button-${size}`,
         className ?? "",
       ]
         .filter(Boolean)
@@ -231,7 +238,7 @@ export function Button({
         ...style,
       }}
     >
-      <span className={["inline-flex items-center gap-1.5", loading ? "invisible" : ""].filter(Boolean).join(" ")}>
+      <span className={["settings-control-button-label inline-flex items-center gap-1.5", loading ? "invisible" : ""].filter(Boolean).join(" ")}>
         {children}
       </span>
       {loading && (
@@ -278,7 +285,7 @@ export function SegmentedControl<T extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className="flex gap-0.5 p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)] w-fit shrink-0"
+      className="flex max-w-full flex-wrap gap-0.5 p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)] w-fit"
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -289,7 +296,7 @@ export function SegmentedControl<T extends string>({
             aria-pressed={active}
             onClick={() => onChange(opt.value)}
             className={[
-              "flex items-center gap-1.5 px-3 h-[26px] rounded-[var(--mem-radius-sm)] border",
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 h-[26px] rounded-[var(--mem-radius-sm)] border",
               "transition-[background-color,border-color,color,box-shadow] duration-[var(--mem-dur-fast)]",
               "focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-0",
               active
@@ -513,7 +520,7 @@ export function Input({ mono = false, invalid = false, className, style, ...rest
       {...rest}
       aria-invalid={invalid || undefined}
       className={[
-        "h-[32px] px-[10px] py-[8px] rounded-[var(--mem-radius-md)] bg-[var(--mem-bg)] outline-none",
+        "h-[32px] px-[10px] py-[8px] rounded-[var(--mem-radius-md)] bg-[var(--mem-bg)] outline-none settings-control-input",
         "border",
         invalid ? "border-[var(--mem-status-danger-border)]" : "border-[var(--mem-border)]",
         "text-[var(--mem-text)] placeholder:text-[var(--mem-text-tertiary)]",
@@ -559,7 +566,7 @@ export function Select({
   ...rest
 }: SelectProps) {
   return (
-    <span className="relative inline-flex w-full">
+    <span className="settings-control-select-wrap relative inline-flex w-full">
       <select
         {...rest}
         aria-invalid={invalid || undefined}
@@ -576,6 +583,7 @@ export function Select({
           invalid ? "" : "focus-visible:border-[var(--mem-accent-indigo)]",
           "focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-0",
           SELECT_SIZE_CLASS[size],
+          "settings-control-select",
           className ?? "",
         ]
           .filter(Boolean)

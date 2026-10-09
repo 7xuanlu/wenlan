@@ -21,8 +21,47 @@ describe("About Wenlan", () => {
     expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
     const handler = api.listen.mock.calls[0][1];
     act(() => handler({ payload: { state: "current" } }));
-    expect(screen.getByText("You’re up to date.")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("You’re up to date.");
+    expect(document.querySelector(".about-wenlan-feedback")).toHaveTextContent("You’re up to date.");
     expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  });
+  it("does not announce background or replayed current status as a manual confirmation", async () => {
+    const { rerender } = render(<AboutWenlanDialog open onClose={vi.fn()} />);
+    await waitFor(() => expect(api.emit).toHaveBeenCalledWith("updater://ui-ready"));
+    const handler = api.listen.mock.calls[0][1];
+    act(() => handler({ payload: { state: "current" } }));
+    expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    rerender(<AboutWenlanDialog open={false} onClose={vi.fn()} />);
+    act(() => handler({ payload: { state: "current" } }));
+    rerender(<AboutWenlanDialog open onClose={vi.fn()} />);
+    expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
+  });
+  it.each(["error", "available"] as const)("does not report a %s result as current", async (state) => {
+    render(<AboutWenlanDialog open onClose={vi.fn()} />);
+    await waitFor(() => expect(api.emit).toHaveBeenCalledWith("updater://ui-ready"));
+    fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    const handler = api.listen.mock.calls[0][1];
+    act(() => handler({ payload: { state, version: "0.19.0" } }));
+    expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent(state === "error" ? "Couldn’t check for updates. Try again." : "Version 0.19.0 is available.");
+    act(() => handler({ payload: { state: "current" } }));
+    expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
+  });
+  it.each([false, true])("explains the isolated runtime guard, including after a manual request (%s)", async (manual) => {
+    api.open.mockResolvedValue(undefined);
+    render(<AboutWenlanDialog open onClose={vi.fn()} />);
+    await waitFor(() => expect(api.emit).toHaveBeenCalledWith("updater://ui-ready"));
+    if (manual) fireEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    const handler = api.listen.mock.calls[0][1];
+    act(() => handler({ payload: { state: "error", error: "Update checks are disabled for development or custom data directories" } }));
+    expect(screen.getByRole("status")).toHaveTextContent("Updates are disabled in this test session.");
+    expect(screen.queryByRole("button", { name: "Check for updates" })).not.toBeInTheDocument();
+    expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
+    api.emit.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "View releases" }));
+    await waitFor(() => expect(api.open).toHaveBeenCalledWith("https://github.com/7xuanlu/wenlan/releases"));
+    expect(api.emit).not.toHaveBeenCalledWith("updater://check-now");
   });
   it("traps keyboard focus, closes with Escape and restores the trigger", async () => {
     const trigger = document.createElement("button"); document.body.append(trigger); trigger.focus();

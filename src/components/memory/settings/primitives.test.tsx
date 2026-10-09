@@ -105,6 +105,36 @@ describe("Toggle", () => {
     await user.click(button);
     expect(button).toHaveAttribute("aria-pressed", "true");
   });
+
+  it.each([
+    ["zh-Hant", "無法使用"],
+    ["zh-Hans", "不可用"],
+  ] as const)("localizes unavailable status in %s", async (language, label) => {
+    await i18n.changeLanguage(language);
+    render(<Toggle enabled={false} valueUnknown onToggle={() => {}} aria-label="Launch at login" />);
+    expect(screen.getByRole("status", { name: "Launch at login" })).toHaveTextContent(label);
+  });
+
+  it.each([
+    ["loading", "Loading"],
+    ["saving", "Saving"],
+    ["unavailable", "Unavailable"],
+  ] as const)("renders unknown %s as a named noninteractive status", (state, label) => {
+    const onToggle = vi.fn();
+    render(<Toggle enabled={false} valueUnknown unknownState={state} onToggle={onToggle}
+      aria-label="Launch at login" aria-describedby="login-detail" />);
+
+    const status = screen.getByRole("status", { name: "Launch at login" });
+    expect(status).toHaveTextContent(label);
+    expect(status).toHaveAttribute("aria-describedby", "login-detail");
+    expect(status.tagName).toBe("SPAN");
+    expect(status).not.toHaveAttribute("aria-pressed");
+    expect(screen.queryByRole("button", { name: "Launch at login" })).not.toBeInTheDocument();
+    expect(status.className).toContain("min-h-[26px]");
+    expect(status.className).not.toContain("border");
+    fireEvent.click(status);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
 });
 
 describe("Button", () => {
@@ -265,8 +295,17 @@ describe("SettingRow", () => {
     const toggle = screen.getByRole("button");
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(toggle).toHaveAttribute("aria-describedby", expect.stringContaining("error"));
+    expect(toggle.getAttribute("aria-describedby")).toContain("description");
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("passes unknownState through and describes the status with the row detail", () => {
+    render(<SettingRow title="Launch at login" description="Start Wenlan on boot" enabled={false}
+      valueUnknown unknownState="loading" onToggle={() => {}} />);
+    const status = screen.getByRole("status", { name: "Launch at login" });
+    expect(status).toHaveTextContent("Loading");
+    expect(document.getElementById(status.getAttribute("aria-describedby")!)).toHaveTextContent("Start Wenlan on boot");
   });
 
   it("control arm: renders the given control instead of a Toggle", () => {

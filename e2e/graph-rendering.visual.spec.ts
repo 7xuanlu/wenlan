@@ -36,6 +36,8 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   await expect(ours).toHaveCount(2);
   const canvas = graph.getByTestId("atlas-region-names");
   const areas = graph.getByTestId("atlas-community-areas");
+  const display = page.getByRole("button", { name: "Show in graph", exact: true });
+  await display.click();
   const regions = page.getByRole("button", { name: "Regions", exact: true });
   await expect(regions).toHaveAttribute("aria-pressed", "false");
   await expect(canvas).toBeHidden();
@@ -107,6 +109,8 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   await expect(regions).toHaveAttribute("aria-pressed", "false");
   await expect(canvas).toBeHidden();
   await expect(areas).toBeHidden();
+  await display.click();
+  await expect(page.getByRole("group", { name: "Show in graph" })).toHaveCount(0);
   await page.mouse.move(1, 1);
   // Check the rendered map itself as well as the transparent overlays. Read a
   // screenshot because WebGL may discard its drawing buffer after presenting.
@@ -144,4 +148,29 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
   });
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);
+});
+
+test("Graph keeps app search focused and canvas controls reachable", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [] });
+  await page.goto("/");
+  await page.getByRole("navigation", { name: "Primary navigation" })
+    .getByRole("button", { name: "Graph", exact: true }).click();
+  const jump = page.getByRole("combobox", { name: "Filter nodes" });
+  await expect(jump).toBeVisible();
+  await jump.click();
+  await page.evaluate(async () => {
+    await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "toggle-spotlight", payload: null });
+  });
+  const search = page.getByRole("dialog", { name: "Search", exact: true });
+  const input = search.getByPlaceholder("Search pages, memories, sources...");
+  await expect(input).toBeFocused();
+  await input.press("Meta+k");
+  await expect(input).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(search).toHaveCount(0);
+  await expect(jump).toBeFocused();
+  for (const name of ["Zoom in", "Zoom out", "Reset view", "Fit entire graph"]) {
+    await page.getByRole("button", { name, exact: true }).click();
+  }
 });

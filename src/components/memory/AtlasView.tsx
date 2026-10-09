@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import Graph from "graphology";
 import Sigma from "sigma";
+import { EdgeRectangleProgram } from "sigma/rendering";
 import {
   ArrowCounterClockwise,
+  CaretDown,
   CornersOut,
   Minus,
+  Funnel,
   Plus,
+  SlidersHorizontal,
 } from "@phosphor-icons/react";
 import {
   captureAtlasViewpoint,
@@ -25,6 +29,7 @@ import {
   truncateOverviewLabel,
 } from "../../lib/graph/overviewLabels";
 import "./atlasControls.css";
+import "./assets/collectionToolbar.css";
 import AtlasInspector from "./AtlasInspector";
 import AtlasSelect from "./AtlasSelect";
 import AtlasTooltip from "./AtlasTooltip";
@@ -38,6 +43,7 @@ import {
   filterKnowledgeGraph,
   memorySourceId,
   pageIdOf,
+  pageNodeId,
   drawableModel,
   attachMemories,
   smallGroupNodeCount,
@@ -77,6 +83,16 @@ import { useGraphPalette, colorForEntityType, nodeFillFor } from "../../lib/grap
 import type { GraphPalette } from "../../lib/graph/palette";
 import { fetchCartographyForSpaces, aggregateCartographyStatus } from "../../lib/graph/community";
 import type { SpaceCartography } from "../../lib/graph/community";
+
+/** Keep connection strokes in screen pixels while nodes follow graph spacing. */
+class ScreenSpaceEdgeProgram extends EdgeRectangleProgram {
+  override setUniforms(
+    params: Parameters<EdgeRectangleProgram["setUniforms"]>[0],
+    programInfo: Parameters<EdgeRectangleProgram["setUniforms"]>[1],
+  ) {
+    super.setUniforms({ ...params, sizeRatio: 1 }, programInfo);
+  }
+}
 
 // One shared empty map for the unresolved query. An inline `new Map()` default
 // mints a fresh identity on every render, and this map feeds the memoized
@@ -163,6 +179,8 @@ interface AtlasViewProps {
   // (EntityDetail's overlay "Atlas" mode). Applied instantly on mount — a
   // starting frame, not a transition — so no camera animation.
   focusEntityId?: string;
+  /** Initial camera target in the whole graph; never restricts its membership. */
+  focusPageId?: string;
   // Main.tsx's Graph view passes navigateBack; renders a back button as the
   // first toolbar item (a floating one would sit on the search box).
   onBack?: () => void;
@@ -181,8 +199,9 @@ function prefersReducedMotion(): boolean {
  * entity overlay's "Atlas" mode. Replaced the canvas ConstellationMap; the
  * query keys keep the "constellation-" prefix so nothing else invalidates.
  */
-export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasViewProps) {
+export default function AtlasView({ onNodeClick, focusEntityId, focusPageId, onBack }: AtlasViewProps) {
   const { t } = useTranslation();
+  const effectiveFocusId = focusPageId ? pageNodeId(focusPageId) : focusEntityId;
   const palette = useGraphPalette();
   const containerRef = useRef<HTMLDivElement>(null);
   const sigmaRef = useRef<Sigma | null>(null);
@@ -211,6 +230,11 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // communities do, so paints mark it dirty and the afterRender handler
   // rebuilds only then.
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [displayOpen, setDisplayOpen] = useState(false);
+  const displayTriggerRef = useRef<HTMLButtonElement>(null);
+  const displayPanelRef = useRef<HTMLDivElement>(null);
+  const displayOpenRef = useRef(false);
+  displayOpenRef.current = displayOpen;
   const selectedRef = useRef<string | null>(null);
   const overviewRef = useRef<AtlasViewpoint | null>(null);
   const pendingFocusRef = useRef<string | null>(null);
@@ -256,7 +280,8 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const [layers, setLayers] = useState<GraphLayers>(() => {
     if (typeof window === "undefined") return DEFAULT_LAYERS;
     try {
-      return readStoredLayers(window.localStorage.getItem(LAYERS_STORAGE_KEY));
+      const stored = readStoredLayers(window.localStorage.getItem(LAYERS_STORAGE_KEY));
+      return focusPageId ? { ...stored, page: true } : stored;
     } catch {
       return DEFAULT_LAYERS;
     }
@@ -276,6 +301,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // the reader asks for them; the chip below is the ask. Persisted like the
   // layer choice, and a malformed stored value falls back to hidden.
   const [showSmallGroups, setShowSmallGroups] = useState<boolean>(() => {
+    if (focusPageId) return true;
     if (typeof window === "undefined") return false;
     try {
       return readStoredSmallGroups(window.localStorage.getItem(SMALL_GROUPS_STORAGE_KEY));
@@ -319,7 +345,10 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // Scoping filters the model INPUTS: the space's own entities and memories,
   // and only the relations/links whose endpoints both survive. Regions,
   // counts, and insights all re-derive from the scoped model.
-  const scopedGraph = useMemo(() => filterKnowledgeGraph(graph, spaceFilter), [graph, spaceFilter]);
+  const scopedGraph = useMemo(
+    () => filterKnowledgeGraph(graph, spaceFilter),
+    [graph, spaceFilter],
+  );
   const model = useMemo(
     () => buildKnowledgeGraphModel(scopedGraph, { layers }),
     [scopedGraph, layers],
@@ -349,9 +378,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const visibleModel = useMemo<GraphModel>(() => {
     let drawable = drawableModel(baseModel, showSmallGroups);
     if (
-      focusEntityId &&
-      !drawable.nodes.some((n) => n.id === focusEntityId) &&
-      baseModel.nodes.some((n) => n.id === focusEntityId)
+      effectiveFocusId &&
+      !drawable.nodes.some((n) => n.id === effectiveFocusId) &&
+      baseModel.nodes.some((n) => n.id === effectiveFocusId)
     ) {
       drawable = drawableModel(baseModel, true);
     }
@@ -360,7 +389,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     // fall back to drawing the memory model as it is.
     if (baseModel.nodes.length === 0) return drawableModel(model, showSmallGroups);
     return attachMemories(drawable, model);
-  }, [baseModel, model, layers.memory, showSmallGroups, focusEntityId]);
+  }, [baseModel, model, layers.memory, showSmallGroups, effectiveFocusId]);
   // Counted off the FULL base model, so the chip keeps its number when the
   // groups are showing and can offer to hide them again — and keeps it when
   // the memory chip flips, since memories never make or break a group.
@@ -444,6 +473,12 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const [searchFocused, setSearchFocused] = useState(false);
+  const restoreSearchFocusOnCloseRef = useRef(false);
+  useEffect(() => {
+    if (selectedId !== null || !restoreSearchFocusOnCloseRef.current) return;
+    restoreSearchFocusOnCloseRef.current = false;
+    searchInputRef.current?.focus();
+  }, [selectedId]);
   // Start with a clean map; Regions reveals community contours and names.
   // The count line keeps reporting regions either way.
   // Ref mirror so the sigma mount effect (which recreates the overlay per
@@ -459,17 +494,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     return model.nodes.filter((node) => !entityTypeHidden(node.entityType, excludedTypes) && node.name.toLowerCase().includes(needle)).slice(0, 8);
   }, [model, query, excludedTypes]);
 
-  // ⌘K / Ctrl+K jumps to the search box from anywhere in the window.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchInputRef.current?.focus();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
 
   const focusEntity = (nodeId: string) => {
     setQuery("");
@@ -501,16 +525,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // Ratio only ever shrinks (zooms in) — landing further out than the
       // current view would read as the map running away from the match.
       const state = { x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, openingRatioRef.current / 2.5) };
-      const { width, height } = renderer.getDimensions();
-      if (width <= 640) {
-        // The narrow inspector occupies the lower canvas. Keep the selected
-        // neighborhood above it, using Sigma's projection (also handles rotation).
-        const center = renderer.viewportToFramedGraph({ x: width / 2, y: height / 2 });
-        const target = renderer.viewportToFramedGraph({ x: width / 2, y: height * 0.16 });
-        const scale = state.ratio / camera.ratio;
-        state.x += (center.x - target.x) * scale;
-        state.y += (center.y - target.y) * scale;
-      }
       if (prefersReducedMotion()) camera.setState(state);
       else camera.animate(state, { duration: 450 });
     }
@@ -521,6 +535,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const returnToMap = () => {
     selectedRef.current = null;
     setSelectedId(null);
+    restoreSearchFocusOnCloseRef.current = true;
     const renderer = sigmaRef.current;
     const drawn = graphRef.current;
     if (renderer && drawn) {
@@ -533,7 +548,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       renderer.refresh();
     }
     overviewRef.current = null;
-    searchInputRef.current?.focus();
   };
   returnToMapRef.current = returnToMap;
   const frameMap = (mode: AtlasFrameMode) => {
@@ -571,11 +585,54 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   };
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && selectedRef.current) returnToMapRef.current();
+      if (event.key !== "Escape") return;
+      const target = event.target as Element | null;
+      const inDisplayControls = displayOpenRef.current && (
+        displayPanelRef.current?.contains(target) ||
+        displayTriggerRef.current?.contains(target) ||
+        target?.closest?.(".atlas-type-filter-panel")
+      );
+      if (inDisplayControls) return;
+      if (selectedRef.current) returnToMapRef.current();
     };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, []);
+  useEffect(() => {
+    if (!displayOpen) return;
+    const isInside = (target: EventTarget | null) => {
+      const node = target as Node | null;
+      const element = target as Element | null;
+      return !!node && (
+        displayPanelRef.current?.contains(node) ||
+        displayTriggerRef.current?.contains(node) ||
+        !!element?.closest?.(".atlas-type-filter-panel")
+      );
+    };
+    const dismissPointer = (event: PointerEvent) => {
+      if (!isInside(event.target)) setDisplayOpen(false);
+    };
+    const dismissFocus = (event: FocusEvent) => {
+      if (!isInside(event.target)) setDisplayOpen(false);
+    };
+    const dismissEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      // Nested selectors handle Escape first and stop propagation. This outer
+      // handler only closes the display disclosure and restores its trigger.
+      event.preventDefault();
+      event.stopPropagation();
+      setDisplayOpen(false);
+      displayTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", dismissPointer);
+    document.addEventListener("focusin", dismissFocus);
+    document.addEventListener("keydown", dismissEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissPointer);
+      document.removeEventListener("focusin", dismissFocus);
+      document.removeEventListener("keydown", dismissEscape);
+    };
+  }, [displayOpen]);
   useEffect(() => {
     if (selectedRef.current && !filteredModel.nodes.some((node) => node.id === selectedRef.current)) {
       selectedRef.current = null;
@@ -619,6 +676,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       e.preventDefault();
       setActiveIndex((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
+      // Opening the inspector focuses its close button. Consume Enter so the
+      // browser cannot activate that newly focused button with the same key.
+      e.preventDefault();
       const match = matches[activeIndex] ?? matches[0];
       if (match) focusEntity(match.id);
     } else if (e.key === "Escape") {
@@ -630,8 +690,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   // Mount/rebuild sigma whenever the model changes. `palette` is read here
   // (fresh at build time) but deliberately not a dependency — a theme flip
   // recolors the existing graph in place (below) instead of tearing down and
-  // remounting the whole renderer.
-  useEffect(() => {
+  // remounting the whole renderer. Dispose before the canvas leaves the DOM;
+  // a focus animation can otherwise render into a detached, zero-width host.
+  useLayoutEffect(() => {
     const container = containerRef.current;
     // Guarded on the FULL model, not the drawn one: a graph whose components
     // are all smaller than MIN_COMPONENT_SIZE draws nothing but must still
@@ -780,9 +841,10 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
           // Focus labels retain the full source string for inspection and
           // selection; overview truncation is deliberately scoped below.
           const focusedData = { ...data, label: String(data.label || graph.getNodeAttribute(data.key, "label") || "") };
+          const placement = at;
           const rawLabel = focusedData.label;
-          reserveLabel(ctx, rawLabel, at);
-          drawNodeLabelAt(ctx, focusedData, s, at, paletteRef.current.surface);
+          reserveLabel(ctx, rawLabel, placement);
+          drawNodeLabelAt(ctx, focusedData, s, placement, paletteRef.current.surface);
           return;
         }
         const state = hoverStateRef.current;
@@ -853,6 +915,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       // Edges are a 1 px hairline (0.6 for shared-source); sigma's default
       // floor of 1.7 would silently bump them back up.
       minEdgeThickness: 0.5,
+      edgeProgramClasses: { line: ScreenSpaceEdgeProgram },
       // 12px body-font labels placed radially around the node, facing the
       // cluster center, over a ground-coloured halo — sigma's default is
       // 14px Arial pinned to the right.
@@ -873,6 +936,13 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
           display.label = attrs.label;
           display.forceLabel = true;
         }
+        // A note handoff marks the destination without the hover reducer's
+        // one-hop dimming, so panning still reveals the surrounding network.
+        if (focusPageId && node === effectiveFocusId && hoverStateRef.current.hovered === null) {
+          display.label = attrs.label;
+          display.forceLabel = true;
+          display.highlighted = true;
+        }
         const floor = lodRef.current.phase === "overview" && attrs.landmark ? minimumGraphRadius * 2 : minimumGraphRadius;
         const cap = node === hoverStateRef.current.hovered ? 12 : attrs.entityType === MEMORY_NODE_TYPE ? 2.8 : 8;
         return { ...display, size: Math.min(Math.max(display.size, floor), cap * graphUnitsPerPixel) };
@@ -880,7 +950,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       edgeReducer: (edge, attrs) => {
         const [source, target] = graph.extremities(edge);
         if ([source, target].some((id) => entityTypeHidden(graph.getNodeAttribute(id, "entityType"), excludedTypesRef.current))) return { ...attrs, hidden: true };
-        return edgeDisplay(
+        const display = edgeDisplay(
           hoverStateRef.current,
           edge,
           source,
@@ -890,6 +960,7 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
           lodRef.current,
           { source: graph.getNodeAttributes(source), target: graph.getNodeAttributes(target) },
         );
+        return display;
       },
     });
     labelSigma = renderer;
@@ -991,10 +1062,23 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       minimumGraphRadius = 1.3 * graphUnitsPerPixel;
     };
     updateRadiusScale();
-    renderer.on("resize", () => { updateRadiusScale(); renderer.refresh(); });
+    renderer.on("resize", () => {
+      updateRadiusScale(); renderer.refresh();
+    });
+    // Sigma listens to window resizes; a docked inspector changes only the
+    // container. Refresh dimensions without replacing the current camera view.
+    const containerSizeObserver = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(() => {
+        if (container.clientWidth > 0 && container.clientHeight > 0) {
+          renderer.resize();
+          renderer.refresh();
+        }
+      }) : null;
+    containerSizeObserver?.observe(container);
     let previousRatio = mountRatio;
     lodRef.current = OPENING_LOD;
-    renderer.getCamera().on("updated", ({ ratio }) => {
+    const camera = renderer.getCamera();
+    const onCameraUpdated = ({ ratio }: { ratio: number }) => {
       const next = lodFor(openingRatioRef.current / ratio);
       const prev = lodRef.current;
       const zoomChanged = ratio !== previousRatio;
@@ -1003,16 +1087,18 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
       if (!zoomChanged && next.dustVisible === prev.dustVisible && next.islandsSolid === prev.islandsSolid && next.phase === prev.phase) return;
       lodRef.current = next;
       renderer.refresh();
-    });
-    // Overlay entry point: land already centered on the focused entity with
-    // the same emphasis the search fly applies. setState, never animate —
-    // this is the first frame the user sees, not a camera move.
-    if (!restored && focusEntityId && graph.hasNode(focusEntityId)) {
-      hoverStateRef.current = hoverStateFor(graph, focusEntityId);
-      const display = renderer.getNodeDisplayData(focusEntityId);
+    };
+    camera.on("updated", onCameraUpdated);
+    // Entry framing is instantaneous. Entity overlays retain neighborhood
+    // emphasis; page handoffs only move the camera in the whole graph.
+    if (!restored && effectiveFocusId && graph.hasNode(effectiveFocusId)) {
+      if (!focusPageId) hoverStateRef.current = hoverStateFor(graph, effectiveFocusId);
+      const display = renderer.getNodeDisplayData(effectiveFocusId);
+      // Page handoffs use the same camera zoom as a filter result. Other
+      // nodes and connections stay in the graph, including distant groups.
       if (display) {
         const camera = renderer.getCamera();
-        camera.setState({ x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1) });
+        camera.setState({ x: display.x, y: display.y, ratio: Math.min(camera.ratio, 1, focusPageId ? openingRatioRef.current / 2.5 : 1) });
       }
     }
     const pendingFocus = pendingFocusRef.current;
@@ -1173,6 +1259,9 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
     });
 
     return () => {
+      containerSizeObserver?.disconnect();
+      // Sigma only detaches its own camera listener; release our listener too.
+      camera.off("updated", onCameraUpdated);
       viewpointRef.current = {
         scope: spaceFilter,
         view: captureAtlasViewpoint(renderer, graph),
@@ -1317,53 +1406,25 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
   const dropdownOpen = searchFocused && query.trim().length > 0;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%" }}>
-      {/* Toolbar — artifact screen 01: ⌘K search + mono count line. The
-          filter chips and Atlas|Focus segment wait for their features. */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "12px 16px",
-          borderBottom: "1px solid var(--mem-border)",
-          flexWrap: "wrap",
-          background: "var(--mem-surface)",
-          fontFamily: "var(--mem-font-body)",
-        }}
-      >
+    <div className="atlas-canvas-shell">
+      <div ref={containerRef} data-testid="atlas-view" className="atlas-canvas" />
+
+      <div className="atlas-top-controls">
         {onBack && (
           <WorkspaceBackButton
             type="button"
             onClick={onBack}
-            className="flex items-center gap-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-            style={{
-              color: "var(--mem-text-secondary)",
-              fontSize: "var(--mem-text-control)",
-              fontFamily: "var(--mem-font-body)",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              padding: "6px 8px",
-            }}
+            className="atlas-back-button"
           >
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
             {t("main.back")}
           </WorkspaceBackButton>
         )}
-        <div style={{ position: "relative", flex: "0 1 300px", minWidth: 250 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-              background: "var(--mem-bg)",
-              border: `1px solid ${searchFocused ? "var(--mem-accent-indigo-border)" : "var(--mem-border)"}`,
-              borderRadius: "var(--mem-radius-md)",
-              padding: "7px 12px",
-            }}
-          >
+        <div className="atlas-search-control">
+          <div className={`collection-search atlas-search-field${searchFocused ? " is-focused" : ""}`}>
+            <Funnel size={18} aria-hidden="true" />
             <input
+              className="collection-search-input"
               ref={searchInputRef}
               type="text"
               role="combobox"
@@ -1382,124 +1443,74 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
               onFocus={() => setSearchFocused(true)}
               onBlur={() => setSearchFocused(false)}
               onKeyDown={onSearchKeyDown}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                background: "transparent",
-                border: "none",
-                outline: "none",
-                font: "400 13px var(--mem-font-body)",
-                color: "var(--mem-text)",
-                padding: 0,
-              }}
             />
-            <kbd
-              style={{
-                font: "400 10px var(--mem-font-mono)",
-                color: "var(--mem-text-secondary)",
-                border: "1px solid var(--mem-border)",
-                borderRadius: 4,
-                padding: "1px 5px",
-              }}
-            >
-              ⌘K
-            </kbd>
           </div>
           {dropdownOpen && (
-            <ul
-              id="atlas-search-listbox"
-              role="listbox"
-              style={{
-                position: "absolute",
-                top: "calc(100% + 6px)",
-                left: 0,
-                right: 0,
-                margin: 0,
-                padding: 4,
-                listStyle: "none",
-                background: "var(--mem-surface)",
-                border: "1px solid var(--mem-popover-border, var(--mem-border))",
-                borderRadius: "var(--mem-radius-md)",
-                boxShadow: "0 8px 24px rgba(0, 0, 0, 0.12)",
-                zIndex: 20,
-                maxHeight: 280,
-                overflowY: "auto",
-              }}
-            >
+            <ul id="atlas-search-listbox" role="listbox" className="atlas-search-results">
               {matches.map((node, index) => (
                 <li
                   key={node.id}
                   id={`atlas-search-option-${index}`}
                   role="option"
                   aria-selected={index === activeIndex}
-                  // preventDefault keeps the input's blur from closing the
-                  // list before this row's click lands.
+                  // Keep the input focused until the selected row is handled.
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => focusEntity(node.id)}
                   onMouseEnter={() => setActiveIndex(index)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    padding: "6px 10px",
-                    borderRadius: "var(--mem-radius-sm)",
-                    fontSize: "var(--mem-text-control)",
-                    color: "var(--mem-text)",
-                    cursor: "pointer",
-                    background: index === activeIndex ? "var(--mem-hover)" : "transparent",
-                  }}
                 >
                   <span
+                    className="atlas-search-result-dot"
                     style={{
-                      width: 8,
-                      height: 8,
-                      borderRadius: "50%",
-                      flexShrink: 0,
                       backgroundColor:
                         node.entityType === MEMORY_NODE_TYPE
                           ? palette.memory
                           : node.entityType === PAGE_NODE_TYPE
                             ? palette.page
                             : colorForEntityType(node.entityType, palette),
-                      opacity: 0.85,
                     }}
                   />
-                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                    {node.name}
-                  </span>
+                  <span>{node.name}</span>
                 </li>
               ))}
-              {matches.length === 0 && (
-                <li style={{ padding: "6px 10px", fontSize: "var(--mem-text-description)", color: "var(--mem-text-secondary)" }}>
-                  {t("atlas.noMatches")}
-                </li>
-              )}
+              {matches.length === 0 && <li className="atlas-search-no-matches">{t("atlas.noMatches")}</li>}
             </ul>
           )}
         </div>
-        {spaces.length > 0 && (
-          <AtlasSelect
-            label={t("atlas.spaceLabel")}
-            value={spaceFilter ?? ""}
-            onChange={(value) => setSpaceFilter(value || null)}
-            options={[{ value: "", label: t("atlas.spaceAll") }, ...spaces.map((space) => ({ value: space, label: space }))]}
-            searchLabel={t("atlas.searchSpaces")}
-            noMatchesLabel={t("atlas.noMatches")}
-          />
-        )}
-        <span
-          style={{
-            marginLeft: "auto",
-            font: "400 11px var(--mem-font-mono)",
-            color: "var(--mem-text-secondary)",
-          }}
-        >
-          {countLine}
-        </span>
       </div>
 
-      <div className="atlas-content-controls" role="group" aria-label={t("atlas.graphContent")}>
-        <div className="atlas-content-row">
+      <div className="atlas-display-anchor">
+        <button
+          ref={displayTriggerRef}
+          type="button"
+          className="collection-control atlas-display-trigger"
+          aria-label={t("atlas.graphContent")}
+          aria-expanded={displayOpen}
+          aria-controls={displayOpen ? "atlas-display-panel" : undefined}
+          onClick={() => setDisplayOpen((open) => !open)}
+        >
+          <SlidersHorizontal size={16} weight="regular" aria-hidden="true" />
+          <span>{t("atlas.display")}</span>
+          <CaretDown size={13} weight="regular" aria-hidden="true" />
+        </button>
+        {displayOpen && (
+          <div
+            ref={displayPanelRef}
+            id="atlas-display-panel"
+            className="atlas-display-panel"
+            role="group"
+            aria-label={t("atlas.graphContent")}
+          >
+            {spaces.length > 0 && (
+              <AtlasSelect
+                label={t("atlas.spaceLabel")}
+                value={spaceFilter ?? ""}
+                onChange={(value) => setSpaceFilter(value || null)}
+                options={[{ value: "", label: t("atlas.spaceAll") }, ...spaces.map((space) => ({ value: space, label: space }))]}
+                searchLabel={t("atlas.searchSpaces")}
+                noMatchesLabel={t("atlas.noMatches")}
+              />
+            )}
+            <div className="atlas-display-options">
           {(
             [
               { key: "page" as const },
@@ -1573,17 +1584,17 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
               </span>
             )}
           </div>
-        </div>
+            </div>
+          </div>
+        )}
       </div>
 
-
-      <div style={{ position: "relative", flex: 1, minHeight: 0 }}>
-      <div ref={containerRef} data-testid="atlas-view" style={{ height: "100%", width: "100%" }} />
+      <div className="atlas-count-line" aria-live="polite">{countLine}</div>
 
       {filteredModel.nodes.length === 0 && excludedTypes.size > 0 && <div className="atlas-filter-empty">
         <p>{t("atlas.noTypeMatches")}</p><button type="button" className="atlas-action" onClick={() => setExcludedTypes(new Set())}>{t("atlas.allEntityTypes")}</button>
       </div>}
-      {selectedNode && <AtlasInspector key={selectedNode.id} node={selectedNode} neighbors={selectedNeighbors}
+      {selectedNode && <AtlasInspector node={selectedNode} neighbors={selectedNeighbors}
         edges={filteredModel.edges.filter((edge) => edge.source === selectedNode.id || edge.target === selectedNode.id)}
         onSelect={focusEntity} onClose={returnToMap}
         onOpen={onNodeClick ? () => onNodeClick(targetForNode(selectedNode.id)) : undefined} />}
@@ -1611,7 +1622,6 @@ export default function AtlasView({ onNodeClick, focusEntityId, onBack }: AtlasV
         </AtlasTooltip>
       </div>
 
-      </div>
     </div>
   );
 }

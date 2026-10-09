@@ -3,14 +3,14 @@
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 :root {
-  --bg-primary: #11131A;
-  --bg-secondary: #171A23;
-  --bg-tertiary: #202432;
+  --bg-primary: #191C24;
+  --bg-secondary: #202430;
+  --bg-tertiary: #282D3C;
   --text-primary: #F1EFE8;
   --text-secondary: #C9C8D1;
   --accent: #8FB3EA;
   --accent-hover: #A5C3F3;
-  --border: #2B3140;
+  --border: #333A4B;
   --text-tertiary: #969BAD;
   --separator: rgba(80, 88, 112, 0.52);
   --overlay-subtle: rgba(240, 239, 232, 0.04);
@@ -340,13 +340,15 @@ body {
 /* Dark (default — logo ink with a quiet reading cast) */
 :root,
 html[data-theme="dark"] {
-  --mem-bg: #11131A;
-  --mem-surface: #171A23;
-  --mem-sidebar: #0E1017;
-  --mem-account-card: #141823;
-  --mem-account-card-border: #30364A;
-  --mem-popover: #171A23;
-  --mem-popover-border: #687084;
+  --workspace-radius: 12px;
+  --mem-bg: #191C24;
+  --mem-surface: #202430;
+  --mem-sidebar: #161920;
+  --mem-account-card: #1C202C;
+  --mem-account-card-border: #383E52;
+  --mem-popover: #202430;
+  --mem-popover-border: var(--mem-border);
+  --mem-popover-shadow: 0 8px 24px rgba(3, 4, 8, 0.30);
   --mem-text: #F1EFE8;
   --mem-text-secondary: #C9C8D1;
   --mem-text-tertiary: #969BAD;
@@ -363,9 +365,9 @@ html[data-theme="dark"] {
   --mem-accent-sage-text: #9DA990;
   --mem-danger: #F0A0A0;
   --mem-accent-glow: #CEB95F;
-  --mem-border: #2B3140;
-  --mem-card-surface: #181A1F;
-  --mem-card-hover: #1D1F25;
+  --mem-border: #333A4B;
+  --mem-card-surface: #20232A;
+  --mem-card-hover: #262A33;
   --mem-control-border: #687084;
   --mem-hover: rgba(143, 179, 234, 0.09);
   --mem-hover-strong: rgba(143, 179, 234, 0.15);
@@ -374,8 +376,8 @@ html[data-theme="dark"] {
   --mem-distilled-border: rgba(169, 174, 242, 0.36);
   --mem-distilled-bg: rgba(169, 174, 242, 0.09);
   --mem-shimmer-color: rgba(143, 179, 234, 0.15);
-  --mem-detail-surface: #171A23;
-  --mem-detail-surface-raised: #1C2130;
+  --mem-detail-surface: #202430;
+  --mem-detail-surface-raised: #252B3B;
   /* Home review card fill: dark lifts by surface color (shadows barely read on
      dark), so it aliases the raised token; light stays canvas-white + shadow. */
   --mem-home-card: var(--mem-detail-surface-raised);
@@ -424,20 +426,15 @@ html[data-theme="dark"] {
   --kg-concept: #7CBD89;
   --kg-neutral: #969BAD;
   /* Edge inks must stay OPAQUE: sigma's WebGL pipeline packs colors
-     non-premultiplied under premultiplied blending, so any alpha here
-     renders as an additive wash (bluish sky) instead of a gray. These are
-     the old translucent inks pre-composited over --mem-surface —
-     rgba(150,155,173,.30/.55) over #171A23. Canvas 2D paints them to the
-     same pixels, so ConstellationMap is unchanged. */
-  --kg-edge: #3D414C;
-  --kg-edge-strong: #5D616F;
-  /* The Canvas draws its spokes as SVG strokes on the page surface, not as
-     sigma edges over the graph's own ground, and at that size the graph inks
-     above disappear — the strokes are what make thirteen boxes read as a tree
-     rather than as scattered pills. Lifted here only; AtlasView, FocusGraph and
-     ConstellationMap keep the pre-composited values they were tuned against. */
-  --canvas-edge: #565B69;
-  --canvas-edge-strong: #7C8291;
+     non-premultiplied under premultiplied blending, so any alpha renders as an
+     additive wash instead of a gray. These blue-gray edges are tuned for the
+     lighter #202430 surface. */
+  --kg-edge: #444956;
+  --kg-edge-strong: #626878;
+  /* The Canvas draws its spokes as SVG strokes on the page surface, so its
+     small tree links use a brighter pair in the same blue-gray hierarchy. */
+  --canvas-edge: #5D6373;
+  --canvas-edge-strong: #82899B;
   /* Bridge is the shared amber accent the PageCanvas spokes still wear; it is
      a sigma edge color there, hence opaque. The Atlas paints nothing under its
      nodes — no terrain, wash or hull — so there is no cartography ink token. */
@@ -470,7 +467,8 @@ html[data-theme="light"] {
   --mem-account-card: #FCFCFB;
   --mem-account-card-border: #E3E7EE;
   --mem-popover: #FFFFFF;
-  --mem-popover-border: #8B93A3;
+  --mem-popover-border: var(--mem-border);
+  --mem-popover-shadow: 0 8px 24px rgba(26, 26, 46, 0.10);
   --mem-text: #1A1A2E;
   --mem-text-secondary: #586174;
   --mem-text-tertiary: #687184;
