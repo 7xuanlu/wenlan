@@ -691,6 +691,110 @@ async fn migration_134_public_133_backfills_only_exact_snapshot_and_reopens_idem
 }
 
 #[tokio::test]
+async fn migration_134_backups_existing_133_before_ddl_and_preserves_it_on_retry() {
+    let (db, dir) = test_db_at(133).await;
+    // `test_db_at` models a fresh database boot by default. This fixture
+    // represents an already-existing on-disk database reaching migration 134.
+    db.skip_migration_backups
+        .store(false, std::sync::atomic::Ordering::Relaxed);
+    let backup_path = dir.path().join("pre_migration_134_backup.db");
+    assert!(
+        !backup_path.exists(),
+        "fixture must begin without a migration-134 backup"
+    );
+
+    // Fail after the node table was staged. Migration DDL must roll back, but
+    // the pre-migration backup is intentionally outside that transaction.
+    {
+        let conn = db.conn.lock().await;
+        conn.execute("CREATE TABLE page_map_edges__m134 (marker TEXT)", ())
+            .await
+            .unwrap();
+    }
+    assert!(db.migrate_134_page_map_ideas().await.is_err());
+    assert_eq!(db_user_version(&db).await, 133);
+    assert!(
+        backup_path.exists(),
+        "the existing database needs a restore point before migration DDL"
+    );
+    assert!(db
+        .get_app_metadata("backup_before_migration_134")
+        .await
+        .unwrap()
+        .is_some());
+
+    let backup_bytes = std::fs::read(&backup_path).unwrap();
+    let backup_db = libsql::Builder::new_local(backup_path.to_string_lossy().to_string())
+        .build()
+        .await
+        .unwrap();
+    let backup_conn = backup_db.connect().unwrap();
+    let mut version_rows = backup_conn.query("PRAGMA user_version", ()).await.unwrap();
+    let backup_version = version_rows
+        .next()
+        .await
+        .unwrap()
+        .unwrap()
+        .get::<i64>(0)
+        .unwrap();
+    assert_eq!(
+        backup_version, 133,
+        "the snapshot must predate migration 134"
+    );
+    let mut integrity_rows = backup_conn
+        .query("PRAGMA integrity_check", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        integrity_rows
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<String>(0)
+            .unwrap(),
+        "ok"
+    );
+    drop(backup_conn);
+    drop(backup_db);
+
+    {
+        let conn = db.conn.lock().await;
+        conn.execute("DROP TABLE page_map_edges__m134", ())
+            .await
+            .unwrap();
+    }
+    db.migrate_134_page_map_ideas().await.unwrap();
+    assert_eq!(db_user_version(&db).await, 134);
+    assert_eq!(
+        std::fs::read(&backup_path).unwrap(),
+        backup_bytes,
+        "retry must preserve the original pre-134 restore point byte-for-byte"
+    );
+}
+
+#[tokio::test]
+async fn migration_134_skips_backup_when_fresh_store_backup_policy_is_set() {
+    let (db, dir) = test_db_at(133).await;
+    db.skip_migration_backups
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let backup_path = dir.path().join("pre_migration_134_backup.db");
+
+    db.migrate_134_page_map_ideas().await.unwrap();
+
+    assert_eq!(db_user_version(&db).await, 134);
+    assert!(
+        !backup_path.exists(),
+        "migration 134 must retain the existing fresh-store backup skip behavior"
+    );
+    assert!(db
+        .get_app_metadata("backup_before_migration_134")
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn migration_134_private_133_adds_history_title_and_preserves_idea_rows() {
     let (db, _tmp) = test_db_at(132).await;
     seed_page(&db, "private-133-history").await;

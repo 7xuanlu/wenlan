@@ -120,7 +120,7 @@ export function useSpaceReorderDrag(
         window.setTimeout(() => { suppressClick.current = false; }, 0);
       }
       if (!active.moved || !xInside || !yInside || !source || !target || target.id === source.id ||
-          (hitSpace !== undefined && !canReorderTogether(source, hitSpace)) || !canReorderTogether(source, target)) {
+          (hitSpace !== undefined && hitSpace.id !== source.id && !canReorderTogether(source, hitSpace)) || !canReorderTogether(source, target)) {
         setProjection(null);
         return;
       }

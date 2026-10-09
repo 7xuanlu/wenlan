@@ -43,6 +43,12 @@ impl super::MemoryDB {
         if version >= 134 {
             return Ok(());
         }
+        // The table rebuild below replaces both map tables. Drop the guard
+        // before calling the helper because it acquires the same connection
+        // mutex while resolving the source path and writing its receipt.
+        drop(conn);
+        self.backup_before_migration(134, version).await?;
+        let conn = self.conn.lock().await;
 
         let has_history_title = {
             let mut columns = conn

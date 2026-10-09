@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmedSpaces } from "./ConfirmedSpaces";
 import { labels, makeSpace } from "./SpacesOverview.testUtils";
@@ -7,13 +7,13 @@ const work = makeSpace({ id: "work", name: "Work", sort_order: 0 });
 const personal = makeSpace({ id: "personal", name: "Personal", sort_order: 1 });
 const spaces = [work, personal] as const;
 
-function renderConfirmed(onReorder = vi.fn(), pendingIds: readonly string[] = []) {
+function renderConfirmed(onReorder = vi.fn(), pendingIds: readonly string[] = [], visibleSpaces: readonly typeof work[] = spaces) {
   const result = render(
     <ConfirmedSpaces
-      spaces={spaces}
+      spaces={visibleSpaces}
       allSpaces={spaces}
       labels={labels}
-      filter=""
+      filter={visibleSpaces.length === spaces.length ? "" : "Work"}
       noResults={false}
       pageCounts={new Map()}
       pendingIds={pendingIds}
@@ -79,6 +79,25 @@ describe("ConfirmedSpaces pointer drag lifecycle", () => {
     fireEvent.pointerUp(window, { pointerId: 2, clientY: 100 });
     expect(onReorder).toHaveBeenCalledTimes(1);
     expect(onReorder).toHaveBeenCalledWith(work, personal);
+  });
+
+  it("does not cancel a valid drop when an unequal-height source row is hit again", () => {
+    const { onReorder } = renderConfirmed();
+    const source = screen.getByTestId("space-row-work").parentElement!;
+    const destination = screen.getByTestId("space-row-personal").parentElement!;
+    const list = source.parentElement!;
+    vi.spyOn(source, "getBoundingClientRect").mockReturnValue(rect(0, 100));
+    vi.spyOn(destination, "getBoundingClientRect").mockReturnValue(rect(110, 30));
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rect(0, 140));
+
+    // Grab at the top of Work. The pointer ends at y=90, still over Work's
+    // original rectangle, while its projected insertion point is Personal.
+    const handle = screen.getByRole("button", { name: labels.dragSpace("Work") });
+    fireEvent.pointerDown(handle, { pointerId: 20, pointerType: "mouse", button: 0, isPrimary: true, clientX: 10, clientY: 0 });
+    fireEvent.pointerMove(window, { pointerId: 20, clientX: 10, clientY: 90 });
+    fireEvent.pointerUp(window, { pointerId: 20, clientX: 10, clientY: 90 });
+
+    expect(onReorder).toHaveBeenCalledExactlyOnceWith(work, personal);
   });
 
   it("places an upward drag before the row at its exact midpoint", () => {
@@ -187,5 +206,59 @@ describe("ConfirmedSpaces pointer drag lifecycle", () => {
     const { onReorder } = renderConfirmed();
     fireEvent.keyDown(screen.getByRole("button", { name: labels.dragSpace("Work") }), { key: "ArrowDown" });
     expect(onReorder).toHaveBeenCalledWith(work, personal);
+  });
+
+  it("keeps a focused handle through pending state and allows the next keyboard reorder", async () => {
+    let pendingIds: readonly string[] = [];
+    let view: ReturnType<typeof render>;
+    const resolvers: ((ok: boolean) => void)[] = [];
+    const tree = (onReorder: (source: typeof work, target: typeof personal) => void | boolean | Promise<boolean>) => (
+      <ConfirmedSpaces
+        spaces={spaces} allSpaces={spaces} labels={labels} filter="" noResults={false}
+        pageCounts={new Map()} pendingIds={pendingIds} lens="rows" onSelect={() => undefined}
+        onStar={() => undefined} onRename={async () => true} onReorder={onReorder} onDelete={() => undefined}
+      />
+    );
+    const onReorder = vi.fn((_source: typeof work, _target: typeof personal) => {
+      pendingIds = ["work"];
+      view.rerender(tree(onReorder));
+      return new Promise<boolean>((resolve) => {
+        resolvers.push((ok) => {
+          pendingIds = [];
+          resolve(ok);
+          view.rerender(tree(onReorder));
+        });
+      });
+    });
+    view = render(tree(onReorder));
+    let handle = screen.getByRole("button", { name: labels.dragSpace("Work") });
+    handle.focus();
+
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    await waitFor(() => expect(onReorder).toHaveBeenCalledTimes(1));
+    handle = screen.getByRole("button", { name: labels.dragSpace("Work") });
+    expect(handle).toHaveAttribute("aria-disabled", "true");
+    expect(handle).not.toBeDisabled();
+    expect(handle).toHaveFocus();
+
+    act(() => resolvers.shift()?.(true));
+    await waitFor(() => expect(handle).toHaveAttribute("aria-disabled", "false"));
+    expect(handle).toHaveFocus();
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    await waitFor(() => expect(onReorder).toHaveBeenCalledTimes(2));
+    expect(handle).toHaveAttribute("aria-disabled", "true");
+    expect(handle).toHaveFocus();
+    act(() => resolvers.shift()?.(true));
+  });
+
+  it("keeps filtered-out reorder unavailable without removing the handle from focus order", () => {
+    const { onReorder } = renderConfirmed(vi.fn(), [], [work]);
+    const handle = screen.getByRole("button", { name: labels.dragSpace("Work") });
+    expect(handle).toHaveAttribute("aria-disabled", "true");
+    expect(handle).not.toBeDisabled();
+    handle.focus();
+    fireEvent.keyDown(handle, { key: "ArrowDown" });
+    fireEvent.pointerDown(handle, { pointerId: 21, pointerType: "mouse", button: 0, isPrimary: true, clientY: 20 });
+    expect(onReorder).not.toHaveBeenCalled();
   });
 });

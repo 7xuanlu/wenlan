@@ -25,21 +25,6 @@ fn ensure_meaningful_draft_snapshot(title: &str, content: &str) -> Result<(), We
     ensure_meaningful_snapshot(title, content)
 }
 
-// A body-first note gets a readable name without requiring a separate naming step.
-fn initial_note_title(title: &str, content: &str) -> String {
-    if !title.trim().is_empty() {
-        return title.trim().to_string();
-    }
-    content
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("Untitled note")
-        .chars()
-        .take(80)
-        .collect()
-}
-
 fn ensure_client_page_draft_id(id: &str) -> Result<(), WenlanError> {
     let Some(uuid_text) = id.strip_prefix("page_") else {
         return Err(WenlanError::Validation(
@@ -605,9 +590,8 @@ impl MemoryDB {
     /// `expected_version + 1` — replays the published Page; any other version
     /// mismatch is a `VersionConflict`; an active Page in the same scope whose
     /// trimmed title matches case-insensitively blocks with `TitleConflict`.
-    /// Finalizing accepts a title or body. Body-first notes derive a unique name
-    /// from their first line; explicit title conflicts still block. It stamps
-    /// the resolved title, flips `status` to active, re-derives `kind` from the
+    /// Publishing requires both a trimmed title and non-empty content, stamps
+    /// the trimmed title, flips `status` to active, re-derives `kind` from the
     /// one shared rule, bumps the version, and stamps `last_compiled` /
     /// `last_modified`. The page embedding is computed best-effort like every
     /// other page insert; the FTS reindex is the `pages_fts_update` trigger's
@@ -628,7 +612,7 @@ impl MemoryDB {
         };
         let embedding_sql = if snapshot.status == "draft" && snapshot.version == expected_version {
             let embed_text = crate::pages::page_embedding_text(
-                &initial_note_title(&snapshot.title, &snapshot.content),
+                snapshot.title.trim(),
                 snapshot.summary.as_deref(),
                 &snapshot.content,
             );
@@ -663,9 +647,12 @@ impl MemoryDB {
             });
         }
         ensure_draft(&current)?;
-        ensure_meaningful_snapshot(&current.title, &current.content)?;
-        let generated_title = current.title.trim().is_empty();
-        let mut title = initial_note_title(&current.title, &current.content);
+        let title = current.title.trim().to_string();
+        if title.is_empty() || current.content.trim().is_empty() {
+            return Err(WenlanError::Validation(
+                "Title and content are required".to_string(),
+            ));
+        }
         // Same-scope title uniqueness among active Pages, compared on the
         // stored (sentinel-mirrored) scope column so unfiled matches unfiled.
         // `page_title_key` folds in Rust: the bundled SQLite lower() is
@@ -689,7 +676,6 @@ impl MemoryDB {
                 WenlanError::VectorDb(format!("publish Page draft title check: {error}"))
             })?;
         let mut conflict: Option<(String, String)> = None;
-        let mut occupied_titles = std::collections::HashSet::new();
         while let Some(row) = rows.next().await.map_err(|error| {
             WenlanError::VectorDb(format!("publish Page draft title row: {error}"))
         })? {
@@ -699,22 +685,12 @@ impl MemoryDB {
             let existing_page_title: String = row
                 .get(1)
                 .map_err(|error| WenlanError::VectorDb(format!("title conflict title: {error}")))?;
-            let key = Self::page_title_key(&existing_page_title);
-            occupied_titles.insert(key.clone());
-            if key == wanted && !generated_title {
+            if Self::page_title_key(&existing_page_title) == wanted {
                 conflict = Some((existing_page_id, existing_page_title));
                 break;
             }
         }
         drop(rows);
-        if generated_title {
-            let base = title.clone();
-            let mut suffix = 2;
-            while occupied_titles.contains(&Self::page_title_key(&title)) {
-                title = format!("{base} ({suffix})");
-                suffix += 1;
-            }
-        }
         if let Some((existing_page_id, existing_page_title)) = conflict {
             return Ok(PageDraftPublishOutcome::TitleConflict {
                 existing_page_id,

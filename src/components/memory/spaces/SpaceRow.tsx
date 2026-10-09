@@ -29,6 +29,7 @@ export function SpaceRow(props: SpaceRowProps) {
   const { t } = useTranslation();
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const dragUnavailable = props.dragDisabled === true;
 
   if (renaming) {
     return (
@@ -58,11 +59,12 @@ export function SpaceRow(props: SpaceRowProps) {
         data-space-column="drag"
         aria-label={props.labels.dragSpace(props.space.name)}
         title={props.labels.dragSpace(props.space.name)}
-        disabled={props.dragDisabled === true}
+        aria-disabled={dragUnavailable}
         onPointerDown={(event) => {
-          props.onDragStart(event);
+          if (!dragUnavailable) props.onDragStart(event);
         }}
         onKeyDown={(event) => {
+          if (dragUnavailable) return;
           if (event.key === "ArrowUp" && props.canMoveUp) { event.preventDefault(); props.onMoveUp(props.space); }
           if (event.key === "ArrowDown" && props.canMoveDown) { event.preventDefault(); props.onMoveDown(props.space); }
         }}
