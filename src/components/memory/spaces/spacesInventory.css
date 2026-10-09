@@ -8,6 +8,7 @@
 }
 
 .spaces-menu {
+  --mem-popover-border: var(--mem-control-border);
   border: 1px solid var(--mem-popover-border);
 }
 

@@ -116,7 +116,7 @@ test("renders the Planet Space mark across light, dark, mobile, focus, and physi
   expect(darkDefault).toMatchObject({
     color: "rgb(201, 200, 209)",
     indigoToken: "#A9AEF2",
-    tertiaryToken: "#969BAD",
+    tertiaryToken: "#A0A5B7",
   });
   screenshots.push(await capture(page, "space-mark-wiki-default-dark-1280x900"));
   await spacesButton(page).click();
