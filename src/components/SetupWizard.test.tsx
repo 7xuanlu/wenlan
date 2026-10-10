@@ -926,6 +926,36 @@ describe("SetupWizard", () => {
     ).toBeInTheDocument();
   });
 
+  // The row promised "repaired when you continue". For a plugin client that
+  // promise is kept by rewriting the broken raw entry in place, as Settings'
+  // Repair does; installing the plugin would leave the broken entry beside it.
+  it("a plugin client whose raw entry needs repair gets the entry rewritten, not the plugin", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Codex CLI",
+        client_type: "codex_cli",
+        config_path: "/path/to/config.toml",
+        detected: YES,
+        already_configured: YES,
+        has_raw_entry: YES,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+        entry_health: { kind: "needs_repair", reason: "command_not_found", detail: "x" },
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    const codexCheckbox = await screen.findByRole("checkbox", { name: "Codex CLI" });
+    await waitFor(() => expect(codexCheckbox).toBeChecked());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(writeMcpConfig).toHaveBeenCalledWith("codex_cli");
+    });
+    expect(installClientPlugin).not.toHaveBeenCalled();
+  });
+
   // Rows are ordered ascending by how long they actually take, so the rail
   // inks top-to-bottom in the common case instead of stalling on a slow row
   // near the top while everything below it has long since finished. Plugin

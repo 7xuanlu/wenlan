@@ -2113,6 +2113,43 @@ fn unreadable_config_message(config_path: &std::path::Path, error: &str) -> AppE
     ))
 }
 
+/// The name a client's Wenlan entry reports to the daemon, so a search from
+/// Cursor is recorded as Cursor's and not as the stdio default
+/// (`claude-code`). The names are the tool families the app matches presence
+/// rows against (`clientTypeFamily` in `src/lib/agents.ts`).
+pub fn agent_name_for_client(client_type: &str) -> Option<&'static str> {
+    match client_type {
+        "claude_code" => Some("claude-code"),
+        "codex_cli" => Some("codex"),
+        "claude_desktop" => Some("claude-desktop"),
+        "cursor" => Some("cursor"),
+        "gemini_cli" => Some("gemini-cli"),
+        _ => None,
+    }
+}
+
+/// `decision` with `--agent-name <name>` added to the entry it writes.
+fn with_agent_name(decision: McpEntryDecision, agent_name: Option<&str>) -> McpEntryDecision {
+    match (decision, agent_name) {
+        (
+            McpEntryDecision::Write {
+                mut entry,
+                undetermined,
+            },
+            Some(name),
+        ) => {
+            entry
+                .args
+                .extend(["--agent-name".to_string(), name.to_string()]);
+            McpEntryDecision::Write {
+                entry,
+                undetermined,
+            }
+        }
+        (decision, _) => decision,
+    }
+}
+
 /// The entry a decision says to write, or its `PreserveExisting` refusal as an
 /// error. Shared by both writers, which must decide BEFORE touching anything:
 /// an unresolvable binary leaves the file exactly as it was — no rewrite, and
@@ -2160,19 +2197,26 @@ fn config_to_remove_from(config_path: &Path) -> Result<String, AppError> {
     }
 }
 
-/// Write the Wenlan MCP server entry into a client's config file.
-/// Existing legacy `origin` entries are preserved and still detected.
-/// If `is_claude_code` is true and the file doesn't exist, returns an error
-/// (Claude Code manages its own config file).
+/// Write the Wenlan MCP server entry into `client_type`'s config file, named
+/// for that client (see [`agent_name_for_client`]). A legacy `origin` entry is
+/// replaced, not kept beside it: it is the same server under its old name, so
+/// keeping it would leave a second launch, possibly a broken one, that a
+/// repair never touched.
+/// For Claude Code, a missing file is an error (Claude Code manages its own
+/// config file).
 ///
 /// `Ok` carries the inputs that could NOT be determined while deciding what to
 /// write: a write that succeeded while one of its inputs went unread is not the
 /// same event as one where everything was measured.
 pub fn write_wenlan_entry(
     config_path: &std::path::Path,
-    is_claude_code: bool,
+    client_type: &str,
 ) -> Result<Vec<UndeterminedInput>, AppError> {
-    write_wenlan_entry_with(config_path, is_claude_code, wenlan_mcp_decision().0)
+    write_wenlan_entry_with(
+        config_path,
+        client_type == "claude_code",
+        with_agent_name(wenlan_mcp_decision().0, agent_name_for_client(client_type)),
+    )
 }
 
 /// Body of [`write_wenlan_entry`] with the decision handed in, so a test can
@@ -2218,6 +2262,9 @@ pub(crate) fn write_wenlan_entry_with(
     }
     root["mcpServers"][MCP_SERVER_KEY] =
         serde_json::to_value(entry).map_err(|e| AppError::Generic(e.to_string()))?;
+    if let Some(servers) = root["mcpServers"].as_object_mut() {
+        servers.remove(LEGACY_MCP_SERVER_KEY);
+    }
 
     // Write back with pretty formatting
     let formatted =
@@ -2237,11 +2284,15 @@ pub(crate) fn write_wenlan_entry_with(
 
 /// Upsert the Wenlan entry into a Codex CLI `config.toml` — format-preserving:
 /// user comments, key order, and unrelated tables survive byte-for-byte
-/// (toml_edit round-trips everything it didn't touch).
+/// (toml_edit round-trips everything it didn't touch). Named and migrated as
+/// in [`write_wenlan_entry`].
 pub fn write_wenlan_entry_toml(
     config_path: &std::path::Path,
 ) -> Result<Vec<UndeterminedInput>, AppError> {
-    write_wenlan_entry_toml_with(config_path, wenlan_mcp_decision().0)
+    write_wenlan_entry_toml_with(
+        config_path,
+        with_agent_name(wenlan_mcp_decision().0, agent_name_for_client("codex_cli")),
+    )
 }
 
 /// Body of [`write_wenlan_entry_toml`] with the decision handed in. Same
@@ -2298,6 +2349,9 @@ pub(crate) fn write_wenlan_entry_toml_with(
     }
     server.insert("args", toml_edit::value(args));
     doc["mcp_servers"][MCP_SERVER_KEY] = Item::Table(server);
+    if let Some(servers) = doc["mcp_servers"].as_table_like_mut() {
+        servers.remove(LEGACY_MCP_SERVER_KEY);
+    }
 
     let formatted = doc.to_string();
     // Backup last, from the bytes that were parsed — see `back_up_parsed`.
@@ -3848,15 +3902,19 @@ mod tests {
         std::env::set_var(MCP_RESOLVER_HOME_ENV, tmp.path());
 
         let config_path = tmp.path().join("config.json");
-        write_wenlan_entry(&config_path, false).unwrap();
+        write_wenlan_entry(&config_path, "cursor").unwrap();
         let contents = std::fs::read_to_string(&config_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         // `.entry`, not the whole report: `undetermined` is for the caller and
         // must never reach the user's config file, whose entry shape stays
-        // exactly `{command, args}`.
+        // exactly `{command, args}`. The args name the client.
+        let mut expected = wenlan_mcp_entry().unwrap().entry;
+        expected
+            .args
+            .extend(["--agent-name".into(), "cursor".into()]);
         assert_eq!(
             parsed["mcpServers"]["wenlan"],
-            serde_json::to_value(wenlan_mcp_entry().unwrap().entry).unwrap()
+            serde_json::to_value(expected).unwrap()
         );
         let cmd = parsed["mcpServers"]["wenlan"]["command"].as_str().unwrap();
         assert_eq!(
@@ -3868,9 +3926,9 @@ mod tests {
         assert!(parsed["mcpServers"]["origin"].is_null());
     }
 
-    /// The entry is added and nothing else in the file moves: a sibling server,
-    /// a legacy `origin` entry (preserved, not replaced), and an unrelated
-    /// top-level key. `mcpServers` is created when it is not there.
+    /// The entry is added and nothing else in the file moves: a sibling server
+    /// and an unrelated top-level key. `mcpServers` is created when it is not
+    /// there.
     #[test]
     fn test_write_wenlan_entry_preserves_everything_else() {
         let tmp = tempfile::tempdir().unwrap();
@@ -3880,11 +3938,6 @@ mod tests {
                 "/mcpServers/other/command",
                 serde_json::json!("other-cmd"),
             ),
-            (
-                r#"{"mcpServers": {"origin": {"command": "npx", "args": ["-y", "origin-mcp"]}}}"#,
-                "/mcpServers/origin/args",
-                serde_json::json!(["-y", "origin-mcp"]),
-            ),
             (r#"{"theme": "dark"}"#, "/theme", serde_json::json!("dark")),
         ]
         .into_iter()
@@ -3892,7 +3945,7 @@ mod tests {
         {
             let config_path = tmp.path().join(format!("config{i}.json"));
             std::fs::write(&config_path, existing).unwrap();
-            write_wenlan_entry(&config_path, false).unwrap();
+            write_wenlan_entry(&config_path, "cursor").unwrap();
             let parsed: serde_json::Value =
                 serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
             assert_eq!(parsed.pointer(pointer), Some(&preserved), "{existing}");
@@ -3900,12 +3953,84 @@ mod tests {
         }
     }
 
+    /// Each client's entry carries that client's name, so a search it runs is
+    /// recorded as its own and not as the stdio default (`claude-code`).
+    #[test]
+    fn test_write_wenlan_entry_names_the_client() {
+        let tmp = tempfile::tempdir().unwrap();
+        for (client_type, name) in [
+            ("cursor", "cursor"),
+            ("gemini_cli", "gemini-cli"),
+            ("claude_desktop", "claude-desktop"),
+            ("claude_code", "claude-code"),
+        ] {
+            let config_path = tmp.path().join(format!("{client_type}.json"));
+            std::fs::write(&config_path, "{}").unwrap();
+            write_wenlan_entry(&config_path, client_type).unwrap();
+            let parsed: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+            let args: Vec<&str> = parsed["mcpServers"]["wenlan"]["args"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a.as_str().unwrap())
+                .collect();
+            assert_eq!(
+                args[args.len() - 2..],
+                ["--agent-name", name],
+                "{client_type}"
+            );
+        }
+
+        let toml_path = tmp.path().join("config.toml");
+        write_wenlan_entry_toml(&toml_path).unwrap();
+        let parsed: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&toml_path).unwrap()).unwrap();
+        let args = parsed["mcp_servers"]["wenlan"]["args"].as_array().unwrap();
+        assert_eq!(args[args.len() - 2].as_str(), Some("--agent-name"));
+        assert_eq!(args[args.len() - 1].as_str(), Some("codex"));
+    }
+
+    /// Writing `wenlan` replaces a legacy `origin` entry instead of leaving it
+    /// beside the new one: a repair of a broken `origin` must not report
+    /// success while the broken launch is still configured.
+    #[test]
+    fn test_write_wenlan_entry_replaces_the_legacy_origin_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join("config.json");
+        std::fs::write(
+            &config_path,
+            r#"{"mcpServers": {"origin": {"command": "/gone/origin-mcp"}, "other": {"command": "x"}}}"#,
+        )
+        .unwrap();
+        write_wenlan_entry(&config_path, "cursor").unwrap();
+        let contents = std::fs::read_to_string(&config_path).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert!(json["mcpServers"]["origin"].is_null(), "{contents}");
+        assert!(json["mcpServers"]["wenlan"].is_object());
+        assert_eq!(json["mcpServers"]["other"]["command"], "x");
+        assert!(!parsed(has_both_raw_entries(&contents)));
+
+        let toml_path = tmp.path().join("config.toml");
+        std::fs::write(
+            &toml_path,
+            "[mcp_servers.origin]\ncommand = \"/gone/origin-mcp\"\n\n[mcp_servers.other]\ncommand = \"x\"\n",
+        )
+        .unwrap();
+        write_wenlan_entry_toml(&toml_path).unwrap();
+        let contents = std::fs::read_to_string(&toml_path).unwrap();
+        let doc: toml::Value = toml::from_str(&contents).unwrap();
+        assert!(doc["mcp_servers"].get("origin").is_none(), "{contents}");
+        assert!(doc["mcp_servers"].get("wenlan").is_some());
+        assert_eq!(doc["mcp_servers"]["other"]["command"].as_str(), Some("x"));
+    }
+
     #[test]
     fn test_write_wenlan_entry_creates_backup() {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("config.json");
         std::fs::write(&config_path, r#"{"original": true}"#).unwrap();
-        write_wenlan_entry(&config_path, false).unwrap();
+        write_wenlan_entry(&config_path, "cursor").unwrap();
         let backup = tmp.path().join("config.json.bak");
         assert!(backup.exists());
         let backup_contents = std::fs::read_to_string(&backup).unwrap();
@@ -3925,7 +4050,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("config.json");
         std::fs::write(&config_path, "not valid json").unwrap();
-        assert!(write_wenlan_entry(&config_path, false).is_err());
+        assert!(write_wenlan_entry(&config_path, "cursor").is_err());
 
         let toml_path = tmp.path().join("config.toml");
         std::fs::write(&toml_path, "not toml [").unwrap();
@@ -3937,7 +4062,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let config_path = tmp.path().join("claude.json");
         // is_claude_code = true, file doesn't exist → should error
-        let result = write_wenlan_entry(&config_path, true);
+        let result = write_wenlan_entry(&config_path, "claude_code");
         assert!(result.is_err());
     }
 
