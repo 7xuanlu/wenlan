@@ -1458,7 +1458,8 @@ export default function Main({
             />
           ) : view.kind === "activity" ? (
             <ActivityFeed
-              onOpenReview={() => navigateTo({ kind: "distill-review" })}
+              onOpenReview={(reviewItemId) => navigateTo({ kind: "distill-review", reviewItemId })}
+              onOpenPage={(pageId) => navigateTo({ kind: "page", pageId })}
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />
