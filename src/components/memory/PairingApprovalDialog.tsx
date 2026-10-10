@@ -7,7 +7,7 @@ import {
   type RemotePairing,
 } from "../../lib/tauri";
 import {
-  clearPendingPairingCode, markPairingApproved, usePendingPairingCode,
+  clearPendingPairingCode, holdPendingPairingCode, markPairingApproved, usePendingPairingCode,
 } from "../../lib/pairingLink";
 import { classifyPairingCode } from "../../lib/pairingCode";
 import { clientIdentity } from "../../lib/remoteClient";
@@ -81,6 +81,15 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
       });
     return () => { current = false; };
   }, [canLookUp, revision, parsed.kind, parsed.kind === "invalid" ? "" : parsed.code, attempt]);
+
+  // Keep this request while it is being looked up or decided. Before that (Web
+  // access off, a bad code) or once it has an outcome, a newer link replaces it.
+  const holding = step.kind === "review" || step.kind === "working"
+    || (step.kind === "loading" && canLookUp);
+  useEffect(() => {
+    holdPendingPairingCode(holding);
+    return () => holdPendingPairingCode(false);
+  }, [holding]);
 
   // A request the person never answers goes stale on the relay; say so.
   const reviewExpiresAt = step.kind === "review" ? step.request.expiresAt : null;
@@ -175,7 +184,7 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     // before it knows who is asking.
     title = t("remoteAccess.offTitle");
     body = <>
-      <p id={bodyId} className="pairing-approval-body">{t("remoteAccess.offBody")}</p>
+      <p className="pairing-approval-body">{t("remoteAccess.offBody")}</p>
       <div className="pairing-approval-field">
         {remote.spaces.length === 0
           ? <p className="text-sm text-[var(--mem-text-secondary)]">{t("remoteAccess.noSpaces")}</p>
@@ -213,7 +222,7 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     </>;
   } else if (step.kind === "approved") {
     title = t("remoteAccess.approvedTitle");
-    body = <p id={bodyId} role="status" className="pairing-approval-body">{t("remoteAccess.approvedBody", { name })}</p>;
+    body = <p role="status" className="pairing-approval-body">{t("remoteAccess.approvedBody", { name })}</p>;
     actions = <Button variant="primary" autoFocus onClick={close}>{t("remoteAccess.done")}</Button>;
   } else {
     // review, or a decision on its way
@@ -221,7 +230,7 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     const unknown = identity?.kind === "unknown";
     title = t("remoteAccess.approveTitle", { name });
     body = <>
-      <p id={bodyId} className="pairing-approval-body">{t("remoteAccess.approveBody", { space: profile?.space ?? "" })}</p>
+      <p className="pairing-approval-body">{t("remoteAccess.approveBody", { space: profile?.space ?? "" })}</p>
       {host && <p className="pairing-approval-sends">{t("remoteAccess.sendsTo", { host })}</p>}
       {unknown && <p role="note" className="pairing-approval-warning">{t("remoteAccess.unknownWarning")}</p>}
     </>;
@@ -253,7 +262,7 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
           }
         }}>
         <h2 id={titleId}>{title}</h2>
-        {body}
+        {body && <div id={bodyId}>{body}</div>}
         <div className="pairing-approval-actions">{actions}</div>
       </div>
     </div>

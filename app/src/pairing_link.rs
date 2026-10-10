@@ -64,7 +64,9 @@ fn valid_code(code: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-/// Handles URLs the OS opened the app with. The first valid pairing link wins.
+/// Handles URLs the OS opened the app with. The first valid pairing link in
+/// `urls` is kept, and it replaces a link the window has not taken yet. Once the
+/// window holds a request open for a decision, it drops newer links itself.
 pub fn accept_urls<R: Runtime>(app: &AppHandle<R>, urls: &[Url]) {
     let Some(code) = urls.iter().find_map(pairing_code) else {
         if !urls.is_empty() {

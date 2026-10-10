@@ -260,18 +260,41 @@ describe("PairingApprovalDialog", () => {
     const knownAllow = (await screen.findByRole("button", { name: "Allow" })).className;
     const knownDeny = screen.getByRole("button", { name: "Deny" }).className;
     expect(knownAllow).not.toBe(knownDeny);
+    cleanup();
+    clearPendingPairingCode();
     mocks.lookupRemotePairing.mockResolvedValue(stranger);
-    act(() => setPendingPairingCode("WXYZ-2345"));
+    setPendingPairingCode("WXYZ-2345");
+    mount();
+    await screen.findByRole("heading", { name: /evil\.example/ });
     await waitFor(() => expect(screen.getByRole("button", { name: "Deny" }).className).toBe(knownAllow));
     expect(screen.getByRole("button", { name: "Allow" }).className).toBe(knownDeny);
   });
 
-  it("starts over for a different code", async () => {
+  it("keeps the request it is looking up or showing when another link arrives", async () => {
+    let found: (request: typeof claude) => void = () => {};
+    mocks.lookupRemotePairing.mockImplementationOnce(() => new Promise((resolve) => { found = resolve; }));
     setPendingPairingCode(SHORT);
     mount();
+    await waitFor(() => expect(mocks.lookupRemotePairing).toHaveBeenCalledTimes(1));
+    act(() => setPendingPairingCode("WXYZ-2345"));
+    await act(async () => { found(claude); });
     await screen.findByRole("button", { name: "Allow" });
     act(() => setPendingPairingCode("WXYZ-2345"));
+    await settled();
+    expect(mocks.lookupRemotePairing).toHaveBeenCalledTimes(1);
+    expect(mocks.lookupRemotePairing).toHaveBeenCalledWith("r1", SHORT_NORMAL);
+    fireEvent.click(screen.getByRole("button", { name: "Allow" }));
+    await waitFor(() => expect(mocks.approveRemotePairing).toHaveBeenCalledWith("r1", claude));
+  });
+
+  it("takes a newer link once the open request has an outcome", async () => {
+    mocks.lookupRemotePairing.mockResolvedValueOnce({ ...claude, expiresAt: 1 });
+    setPendingPairingCode(SHORT);
+    mount();
+    await screen.findByRole("heading", { name: /request expired/ });
+    act(() => setPendingPairingCode("WXYZ-2345"));
     await waitFor(() => expect(mocks.lookupRemotePairing).toHaveBeenLastCalledWith("r1", "WXYZ2345"));
+    expect(await screen.findByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
 
   it("treats a code that is neither short nor long as an expired request, without asking anyone", async () => {
@@ -327,6 +350,15 @@ describe("PairingApprovalDialog", () => {
       expect(mocks.toggleRemoteAccess).not.toHaveBeenCalled();
     });
 
+    it("lets a newer link replace the request before anyone is asked about", async () => {
+      goesOnOnceTurnedOn();
+      setPendingPairingCode(SHORT);
+      mount();
+      await screen.findByRole("heading", { name: "Turn on Web access?" });
+      act(() => setPendingPairingCode("WXYZ-2345"));
+      expect(screen.getByTestId("code")).toHaveTextContent("WXYZ-2345");
+    });
+
     it("shows why turning on failed", async () => {
       goesOnOnceTurnedOn();
       mocks.toggleRemoteAccess.mockRejectedValue(new Error("Remote connection unavailable; retry later"));
@@ -354,7 +386,7 @@ describe("PairingApprovalDialog", () => {
     mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, ...over, disconnect_pending: true });
     setPendingPairingCode(SHORT);
     mount();
-    expect(await screen.findByText(/Remote revocation is pending/)).toBeInTheDocument();
+    expect(await screen.findByText(/still removing this computer from the relay/)).toBeInTheDocument();
     await settled();
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Turn on" })).not.toBeInTheDocument();

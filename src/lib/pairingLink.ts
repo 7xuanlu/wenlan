@@ -5,12 +5,16 @@
  * 1. A pairing code that arrived through a `wenlan://pair?code=` link from the
  *    relay pairing page, or that someone typed into "Have a code?". Main (or the
  *    panel) parks it here; the approval dialog takes it and closes it again.
+ *    While a request is being looked up or decided, a newer code is dropped:
+ *    swapping the request under someone about to click Allow could grant a
+ *    different browser than the one they were reading about.
  * 2. That a request was just allowed. The AI app finishes connecting a moment
  *    later, and the connected-apps list polls quickly for that short while.
  */
 import { useEffect, useReducer, useSyncExternalStore } from "react";
 
 let pending: string | null = null;
+let held = false;
 const listeners = new Set<() => void>();
 
 function publish(next: string | null) {
@@ -25,11 +29,18 @@ function subscribe(listener: () => void) {
 }
 
 export function setPendingPairingCode(code: string) {
+  if (held && pending !== null) return;
   publish(code);
 }
 
 export function clearPendingPairingCode() {
+  held = false;
   publish(null);
+}
+
+/** The dialog holds the open request while it is looked up or decided. */
+export function holdPendingPairingCode(hold: boolean) {
+  held = hold;
 }
 
 export function usePendingPairingCode(): string | null {
