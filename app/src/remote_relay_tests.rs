@@ -271,6 +271,9 @@ async fn only_explicit_approved_response_completes_pairing() {
         resource: client.mcp_url(),
         scopes: vec![QUERY_SCOPE.into()],
         expires_at: now_ms() + 60_000,
+        client_name: None,
+        redirect_host: None,
+        known_client: false,
     };
     client
         .approve_pairing(&credential(), &view, "review")
@@ -960,4 +963,278 @@ async fn reverse_generic_errors_are_mapped_without_exposing_response_or_secret_d
     ] {
         assert!(!output.contains(secret));
     }
+}
+
+fn pairing_body(id: &str, extra: serde_json::Value) -> String {
+    let mut body = serde_json::json!({ "pairingId": id, "clientId": "synthetic-client",
+        "resource": format!("{RELAY_ORIGIN}/mcp"), "scopes": [QUERY_SCOPE], "expiresAt": now_ms() + 60_000 });
+    body.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    body.to_string()
+}
+
+#[test]
+fn short_codes_accept_what_a_person_types_and_nothing_the_relay_could_not_issue() {
+    for input in ["abcd-2345", "ABCD 2345", " abcd2345 ", "AbCd-2345"] {
+        assert_eq!(normalize_user_code(input).as_deref(), Some("ABCD2345"));
+    }
+    // 0, O, 1, I, L, U are not in the alphabet; wrong lengths and symbols fail too.
+    for input in [
+        "",
+        "ABCD-234",
+        "ABCD-23456",
+        "ABCD-234O",
+        "ABCD-2341",
+        "ABCD-2340",
+        "0BCD-2345",
+        "ABCD-234I",
+        "ABCD-234L",
+        "ABCD-234U",
+        "ABCD/2345",
+        "ABCD_2345",
+        "ÅBCD-2345",
+    ] {
+        assert_eq!(normalize_user_code(input), None, "{input}");
+    }
+}
+
+#[tokio::test]
+async fn lookup_posts_the_normalized_code_in_the_body_and_never_in_the_url() {
+    let id = "p".repeat(64);
+    let body = pairing_body(
+        &id,
+        serde_json::json!({ "clientName": "Claude", "redirectHost": "claude.ai", "knownClient": true }),
+    );
+    let (client, capture) = server(200, body, JSON).await;
+    let view = client
+        .lookup_pairing(&credential(), "abcd-2345")
+        .await
+        .unwrap();
+    assert_eq!(view.pairing_id, id);
+    assert_eq!(view.redirect_host.as_deref(), Some("claude.ai"));
+    assert!(view.known_client);
+    let request = capture.await.unwrap();
+    assert!(request.starts_with("POST /pairings/lookup HTTP/1.1"));
+    assert!(!request.lines().next().unwrap().contains("ABCD"));
+    let (_, sent) = request.split_once("\r\n\r\n").unwrap();
+    let sent: serde_json::Value = serde_json::from_str(sent).unwrap();
+    assert_eq!(sent, serde_json::json!({ "code": "ABCD2345" }));
+    assert!(request.contains(&format!("x-wenlan-device-id: {}", credential().id)));
+}
+
+#[tokio::test]
+async fn lookup_rejects_impossible_codes_without_spending_a_relay_miss() {
+    // No server is listening: a network attempt would fail as Unavailable, not InvalidInput.
+    let client = RelayClient::build(Url::parse("http://127.0.0.1:9").unwrap(), false).unwrap();
+    for code in ["", "short", "ABCD-234O", &"A".repeat(64)] {
+        assert_eq!(
+            client
+                .lookup_pairing(&credential(), code)
+                .await
+                .unwrap_err(),
+            RelayError::InvalidInput
+        );
+    }
+}
+
+#[tokio::test]
+async fn lookup_miss_and_rate_limit_stay_typed_and_a_foreign_resource_is_refused() {
+    let (client, capture) = server(404, "{\"error\":\"Pairing unavailable\"}".into(), JSON).await;
+    assert_eq!(
+        client
+            .lookup_pairing(&credential(), "ABCD-2345")
+            .await
+            .unwrap_err(),
+        RelayError::Rejected(404)
+    );
+    capture.await.unwrap();
+    let (client, capture) = server(429, "{}".into(), "Retry-After: 45\r\n").await;
+    assert_eq!(
+        client
+            .lookup_pairing(&credential(), "ABCD-2345")
+            .await
+            .unwrap_err(),
+        RelayError::RateLimited {
+            retry_after_seconds: Some(45)
+        }
+    );
+    capture.await.unwrap();
+    let body = pairing_body(
+        &"p".repeat(64),
+        serde_json::json!({ "resource": "https://attacker.example/mcp" }),
+    );
+    let (client, capture) = server(200, body, JSON).await;
+    assert_eq!(
+        client
+            .lookup_pairing(&credential(), "ABCD-2345")
+            .await
+            .unwrap_err(),
+        RelayError::InvalidResponse
+    );
+    capture.await.unwrap();
+    let body = pairing_body(&"not valid!".repeat(8), serde_json::json!({}));
+    let (client, capture) = server(200, body, JSON).await;
+    assert_eq!(
+        client
+            .lookup_pairing(&credential(), "ABCD-2345")
+            .await
+            .unwrap_err(),
+        RelayError::InvalidResponse
+    );
+    capture.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_foreign_over_scoped_or_expired_pairing_is_refused_however_it_was_found() {
+    let id = "p".repeat(64);
+    for extra in [
+        serde_json::json!({ "resource": "https://attacker.example/mcp" }),
+        serde_json::json!({ "scopes": [QUERY_SCOPE, "write"] }),
+        serde_json::json!({ "scopes": [] }),
+        serde_json::json!({ "expiresAt": now_ms() - 1 }),
+        serde_json::json!({ "expiresAt": 0 }),
+    ] {
+        let (client, capture) = server(200, pairing_body(&id, extra.clone()), JSON).await;
+        assert_eq!(
+            client
+                .inspect_pairing(&credential(), &id)
+                .await
+                .unwrap_err(),
+            RelayError::InvalidResponse,
+            "inspect {extra}"
+        );
+        capture.await.unwrap();
+        let (client, capture) = server(200, pairing_body(&id, extra.clone()), JSON).await;
+        assert_eq!(
+            client
+                .lookup_pairing(&credential(), "ABCD-2345")
+                .await
+                .unwrap_err(),
+            RelayError::InvalidResponse,
+            "lookup {extra}"
+        );
+        capture.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn deny_posts_to_the_pairing_and_only_204_counts() {
+    let id = "p".repeat(64);
+    let (client, capture) = server(204, String::new(), "").await;
+    client.deny_pairing(&credential(), &id).await.unwrap();
+    let request = capture.await.unwrap();
+    assert!(request.starts_with(&format!("POST /pairings/{id}/deny HTTP/1.1")));
+    assert!(request.contains(&format!(
+        "authorization: Bearer {}",
+        credential().management_token
+    )));
+    let (client, capture) = server(200, "{\"success\":true}".into(), JSON).await;
+    assert_eq!(
+        client.deny_pairing(&credential(), &id).await.unwrap_err(),
+        RelayError::InvalidResponse
+    );
+    capture.await.unwrap();
+    let (client, capture) = server(404, "{}".into(), JSON).await;
+    assert_eq!(
+        client.deny_pairing(&credential(), &id).await.unwrap_err(),
+        RelayError::Rejected(404)
+    );
+    capture.await.unwrap();
+    let offline = RelayClient::build(Url::parse("http://127.0.0.1:9").unwrap(), false).unwrap();
+    assert_eq!(
+        offline
+            .deny_pairing(&credential(), "short")
+            .await
+            .unwrap_err(),
+        RelayError::InvalidInput
+    );
+}
+
+#[tokio::test]
+async fn an_old_relay_without_identity_fields_still_inspects_as_an_unknown_app() {
+    let id = "p".repeat(64);
+    let (client, capture) = server(200, pairing_body(&id, serde_json::json!({})), JSON).await;
+    let view = client.inspect_pairing(&credential(), &id).await.unwrap();
+    assert_eq!(view.client_name, None);
+    assert_eq!(view.redirect_host, None);
+    assert!(!view.known_client);
+    capture.await.unwrap();
+}
+
+#[tokio::test]
+async fn app_supplied_text_is_cleaned_before_it_reaches_the_screen() {
+    let id = "p".repeat(64);
+    let spoof = format!("Cl\u{202E}aude\u{0007} {}", "x".repeat(200));
+    let body = pairing_body(
+        &id,
+        serde_json::json!({ "clientName": spoof, "redirectHost": "Evil.EXAMPLE:8443", "knownClient": false }),
+    );
+    let (client, capture) = server(200, body, JSON).await;
+    let view = client.inspect_pairing(&credential(), &id).await.unwrap();
+    let name = view.client_name.unwrap();
+    assert!(!name.contains('\u{202E}') && !name.contains('\u{0007}'));
+    assert_eq!(name.chars().count(), 80);
+    assert!(name.starts_with("Claude xxx"));
+    assert_eq!(view.redirect_host.as_deref(), Some("evil.example:8443"));
+    capture.await.unwrap();
+    for bad in [
+        "",
+        " ",
+        "a b.example",
+        "claude.ai/evil",
+        "user@claude.ai",
+        "[::1]",
+        "-a.example",
+        "a..example",
+        "example.com:port",
+        "example.com:123456",
+        "exa_mple.com",
+    ] {
+        assert_eq!(clean_redirect_host(Some(bad.into())), None, "{bad:?}");
+    }
+    assert_eq!(clean_client_name(Some(" \u{200B} ".into())), None);
+}
+
+#[tokio::test]
+async fn grants_carry_optional_use_and_end_fields_and_tolerate_unknown_reasons() {
+    let old = serde_json::json!({ "id": "g".repeat(16), "clientId": "c", "space": "review",
+        "createdAt": 1, "expiresAt": 2, "status": "active", "cleanupPending": false });
+    let new = serde_json::json!({ "id": "h".repeat(16), "clientId": "c", "space": "review",
+        "createdAt": 1, "expiresAt": 2, "status": "inactive", "cleanupPending": false,
+        "clientName": "Claude", "redirectHost": "claude.ai", "knownClient": true,
+        "lastUsedAt": 1_700_000_000_000u64, "endReason": "reset" });
+    let future = serde_json::json!({ "id": "i".repeat(16), "clientId": "c", "space": "review",
+        "createdAt": 1, "expiresAt": 2, "status": "inactive", "cleanupPending": false,
+        "lastUsedAt": null, "endReason": "something-newer" });
+    let spoofed = serde_json::json!({ "id": "j".repeat(16), "clientId": "c", "space": "review",
+        "createdAt": 1, "expiresAt": 2, "status": "active", "cleanupPending": false,
+        "clientName": "Cl\u{202E}aude\u{0007}", "redirectHost": "Evil.EXAMPLE:8443" });
+    let bad_host = serde_json::json!({ "id": "k".repeat(16), "clientId": "c", "space": "review",
+        "createdAt": 1, "expiresAt": 2, "status": "active", "cleanupPending": false,
+        "clientName": " \u{200B} ", "redirectHost": "claude.ai/evil" });
+    let body =
+        serde_json::json!({ "items": [old, new, future, spoofed, bad_host], "cursor": null })
+            .to_string();
+    let (client, capture) = server(200, body, JSON).await;
+    let page = client.grants(&credential(), None).await.unwrap();
+    capture.await.unwrap();
+    // App-supplied text is cleaned in the list exactly as it is on a pairing.
+    assert_eq!(page.items[3].client_name.as_deref(), Some("Claude"));
+    assert_eq!(
+        page.items[3].redirect_host.as_deref(),
+        Some("evil.example:8443")
+    );
+    assert_eq!(page.items[4].client_name, None);
+    assert_eq!(page.items[4].redirect_host, None);
+    assert_eq!(page.items[0].end_reason, None);
+    assert_eq!(page.items[0].last_used_at, None);
+    assert!(!page.items[0].known_client);
+    assert_eq!(page.items[1].end_reason, Some(GrantEndReason::Reset));
+    assert_eq!(page.items[1].last_used_at, Some(1_700_000_000_000));
+    assert_eq!(page.items[1].redirect_host.as_deref(), Some("claude.ai"));
+    assert_eq!(page.items[2].end_reason, Some(GrantEndReason::Other));
+    let wire = serde_json::to_value(&page.items[1]).unwrap();
+    assert_eq!(wire["endReason"], "reset");
+    assert_eq!(wire["lastUsedAt"], 1_700_000_000_000u64);
 }

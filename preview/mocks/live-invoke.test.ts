@@ -1086,6 +1086,9 @@ describe("liveInvoke remote pairing/grants boundary (live daemon path)", () => {
     "reconnect_remote_access",
     "inspect_remote_pairing",
     "approve_remote_pairing",
+    "lookup_remote_pairing",
+    "deny_remote_pairing",
+    "renew_remote_access",
     "revoke_remote_grant",
   ])("rejects %s explicitly without reaching a daemon or reporting success", async (command) => {
     const fetch = vi.fn();
@@ -1100,6 +1103,13 @@ describe("liveInvoke remote pairing/grants boundary (live daemon path)", () => {
     const fetch = vi.fn(() => Promise.reject(new Error("profile read must stay local")));
     vi.stubGlobal("fetch", fetch);
     await expect(liveInvoke("get_remote_access_profile")).resolves.toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("reports no stopped-on-its-own notice, so the browser preview never notifies", async () => {
+    const fetch = vi.fn(() => Promise.reject(new Error("notice read must stay local")));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("take_remote_access_notice")).resolves.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 

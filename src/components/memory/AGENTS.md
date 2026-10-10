@@ -14,7 +14,7 @@ sources, settings, remote access, imports, profile, and review surfaces.
 | Settings/config | `SettingsPage.tsx`, `settings/` | profile, capture, sources, diagnostics, remote access |
 | Sources UI | `SourcesView.tsx`, `sources/` | add/list/sync source workflows |
 | Memory rendering | `MemoryCard.tsx`, `ContentRenderer.tsx`, `MemoryDetail.tsx` | classifier/rendering invariants |
-| Remote access UI | `RemoteAccessPanel.tsx` | talks to Rust remote-access commands |
+| Remote access UI | `RemoteAccessPanel.tsx`, `RemoteAccessApps.tsx`, `PairingApprovalDialog.tsx`, `RemoteAccessNotifier.tsx`, `useRemoteAccess.ts` | Settings panel, connected-apps list, global approval dialog (opened by `wenlan://pair` or "Have a code?"), stopped/expired notifications; talk to Rust remote-access commands. App identity comes from `lib/remoteClient.ts` (host allowlist), never the relay's name; errors from `lib/remoteErrors.ts` |
 | Review lanes | `DistillReviewPanel.tsx`, `HomePage.tsx` needs-review rail | pending/refinement flows |
 
 ## CONVENTIONS

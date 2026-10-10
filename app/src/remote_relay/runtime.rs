@@ -72,6 +72,43 @@ async fn approve_inspected_at(
         .map_err(|e| e.to_string())
 }
 
+/// Replace the saved management key with a fresh one for the same device.
+/// Only a profile that is on, at the revision the person saw, with a device that
+/// has not ended, can be renewed. Nothing here enrolls or revokes a device for
+/// another profile.
+pub async fn rotate_device(expected_revision: String) -> Result<Profile, String> {
+    let client = RelayClient::new().map_err(|e| e.to_string())?;
+    rotate_device_at(Store::current(), client, expected_revision).await
+}
+
+async fn rotate_device_at(
+    store: Store,
+    client: RelayClient,
+    expected_revision: String,
+) -> Result<Profile, String> {
+    let profile = consent_profile_at(store.clone(), expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| StoreError::Stale.to_string())?;
+    // Never retried here: the relay may have switched keys before a lost reply.
+    let next = client.rotate(device).await.map_err(|e| e.to_string())?;
+    let stored = next.clone();
+    let revision = profile.revision().to_string();
+    let saved = tokio::task::spawn_blocking(move || store.attach_device(&revision, stored))
+        .await
+        .map_err(|_| "Remote access storage task failed".to_string())
+        .and_then(|result| result.map_err(|e| e.to_string()));
+    match saved {
+        Ok(profile) => Ok(profile),
+        Err(error) => {
+            // The new key cannot be kept (a newer profile or a stop won the race):
+            // end it rather than leave a live key nothing here can use.
+            let _ = client.revoke_device(&next).await;
+            Err(error)
+        }
+    }
+}
+
 fn require_enabled(profile: Option<Profile>) -> Result<Profile, StoreError> {
     profile
         .filter(Profile::enabled)

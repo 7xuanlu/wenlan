@@ -8,6 +8,8 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
   if (command === "set_traffic_lights_visible") return null;
   // No wenlan://pair link can reach a browser preview.
   if (command === "take_remote_pairing_link") return null;
+  // Nor can Web access stop on its own here, so no notice is ever waiting.
+  if (command === "take_remote_access_notice") return null;
   if (!allowsDevLiveCommand(command)) {
     throw new Error("Wenlan Dev is read-only. Use the installed app to make changes.");
   }

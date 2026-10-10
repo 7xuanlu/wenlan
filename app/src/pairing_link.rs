@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! `wenlan://pair?code=<pairing code>` links from the relay pairing page.
 //!
-//! A link only fills in the code and opens the review screen. Approving still
-//! takes an explicit click in Settings > Connections, so a link someone else
-//! sends can never grant access on its own.
+//! A link only raises the window and opens the approval dialog. Allowing still
+//! takes an explicit click there, so a link someone else sends can never grant
+//! access on its own.
 
 use std::sync::Mutex;
 
@@ -79,7 +79,7 @@ pub fn accept_urls<R: Runtime>(app: &AppHandle<R>, urls: &[Url]) {
     if let Some(pending) = app.try_state::<PendingPairingLink>() {
         pending.put(code);
     }
-    crate::reveal_main_window(app);
+    crate::reveal_main_window_on_main_thread(app);
     if let Err(error) = app.emit_to("main", PAIRING_LINK_EVENT, ()) {
         log::warn!("[pairing-link] could not notify the main window: {error}");
     }

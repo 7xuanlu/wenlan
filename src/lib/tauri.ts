@@ -3207,7 +3207,13 @@ export interface RemotePairing {
   resource: string;
   scopes: string[];
   expiresAt: number;
+  /** Fields the relay added later. Absent from an older relay. */
+  clientName?: string | null;
+  redirectHost?: string | null;
+  knownClient?: boolean;
 }
+
+export type RemoteGrantEndReason = 'revoked' | 'reset' | 'expired' | 'replaced';
 
 export interface RemoteGrant {
   id: string;
@@ -3217,6 +3223,13 @@ export interface RemoteGrant {
   expiresAt: number;
   status: 'active' | 'inactive';
   cleanupPending: boolean;
+  /** Fields the relay added later. Absent from an older relay. */
+  clientName?: string | null;
+  redirectHost?: string | null;
+  knownClient?: boolean;
+  lastUsedAt?: number | null;
+  /** Only on an inactive grant. An unknown reason arrives as "other". */
+  endReason?: RemoteGrantEndReason | 'other' | null;
 }
 
 export interface RemoteGrantPage { items: RemoteGrant[]; cursor: string | null }
@@ -3224,6 +3237,14 @@ export interface RemoteGrantRevocation { revoked: boolean; cleanupPending: boole
 
 export async function inspectRemotePairing(expectedRevision: string, pairingId: string): Promise<RemotePairing> {
   return invoke("inspect_remote_pairing", { expectedRevision, pairingId });
+}
+/** Finds a pending request from the short code the browser page shows. */
+export async function lookupRemotePairing(expectedRevision: string, code: string): Promise<RemotePairing> {
+  return invoke("lookup_remote_pairing", { expectedRevision, code });
+}
+/** Tells the browser the person declined, so it stops waiting. */
+export async function denyRemotePairing(expectedRevision: string, pairingId: string): Promise<void> {
+  return invoke("deny_remote_pairing", { expectedRevision, pairingId });
 }
 export async function approveRemotePairing(expectedRevision: string, inspected: RemotePairing): Promise<void> {
   return invoke("approve_remote_pairing", { expectedRevision, inspected });
@@ -3239,16 +3260,34 @@ export async function takeRemotePairingLink(): Promise<string | null> {
   return invoke("take_remote_pairing_link");
 }
 
-/** Native protected-backend and authenticated relay control-plane probe. */
+/**
+ * Native check that the protected local backend answers and that the relay
+ * reports this app's own connection as live.
+ */
 export interface RemoteConnectionTest {
   ok: boolean;
   latency_ms: number | null;
   error: string | null;
 }
 
-/** Does not prove a ChatGPT/Codex OAuth conversation or tool execution. */
+/** Does not prove a ChatGPT/Claude OAuth conversation or a tool call. */
 export async function testRemoteMcpConnection(): Promise<RemoteConnectionTest> {
   return invoke<RemoteConnectionTest>("test_remote_mcp_connection");
+}
+
+/** Gives this computer a fresh 90-day key. Apps connected before must connect again. */
+export async function renewRemoteAccess(expectedRevision: string): Promise<RemoteAccessStatus> {
+  return invoke<RemoteAccessStatus>("renew_remote_access", { expectedRevision });
+}
+
+/** Why Web access stopped on its own. The wire carries a kind, never copy. */
+export interface RemoteAccessNotice {
+  kind: "stopped" | "expired";
+}
+
+/** Takes the pending notice, if any. A notice is returned once. */
+export async function takeRemoteAccessNotice(): Promise<RemoteAccessNotice | null> {
+  return invoke<RemoteAccessNotice | null>("take_remote_access_notice");
 }
 
 // ── Nurturing Garden ────────────────────────────────────────────────

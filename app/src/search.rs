@@ -487,6 +487,30 @@ pub async fn reconnect_remote_access(
     Ok(crate::remote_access::RemoteAccessStatus::Starting)
 }
 
+/// Give this computer a fresh 90-day key and reconnect. Apps connected before
+/// need to connect again.
+#[tauri::command]
+pub async fn renew_remote_access(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, State>,
+    expected_revision: String,
+) -> Result<crate::remote_access::RemoteAccessStatus, String> {
+    let client = daemon_client(&state).await;
+    crate::remote_access::renew_access(&app_handle, expected_revision, client).await?;
+    Ok(crate::remote_access::RemoteAccessStatus::Starting)
+}
+
+/// The reason Web access stopped on its own, once. The window shows it as a
+/// system notification in the person's language.
+#[tauri::command]
+pub async fn take_remote_access_notice(
+    state: tauri::State<'_, State>,
+) -> Result<Option<crate::remote_access::RemoteAccessNotice>, String> {
+    let remote_access = { state.read().await.remote_access.clone() };
+    let notice = remote_access.lock().await.pending_notice.take();
+    Ok(notice)
+}
+
 #[tauri::command]
 pub async fn get_remote_access_profile(
 ) -> Result<Option<crate::remote_relay::store::ProfileView>, String> {
@@ -534,6 +558,40 @@ pub async fn inspect_remote_pairing(
     crate::remote_relay::RelayClient::new()
         .map_err(|e| e.to_string())?
         .inspect_pairing(device, &pairing_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Find a pending request from the short code the browser page shows.
+#[tauri::command]
+pub async fn lookup_remote_pairing(
+    expected_revision: String,
+    code: String,
+) -> Result<crate::remote_relay::PairingView, String> {
+    let profile = crate::remote_relay::runtime::consent_profile(expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| "Remote device not registered".to_string())?;
+    crate::remote_relay::RelayClient::new()
+        .map_err(|e| e.to_string())?
+        .lookup_pairing(device, &code)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Tell the browser the person declined, so it stops waiting.
+#[tauri::command]
+pub async fn deny_remote_pairing(
+    expected_revision: String,
+    pairing_id: String,
+) -> Result<(), String> {
+    let profile = crate::remote_relay::runtime::consent_profile(expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| "Remote device not registered".to_string())?;
+    crate::remote_relay::RelayClient::new()
+        .map_err(|e| e.to_string())?
+        .deny_pairing(device, &pairing_id)
         .await
         .map_err(|e| e.to_string())
 }
@@ -590,32 +648,23 @@ pub async fn test_remote_mcp_connection(
     state: tauri::State<'_, State>,
 ) -> Result<RemoteConnectionTest, String> {
     let remote_access = { state.read().await.remote_access.clone() };
-    let port = {
+    let target = {
         let ra = remote_access.lock().await;
-        if matches!(
-            ra.status,
-            crate::remote_access::RemoteAccessStatus::Connected { .. }
-        ) {
-            ra.port
-        } else {
-            None
-        }
+        crate::remote_access::connection_target(&ra)
     };
     let start = std::time::Instant::now();
-    // This checks native backend + authenticated control-plane availability,
-    // not a ChatGPT/Codex OAuth conversation. A public 401 alone is not success.
+    // Two facts, both checked: the protected local backend answers, and the relay
+    // reports this app's own connection as live. That is "the relay can reach this
+    // computer"; it is not an AI app's OAuth conversation or a tool call, and a
+    // control-plane call that merely authenticates is not enough to claim it.
     let result = async {
-        let port = port.ok_or_else(|| "Remote Access not connected".to_string())?;
+        let (port, connection_id) =
+            target.ok_or_else(|| "Remote Access not connected".to_string())?;
         let profile = crate::remote_relay::runtime::enabled_profile().await?;
         crate::remote_relay::runtime::verify_backend(port, &profile)
             .await
             .map_err(|e| e.to_string())?;
-        let device = profile
-            .device()
-            .ok_or_else(|| "Remote device not registered".to_string())?;
-        crate::remote_relay::RelayClient::new()
-            .map_err(|e| e.to_string())?
-            .grants(device, None)
+        crate::remote_relay::reverse_runtime::check(&profile, &connection_id)
             .await
             .map_err(|e| e.to_string())?;
         Ok::<(), String>(())

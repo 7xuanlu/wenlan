@@ -8,7 +8,7 @@
 // through a real first run, which is why a whole redesign round once shipped
 // green tests and zero reviewed pixels. Every step and section is directly
 // addressable here.
-import { StrictMode, Suspense, lazy, useState } from "react";
+import { StrictMode, Suspense, lazy, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import Main from "../src/components/memory/Main";
@@ -19,6 +19,8 @@ import DistillReviewPanel from "../src/components/memory/DistillReviewPanel";
 import { SetupWizard, STEP_ORDER, type WizardStep } from "../src/components/SetupWizard";
 import SettingsPage from "../src/components/memory/SettingsPage";
 import { RemoteAccessPanel } from "../src/components/memory/RemoteAccessPanel";
+import PairingApprovalDialog from "../src/components/memory/PairingApprovalDialog";
+import { setPendingPairingCode } from "../src/lib/pairingLink";
 import SettingsSidebar, {
   SETTINGS_GROUPS,
   type SettingsSection,
@@ -143,6 +145,15 @@ function Harness() {
     color: active ? "#fff" : "inherit",
     cursor: "pointer",
   });
+
+  // ?pair=known|chatgpt|unknown|expired|toomany|offline|long opens the approval
+  // dialog the way a wenlan://pair link would (the fixture decides what the
+  // relay says about the request; see mocks/remote-access.ts).
+  const pair = params.get("pair");
+  useEffect(() => {
+    if (mode !== "remote-access" || !pair) return;
+    setPendingPairingCode(pair === "long" ? "a".repeat(64) : "K7MQ-4WXZ");
+  }, [mode, pair]);
 
   if (params.get("mode") === "spaces") return <Main initialView={{kind:"space",spaceId:null,spaceName:params.get("space") ?? "Wenlan"}} />;
   if (params.get("mode") === "folders") return <Main initialView={{kind:"pages",inventoryScope:params.has("folder") ? `folder:${params.get("folder") ?? ""}` : "all"}} />;
@@ -300,6 +311,7 @@ function Harness() {
       ) : mode === "remote-access" ? (
         <div style={{ maxWidth: 672, margin: "0 auto", padding: "24px 16px" }}>
           <RemoteAccessPanel currentSpace="Review workspace" />
+          <PairingApprovalDialog currentSpace="Review workspace" />
         </div>
       ) : mode === "atlas" ? (
         // Full-bleed like graph/wizard. sigma lands in its own lazy chunk
