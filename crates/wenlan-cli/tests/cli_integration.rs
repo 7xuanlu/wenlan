@@ -689,9 +689,10 @@ fn connect_claude_code_dry_run_explains_tools_only() {
         .assert()
         .success()
         .stdout(predicate::str::contains(format!(
-            "claude mcp add -s user wenlan -- {}",
+            "claude mcp add -s user wenlan -- {} --agent-name claude-code",
             origin_mcp_sibling_arg()
         )))
+        .stdout(predicate::str::contains("claude mcp remove -s user origin"))
         .stdout(predicate::str::contains("MCP tools only"))
         .stdout(predicate::str::contains("/brief"))
         .stdout(predicate::str::contains("/handoff"))
@@ -699,24 +700,37 @@ fn connect_claude_code_dry_run_explains_tools_only() {
         .stdout(predicate::str::contains("/setup"));
 }
 
+/// Each native client gets `wenlan` added with its own `--agent-name`, and
+/// only THEN the pre-rename `origin` entry removed, in the scope the old CLI
+/// added it to. The `wenlan` entry itself is never removed (a remove-then-add
+/// would leave nothing behind if the add failed).
 #[test]
-fn connect_native_clients_run_add_without_destructive_remove() {
+fn connect_native_clients_add_named_entry_then_retire_legacy_origin() {
     let wenlan_mcp = origin_mcp_sibling_arg();
     let cases = [
         (
             "claude-code",
             "claude",
-            format!("claude\tmcp\tadd\t-s\tuser\twenlan\t--\t{wenlan_mcp}\n"),
+            format!(
+                "claude\tmcp\tadd\t-s\tuser\twenlan\t--\t{wenlan_mcp}\t--agent-name\tclaude-code\n\
+                 claude\tmcp\tremove\t-s\tuser\torigin\n"
+            ),
         ),
         (
             "codex",
             "codex",
-            format!("codex\tmcp\tadd\twenlan\t--\t{wenlan_mcp}\n"),
+            format!(
+                "codex\tmcp\tadd\twenlan\t--\t{wenlan_mcp}\t--agent-name\tcodex\n\
+                 codex\tmcp\tremove\torigin\n"
+            ),
         ),
         (
             "gemini",
             "gemini",
-            format!("gemini\tmcp\tadd\t-s\tuser\twenlan\t{wenlan_mcp}\n"),
+            format!(
+                "gemini\tmcp\tadd\t-s\tuser\twenlan\t{wenlan_mcp}\t--agent-name\tgemini-cli\n\
+                 gemini\tmcp\tremove\t-s\tuser\torigin\n"
+            ),
         ),
     ];
 
@@ -806,6 +820,114 @@ fn connect_cursor_dry_run_prints_only_wenlan_block() {
 
     let unchanged = fs::read_to_string(&config_path).expect("cursor config unchanged");
     assert!(unchanged.contains("SECRET_TOKEN"), "{unchanged}");
+}
+
+/// The `args` of the `wenlan` entry in `section` of the JSON file at `path`.
+fn wenlan_entry_args(path: &Path, section: &str) -> Vec<String> {
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(path).expect("config written"))
+            .expect("config is JSON");
+    config[section]["wenlan"]["args"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no args in {}: {config}", path.display()))
+        .iter()
+        .map(|arg| arg.as_str().expect("string arg").to_string())
+        .collect()
+}
+
+/// Every JSON client's entry names that client, so the daemon does not
+/// record its searches under the stdio default (`claude-code`).
+#[test]
+fn connect_json_clients_name_the_client() {
+    let runtime = IsolatedRuntime::new();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["connect", "cursor"])
+        .assert()
+        .success();
+    cli_with_isolated_runtime(&runtime)
+        .args(["connect", "claude-desktop"])
+        .assert()
+        .success();
+    cli_with_isolated_runtime(&runtime)
+        .current_dir(runtime.root.path())
+        .args(["connect", "vscode"])
+        .assert()
+        .success();
+
+    for (path, section, name) in [
+        (
+            runtime.home.path().join(".cursor/mcp.json"),
+            "mcpServers",
+            "cursor",
+        ),
+        (
+            claude_desktop_config_in(&runtime),
+            "mcpServers",
+            "claude-desktop",
+        ),
+        (
+            runtime.root.path().join(".vscode/mcp.json"),
+            "servers",
+            "vscode",
+        ),
+    ] {
+        assert_eq!(
+            wenlan_entry_args(&path, section),
+            ["--agent-name", name],
+            "{}",
+            path.display()
+        );
+    }
+}
+
+/// A config the pre-rename CLI wrote holds `origin`; connecting replaces it
+/// with `wenlan` instead of leaving both launches configured.
+#[test]
+fn connect_json_client_replaces_the_legacy_origin_entry() {
+    let runtime = IsolatedRuntime::new();
+    let config_path = runtime.home.path().join(".cursor/mcp.json");
+    fs::create_dir_all(config_path.parent().expect("cursor config parent")).unwrap();
+    fs::write(
+        &config_path,
+        r#"{"mcpServers":{"origin":{"command":"npx","args":["-y","origin-mcp"]},"other":{"command":"other-cmd"}}}"#,
+    )
+    .unwrap();
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["connect", "cursor", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Would remove the pre-rename `mcpServers.origin` entry",
+        ));
+    assert!(fs::read_to_string(&config_path)
+        .unwrap()
+        .contains("origin-mcp"));
+
+    cli_with_isolated_runtime(&runtime)
+        .args(["connect", "cursor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Replaced the pre-rename `origin` entry",
+        ));
+
+    let config: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+    assert!(config["mcpServers"]["origin"].is_null(), "{config}");
+    assert_eq!(config["mcpServers"]["other"]["command"], "other-cmd");
+    assert_eq!(
+        wenlan_entry_args(&config_path, "mcpServers"),
+        ["--agent-name", "cursor"]
+    );
+
+    // Once replaced, a second connect has nothing to do.
+    cli_with_isolated_runtime(&runtime)
+        .args(["connect", "cursor"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("already configured"));
 }
 
 #[test]
