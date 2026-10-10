@@ -781,6 +781,8 @@ mod tests {
             has_raw_entry,
             has_raw_duplicate: Reading::No,
             has_plugin: Reading::No,
+            install_state: mcp_config::InstallState::Installed,
+            entry_health: mcp_config::EntryHealth::NoEntry,
         }
     }
 

@@ -330,6 +330,7 @@ jobs:
               # drift_guard fails if a cfg-bearing source lacks an owner here
               # or in the focused MCP platform-compile filter.
               - 'scripts/first-run/macos-app.sh'
+              - 'crates/wenlan-cli/src/commands/mcp.rs'
               - 'crates/wenlan-cli/src/commands/pages.rs'
               - 'crates/wenlan-cli/src/commands/service.rs'
               - 'crates/wenlan-cli/src/commands/setup.rs'
@@ -425,6 +426,7 @@ jobs:
               # Windows owns cfg-bearing CLI/server paths, native ORT/Vulkan,
               # and packaging. Shared Rust stays on Ubuntu; MCP's Unix/non-Unix
               # branches compile in the focused mcp-platform job.
+              - 'crates/wenlan-cli/src/commands/mcp.rs'
               - 'crates/wenlan-cli/src/commands/mod.rs'
               - 'crates/wenlan-cli/src/commands/pages.rs'
               - 'crates/wenlan-cli/src/commands/service.rs'
