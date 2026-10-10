@@ -190,7 +190,8 @@ test('actual Worker supports device-scoped per-client disconnection', { timeout:
       for (const [key, value] of snapshot) { assert(value); await kv.put(key, value); }
       const before = backendCalls;
       const old = await post('/mcp', { jsonrpc: '2.0', id: 7, method: 'tools/list' }, second.headers);
-      assert.equal(old.status, 403);
+      assert.equal(old.status, 401, 'superseded consent asks the client to re-authorize');
+      assert.match(old.headers.get('www-authenticate'), /error="invalid_token"/);
       assert.equal(backendCalls, before);
       assert.equal((await token({ grant_type: 'refresh_token', client_id: second.client.client_id,
         refresh_token: second.tokens.refresh_token, resource })).status, 400);

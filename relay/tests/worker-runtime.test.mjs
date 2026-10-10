@@ -18,7 +18,7 @@ const candidate = { tunnelOrigin: 'https://synthetic.trycloudflare.com',
 
 const realExpiry = process.env.WENLAN_TEST_REAL_PAIRING_EXPIRY === '1';
 test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwarding', {
-  timeout: realExpiry ? 370_000 : 60_000,
+  timeout: realExpiry ? 670_000 : 60_000,
 }, async t => {
   const packagedEntry = process.env.WENLAN_RELAY_BUNDLE_DIR
     ? join(resolve(process.env.WENLAN_RELAY_BUNDLE_DIR), 'worker.js') : null;
@@ -87,20 +87,21 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       assert.equal(response.headers.get('location'), '/pairing');
       const header = response.headers.get('set-cookie');
       assert.match(header, /^__Host-wenlan-pairing=/);
-      for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=300']) assert(header.includes(flag));
+      for (const flag of ['HttpOnly', 'Secure', 'SameSite=Lax', 'Path=/', 'Max-Age=600']) assert(header.includes(flag));
       cookie = header.split(';')[0];
       const secret = cookie.split('=')[1].split('.')[1];
       assert.equal(await response.text(), '');
       const page = await request('/pairing', { headers: { cookie } });
       const html = await page.text();
       assert(!html.includes(secret));
-      pairId = /id="pairing-code"[^>]*>([^<]+)</.exec(html)[1];
-      assert.equal(pairId, cookie.split('=')[1].split('.')[0]);
-      assert.match(html, /Waiting for device approval/);
+      pairId = cookie.split('=')[1].split('.')[0];
+      assert.match(html, /Waiting for you in Wenlan\.\.\./);
       assert.match(html, /id="continue"[^>]*disabled/);
       assert.match(html, /https:\/\/wenlan.app\/docs\/data-and-privacy/);
-      assert.match(html, /Settings &gt; Connections/);
-      assert.match(html, /class="local-hint">App on this computer[^<]*<strong>Add a tool<\/strong>/, 'local apps are steered to direct setup');
+      assert.match(html, /<output id="user-code">[2-9A-HJKMNP-TV-Z]{4}-[2-9A-HJKMNP-TV-Z]{4}<\/output>/, 'the short code is the fallback');
+      assert.match(html, /class="warning"/, 'client.example is not an allowlisted client');
+      assert.match(html, /Connect client\.example to Wenlan/, 'an unknown client is named by its redirect host');
+      assert(!html.includes('Synthetic client'), 'the self-declared DCR name is never displayed');
       const openLink = /id="open-in-wenlan"[^>]*href="([^"]+)"/.exec(html);
       assert.equal(openLink?.[1], `wenlan://pair?code=${pairId}`, 'the app link carries only the pairing code, never the browser secret');
       const pendingStatus = await request('/pairing/status', { headers: { cookie } });
@@ -134,8 +135,8 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       assert.equal((await post(`/pairings/${pairId}/approve`, consent, deviceHeaders())).status, 400);
       assert.equal((await post(`/pairings/${pairId}/approve`, { ...consent, approved: true }, deviceHeaders())).status, 200);
       const page = await (await request('/pairing', { headers: { cookie } })).text();
-      assert.match(page, /Approved on your device/);
-      assert.match(page, /Authorized Space/);
+      assert.match(page, /Allowed\. Taking you back to client\.example\.\.\./);
+      assert.match(page, /<dl id="approved-space"><dt>Space<\/dt><dd>review<\/dd><\/dl>/);
       assert.doesNotMatch(page, /id="continue"[^>]*disabled/);
       assert.deepEqual(await (await request('/pairing/status', { headers: { cookie } })).json(),
         { status: 'approved', space: candidate.space });
@@ -194,7 +195,7 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
         assert.equal(ended, true, 'data arrived after the revocation barrier');
         assert(Date.now() - start < 4000);
       } finally { clearTimeout(timer); await reader.cancel().catch(() => {}); }
-      assert.equal((await post('/mcp', query, mcpHeaders)).status, 403);
+      assert.equal((await post('/mcp', query, mcpHeaders)).status, 401);
       assert.equal(backendCalls, 3);
     });
     await t.test('cancelled and unknown pairings report unavailable, not pending', async () => {
@@ -216,7 +217,9 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       assert.deepEqual(await stillPending.json(), { redirectTo: null, error: 'Device approval is still pending.' });
       const cancelled = await post('/pairing/cancel', {}, { cookie: secondCookie, origin });
       assert.equal(cancelled.status, 200);
-      assert.deepEqual(await cancelled.json(), { cancelled: true });
+      const cancelledBody = await cancelled.json();
+      assert.equal(cancelledBody.cancelled, true);
+      assert.equal(new URL(cancelledBody.redirectTo).searchParams.get('error'), 'access_denied');
       assert.match(cancelled.headers.get('set-cookie'), /Max-Age=0/);
       const afterCancel = await post('/pairing/complete', {}, { cookie: secondCookie, origin });
       assert.equal(afterCancel.status, 409);
@@ -233,7 +236,7 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
         error: 'This pairing has expired or is no longer available. Start a new connection in your AI client.' });
     });
     await t.test('pairing TTL expiry reports unavailable', {
-      skip: realExpiry ? false : 'Set WENLAN_TEST_REAL_PAIRING_EXPIRY=1 for the five-minute wall-clock check',
+      skip: realExpiry ? false : 'Set WENLAN_TEST_REAL_PAIRING_EXPIRY=1 for the ten-minute wall-clock check',
     }, async () => {
       const query = new URLSearchParams({ response_type: 'code', client_id: client.client_id,
         redirect_uri: 'https://client.example/callback', resource: `${origin}/mcp`, scope: 'wenlan:query',
@@ -241,20 +244,20 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       const authorized = await request(`/authorize?${query}`, { redirect: 'manual' });
       assert.equal(authorized.status, 303);
       const expiryCookie = authorized.headers.get('set-cookie').split(';')[0];
-      assert.match(authorized.headers.get('set-cookie'), /Max-Age=300/);
+      assert.match(authorized.headers.get('set-cookie'), /Max-Age=600/);
       const pending = await post('/pairing/complete', {}, { cookie: expiryCookie, origin });
       assert.equal(pending.status, 409);
       assert.deepEqual(await pending.json(), { redirectTo: null, error: 'Device approval is still pending.' });
       const started = Date.now();
       console.log('WENLAN_REAL_EXPIRY_WAIT_STARTED');
-      await delay(301_000);
-      assert(Date.now() - started >= 300_000, 'expiry must be exercised through actual elapsed time');
+      await delay(601_000);
+      assert(Date.now() - started >= 600_000, 'expiry must be exercised through actual elapsed time');
       const expired = await post('/pairing/complete', {}, { cookie: expiryCookie, origin });
       assert.equal(expired.status, 409);
       assert.deepEqual(await expired.json(), { redirectTo: null, pairingUnavailable: true,
         error: 'This pairing has expired or is no longer available. Start a new connection in your AI client.' });
       const page = await request('/pairing', { headers: { cookie: expiryCookie } });
-      assert.match(await page.text(), /This pairing is no longer available/);
+      assert.match(await page.text(), /This request expired\. Start connecting again from your AI app\./);
     });
     await t.test('bounds, unsupported methods and enrollment rate limits are enforced', async () => {
       assert.equal((await request('/devices', { method: 'PUT' })).status, 405);

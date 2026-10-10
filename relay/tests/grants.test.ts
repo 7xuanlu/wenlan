@@ -109,7 +109,8 @@ test('device management lists only its own grants without secrets or internal au
   const { store, device, other } = state;
   const page = await listDeviceGrants(store, device.id, device.managementToken);
   assert.equal(page!.items.length, 2);
-  assert.deepEqual(Object.keys(page!.items[0]).sort(), ['id', 'clientId', 'space', 'createdAt', 'expiresAt', 'status', 'cleanupPending'].sort());
+  assert.deepEqual(Object.keys(page!.items[0]).sort(), ['id', 'clientId', 'space', 'createdAt', 'expiresAt', 'status', 'cleanupPending',
+    'clientName', 'redirectHost', 'knownClient', 'lastUsedAt'].sort());
   const serialized = JSON.stringify(page);
   for (const secret of [device.managementToken, 'b'.repeat(43), 'credentialHash', 'owner', 'connectorId']) assert(!serialized.includes(secret));
   assert.equal((await listDeviceGrants(store, other.id, other.managementToken))!.items.length, 0);

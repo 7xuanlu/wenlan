@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
-import { OAuthProvider, OAuthError, getOAuthApi, type AuthRequest, type OAuthHelpers, type OAuthProviderOptions } from '@cloudflare/workers-oauth-provider';
+import { OAuthProvider, OAuthError, authorizationErrorRedirect, getOAuthApi, type AuthRequest, type OAuthHelpers, type OAuthProviderOptions } from '@cloudflare/workers-oauth-provider';
 import { cleanupKV } from './cleanup-kv.ts';
-import { beginPairing, consumePairing, type PairingStore } from './pairing.ts';
-import { type ConnectorRoute, type QueryGrant, type ProxyOptions } from './proxy.ts';
+import { beginPairing, cancelPairingRequest, consumePairing, type PairingStore } from './pairing.ts';
+import { authorizationChallenge, type ConnectorRoute, type QueryGrant, type ProxyOptions } from './proxy.ts';
 import { forwardSessionQuery } from './sessions.ts';
-import { authorizationGrantActive, authorizationGrantEnd, claimAuthorizationGrant, replaceClientAuthorization } from './grants.ts';
+import { authorizationGrantActive, authorizationGrantEnd, claimAuthorizationGrant, replaceClientAuthorization, touchGrant } from './grants.ts';
 import { randomSecret, validSecret } from './secrets.ts';
 
 export interface OAuthEnv {
@@ -40,9 +40,13 @@ export async function startOAuthPairing(
     throw new Error('Unsupported OAuth authorization request');
   }
   const authorizationId = randomSecret();
+  // The registered name is display-only context for the desktop app. Trust
+  // and the browser's displayed name come from the validated redirect host.
+  let clientName: string | null = null;
+  try { clientName = (await oauth.lookupClient(parsed.clientId))?.clientName ?? null; } catch { clientName = null; }
   const pair = await beginPairing(store, {
     authorizationId, clientId: parsed.clientId, resource, scopes: parsed.scope,
-  }, resource);
+  }, resource, Date.now(), { redirectUri: parsed.redirectUri, clientName });
   // No browser-visible state is returned until the validated request is durable.
   // Failure here leaves only an unusable pairing, never an issuable grant.
   await store.transaction(async tx => {
@@ -65,7 +69,7 @@ export async function finishOAuthPairing(
     || saved.request.clientId !== consumed.clientId || saved.request.issuer !== origin
     || saved.request.resource !== `${origin}/mcp` || consumed.resource !== `${origin}/mcp`
     || saved.request.scope.length !== 1 || saved.request.scope[0] !== QUERY_SCOPE) return null;
-  await replaceClientAuthorization(store, consumed.grant.subject, consumed.clientId, consumed.authorizationId);
+  await replaceClientAuthorization(store, consumed.grant.subject, consumed.clientId, consumed.authorizationId, consumed.client);
   const result = await oauth.completeAuthorization({
     request: saved.request, userId: consumed.grant.subject,
     metadata: { scope: QUERY_SCOPE }, scope: [QUERY_SCOPE], props: { ...consumed.grant, authorizationId: consumed.authorizationId },
@@ -73,12 +77,22 @@ export async function finishOAuthPairing(
   return result.redirectTo;
 }
 
-function challenge(origin: string): Response {
-  return new Response(null, { status: 401, headers: {
-    'cache-control': 'no-store',
-    'www-authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token", scope="${QUERY_SCOPE}"`,
-  } });
+/** Cancels a browser pairing and returns the client's access_denied redirect,
+ * built only from the validated, stored authorization request. Null when the
+ * pairing is unavailable; '' when it was cancelled but no redirect is known.
+ */
+export async function cancelOAuthPairing(
+  store: PairingStore, pairingId: string, browserSecret: string, publicOrigin: string,
+): Promise<string | null> {
+  const origin = canonicalOrigin(publicOrigin);
+  const authorizationId = await cancelPairingRequest(store, pairingId, browserSecret);
+  if (authorizationId === null) return null;
+  const saved = await store.transaction(tx => tx.get<StoredAuthorization>(authorizationKey(authorizationId)));
+  if (!saved || saved.request.issuer !== origin || typeof saved.request.redirectUri !== 'string') return '';
+  try { return authorizationErrorRedirect(saved.request, 'access_denied'); } catch { return ''; }
 }
+
+const challenge = authorizationChallenge;
 
 /** Must run behind OAuthProvider. The helper supplies the actual token's scope
  * and expiry, not the authorization-time props (which survive token refresh).
@@ -89,6 +103,7 @@ export async function forwardOAuthQuery(
   store: PairingStore,
   fetcher?: typeof globalThis.fetch,
   fetchReverse?: ProxyOptions['fetchReverse'],
+  limits: { limitGrant?: (grantId: string) => Promise<number> } = {},
 ): Promise<Response> {
   const origin = canonicalOrigin(publicOrigin);
   const bearer = request.headers.get('authorization');
@@ -110,16 +125,28 @@ export async function forwardOAuthQuery(
     generation: bound.generation!, scopes: token.scope, expiresAt: token.expiresAt * 1000,
   };
   const identity = { grantId: token.grantId, clientId: token.grant.clientId };
-  return forwardSessionQuery(request, queryGrant, identity, store,
-    { publicOrigin: origin, loadRoute, fetch: fetcher, fetchReverse,
-      authorize: async () => {
-        if (!await authorizationGrantActive(store, identity, queryGrant)) return false;
-        const current = await oauth.unwrapToken<unknown>(bearer.slice(7));
-        return !!current && current.id === token.id && current.userId === token.userId
-          && current.grantId === token.grantId && current.grant.clientId === token.grant.clientId
-          && current.audience === `${origin}/mcp` && current.expiresAt * 1000 > Date.now()
-          && current.scope.includes(QUERY_SCOPE);
-      } });
+  if (limits.limitGrant) {
+    const retryAfter = await limits.limitGrant(token.grantId);
+    if (retryAfter > 0) {
+      return Response.json({ error: 'Request limit reached' }, { status: 429,
+        headers: { 'cache-control': 'no-store', 'retry-after': String(retryAfter) } });
+    }
+  }
+  const authorize = async () => {
+    if (!await authorizationGrantActive(store, identity, queryGrant)) return false;
+    const current = await oauth.unwrapToken<unknown>(bearer.slice(7));
+    return !!current && current.id === token.id && current.userId === token.userId
+      && current.grantId === token.grantId && current.grant.clientId === token.grant.clientId
+      && current.audience === `${origin}/mcp` && current.expiresAt * 1000 > Date.now()
+      && current.scope.includes(QUERY_SCOPE);
+  };
+  const response = await forwardSessionQuery(request, queryGrant, identity, store,
+    { publicOrigin: origin, loadRoute, fetch: fetcher, fetchReverse, authorize, grantActive: authorize });
+  // Usage is display-only: a failed write never fails the authorized request.
+  if (response.status < 400) {
+    try { await touchGrant(store, identity, queryGrant); } catch { /* best effort */ }
+  }
+  return response;
 }
 
 /** DCR is the currently tested registration path. CIMD remains disabled until

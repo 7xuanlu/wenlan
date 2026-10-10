@@ -1,44 +1,56 @@
 // SPDX-License-Identifier: Apache-2.0
+// Browser pairing page behavior. Localized strings come from data attributes
+// on <main>, rendered by the server, because the CSP forbids inline script.
 export const pairingJS = `
 const main = document.querySelector('main');
+const text = key => main.dataset['text' + key[0].toUpperCase() + key.slice(1)] || '';
 const notice = document.querySelector('#notice');
 const continueButton = document.querySelector('#continue');
+const completeForm = continueButton ? continueButton.form : null;
+const cancelForm = document.querySelector('form[action="/pairing/cancel"]');
 let pollingTimer;
 let stopped = false;
 let submitting = false;
+let autoSubmitted = false;
 let statusRequest;
-const pollingDeadline = Date.now() + 5 * 60 * 1000;
+const pollingDeadline = Date.now() + 10 * 60 * 1000;
 function stopPolling() {
   stopped = true;
   clearTimeout(pollingTimer);
   statusRequest?.abort();
 }
+function setNotice(value) { if (notice) notice.textContent = value; }
+function hide(selector, hidden) { for (const node of document.querySelectorAll(selector)) node.hidden = hidden; }
 function renderState(result) {
   const status = result.status;
-  if (!['pending', 'approved', 'unavailable'].includes(status)) throw new Error('Invalid pairing status');
+  if (!['pending', 'approved', 'denied', 'unavailable'].includes(status)) throw new Error('Invalid pairing status');
   main.dataset.pairingState = status;
   const banner = document.querySelector('.status');
   banner.dataset.state = status;
   const label = document.querySelector('#pairing-status') || banner;
-  label.textContent = status === 'approved' ? 'Approved on your device'
-    : status === 'pending' ? 'Waiting for device approval' : 'This pairing is no longer available.';
-  continueButton.disabled = status !== 'approved' || submitting;
-  document.querySelector('.pairing-step').hidden = status !== 'pending';
+  label.textContent = text(status === 'approved' ? 'approved' : status === 'denied' ? 'denied'
+    : status === 'pending' ? 'waiting' : 'expired');
+  hide('.pairing-step', status !== 'pending');
   const space = document.querySelector('#approved-space');
-  space.hidden = status !== 'approved';
-  space.querySelector('dd').textContent = typeof result.space === 'string' ? result.space : '';
-  if (status === 'approved') notice.textContent = 'Ready. Continue to your AI client.';
-  if (status === 'pending') notice.textContent = 'This page updates after you approve in Wenlan.';
+  if (space) {
+    space.hidden = status !== 'approved';
+    space.querySelector('dd').textContent = typeof result.space === 'string' ? result.space : '';
+  }
+  if (continueButton) {
+    continueButton.hidden = status !== 'approved';
+    continueButton.disabled = status !== 'approved' || submitting;
+  }
+  if (status === 'pending') setNotice('');
   if (status === 'unavailable') {
     stopPolling();
-    notice.textContent = 'Return to your AI client and start a new connection.';
-    document.querySelector('.permissions').hidden = true;
-    document.querySelector('.client-details').hidden = true;
-    document.querySelector('.actions').hidden = true;
+    setNotice('');
+    hide('.intro, .warning, .sends-to, .client-details, .actions, #approved-space', true);
     for (const button of document.querySelectorAll('.actions button')) button.disabled = true;
-    document.querySelector('#copy-code').disabled = true;
     document.querySelector('.sample-link')?.remove();
   }
+  // Approval in Wenlan is the consent; the browser continues by itself.
+  if (!autoSubmitted && !submitting && status === 'approved' && completeForm) { autoSubmitted = true; submit(completeForm); }
+  if (!autoSubmitted && !submitting && status === 'denied' && cancelForm) { autoSubmitted = true; submit(cancelForm); }
 }
 async function pollStatus() {
   if (stopped || submitting) return;
@@ -51,32 +63,20 @@ async function pollStatus() {
     if (!stopped && !submitting) renderState(result);
   } catch {
     if (!stopped && !submitting) {
-      continueButton.disabled = true;
-      notice.textContent = 'Unable to check approval. Reconnecting...';
+      if (continueButton) continueButton.disabled = true;
+      setNotice(text('retry'));
     }
   } finally {
     clearTimeout(timeout);
     if (!stopped && !submitting) {
-      if (Date.now() >= pollingDeadline) {
-        stopPolling();
-        continueButton.disabled = true;
-        notice.textContent = 'Approval check ended. Refresh this page to check again.';
-      } else pollingTimer = setTimeout(pollStatus, 3000);
+      if (Date.now() >= pollingDeadline) renderState({ status: 'unavailable' });
+      else pollingTimer = setTimeout(pollStatus, 3000);
     }
   }
 }
-window.addEventListener('pagehide', stopPolling);
-document.querySelector('#copy-code')?.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(document.querySelector('#pairing-code').value);
-    document.querySelector('#copy-code').textContent = 'Copied';
-    notice.textContent = 'Code copied. Paste it in Wenlan to review this connection.';
-  } catch { notice.textContent = 'Select the pairing code and copy it.'; }
-});
-for (const form of document.querySelectorAll('form')) form.addEventListener('submit', async event => {
-  event.preventDefault();
+async function submit(form) {
   const button = form.querySelector('button');
-  if (submitting || button.disabled) return;
+  if (submitting || (button && button.disabled && form !== cancelForm)) return;
   submitting = true;
   clearTimeout(pollingTimer);
   statusRequest?.abort();
@@ -87,13 +87,13 @@ for (const form of document.querySelectorAll('form')) form.addEventListener('sub
     const sample = form.id === 'sample-login';
     const body = sample ? { username: fields.get('username'), password: fields.get('password'), approved: fields.get('approved') === 'on',
       clientId: form.dataset.clientId, resource: form.dataset.resource, space: form.dataset.space } : {};
-    const response = await fetch(form.action, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+    const response = await fetch(form.getAttribute('action'), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
     const result = await response.json();
     if (result.redirectTo) { navigated = true; stopPolling(); location.assign(result.redirectTo); }
     else if (result.cancelled) { navigated = true; stopPolling(); location.replace('/pairing'); }
     else if (result.pairingUnavailable === true && continueButton) renderState({ status: 'unavailable' });
-    else notice.textContent = result.error || 'Unable to continue.';
-  } catch { notice.textContent = 'Connection unavailable. Try again.'; }
+    else setNotice(sample ? (result.error || text('error')) : text('error'));
+  } catch { setNotice(text('error') || 'Connection unavailable. Try again.'); }
   finally {
     const password = form.querySelector('input[type=password]');
     if (password) password.value = '';
@@ -101,11 +101,21 @@ for (const form of document.querySelectorAll('form')) form.addEventListener('sub
     if (!navigated && main.dataset.pairingState !== 'unavailable') {
       for (const action of document.querySelectorAll('form button')) action.disabled = false;
       if (continueButton) {
-        continueButton.disabled = true;
-        pollingTimer = setTimeout(pollStatus, 3000);
+        continueButton.disabled = main.dataset.pairingState !== 'approved';
+        if (!stopped) pollingTimer = setTimeout(pollStatus, 3000);
       }
     }
   }
+}
+window.addEventListener('pagehide', stopPolling);
+for (const form of document.querySelectorAll('form')) form.addEventListener('submit', event => {
+  event.preventDefault();
+  submit(form);
 });
-if (continueButton) pollStatus();
+if (continueButton) {
+  const initial = main.dataset.pairingState;
+  if (initial === 'approved' || initial === 'denied') renderState({ status: initial,
+    space: document.querySelector('#approved-space dd')?.textContent || undefined });
+  else pollStatus();
+}
 `;

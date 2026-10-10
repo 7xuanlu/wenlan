@@ -15,7 +15,7 @@ const PAGE_SIZE = 32;
 const expired = (record: { expiresAt: number }, now: number) => !Number.isFinite(record.expiresAt) || record.expiresAt <= now;
 const liveDevice = (record: DeviceRecord | undefined, now: number) => !!record && record.enabled
   && !record.pendingReverse && !expired(record, now);
-const transient = ['pairing:', 'authorization-pairing:', 'oauth-request:', 'oauth-client:'];
+const transient = ['pairing:', 'pairing-code:', 'pairing-lookup-miss:', 'authorization-pairing:', 'oauth-request:', 'oauth-client:'];
 
 /** One durable, bounded scan page and at most one external cleanup batch.
  * Permission denial commits before external IO. The cursor and retry lease

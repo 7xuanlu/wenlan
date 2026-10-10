@@ -37,6 +37,11 @@ export interface ProxyOptions {
   fetchReverse?: (connectionId: string, request: ReverseQueryRequest, deviceId: string) => Promise<Response>;
   now?: () => number;
   authorize?: (route: ConnectorRoute) => Promise<boolean>;
+  /** Whether the OAuth grant itself (device, generation, consent, token) is
+   * still current. Splits a dead grant (401, re-run OAuth) from an offline
+   * device (503) and from a request-scoped denial (403).
+   */
+  grantActive?: (route: ConnectorRoute) => Promise<boolean>;
 }
 
 const QUERY_TOOLS = new Set(['brief', 'recall', 'get_page_sources']);
@@ -83,6 +88,51 @@ function validGrant(grant: QueryGrant | null, now: number): grant is QueryGrant 
     && Number.isSafeInteger(grant.generation) && grant.generation >= 0
     && Number.isFinite(grant.expiresAt) && grant.expiresAt > now
     && Array.isArray(grant.scopes) && grant.scopes.includes('wenlan:query');
+}
+
+/** 401 that sends an MCP client back through OAuth discovery. */
+export function authorizationChallenge(origin: string): Response {
+  return new Response(null, { status: 401, headers: {
+    'cache-control': 'no-store',
+    'www-authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource/mcp", error="invalid_token", scope="wenlan:query"`,
+  } });
+}
+
+/** 'offline' when the route still matches the grant but its lease lapsed (the
+ * device has not checked in); 'revoked' when the device, Space or generation
+ * no longer match. Null when the route allows the grant.
+ */
+export function routeDenial(route: ConnectorRoute | null | undefined, grant: QueryGrant, now: number): 'offline' | 'revoked' | null {
+  if (!route || route.enabled !== true || route.id !== grant.connectorId || route.subject !== grant.subject
+    || route.space !== grant.space || route.generation !== grant.generation) return 'revoked';
+  return Number.isFinite(route.expiresAt) && route.expiresAt > now ? null : 'offline';
+}
+
+/** Response for a route that does not allow the grant. An offline device with
+ * a still-current grant gets the friendly 503; anything else re-runs OAuth.
+ */
+export async function routeDenialResponse(
+  kind: 'offline' | 'revoked', route: ConnectorRoute | null | undefined, options: ProxyOptions,
+): Promise<Response> {
+  if (kind === 'revoked') return authorizationChallenge(options.publicOrigin);
+  try {
+    if (route && options.grantActive && !await authorizationRead(() => options.grantActive!(route))) {
+      return authorizationChallenge(options.publicOrigin);
+    }
+  } catch { return failure(503, 'Connector unavailable'); }
+  return failure(503, TOOL_UNAVAILABLE_TEXT);
+}
+
+/** After options.authorize refused: 401 when the grant itself is dead,
+ * otherwise the request-scoped 403.
+ */
+async function authorizeDenialResponse(route: ConnectorRoute, options: ProxyOptions): Promise<Response> {
+  try {
+    if (options.grantActive && !await authorizationRead(() => options.grantActive!(route))) {
+      return authorizationChallenge(options.publicOrigin);
+    }
+  } catch { return failure(503, 'Connector unavailable'); }
+  return failure(403, 'Connection is not authorized');
 }
 
 function routeAllows(route: ConnectorRoute | null, grant: QueryGrant, now: number): route is ConnectorRoute {
@@ -256,7 +306,7 @@ export async function readQueryBody(request: Request): Promise<Uint8Array<ArrayB
   return bytes;
 }
 
-const TOOL_UNAVAILABLE_TEXT = 'Wenlan could not reach your local device. Make sure Wenlan is running and the device is online, then try again. This does not mean your authorization was revoked.';
+export const TOOL_UNAVAILABLE_TEXT = 'Wenlan could not reach your local device. Make sure Wenlan is running and the device is online, then try again. This does not mean your authorization was revoked.';
 
 /** An already allowed request, never a notification or malformed RPC id. */
 function unavailableRpc(bytes: Uint8Array): { id: string | number; tool: boolean } | null {
@@ -343,15 +393,17 @@ export async function forwardQuery(
   }
   const dispatchTime = (options.now ?? Date.now)();
   if (!validGrant(grant, dispatchTime)) return failure(401, 'Authorization required');
-  if (!routeAllows(route, grant, dispatchTime)) return failure(403, 'Connection is not authorized');
+  const denied = routeDenial(route, grant, dispatchTime);
+  if (denied) return routeDenialResponse(denied, route, options);
   try {
-    if (options.authorize && !await authorizationRead(() => options.authorize!(route))) {
-      return failure(403, 'Connection is not authorized');
+    if (options.authorize && !await authorizationRead(() => options.authorize!(route!))) {
+      return authorizeDenialResponse(route!, options);
     }
   } catch { return failure(503, 'Connector unavailable'); }
   const authorizedAt = (options.now ?? Date.now)();
   if (!validGrant(grant, authorizedAt)) return failure(401, 'Authorization required');
-  if (!routeAllows(route, grant, authorizedAt)) return failure(403, 'Connection is not authorized');
+  const lapsed = routeDenial(route, grant, authorizedAt);
+  if (lapsed || !routeAllows(route, grant, authorizedAt)) return routeDenialResponse(lapsed ?? 'revoked', route, options);
   const reverseId = route.reverseConnectionId;
   const origin = typeof route.tunnelOrigin === 'string' ? tunnelOrigin(route.tunnelOrigin) : null;
   const reverse = typeof reverseId === 'string' && /^[A-Za-z0-9_-]{32,128}$/.test(reverseId)
