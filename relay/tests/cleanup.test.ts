@@ -38,6 +38,19 @@ test('expired transient records are removed, live and unknown records are preser
   assert.equal([...store.data.keys()].filter(k => k.endsWith('live')).length, 4);
 });
 
+test('expired short-code indexes and lookup-miss counters are swept; live ones are kept', async () => {
+  const store = new MemoryStore();
+  store.data.set('pairing-code:ABCD2345', { pairingId: 'a'.repeat(64), expiresAt: now });
+  store.data.set('pairing-code:WXYZ6789', { pairingId: 'b'.repeat(64), expiresAt: now + 1 });
+  store.data.set('pairing-lookup-miss:device-expired', { count: 10, expiresAt: now - 1 });
+  store.data.set('pairing-lookup-miss:device-live', { count: 3, expiresAt: now + 1 });
+  await maintainAuthority(store, noop, now);
+  assert(!store.data.has('pairing-code:ABCD2345'), 'expired code index is deleted');
+  assert(!store.data.has('pairing-lookup-miss:device-expired'), 'expired miss counter is deleted');
+  assert.deepEqual(store.data.get('pairing-code:WXYZ6789'), { pairingId: 'b'.repeat(64), expiresAt: now + 1 });
+  assert.deepEqual(store.data.get('pairing-lookup-miss:device-live'), { count: 3, expiresAt: now + 1 });
+});
+
 test('offline routes survive while device credentials can renew; revoked or expired devices do not', async () => {
   const store = new MemoryStore();
   for (const [id, enabled, expiresAt] of [['offline', true, now + 1], ['expired', true, now], ['revoked', false, now + 1]] as const) {

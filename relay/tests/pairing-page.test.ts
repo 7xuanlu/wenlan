@@ -234,6 +234,19 @@ test('script: a denial auto-submits cancel and returns access_denied to the clie
   assert.deepEqual(page.navigations, ['https://client.example/cb?error=access_denied']);
 });
 
+test('script: a server-rendered denied page (reload after deny) submits cancel once without polling', async () => {
+  const page = harness('denied', {
+    '/pairing/cancel': [{ cancelled: true, redirectTo: 'https://client.example/cb?error=access_denied' }],
+  });
+  await page.settle();
+  assert.equal(page.main.dataset.pairingState, 'denied');
+  assert.equal(page.label.textContent, 'DENIED');
+  assert.deepEqual(page.calls, [{ url: '/pairing/cancel', method: 'POST' }], 'cancel only, no status poll');
+  assert.deepEqual(page.navigations, ['https://client.example/cb?error=access_denied']);
+  await page.advance(60_000);
+  assert.equal(page.calls.filter(call => call.method === 'POST').length, 1, 'cancel is submitted once');
+});
+
 test('script: polling stops at the ten-minute deadline and shows the expired copy', async () => {
   const page = harness('pending', { '/pairing/status': [{ status: 'pending' }] }, 1_000_000);
   await page.settle();

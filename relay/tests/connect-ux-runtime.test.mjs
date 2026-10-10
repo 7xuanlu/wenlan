@@ -118,6 +118,22 @@ test('one-click pairing contract through the Worker entry', { timeout: 90_000 },
       assert.equal((await post('/pairings/lookup', { code: userCode, pairingId: first.id }, deviceHeaders)).status, 400);
     });
 
+    await t.test('lookup is POST only: a GET never resolves a code and never counts toward the miss limit', async () => {
+      const variants = ['/pairings/lookup', `/pairings/lookup?code=${userCode}`,
+        `/pairings/lookup?code=${encodeURIComponent(userCode.replace('-', '').toLowerCase())}`];
+      // Eleven GETs: more than the ten-miss budget, so a GET that ran a lookup would leave this device limited.
+      for (let n = 0; n < 11; n++) {
+        const path = variants[n % variants.length];
+        const response = await request(path, { headers: n % 2 ? deviceHeaders : { ...deviceHeaders, accept: 'application/json' } });
+        assert([404, 405].includes(response.status), `${path}: ${response.status}`);
+        const body = await response.text();
+        assert(!body.includes(first.id) && !body.includes('pairingId'), `${path} leaked a pairing`);
+      }
+      const after = await post('/pairings/lookup', { code: userCode }, deviceHeaders);
+      assert.equal(after.status, 200, 'the POST lookup still resolves, so no GET spent the miss budget');
+      assert.deepEqual(await after.json(), inspected);
+    });
+
     await t.test('a denied request reports denied and cancel returns access_denied to the client', async () => {
       const second = await begin();
       assert.equal((await post(`/pairings/${second.id}/deny`, {})).status, 401);
