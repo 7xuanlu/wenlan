@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import "../../i18n";
+import { i18n } from "../../i18n";
 import { resources } from "../../i18n/resources";
 
 const mocks = vi.hoisted(() => ({
@@ -30,10 +30,11 @@ const CLIENTS = [
 function renderList(
   qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
   connectedFamilies?: Set<string>,
+  seenFamilies?: Set<string>,
 ) {
   return render(
     <QueryClientProvider client={qc}>
-      <ClientSetupList connectedFamilies={connectedFamilies} />
+      <ClientSetupList connectedFamilies={connectedFamilies} seenFamilies={seenFamilies} />
     </QueryClientProvider>,
   );
 }
@@ -174,40 +175,47 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["claude-code"]));
 
     expect(await screen.findByText("Every detected tool is already connected")).toBeInTheDocument();
-    expect(screen.queryByText(/to activate/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/to finish/)).not.toBeInTheDocument();
   });
 
-  it("names configured-but-unseen tools as needing a restart, not as connected", async () => {
+  // The restart instruction lives on the tool's own row in the roster above
+  // ("Restart X to finish."). Repeating it here made the same sentence appear
+  // twice on the page, so this note claims only what was measured.
+  it("says configured-but-unseen tools are added, not connected, and does not repeat the restart line", async () => {
     mocks.detectMcpClients.mockResolvedValue([
       { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
       { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
     ]);
     renderList();
 
-    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code, Cursor to activate.")).toBeInTheDocument();
+    expect(await screen.findByText("Every detected tool is added.")).toBeInTheDocument();
     expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Restart/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/to finish/)).not.toBeInTheDocument();
   });
 
-  it("lists only the unseen tool when one hidden client is already seen in the roster", async () => {
+  it("still says added when only one of the hidden clients has been seen in the roster", async () => {
     mocks.detectMcpClients.mockResolvedValue([
       { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: NO, has_raw_entry: NO, has_raw_duplicate: NO, has_plugin: NO },
       { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
     ]);
     renderList(new QueryClient({ defaultOptions: { queries: { retry: false } } }), new Set(["cursor"]));
 
-    expect(await screen.findByText("Every detected tool is set up. Restart Claude Code to activate.")).toBeInTheDocument();
+    expect(await screen.findByText("Every detected tool is added.")).toBeInTheDocument();
     expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Restart/)).not.toBeInTheDocument();
   });
 
-  it("never names an undetected client under the restart note, even when configured", async () => {
+  it("never names an undetected client in the note, even when configured", async () => {
     mocks.detectMcpClients.mockResolvedValue([
       { name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
       { name: "Gemini CLI", client_type: "gemini_cli", config_path: "~/.gemini/settings.json", detected: NO, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
     ]);
     renderList();
 
-    expect(await screen.findByText("Every detected tool is set up. Restart Cursor to activate.")).toBeInTheDocument();
+    expect(await screen.findByText("Every detected tool is added.")).toBeInTheDocument();
     expect(screen.queryByText("Gemini CLI")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Cursor/)).not.toBeInTheDocument();
     expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
   });
 
@@ -289,8 +297,8 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     // the half a boolean could never carry.
     expect(within(row).getByText(/Setup state unknown/)).toBeInTheDocument();
     expect(within(row).getByText(/Access is denied/)).toBeInTheDocument();
-    // Not the green "Configured" chip: nothing was read that says so.
-    expect(within(row).queryByText("Configured")).not.toBeInTheDocument();
+    // Not the "Added" chip: nothing was read that says so.
+    expect(within(row).queryByText("Added")).not.toBeInTheDocument();
   });
 
   // ── Round 6, D6a ────────────────────────────────────────────────────
@@ -417,5 +425,301 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
 
     const row = rowFor("Cursor");
     expect(within(row).queryByText(/could not be determined/)).not.toBeInTheDocument();
+  });
+
+  // ── C2: Added versus Connected, in place ────────────────────────────
+
+  it("a tool added from this list keeps its row and says to restart it", async () => {
+    renderList();
+    await screen.findByText("Cursor");
+    await clickSetUp("Cursor");
+
+    const row = rowFor("Cursor");
+    expect(await within(row).findByText("Added")).toBeInTheDocument();
+    expect(within(row).getByRole("status")).toHaveTextContent("Added. Restart Cursor to finish.");
+    // Nothing left to press, and nothing claims a connection yet.
+    expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+    expect(within(row).queryByText("Connected")).not.toBeInTheDocument();
+    expect(mocks.writeMcpConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("the same row flips to Connected once the roster has seen the tool", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const tree = (seen: Set<string>) => (
+      <QueryClientProvider client={qc}>
+        <ClientSetupList connectedFamilies={new Set()} seenFamilies={seen} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(tree(new Set()));
+    await screen.findByText("Cursor");
+    await clickSetUp("Cursor");
+    expect(await within(rowFor("Cursor")).findByText("Added")).toBeInTheDocument();
+
+    rerender(tree(new Set(["cursor"])));
+
+    const row = rowFor("Cursor");
+    expect(await within(row).findByText("Connected")).toBeInTheDocument();
+    expect(within(row).queryByText("Added")).not.toBeInTheDocument();
+    expect(within(row).getByRole("status")).toHaveTextContent("Connected. Cursor has reached Wenlan.");
+  });
+
+  it("a failed Set up names the tool, classifies the failure, and keeps the raw text underneath", async () => {
+    mocks.writeMcpConfig.mockRejectedValue(new Error("permission denied: ~/.cursor/mcp.json"));
+    renderList();
+    await screen.findByText("Cursor");
+    await clickSetUp("Cursor");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't add Wenlan to Cursor. Wenlan was not allowed to do this.");
+    expect(screen.getByTestId("client-row-error-detail-cursor")).toHaveTextContent(
+      "permission denied: ~/.cursor/mcp.json",
+    );
+    // The row stays actionable, so the user can try again.
+    expect(within(rowFor("Cursor")).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["zh-Hans", "无法将文澜添加到 Cursor。", "文澜没有权限执行这项操作。", "添加"],
+    ["zh-Hant", "無法將文瀾新增到 Cursor。", "文瀾沒有權限執行這項操作。", "新增"],
+  ])("a failed Set up is localized in %s, with the raw text kept verbatim", async (lng, sentence, heading) => {
+    await i18n.changeLanguage(lng);
+    try {
+      mocks.writeMcpConfig.mockRejectedValue(new Error("permission denied: ~/.cursor/mcp.json"));
+      renderList();
+      await screen.findByText("Cursor");
+      const row = rowFor("Cursor");
+      await userEvent.click(within(row).getAllByRole("button")[0]);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(sentence);
+      expect(alert).toHaveTextContent(heading);
+      expect(alert).not.toHaveTextContent("Couldn't");
+      expect(screen.getByTestId("client-row-error-detail-cursor")).toHaveTextContent(
+        "permission denied: ~/.cursor/mcp.json",
+      );
+    } finally {
+      await i18n.changeLanguage("en");
+    }
+  });
+});
+
+// ── C2: the daemon's install and entry checks (C1's optional fields) ──────
+
+const BASE = {
+  name: "Cursor",
+  client_type: "cursor",
+  config_path: "~/.cursor/mcp.json",
+  detected: YES,
+  already_configured: YES,
+  has_raw_entry: YES,
+  has_raw_duplicate: NO,
+  has_plugin: NO,
+};
+
+describe("ClientSetupList — repair and install state", () => {
+  afterEach(() => Object.values(mocks).forEach((m) => m.mockReset()));
+  beforeEach(async () => {
+    await i18n.changeLanguage("en");
+    mocks.writeMcpConfig.mockResolvedValue([]);
+    mocks.installClientPlugin.mockResolvedValue(undefined);
+  });
+
+  const REASONS = [
+    ["command_missing", "Wenlan's entry in Cursor has no command to start it."],
+    ["command_not_found", "Wenlan's entry in Cursor points to a program that is no longer there."],
+    ["command_not_runnable", "Wenlan's entry in Cursor points to a program that can't be run."],
+    ["args_invalid", "Wenlan's entry in Cursor has start-up arguments that don't look right."],
+  ] as const;
+
+  it.each(REASONS)("needs_repair (%s) shows a localized line, a Repair button, and never the Rust detail", async (reason, line) => {
+    mocks.detectMcpClients.mockResolvedValue([
+      {
+        ...BASE,
+        entry_health: { kind: "needs_repair", reason, detail: "RUST-ONLY-ENGLISH-DETAIL /usr/bin/x" },
+      },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByText(line)).toBeInTheDocument();
+    expect(within(row).getByText("Needs repair")).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Repair" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+    // Not "Added": restarting a tool whose entry cannot start fixes nothing.
+    expect(within(row).queryByText("Added")).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("RUST-ONLY-ENGLISH-DETAIL");
+  });
+
+  it("Repair rewrites the entry through write_mcp_config and then asks for a restart", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, entry_health: { kind: "needs_repair", reason: "command_not_found", detail: "x" } },
+    ]);
+    renderList();
+    await screen.findByText("Cursor");
+
+    await userEvent.click(within(rowFor("Cursor")).getByRole("button", { name: "Repair" }));
+
+    expect(mocks.writeMcpConfig).toHaveBeenCalledWith("cursor");
+    expect(mocks.installClientPlugin).not.toHaveBeenCalled();
+    const row = rowFor("Cursor");
+    expect(await within(row).findByRole("status")).toHaveTextContent("Repaired. Restart Cursor to finish.");
+    expect(within(row).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+  });
+
+  it("Repair on a plugin client rewrites the existing raw entry and never installs a second plugin", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      {
+        ...BASE,
+        name: "Claude Code",
+        client_type: "claude_code",
+        config_path: "~/.claude.json",
+        entry_health: { kind: "needs_repair", reason: "command_not_runnable", detail: "x" },
+      },
+    ]);
+    renderList();
+    await screen.findByText("Claude Code");
+
+    await userEvent.click(within(rowFor("Claude Code")).getByRole("button", { name: "Repair" }));
+
+    expect(mocks.writeMcpConfig).toHaveBeenCalledWith("claude_code");
+    expect(mocks.installClientPlugin).not.toHaveBeenCalled();
+  });
+
+  it("a broken entry stays listed even when its family is already connected", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, entry_health: { kind: "needs_repair", reason: "command_missing", detail: "x" } },
+    ]);
+    renderList(undefined, new Set(["cursor"]), new Set(["cursor"]));
+
+    await screen.findByText("Cursor");
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+    expect(within(rowFor("Cursor")).getByRole("button", { name: "Repair" })).toBeInTheDocument();
+  });
+
+  it("a failed Repair says it could not repair, not that it could not add", async () => {
+    mocks.writeMcpConfig.mockRejectedValue(new Error("permission denied"));
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, entry_health: { kind: "needs_repair", reason: "command_missing", detail: "x" } },
+    ]);
+    renderList();
+    await screen.findByText("Cursor");
+
+    await userEvent.click(within(rowFor("Cursor")).getByRole("button", { name: "Repair" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Couldn't repair Wenlan in Cursor.");
+    expect(alert).not.toHaveTextContent("Couldn't add");
+    expect(within(rowFor("Cursor")).getByRole("button", { name: "Repair" })).toBeInTheDocument();
+  });
+
+  it("an entry that could not be read says so and offers no Repair", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      {
+        ...BASE,
+        entry_health: { kind: "unreadable", error: "RUST-ONLY-ENGLISH-ERROR (os error 5)" },
+      },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByTestId("client-row-entry-unreadable-cursor")).toHaveTextContent(
+      "Can't read this tool's settings, so Wenlan can't tell whether its entry works.",
+    );
+    expect(within(row).queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("RUST-ONLY-ENGLISH-ERROR");
+  });
+
+  // The chip and the localized line said the same thing, the chip in raw
+  // English ("SETUP STATE UNKNOWN · PERMISSION DENIED"). With the line on the
+  // row, the chip keeps only its localized label.
+  it("an unreadable entry keeps the raw OS detail out of the setup-state chip", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      {
+        ...BASE,
+        already_configured: unreadable("Permission denied (os error 13)"),
+        entry_health: { kind: "unreadable", error: "Permission denied (os error 13)" },
+      },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByText("Setup state unknown")).toBeInTheDocument();
+    expect(within(row).getByTestId("client-row-entry-unreadable-cursor")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Permission denied");
+    expect(document.body.textContent).not.toContain("os error 13");
+  });
+
+  it("without the localized line, the setup-state chip still shows its raw detail", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, already_configured: unreadable("Permission denied (os error 13)") },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByText(/Setup state unknown · Permission denied \(os error 13\)/)).toBeInTheDocument();
+    expect(within(row).queryByTestId("client-row-entry-unreadable-cursor")).not.toBeInTheDocument();
+  });
+
+  it("config_only does not claim the tool is installed, and Set up is still offered", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, already_configured: NO, has_raw_entry: NO, install_state: { kind: "config_only" } },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByText("Settings found, app not found")).toBeInTheDocument();
+    expect(within(row).queryByText(/installed/i)).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["no_entry", { kind: "no_entry" }],
+    ["healthy", { kind: "healthy" }],
+  ] as const)("entry_health %s adds nothing to the row", async (_name, health) => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...BASE, already_configured: NO, has_raw_entry: NO, entry_health: health, install_state: { kind: "installed" } },
+    ]);
+    renderList();
+
+    await screen.findByText("Cursor");
+    const row = rowFor("Cursor");
+    expect(within(row).getByRole("button", { name: "Set up" })).toBeInTheDocument();
+    expect(within(row).queryByText("Needs repair")).not.toBeInTheDocument();
+    expect(within(row).queryByText("Settings found, app not found")).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("client-row-entry-unreadable-cursor")).not.toBeInTheDocument();
+  });
+
+  it("without the fields (an older daemon or a mock) a configured client behaves exactly as before", async () => {
+    mocks.detectMcpClients.mockResolvedValue([BASE]);
+    renderList();
+
+    expect(await screen.findByText("Every detected tool is added.")).toBeInTheDocument();
+    expect(screen.queryByText("Needs repair")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repair" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["zh-Hans", "需要修复", "修复", "Cursor 中的文澜配置指向的程序已经不存在。"],
+    ["zh-Hant", "需要修復", "修復", "Cursor 中的文瀾設定指向的程式已經不存在。"],
+  ])("the repair row is localized in %s", async (lng, chip, button, line) => {
+    await i18n.changeLanguage(lng);
+    try {
+      mocks.detectMcpClients.mockResolvedValue([
+        { ...BASE, entry_health: { kind: "needs_repair", reason: "command_not_found", detail: "x" } },
+      ]);
+      renderList();
+      await screen.findByText("Cursor");
+      const row = rowFor("Cursor");
+      expect(within(row).getByText(chip)).toBeInTheDocument();
+      expect(within(row).getByRole("button", { name: button })).toBeInTheDocument();
+      expect(within(row).getByText(line)).toBeInTheDocument();
+    } finally {
+      await i18n.changeLanguage("en");
+    }
   });
 });

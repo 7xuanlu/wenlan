@@ -601,6 +601,50 @@ describe("SetupWizard", () => {
     );
   });
 
+  // A leftover settings folder is not an installed app. Preselecting it made
+  // Continue write an entry for a tool that is not there, and the Done screen
+  // then asked the user to restart it. The row says what was found, the box
+  // starts empty, and the user can still tick it.
+  it("a config-only tool (settings found, app not found) is not preselected but can be ticked", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Windsurf",
+        client_type: "windsurf",
+        config_path: "/path/to/windsurf/mcp_config.json",
+        detected: YES,
+        already_configured: NO,
+        has_raw_entry: NO,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+        install_state: { kind: "config_only" },
+      },
+      {
+        name: "Cursor",
+        client_type: "cursor",
+        config_path: "/path/to/cursor",
+        detected: YES,
+        already_configured: NO,
+        has_raw_entry: NO,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+        install_state: { kind: "installed" },
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    const windsurf = await screen.findByLabelText("Windsurf");
+    // The sibling that IS installed keeps its preselection, so this is not
+    // "nothing is preselected any more".
+    await waitFor(() => expect(screen.getByLabelText("Cursor")).toBeChecked());
+    expect(windsurf).not.toBeChecked();
+    expect(screen.getByText("Settings found, app not found")).toBeInTheDocument();
+
+    // Still the user's call.
+    fireEvent.click(windsurf);
+    expect(windsurf).toBeChecked();
+  });
+
   it("only detected tools render a row — an undetected tool is invisible, not a disabled row", async () => {
     (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
       {
@@ -698,7 +742,7 @@ describe("SetupWizard", () => {
     });
     expect(screen.getByText("Setting up")).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Configured");
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
     });
     expect(installClientPlugin).not.toHaveBeenCalledWith("cursor");
   });
@@ -980,7 +1024,7 @@ describe("SetupWizard", () => {
     // Settle on a real state change first — otherwise the "did not advance"
     // assertions below could pass simply by running before anything happened.
     await waitFor(() => {
-      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Configured");
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
     });
 
     expect(screen.getByText("Setting up")).toBeInTheDocument();
@@ -1041,7 +1085,7 @@ describe("SetupWizard", () => {
   // Redesign spec §4/§12: Remote Access left the wizard entirely — it's a
   // Settings-only surface now, alongside the single consolidated no-auth
   // warning (see RemoteAccessPanel.test.tsx and AgentsSection.test.tsx).
-  // The wizard instead points at Settings → Agents for it and every other
+  // The wizard instead points at Settings → Connections for it and every other
   // web tool (assertion lives in the settingsPointer test below).
   it("does not render Remote Access — it lives only in Settings now", async () => {
     renderWizard({ initialStep: "connect" });
@@ -1051,12 +1095,12 @@ describe("SetupWizard", () => {
     expect(screen.queryByText(/Share with web-based AI tools/i)).not.toBeInTheDocument();
   });
 
-  it("points at Settings → Agents for Claude.ai, ChatGPT, and anything not listed", async () => {
+  it("points at Settings → Connections for Claude.ai, ChatGPT, and anything not listed", async () => {
     renderWizard({ initialStep: "connect" });
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Claude.ai, ChatGPT, and more tools can be connected any time in Settings → Agents.",
+          "Claude.ai, ChatGPT, and more tools can be connected any time in Settings → Connections.",
         ),
       ).toBeInTheDocument();
     });
@@ -1130,7 +1174,7 @@ describe("SetupWizard", () => {
     // Exactly one badge, on Cursor's row — Windsurf isn't configured yet and
     // must not render a second one. The badge is the affordance; `disabled`
     // never is.
-    expect(screen.getAllByText("Configured")).toHaveLength(1);
+    expect(screen.getAllByText("Added")).toHaveLength(1);
     expect(screen.getByText("Already set up. Uncheck to leave it as it is.")).toBeInTheDocument();
     expect(cursorCheckbox).toBeEnabled();
 
@@ -1218,7 +1262,7 @@ describe("SetupWizard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("task-status-gemini_cli")).toHaveTextContent("Configured");
+      expect(screen.getByTestId("task-status-gemini_cli")).toHaveTextContent("Added");
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -1252,7 +1296,7 @@ describe("SetupWizard", () => {
     renderWizard({ initialStep: "connect" });
 
     await waitFor(() => {
-      expect(screen.getByText("Configured")).toBeInTheDocument();
+      expect(screen.getByText("Added")).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
 
@@ -2154,7 +2198,7 @@ describe("SetupWizard", () => {
 
     // The tool got configured anyway — that is the whole point.
     await waitFor(() => {
-      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Configured");
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
     });
     expect(writeMcpConfig).toHaveBeenCalledWith("cursor");
 
@@ -2185,10 +2229,10 @@ describe("SetupWizard", () => {
     }
   });
 
-  // A daemon is not "Configured" — it runs. One flat done-word for every row
+  // A daemon is not "Added" — it runs. One flat done-word for every row
   // kind said the wrong thing about the runtime, the model and the import.
   // Caught by looking at the running app, not by any test, so pin it now.
-  it("each finished row says what it actually finished — the runtime runs, it is not 'Configured'", async () => {
+  it("each finished row says what it actually finished — the runtime runs, it is not 'Added'", async () => {
     (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
       daemon: {
         base_url: "http://127.0.0.1:7878",
@@ -2222,11 +2266,11 @@ describe("SetupWizard", () => {
     await waitFor(() => {
       expect(screen.getByTestId("task-status-daemon")).toHaveTextContent("Running");
     });
-    expect(screen.getByTestId("task-status-daemon")).not.toHaveTextContent("Configured");
+    expect(screen.getByTestId("task-status-daemon")).not.toHaveTextContent("Added");
 
     // And a client that IS configured stops claiming it is still being added.
     await waitFor(() => {
-      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Configured");
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
     });
     expect(screen.getByText("Wenlan is in Cursor's configuration file.")).toBeInTheDocument();
   });
@@ -3116,5 +3160,266 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Open Wenlan" }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(2));
     error.mockRestore();
+  });
+});
+
+// "Added" is Wenlan's side only (the config or plugin was written). "Connected"
+// needs a sighting: an agent in the tool's family that called Wenlan after the
+// wizard started. These pin that the two words are never swapped.
+describe("DoneStep and Setting up: Added versus Connected", () => {
+  const NOW = () => Math.floor(Date.now() / 1000);
+
+  function renderDoneWith(connectedAgents: string[], seenSince: number | undefined) {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <DoneStep
+          wireRouting={false}
+          hideDots={false}
+          importResult={null}
+          chatImportResult={null}
+          connectedAgents={connectedAgents}
+          seenSince={seenSince}
+          onComplete={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    await i18n.changeLanguage("en");
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (getBackgroundAiEnabled as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (getResolvedRouting as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+  });
+
+  it("a tool that was only written reads Added, never Connected", async () => {
+    renderDoneWith(["cursor"], NOW());
+
+    const added = await screen.findByTestId("done-added-agents");
+    expect(within(added).getByText("Added. Restart to finish:")).toBeInTheDocument();
+    expect(within(added).getByText("Cursor")).toBeInTheDocument();
+    expect(screen.queryByTestId("done-connected-agents")).not.toBeInTheDocument();
+    expect(screen.queryByText("Connected:")).not.toBeInTheDocument();
+  });
+
+  it("a tool that called Wenlan after the wizard started reads Connected", async () => {
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: FRESH(), memory_count: 0 },
+    ]);
+
+    renderDoneWith(["cursor"], NOW());
+
+    const connected = await screen.findByTestId("done-connected-agents");
+    expect(within(connected).getByText("Connected:")).toBeInTheDocument();
+    expect(within(connected).getByText("Cursor")).toBeInTheDocument();
+    expect(screen.queryByTestId("done-added-agents")).not.toBeInTheDocument();
+  });
+
+  it("an older sighting does not vouch for the config the wizard just wrote", async () => {
+    // A second, fresh sighting proves the agents query has been applied before
+    // the negative is asserted: without it the check would run against the
+    // empty first render and pass whatever the cutoff does.
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: STALE(), memory_count: 9 },
+      { name: "codex-mcp-client", agent_type: "", last_seen_at: FRESH(), memory_count: 0 },
+    ]);
+
+    renderDoneWith(["cursor", "codex_cli"], NOW());
+
+    const connected = await screen.findByTestId("done-connected-agents");
+    const added = await screen.findByTestId("done-added-agents");
+    expect(within(connected).getByText("Codex CLI")).toBeInTheDocument();
+    expect(within(connected).queryByText("Cursor")).not.toBeInTheDocument();
+    expect(within(added).getByText("Cursor")).toBeInTheDocument();
+  });
+
+  // `last_seen_at` and the wizard's entry time are both whole epoch seconds. A
+  // strict `>` meant a tool that called Wenlan in the very second the wizard
+  // opened was never Connected. The cutoff is inclusive; one second earlier is
+  // still before the wizard.
+  it("a call in the same second the wizard opened reads Connected", async () => {
+    const entered = NOW();
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: entered, memory_count: 0 },
+    ]);
+
+    renderDoneWith(["cursor"], entered);
+
+    const connected = await screen.findByTestId("done-connected-agents");
+    expect(within(connected).getByText("Cursor")).toBeInTheDocument();
+    expect(screen.queryByTestId("done-added-agents")).not.toBeInTheDocument();
+  });
+
+  it("a call one second before the wizard opened still reads Added", async () => {
+    const entered = NOW();
+    // The same-second sighting is the anchor: once Codex CLI reads Connected
+    // the agents query has been applied, so Cursor still reading Added is a
+    // result and not a render that had not caught up.
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: entered - 1, memory_count: 0 },
+      { name: "codex-mcp-client", agent_type: "", last_seen_at: entered, memory_count: 0 },
+    ]);
+
+    renderDoneWith(["cursor", "codex_cli"], entered);
+
+    const connected = await screen.findByTestId("done-connected-agents");
+    const added = await screen.findByTestId("done-added-agents");
+    expect(within(connected).getByText("Codex CLI")).toBeInTheDocument();
+    expect(within(added).getByText("Cursor")).toBeInTheDocument();
+    expect(within(connected).queryByText("Cursor")).not.toBeInTheDocument();
+  });
+
+  it("splits a mixed set: the seen tool is Connected and the unseen one stays Added", async () => {
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "codex-mcp-client", agent_type: "", last_seen_at: FRESH(), memory_count: 0 },
+    ]);
+
+    renderDoneWith(["codex_cli", "cursor"], NOW());
+
+    const connected = await screen.findByTestId("done-connected-agents");
+    const added = await screen.findByTestId("done-added-agents");
+    expect(within(connected).getByText("Codex CLI")).toBeInTheDocument();
+    expect(within(added).getByText("Cursor")).toBeInTheDocument();
+    expect(within(added).queryByText("Codex CLI")).not.toBeInTheDocument();
+    expect(within(connected).queryByText("Cursor")).not.toBeInTheDocument();
+  });
+
+  it("without a cutoff any sighting counts, so a returning user's tool reads Connected", async () => {
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: STALE(), memory_count: 0 },
+    ]);
+
+    renderDoneWith(["cursor"], undefined);
+
+    await screen.findByTestId("done-connected-agents");
+  });
+
+  it("the Setting up row flips from Added to Connected on a fresh sighting", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Cursor",
+        client_type: "cursor",
+        config_path: "/path/to/cursor",
+        detected: YES,
+        already_configured: NO,
+        has_raw_entry: NO,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    const cursorCheckbox = await screen.findByRole("checkbox", { name: "Cursor" });
+    await waitFor(() => expect(cursorCheckbox).toBeChecked());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
+    });
+    expect(screen.getByTestId("task-status-cursor")).not.toHaveTextContent("Connected");
+
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: FRESH(), memory_count: 0 },
+    ]);
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Connected");
+      },
+      { timeout: 6000 },
+    );
+  });
+
+  it("the Setting up row counts a call in the same second the wizard opened, not one second before", async () => {
+    const client = (name: string, client_type: string) => ({
+      name,
+      client_type,
+      config_path: `/path/to/${client_type}`,
+      detected: YES,
+      already_configured: NO,
+      has_raw_entry: NO,
+      has_raw_duplicate: NO,
+      has_plugin: NO,
+    });
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      client("Cursor", "cursor"),
+      client("Claude Desktop", "claude_desktop"),
+    ]);
+    // Pin the clock (Date only) so "the second the wizard opened" is exact.
+    const enteredAt = 1_800_000_000;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(enteredAt * 1000 + 400));
+    try {
+      renderWizard({ initialStep: "connect" });
+
+      await waitFor(() => expect(screen.getByRole("checkbox", { name: "Cursor" })).toBeChecked());
+      fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+      await waitFor(() => {
+        expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
+        expect(screen.getByTestId("task-status-claude_desktop")).toHaveTextContent("Added");
+      });
+
+      (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { name: "cursor", agent_type: "", last_seen_at: enteredAt, memory_count: 0 },
+        { name: "claude-desktop", agent_type: "", last_seen_at: enteredAt - 1, memory_count: 0 },
+      ]);
+      await waitFor(
+        () => {
+          expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Connected");
+        },
+        { timeout: 6000 },
+      );
+      expect(screen.getByTestId("task-status-claude_desktop")).toHaveTextContent("Added");
+      expect(screen.getByTestId("task-status-claude_desktop")).not.toHaveTextContent("Connected");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the Setting up row ignores a sighting from before the wizard started", async () => {
+    const client = (name: string, client_type: string) => ({
+      name,
+      client_type,
+      config_path: `/path/to/${client_type}`,
+      detected: YES,
+      already_configured: NO,
+      has_raw_entry: NO,
+      has_raw_duplicate: NO,
+      has_plugin: NO,
+    });
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      client("Cursor", "cursor"),
+      client("Claude Desktop", "claude_desktop"),
+    ]);
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: STALE(), memory_count: 9 },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Cursor" })).toBeChecked());
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
+      expect(screen.getByTestId("task-status-claude_desktop")).toHaveTextContent("Added");
+    });
+
+    // Claude Desktop's fresh sighting is the anchor: once it reads Connected
+    // the poll has been applied, so Cursor still reading Added is a result,
+    // not a render that had not caught up.
+    (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: "cursor", agent_type: "", last_seen_at: STALE(), memory_count: 9 },
+      { name: "claude-desktop", agent_type: "", last_seen_at: FRESH(), memory_count: 0 },
+    ]);
+    await waitFor(
+      () => {
+        expect(screen.getByTestId("task-status-claude_desktop")).toHaveTextContent("Connected");
+      },
+      { timeout: 6000 },
+    );
+    expect(screen.getByTestId("task-status-cursor")).toHaveTextContent("Added");
+    expect(screen.getByTestId("task-status-cursor")).not.toHaveTextContent("Connected");
   });
 });

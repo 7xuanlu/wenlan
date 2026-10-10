@@ -43,6 +43,7 @@ mod genesis_schema;
 #[cfg(test)]
 pub(crate) use genesis_schema::GENESIS_SUBSTRATE_DDL;
 mod activity_counts;
+mod agent_presence;
 mod kg_quality_diagnostics;
 mod kg_quality_duplicate_candidates;
 mod kg_quality_embedding_refresh;
@@ -86,6 +87,7 @@ mod space_context;
 mod space_rename;
 mod truth_exposure;
 
+pub use agent_presence::{presence_agent_id, AgentPresence};
 pub(crate) use community_grouping_state::CommunityGroupingLeaseCleanup;
 pub(crate) use eval_temporal_seed::EvalTemporalSeed;
 pub(crate) use kg_quality_diagnostics::ContradictionObservationCount;
@@ -103,6 +105,8 @@ pub use truth_exposure::{
     TRUTH_CUTOVER_GENERATION_KEY,
 };
 
+#[cfg(test)]
+mod agent_presence_test;
 #[cfg(test)]
 mod brief_test;
 #[cfg(test)]
@@ -1948,6 +1952,20 @@ pub fn known_client_display_name(canonical: &str) -> Option<&'static str> {
         .iter()
         .find(|(k, _)| *k == canonical)
         .map(|(_, v)| *v)
+}
+
+/// The `display_name` a newly created agent row stores: the caller's own
+/// label, trimmed, when it differs from the canonical id, otherwise the
+/// friendly name of a known client. Shared by the write-path registration and
+/// the read-path presence insert so both create identical rows, including for
+/// a padded label such as `" Cursor "`.
+fn new_agent_display_name(raw_label: &str, canonical: &str) -> Option<String> {
+    let label = raw_label.trim();
+    if canonical != label {
+        Some(label.to_string())
+    } else {
+        known_client_display_name(canonical).map(|s| s.to_string())
+    }
 }
 
 /// Normalize an agent name into its canonical technical form.
@@ -43311,11 +43329,6 @@ impl MemoryDB {
         // collapse to one row. The caller's original label — if it differs —
         // is promoted to `display_name` for UI.
         let canonical = canonicalize_agent_id(name);
-        let original_label = if canonical != name.trim().to_lowercase() || canonical != name {
-            Some(name.to_string())
-        } else {
-            None
-        };
         let conn = self.conn.lock().await;
         let mut rows = conn
             .query(
@@ -43337,9 +43350,7 @@ impl MemoryDB {
 
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp();
-        let display_name_to_store = original_label
-            .clone()
-            .or_else(|| known_client_display_name(&canonical).map(|s| s.to_string()));
+        let display_name_to_store = new_agent_display_name(name, &canonical);
         // Default new registrations to `"full"`. Rationale: on a single-user
         // local server, registration IS the trust gesture — if you ran the
         // SetupWizard for this agent, you want it to see your identity and
@@ -43425,7 +43436,11 @@ impl MemoryDB {
         let canonical = canonicalize_agent_id(name);
         let conn = self.conn.lock().await;
         let now = chrono::Utc::now().timestamp();
-        let mut sets = vec!["updated_at = ?1".to_string()];
+        // `MAX(.., created_at + 1)` makes every edit strictly later than the
+        // row's creation, even inside the same second. `updated_at =
+        // created_at` is the "no human or write has touched this row" marker
+        // that `agent_presence` relies on to promote a read-created row.
+        let mut sets = vec!["updated_at = MAX(?1, created_at + 1)".to_string()];
         let mut params: Vec<libsql::Value> = vec![now.into()];
         if let Some(at) = agent_type {
             params.push(at.into());
@@ -43500,8 +43515,16 @@ impl MemoryDB {
                 agent_name
             )));
         }
+        // A row the read path created (`agent_presence`) starts at "unknown";
+        // its first write promotes it to the "full" a write-only first
+        // contact gets, but only while nobody has touched the row since.
+        let trust_level = if agent.trust_level == "unknown" {
+            self.promote_untouched_read_agent(agent_name).await?
+        } else {
+            agent.trust_level
+        };
         self.touch_agent(agent_name).await?;
-        Ok(agent.trust_level)
+        Ok(trust_level)
     }
 
     /// Convenience wrapper for Option<&str> source_agent.

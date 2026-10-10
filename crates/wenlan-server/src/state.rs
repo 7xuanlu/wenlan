@@ -172,6 +172,10 @@ pub struct ServerState {
     /// Process-local, opt-in anonymous product telemetry. The default is inert
     /// so router/unit tests never persist consent or issue network requests.
     pub telemetry: Arc<Telemetry>,
+    /// Once-per-window gate for the best-effort "agent seen" write the search
+    /// routes make (`agent_presence`). In-memory only; a restart just allows
+    /// one more write per agent.
+    pub agent_presence: Arc<crate::agent_presence::AgentPresenceThrottle>,
 }
 
 impl Default for ServerState {
@@ -209,6 +213,7 @@ impl Default for ServerState {
             ambient_gate: Arc::new(std::sync::Mutex::new(None)),
             ambient_run_lock: Arc::new(Mutex::new(())),
             telemetry: Arc::new(Telemetry::disabled()),
+            agent_presence: Arc::default(),
         }
     }
 }
