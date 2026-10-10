@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { PairingStore } from './pairing.ts';
-import { authorizationRead, connectorBinding, forwardQuery, LocalDeviceUnavailableResponse, readQueryBody, type ConnectorRoute, type ProxyOptions, type QueryGrant } from './proxy.ts';
+import { authorizationRead, connectorBinding, forwardQuery, LocalDeviceUnavailableResponse, readQueryBody, routeDenial, routeDenialResponse, type ConnectorRoute, type ProxyOptions, type QueryGrant } from './proxy.ts';
 import { hashSecret, randomSecret, validSecret } from './secrets.ts';
 
 /** Supplied only by the verified OAuth token summary; stable across refresh. */
@@ -14,6 +14,7 @@ export interface SessionRecord {
   active: boolean;
 }
 const key = (id: string) => `mcp-session:${id}`;
+class RouteDenied extends Error {}
 const MAX_SESSION_MS = 24 * 60 * 60 * 1000;
 const error = (status: number, message: string) => Response.json({ error: message }, {
   status, headers: { 'cache-control': 'no-store' },
@@ -46,12 +47,12 @@ export async function forwardSessionQuery(
     grant.subject, grant.connectorId, grant.space, grant.generation]));
   let session: SessionRecord | undefined;
   let routeHash: string;
+  let denial: { kind: 'offline' | 'revoked'; route: ConnectorRoute | null } | undefined;
   try {
     const route = await authorizationRead(() => options.loadRoute(grant.connectorId));
-    if (!route || !route.enabled || route.subject !== grant.subject || route.id !== grant.connectorId
-      || route.space !== grant.space || route.generation !== grant.generation || route.expiresAt <= now()) {
-      return error(403, 'Connection is not authorized');
-    }
+    const kind = routeDenial(route, grant, now());
+    if (kind) denial = { kind, route };
+    if (!route || denial) throw new RouteDenied();
     // Backend restart/credential changes cannot silently rebind an old session.
     routeHash = await hashSecret(connectorBinding(route));
     if (id) {
@@ -59,7 +60,14 @@ export async function forwardSessionQuery(
       if (!session || !session.active || session.owner !== owner || session.route !== routeHash
         || session.expiresAt <= now()) return error(404, 'MCP session unavailable');
     }
-  } catch { return error(503, 'Connector unavailable'); }
+  } catch (failure) {
+    if (failure instanceof RouteDenied && denial) {
+      // The grant check runs without a session: a dead grant re-runs OAuth.
+      return routeDenialResponse(denial.kind, denial.route,
+        { ...options, grantActive: options.grantActive ?? options.authorize });
+    }
+    return error(503, 'Connector unavailable');
+  }
   const headers = new Headers(request.headers);
   headers.delete('mcp-session-id');
   if (session) headers.set('mcp-session-id', session.backendId);
@@ -72,7 +80,8 @@ export async function forwardSessionQuery(
     return !!current && current.active && current.owner === owner && current.route === routeHash
       && current.backendId === session.backendId && current.expiresAt > now();
   };
-  const response = await forwardQuery(forwarded, grant, { ...options, authorize });
+  const response = await forwardQuery(forwarded, grant, { ...options, authorize,
+    grantActive: options.grantActive ?? options.authorize });
   if (response instanceof LocalDeviceUnavailableResponse) return response;
   const deactivate = () => authorizationRead(() => store.transaction(async tx => {
     const current = session ? await tx.get<SessionRecord>(key(session.id)) : undefined;

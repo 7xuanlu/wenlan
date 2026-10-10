@@ -20,6 +20,11 @@ interface Env extends PublicEnv {
 }
 
 const RATE_WINDOW_CAP = 4096;
+/** Authorized /mcp requests per OAuth grant per minute, after the per-peer
+ * and global limits. Bounds one connected client regardless of its IPs.
+ */
+const GRANT_REQUESTS_PER_MINUTE = 120;
+interface RateWindow { key: string; max: number; expires: number }
 
 /** One v1 authorization authority: device state and consent share a transaction
  * domain. Do not shard these independently or bind to the legacy route service.
@@ -52,7 +57,8 @@ export class RelayAuthority extends DurableObject<Env> {
         (grantId, subject) => this.provider.revokeStoredGrant(env, grantId, subject)),
     }, {
       fetch: (request, env) => forwardOAuthQuery(request, env.OAUTH_PROVIDER, env.PUBLIC_ORIGIN, loadRoute, this.store,
-        undefined, (id, request, deviceId) => this.reverseFetch(deviceId, id, request)),
+        undefined, (id, request, deviceId) => this.reverseFetch(deviceId, id, request),
+        { limitGrant: grantId => this.limitGrant(grantId) }),
     }, loadRoute, this.store);
   }
 
@@ -143,7 +149,7 @@ export class RelayAuthority extends DurableObject<Env> {
     const now = Date.now();
     const minute = Math.floor(now / 60_000);
     const hour = Math.floor(now / 3_600_000);
-    const windows = [
+    const windows: RateWindow[] = [
       { key: `global:${minute}`, max: 600, expires: (minute + 1) * 60_000 },
       { key: `peer:${peer}:${minute}`, max: 120, expires: (minute + 1) * 60_000 },
     ];
@@ -161,6 +167,19 @@ export class RelayAuthority extends DurableObject<Env> {
         expires: (day + 1) * 86_400_000,
       });
     }
+    return this.consume(windows, now);
+  }
+
+  /** Runs only after the bearer token was verified, keyed by its grant. */
+  private async limitGrant(grantId: string): Promise<number> {
+    const now = Date.now();
+    const minute = Math.floor(now / 60_000);
+    const grant = await hashSecret(grantId.slice(0, 256));
+    return this.consume([{ key: `grant:${grant}:${minute}`, max: GRANT_REQUESTS_PER_MINUTE,
+      expires: (minute + 1) * 60_000 }], now);
+  }
+
+  private async consume(windows: RateWindow[], now: number): Promise<number> {
     const retryAfter = this.state.storage.transactionSync(() => {
       const rows = windows.map(window => ({
         window,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { forwardQuery, tunnelOrigin, type QueryGrant, type ConnectorRoute } from '../src/proxy.ts';
+import { forwardQuery, routeDenial, TOOL_UNAVAILABLE_TEXT, tunnelOrigin, type QueryGrant, type ConnectorRoute } from '../src/proxy.ts';
 
 const publicOrigin = 'https://relay.example';
 const now = 1_000;
@@ -77,13 +77,62 @@ test('cancelling a request interrupts a stalled body before any forwarding', asy
   assert.equal(state.calls.length, 0);
 });
 
-test('cross-user, scope, device, generation, revoked and expired routes fail closed', async () => {
+const CHALLENGE = `Bearer resource_metadata="${publicOrigin}/.well-known/oauth-protected-resource/mcp", error="invalid_token", scope="wenlan:query"`;
+
+test('cross-user, scope, device, generation and revoked routes fail closed with an OAuth challenge', async () => {
   for (const bad of [null, { ...route, subject: 'bob' }, { ...route, space: 'personal' },
-    { ...route, id: 'bob-device' }, { ...route, generation: 2 }, { ...route, enabled: false },
-    { ...route, expiresAt: now }]) {
+    { ...route, id: 'bob-device' }, { ...route, generation: 2 }, { ...route, enabled: false }]) {
     const state = setup(bad);
-    assert.equal((await forwardQuery(request(), grant, state.options)).status, 403);
+    const response = await forwardQuery(request(), grant, state.options);
+    assert.equal(response.status, 401);
+    // A dead grant sends the client back through OAuth, which lands in pairing.
+    assert.equal(response.headers.get('www-authenticate'), CHALLENGE);
     assert.equal(state.calls.length, 0);
+  }
+});
+
+test('an expired route lease with a current grant is the friendly offline 503, not a reauthorization', async () => {
+  const state = setup({ ...route, expiresAt: now });
+  const offline = await forwardQuery(request(), grant, { ...state.options, grantActive: async () => true });
+  assert.equal(offline.status, 503);
+  assert.equal(offline.headers.get('www-authenticate'), null);
+  assert.deepEqual(await offline.json(), { error: TOOL_UNAVAILABLE_TEXT });
+  // Without a grant check (no OAuth context) the lease alone decides: offline.
+  assert.equal((await forwardQuery(request(), grant, setup({ ...route, expiresAt: now }).options)).status, 503);
+  // Lapsed lease AND a dead grant (consent gone, device expired): reauthorize.
+  const dead = await forwardQuery(request(), grant, { ...state.options, grantActive: async () => false });
+  assert.equal(dead.status, 401);
+  assert.equal(dead.headers.get('www-authenticate'), CHALLENGE);
+  // A storage failure while checking stays a sanitized 503, never a 401.
+  const failing = await forwardQuery(request(), grant, { ...state.options,
+    grantActive: async () => { throw new Error('PRIVATE_DB'); } });
+  assert.equal(failing.status, 503);
+  assert.equal(await failing.text(), '{"error":"Connector unavailable"}');
+  assert.equal(state.calls.length, 0);
+});
+
+test('a refused authorize is 401 only when the grant itself is dead; otherwise 403', async () => {
+  const state = setup();
+  const dead = await forwardQuery(request(), grant, { ...state.options,
+    authorize: async () => false, grantActive: async () => false });
+  assert.equal(dead.status, 401);
+  assert.equal(dead.headers.get('www-authenticate'), CHALLENGE);
+  const scoped = await forwardQuery(request(), grant, { ...state.options,
+    authorize: async () => false, grantActive: async () => true });
+  assert.equal(scoped.status, 403);
+  assert.equal(await scoped.text(), '{"error":"Connection is not authorized"}');
+  assert.equal((await forwardQuery(request(), grant, { ...state.options, authorize: async () => false })).status, 403);
+  assert.equal(state.calls.length, 0);
+});
+
+test('routeDenial separates an offline lease from a changed binding', () => {
+  assert.equal(routeDenial(route, grant, now), null);
+  assert.equal(routeDenial({ ...route, expiresAt: now }, grant, now), 'offline');
+  assert.equal(routeDenial({ ...route, expiresAt: Number.NaN }, grant, now), 'offline');
+  for (const bad of [null, undefined, { ...route, enabled: false }, { ...route, generation: 2 },
+    { ...route, space: 'personal' }, { ...route, subject: 'bob' }, { ...route, id: 'bob-device' },
+    { ...route, generation: 2, expiresAt: now }]) {
+    assert.equal(routeDenial(bad, grant, now), 'revoked');
   }
 });
 
@@ -161,7 +210,7 @@ test('every request reloads revocation state, including session GET and DELETE',
   enabled = false;
   for (const method of ['GET', 'DELETE']) {
     const req = new Request(`${publicOrigin}/mcp`, { method, headers: { 'mcp-session-id': 'session-1' } });
-    assert.equal((await forwardQuery(req, grant, options)).status, 403);
+    assert.equal((await forwardQuery(req, grant, options)).status, 401);
   }
   assert.equal(state.calls.length, 1);
 });
@@ -183,7 +232,8 @@ test('expiry and revocation during body upload are rechecked before dispatch', a
       headers: { 'content-type': 'application/json' } } as RequestInit);
     const response = await forwardQuery(req, grant, { ...state.options,
       now: () => clock, loadRoute: async () => ({ ...route, enabled }) });
-    assert.equal(response.status, change === 'expiry' ? 401 : 403);
+    assert.equal(response.status, 401);
+    if (change === 'revocation') assert.equal(response.headers.get('www-authenticate'), CHALLENGE);
     assert.equal(state.calls.length, 0);
   }
 });

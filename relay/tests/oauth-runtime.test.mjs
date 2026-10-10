@@ -304,7 +304,9 @@ test('real OAuth library requires pairing and enforces PKCE, resource and token 
     await t.test('device revocation prevents existing OAuth access reaching the connector', async () => {
       assert.equal(await (await post('/fixture/revoke', { deviceId: device.id,
         managementToken: device.managementToken })).json(), true);
-      assert.equal((await query(tokens.access_token)).status, 403);
+      const revoked = await query(tokens.access_token);
+      assert.equal(revoked.status, 401, 'a revoked device asks the client to re-authorize');
+      assert.match(revoked.headers.get('www-authenticate'), /error="invalid_token"/);
       assert.equal((await query('invalid')).status, 401);
       const rejected = await token({ grant_type: 'refresh_token', client_id: client.client_id,
         refresh_token: tokens.refresh_token, resource });
