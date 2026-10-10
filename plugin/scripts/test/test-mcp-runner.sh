@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Bash 3.2-compatible contract tests for wenlan-mcp-runner.sh resolution order.
 #
 # Byte-identical copies live in plugin/scripts/test and plugin-codex/bin/test;
