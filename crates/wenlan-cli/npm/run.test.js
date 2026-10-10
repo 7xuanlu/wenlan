@@ -15,6 +15,7 @@ const { afterEach, beforeEach, describe, test } = require("node:test");
 const {
   ASSET,
   BINARIES,
+  STAGING_PREFIX,
   cacheProblem,
   extractBinaries,
   installBinaries,
@@ -66,6 +67,24 @@ function harness({ latest = "v1.0.0", requestedTag = "", extractBody } = {}) {
       },
     },
   };
+}
+
+// Anything in the install dir or the archive dir that is not an installed
+// binary or the stamp: a staging directory or a downloaded archive.
+function leftovers() {
+  const installed = new Set([...BINARIES, ".wenlan-install.json"]);
+  return [
+    ...fs.readdirSync(dir).filter((name) => !installed.has(name)),
+    ...fs.readdirSync(archiveDir),
+  ];
+}
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
 }
 
 describe("installBinaries version cache", () => {
@@ -149,8 +168,9 @@ describe("installBinaries version cache", () => {
     assert.equal(readStamp(dir).tag, "v1.0.0");
   });
 
-  test("an interrupted extraction leaves no stamp, so the next run starts over", async () => {
+  test("an interrupted extraction leaves the previous install untouched and nothing behind", async () => {
     await installBinaries(harness().opts);
+    const before = fs.readFileSync(path.join(dir, "wenlan"), "utf8");
 
     const broken = harness({
       latest: "v1.1.0",
@@ -160,12 +180,40 @@ describe("installBinaries version cache", () => {
       },
     });
     await assert.rejects(installBinaries(broken.opts), /tar exited/);
-    assert.equal(readStamp(dir), null, "stale v1.0.0 stamp must not vouch for the partial v1.1.0 files");
+
+    // Extraction happens in a staging directory, so the v1.0.0 files are not
+    // half-overwritten and the v1.0.0 stamp still describes them truthfully.
+    assert.equal(readStamp(dir).tag, "v1.0.0");
+    assert.equal(cacheProblem(dir, "v1.0.0"), null);
+    assert.equal(fs.readFileSync(path.join(dir, "wenlan"), "utf8"), before);
+    assert.deepEqual(leftovers(), [], "no staging directory or archive survives");
 
     const next = harness({ latest: "v1.1.0" });
     await installBinaries(next.opts);
     assert.equal(next.calls.download.length, 1);
     assert.equal(readStamp(dir).tag, "v1.1.0");
+  });
+
+  test("a placement that dies halfway leaves no stamp, so the next run starts over", async () => {
+    await installBinaries(harness().opts);
+
+    const broken = harness({ latest: "v1.1.0" });
+    let placed = 0;
+    broken.opts.rename = (from, to) => {
+      placed += 1;
+      if (placed === 2) throw new Error("EIO: simulated crash between renames");
+      fs.renameSync(from, to);
+    };
+    await assert.rejects(installBinaries(broken.opts), /simulated crash/);
+
+    assert.equal(placed, 2);
+    assert.equal(readStamp(dir), null, "a stale v1.0.0 stamp must not vouch for a mix of v1.0.0 and v1.1.0 binaries");
+    assert.deepEqual(leftovers(), []);
+
+    const next = harness({ latest: "v1.1.0" });
+    await installBinaries(next.opts);
+    assert.equal(next.calls.download.length, 1);
+    assert.equal(cacheProblem(dir, "v1.1.0"), null);
   });
 
   test("a pinned tag never asks GitHub for the latest release", async () => {
@@ -222,6 +270,131 @@ describe("installBinaries version cache", () => {
     await assert.rejects(installBinaries(h.opts), /macOS Apple Silicon only/);
     assert.equal(fs.existsSync(dir), false);
     assert.equal(h.calls.latest, 0);
+  });
+});
+
+describe("installBinaries with another install running", () => {
+  // Distinct payload per process, and an extract that fails the way the real
+  // one does when its archive has been deleted or overwritten underneath it.
+  function process_(id, { parked, release } = {}) {
+    const h = harness();
+    h.archives = [];
+    h.opts.downloadFile = async (_url, dest) => {
+      h.archives.push(dest);
+      fs.writeFileSync(dest, `archive-${id}`);
+      if (parked) {
+        parked.resolve();
+        await release.promise;
+      }
+    };
+    h.opts.extract = (archive, into) => {
+      h.calls.extract += 1;
+      assert.equal(fs.readFileSync(archive, "utf8"), `archive-${id}`, `${id}'s archive was clobbered`);
+      for (const name of BINARIES) {
+        fs.writeFileSync(path.join(into, name), `#!/bin/sh\n# ${name} from ${id}\n`);
+      }
+    };
+    return h;
+  }
+
+  test("a second install that finishes first does not break the one still in flight", async () => {
+    const parked = deferred();
+    const release = deferred();
+    const slow = process_("slow", { parked, release });
+    const fast = process_("fast");
+
+    const slowRun = installBinaries(slow.opts);
+    await parked.promise; // `slow` has written its archive and is mid-download
+    await installBinaries(fast.opts); // `fast` runs start to finish and cleans up
+    release.resolve();
+    await slowRun; // must not fail on a deleted or overwritten archive
+
+    assert.notEqual(slow.archives[0], fast.archives[0], "each process downloads to its own archive");
+    assert.notEqual(slow.archives[0], path.join(archiveDir, ASSET));
+    assert.equal(slow.calls.extract, 1);
+    assert.equal(cacheProblem(dir, "v1.0.0"), null);
+    // The install `fast` completed is what is on disk: `slow` found it
+    // complete and reused it instead of replacing binaries under a caller.
+    assert.match(fs.readFileSync(path.join(dir, "wenlan"), "utf8"), /from fast/);
+    assert.deepEqual(leftovers(), []);
+  });
+
+  // What a second process leaves behind when its install completes: every
+  // binary in place, executable, and a stamp that describes them.
+  function completeInstallByAnotherProcess(tag, body) {
+    fs.mkdirSync(dir, { recursive: true });
+    const sizes = {};
+    for (const name of BINARIES) {
+      const content = body(name);
+      fs.writeFileSync(path.join(dir, name), content);
+      fs.chmodSync(path.join(dir, name), 0o755);
+      sizes[name] = content.length;
+    }
+    fs.writeFileSync(path.join(dir, ".wenlan-install.json"), JSON.stringify({ tag, asset: ASSET, sizes }));
+  }
+
+  test("a stamp never vouches for binaries another install interleaved into the directory", async () => {
+    const ours = harness({ latest: "v1.0.0" });
+    let renames = 0;
+    ours.opts.rename = (from, to) => {
+      renames += 1;
+      // Between our first and second rename, another process places a
+      // different release (longer binaries) over the directory.
+      if (renames === 2) completeInstallByAnotherProcess("v1.1.0", (name) => `v1.1.0 ${name} ${"x".repeat(64)}`);
+      fs.renameSync(from, to);
+    };
+
+    await installBinaries(ours.opts);
+
+    // The directory is now a mix: our wenlan-server and wenlan-mcp, but the
+    // other release's wenlan was placed after ours. Our stamp describes OUR
+    // sizes, so the mix is detected and the next run repairs it.
+    assert.match(cacheProblem(dir, "v1.0.0"), /wenlan is not the size it was installed with/);
+    const repair = harness({ latest: "v1.0.0" });
+    await installBinaries(repair.opts);
+    assert.equal(repair.calls.download.length, 1);
+    assert.equal(cacheProblem(dir, "v1.0.0"), null);
+  });
+
+  test("losing the race to place files is not a failure when the winner's install is complete", async () => {
+    const loser = harness();
+    loser.opts.rename = () => {
+      completeInstallByAnotherProcess("v1.0.0", (name) => `winner ${name}`);
+      throw new Error("EBUSY: simulated");
+    };
+
+    const result = await installBinaries(loser.opts);
+
+    assert.equal(result, dir);
+    assert.equal(cacheProblem(dir, "v1.0.0"), null);
+    assert.equal(fs.readFileSync(path.join(dir, "wenlan"), "utf8"), "winner wenlan");
+    assert.deepEqual(leftovers(), []);
+  });
+
+  test("a failure with no complete install behind it is still reported", async () => {
+    const h = harness();
+    h.opts.rename = () => {
+      throw new Error("EBUSY: simulated");
+    };
+    await assert.rejects(installBinaries(h.opts), /EBUSY/);
+    assert.equal(readStamp(dir), null);
+  });
+
+  test("staging directories left by a killed install are swept once they are old", async () => {
+    fs.mkdirSync(dir, { recursive: true });
+    const stale = path.join(dir, `${STAGING_PREFIX}999-stale`);
+    const live = path.join(dir, `${STAGING_PREFIX}998-live`);
+    for (const d of [stale, live]) {
+      fs.mkdirSync(d);
+      fs.writeFileSync(path.join(d, "wenlan"), "partial");
+    }
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(stale, twoDaysAgo, twoDaysAgo);
+
+    await installBinaries(harness().opts);
+
+    assert.equal(fs.existsSync(stale), false, "an old staging directory is removed");
+    assert.equal(fs.existsSync(live), true, "a recent one may belong to a running install");
   });
 });
 

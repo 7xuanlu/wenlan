@@ -1002,14 +1002,25 @@ fn entry_spec_toml(entry: &toml_edit::Item) -> EntrySpec {
     }
 }
 
+/// The file extensions that make a program launchable by name on Windows, in
+/// the order they are tried. ONE list for both directions: the plugin installer
+/// builds the file names it looks for from it, and [`command_stem`] strips
+/// exactly these, so a name one side treats as a launcher extension is never a
+/// plain name to the other. `.com` is deliberately not here: nothing in
+/// Wenlan's toolchain ships as one, and the installer does not look for it.
+pub(crate) const WINDOWS_LAUNCHER_EXTENSIONS: [&str; 3] = ["exe", "cmd", "bat"];
+
 /// The program name a command launches, lower-cased and without a launcher
 /// extension: `C:\Program Files\nodejs\npx.cmd` and `/usr/bin/npx` are both
 /// `npx`.
 fn command_stem(command: &str) -> String {
     let file = command.rsplit(['/', '\\']).next().unwrap_or(command);
     let lower = file.to_lowercase();
-    for ext in [".exe", ".cmd", ".bat", ".com"] {
-        if let Some(stem) = lower.strip_suffix(ext) {
+    for ext in WINDOWS_LAUNCHER_EXTENSIONS {
+        if let Some(stem) = lower
+            .strip_suffix(ext)
+            .and_then(|without| without.strip_suffix('.'))
+        {
             return stem.to_string();
         }
     }
@@ -1312,13 +1323,14 @@ fn pinned_wenlan_mcp_package(pin_file: &str) -> String {
     format!("wenlan-mcp@^{version}")
 }
 
-/// Give a candidate binary path the platform's executable suffix —
-/// `wenlan-mcp.exe` on Windows. Same idiom as
-/// `lifecycle::service_cli_path_for_app_exe`: a suffix-less candidate never
-/// matches a real Windows install, so the bundled binary next to the app exe is
-/// skipped and the `npx` fallback wins on a machine that already has it.
-fn with_exe_suffix(mut bin: PathBuf) -> PathBuf {
-    if cfg!(target_os = "windows") {
+/// Give a candidate binary path `host`'s executable suffix — `wenlan-mcp.exe`
+/// on Windows. Same idiom as `lifecycle::service_cli_path_for_app_exe`: a
+/// suffix-less candidate never matches a real Windows install, so the bundled
+/// binary next to the app exe is skipped and the `npx` fallback wins on a
+/// machine that already has it. Takes the host as a value, not `cfg!`, so the
+/// Windows shape is testable from any machine.
+fn with_exe_suffix(mut bin: PathBuf, host: HostKind) -> PathBuf {
+    if host == HostKind::Windows {
         bin.set_extension("exe");
     }
     bin
@@ -1337,21 +1349,34 @@ pub(crate) fn wenlan_mcp_candidate_sources(
     dev_bin: Option<&str>,
     exe_dir: Option<&Path>,
 ) -> Vec<(PathBuf, &'static str)> {
+    wenlan_mcp_candidate_sources_for(HostKind::current(), home, dev_bin, exe_dir)
+}
+
+/// [`wenlan_mcp_candidate_sources`] for a chosen host.
+pub(crate) fn wenlan_mcp_candidate_sources_for(
+    host: HostKind,
+    home: Option<&Path>,
+    dev_bin: Option<&str>,
+    exe_dir: Option<&Path>,
+) -> Vec<(PathBuf, &'static str)> {
     let mut candidates = Vec::new();
     if let Some(dev_bin) = dev_bin.filter(|p| !p.trim().is_empty()) {
         candidates.push((PathBuf::from(dev_bin), "WENLAN_MCP_DEV_BIN"));
     }
     if let Some(home) = home {
         candidates.push((
-            with_exe_suffix(home.join(".wenlan/bin/wenlan-mcp")),
+            with_exe_suffix(home.join(".wenlan/bin/wenlan-mcp"), host),
             "installed",
         ));
     }
     if let Some(exe_dir) = exe_dir {
-        candidates.push((with_exe_suffix(exe_dir.join("wenlan-mcp")), "bundled"));
+        candidates.push((with_exe_suffix(exe_dir.join("wenlan-mcp"), host), "bundled"));
     }
     if let Some(home) = home {
-        candidates.push((with_exe_suffix(home.join(".cargo/bin/wenlan-mcp")), "cargo"));
+        candidates.push((
+            with_exe_suffix(home.join(".cargo/bin/wenlan-mcp"), host),
+            "cargo",
+        ));
     }
     candidates
 }
@@ -3451,6 +3476,45 @@ mod tests {
                 "the {source} candidate cannot match a real install on this platform: {}",
                 path.display()
             );
+        }
+    }
+
+    /// The suffix follows the HOST value, not the machine running the test:
+    /// Windows gets `.exe` on every candidate except the developer's override
+    /// (a full path they supplied), and every other host gets the bare name.
+    #[test]
+    fn wenlan_mcp_candidate_suffix_follows_the_host_not_the_test_machine() {
+        let home = PathBuf::from("/Users/someone");
+        let exe_dir = Path::new("/Applications/Wenlan.app/Contents/MacOS");
+        for (host, expected) in [
+            (HostKind::Windows, "wenlan-mcp.exe"),
+            (HostKind::MacOs, "wenlan-mcp"),
+            (HostKind::Linux, "wenlan-mcp"),
+        ] {
+            let sources = wenlan_mcp_candidate_sources_for(
+                host,
+                Some(home.as_path()),
+                Some("/tmp/dev/wenlan-mcp"),
+                Some(exe_dir),
+            );
+            let labels: Vec<&str> = sources.iter().map(|(_, source)| *source).collect();
+            assert_eq!(
+                labels,
+                ["WENLAN_MCP_DEV_BIN", "installed", "bundled", "cargo"],
+                "{host:?}"
+            );
+            for (path, source) in sources {
+                if source == "WENLAN_MCP_DEV_BIN" {
+                    assert_eq!(path, PathBuf::from("/tmp/dev/wenlan-mcp"), "{host:?}");
+                } else {
+                    assert_eq!(
+                        path.file_name().unwrap().to_string_lossy(),
+                        expected,
+                        "{host:?} {source}: {}",
+                        path.display()
+                    );
+                }
+            }
         }
     }
 
@@ -5842,6 +5906,15 @@ args = ["-y", "wenlan-mcp"]
         assert_eq!(command_stem("/usr/local/bin/npx"), "npx");
         assert_eq!(command_stem("wenlan-mcp.exe"), "wenlan-mcp");
         assert_eq!(command_stem("npx"), "npx");
+        // Only the extensions the installer actually looks for are launcher
+        // extensions: `.com` is not one, and a name that merely ends in the
+        // letters (`nodecmd`) is not `node.cmd`.
+        assert_eq!(command_stem("C:\\tools\\npx.bat"), "npx");
+        assert_eq!(command_stem("npx.com"), "npx.com");
+        assert_eq!(command_stem("nodecmd"), "nodecmd");
+        for ext in WINDOWS_LAUNCHER_EXTENSIONS {
+            assert_eq!(command_stem(&format!("tool.{ext}")), "tool", ".{ext}");
+        }
     }
 
     /// The real probe, on real files: the three ways a path that exists can

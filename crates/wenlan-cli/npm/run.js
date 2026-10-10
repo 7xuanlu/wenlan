@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 const childProcess = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const https = require("https");
 const os = require("os");
@@ -21,6 +22,13 @@ const BINARIES = ["wenlan", "wenlan-server", "wenlan-mcp"];
 // still has the size it was extracted with, instead of re-downloading ~60 MB
 // on every `npx wenlan` call.
 const STAMP_NAME = ".wenlan-install.json";
+// Each install extracts into its own `<STAGING_PREFIX><pid>-<random>` directory
+// INSIDE the install dir (same filesystem, so the final rename is atomic) and
+// moves the binaries into place only once the archive is fully extracted.
+const STAGING_PREFIX = ".install-";
+// A staging directory older than this was left by a process that was killed
+// mid-install (a live install finishes in seconds to minutes).
+const STALE_STAGING_MS = 24 * 60 * 60 * 1000;
 
 const RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -172,11 +180,19 @@ function cacheProblem(dir, tag) {
   return null;
 }
 
-function writeStamp(dir, tag) {
+function sizesOf(dir) {
   const sizes = {};
   for (const name of BINARIES) {
     sizes[name] = fs.statSync(path.join(dir, name)).size;
   }
+  return sizes;
+}
+
+// `sizes` describe the binaries THIS install extracted, not whatever is in
+// `dir` by now. If a concurrent install of another release interleaved its
+// own files, the next run sees a size that does not match and reinstalls,
+// instead of the stamp vouching for a mixture.
+function writeStamp(dir, tag, sizes) {
   const finalPath = stampPath(dir);
   const tmpPath = `${finalPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify({ tag, asset: ASSET, sizes }) + "\n");
@@ -188,6 +204,32 @@ function removeStamp(dir) {
     fs.unlinkSync(stampPath(dir));
   } catch (_) {
     // Already absent.
+  }
+}
+
+function removeTree(target) {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch (_) {
+    // Best-effort cleanup only.
+  }
+}
+
+function sweepStaleStaging(dir, now = Date.now()) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch (_) {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.startsWith(STAGING_PREFIX)) continue;
+    const staged = path.join(dir, entry);
+    try {
+      if (now - fs.statSync(staged).mtimeMs > STALE_STAGING_MS) removeTree(staged);
+    } catch (_) {
+      // Vanished (finished or swept by another process) between list and stat.
+    }
   }
 }
 
@@ -203,6 +245,7 @@ async function installBinaries(overrides = {}) {
     fetchLatestTag: latestTag,
     downloadFile: download,
     extract: extractBinaries,
+    rename: fs.renameSync,
     log: (message) => process.stderr.write(message),
     ...overrides,
   };
@@ -239,11 +282,18 @@ async function installBinaries(overrides = {}) {
   }
 
   fs.mkdirSync(dir, { recursive: true });
-  // No stamp may survive into a half-written install: if extraction below is
-  // interrupted, the next run must see "no install" and start over.
-  removeStamp(dir);
+  sweepStaleStaging(dir);
 
-  const archivePath = path.join(opts.archiveDir, ASSET);
+  // Several `npx wenlan` calls can start at once (a first run from two
+  // terminals, an editor and a shell). Nothing here is shared between them
+  // until the final renames: each has its own archive file and its own staging
+  // directory, so one process's cleanup can never delete or overwrite what
+  // another is still reading.
+  const archivePath = path.join(
+    opts.archiveDir,
+    `${ASSET}.${process.pid}-${crypto.randomBytes(4).toString("hex")}`
+  );
+  const staging = fs.mkdtempSync(path.join(dir, `${STAGING_PREFIX}${process.pid}-`));
   const url = `https://github.com/${REPO}/releases/download/${tag}/${ASSET}`;
   opts.log(`Downloading Wenlan ${tag}...\n`);
 
@@ -255,22 +305,41 @@ async function installBinaries(overrides = {}) {
         `${err.message}. Check that the release exists at https://github.com/${REPO}/releases/tag/${tag}`
       );
     }
-    opts.extract(archivePath, dir);
+    opts.extract(archivePath, staging);
+    for (const name of BINARIES) {
+      fs.chmodSync(path.join(staging, name), 0o755);
+    }
+    const sizes = sizesOf(staging);
+
+    // Another process may have finished this same install while this one was
+    // downloading. Use theirs rather than replacing binaries a caller may be
+    // running right now.
+    if (cacheProblem(dir, tag) === null) {
+      return dir;
+    }
+
+    // No stamp may survive into a half-placed install: if the renames below
+    // are interrupted, the next run must see "no install" and start over.
+    removeStamp(dir);
+    for (const name of BINARIES) {
+      opts.rename(path.join(staging, name), path.join(dir, name));
+    }
+    writeStamp(dir, tag, sizes);
+    return dir;
+  } catch (err) {
+    // Losing a race is not a failure when the winner left a complete install.
+    if (cacheProblem(dir, tag) === null) {
+      return dir;
+    }
+    throw err;
   } finally {
     try {
-      if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+      fs.unlinkSync(archivePath);
     } catch (_) {
-      // Best-effort cleanup only.
+      // Never created, or already gone.
     }
+    removeTree(staging);
   }
-
-  for (const name of BINARIES) {
-    const dest = path.join(dir, name);
-    fs.chmodSync(dest, 0o755);
-  }
-
-  writeStamp(dir, tag);
-  return dir;
 }
 
 async function main() {
@@ -300,6 +369,7 @@ if (require.main === module) {
 module.exports = {
   ASSET,
   BINARIES,
+  STAGING_PREFIX,
   STAMP_NAME,
   cacheProblem,
   checkTag,

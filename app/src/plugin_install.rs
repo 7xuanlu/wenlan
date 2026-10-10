@@ -92,10 +92,12 @@ impl LookupEnv {
 
 /// File names that can launch `binary_name`: the bare name on Unix; the
 /// `.exe`/`.cmd`/`.bat` forms on Windows (an npm-installed CLI is a `.cmd`
-/// shim there, which `CreateProcess` would not find by bare name).
+/// shim there, which `CreateProcess` would not find by bare name). The
+/// extension list is `mcp_config`'s, which `command_stem` strips, so the two
+/// can never disagree about what counts as a launcher extension.
 fn executable_names(binary_name: &str, windows: bool) -> Vec<String> {
     if windows {
-        ["exe", "cmd", "bat"]
+        crate::mcp_config::WINDOWS_LAUNCHER_EXTENSIONS
             .iter()
             .map(|ext| format!("{binary_name}.{ext}"))
             .collect()

@@ -70,7 +70,7 @@ new_case() {
     mkdir -p "$home" "$apps" "$path_dir"
     printf '#!/bin/sh\necho "NPX:$*"\n' > "$path_dir/npx"
     chmod +x "$path_dir/npx"
-    rm -f "$plugin/run/wenlan-mcp.local"
+    rm -rf "$plugin/run/wenlan-mcp.local"
 }
 
 run_runner() {
@@ -141,9 +141,35 @@ new_case
 make_bin "$case_dir/$installed" installed
 make_bin "$case_dir/dev-bin" dev
 make_bin "$plugin/run/wenlan-mcp.local" local
-assert_eq 'the sibling wenlan-mcp.local beats the dev env var' \
-    "BIN:local:${agent_args}tool-arg" "$(run_runner WENLAN_MCP_DEV_BIN="$case_dir/dev-bin")"
-rm -f "$plugin/run/wenlan-mcp.local"
+assert_eq 'WENLAN_MCP_DEV_BIN beats the sibling wenlan-mcp.local (the app resolver order)' \
+    "BIN:dev:${agent_args}tool-arg" "$(run_runner WENLAN_MCP_DEV_BIN="$case_dir/dev-bin")"
+
+new_case
+make_bin "$case_dir/$installed" installed
+make_bin "$plugin/run/wenlan-mcp.local" local
+assert_eq 'the sibling wenlan-mcp.local beats installed binaries' \
+    "BIN:local:${agent_args}tool-arg" "$(run_runner)"
+
+new_case
+make_bin "$case_dir/$installed" installed
+make_bin "$plugin/run/wenlan-mcp.local" local
+mkdir -p "$case_dir/dev-dir"
+assert_eq 'a directory as WENLAN_MCP_DEV_BIN is skipped, not exec-ed' \
+    "BIN:local:${agent_args}tool-arg" "$(run_runner WENLAN_MCP_DEV_BIN="$case_dir/dev-dir")"
+
+new_case
+make_bin "$case_dir/$installed" installed
+mkdir -p "$plugin/run/wenlan-mcp.local"
+assert_eq 'a directory named wenlan-mcp.local is skipped, not exec-ed' \
+    "BIN:installed:${agent_args}tool-arg" "$(run_runner)"
+
+new_case
+make_bin "$case_dir/$installed" installed
+printf '#!/bin/sh\necho NO-EXEC-BIT\n' > "$case_dir/dev-file"
+assert_eq 'a non-executable WENLAN_MCP_DEV_BIN is skipped' \
+    "BIN:installed:${agent_args}tool-arg" "$(run_runner WENLAN_MCP_DEV_BIN="$case_dir/dev-file")"
+
+rm -rf "$plugin/run/wenlan-mcp.local"
 
 printf '\n%s passed, %s failed (%s runner)\n' "$pass" "$fail" "$flavor"
 [ "$fail" -eq 0 ]

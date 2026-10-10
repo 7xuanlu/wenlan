@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Dispatch the wenlan MCP server.
 #
-# Resolution order (most specific first):
-#   1. Sibling file `scripts/wenlan-mcp.local` next to this script — typically a
+# Resolution order (most specific first). Every override is held to the same
+# test as the installed binaries below: a regular file (`-f`) that is
+# executable (`-x`), because a directory is "executable" too.
+#   1. WENLAN_MCP_DEV_BIN env var (primary) or ORIGIN_MCP_DEV_BIN (fallback) —
+#      the same first slot the Wenlan app's own resolver gives it
+#      (app/src/mcp_config.rs). Requires Claude Code to inherit the var at
+#      startup. Accepts both names for backward compatibility.
+#   2. Sibling file `scripts/wenlan-mcp.local` next to this script — typically a
 #      symlink to a locally-built wenlan-mcp binary. Filesystem-based so it
 #      survives plugin reloads that don't re-read settings.json env.
-#   2. WENLAN_MCP_DEV_BIN env var (primary) or ORIGIN_MCP_DEV_BIN (fallback) —
-#      secondary, kept for shells that already export them. Requires Claude Code
-#      to inherit the var at startup. Accepts both for backward compatibility.
 #   3. An installed binary, in this order (mirrors the order the Wenlan app
 #      uses when it writes its own MCP entry, app/src/mcp_config.rs):
 #        a. ~/.wenlan/bin/wenlan-mcp — the path install.sh places binaries at.
@@ -33,13 +36,13 @@
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)"
 local_bin="${here}/wenlan-mcp.local"
 
-if [ -x "${local_bin}" ]; then
-  exec "${local_bin}" "$@"
+dev_bin="${WENLAN_MCP_DEV_BIN:-${ORIGIN_MCP_DEV_BIN:-}}"
+if [ -n "${dev_bin}" ] && [ -f "${dev_bin}" ] && [ -x "${dev_bin}" ]; then
+  exec "${dev_bin}" "$@"
 fi
 
-dev_bin="${WENLAN_MCP_DEV_BIN:-${ORIGIN_MCP_DEV_BIN:-}}"
-if [ -n "${dev_bin}" ] && [ -x "${dev_bin}" ]; then
-  exec "${dev_bin}" "$@"
+if [ -f "${local_bin}" ] && [ -x "${local_bin}" ]; then
+  exec "${local_bin}" "$@"
 fi
 
 # Installed binaries. `-f` as well as `-x`: a directory is "executable" too.
