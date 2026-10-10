@@ -508,7 +508,7 @@ test('actual Worker reverse enrollment, OAuth routing, reconnect and revocation 
       catch (error) { if (/deadline/.test(error.message)) throw error; ended = true; }
       assert.equal(ended, true);
       await reader.cancel().catch(() => {});
-      assert.equal((await post('/mcp', query, mcpHeaders)).status, 403);
+      assert.equal((await post('/mcp', query, mcpHeaders)).status, 401);
       assert.equal((await request('/devices/reverse/connect', { headers: upgradeHeaders })).status, 401);
     });
 

@@ -2782,6 +2782,30 @@ export async function removeAvatar(): Promise<void> {
 export type { Reading } from "./reading";
 import type { Reading } from "./reading";
 
+/** How a client is present on this machine. `detected` is the superset
+ *  ("installed" or "config_only"); this says which. `config_only` means no
+ *  program was found at any known location, only the client's config or home
+ *  folder: a leftover, or a program installed somewhere unusual. */
+export type McpInstallState =
+  | { kind: "installed" }
+  | { kind: "config_only" }
+  | { kind: "not_found" }
+  | { kind: "unreadable"; error: string };
+
+export type McpRepairReason =
+  | "command_missing"
+  | "command_not_found"
+  | "command_not_runnable"
+  | "args_invalid";
+
+/** Whether the raw `wenlan` entry in the client's own config would launch.
+ *  `needs_repair` is fixed by the existing `write_mcp_config` command. */
+export type McpEntryHealth =
+  | { kind: "no_entry" }
+  | { kind: "healthy" }
+  | { kind: "needs_repair"; reason: McpRepairReason; detail: string }
+  | { kind: "unreadable"; error: string };
+
 export interface McpClient {
   name: string;
   client_type: string;
@@ -2796,6 +2820,10 @@ export interface McpClient {
   has_raw_duplicate: Reading;
   /** The plugin half of `already_configured`. */
   has_plugin: Reading;
+  /** Optional until every mock supplies it; the app always sends it. */
+  install_state?: McpInstallState;
+  /** Optional until every mock supplies it; the app always sends it. */
+  entry_health?: McpEntryHealth;
 }
 
 export async function shouldShowWizard(): Promise<boolean> {

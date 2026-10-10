@@ -64,7 +64,7 @@ test('sample login uses real OAuth issuance and normal grant enforcement without
     assert.equal(f.backendCalls(), calls);
     assert.equal((await f.post('/devices/revoke', {}, { authorization: `Bearer ${f.issued.password}`, 'x-wenlan-device-id': f.device.id })).status, 401);
     assert.equal((await f.post('/devices/revoke', {}, { authorization: `Bearer ${f.device.managementToken}`, 'x-wenlan-device-id': f.device.id })).status, 200);
-    assert.equal((await f.post('/mcp', query('atlas-review'), mcpHeaders)).status, 403);
+    assert.equal((await f.post('/mcp', query('atlas-review'), mcpHeaders)).status, 401);
     // The provider revokes an issued grant on code replay. Exercise normal
     // querying/revocation first instead of accidentally revoking this token.
     assert.equal((await exchange()).status, 400, 'code cannot be replayed');

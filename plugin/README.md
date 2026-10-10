@@ -37,7 +37,7 @@ Everything the plugin does is listed here so you can decide whether to install i
 
 No memory content, prompts, or file contents leave your machine through this plugin. The daemon's full privacy notes are in [docs/PRIVACY.md](../docs/PRIVACY.md). Model-backed enrichment (classification, entity extraction, page synthesis, reranking) is opt-in and configured in the daemon, not in the plugin.
 
-The MCP runner picks a binary in this order: a local override file next to the script, the `WENLAN_MCP_DEV_BIN` environment variable, the installed `~/.wenlan/bin/wenlan-mcp`, then the pinned npm package. The runner reads `$HOME` to find the installed binary, which is why a reviewer may hold the local MCP command for a manual look.
+The MCP runner picks a binary in this order: the `WENLAN_MCP_DEV_BIN` environment variable, a local override file next to the script, the installed `~/.wenlan/bin/wenlan-mcp`, then the pinned npm package. The runner reads `$HOME` to find the installed binary, which is why a reviewer may hold the local MCP command for a manual look.
 
 ## Where your data lives
 

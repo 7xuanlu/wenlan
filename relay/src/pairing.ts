@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import type { ConnectorRoute, QueryGrant } from './proxy.ts';
 import { validSecret as validId, randomSecret, hashSecret as hash, sameHash } from './secrets.ts';
+import { clientIdentity, displayName, type ClientIdentity } from './client-identity.ts';
 
 /** Production adapters must provide serializable, durable transactions.
  * Cloudflare KV is not an implementation of this contract.
@@ -40,20 +41,72 @@ interface Approval {
   space: string;
   generation: number;
 }
-interface PairingRecord extends AuthorizationIntent {
+// Identity fields and userCode are optional so records written before they
+// existed still read as unknown clients without a short code.
+interface PairingRecord extends AuthorizationIntent, Partial<ClientIdentity> {
   browserHash: string;
   expiresAt: number;
-  status: 'pending' | 'approved' | 'consumed' | 'cancelled';
+  status: 'pending' | 'approved' | 'consumed' | 'cancelled' | 'denied';
   approval?: Approval;
+  userCode?: string;
 }
+interface CodeIndex { pairingId: string; expiresAt: number }
+interface LookupMisses { count: number; expiresAt: number }
 
-export const PAIRING_TTL_MS = 5 * 60 * 1000;
+export const PAIRING_TTL_MS = 10 * 60 * 1000;
+/** Short code alphabet: no 0/O, 1/I/L or U, so it reads aloud unambiguously. */
+export const USER_CODE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+export const USER_CODE_LENGTH = 8;
+export const LOOKUP_MISS_LIMIT = 10;
+export const LOOKUP_MISS_WINDOW_MS = 10 * 60 * 1000;
 const pairingKey = (id: string) => `pairing:${id}`;
+const codeKey = (code: string) => `pairing-code:${code}`;
+const missKey = (deviceId: string) => `pairing-lookup-miss:${deviceId}`;
 export const connectorKey = (id: string) => `connector:${id}`;
 
 function live(record: PairingRecord | undefined, now: number): record is PairingRecord {
   return !!record && Number.isFinite(record.expiresAt) && record.expiresAt > now
     && (record.status === 'pending' || record.status === 'approved');
+}
+/** Live for the browser: a denial stays visible until the page cancels it. */
+function visible(record: PairingRecord | undefined, now: number): record is PairingRecord {
+  if (!record || !Number.isFinite(record.expiresAt) || record.expiresAt <= now) return false;
+  return record.status === 'pending' || record.status === 'approved' || record.status === 'denied';
+}
+function identityOf(record: PairingRecord) {
+  return { clientName: typeof record.clientName === 'string' ? record.clientName : null,
+    redirectHost: typeof record.redirectHost === 'string' ? record.redirectHost : '',
+    knownClient: record.knownClient === true };
+}
+
+/** Uniform over the alphabet: bytes at or above 240 (8 * 30) are rejected. */
+export function generateUserCode(random: (size: number) => Uint8Array = size => crypto.getRandomValues(new Uint8Array(size))): string {
+  let code = '';
+  while (code.length < USER_CODE_LENGTH) {
+    for (const byte of random(16)) {
+      if (byte >= 240) continue;
+      code += USER_CODE_ALPHABET[byte % USER_CODE_ALPHABET.length];
+      if (code.length === USER_CODE_LENGTH) break;
+    }
+  }
+  return code;
+}
+
+/** Accepts dashes, spaces and lowercase. Returns null when it cannot be a code. */
+export function normalizeUserCode(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 32) return null;
+  const code = value.replace(/[\s-]/g, '').toUpperCase();
+  if (code.length !== USER_CODE_LENGTH) return null;
+  for (const character of code) if (!USER_CODE_ALPHABET.includes(character)) return null;
+  return code;
+}
+
+export const formatUserCode = (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`;
+
+async function dropCode(tx: Transaction, record: PairingRecord, pairingId: string) {
+  if (!record.userCode) return;
+  const index = await tx.get<CodeIndex>(codeKey(record.userCode));
+  if (index?.pairingId === pairingId) await tx.delete(codeKey(record.userCode));
 }
 function matchingRoute(route: ConnectorRoute | undefined, approval: Approval, now: number): boolean {
   return !!route && route.enabled === true && Number.isFinite(route.expiresAt) && route.expiresAt > now
@@ -63,7 +116,8 @@ function matchingRoute(route: ConnectorRoute | undefined, approval: Approval, no
 
 export async function beginPairing(
   store: PairingStore, intent: AuthorizationIntent, publicResource: string, now = Date.now(),
-): Promise<{ pairingId: string; browserSecret: string; expiresAt: number }> {
+  client: { redirectUri?: string; clientName?: string | null } = {},
+): Promise<{ pairingId: string; browserSecret: string; expiresAt: number; userCode: string }> {
   if (!validId(intent.authorizationId) || !intent.clientId || intent.clientId.length > 2048
     || intent.resource !== publicResource || !publicResource.startsWith('https://')
     || intent.scopes.length !== 1 || intent.scopes[0] !== 'wenlan:query') {
@@ -73,28 +127,91 @@ export async function beginPairing(
   const browserSecret = randomSecret();
   const browserHash = await hash(browserSecret);
   const expiresAt = now + PAIRING_TTL_MS;
-  await store.transaction(async tx => {
+  const identity = clientIdentity(client.redirectUri, client.clientName);
+  const userCode = await store.transaction(async tx => {
     const authorizationKey = `authorization-pairing:${intent.authorizationId}`;
     if (await tx.get(authorizationKey)) throw new Error('Authorization already paired');
+    // Regenerate on collision with a live code; an expired index is reusable.
+    let code = '';
+    for (let attempt = 0; ; attempt++) {
+      if (attempt >= 8) throw new Error('User code unavailable');
+      code = generateUserCode();
+      const existing = await tx.get<CodeIndex>(codeKey(code));
+      if (!existing || !Number.isFinite(existing.expiresAt) || existing.expiresAt <= now) break;
+    }
     await tx.put(pairingKey(pairingId), {
       authorizationId: intent.authorizationId, clientId: intent.clientId,
       resource: intent.resource, scopes: [...intent.scopes], browserHash,
-      expiresAt, status: 'pending',
+      expiresAt, status: 'pending', ...identity, userCode: code,
     } satisfies PairingRecord);
     await tx.put(authorizationKey, { pairingId, expiresAt });
+    await tx.put(codeKey(code), { pairingId, expiresAt } satisfies CodeIndex);
+    return code;
   });
   // Transport adapter must keep browserSecret in an HttpOnly/Secure cookie,
   // never in the pairing code, URL, model context or desktop response.
-  return { pairingId, browserSecret, expiresAt };
+  return { pairingId, browserSecret, expiresAt, userCode };
 }
 
 export async function inspectPairing(store: PairingStore, pairingId: string, now = Date.now()) {
   if (!validId(pairingId)) return null;
   return store.transaction(async tx => {
+    return pendingView(tx, pairingId, now);
+  });
+}
+
+async function pendingView(tx: Transaction, pairingId: string, now: number) {
+  const record = await tx.get<PairingRecord>(pairingKey(pairingId));
+  if (!live(record, now) || record.status !== 'pending') return null;
+  return { pairingId, clientId: record.clientId, resource: record.resource,
+    scopes: [...record.scopes], expiresAt: record.expiresAt, ...identityOf(record) };
+}
+
+export type LookupResult =
+  | { status: 'found'; view: NonNullable<Awaited<ReturnType<typeof pendingView>>> }
+  | { status: 'missing' }
+  | { status: 'limited'; retryAfter: number };
+
+/** Short-code lookup for an authenticated device. Misses are counted per
+ * device in a fixed window; once the limit is reached every lookup is refused
+ * until the window ends, so the 39-bit code cannot be enumerated.
+ */
+export async function lookupPairing(
+  store: PairingStore, deviceId: string, code: unknown, now = Date.now(),
+): Promise<LookupResult> {
+  if (!validId(deviceId)) return { status: 'missing' };
+  return store.transaction(async tx => {
+    const saved = await tx.get<LookupMisses>(missKey(deviceId));
+    const misses = saved && Number.isFinite(saved.expiresAt) && saved.expiresAt > now
+      && Number.isSafeInteger(saved.count) ? saved : null;
+    if (misses && misses.count >= LOOKUP_MISS_LIMIT) {
+      return { status: 'limited', retryAfter: Math.max(1, Math.ceil((misses.expiresAt - now) / 1000)) };
+    }
+    const normalized = normalizeUserCode(code);
+    const index = normalized ? await tx.get<CodeIndex>(codeKey(normalized)) : undefined;
+    const view = index && Number.isFinite(index.expiresAt) && index.expiresAt > now
+      ? await pendingView(tx, index.pairingId, now) : null;
+    const record = view ? await tx.get<PairingRecord>(pairingKey(view.pairingId)) : undefined;
+    if (view && record?.userCode === normalized) return { status: 'found', view };
+    await tx.put(missKey(deviceId), misses ? { ...misses, count: misses.count + 1 }
+      : { count: 1, expiresAt: now + LOOKUP_MISS_WINDOW_MS } satisfies LookupMisses);
+    return { status: 'missing' };
+  });
+}
+
+/** An authenticated device declines a pending request. The browser shows the
+ * denial and returns the client an access_denied error through cancel.
+ */
+export async function denyPairing(
+  store: PairingStore, pairingId: string, device: Pick<DeviceIdentity, 'id'>, now = Date.now(),
+): Promise<boolean> {
+  if (!validId(pairingId) || !validId(device.id)) return false;
+  return store.transaction(async tx => {
     const record = await tx.get<PairingRecord>(pairingKey(pairingId));
-    if (!live(record, now) || record.status !== 'pending') return null;
-    return { pairingId, clientId: record.clientId, resource: record.resource,
-      scopes: [...record.scopes], expiresAt: record.expiresAt };
+    if (!live(record, now) || record.status !== 'pending') return false;
+    await dropCode(tx, record, pairingId);
+    await tx.put(pairingKey(pairingId), { ...record, status: 'denied' } satisfies PairingRecord);
+    return true;
   });
 }
 
@@ -104,8 +221,12 @@ export async function browserPairingView(store: PairingStore, pairingId: string,
   const browserHash = await hash(browserSecret);
   return store.transaction(async tx => {
     const record = await tx.get<PairingRecord>(pairingKey(pairingId));
-    if (!live(record, clock()) || !sameHash(record.browserHash, browserHash)) return null;
+    if (!visible(record, clock()) || !sameHash(record.browserHash, browserHash)) return null;
+    const identity = identityOf(record);
     return { pairingId, clientId: record.clientId, status: record.status,
+      redirectHost: identity.redirectHost, knownClient: identity.knownClient,
+      displayName: displayName(identity),
+      ...(record.status === 'pending' && record.userCode ? { userCode: record.userCode } : {}),
       ...(record.status === 'approved' && record.approval ? { space: record.approval.space } : {}) };
   });
 }
@@ -143,6 +264,7 @@ export interface ConsumedPairing {
   resource: string;
   // The OAuth adapter supplies verified token expiry separately on each call.
   grant: Omit<QueryGrant, 'expiresAt'>;
+  client: { clientName: string | null; redirectHost: string; knownClient: boolean };
 }
 
 /** Consumes once before calling the OAuth library. A later issuance failure
@@ -160,10 +282,11 @@ export async function consumePairing(
     const route = await tx.get<ConnectorRoute>(connectorKey(record.approval.connectorId));
     const now = clock();
     if (!live(record, now) || !matchingRoute(route, record.approval, now)) return null;
+    await dropCode(tx, record, pairingId);
     await tx.put(pairingKey(pairingId), { ...record, status: 'consumed' } satisfies PairingRecord);
     return {
       authorizationId: record.authorizationId, clientId: record.clientId, resource: record.resource,
-      grant: { ...record.approval, scopes: [...record.scopes] },
+      grant: { ...record.approval, scopes: [...record.scopes] }, client: identityOf(record),
     };
   });
 }
@@ -171,12 +294,20 @@ export async function consumePairing(
 export async function cancelPairing(
   store: PairingStore, pairingId: string, browserSecret: string, now = Date.now(),
 ): Promise<boolean> {
-  if (!validId(pairingId) || !validId(browserSecret)) return false;
+  return await cancelPairingRequest(store, pairingId, browserSecret, now) !== null;
+}
+
+/** Returns the cancelled request's authorizationId, or null when unavailable. */
+export async function cancelPairingRequest(
+  store: PairingStore, pairingId: string, browserSecret: string, now = Date.now(),
+): Promise<string | null> {
+  if (!validId(pairingId) || !validId(browserSecret)) return null;
   const browserHash = await hash(browserSecret);
   return store.transaction(async tx => {
     const record = await tx.get<PairingRecord>(pairingKey(pairingId));
-    if (!live(record, now) || !sameHash(record.browserHash, browserHash)) return false;
+    if (!visible(record, now) || !sameHash(record.browserHash, browserHash)) return null;
+    await dropCode(tx, record, pairingId);
     await tx.put(pairingKey(pairingId), { ...record, status: 'cancelled' } satisfies PairingRecord);
-    return true;
+    return record.authorizationId;
   });
 }

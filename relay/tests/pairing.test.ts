@@ -27,13 +27,15 @@ test('binding uses server-owned intent and requires desktop approval', async () 
   assert.equal(await consumePairing(store, pair.pairingId, pair.browserSecret, clock), null);
   const view = await inspectPairing(store, pair.pairingId, 1000);
   assert.deepEqual(view, {pairingId: pair.pairingId, clientId: intent.clientId,
-    resource, scopes: ['wenlan:query'], expiresAt: pair.expiresAt});
+    resource, scopes: ['wenlan:query'], expiresAt: pair.expiresAt,
+    clientName: null, redirectHost: '', knownClient: false});
   assert(!JSON.stringify([...store.data.values()]).includes(pair.browserSecret));
   assert.equal(await approvePairing(store, pair.pairingId, device, consent, clock), true);
   assert.deepEqual(await consumePairing(store, pair.pairingId, pair.browserSecret, clock), {
     authorizationId: intent.authorizationId, clientId: intent.clientId, resource,
     grant: {subject: device.subject, connectorId: device.id, space: route.space,
       generation: 3, scopes: ['wenlan:query']},
+    client: {clientName: null, redirectHost: '', knownClient: false},
   });
 });
 

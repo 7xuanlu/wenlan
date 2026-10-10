@@ -27,8 +27,27 @@ fn cli_with_isolated_runtime(runtime: &IsolatedRuntime) -> Command {
         .env("WENLAN_HOST", "http://127.0.0.1:9")
         .env("WENLAN_NO_AUTOSTART", "1")
         .env("WENLAN_BIND_ADDR", "127.0.0.1:9")
+        // Per-OS config roots (`connect claude-desktop` reads them): pin both
+        // inside the isolated home so a developer's real APPDATA or
+        // XDG_CONFIG_HOME can never receive a test write.
+        .env(
+            "APPDATA",
+            runtime.home.path().join("AppData").join("Roaming"),
+        )
+        .env("XDG_CONFIG_HOME", runtime.home.path().join(".config"))
         .env("PATH", &joined);
     cmd
+}
+
+/// Where `connect claude-desktop` must write under the isolated runtime on
+/// the OS running the test (see `cli_with_isolated_runtime` for the env).
+fn claude_desktop_config_in(runtime: &IsolatedRuntime) -> PathBuf {
+    let home = runtime.home.path();
+    match std::env::consts::OS {
+        "macos" => home.join("Library/Application Support/Claude/claude_desktop_config.json"),
+        "windows" => home.join("AppData/Roaming/Claude/claude_desktop_config.json"),
+        _ => home.join(".config/Claude/claude_desktop_config.json"),
+    }
 }
 
 struct IsolatedRuntime {
@@ -789,7 +808,6 @@ fn connect_cursor_dry_run_prints_only_wenlan_block() {
     assert!(unchanged.contains("SECRET_TOKEN"), "{unchanged}");
 }
 
-#[cfg(target_os = "macos")]
 #[test]
 fn connect_json_clients_write_expected_config_shapes() {
     let runtime = IsolatedRuntime::new();
@@ -797,14 +815,10 @@ fn connect_json_clients_write_expected_config_shapes() {
     cli_with_isolated_runtime(&runtime)
         .args(["connect", "claude-desktop"])
         .assert()
-        .success();
-    let claude = fs::read_to_string(
-        runtime
-            .home
-            .path()
-            .join("Library/Application Support/Claude/claude_desktop_config.json"),
-    )
-    .expect("claude desktop config");
+        .success()
+        .stdout(predicate::str::contains("Claude Desktop"));
+    let claude = fs::read_to_string(claude_desktop_config_in(&runtime))
+        .expect("claude desktop config at the per-OS path");
     assert!(claude.contains(r#""mcpServers""#), "{claude}");
     assert!(claude.contains("wenlan-mcp"), "{claude}");
 
@@ -817,6 +831,43 @@ fn connect_json_clients_write_expected_config_shapes() {
         .expect("vscode workspace config");
     assert!(vscode.contains(r#""servers""#), "{vscode}");
     assert!(vscode.contains("wenlan-mcp"), "{vscode}");
+}
+
+#[test]
+fn connect_claude_desktop_follows_the_per_os_config_root() {
+    let runtime = IsolatedRuntime::new();
+    let custom = runtime.root.path().join("custom-config-root");
+    fs::create_dir_all(&custom).unwrap();
+
+    // Point BOTH overrides at one custom root. Windows (APPDATA) and Linux
+    // (XDG_CONFIG_HOME) must follow it; macOS has no such override and must
+    // keep using ~/Library/Application Support.
+    cli_with_isolated_runtime(&runtime)
+        .env("APPDATA", &custom)
+        .env("XDG_CONFIG_HOME", &custom)
+        .args(["connect", "claude-desktop"])
+        .assert()
+        .success();
+
+    let custom_file = custom.join("Claude").join("claude_desktop_config.json");
+    if std::env::consts::OS == "macos" {
+        let mac_file = runtime
+            .home
+            .path()
+            .join("Library/Application Support/Claude/claude_desktop_config.json");
+        assert!(mac_file.is_file(), "macOS must write under Library");
+        assert!(!custom_file.exists(), "macOS must ignore APPDATA/XDG");
+    } else {
+        assert!(
+            custom_file.is_file(),
+            "{} must follow the config-root override",
+            std::env::consts::OS
+        );
+        assert!(
+            !claude_desktop_config_in(&runtime).exists(),
+            "the default location must stay untouched when the override is set"
+        );
+    }
 }
 
 #[test]

@@ -150,8 +150,10 @@ test('offline auth changes still fail closed instead of converting', async () =>
   assert.equal(await expired.text(), '{"error":"Authorization required"}');
   const revokedPre = await forwardSessionQuery(post(toolsCallRpc(1), session), liveGrant, identity, store,
     { ...base, loadRoute: async () => ({ ...liveRoute, enabled: false }) });
-  assert.equal(revokedPre.status, 403);
-  assert.equal(await revokedPre.text(), '{"error":"Connection is not authorized"}');
+  // A revoked device re-runs OAuth (401 + challenge), never the offline 503.
+  assert.equal(revokedPre.status, 401);
+  assert.match(revokedPre.headers.get('www-authenticate') ?? '', /^Bearer resource_metadata=".*", error="invalid_token"/);
+  assert.equal(await revokedPre.text(), '');
   const unknown = await forwardSessionQuery(post(toolsCallRpc(1), 'b'.repeat(64)), liveGrant, identity, store, base);
   assert.equal(unknown.status, 404);
   assert.equal(await unknown.text(), '{"error":"MCP session unavailable"}');

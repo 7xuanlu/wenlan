@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { authenticateDevice, enrollDevice, refreshDevice, revokeDevice, rotateDeviceCredential } from './devices.ts';
-import { approvePairing, browserPairingView, cancelPairing, inspectPairing, type PairingStore } from './pairing.ts';
-import { finishOAuthPairing, startOAuthPairing, type OAuthEnv } from './oauth.ts';
+import { approvePairing, browserPairingView, denyPairing, inspectPairing, lookupPairing, PAIRING_TTL_MS, type PairingStore } from './pairing.ts';
+import { cancelOAuthPairing, finishOAuthPairing, startOAuthPairing, type OAuthEnv } from './oauth.ts';
+import { authorizeFailureDocument, htmlEscape, negotiateLocale, pairingDocument, returnDocument, shell, type PageLocale } from './pairing-page.ts';
 import { AuthorityCapacityError } from './bounded-store.ts';
 import { validSecret } from './secrets.ts';
 import { listDeviceGrants, revokeDeviceGrant, validGrantId } from './grants.ts';
@@ -57,6 +58,26 @@ export async function boundedRequest(request: Request, limit: number): Promise<R
   return new Request(request, { body: bytes });
 }
 
+/** Pairing complete/cancel accept the page's JSON request or, without
+ * JavaScript, a plain same-origin form post (answered with a redirect).
+ */
+async function formOrJson(request: Request): Promise<'json' | 'form'> {
+  const type = request.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
+  if (type === 'application/x-www-form-urlencoded') return 'form';
+  await jsonObject(request);
+  return 'json';
+}
+function seeOther(location: string, cookie?: string): Response {
+  const headers = new Headers({ location, 'cache-control': 'no-store' });
+  if (cookie) headers.set('set-cookie', cookie);
+  return new Response(null, { status: 303, headers });
+}
+function returnPage(request: Request, outcome: 'approved' | 'cancelled', href: string): Response {
+  const response = htmlResponse(returnDocument(negotiateLocale(request.headers.get('accept-language')), outcome, href));
+  response.headers.set('set-cookie', clearCookie());
+  return response;
+}
+
 async function jsonObject(request: Request): Promise<Record<string, unknown>> {
   if (request.headers.get('content-type')?.split(';')[0].trim() !== 'application/json') {
     throw new HttpFailure(415, 'JSON required');
@@ -92,13 +113,10 @@ function browserCookie(request: Request) {
   const [id, secret] = parts;
   return parts.length === 2 && validSecret(id) && validSecret(secret) ? { id, secret } : null;
 }
-function setCookie(id: string, secret: string, maxAge = 300) {
+function setCookie(id: string, secret: string, maxAge = PAIRING_TTL_MS / 1000) {
   return `${COOKIE}=${id}.${secret}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`;
 }
 const clearCookie = () => `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
-function htmlEscape(value: string): string {
-  return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
-}
 
 function configuredSampleAccount(env: PublicEnv, publicOrigin: string): SampleAccount | null {
   if (typeof env.SAMPLE_ACCOUNT !== 'string' || env.SAMPLE_ACCOUNT.length > 4096) return null;
@@ -108,6 +126,11 @@ function configuredSampleAccount(env: PublicEnv, publicOrigin: string): SampleAc
   } catch { return null; }
 }
 
+function acceptsHtml(request: Request): boolean {
+  return (request.headers.get('accept') ?? '').toLowerCase().split(',')
+    .some(part => part.split(';')[0].trim() === 'text/html');
+}
+
 function sameOrigin(request: Request, publicOrigin: string) {
   if (request.headers.get('origin') !== publicOrigin
     || (request.headers.has('sec-fetch-site') && request.headers.get('sec-fetch-site') !== 'same-origin')) {
@@ -115,28 +138,8 @@ function sameOrigin(request: Request, publicOrigin: string) {
   }
 }
 
-function pairingPage(view: { pairingId: string; clientId: string; status: string; space?: string } | null, sampleAvailable = false): Response {
-  const approved = view?.status === 'approved';
-  const state = view ? approved ? 'approved' : 'pending' : 'unavailable';
-  const body = view ? `<p class="intro">Your knowledge stays on your device. You choose what this connection can access.</p>
-<p class="status" data-state="${state}" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="pairing-status">${approved ? 'Approved on your device' : 'Waiting for device approval'}</span></p>
-<section class="pairing-step"${approved ? ' hidden' : ''}><h2>Approve in Wenlan</h2>
-<div class="open-app"><p>Wenlan on this computer? Skip the copy and paste.</p><a id="open-in-wenlan" class="button primary" href="wenlan://pair?code=${htmlEscape(view.pairingId)}">Open in Wenlan</a></div>
-<p>Open <strong>Settings &gt; Connections</strong> in the Wenlan app. Paste this code into <strong>Authorize a connection</strong>, review the request, then approve.</p>
-<label for="pairing-code">Pairing code</label><div class="code-row"><textarea id="pairing-code" readonly rows="2" spellcheck="false">${htmlEscape(view.pairingId)}</textarea>
-<button id="copy-code" type="button">Copy code</button></div>
-<p class="local-hint">App on this computer, like Codex or Claude Code? Cancel here and use <strong>Add a tool</strong> in Settings &gt; Connections instead. It connects directly, with no sign-in to expire.</p></section>
-<dl id="approved-space"${approved ? '' : ' hidden'}><dt>Authorized Space</dt><dd>${htmlEscape(view.space ?? '')}</dd></dl>
-<section class="permissions"><h2>This connection can</h2><ul><li>Read Briefs, search knowledge, and inspect sources in the Space you approve.</li>
-<li>Record searches and access activity locally. Other Spaces stay private.</li></ul>
-<p>Requests and results pass through wenlan-relay. Keep Wenlan running and your device online. Revoke access anytime in Connections.</p></section>
-<details class="client-details"><summary>Connection details</summary><dl><dt>Client ID</dt><dd>${htmlEscape(view.clientId)}</dd></dl></details>
-<p id="notice" role="status" aria-live="polite">${approved ? 'Ready. Continue to your AI client.' : 'This page updates after you approve in Wenlan.'}</p>
-<div class="actions"><form action="/pairing/complete" method="post"><button id="continue" type="submit" class="primary"${approved ? '' : ' disabled'}>Continue</button></form>
-<form action="/pairing/cancel" method="post"><button type="submit">Cancel</button></form></div>
-${sampleAvailable && view.status === 'pending' ? '<a class="sample-link" href="/pairing/sample">Connect a sample library</a>' : ''}`
-    : '<p class="status" data-state="unavailable">This pairing is no longer available.</p><p class="intro">Return to your AI client and start a new connection.</p>';
-  return authorizationPage(body, state);
+function pairingPage(view: Parameters<typeof pairingDocument>[0], locale: PageLocale, sampleAvailable = false): Response {
+  return htmlResponse(pairingDocument(view, locale, sampleAvailable).html);
 }
 
 function samplePage(clientId: string, account: SampleAccount): Response {
@@ -152,12 +155,14 @@ function samplePage(clientId: string, account: SampleAccount): Response {
 }
 
 function authorizationPage(body: string, state = 'sample'): Response {
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Connect Wenlan</title><link rel="icon" href="/icon.png"><link rel="stylesheet" href="/pairing.css"><script src="/pairing.js" defer></script></head>
-<body><main data-pairing-state="${state}"><header class="brand"><img src="/icon.png" width="32" height="32" alt=""><span>Wenlan</span></header><h1>Connect Wenlan</h1>${body}
-<noscript><p>JavaScript is required to complete this connection.</p></noscript>
-<footer><a href="https://wenlan.app/docs/data-and-privacy" rel="noreferrer">Privacy</a><a href="https://wenlan.app/terms" rel="noreferrer">Terms</a><a href="https://wenlan.app" rel="noreferrer">Wenlan</a></footer></main></body></html>`, {
-    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store',
+  return htmlResponse(shell('en', `<h1>Connect Wenlan</h1>${body}
+<noscript><p>JavaScript is required to complete this connection.</p></noscript>`, state));
+}
+
+function htmlResponse(html: string, status = 200): Response {
+  return new Response(html, {
+    status,
+    headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'content-language': html.match(/<html lang="([^"]+)"/)?.[1] ?? 'en', vary: 'accept-language',
       'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' },
   });
@@ -173,7 +178,7 @@ export async function handlePublicRequest(
       || request.headers.get('sec-fetch-site') === 'cross-site') throw new HttpFailure(403, 'Same-origin request required');
     const cookie = browserCookie(request);
     const view = cookie ? await browserPairingView(store, cookie.id, cookie.secret) : null;
-    return Response.json(view ? { status: view.status, ...(view.space ? { space: view.space } : {}) }
+    return Response.json(view ? { status: view.status, ...(view.status === 'approved' && view.space ? { space: view.space } : {}) }
       : { status: 'unavailable' }, { headers: { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
   }
   if (url.pathname === '/authorize' && request.method === 'GET') {
@@ -181,6 +186,8 @@ export async function handlePublicRequest(
     try { pair = await startOAuthPairing(env.OAUTH_PROVIDER, store, request, publicOrigin); }
     catch (error) {
       if (error instanceof AuthorityCapacityError) throw error;
+      // A person following a link gets a page; programmatic callers keep JSON.
+      if (acceptsHtml(request)) return htmlResponse(authorizeFailureDocument(negotiateLocale(request.headers.get('accept-language'))), 400);
       throw new HttpFailure(400, 'Authorization request rejected');
     }
     return new Response(null, { status: 303, headers: {
@@ -191,7 +198,7 @@ export async function handlePublicRequest(
   if (url.pathname === '/pairing' && request.method === 'GET') {
     const cookie = browserCookie(request);
     return pairingPage(cookie ? await browserPairingView(store, cookie.id, cookie.secret) : null,
-      configuredSampleAccount(env, publicOrigin) !== null);
+      negotiateLocale(request.headers.get('accept-language')), configuredSampleAccount(env, publicOrigin) !== null);
   }
   if (url.pathname === '/pairing/sample') {
     const account = configuredSampleAccount(env, publicOrigin);
@@ -224,11 +231,15 @@ export async function handlePublicRequest(
   }
   if (['/pairing/complete', '/pairing/cancel'].includes(url.pathname) && request.method === 'POST') {
     sameOrigin(request, publicOrigin);
-    await jsonObject(request);
+    const mode = await formOrJson(request);
     const cookie = browserCookie(request);
-    if (!cookie) throw new HttpFailure(401, 'Pairing cookie required');
+    if (!cookie) {
+      if (mode === 'form') return seeOther('/pairing');
+      throw new HttpFailure(401, 'Pairing cookie required');
+    }
     if (url.pathname.endsWith('/complete')) {
       const redirectTo = await finishOAuthPairing(env.OAUTH_PROVIDER, store, cookie.id, cookie.secret, publicOrigin);
+      if (mode === 'form') return redirectTo ? returnPage(request, 'approved', redirectTo) : seeOther('/pairing');
       if (redirectTo) {
         const response = Response.json({ redirectTo }, { headers: { 'cache-control': 'no-store' } });
         response.headers.set('set-cookie', clearCookie());
@@ -247,8 +258,11 @@ export async function handlePublicRequest(
       return Response.json({ redirectTo: null, error, ...(view?.status !== 'pending' ? { pairingUnavailable: true } : {}) },
         { status: 409, headers: { 'cache-control': 'no-store' } });
     }
-    if (await cancelPairing(store, cookie.id, cookie.secret)) {
-      const response = Response.json({ cancelled: true }, { headers: { 'cache-control': 'no-store' } });
+    // The client receives access_denied at its validated redirect URI.
+    const redirectTo = await cancelOAuthPairing(store, cookie.id, cookie.secret, publicOrigin);
+    if (mode === 'form') return redirectTo ? returnPage(request, 'cancelled', redirectTo) : seeOther('/pairing', redirectTo === '' ? clearCookie() : undefined);
+    if (redirectTo !== null) {
+      const response = Response.json({ cancelled: true, ...(redirectTo ? { redirectTo } : {}) }, { headers: { 'cache-control': 'no-store' } });
       response.headers.set('set-cookie', clearCookie());
       return response;
     }
@@ -307,11 +321,31 @@ export async function handlePublicRequest(
     return result ? Response.json(result, { status: result.cleanupPending ? 503 : 200,
       headers: { 'cache-control': 'no-store' } }) : failure(404, 'Connection unavailable');
   }
-  const pairMatch = /^\/pairings\/([A-Za-z0-9_-]{32,128})(\/approve)?$/.exec(url.pathname);
+  if (url.pathname === '/pairings/lookup' && request.method === 'POST') {
+    const { id, token } = deviceCredential(request);
+    const identity = await authenticateDevice(store, id, token);
+    if (!identity) throw new HttpFailure(401, 'Device authentication failed');
+    const body = await jsonObject(request);
+    if (Object.keys(body).some(key => key !== 'code') || typeof body.code !== 'string') throw new HttpFailure(400, 'Invalid request fields');
+    const result = await lookupPairing(store, identity.id, body.code);
+    if (result.status === 'limited') {
+      const response = failure(429, 'Too many pairing lookups');
+      response.headers.set('retry-after', String(result.retryAfter));
+      return response;
+    }
+    return result.status === 'found' ? Response.json(result.view, { headers: { 'cache-control': 'no-store' } })
+      : failure(404, 'Pairing unavailable');
+  }
+  const pairMatch = /^\/pairings\/([A-Za-z0-9_-]{32,128})(\/approve|\/deny)?$/.exec(url.pathname);
   if (pairMatch && ((request.method === 'GET' && !pairMatch[2]) || (request.method === 'POST' && pairMatch[2]))) {
     const { id, token } = deviceCredential(request);
     const identity = await authenticateDevice(store, id, token);
     if (!identity) throw new HttpFailure(401, 'Device authentication failed');
+    if (pairMatch[2] === '/deny') {
+      return await denyPairing(store, pairMatch[1], identity)
+        ? new Response(null, { status: 204, headers: { 'cache-control': 'no-store' } })
+        : failure(404, 'Pairing unavailable');
+    }
     if (request.method === 'GET') {
       const view = await inspectPairing(store, pairMatch[1]);
       return view ? Response.json(view, { headers: { 'cache-control': 'no-store' } }) : failure(404, 'Pairing unavailable');

@@ -46,6 +46,6 @@ test('real Worker conditional renewal preserves reviewer login and refuses stale
     f.candidate.space = 'other';
     assert.equal((await f.post('/devices/refresh', f.candidate, headers)).status, 200, 'normal desktop API remains compatible');
     assert.equal(await renewSampleRoute(input, { fetcher }), 'rejected');
-    assert.equal((await mcp()).status, 403, 'stale renewal cannot restore a revoked data boundary');
+    assert.equal((await mcp()).status, 401, 'stale renewal cannot restore a revoked data boundary');
   } finally { await f.runtime.dispose(); }
 });
