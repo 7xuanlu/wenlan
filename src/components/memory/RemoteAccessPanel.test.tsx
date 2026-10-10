@@ -127,7 +127,7 @@ describe("turning on", () => {
     await waitFor(() => expect(button("Turn on")).toBeEnabled());
     fireEvent.click(button("Turn on"));
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent("Too many tries. Wait a minute and try again.");
+    expect(alert).toHaveTextContent("Too many tries. Wait a few minutes, then try again.");
     expect(screen.queryByText(/rate limited/)).not.toBeInTheDocument();
     fireEvent.click(button("Details"));
     expect(screen.getByText("Remote connection rate limited")).toBeInTheDocument();

@@ -210,7 +210,7 @@ describe("PairingApprovalDialog", () => {
     mocks.lookupRemotePairing.mockRejectedValueOnce(new Error("Remote connection rate limited"));
     setPendingPairingCode(SHORT);
     mount();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Too many tries. Wait a minute and try again.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Too many tries. Wait a few minutes, then try again.");
     expect(screen.queryByText(/rate limited/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(screen.getByText("Remote connection rate limited")).toBeInTheDocument();
