@@ -7,39 +7,48 @@
 //! callers must never ALSO write a raw MCP entry for `claude_code` /
 //! `codex_cli` via `mcp_config.rs` — that would duplicate it.
 //!
-//! Binary resolution tries a LOGIN SHELL first, static install locations
-//! only as a fallback: both CLIs are commonly installed via `npm i -g` under
-//! a version manager (nvm) whose bin dir no static probe can guess — on the
-//! machine this was verified against, `codex` lives at
-//! `~/.nvm/versions/node/v24.11.1/bin/codex`. A Tauri app launched from
-//! Finder inherits a minimal PATH (`/usr/bin:/bin:/usr/sbin:/sbin`), so a
-//! plain `which` at spawn time would not see it either; a login shell
-//! (`zsh -lic 'command -v <bin>'`) sources the same rc files the user's own
-//! terminal does.
+//! Binary resolution is platform-neutral and never blocks on a shell: it
+//! searches the process `PATH` (with `.exe`/`.cmd`/`.bat` suffixes on
+//! Windows), then the conventional install dirs a GUI-launched app's minimal
+//! PATH misses (`~/.local/bin`, Homebrew, npm/volta/bun/pnpm globals, every
+//! `~/.nvm/versions/node/*/bin`, `%APPDATA%\npm` on Windows), and only then
+//! asks the user's own login shell (`$SHELL -l -i -c 'command -v <bin>'`,
+//! Unix only) under a hard 3 s bound. Both CLIs are commonly installed via
+//! `npm i -g` under a version manager whose bin dir only the user's rc
+//! files know; an interactive login shell can hang on a slow rc file, so it
+//! is the last resort rather than the first.
 //!
 //! Marketplace *selectors* are resolved at runtime, never hardcoded: the
 //! name a CLI derives from a GitHub source can differ from the repo slug
 //! (Codex derived `wenlan-local` for `7xuanlu/wenlan` as of codex-cli
-//! 0.144.0, pending a rename to `7xuanlu-wenlan` in 7xuanlu/wenlan#348,
-//! not yet merged as of 2026-07-12) — so after `marketplace add`, each
-//! installer reads the real name back out of `plugin marketplace list
-//! --json` and only falls back to a hardcoded default if that lookup fails.
+//! 0.144.0, before the repo's `.agents/plugins/marketplace.json` was named
+//! `7xuanlu-wenlan`) — so after `marketplace add`, each installer reads the
+//! real name back out of `plugin marketplace list --json` and only falls
+//! back to a hardcoded default if that lookup fails.
 
+use std::ffi::OsString;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 /// The GitHub source both CLIs' `plugin marketplace add` clone from.
 const WENLAN_REPO: &str = "7xuanlu/wenlan";
 /// Last-resort marketplace names if runtime resolution fails for any reason
-/// (unexpected CLI output, `marketplace list` unsupported, etc) — per
-/// client, not shared: Claude's derivation is stable (owner/repo slug), but
-/// Codex's is `wenlan-local` *today*, correct only until 7xuanlu/wenlan#348
-/// merges. A shared "post-rename" fallback would be wrong for every Codex
-/// user until that PR lands; this way the fallback matches current reality,
-/// and is only ever reached if the primary `marketplace list --json` lookup
-/// itself fails — which stays correct across the rename either way.
+/// (unexpected CLI output, `marketplace list` unsupported, etc). Both must
+/// equal the `name` in the repo's own marketplace manifests —
+/// `.claude-plugin/marketplace.json` for Claude and
+/// `.agents/plugins/marketplace.json` for Codex — which a test reads from
+/// disk so the constants cannot drift from what the CLIs actually register.
 const FALLBACK_MARKETPLACE_CLAUDE: &str = "7xuanlu-wenlan";
-const FALLBACK_MARKETPLACE_CODEX: &str = "wenlan-local";
+const FALLBACK_MARKETPLACE_CODEX: &str = "7xuanlu-wenlan";
+
+/// Hard bound on the login-shell fallback. An interactive login shell runs
+/// the user's rc files, which can block on the network, a keychain prompt or
+/// a slow version-manager init; the lookup is a convenience and must never
+/// hang the setup UI.
+const SHELL_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PluginInstallError {
@@ -53,63 +62,294 @@ pub enum PluginInstallError {
 
 // ── Binary resolution ───────────────────────────────────────────────────
 
-/// Static, fixed-location fallback candidates for `binary_name`, in probe
-/// order. Only consulted when the login shell can't resolve the binary.
-/// `.claude/local/<bin>` is Claude Code's own self-managed install dir and
-/// only applies to `claude`.
-pub fn static_binary_candidates(home: &Path, binary_name: &str) -> Vec<PathBuf> {
-    let mut candidates = vec![home.join(".local/bin").join(binary_name)];
-    if binary_name == "claude" {
-        candidates.push(home.join(".claude/local").join(binary_name));
-    }
-    candidates.push(PathBuf::from("/opt/homebrew/bin").join(binary_name));
-    candidates.push(PathBuf::from("/usr/local/bin").join(binary_name));
-    candidates
+/// Everything resolution reads from the environment, captured once so the
+/// probe order is unit-testable for every OS from any host.
+#[derive(Debug, Clone, Default)]
+struct LookupEnv {
+    home: Option<PathBuf>,
+    path_var: Option<OsString>,
+    windows: bool,
+    appdata: Option<PathBuf>,
+    local_appdata: Option<PathBuf>,
 }
 
-fn first_existing(candidates: &[PathBuf], exists: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+impl LookupEnv {
+    fn from_process() -> Self {
+        let nonempty = |key: &str| {
+            std::env::var_os(key)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        };
+        Self {
+            home: dirs::home_dir(),
+            path_var: std::env::var_os("PATH"),
+            windows: std::env::consts::OS == "windows",
+            appdata: nonempty("APPDATA"),
+            local_appdata: nonempty("LOCALAPPDATA"),
+        }
+    }
+}
+
+/// File names that can launch `binary_name`: the bare name on Unix; the
+/// `.exe`/`.cmd`/`.bat` forms on Windows (an npm-installed CLI is a `.cmd`
+/// shim there, which `CreateProcess` would not find by bare name).
+fn executable_names(binary_name: &str, windows: bool) -> Vec<String> {
+    if windows {
+        ["exe", "cmd", "bat"]
+            .iter()
+            .map(|ext| format!("{binary_name}.{ext}"))
+            .collect()
+    } else {
+        vec![binary_name.to_string()]
+    }
+}
+
+/// Every `PATH` entry crossed with the launchable names, in PATH order.
+/// Relative entries are skipped: they resolve against the current directory,
+/// which for a GUI app is arbitrary and for a hostile checkout is a planted
+/// binary.
+fn path_candidates(env: &LookupEnv, binary_name: &str) -> Vec<PathBuf> {
+    let Some(path_var) = env.path_var.as_ref() else {
+        return Vec::new();
+    };
+    let names = executable_names(binary_name, env.windows);
+    std::env::split_paths(path_var)
+        .filter(|dir| dir.is_absolute())
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .collect()
+}
+
+/// Version-manager bin dirs under `~/.nvm/versions/node`, newest first.
+fn nvm_bin_dirs(home: &Path, list_dir: &impl Fn(&Path) -> Vec<PathBuf>) -> Vec<PathBuf> {
+    fn version_key(dir: &Path) -> Vec<u64> {
+        dir.file_name()
+            .map(|name| name.to_string_lossy().trim_start_matches('v').to_string())
+            .unwrap_or_default()
+            .split('.')
+            .map(|part| part.parse::<u64>().unwrap_or(0))
+            .collect()
+    }
+    let mut versions = list_dir(&home.join(".nvm/versions/node"));
+    versions.sort_by_key(|dir| std::cmp::Reverse(version_key(dir)));
+    versions.into_iter().map(|dir| dir.join("bin")).collect()
+}
+
+/// Conventional install dirs a GUI-launched app's minimal PATH misses, in
+/// probe order. `.claude/local` is Claude Code's own self-managed install dir
+/// and only applies to `claude`.
+fn known_install_dirs(
+    env: &LookupEnv,
+    binary_name: &str,
+    list_dir: &impl Fn(&Path) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = &env.home {
+        dirs.push(home.join(".local/bin"));
+        if binary_name == "claude" {
+            dirs.push(home.join(".claude/local"));
+        }
+    }
+    if env.windows {
+        if let Some(appdata) = &env.appdata {
+            dirs.push(appdata.join("npm"));
+        }
+        if let Some(local) = &env.local_appdata {
+            dirs.push(local.join("Microsoft").join("WinGet").join("Links"));
+            dirs.push(local.join("pnpm"));
+        }
+        if let Some(home) = &env.home {
+            dirs.push(home.join("scoop").join("shims"));
+            dirs.push(home.join(".volta").join("bin"));
+            dirs.push(home.join(".bun").join("bin"));
+        }
+    } else {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+        dirs.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin"));
+        if let Some(home) = &env.home {
+            dirs.push(home.join(".npm-global/bin"));
+            dirs.push(home.join(".volta/bin"));
+            dirs.push(home.join(".bun/bin"));
+            dirs.push(home.join(".local/share/pnpm"));
+            dirs.extend(nvm_bin_dirs(home, list_dir));
+        }
+    }
+    dirs
+}
+
+fn known_candidates(
+    env: &LookupEnv,
+    binary_name: &str,
+    list_dir: &impl Fn(&Path) -> Vec<PathBuf>,
+) -> Vec<PathBuf> {
+    let names = executable_names(binary_name, env.windows);
+    known_install_dirs(env, binary_name, list_dir)
+        .into_iter()
+        .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
+        .collect()
+}
+
+fn first_existing(candidates: &[PathBuf], exists: &impl Fn(&Path) -> bool) -> Option<PathBuf> {
     candidates.iter().find(|p| exists(p)).cloned()
 }
 
 /// Full resolution with every filesystem/process dependency injected, so the
-/// probe order (login shell first, static candidates as fallback) is
-/// unit-testable without spawning a shell or touching the real filesystem.
+/// probe order (PATH, then known install dirs, then the bounded login shell)
+/// is unit-testable without spawning a shell or touching the real filesystem.
 fn resolve_binary_with(
     binary_name: &str,
-    home: Option<PathBuf>,
+    env: &LookupEnv,
     exists: impl Fn(&Path) -> bool,
+    list_dir: impl Fn(&Path) -> Vec<PathBuf>,
     login_shell: impl FnOnce(&str) -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    login_shell(binary_name).or_else(|| {
-        let candidates = home
-            .map(|h| static_binary_candidates(&h, binary_name))
-            .unwrap_or_default();
-        first_existing(&candidates, exists)
-    })
+    first_existing(&path_candidates(env, binary_name), &exists)
+        .or_else(|| first_existing(&known_candidates(env, binary_name, &list_dir), &exists))
+        .or_else(|| login_shell(binary_name))
+}
+
+/// A regular file the current user can run.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn list_child_dirs(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Runs `command` to completion or kills it after `timeout`. Returns the
+/// exit success flag and stdout, or `None` when it could not start or ran out
+/// of time. stdout is drained on a helper thread so a grandchild that keeps
+/// the pipe open after the shell exits cannot hold this call past its bound.
+fn run_bounded(command: &mut Command, timeout: Duration) -> Option<(bool, Vec<u8>)> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = command.spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        let _ = tx.send(buf);
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let buf = rx
+                    .recv_timeout(remaining.max(Duration::from_millis(50)))
+                    .unwrap_or_default();
+                return Some((status.success(), buf));
+            }
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
+/// The shell to ask: `$SHELL` when it is an absolute path to a file, else the
+/// first of zsh/bash that exists. Unix only; Windows has no equivalent of an
+/// rc-file PATH, so the PATH and known-dir searches are the whole story.
+fn lookup_shell() -> Option<PathBuf> {
+    if std::env::consts::OS == "windows" {
+        return None;
+    }
+    std::env::var_os("SHELL")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(["/bin/zsh", "/bin/bash"].map(PathBuf::from))
+        .find(|shell| shell.is_absolute() && shell.is_file())
+}
+
+/// Asks `shell` (as an interactive login shell, so version-manager rc files
+/// run) where `binary_name` lives, giving up after `timeout`. rc files may
+/// print banners, so the answer is the LAST absolute-path line, not the whole
+/// output; an alias or function line (`alias codex=...`) is not a path and is
+/// ignored.
+fn shell_lookup(binary_name: &str, shell: &Path, timeout: Duration) -> Option<PathBuf> {
+    if binary_name.is_empty()
+        || !binary_name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return None;
+    }
+    let mut command = Command::new(shell);
+    command
+        .arg("-l")
+        .arg("-i")
+        .arg("-c")
+        .arg(format!("command -v {binary_name}"));
+    let (success, stdout) = run_bounded(&mut command, timeout)?;
+    if !success {
+        return None;
+    }
+    String::from_utf8_lossy(&stdout)
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| Path::new(line).is_absolute())
+        .map(PathBuf::from)
+        .filter(|path| is_executable_file(path))
 }
 
 fn login_shell_binary_path(binary_name: &str) -> Option<PathBuf> {
-    let output = Command::new("zsh")
-        .arg("-lic")
-        .arg(format!("command -v {binary_name}"))
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!path.is_empty()).then(|| PathBuf::from(path))
+    shell_lookup(binary_name, &lookup_shell()?, SHELL_LOOKUP_TIMEOUT)
 }
 
-/// Resolve a CLI binary by name ("claude" / "codex"): login shell first (it
-/// sees the user's real PATH, including version-managed installs), static
-/// locations as fallback. Never panics — a missing CLI is expected, not
-/// exceptional.
+/// Resolve a CLI binary by name ("claude" / "codex") without ever starting a
+/// shell: PATH, then the known install dirs. Cheap enough for detection
+/// code that runs on every wizard refresh. Never panics — a missing CLI is
+/// expected, not exceptional.
+pub fn resolve_binary_no_shell(binary_name: &str) -> Option<PathBuf> {
+    resolve_binary_with(
+        binary_name,
+        &LookupEnv::from_process(),
+        is_executable_file,
+        list_child_dirs,
+        |_| None,
+    )
+}
+
+/// Resolve a CLI binary by name ("claude" / "codex"): PATH, known install
+/// dirs, then the user's login shell under a 3 s bound as the last resort.
 pub fn resolve_binary(binary_name: &str) -> Option<PathBuf> {
     resolve_binary_with(
         binary_name,
-        dirs::home_dir(),
-        |p| p.exists(),
+        &LookupEnv::from_process(),
+        is_executable_file,
+        list_child_dirs,
         login_shell_binary_path,
     )
 }
@@ -316,79 +556,301 @@ pub fn install_client_plugin(client_type: &str) -> Result<(), PluginInstallError
 mod tests {
     use super::*;
 
-    // ── static_binary_candidates ────────────────────────────────────────
+    // ── test fixtures ───────────────────────────────────────────────────
+
+    fn unix_env(home: &str, path: &[&str]) -> LookupEnv {
+        LookupEnv {
+            home: Some(PathBuf::from(home)),
+            path_var: Some(std::env::join_paths(path).expect("join PATH")),
+            windows: false,
+            appdata: None,
+            local_appdata: None,
+        }
+    }
+
+    fn windows_env() -> LookupEnv {
+        LookupEnv {
+            home: Some(PathBuf::from("/users/u")),
+            path_var: Some(std::env::join_paths(["/tools/bin", "/more/bin"]).expect("join PATH")),
+            windows: true,
+            appdata: Some(PathBuf::from("/users/u/AppData/Roaming")),
+            local_appdata: Some(PathBuf::from("/users/u/AppData/Local")),
+        }
+    }
+
+    fn no_dirs(_: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    // ── PATH search ─────────────────────────────────────────────────────
 
     #[test]
-    fn static_candidates_claude_includes_self_managed_dir() {
-        let home = PathBuf::from("/home/u");
-        let c = static_binary_candidates(&home, "claude");
+    fn path_candidates_follow_path_order_with_bare_name_on_unix() {
+        let env = unix_env("/home/u", &["/a/bin", "/b/bin"]);
         assert_eq!(
-            c,
+            path_candidates(&env, "codex"),
+            vec![PathBuf::from("/a/bin/codex"), PathBuf::from("/b/bin/codex")]
+        );
+    }
+
+    #[test]
+    fn path_candidates_try_exe_cmd_bat_per_dir_on_windows() {
+        let env = windows_env();
+        assert_eq!(
+            path_candidates(&env, "claude"),
             vec![
-                PathBuf::from("/home/u/.local/bin/claude"),
-                PathBuf::from("/home/u/.claude/local/claude"),
-                PathBuf::from("/opt/homebrew/bin/claude"),
-                PathBuf::from("/usr/local/bin/claude"),
+                PathBuf::from("/tools/bin/claude.exe"),
+                PathBuf::from("/tools/bin/claude.cmd"),
+                PathBuf::from("/tools/bin/claude.bat"),
+                PathBuf::from("/more/bin/claude.exe"),
+                PathBuf::from("/more/bin/claude.cmd"),
+                PathBuf::from("/more/bin/claude.bat"),
             ]
         );
     }
 
     #[test]
-    fn static_candidates_codex_excludes_claude_local_dir() {
-        let home = PathBuf::from("/home/u");
-        let c = static_binary_candidates(&home, "codex");
+    fn path_candidates_skip_relative_and_empty_entries() {
+        // A relative PATH entry resolves against the GUI app's arbitrary cwd.
+        let env = unix_env("/home/u", &["", ".", "bin", "/abs/bin"]);
         assert_eq!(
-            c,
-            vec![
-                PathBuf::from("/home/u/.local/bin/codex"),
-                PathBuf::from("/opt/homebrew/bin/codex"),
-                PathBuf::from("/usr/local/bin/codex"),
+            path_candidates(&env, "codex"),
+            vec![PathBuf::from("/abs/bin/codex")]
+        );
+    }
+
+    #[test]
+    fn path_candidates_empty_without_a_path_variable() {
+        let mut env = unix_env("/home/u", &[]);
+        env.path_var = None;
+        assert!(path_candidates(&env, "codex").is_empty());
+    }
+
+    // ── known install dirs ──────────────────────────────────────────────
+
+    #[test]
+    fn known_dirs_claude_includes_self_managed_dir_before_system_dirs() {
+        let env = unix_env("/home/u", &[]);
+        let dirs = known_install_dirs(&env, "claude", &no_dirs);
+        assert_eq!(
+            &dirs[..4],
+            &[
+                PathBuf::from("/home/u/.local/bin"),
+                PathBuf::from("/home/u/.claude/local"),
+                PathBuf::from("/opt/homebrew/bin"),
+                PathBuf::from("/usr/local/bin"),
             ]
+        );
+    }
+
+    #[test]
+    fn known_dirs_codex_excludes_claude_local_dir() {
+        let env = unix_env("/home/u", &[]);
+        let dirs = known_install_dirs(&env, "codex", &no_dirs);
+        assert!(!dirs.contains(&PathBuf::from("/home/u/.claude/local")));
+        assert_eq!(dirs[0], PathBuf::from("/home/u/.local/bin"));
+    }
+
+    #[test]
+    fn known_dirs_list_every_nvm_node_version_newest_first() {
+        let env = unix_env("/home/u", &[]);
+        let list = |dir: &Path| {
+            if dir == Path::new("/home/u/.nvm/versions/node") {
+                vec![
+                    PathBuf::from("/home/u/.nvm/versions/node/v18.20.4"),
+                    PathBuf::from("/home/u/.nvm/versions/node/v24.11.1"),
+                    PathBuf::from("/home/u/.nvm/versions/node/v9.0.0"),
+                ]
+            } else {
+                Vec::new()
+            }
+        };
+        let dirs = known_install_dirs(&env, "codex", &list);
+        let nvm: Vec<_> = dirs
+            .iter()
+            .filter(|d| d.starts_with("/home/u/.nvm"))
+            .cloned()
+            .collect();
+        assert_eq!(
+            nvm,
+            vec![
+                PathBuf::from("/home/u/.nvm/versions/node/v24.11.1/bin"),
+                PathBuf::from("/home/u/.nvm/versions/node/v18.20.4/bin"),
+                PathBuf::from("/home/u/.nvm/versions/node/v9.0.0/bin"),
+            ],
+            "numeric version order, not lexical (v9 must sort below v18)"
+        );
+    }
+
+    #[test]
+    fn known_dirs_on_windows_use_appdata_npm_and_skip_unix_prefixes() {
+        let dirs = known_install_dirs(&windows_env(), "codex", &no_dirs);
+        assert!(dirs.contains(&PathBuf::from("/users/u/AppData/Roaming/npm")));
+        assert!(dirs.contains(&PathBuf::from(
+            "/users/u/AppData/Local/Microsoft/WinGet/Links"
+        )));
+        assert!(!dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+        assert!(!dirs.contains(&PathBuf::from("/usr/local/bin")));
+    }
+
+    #[test]
+    fn known_candidates_on_windows_find_the_npm_cmd_shim() {
+        let env = windows_env();
+        let want = PathBuf::from("/users/u/AppData/Roaming/npm/codex.cmd");
+        let exists = |p: &Path| p == want;
+        assert_eq!(
+            resolve_binary_with("codex", &env, exists, no_dirs, |_| None),
+            Some(PathBuf::from("/users/u/AppData/Roaming/npm/codex.cmd"))
         );
     }
 
     // ── resolve_binary_with: order ──────────────────────────────────────
 
     #[test]
-    fn resolve_binary_prefers_login_shell_over_static_match() {
-        // Both the login shell AND a static candidate would resolve to a
-        // path that "exists" — but they're different paths. The login
-        // shell's answer must win.
-        let home = Some(PathBuf::from("/home/u"));
+    fn resolve_binary_prefers_path_over_known_dir_over_shell() {
+        let env = unix_env("/home/u", &["/on/path"]);
+        let exists = |p: &Path| {
+            p == Path::new("/on/path/codex") || p == Path::new("/home/u/.local/bin/codex")
+        };
+        let shell = |_: &str| Some(PathBuf::from("/from/shell/codex"));
+        assert_eq!(
+            resolve_binary_with("codex", &env, exists, no_dirs, shell),
+            Some(PathBuf::from("/on/path/codex"))
+        );
+
         let exists = |p: &Path| p == Path::new("/home/u/.local/bin/codex");
-        let login_shell = |_: &str| Some(PathBuf::from("/nvm/bin/codex"));
-        let resolved = resolve_binary_with("codex", home, exists, login_shell);
-        assert_eq!(resolved, Some(PathBuf::from("/nvm/bin/codex")));
+        let shell = |_: &str| Some(PathBuf::from("/from/shell/codex"));
+        assert_eq!(
+            resolve_binary_with("codex", &env, exists, no_dirs, shell),
+            Some(PathBuf::from("/home/u/.local/bin/codex"))
+        );
     }
 
     #[test]
-    fn resolve_binary_falls_back_to_static_when_login_shell_fails() {
-        let home = Some(PathBuf::from("/home/u"));
-        let exists = |p: &Path| p == Path::new("/home/u/.local/bin/codex");
-        let login_shell = |_: &str| None;
-        let resolved = resolve_binary_with("codex", home, exists, login_shell);
-        assert_eq!(resolved, Some(PathBuf::from("/home/u/.local/bin/codex")));
+    fn resolve_binary_consults_the_shell_only_when_nothing_else_matched() {
+        let env = unix_env("/home/u", &["/on/path"]);
+        let shell_calls = std::cell::Cell::new(0);
+        let shell = |_: &str| {
+            shell_calls.set(shell_calls.get() + 1);
+            Some(PathBuf::from("/from/shell/codex"))
+        };
+        let resolved = resolve_binary_with("codex", &env, |_| false, no_dirs, shell);
+        assert_eq!(resolved, Some(PathBuf::from("/from/shell/codex")));
+        assert_eq!(shell_calls.get(), 1);
+
+        let shell_calls = std::cell::Cell::new(0);
+        let shell = |_: &str| {
+            shell_calls.set(shell_calls.get() + 1);
+            None
+        };
+        let _ = resolve_binary_with("codex", &env, |_| true, no_dirs, shell);
+        assert_eq!(shell_calls.get(), 0, "a PATH hit must not spawn a shell");
     }
 
     #[test]
     fn resolve_binary_none_when_nothing_matches() {
-        let home = Some(PathBuf::from("/home/u"));
-        let exists = |_: &Path| false;
-        let login_shell = |_: &str| None;
+        let env = unix_env("/home/u", &["/on/path"]);
         assert_eq!(
-            resolve_binary_with("codex", home, exists, login_shell),
+            resolve_binary_with("codex", &env, |_| false, no_dirs, |_| None),
             None
         );
     }
 
     #[test]
-    fn resolve_binary_none_home_no_login_shell_is_none() {
-        let exists = |_: &Path| true; // would match if home existed
-        let login_shell = |_: &str| None;
+    fn resolve_binary_without_home_or_path_still_checks_system_dirs() {
+        // No home means no per-user dirs, but /opt/homebrew/bin and
+        // /usr/local/bin are home-independent and must still be probed.
+        let env = LookupEnv::default();
+        let exists = |p: &Path| p == Path::new("/opt/homebrew/bin/codex");
         assert_eq!(
-            resolve_binary_with("codex", None, exists, login_shell),
+            resolve_binary_with("codex", &env, exists, no_dirs, |_| None),
+            Some(PathBuf::from("/opt/homebrew/bin/codex"))
+        );
+        let exists = |p: &Path| p.starts_with("/home/u");
+        assert_eq!(
+            resolve_binary_with("codex", &env, exists, no_dirs, |_| None),
+            None,
+            "per-user dirs must not be probed without a home"
+        );
+    }
+
+    // ── bounded shell fallback (real subprocesses, Unix only) ───────────
+
+    #[cfg(unix)]
+    fn write_fake_shell(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-shell");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_lookup_takes_last_absolute_line_and_passes_login_interactive_flags() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("codex");
+        std::fs::write(&target, "#!/bin/sh\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let argv_log = dir.path().join("argv.txt");
+        let shell = write_fake_shell(
+            dir.path(),
+            &format!(
+                "printf '%s|' \"$@\" > '{}'\nprintf 'welcome banner\\nalias codex=foo\\n{}\\n'",
+                argv_log.display(),
+                target.display()
+            ),
+        );
+        let found = shell_lookup("codex", &shell, Duration::from_secs(5));
+        assert_eq!(found, Some(target));
+        assert_eq!(
+            std::fs::read_to_string(&argv_log).unwrap(),
+            "-l|-i|-c|command -v codex|"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_lookup_gives_up_on_a_hanging_shell_within_the_bound() {
+        let dir = tempfile::tempdir().unwrap();
+        let shell = write_fake_shell(dir.path(), "sleep 30");
+        let started = Instant::now();
+        let found = shell_lookup("codex", &shell, Duration::from_millis(300));
+        assert_eq!(found, None);
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "hung shell must be abandoned at the bound, took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shell_lookup_ignores_a_non_path_answer_and_a_failing_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let alias_only = write_fake_shell(dir.path(), "echo 'alias codex=foo'");
+        assert_eq!(
+            shell_lookup("codex", &alias_only, Duration::from_secs(5)),
             None
         );
+        let failing = write_fake_shell(dir.path(), "echo /bin/sh; exit 1");
+        assert_eq!(
+            shell_lookup("codex", &failing, Duration::from_secs(5)),
+            None
+        );
+    }
+
+    #[test]
+    fn shell_lookup_rejects_binary_names_that_could_inject_shell_syntax() {
+        let sh = Path::new("/bin/sh");
+        assert_eq!(
+            shell_lookup("codex; touch /tmp/x", sh, Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(shell_lookup("", sh, Duration::from_secs(1)), None);
     }
 
     // ── find_marketplace_name_claude ────────────────────────────────────
@@ -423,6 +885,7 @@ mod tests {
 
     // ── find_marketplace_name_codex ─────────────────────────────────────
 
+    /// Shape captured from codex-cli 0.144.0, which derived `wenlan-local`.
     const CODEX_MARKETPLACE_JSON: &str = r#"{
   "marketplaces": [
     {
@@ -446,9 +909,9 @@ mod tests {
 
     #[test]
     fn find_marketplace_name_codex_matches_renamed_marketplace() {
-        // 7xuanlu/wenlan#348 renames the marketplace; the source URL (what
-        // we match on) is unchanged, so resolution keeps working post-merge
-        // without a code change.
+        // Older Codex builds registered this repo as `wenlan-local`; newer
+        // ones use the manifest's `7xuanlu-wenlan`. The source URL (what we
+        // match on) is the same either way, so resolution needs no change.
         let json = CODEX_MARKETPLACE_JSON.replace("wenlan-local", "7xuanlu-wenlan");
         assert_eq!(
             find_marketplace_name_codex(&json),
@@ -502,12 +965,38 @@ mod tests {
         assert_eq!(selector, format!("wenlan@{FALLBACK_MARKETPLACE_CODEX}"));
     }
 
+    /// The `name` field of a marketplace manifest checked into this repo.
+    fn manifest_name(relative: &str) -> String {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join(relative);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let value: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
+        value["name"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} has no string `name`", path.display()))
+            .to_string()
+    }
+
     #[test]
-    fn build_selector_fallback_differs_per_client() {
-        // The whole point of a per-client fallback: Codex's real name today
-        // is `wenlan-local`, not the post-rename `7xuanlu-wenlan` Claude
-        // uses — using the wrong one would install to a marketplace that
-        // doesn't exist yet.
+    fn fallback_marketplace_names_match_the_checked_in_manifests() {
+        // The fallback is what gets installed when `marketplace list --json`
+        // cannot be read; if it names a marketplace the CLI never registered,
+        // `plugin add wenlan@<name>` fails with "marketplace not found".
+        assert_eq!(
+            FALLBACK_MARKETPLACE_CLAUDE,
+            manifest_name(".claude-plugin/marketplace.json")
+        );
+        assert_eq!(
+            FALLBACK_MARKETPLACE_CODEX,
+            manifest_name(".agents/plugins/marketplace.json")
+        );
+    }
+
+    #[test]
+    fn build_selector_fallback_uses_each_clients_manifest_name() {
         let claude_selector = build_selector_with(
             "not json",
             false,
@@ -521,7 +1010,7 @@ mod tests {
             FALLBACK_MARKETPLACE_CODEX,
         );
         assert_eq!(claude_selector, "wenlan@7xuanlu-wenlan");
-        assert_eq!(codex_selector, "wenlan@wenlan-local");
+        assert_eq!(codex_selector, "wenlan@7xuanlu-wenlan");
     }
 
     // ── strip_ansi / strip_warning_lines ────────────────────────────────

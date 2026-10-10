@@ -8,16 +8,24 @@
 #   2. WENLAN_MCP_DEV_BIN env var (primary) or ORIGIN_MCP_DEV_BIN (fallback) —
 #      secondary, kept for shells that already export them. Requires Claude Code
 #      to inherit the var at startup. Accepts both for backward compatibility.
-#   3. ~/.wenlan/bin/wenlan-mcp — the path install.sh places binaries at.
+#   3. An installed binary, in this order (mirrors the order the Wenlan app
+#      uses when it writes its own MCP entry, app/src/mcp_config.rs):
+#        a. ~/.wenlan/bin/wenlan-mcp — the path install.sh places binaries at.
+#        b. The Wenlan desktop app's bundled copy:
+#           Wenlan.app/Contents/MacOS/wenlan-mcp under /Applications or
+#           ~/Applications (WENLAN_APP_DIRS, colon-separated, overrides both).
+#        c. ~/.cargo/bin/wenlan-mcp — `cargo install`.
+#        d. `wenlan-mcp` on PATH, for example from a package manager.
 #      Preferred over npx because (a) it's already on disk so MCP host
 #      handshake is instant, and (b) it sidesteps the EPERM class of npx
 #      failures when ~/.npm/_cacache contains root-owned files left over
 #      from older npm versions (npx exits before responding to initialize,
 #      MCP host then waits 30s and times out).
-#   4. npx -y wenlan-mcp@<exact version> — fallback for users who installed
-#      the plugin without running install.sh. The Claude directory rejects
-#      ranges and @latest, so this is a literal pin that the release train
-#      rewrites (scripts/bump-version.sh) and checks (scripts/validate-versions.sh).
+#   4. npx -y wenlan-mcp@<exact version> — LAST resort for users with no
+#      installed binary at all (it downloads on first use and needs network and
+#      a working npm cache). The Claude directory rejects ranges and @latest,
+#      so this is a literal pin that the release train rewrites
+#      (scripts/bump-version.sh) and checks (scripts/validate-versions.sh).
 
 # Don't enable `set -u` here: if Claude Code (or any MCP host) invokes the
 # script through a shell that doesn't populate BASH_SOURCE, `set -u` halts
@@ -34,10 +42,32 @@ if [ -n "${dev_bin}" ] && [ -x "${dev_bin}" ]; then
   exec "${dev_bin}" "$@"
 fi
 
-installed_bin="${HOME}/.wenlan/bin/wenlan-mcp"
-if [ -x "${installed_bin}" ]; then
-  exec "${installed_bin}" "$@"
-fi
+# Installed binaries. `-f` as well as `-x`: a directory is "executable" too.
+app_dirs="${WENLAN_APP_DIRS:-/Applications:${HOME}/Applications}"
+candidates=("${HOME}/.wenlan/bin/wenlan-mcp" "${HOME}/.wenlan/bin/wenlan-mcp.exe")
+IFS=":" read -r -a app_dir_list <<< "${app_dirs}"
+for app_dir in "${app_dir_list[@]}"; do
+  if [ -n "${app_dir}" ]; then
+    candidates+=("${app_dir}/Wenlan.app/Contents/MacOS/wenlan-mcp")
+  fi
+done
+candidates+=("${HOME}/.cargo/bin/wenlan-mcp" "${HOME}/.cargo/bin/wenlan-mcp.exe")
+for candidate in "${candidates[@]}"; do
+  if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
+    exec "${candidate}" "$@"
+  fi
+done
+
+# A `wenlan-mcp` on PATH. Absolute paths only: a bare name from `command -v`
+# (a function or alias) would be resolved against the current directory.
+path_bin="$(command -v wenlan-mcp 2>/dev/null || true)"
+case "${path_bin}" in
+  /*)
+    if [ -f "${path_bin}" ] && [ -x "${path_bin}" ]; then
+      exec "${path_bin}" "$@"
+    fi
+    ;;
+esac
 
 # wenlan-mcp-pin: kept in lockstep by scripts/bump-version.sh
 exec npx -y wenlan-mcp@0.18.16 "$@"

@@ -4,11 +4,21 @@
 # Resolution order (most specific first):
 #   1. Sibling file `bin/wenlan-mcp.local` next to this script.
 #   2. WENLAN_MCP_DEV_BIN env var, for local development.
-#   3. ~/.wenlan/bin/wenlan-mcp, installed by install.sh.
-#   4. npx -y wenlan-mcp@^<.codex-plugin/plugin.json version>, package fallback.
-#      The version is derived from the sibling plugin.json (the single source
-#      of truth kept on the release train) rather than a hardcoded pin that
-#      silently drifts — same approach as the Claude runner.
+#   3. An installed binary, in this order (mirrors the order the Wenlan app
+#      uses when it writes its own MCP entry, app/src/mcp_config.rs):
+#        a. ~/.wenlan/bin/wenlan-mcp, installed by install.sh.
+#        b. The Wenlan desktop app's bundled copy:
+#           Wenlan.app/Contents/MacOS/wenlan-mcp under /Applications or
+#           ~/Applications (WENLAN_APP_DIRS, colon-separated, overrides both).
+#        c. ~/.cargo/bin/wenlan-mcp — `cargo install`.
+#        d. `wenlan-mcp` on PATH, for example from a package manager.
+#      Preferred over npx: already on disk (instant MCP handshake) and it
+#      avoids npx's cache-permission failures.
+#   4. npx -y wenlan-mcp@^<.codex-plugin/plugin.json version>, LAST-resort
+#      package fallback (downloads on first use). The version is derived from
+#      the sibling plugin.json (the single source of truth kept on the release
+#      train) rather than a hardcoded pin that silently drifts — same approach
+#      as the Claude runner.
 #
 # The explicit agent name is a Codex plugin requirement: stdio MCP clients may
 # send a client name during initialize, but the fallback must not mislabel
@@ -27,10 +37,32 @@ if [ -n "${dev_bin}" ] && [ -x "${dev_bin}" ]; then
   exec "${dev_bin}" --agent-name "${agent_name}" "$@"
 fi
 
-installed_bin="${HOME}/.wenlan/bin/wenlan-mcp"
-if [ -x "${installed_bin}" ]; then
-  exec "${installed_bin}" --agent-name "${agent_name}" "$@"
-fi
+# Installed binaries. `-f` as well as `-x`: a directory is "executable" too.
+app_dirs="${WENLAN_APP_DIRS:-/Applications:${HOME}/Applications}"
+candidates=("${HOME}/.wenlan/bin/wenlan-mcp" "${HOME}/.wenlan/bin/wenlan-mcp.exe")
+IFS=":" read -r -a app_dir_list <<< "${app_dirs}"
+for app_dir in "${app_dir_list[@]}"; do
+  if [ -n "${app_dir}" ]; then
+    candidates+=("${app_dir}/Wenlan.app/Contents/MacOS/wenlan-mcp")
+  fi
+done
+candidates+=("${HOME}/.cargo/bin/wenlan-mcp" "${HOME}/.cargo/bin/wenlan-mcp.exe")
+for candidate in "${candidates[@]}"; do
+  if [ -f "${candidate}" ] && [ -x "${candidate}" ]; then
+    exec "${candidate}" --agent-name "${agent_name}" "$@"
+  fi
+done
+
+# A `wenlan-mcp` on PATH. Absolute paths only: a bare name from `command -v`
+# (a function or alias) would be resolved against the current directory.
+path_bin="$(command -v wenlan-mcp 2>/dev/null || true)"
+case "${path_bin}" in
+  /*)
+    if [ -f "${path_bin}" ] && [ -x "${path_bin}" ]; then
+      exec "${path_bin}" --agent-name "${agent_name}" "$@"
+    fi
+    ;;
+esac
 
 # Derive the npm version from the sibling plugin.json (single source of truth on
 # the release train) so the fallback can't drift from a hardcoded pin; @latest if

@@ -16,6 +16,11 @@ const REQUESTED_TAG =
   process.env.ORIGIN_TAG ||
   "";
 const BINARIES = ["wenlan", "wenlan-server", "wenlan-mcp"];
+// Written into the bin dir only after a COMPLETE install. A run reuses the
+// installed binaries when this stamp names the wanted tag and every binary
+// still has the size it was extracted with, instead of re-downloading ~60 MB
+// on every `npx wenlan` call.
+const STAMP_NAME = ".wenlan-install.json";
 
 const RELEASE_TAG_PATTERN = /^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
@@ -128,29 +133,129 @@ function printPathHint(dir) {
   );
 }
 
-async function installBinaries() {
-  if (process.platform !== "darwin" || process.arch !== "arm64") {
+function stampPath(dir) {
+  return path.join(dir, STAMP_NAME);
+}
+
+function readStamp(dir) {
+  try {
+    const stamp = JSON.parse(fs.readFileSync(stampPath(dir), "utf8"));
+    return stamp && typeof stamp === "object" ? stamp : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// null when the install in `dir` is a complete `tag` install that can be
+// reused as-is; otherwise the reason it cannot (for tests and diagnostics).
+function cacheProblem(dir, tag) {
+  const stamp = readStamp(dir);
+  if (!stamp) return "no install stamp";
+  if (stamp.tag !== tag) return `installed ${stamp.tag}, wanted ${tag}`;
+  if (stamp.asset !== ASSET) return `installed asset ${stamp.asset}, wanted ${ASSET}`;
+  for (const name of BINARIES) {
+    const expected = stamp.sizes && stamp.sizes[name];
+    let stat;
+    try {
+      stat = fs.statSync(path.join(dir, name));
+    } catch (_) {
+      return `${name} is missing`;
+    }
+    if (!stat.isFile()) return `${name} is not a file`;
+    if (!Number.isInteger(expected) || expected <= 0 || stat.size !== expected) {
+      return `${name} is not the size it was installed with`;
+    }
+    if (process.platform !== "win32" && (stat.mode & 0o111) === 0) {
+      return `${name} is not executable`;
+    }
+  }
+  return null;
+}
+
+function writeStamp(dir, tag) {
+  const sizes = {};
+  for (const name of BINARIES) {
+    sizes[name] = fs.statSync(path.join(dir, name)).size;
+  }
+  const finalPath = stampPath(dir);
+  const tmpPath = `${finalPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify({ tag, asset: ASSET, sizes }) + "\n");
+  fs.renameSync(tmpPath, finalPath);
+}
+
+function removeStamp(dir) {
+  try {
+    fs.unlinkSync(stampPath(dir));
+  } catch (_) {
+    // Already absent.
+  }
+}
+
+// Every effect is injectable so the cache logic is testable without the
+// network, a real release, or the real home directory.
+async function installBinaries(overrides = {}) {
+  const opts = {
+    requestedTag: REQUESTED_TAG,
+    dir: binDir(),
+    platform: process.platform,
+    arch: process.arch,
+    archiveDir: os.tmpdir(),
+    fetchLatestTag: latestTag,
+    downloadFile: download,
+    extract: extractBinaries,
+    log: (message) => process.stderr.write(message),
+    ...overrides,
+  };
+
+  if (opts.platform !== "darwin" || opts.arch !== "arm64") {
     throw new Error("Wenlan setup currently supports macOS Apple Silicon only.");
   }
 
-  const tag = REQUESTED_TAG ? checkTag(REQUESTED_TAG) : await latestTag();
+  const dir = opts.dir;
+  let tag;
+  if (opts.requestedTag) {
+    tag = checkTag(opts.requestedTag);
+  } else {
+    try {
+      tag = await opts.fetchLatestTag();
+    } catch (err) {
+      // Offline (or GitHub unreachable) with a complete install already on
+      // disk: run what is installed rather than failing a command that needs
+      // no network.
+      const installed = readStamp(dir);
+      if (installed && installed.tag && cacheProblem(dir, installed.tag) === null) {
+        opts.log(
+          `Could not check for a newer Wenlan release (${err.message}); ` +
+            `using the installed ${installed.tag}.\n`
+        );
+        return dir;
+      }
+      throw err;
+    }
+  }
 
-  const dir = binDir();
+  if (cacheProblem(dir, tag) === null) {
+    return dir;
+  }
+
   fs.mkdirSync(dir, { recursive: true });
+  // No stamp may survive into a half-written install: if extraction below is
+  // interrupted, the next run must see "no install" and start over.
+  removeStamp(dir);
 
-  const archivePath = path.join(os.tmpdir(), ASSET);
+  const archivePath = path.join(opts.archiveDir, ASSET);
   const url = `https://github.com/${REPO}/releases/download/${tag}/${ASSET}`;
-  process.stderr.write(`Downloading Wenlan ${tag}...\n`);
+  opts.log(`Downloading Wenlan ${tag}...\n`);
 
   try {
     try {
-      await download(url, archivePath);
+      await opts.downloadFile(url, archivePath);
     } catch (err) {
       throw new Error(
         `${err.message}. Check that the release exists at https://github.com/${REPO}/releases/tag/${tag}`
       );
     }
-    extractBinaries(archivePath, dir);
+    opts.extract(archivePath, dir);
   } finally {
     try {
       if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
@@ -164,6 +269,7 @@ async function installBinaries() {
     fs.chmodSync(dest, 0o755);
   }
 
+  writeStamp(dir, tag);
   return dir;
 }
 
@@ -184,7 +290,21 @@ async function main() {
   run(wenlan, args.length ? args : ["--help"]);
 }
 
-main().catch((err) => {
-  console.error(`wenlan setup failed: ${err.message}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(`wenlan setup failed: ${err.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  ASSET,
+  BINARIES,
+  STAMP_NAME,
+  cacheProblem,
+  checkTag,
+  extractBinaries,
+  installBinaries,
+  readStamp,
+  safeTag,
+};

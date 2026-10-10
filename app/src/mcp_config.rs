@@ -148,6 +148,80 @@ pub struct McpClient {
     pub has_raw_duplicate: Reading,
     /// The Wenlan plugin, for the three clients that have a plugin surface.
     pub has_plugin: Reading,
+    /// Whether the client PROGRAM is here, or only something it left behind.
+    /// `detected` is the superset ("any trace of this client") and keeps its
+    /// meaning; this says which kind of trace it was.
+    pub install_state: InstallState,
+    /// Whether the raw entry Wenlan wrote into the client's own config would
+    /// actually launch. `already_configured` only says an entry EXISTS.
+    pub entry_health: EntryHealth,
+}
+
+/// What kind of trace of a client is on this machine.
+///
+/// `detected` cannot say: a config file survives an uninstall, so "the config
+/// is there" and "the client is there" used to be one answer. They are two
+/// here, and `detected` is exactly "installed or config-only" (a measured yes
+/// for either, an unreadable when the question could not be answered).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum InstallState {
+    /// The app or CLI itself was found (an app bundle or `.exe`, an AppImage,
+    /// or the CLI on `PATH` / in a usual install folder).
+    Installed,
+    /// No program was found at any place this app looks, but the client's
+    /// config file or home folder is here: a leftover from an uninstall, or a
+    /// program installed somewhere unusual. NOT a claim that it is gone.
+    ConfigOnly,
+    /// Neither the program nor anything it leaves behind. Measured.
+    NotFound,
+    /// Could not be measured (a path the OS would not let this app look at, or
+    /// a folder the platform would not report). NOT `not_found`.
+    Unreadable { error: String },
+}
+
+/// Does the raw `wenlan` entry (or the legacy `origin` one when that is all
+/// there is) in a client's own config file launch a server?
+///
+/// "Launch" is checked the way a client would start it, without starting it:
+/// the command resolves to a runnable file, and the arguments are the shape the
+/// command needs. Whether the process then runs correctly is NOT checked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EntryHealth {
+    /// The config holds no Wenlan entry (or no config file). Nothing to check;
+    /// the plugin, if any, is a different surface.
+    NoEntry,
+    /// The command resolves to a runnable file and the arguments are sane.
+    Healthy,
+    /// The entry exists and would not launch. Fixed by the existing
+    /// `write_mcp_config` command, which rewrites only Wenlan's own entry.
+    NeedsRepair {
+        reason: RepairReason,
+        /// One plain sentence naming what is wrong, for the UI to show.
+        detail: String,
+    },
+    /// The config could not be read or parsed, or the command's path could not
+    /// be looked at. NOT `healthy`, and not a reason to offer a repair.
+    Unreadable { error: String },
+}
+
+/// Why an entry needs repair. Stable `snake_case` strings on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairReason {
+    /// The entry has no usable `command` (and is not a `url` entry).
+    CommandMissing,
+    /// The command names a file that is not there: a missing absolute path, a
+    /// relative path, or a bare name found nowhere on `PATH` or in the usual
+    /// install folders.
+    CommandNotFound,
+    /// Something is at the command's path and it cannot be run: a folder, an
+    /// empty file, or (Unix) a file with no execute bit.
+    CommandNotRunnable,
+    /// `args` is not a list of strings, or an `npx` entry does not ask for the
+    /// Wenlan package.
+    ArgsInvalid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -519,18 +593,276 @@ fn codex_cli_detected(
         .fold(config_exists.or(home_lookup_reading(home)), Reading::or)
 }
 
-/// Whether Cursor is installed — by app bundle, not by config file, since
-/// Cursor writes `~/.cursor/mcp.json` only once something configures it.
-/// Same tri-state rule as [`codex_cli_detected`].
-fn cursor_detected(home: Option<&Path>, exists: impl Fn(&Path) -> Reading) -> Reading {
-    let mut candidates = vec![PathBuf::from("/Applications/Cursor.app")];
-    if let Some(home) = home {
-        candidates.push(home.join("Applications/Cursor.app"));
+/// The operating system family detection is looking at. A value rather than a
+/// `cfg!`, so every OS's candidate list is testable from any host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostKind {
+    MacOs,
+    Windows,
+    Linux,
+}
+
+impl HostKind {
+    pub(crate) fn current() -> Self {
+        match std::env::consts::OS {
+            "macos" => HostKind::MacOs,
+            "windows" => HostKind::Windows,
+            _ => HostKind::Linux,
+        }
     }
-    candidates
+}
+
+/// Everything detection reads besides the client config files themselves,
+/// handed in so a test decides what the machine looks like. The real machine
+/// is [`detect_mcp_clients`]; a hermetic one is [`detect_mcp_clients_from`].
+pub(crate) struct DetectProbes<'a> {
+    pub host: HostKind,
+    /// The per-user program folder the platform reports (`%LOCALAPPDATA%` on
+    /// Windows). Only consulted on Windows.
+    pub local_data_dir: Option<&'a Path>,
+    /// `%ProgramFiles%`-style folders. Only consulted on Windows.
+    pub program_files: &'a [PathBuf],
+    /// Is anything at this path, in three values.
+    pub exists: &'a dyn Fn(&Path) -> Reading,
+    /// The children of a folder (empty when it cannot be listed).
+    pub list_dir: &'a dyn Fn(&Path) -> Vec<PathBuf>,
+    /// Resolve a CLI by name without ever starting a shell: `PATH`, then the
+    /// usual install folders (`plugin_install::resolve_binary_no_shell`).
+    pub which: &'a dyn Fn(&str) -> Option<PathBuf>,
+    /// What a command path is, for entry validation.
+    pub probe_command: &'a dyn Fn(&Path) -> CandidateProbe,
+}
+
+/// What the per-user program folder lookup contributes before any candidate
+/// under it is probed. Windows only: elsewhere no candidate hangs off it.
+fn local_data_lookup_reading(host: HostKind, local: Option<&Path>) -> Reading {
+    match (host, local) {
+        (HostKind::Windows, None) => Reading::Unreadable {
+            error: "could not determine the local application-data directory".to_string(),
+        },
+        _ => Reading::No,
+    }
+}
+
+/// `%ProgramFiles%`, `%ProgramFiles(x86)%` and `%ProgramW6432%`, deduplicated.
+/// Empty off Windows.
+fn program_files_dirs() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if std::env::consts::OS != "windows" {
+        return out;
+    }
+    for key in ["ProgramFiles", "ProgramFiles(x86)", "ProgramW6432"] {
+        if let Some(dir) = std::env::var_os(key).filter(|value| !value.is_empty()) {
+            let dir = PathBuf::from(dir);
+            if !out.contains(&dir) {
+                out.push(dir);
+            }
+        }
+    }
+    out
+}
+
+fn list_child_paths(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Where a client's app (not its CLI) can be installed, per OS. Best effort:
+/// a program installed somewhere else is still found through its CLI on
+/// `PATH`, or reported as `config_only` rather than as absent.
+fn app_candidates(
+    client_type: &str,
+    host: HostKind,
+    home: Option<&Path>,
+    local: Option<&Path>,
+    program_files: &[PathBuf],
+) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let under_home = |tail: &str| home.map(|home| home.join(tail));
+    match (client_type, host) {
+        ("cursor", HostKind::MacOs) => {
+            out.push(PathBuf::from("/Applications/Cursor.app"));
+            out.extend(under_home("Applications/Cursor.app"));
+        }
+        ("cursor", HostKind::Windows) => {
+            // Both spellings of the per-user installer's folder: the second
+            // is a different directory on a case-sensitive volume.
+            if let Some(local) = local {
+                out.push(local.join("Programs").join("cursor").join("Cursor.exe"));
+                out.push(local.join("Programs").join("Cursor").join("Cursor.exe"));
+            }
+            out.extend(
+                program_files
+                    .iter()
+                    .map(|dir| dir.join("Cursor").join("Cursor.exe")),
+            );
+        }
+        ("cursor", HostKind::Linux) => {
+            out.extend(
+                [
+                    "/usr/bin/cursor",
+                    "/usr/local/bin/cursor",
+                    "/opt/Cursor/cursor",
+                    "/opt/cursor/cursor",
+                ]
+                .map(PathBuf::from),
+            );
+            out.extend(under_home(".local/bin/cursor"));
+        }
+        ("claude_desktop", HostKind::MacOs) => {
+            out.push(PathBuf::from("/Applications/Claude.app"));
+            out.extend(under_home("Applications/Claude.app"));
+        }
+        ("claude_desktop", HostKind::Windows) => {
+            if let Some(local) = local {
+                out.push(local.join("AnthropicClaude").join("claude.exe"));
+                out.push(local.join("Programs").join("Claude").join("Claude.exe"));
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// CLI names that mean the client is installed, resolved without a shell.
+fn client_cli_names(client_type: &str) -> &'static [&'static str] {
+    match client_type {
+        "cursor" => &["cursor"],
+        "claude_code" => &["claude"],
+        // The unofficial Linux builds of Claude Desktop ship this launcher;
+        // there is no official one on macOS or Windows, so a miss is normal.
+        "claude_desktop" => &["claude-desktop"],
+        "gemini_cli" => &["gemini"],
+        "codex_cli" => &["codex"],
+        _ => &[],
+    }
+}
+
+/// Folders a Cursor AppImage is commonly kept in (it has no installer).
+fn cursor_appimage_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/opt")];
+    if let Some(home) = home {
+        dirs.push(home.join("Applications"));
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join("bin"));
+    }
+    dirs
+}
+
+/// Whether `dir` holds a file named like `<prefix>*.appimage`, ignoring case.
+fn dir_has_appimage(dir: &Path, prefix: &str, list_dir: &dyn Fn(&Path) -> Vec<PathBuf>) -> bool {
+    list_dir(dir).iter().any(|child| {
+        child
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .is_some_and(|name| name.starts_with(prefix) && name.ends_with(".appimage"))
+    })
+}
+
+/// Whether a Windows Store (MSIX) package folder for Claude is present.
+fn has_claude_store_package(local: &Path, list_dir: &dyn Fn(&Path) -> Vec<PathBuf>) -> bool {
+    list_dir(&local.join("Packages")).iter().any(|child| {
+        child
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .is_some_and(|name| name.starts_with("claude_"))
+    })
+}
+
+/// Whether the client PROGRAM is here: an app bundle or `.exe`, an AppImage, or
+/// its CLI. Never a config file — that is the other half of
+/// [`install_state_of`]. Same tri-state rule as [`codex_cli_detected`]: a
+/// candidate the OS refused to stat, or a folder the platform would not
+/// report, makes an empty result "unknown", never "absent".
+fn program_reading(client_type: &str, home: Option<&Path>, probes: &DetectProbes) -> Reading {
+    let seed = match client_type {
+        "cursor" | "claude_desktop" => home_lookup_reading(home).or(local_data_lookup_reading(
+            probes.host,
+            probes.local_data_dir,
+        )),
+        _ => Reading::No,
+    };
+    let app = if client_type == "codex_cli" {
+        // The ChatGPT desktop bundle: its Codex pane reads the same config.
+        // `Reading::No` as the config half leaves just the bundle search.
+        codex_cli_detected(Reading::No, home, probes.exists)
+    } else {
+        app_candidates(
+            client_type,
+            probes.host,
+            home,
+            probes.local_data_dir,
+            probes.program_files,
+        )
         .iter()
-        .map(|p| exists(p.as_path()))
-        .fold(home_lookup_reading(home), Reading::or)
+        .map(|p| (probes.exists)(p.as_path()))
+        .fold(seed, Reading::or)
+    };
+
+    let mut found = app;
+    for name in client_cli_names(client_type) {
+        found = found.or(Reading::of((probes.which)(name).is_some()));
+    }
+    if client_type == "cursor" && probes.host == HostKind::Linux {
+        found = found.or(Reading::of(
+            cursor_appimage_dirs(home)
+                .iter()
+                .any(|dir| dir_has_appimage(dir, "cursor", probes.list_dir)),
+        ));
+    }
+    if client_type == "claude_desktop" && probes.host == HostKind::Windows {
+        if let Some(local) = probes.local_data_dir {
+            found = found.or(Reading::of(has_claude_store_package(
+                local,
+                probes.list_dir,
+            )));
+        }
+    }
+    found
+}
+
+/// What a client leaves behind in its own home folder, beyond the one config
+/// file `detect_mcp_clients_from` already reads: Cursor's `~/.cursor` and
+/// Codex's `~/.codex` exist once the client has run, with or without a
+/// `mcp.json` / `config.toml`. Only the folder's existence is asked — never its
+/// contents (`config.toml` is the user's, and read only where it already was).
+fn client_home_dir_reading(
+    client_type: &str,
+    home: Option<&Path>,
+    exists: &dyn Fn(&Path) -> Reading,
+) -> Reading {
+    let dir = match client_type {
+        "cursor" => ".cursor",
+        "codex_cli" => ".codex",
+        _ => return Reading::No,
+    };
+    match home {
+        Some(home) => exists(&home.join(dir)),
+        // The missing home is already reported through the config path and the
+        // program search; adding it here would only repeat it.
+        None => Reading::No,
+    }
+}
+
+/// Program evidence and leftover evidence, combined into the one state the UI
+/// shows. An unreadable half never becomes "config only": that would claim the
+/// program is absent when it merely could not be looked for.
+fn install_state_of(program: &Reading, leftovers: &Reading) -> InstallState {
+    match (program, leftovers) {
+        (Reading::Yes, _) => InstallState::Installed,
+        (Reading::No, Reading::Yes) => InstallState::ConfigOnly,
+        (Reading::Unreadable { error }, _) | (Reading::No, Reading::Unreadable { error }) => {
+            InstallState::Unreadable {
+                error: error.clone(),
+            }
+        }
+        (Reading::No, Reading::No) => InstallState::NotFound,
+    }
 }
 
 /// Whether a client config's contents hold a raw wenlan/origin `mcpServers`
@@ -596,13 +928,264 @@ fn client_plugin_enabled_for(
     }
 }
 
+/// One `wenlan` entry reduced to the parts a client needs to start it.
+struct EntrySpec {
+    /// `None` when the entry has no usable `command` string.
+    command: Option<String>,
+    /// `Err` is the sentence for an `args` value that is not a list of strings.
+    args: Result<Vec<String>, String>,
+    /// A `url` entry (a remote server) has no command to check.
+    has_url: bool,
+    /// Set when the entry is not even a table/object, for the detail sentence.
+    not_an_entry: Option<&'static str>,
+}
+
+fn entry_spec_json(entry: &serde_json::Value) -> EntrySpec {
+    let command = entry
+        .get("command")
+        .and_then(|c| c.as_str())
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(String::from);
+    let args = match entry.get("args") {
+        None | Some(serde_json::Value::Null) => Ok(Vec::new()),
+        Some(serde_json::Value::Array(items)) => items
+            .iter()
+            .map(|item| item.as_str().map(String::from))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| "`args` has to be a list of strings".to_string()),
+        Some(other) => Err(format!(
+            "`args` is {}, but it has to be a list of strings",
+            json_type_name(other)
+        )),
+    };
+    EntrySpec {
+        command,
+        args,
+        has_url: entry
+            .get("url")
+            .and_then(|u| u.as_str())
+            .is_some_and(|u| !u.trim().is_empty()),
+        not_an_entry: (!entry.is_object()).then(|| json_type_name(entry)),
+    }
+}
+
+fn entry_spec_toml(entry: &toml_edit::Item) -> EntrySpec {
+    let command = entry
+        .get("command")
+        .and_then(|c| c.as_str())
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(String::from);
+    let args = match entry.get("args") {
+        None => Ok(Vec::new()),
+        Some(item) => match item.as_array() {
+            Some(items) => items
+                .iter()
+                .map(|value| value.as_str().map(String::from))
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| "`args` has to be a list of strings".to_string()),
+            None => Err(format!(
+                "`args` is {}, but it has to be a list of strings",
+                item.type_name()
+            )),
+        },
+    };
+    EntrySpec {
+        command,
+        args,
+        has_url: entry
+            .get("url")
+            .and_then(|u| u.as_str())
+            .is_some_and(|u| !u.trim().is_empty()),
+        not_an_entry: (!entry.is_table_like()).then_some("not a table"),
+    }
+}
+
+/// The program name a command launches, lower-cased and without a launcher
+/// extension: `C:\Program Files\nodejs\npx.cmd` and `/usr/bin/npx` are both
+/// `npx`.
+fn command_stem(command: &str) -> String {
+    let file = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    let lower = file.to_lowercase();
+    for ext in [".exe", ".cmd", ".bat", ".com"] {
+        if let Some(stem) = lower.strip_suffix(ext) {
+            return stem.to_string();
+        }
+    }
+    lower
+}
+
+/// What Wenlan's own package is called on npm, now and before the rename.
+fn is_wenlan_mcp_package(arg: &str) -> bool {
+    ["wenlan-mcp", "origin-mcp"]
+        .iter()
+        .any(|name| arg == *name || arg.strip_prefix(*name).is_some_and(|r| r.starts_with('@')))
+}
+
+enum CommandCheck {
+    Runs,
+    Problem(RepairReason, String),
+    /// The command's path could not be looked at. NOT a problem with it.
+    Unreadable(String),
+}
+
+/// Whether `command` would start, resolved the way a client would find it but
+/// without starting it: an absolute path is probed as a file; a bare name is
+/// looked up on `PATH` and in the usual install folders (no shell); anything
+/// else (a relative path, `~/...`) is refused, because a client starts its
+/// servers from a folder this app cannot know and does not expand `~`.
+fn check_command(command: &str, probes: &DetectProbes) -> CommandCheck {
+    let path = Path::new(command);
+    if path.is_absolute() {
+        return match (probes.probe_command)(path) {
+            CandidateProbe::File => CommandCheck::Runs,
+            CandidateProbe::Absent => CommandCheck::Problem(
+                RepairReason::CommandNotFound,
+                format!("{command} does not exist."),
+            ),
+            CandidateProbe::NotAFile => CommandCheck::Problem(
+                RepairReason::CommandNotRunnable,
+                format!("{command} is a folder, not a program."),
+            ),
+            CandidateProbe::NotExecutable { reason } => CommandCheck::Problem(
+                RepairReason::CommandNotRunnable,
+                format!("{command} cannot be run: {reason}."),
+            ),
+            CandidateProbe::Unreadable { error } => {
+                CommandCheck::Unreadable(format!("could not look at {command}: {error}"))
+            }
+        };
+    }
+    if command.contains(['/', '\\']) {
+        return CommandCheck::Problem(
+            RepairReason::CommandNotFound,
+            format!(
+                "{command} is a relative path. MCP clients start servers from a folder Wenlan \
+                 cannot know, and do not expand `~`, so it has to be the full path."
+            ),
+        );
+    }
+    // A bare name. The resolver adds the launcher extensions on Windows, so
+    // `npx.cmd` is asked for as `npx`.
+    let name = if probes.host == HostKind::Windows {
+        command_stem(command)
+    } else {
+        command.to_string()
+    };
+    if (probes.which)(&name).is_some() {
+        CommandCheck::Runs
+    } else {
+        CommandCheck::Problem(
+            RepairReason::CommandNotFound,
+            format!("`{command}` was not found on PATH or in the usual install folders."),
+        )
+    }
+}
+
+fn entry_health_of(spec: EntrySpec, probes: &DetectProbes) -> EntryHealth {
+    let needs_repair = |reason, detail: String| EntryHealth::NeedsRepair { reason, detail };
+    let Some(command) = spec.command else {
+        if spec.has_url {
+            // A remote (`url`) entry has no command to check, and is not ours
+            // to second-guess.
+            return EntryHealth::Healthy;
+        }
+        return needs_repair(
+            RepairReason::CommandMissing,
+            match spec.not_an_entry {
+                Some(kind) => format!("The Wenlan entry is {kind}, not an entry with a command."),
+                None => "The Wenlan entry has no command to run.".to_string(),
+            },
+        );
+    };
+    let args = match spec.args {
+        Ok(args) => args,
+        Err(why) => return needs_repair(RepairReason::ArgsInvalid, format!("{why}.")),
+    };
+    match check_command(&command, probes) {
+        CommandCheck::Runs => {}
+        CommandCheck::Problem(reason, detail) => return needs_repair(reason, detail),
+        CommandCheck::Unreadable(error) => return EntryHealth::Unreadable { error },
+    }
+    // `npx` is only Wenlan's launcher if it is asked for Wenlan's package.
+    if command_stem(&command) == "npx" && !args.iter().any(|arg| is_wenlan_mcp_package(arg)) {
+        return needs_repair(
+            RepairReason::ArgsInvalid,
+            "The entry runs npx without asking for wenlan-mcp (expected `-y wenlan-mcp`)."
+                .to_string(),
+        );
+    }
+    EntryHealth::Healthy
+}
+
+/// Whether the raw Wenlan entry in a client's config would launch.
+///
+/// Judged on the `wenlan` entry, or on the legacy `origin` entry when that is
+/// all there is. The same single read of the config file feeds this and
+/// `has_raw_entry`, so the two cannot describe different instants. An
+/// unreadable or unparseable file is `unreadable`, never `no_entry`, and never
+/// a reason to offer a repair that would rewrite a file nobody could read.
+fn entry_health_reading(
+    client_type: &str,
+    config: &ConfigRead,
+    probes: &DetectProbes,
+) -> EntryHealth {
+    let body = match config {
+        ConfigRead::Absent => return EntryHealth::NoEntry,
+        ConfigRead::Unreadable(error) => {
+            return EntryHealth::Unreadable {
+                error: error.clone(),
+            }
+        }
+        ConfigRead::Contents(body) => body,
+    };
+    if client_type == "codex_cli" {
+        let doc = match parse_toml(body) {
+            Ok(doc) => doc,
+            Err(error) => return EntryHealth::Unreadable { error },
+        };
+        match doc.get("mcp_servers").and_then(|servers| {
+            servers
+                .get(MCP_SERVER_KEY)
+                .or(servers.get(LEGACY_MCP_SERVER_KEY))
+        }) {
+            Some(entry) => entry_health_of(entry_spec_toml(entry), probes),
+            None => EntryHealth::NoEntry,
+        }
+    } else {
+        let value = match parse_json(body) {
+            Ok(value) => value,
+            Err(error) => return EntryHealth::Unreadable { error },
+        };
+        match value.get("mcpServers").and_then(|servers| {
+            servers
+                .get(MCP_SERVER_KEY)
+                .or(servers.get(LEGACY_MCP_SERVER_KEY))
+        }) {
+            Some(entry) => entry_health_of(entry_spec_json(entry), probes),
+            None => EntryHealth::NoEntry,
+        }
+    }
+}
+
 /// Detect installed MCP-compatible tools and whether Wenlan is already
 /// configured — in three values per fact, never two. See [`Reading`].
 pub fn detect_mcp_clients() -> Vec<McpClient> {
-    detect_mcp_clients_from(
+    let local_data_dir = dirs::data_local_dir();
+    let program_files = program_files_dirs();
+    detect_mcp_clients_with(
         dirs::home_dir().as_deref(),
         dirs::config_dir().as_deref(),
-        path_exists_reading,
+        &DetectProbes {
+            host: HostKind::current(),
+            local_data_dir: local_data_dir.as_deref(),
+            program_files: &program_files,
+            exists: &path_exists_reading,
+            list_dir: &list_child_paths,
+            which: &crate::plugin_install::resolve_binary_no_shell,
+            probe_command: &probe_candidate,
+        },
     )
 }
 
@@ -610,10 +1193,36 @@ pub fn detect_mcp_clients() -> Vec<McpClient> {
 /// The seam exists because `dirs::home_dir()` on Windows resolves the known
 /// folder and IGNORES `$HOME`, so "the platform would not report a home
 /// directory" is unreachable through the environment there.
+///
+/// HERMETIC: it looks at the macOS candidate set and finds no CLI on `PATH`,
+/// whatever machine it runs on, so a test answers for the temp directory it
+/// built and not for the developer's Cursor or Codex. The real machine is
+/// [`detect_mcp_clients`]; another OS is [`detect_mcp_clients_with`].
+#[cfg(test)]
 pub(crate) fn detect_mcp_clients_from(
     home: Option<&Path>,
     config_dir: Option<&Path>,
     exists: impl Fn(&Path) -> Reading,
+) -> Vec<McpClient> {
+    detect_mcp_clients_with(
+        home,
+        config_dir,
+        &DetectProbes {
+            host: HostKind::MacOs,
+            local_data_dir: None,
+            program_files: &[],
+            exists: &exists,
+            list_dir: &|_| Vec::new(),
+            which: &|_| None,
+            probe_command: &probe_candidate,
+        },
+    )
+}
+
+pub(crate) fn detect_mcp_clients_with(
+    home: Option<&Path>,
+    config_dir: Option<&Path>,
+    probes: &DetectProbes,
 ) -> Vec<McpClient> {
     let clients = [
         ("Cursor", "cursor"),
@@ -648,18 +1257,21 @@ pub(crate) fn detect_mcp_clients_from(
             let has_raw_entry = raw_entry_reading(client_type, &config);
             let has_raw_duplicate = raw_duplicate_reading(client_type, &config);
             let has_plugin = client_plugin_enabled_for(client_type, home, config_dir);
+            let entry_health = entry_health_reading(client_type, &config, probes);
 
-            let detected = match *client_type {
-                // Cursor: detect by app bundle, not config file — Cursor writes
-                // `~/.cursor/mcp.json` only once something configures it.
-                "cursor" => cursor_detected(home, &exists),
-                // Codex CLI also detects off ChatGPT desktop's bundle: its Codex
-                // pane reads the same `~/.codex/config.toml`, so a user who
-                // only has ChatGPT desktop still gets this row.
-                "codex_cli" => codex_cli_detected(config.present(), home, &exists),
-                // Everything else: the config file's own presence.
-                _ => config.present(),
-            };
+            // Two kinds of evidence that the client is here. The program (an app
+            // bundle, an .exe, an AppImage, its CLI) is the real thing; the
+            // config file and the client's own home folder survive an
+            // uninstall. `detected` is both, as before — the install state is
+            // what tells them apart. A config file alone used to be reported as
+            // an installed client.
+            let program = program_reading(client_type, home, probes);
+            let leftovers =
+                config
+                    .present()
+                    .or(client_home_dir_reading(client_type, home, probes.exists));
+            let detected = program.clone().or(leftovers.clone());
+            let install_state = install_state_of(&program, &leftovers);
 
             McpClient {
                 name: name.to_string(),
@@ -670,6 +1282,8 @@ pub(crate) fn detect_mcp_clients_from(
                 has_raw_entry,
                 has_raw_duplicate,
                 has_plugin,
+                install_state,
+                entry_health,
             }
         })
         .collect()
@@ -3320,10 +3934,12 @@ mod tests {
     fn test_detect_mcp_clients_has_exactly_one_codex_cli_row() {
         // ChatGPT desktop shares ~/.codex/config.toml with Codex CLI — it
         // must fold into the existing codex_cli row, never add a second row.
-        let codex_rows: Vec<_> = detect_mcp_clients()
-            .into_iter()
-            .filter(|c| c.client_type == "codex_cli")
-            .collect();
+        let tmp = tempfile::tempdir().unwrap();
+        let codex_rows: Vec<_> =
+            detect_mcp_clients_from(Some(tmp.path()), Some(tmp.path()), |_| Reading::No)
+                .into_iter()
+                .filter(|c| c.client_type == "codex_cli")
+                .collect();
         assert_eq!(
             codex_rows.len(),
             1,
@@ -3462,8 +4078,11 @@ mod tests {
         assert_eq!(cursor.has_raw_entry, Reading::Yes);
         assert_eq!(cursor.already_configured, Reading::Yes);
         assert_eq!(cursor.has_plugin, Reading::No);
-        // Cursor detects by app bundle, and the injected probe says no bundle.
-        assert_eq!(cursor.detected, Reading::No);
+        // The injected probe says there is no Cursor app, so the config file is
+        // all that is here: still `detected` (the superset), but reported as
+        // what it is rather than as an installed client.
+        assert_eq!(cursor.install_state, InstallState::ConfigOnly);
+        assert_eq!(cursor.detected, Reading::Yes);
     }
 
     /// `Reading::or` is the OR that `already_configured` is built from, and the
@@ -3513,10 +4132,12 @@ mod tests {
 
     #[test]
     fn test_detect_includes_new_clients() {
-        let types: Vec<String> = detect_mcp_clients()
-            .into_iter()
-            .map(|c| c.client_type)
-            .collect();
+        let tmp = tempfile::tempdir().unwrap();
+        let types: Vec<String> =
+            detect_mcp_clients_from(Some(tmp.path()), Some(tmp.path()), |_| Reading::No)
+                .into_iter()
+                .map(|c| c.client_type)
+                .collect();
         for expected in [
             "cursor",
             "claude_code",
@@ -4357,5 +4978,1083 @@ args = ["-y", "wenlan-mcp"]
         )
         .unwrap();
         assert_eq!(reported, undetermined);
+    }
+
+    // ── Install state: the program, or only what it left behind ──────────
+
+    /// A described machine for [`detect_mcp_clients_with`]: every path the OS
+    /// would say is there, the folders that can be listed, and the CLI names
+    /// that resolve. Config files are still REAL reads of the temp home a test
+    /// passes, so nothing here ever looks at the developer's own machine.
+    struct Machine {
+        host: HostKind,
+        local: Option<PathBuf>,
+        program_files: Vec<PathBuf>,
+        existing: Vec<PathBuf>,
+        listings: Vec<(PathBuf, Vec<PathBuf>)>,
+        on_path: Vec<&'static str>,
+        unreadable: Vec<PathBuf>,
+    }
+
+    impl Machine {
+        fn new(host: HostKind) -> Self {
+            Machine {
+                host,
+                local: None,
+                program_files: Vec::new(),
+                existing: Vec::new(),
+                listings: Vec::new(),
+                on_path: Vec::new(),
+                unreadable: Vec::new(),
+            }
+        }
+
+        fn detect(&self, home: &Path) -> Vec<McpClient> {
+            let exists = |p: &Path| {
+                if self.unreadable.iter().any(|u| u == p) {
+                    return Reading::Unreadable {
+                        error: "Access is denied. (os error 5)".to_string(),
+                    };
+                }
+                Reading::of(self.existing.iter().any(|e| e == p))
+            };
+            let list_dir = |p: &Path| {
+                self.listings
+                    .iter()
+                    .find(|(dir, _)| dir == p)
+                    .map(|(_, children)| children.clone())
+                    .unwrap_or_default()
+            };
+            let which = |name: &str| {
+                self.on_path
+                    .contains(&name)
+                    .then(|| PathBuf::from("/fake/bin").join(name))
+            };
+            detect_mcp_clients_with(
+                Some(home),
+                Some(home),
+                &DetectProbes {
+                    host: self.host,
+                    local_data_dir: self.local.as_deref(),
+                    program_files: &self.program_files,
+                    exists: &exists,
+                    list_dir: &list_dir,
+                    which: &which,
+                    probe_command: &probe_candidate,
+                },
+            )
+        }
+
+        fn install_state(&self, home: &Path, client_type: &str) -> InstallState {
+            row(&self.detect(home), client_type).install_state.clone()
+        }
+    }
+
+    fn row<'a>(clients: &'a [McpClient], client_type: &str) -> &'a McpClient {
+        clients
+            .iter()
+            .find(|c| c.client_type == client_type)
+            .expect("every client keeps a row")
+    }
+
+    /// Every place Cursor can live that is not a macOS `/Applications`, one OS
+    /// at a time. Each case makes EXACTLY that path the only thing on the
+    /// machine, so a typo in a candidate fails here, and the control at the end
+    /// proves the fixture can say "not found".
+    #[test]
+    fn cursor_is_found_beyond_applications_on_each_os() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let local = home.join("AppData").join("Local");
+        let program_files = home.join("PF");
+
+        let cases: Vec<(HostKind, PathBuf)> = vec![
+            (HostKind::MacOs, PathBuf::from("/Applications/Cursor.app")),
+            (HostKind::MacOs, home.join("Applications/Cursor.app")),
+            (
+                HostKind::Windows,
+                local.join("Programs").join("cursor").join("Cursor.exe"),
+            ),
+            (
+                HostKind::Windows,
+                local.join("Programs").join("Cursor").join("Cursor.exe"),
+            ),
+            (
+                HostKind::Windows,
+                program_files.join("Cursor").join("Cursor.exe"),
+            ),
+            (HostKind::Linux, PathBuf::from("/usr/bin/cursor")),
+            (HostKind::Linux, PathBuf::from("/usr/local/bin/cursor")),
+            (HostKind::Linux, PathBuf::from("/opt/Cursor/cursor")),
+            (HostKind::Linux, PathBuf::from("/opt/cursor/cursor")),
+            (HostKind::Linux, home.join(".local/bin/cursor")),
+        ];
+        for (host, hit) in cases {
+            let mut machine = Machine::new(host);
+            machine.local = Some(local.clone());
+            machine.program_files = vec![program_files.clone()];
+
+            assert_eq!(
+                machine.install_state(home, "cursor"),
+                InstallState::NotFound,
+                "control: an empty {host:?} machine has no Cursor"
+            );
+            machine.existing = vec![hit.clone()];
+            assert_eq!(
+                machine.install_state(home, "cursor"),
+                InstallState::Installed,
+                "{} was not probed on {host:?}",
+                hit.display()
+            );
+        }
+
+        // The OS branch is the point: a Windows install location means nothing
+        // on a Linux host.
+        let mut machine = Machine::new(HostKind::Linux);
+        machine.local = Some(local.clone());
+        machine.existing = vec![local.join("Programs").join("cursor").join("Cursor.exe")];
+        assert_eq!(
+            machine.install_state(home, "cursor"),
+            InstallState::NotFound
+        );
+    }
+
+    #[test]
+    fn cursor_cli_on_path_or_an_appimage_counts_as_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        let mut machine = Machine::new(HostKind::Linux);
+        machine.on_path = vec!["cursor"];
+        assert_eq!(
+            machine.install_state(home, "cursor"),
+            InstallState::Installed
+        );
+
+        // An AppImage has no installer; it sits wherever the user put it.
+        let apps = home.join("Applications");
+        for (listed, expected) in [
+            ("Cursor-0.50.5-x86_64.AppImage", InstallState::Installed),
+            ("cursor.appimage", InstallState::Installed),
+            ("Notes-1.0.AppImage", InstallState::NotFound),
+            ("cursor-notes.txt", InstallState::NotFound),
+        ] {
+            let mut machine = Machine::new(HostKind::Linux);
+            machine.listings = vec![(apps.clone(), vec![apps.join(listed)])];
+            assert_eq!(
+                machine.install_state(home, "cursor"),
+                expected,
+                "{listed} in ~/Applications"
+            );
+        }
+    }
+
+    /// The finding: a leftover config used to be indistinguishable from an
+    /// installed client. Now the row says which it is, and `detected` (the
+    /// superset) keeps saying yes.
+    #[test]
+    fn a_config_with_no_program_is_config_only_and_still_detected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".gemini")).unwrap();
+        std::fs::write(home.join(".gemini").join("settings.json"), "{}").unwrap();
+        std::fs::write(home.join(".claude.json"), "{}").unwrap();
+
+        let machine = Machine::new(HostKind::MacOs);
+        let clients = machine.detect(home);
+        for client_type in ["gemini_cli", "claude_code"] {
+            let client = row(&clients, client_type);
+            assert_eq!(
+                client.install_state,
+                InstallState::ConfigOnly,
+                "{client_type}"
+            );
+            assert_eq!(client.detected, Reading::Yes, "{client_type}");
+        }
+
+        // The same configs with the CLIs present are installs.
+        let mut machine = Machine::new(HostKind::MacOs);
+        machine.on_path = vec!["gemini", "claude"];
+        let clients = machine.detect(home);
+        for client_type in ["gemini_cli", "claude_code"] {
+            assert_eq!(
+                row(&clients, client_type).install_state,
+                InstallState::Installed,
+                "{client_type}"
+            );
+        }
+    }
+
+    /// A fresh Claude Code has no `~/.claude.json` until it first runs; the CLI
+    /// on PATH is what says it is installed.
+    #[test]
+    fn a_cli_with_no_config_yet_is_installed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut machine = Machine::new(HostKind::Linux);
+        machine.on_path = vec!["claude"];
+        let clients = machine.detect(tmp.path());
+        let claude = row(&clients, "claude_code");
+        assert_eq!(claude.install_state, InstallState::Installed);
+        assert_eq!(claude.detected, Reading::Yes);
+        assert_eq!(
+            row(&clients, "gemini_cli").install_state,
+            InstallState::NotFound,
+            "control: an unrelated CLI is not found"
+        );
+    }
+
+    /// Cursor and Codex leave a home folder once they have run, whether or not
+    /// it holds a config file. The folder is leftover evidence, never install
+    /// evidence.
+    #[test]
+    fn a_client_home_folder_alone_is_config_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        for (client_type, folder) in [("cursor", ".cursor"), ("codex_cli", ".codex")] {
+            let mut machine = Machine::new(HostKind::Linux);
+            assert_eq!(
+                machine.install_state(home, client_type),
+                InstallState::NotFound,
+                "control: {client_type} on an empty machine"
+            );
+            machine.existing = vec![home.join(folder)];
+            let clients = machine.detect(home);
+            let client = row(&clients, client_type);
+            assert_eq!(
+                client.install_state,
+                InstallState::ConfigOnly,
+                "{client_type}: ~/{folder} is a leftover, not a program"
+            );
+            assert_eq!(client.detected, Reading::Yes);
+        }
+    }
+
+    /// Codex used to be detected through ChatGPT.app or its config file only.
+    #[test]
+    fn codex_is_found_by_its_cli_and_not_only_through_chatgpt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+
+        let mut machine = Machine::new(HostKind::Linux);
+        machine.on_path = vec!["codex"];
+        assert_eq!(
+            machine.install_state(home, "codex_cli"),
+            InstallState::Installed,
+            "codex on PATH, no ChatGPT, no ~/.codex"
+        );
+
+        let mut machine = Machine::new(HostKind::MacOs);
+        machine.existing = vec![PathBuf::from("/Applications/ChatGPT.app")];
+        assert_eq!(
+            machine.install_state(home, "codex_cli"),
+            InstallState::Installed,
+            "the ChatGPT desktop bundle still counts"
+        );
+
+        let machine = Machine::new(HostKind::Windows);
+        assert_eq!(
+            machine.install_state(home, "codex_cli"),
+            InstallState::NotFound
+        );
+    }
+
+    #[test]
+    fn claude_desktop_is_found_per_os() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let local = home.join("AppData").join("Local");
+
+        let mut machine = Machine::new(HostKind::MacOs);
+        machine.existing = vec![PathBuf::from("/Applications/Claude.app")];
+        assert_eq!(
+            machine.install_state(home, "claude_desktop"),
+            InstallState::Installed
+        );
+
+        let mut machine = Machine::new(HostKind::Windows);
+        machine.local = Some(local.clone());
+        machine.existing = vec![local.join("AnthropicClaude").join("claude.exe")];
+        assert_eq!(
+            machine.install_state(home, "claude_desktop"),
+            InstallState::Installed
+        );
+
+        // The Microsoft Store package is a folder under Packages.
+        let mut machine = Machine::new(HostKind::Windows);
+        machine.local = Some(local.clone());
+        let packages = local.join("Packages");
+        machine.listings = vec![(
+            packages.clone(),
+            vec![packages.join("Claude_pzs8sxrjxfjjc")],
+        )];
+        assert_eq!(
+            machine.install_state(home, "claude_desktop"),
+            InstallState::Installed
+        );
+
+        // A leftover config with no app.
+        std::fs::create_dir_all(home.join("Claude")).unwrap();
+        std::fs::write(home.join("Claude").join("claude_desktop_config.json"), "{}").unwrap();
+        let machine = Machine::new(HostKind::MacOs);
+        assert_eq!(
+            machine.install_state(home, "claude_desktop"),
+            InstallState::ConfigOnly
+        );
+    }
+
+    /// A look the OS refused is not "no program": it cannot be promoted to
+    /// `config_only` (which says the program is gone) or `not_found`.
+    #[test]
+    fn a_program_search_that_could_not_look_is_never_config_only_or_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let bundle = PathBuf::from("/Applications/Cursor.app");
+
+        let mut machine = Machine::new(HostKind::MacOs);
+        machine.unreadable = vec![bundle.clone()];
+        let clients = machine.detect(home);
+        let cursor = row(&clients, "cursor");
+        assert!(
+            matches!(cursor.install_state, InstallState::Unreadable { .. }),
+            "{:?}",
+            cursor.install_state
+        );
+        assert!(matches!(cursor.detected, Reading::Unreadable { .. }));
+
+        // With a config file present the client IS detected, but whether the
+        // program is there is still unknown.
+        std::fs::create_dir_all(home.join(".cursor")).unwrap();
+        std::fs::write(home.join(".cursor").join("mcp.json"), "{}").unwrap();
+        let clients = machine.detect(home);
+        let cursor = row(&clients, "cursor");
+        assert!(
+            matches!(cursor.install_state, InstallState::Unreadable { .. }),
+            "an unread program search reported {:?}",
+            cursor.install_state
+        );
+        assert_eq!(cursor.detected, Reading::Yes);
+    }
+
+    /// Windows candidates hang off the per-user program folder. If the platform
+    /// would not report it, the search did not cover them.
+    #[test]
+    fn a_windows_machine_with_no_local_data_dir_is_unknown_not_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let machine = Machine::new(HostKind::Windows);
+        let state = machine.install_state(tmp.path(), "cursor");
+        match state {
+            InstallState::Unreadable { error } => assert!(error.contains("local application-data")),
+            other => panic!("an undetermined local data dir reported {other:?}"),
+        }
+    }
+
+    /// `detected` is exactly "installed or config-only", across every client
+    /// and a spread of machines — never a third opinion.
+    #[test]
+    fn detected_is_exactly_installed_or_config_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::write(home.join(".claude.json"), "{}").unwrap();
+
+        let empty = Machine::new(HostKind::MacOs);
+        let mut everything_on_path = Machine::new(HostKind::Linux);
+        everything_on_path.on_path = vec!["cursor", "codex", "gemini", "claude"];
+        let mut leftovers_only = Machine::new(HostKind::MacOs);
+        leftovers_only.existing = vec![home.join(".cursor"), home.join(".codex")];
+        let mut refused = Machine::new(HostKind::MacOs);
+        refused.unreadable = vec![PathBuf::from("/Applications/Cursor.app")];
+
+        for machine in [&empty, &everything_on_path, &leftovers_only, &refused] {
+            for client in machine.detect(home) {
+                match &client.install_state {
+                    InstallState::Installed | InstallState::ConfigOnly => assert_eq!(
+                        client.detected,
+                        Reading::Yes,
+                        "{}: {:?}",
+                        client.client_type,
+                        client.install_state
+                    ),
+                    InstallState::NotFound => assert_eq!(
+                        client.detected,
+                        Reading::No,
+                        "{}: not_found must be a measured no",
+                        client.client_type
+                    ),
+                    InstallState::Unreadable { .. } => assert!(
+                        matches!(client.detected, Reading::Yes | Reading::Unreadable { .. }),
+                        "{}: an unread install state cannot be a measured no: {:?}",
+                        client.client_type,
+                        client.detected
+                    ),
+                }
+            }
+        }
+    }
+
+    // ── Entry health: would the configured command launch? ───────────────
+
+    /// A `DetectProbes` whose only live parts are the two entry-validation
+    /// lookups, handed in by the test.
+    fn nothing_exists(_: &Path) -> Reading {
+        Reading::No
+    }
+
+    fn nothing_to_list(_: &Path) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    fn health_probes<'a>(
+        host: HostKind,
+        which: &'a dyn Fn(&str) -> Option<PathBuf>,
+        probe_command: &'a dyn Fn(&Path) -> CandidateProbe,
+    ) -> DetectProbes<'a> {
+        DetectProbes {
+            host,
+            local_data_dir: None,
+            program_files: &[],
+            exists: &nothing_exists,
+            list_dir: &nothing_to_list,
+            which,
+            probe_command,
+        }
+    }
+
+    /// `which` that resolves exactly the names given.
+    fn resolves<'a>(names: &'a [&'a str]) -> impl Fn(&str) -> Option<PathBuf> + 'a {
+        move |name: &str| {
+            names
+                .contains(&name)
+                .then(|| PathBuf::from("/fake/bin").join(name))
+        }
+    }
+
+    fn json_health(
+        body: &str,
+        names: &[&str],
+        probe: impl Fn(&Path) -> CandidateProbe,
+    ) -> EntryHealth {
+        let which = resolves(names);
+        entry_health_reading(
+            "cursor",
+            &ConfigRead::Contents(body.to_string()),
+            &health_probes(HostKind::MacOs, &which, &probe),
+        )
+    }
+
+    fn toml_health(
+        body: &str,
+        names: &[&str],
+        probe: impl Fn(&Path) -> CandidateProbe,
+    ) -> EntryHealth {
+        let which = resolves(names);
+        entry_health_reading(
+            "codex_cli",
+            &ConfigRead::Contents(body.to_string()),
+            &health_probes(HostKind::MacOs, &which, &probe),
+        )
+    }
+
+    fn is_a_file(_: &Path) -> CandidateProbe {
+        CandidateProbe::File
+    }
+
+    #[track_caller]
+    fn assert_repair(health: EntryHealth, expected: RepairReason) -> String {
+        match health {
+            EntryHealth::NeedsRepair { reason, detail } => {
+                assert_eq!(reason, expected, "{detail}");
+                assert!(!detail.is_empty());
+                detail
+            }
+            other => panic!("expected needs_repair/{expected:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_entry_when_there_is_nothing_to_check() {
+        let no_probe = |_: &Path| CandidateProbe::Absent;
+        let which = resolves(&[]);
+        let probes = health_probes(HostKind::MacOs, &which, &no_probe);
+        assert_eq!(
+            entry_health_reading("cursor", &ConfigRead::Absent, &probes),
+            EntryHealth::NoEntry
+        );
+        for body in [
+            "{}",
+            r#"{"mcpServers": {"other": {"command": "x"}}}"#,
+            r#"{"mcpServers": []}"#,
+        ] {
+            assert_eq!(
+                json_health(body, &[], no_probe),
+                EntryHealth::NoEntry,
+                "{body}"
+            );
+        }
+        assert_eq!(
+            toml_health("model = \"gpt-5.5\"\n", &[], no_probe),
+            EntryHealth::NoEntry
+        );
+    }
+
+    #[test]
+    fn an_entry_that_resolves_is_healthy() {
+        // An absolute path to a runnable file, with and without `args`.
+        for entry in [
+            r#"{"command": "/opt/wenlan/bin/wenlan-mcp", "args": []}"#,
+            r#"{"command": "/opt/wenlan/bin/wenlan-mcp"}"#,
+            r#"{"command": "/opt/wenlan/bin/wenlan-mcp", "args": ["--agent-name", "cursor"]}"#,
+        ] {
+            let body = format!(r#"{{"mcpServers": {{"wenlan": {entry}}}}}"#);
+            assert_eq!(
+                json_health(&body, &[], is_a_file),
+                EntryHealth::Healthy,
+                "{entry}"
+            );
+        }
+        // A bare name found on PATH.
+        assert_eq!(
+            json_health(
+                r#"{"mcpServers": {"wenlan": {"command": "wenlan-mcp"}}}"#,
+                &["wenlan-mcp"],
+                |_| CandidateProbe::Absent
+            ),
+            EntryHealth::Healthy
+        );
+        // The shape Wenlan writes when nothing is installed.
+        assert_eq!(
+            json_health(
+                r#"{"mcpServers": {"wenlan": {"command": "npx", "args": ["-y", "wenlan-mcp@^0.18.16"]}}}"#,
+                &["npx"],
+                |_| CandidateProbe::Absent
+            ),
+            EntryHealth::Healthy
+        );
+    }
+
+    #[test]
+    fn a_command_that_resolves_nowhere_needs_repair() {
+        let missing = json_health(
+            r#"{"mcpServers": {"wenlan": {"command": "/gone/wenlan-mcp"}}}"#,
+            &[],
+            |_| CandidateProbe::Absent,
+        );
+        let detail = assert_repair(missing, RepairReason::CommandNotFound);
+        assert!(detail.contains("/gone/wenlan-mcp"), "{detail}");
+
+        let bare = json_health(
+            r#"{"mcpServers": {"wenlan": {"command": "wenlan-mcp"}}}"#,
+            &["something-else"],
+            is_a_file,
+        );
+        let detail = assert_repair(bare, RepairReason::CommandNotFound);
+        assert!(detail.contains("PATH"), "{detail}");
+
+        // `npx` that is not installed: reported as the missing command before
+        // anyone looks at its arguments.
+        assert_repair(
+            json_health(
+                r#"{"mcpServers": {"wenlan": {"command": "npx", "args": ["-y", "wenlan-mcp"]}}}"#,
+                &[],
+                is_a_file,
+            ),
+            RepairReason::CommandNotFound,
+        );
+    }
+
+    /// Clients start servers from a folder this app cannot know and do not
+    /// expand `~`, so these never work however plausible they look.
+    #[test]
+    fn a_relative_command_path_needs_repair() {
+        for command in ["./wenlan-mcp", "bin/wenlan-mcp", "~/.wenlan/bin/wenlan-mcp"] {
+            let body = format!(r#"{{"mcpServers": {{"wenlan": {{"command": "{command}"}}}}}}"#);
+            let detail = assert_repair(
+                // Even a probe that says "file" and a PATH that resolves
+                // everything must not rescue it.
+                json_health(&body, &["wenlan-mcp", "./wenlan-mcp"], is_a_file),
+                RepairReason::CommandNotFound,
+            );
+            assert!(detail.contains("full path"), "{command}: {detail}");
+        }
+    }
+
+    #[test]
+    fn something_at_the_path_that_cannot_run_needs_repair() {
+        let entry = r#"{"mcpServers": {"wenlan": {"command": "/opt/wenlan-mcp"}}}"#;
+        assert_repair(
+            json_health(entry, &[], |_| CandidateProbe::NotAFile),
+            RepairReason::CommandNotRunnable,
+        );
+        let detail = assert_repair(
+            json_health(entry, &[], |_| CandidateProbe::NotExecutable {
+                reason: "the file is empty (0 bytes), so it is not a program".to_string(),
+            }),
+            RepairReason::CommandNotRunnable,
+        );
+        assert!(detail.contains("0 bytes"), "{detail}");
+    }
+
+    /// A path the OS would not let this app stat is not a broken entry, and
+    /// must not put a "Repair" button in front of the user.
+    #[test]
+    fn a_command_path_that_could_not_be_looked_at_is_unreadable_not_broken() {
+        let health = json_health(
+            r#"{"mcpServers": {"wenlan": {"command": "/opt/wenlan-mcp"}}}"#,
+            &[],
+            |_| CandidateProbe::Unreadable {
+                error: "Access is denied. (os error 5)".to_string(),
+            },
+        );
+        match health {
+            EntryHealth::Unreadable { error } => assert!(error.contains("Access is denied")),
+            other => panic!("an unreadable command path reported {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_entry_with_no_usable_command_needs_repair() {
+        for entry in [
+            "{}",
+            r#"{"command": ""}"#,
+            r#"{"command": "   "}"#,
+            r#"{"command": 5}"#,
+            r#""wenlan-mcp""#,
+            "null",
+        ] {
+            let body = format!(r#"{{"mcpServers": {{"wenlan": {entry}}}}}"#);
+            assert_repair(
+                json_health(&body, &["wenlan-mcp"], is_a_file),
+                RepairReason::CommandMissing,
+            );
+        }
+    }
+
+    #[test]
+    fn arguments_that_are_not_sane_need_repair() {
+        for args in [r#""-y""#, "[1, 2]", r#"["-y", null]"#, r#"{"a": "b"}"#] {
+            let body = format!(
+                r#"{{"mcpServers": {{"wenlan": {{"command": "/opt/wenlan-mcp", "args": {args}}}}}}}"#
+            );
+            assert_repair(
+                json_health(&body, &[], is_a_file),
+                RepairReason::ArgsInvalid,
+            );
+        }
+        // `npx` has to be asked for Wenlan's package; any other package, or
+        // none, is not Wenlan's launcher.
+        for args in [
+            r#"["-y", "some-other-server"]"#,
+            r#"["-y"]"#,
+            r#"["-y", "wenlan-mcp-evil"]"#,
+            r#"["-y", "@scope/wenlan-mcp"]"#,
+            "[]",
+        ] {
+            let body =
+                format!(r#"{{"mcpServers": {{"wenlan": {{"command": "npx", "args": {args}}}}}}}"#);
+            assert_repair(
+                json_health(&body, &["npx"], is_a_file),
+                RepairReason::ArgsInvalid,
+            );
+        }
+        // …and the spellings that are Wenlan's, including the pre-rename name.
+        for package in [
+            "wenlan-mcp",
+            "wenlan-mcp@^0.18.16",
+            "wenlan-mcp@latest",
+            "origin-mcp@1",
+        ] {
+            let body = format!(
+                r#"{{"mcpServers": {{"wenlan": {{"command": "npx", "args": ["-y", "{package}"]}}}}}}"#
+            );
+            assert_eq!(
+                json_health(&body, &["npx"], is_a_file),
+                EntryHealth::Healthy,
+                "{package}"
+            );
+        }
+    }
+
+    /// A remote server has no command to check and is not Wenlan's to second
+    /// guess.
+    #[test]
+    fn a_url_entry_has_no_command_to_validate() {
+        assert_eq!(
+            json_health(
+                r#"{"mcpServers": {"wenlan": {"url": "http://127.0.0.1:7878/mcp"}}}"#,
+                &[],
+                |_| CandidateProbe::Absent
+            ),
+            EntryHealth::Healthy
+        );
+        assert_eq!(
+            toml_health(
+                "[mcp_servers.wenlan]\nurl = \"http://127.0.0.1:7878/mcp\"\n",
+                &[],
+                |_| CandidateProbe::Absent
+            ),
+            EntryHealth::Healthy
+        );
+    }
+
+    /// Judged on `wenlan`, or on the legacy `origin` entry when that is all
+    /// there is — and `wenlan` wins when both exist.
+    #[test]
+    fn the_wenlan_entry_is_judged_and_the_legacy_one_only_when_alone() {
+        let broken = r#"{"command": "/gone/origin-mcp"}"#;
+        let good = r#"{"command": "/opt/wenlan-mcp"}"#;
+        let only_present = |p: &Path| {
+            if p == Path::new("/opt/wenlan-mcp") {
+                CandidateProbe::File
+            } else {
+                CandidateProbe::Absent
+            }
+        };
+
+        let legacy_only = format!(r#"{{"mcpServers": {{"origin": {broken}}}}}"#);
+        assert_repair(
+            json_health(&legacy_only, &[], only_present),
+            RepairReason::CommandNotFound,
+        );
+
+        let healthy_wenlan =
+            format!(r#"{{"mcpServers": {{"wenlan": {good}, "origin": {broken}}}}}"#);
+        assert_eq!(
+            json_health(&healthy_wenlan, &[], only_present),
+            EntryHealth::Healthy,
+            "a broken legacy entry beside a good one is the duplicate fix's business"
+        );
+
+        let broken_wenlan =
+            format!(r#"{{"mcpServers": {{"wenlan": {broken}, "origin": {good}}}}}"#);
+        assert_repair(
+            json_health(&broken_wenlan, &[], only_present),
+            RepairReason::CommandNotFound,
+        );
+    }
+
+    /// Same rule in Codex's TOML: the legacy `origin` table is judged only
+    /// when there is no `wenlan` one.
+    #[test]
+    fn the_legacy_codex_table_is_judged_only_when_alone() {
+        let only_present = |p: &Path| {
+            if p == Path::new("/opt/wenlan-mcp") {
+                CandidateProbe::File
+            } else {
+                CandidateProbe::Absent
+            }
+        };
+        assert_repair(
+            toml_health(
+                "[mcp_servers.origin]\ncommand = \"/gone/origin-mcp\"\n",
+                &[],
+                only_present,
+            ),
+            RepairReason::CommandNotFound,
+        );
+        assert_eq!(
+            toml_health(
+                "[mcp_servers.wenlan]\ncommand = \"/opt/wenlan-mcp\"\n\n[mcp_servers.origin]\ncommand = \"/gone/origin-mcp\"\n",
+                &[],
+                only_present,
+            ),
+            EntryHealth::Healthy
+        );
+    }
+
+    #[test]
+    fn a_config_that_could_not_be_read_is_not_a_healthy_or_broken_entry() {
+        let which = resolves(&[]);
+        let absent = |_: &Path| CandidateProbe::Absent;
+        let probes = health_probes(HostKind::MacOs, &which, &absent);
+        assert!(matches!(
+            entry_health_reading("cursor", &ConfigRead::Unreadable("denied".into()), &probes),
+            EntryHealth::Unreadable { .. }
+        ));
+        match json_health("not json", &[], is_a_file) {
+            EntryHealth::Unreadable { error } => assert!(error.contains("not valid JSON")),
+            other => panic!("an unparseable config reported {other:?}"),
+        }
+        match toml_health("not toml [", &[], is_a_file) {
+            EntryHealth::Unreadable { error } => assert!(error.contains("not valid TOML")),
+            other => panic!("an unparseable config reported {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_codex_toml_entry_is_validated_the_same_way() {
+        assert_eq!(
+            toml_health(
+                "[mcp_servers.wenlan]\ncommand = \"/opt/wenlan-mcp\"\nargs = []\n",
+                &[],
+                is_a_file
+            ),
+            EntryHealth::Healthy
+        );
+        assert_repair(
+            toml_health(
+                "[mcp_servers.wenlan]\ncommand = \"/gone/wenlan-mcp\"\n",
+                &[],
+                |_| CandidateProbe::Absent,
+            ),
+            RepairReason::CommandNotFound,
+        );
+        assert_repair(
+            toml_health("[mcp_servers.wenlan]\nargs = []\n", &[], is_a_file),
+            RepairReason::CommandMissing,
+        );
+        assert_repair(
+            toml_health(
+                "[mcp_servers.wenlan]\ncommand = \"/opt/wenlan-mcp\"\nargs = \"-y\"\n",
+                &[],
+                is_a_file,
+            ),
+            RepairReason::ArgsInvalid,
+        );
+        assert_repair(
+            toml_health(
+                "[mcp_servers.wenlan]\ncommand = \"npx\"\nargs = [\"-y\", \"other\"]\n",
+                &["npx"],
+                is_a_file,
+            ),
+            RepairReason::ArgsInvalid,
+        );
+    }
+
+    /// On Windows a bare `npx.cmd` / `wenlan-mcp.exe` is looked up by its stem
+    /// (the resolver adds the launcher extensions); elsewhere the name is used
+    /// as written.
+    #[test]
+    fn windows_launcher_extensions_are_looked_up_by_stem() {
+        let body =
+            r#"{"mcpServers": {"wenlan": {"command": "npx.cmd", "args": ["-y", "wenlan-mcp"]}}}"#;
+        let which = resolves(&["npx"]);
+        let probe = |_: &Path| CandidateProbe::Absent;
+        let on = |host| {
+            entry_health_reading(
+                "cursor",
+                &ConfigRead::Contents(body.to_string()),
+                &health_probes(host, &which, &probe),
+            )
+        };
+        assert_eq!(on(HostKind::Windows), EntryHealth::Healthy);
+        assert_repair(on(HostKind::Linux), RepairReason::CommandNotFound);
+
+        assert_eq!(command_stem("C:\\Program Files\\nodejs\\NPX.CMD"), "npx");
+        assert_eq!(command_stem("/usr/local/bin/npx"), "npx");
+        assert_eq!(command_stem("wenlan-mcp.exe"), "wenlan-mcp");
+        assert_eq!(command_stem("npx"), "npx");
+    }
+
+    /// The real probe, on real files: the three ways a path that exists can
+    /// still not be a program.
+    #[test]
+    fn real_files_a_folder_an_empty_file_and_a_real_binary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let which = resolves(&[]);
+        let probes = health_probes(HostKind::MacOs, &which, &probe_candidate);
+        let health_of = |command: &Path| {
+            let body = serde_json::json!({
+                "mcpServers": {"wenlan": {"command": command.to_str().unwrap()}}
+            })
+            .to_string();
+            entry_health_reading("cursor", &ConfigRead::Contents(body), &probes)
+        };
+
+        let binary = tmp.path().join("wenlan-mcp");
+        write_binary_fixture(&binary);
+        assert_eq!(health_of(&binary), EntryHealth::Healthy, "control");
+
+        assert_repair(
+            health_of(&tmp.path().join("not-there")),
+            RepairReason::CommandNotFound,
+        );
+        assert_repair(health_of(tmp.path()), RepairReason::CommandNotRunnable);
+
+        let empty = tmp.path().join("empty");
+        std::fs::write(&empty, b"").unwrap();
+        assert_repair(health_of(&empty), RepairReason::CommandNotRunnable);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let plain = tmp.path().join("plain");
+            std::fs::write(&plain, b"#!/bin/sh\n").unwrap();
+            std::fs::set_permissions(&plain, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert_repair(health_of(&plain), RepairReason::CommandNotRunnable);
+        }
+    }
+
+    /// End to end through detection, then through the existing repair path:
+    /// a stale entry is `needs_repair` while still `already_configured`;
+    /// `write_wenlan_entry_with` (what `write_mcp_config` calls) fixes exactly
+    /// Wenlan's own entry and nothing else in the file.
+    #[test]
+    fn repairing_a_stale_entry_rewrites_only_wenlans_own_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let cursor_dir = home.join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+        let config_path = cursor_dir.join("mcp.json");
+        std::fs::write(
+            &config_path,
+            r#"{
+  "theme": "dark",
+  "mcpServers": {
+    "other": {"command": "other-server", "args": ["--x"]},
+    "wenlan": {"command": "/uninstalled/wenlan-mcp", "args": []}
+  }
+}"#,
+        )
+        .unwrap();
+        let machine = Machine::new(HostKind::MacOs);
+
+        let before = machine.detect(home);
+        let cursor = row(&before, "cursor");
+        assert_eq!(cursor.already_configured, Reading::Yes, "an entry EXISTS");
+        assert_repair(cursor.entry_health.clone(), RepairReason::CommandNotFound);
+
+        let binary = home.join("bin").join("wenlan-mcp");
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        write_binary_fixture(&binary);
+        write_wenlan_entry_with(
+            &config_path,
+            false,
+            McpEntryDecision::Write {
+                entry: WenlanMcpEntry {
+                    command: binary.to_str().unwrap().to_string(),
+                    args: Vec::new(),
+                },
+                undetermined: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let after = machine.detect(home);
+        assert_eq!(row(&after, "cursor").entry_health, EntryHealth::Healthy);
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&config_path).unwrap()).unwrap();
+        assert_eq!(written["theme"], "dark", "unrelated keys survive");
+        assert_eq!(
+            written["mcpServers"]["other"],
+            serde_json::json!({"command": "other-server", "args": ["--x"]}),
+            "a sibling server is untouched"
+        );
+        assert_eq!(
+            written["mcpServers"]["wenlan"]["command"],
+            binary.to_str().unwrap()
+        );
+        assert!(
+            config_path.with_extension("json.bak").exists(),
+            "the old file is backed up before it is rewritten"
+        );
+    }
+
+    /// Same for Codex's TOML, where comments and unrelated tables must survive.
+    #[test]
+    fn repairing_a_stale_codex_entry_keeps_the_rest_of_the_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        let codex_dir = home.join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let config_path = codex_dir.join("config.toml");
+        std::fs::write(
+            &config_path,
+            "# my settings\nmodel = \"gpt-5.5\"\n\n[mcp_servers.wenlan]\ncommand = \"/uninstalled/wenlan-mcp\"\nargs = []\n\n[mcp_servers.other]\ncommand = \"other-server\"\n",
+        )
+        .unwrap();
+        let machine = Machine::new(HostKind::MacOs);
+
+        let before = machine.detect(home);
+        assert_repair(
+            row(&before, "codex_cli").entry_health.clone(),
+            RepairReason::CommandNotFound,
+        );
+
+        let binary = home.join("wenlan-mcp");
+        write_binary_fixture(&binary);
+        write_wenlan_entry_toml_with(
+            &config_path,
+            McpEntryDecision::Write {
+                entry: WenlanMcpEntry {
+                    command: binary.to_str().unwrap().to_string(),
+                    args: Vec::new(),
+                },
+                undetermined: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        let after = machine.detect(home);
+        assert_eq!(row(&after, "codex_cli").entry_health, EntryHealth::Healthy);
+        let text = std::fs::read_to_string(&config_path).unwrap();
+        assert!(text.contains("# my settings"), "{text}");
+        assert!(text.contains("model = \"gpt-5.5\""), "{text}");
+        assert!(text.contains("[mcp_servers.other]"), "{text}");
+    }
+
+    /// The wire contract the UI (`McpInstallState` / `McpEntryHealth` in
+    /// `src/lib/tauri.ts`) is written against. A rename here is a breaking
+    /// change to the frontend, so it fails this test first.
+    #[test]
+    fn the_new_fields_serialize_to_the_shape_the_frontend_expects() {
+        fn json(value: &impl Serialize) -> serde_json::Value {
+            serde_json::to_value(value).unwrap()
+        }
+        assert_eq!(
+            json(&InstallState::Installed),
+            serde_json::json!({"kind": "installed"})
+        );
+        assert_eq!(
+            json(&InstallState::ConfigOnly),
+            serde_json::json!({"kind": "config_only"})
+        );
+        assert_eq!(
+            json(&InstallState::NotFound),
+            serde_json::json!({"kind": "not_found"})
+        );
+        assert_eq!(
+            json(&InstallState::Unreadable { error: "e".into() }),
+            serde_json::json!({"kind": "unreadable", "error": "e"})
+        );
+        assert_eq!(
+            json(&EntryHealth::NoEntry),
+            serde_json::json!({"kind": "no_entry"})
+        );
+        assert_eq!(
+            json(&EntryHealth::Healthy),
+            serde_json::json!({"kind": "healthy"})
+        );
+        assert_eq!(
+            json(&EntryHealth::Unreadable { error: "e".into() }),
+            serde_json::json!({"kind": "unreadable", "error": "e"})
+        );
+        for (reason, wire) in [
+            (RepairReason::CommandMissing, "command_missing"),
+            (RepairReason::CommandNotFound, "command_not_found"),
+            (RepairReason::CommandNotRunnable, "command_not_runnable"),
+            (RepairReason::ArgsInvalid, "args_invalid"),
+        ] {
+            assert_eq!(
+                json(&EntryHealth::NeedsRepair {
+                    reason,
+                    detail: "d".into()
+                }),
+                serde_json::json!({"kind": "needs_repair", "reason": wire, "detail": "d"})
+            );
+        }
+
+        // And on the row itself, beside the existing fields.
+        let tmp = tempfile::tempdir().unwrap();
+        let machine = Machine::new(HostKind::MacOs);
+        let clients = machine.detect(tmp.path());
+        let value = json(row(&clients, "gemini_cli"));
+        assert_eq!(
+            value["install_state"],
+            serde_json::json!({"kind": "not_found"})
+        );
+        assert_eq!(
+            value["entry_health"],
+            serde_json::json!({"kind": "no_entry"})
+        );
+        assert_eq!(value["detected"], serde_json::json!({"kind": "no"}));
     }
 }
