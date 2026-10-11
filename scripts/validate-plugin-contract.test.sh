@@ -166,7 +166,7 @@ assert_rejects "setup autocomplete drift" \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
 assert_rejects "codex background-consent command drift" \
-    perl -0pi -e 's/wenlan enrichment disable/wenlan background off/' \
+    perl -0pi -e 's/wenlan steep disable/wenlan background off/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
 assert_rejects "codex README setup command drift" \

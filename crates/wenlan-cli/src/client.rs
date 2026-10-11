@@ -873,7 +873,7 @@ mod tests {
             .expect_err("nothing listens on the released port");
         let text = format!("{error:#}");
         assert!(
-            text.contains(&format!("no Wenlan daemon is listening at {base}")),
+            text.contains(&format!("Wenlan is not running at {base}")),
             "{text}"
         );
         assert!(

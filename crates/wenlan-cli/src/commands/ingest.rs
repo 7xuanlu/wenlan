@@ -123,7 +123,7 @@ fn format_stats(id: &str, stats: &SyncStats) -> String {
         out.push_str(&format!("  error detail: {}\n", detail));
     }
     if let Some(paused) = &stats.paused {
-        out.push_str(&format!("  enrichment paused: {}\n", paused));
+        out.push_str(&format!("  steep paused: {}\n", paused));
     }
     if let (Some(queued), Some(waiting)) = (stats.queued_files, stats.waiting_files) {
         out.push_str(&format!(

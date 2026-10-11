@@ -22,7 +22,7 @@ try:
     d = json.load(sys.stdin)
     q, f = d.get("queued", 0), d.get("failed", 0)
     if q > 0 or f > 0:
-        print(f"[wenlan] outbox: {q} queued handoff write(s), {f} failed — run \`wenlan outbox status\`.")
+        print(f"[wenlan] {q} handoff note(s) waiting to sync, {f} failed — run \`wenlan outbox status\`.")
 except Exception:
     pass
 ' 2>/dev/null
@@ -37,7 +37,7 @@ done
 
 if [ -z "$RESP" ]; then
   cat <<MSG
-[wenlan] local runtime not running. Handoff writes will queue in the outbox; run /wenlan:setup or \`wenlan background on\`.
+[wenlan] Wenlan is not running. Handoff notes are saved locally and sync when it starts; run /wenlan:setup or \`wenlan background on\`.
 MSG
   report_outbox
   exit 0

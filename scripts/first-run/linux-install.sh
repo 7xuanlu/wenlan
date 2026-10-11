@@ -85,14 +85,14 @@ check_output doctor "Daemon: running on" -- wenlan doctor
 check systemd-stop -- systemctl --user stop wenlan-server
 sleep 2
 info health-after-stop "$(curl -sf --max-time 2 "$HEALTH" 2>&1 || echo unreachable)"
-check_output autostart-recovery "wenlan: daemon not reachable — starting" -- wenlan memories --limit 1
+check_output autostart-recovery "starting it in the background" -- wenlan memories --limit 1
 
 # `background off`: unit inactive but present, marker written, CLI explains itself.
 check background-off -- wenlan background off
 check_output unit-inactive-after-off "inactive" -- systemctl --user show wenlan-server --property=ActiveState --value
 check unit-kept-after-off -- test -f "$UNIT"
 check autostart-marker-exists -- test -f "$DATA_ROOT/autostart.off"
-check_fails stopped-marker-error "daemon stopped by" -- wenlan search x
+check_fails stopped-marker-error "switched off with" -- wenlan recall x
 check background-on-again -- wenlan background on
 wait_health "$HEALTH" 120 || true
 assert_version "$HEALTH" "$VERSION"

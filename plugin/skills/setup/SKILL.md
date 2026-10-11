@@ -196,11 +196,11 @@ Mention these only if the user asks for richer synthesis:
 
 Installing a model or key only makes that provider available; it does not
 authorize background inference. If the user wants automatic enrichment, run
-`wenlan enrichment status`, help them choose the exact Everyday and Synthesis
-sources, then run `wenlan enrichment configure --everyday <source> --synthesis
+`wenlan steep status`, help them choose the exact Everyday and Synthesis
+sources, then run `wenlan steep configure --everyday <source> --synthesis
 <source>`. The CLI itself shows the task mapping and cloud/on-device disclosure
 and obtains the one confirmation. Never add `--yes` unless the user already
-stated that exact mapping. `wenlan enrichment disable` reverses the consent
+stated that exact mapping. `wenlan steep disable` reverses the consent
 without deleting the model or key.
 
 Default flow ignores both. Storage, search, recall, and MCP memory all work in
@@ -210,7 +210,7 @@ background enrichment is off.
 ## When to use
 
 - Right after `/plugin install wenlan@7xuanlu-wenlan`.
-- Hook printed "local runtime down -- run /wenlan:setup".
+- Hook printed "Wenlan is not running" with "/wenlan:setup" as the fix.
 - Hook printed "Run /wenlan:setup to repair" for a version mismatch.
 - User says "set up wenlan", "is it working", "reinstall wenlan".
 

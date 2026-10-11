@@ -92,7 +92,7 @@ fn status_uses_canonical_ready_paused_off_vocabulary() {
     ]);
 
     cli(&base)
-        .args(["enrichment", "status"])
+        .args(["steep", "status"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -171,7 +171,7 @@ fn disable_preserves_both_pins_without_removing_providers() {
     ]);
 
     cli(&base)
-        .args(["enrichment", "disable"])
+        .args(["steep", "disable"])
         .assert()
         .success()
         .stdout(predicate::str::contains(
@@ -236,12 +236,10 @@ fn disable_clears_local_pins_and_explicitly_opts_out_when_daemon_is_unreachable(
 
     cli(&base)
         .env("WENLAN_DATA_DIR", data.path())
-        .args(["enrichment", "disable"])
+        .args(["steep", "disable"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Background enrichment disabled in local config",
-        ));
+        .stdout(predicate::str::contains("Steep disabled in local config"));
 
     let config: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(config_path).expect("config remains readable"),
@@ -261,7 +259,7 @@ fn status_reports_off_with_preserved_ready_pins() {
         .args(["enrichment", "status"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Background enrichment: off"))
+        .stdout(predicate::str::contains("Steep: off"))
         .stdout(predicate::str::contains("ready").not());
     assert!(requests.recv().unwrap().starts_with("GET /api/config "));
 }
@@ -274,13 +272,11 @@ fn status_does_not_claim_off_or_ready_when_consent_is_unknown() {
     ] {
         let (base, requests) = spawn_stub(vec![reply]);
         cli(&base)
-            .args(["enrichment", "status"])
+            .args(["steep", "status"])
             .assert()
             .success()
-            .stdout(predicate::str::contains(
-                "Background enrichment: status unavailable",
-            ))
-            .stdout(predicate::str::contains("Background enrichment: off").not())
+            .stdout(predicate::str::contains("Steep: status unavailable"))
+            .stdout(predicate::str::contains("Steep: off").not())
             .stdout(predicate::str::contains("ready").not());
         assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     }
@@ -312,7 +308,7 @@ fn configure_rejects_older_daemon_before_writing_pins() {
     let (base, requests) = spawn_stub(vec![response("{}")]);
     cli(&base)
         .args([
-            "enrichment",
+            "steep",
             "configure",
             "--everyday",
             "anthropic",
@@ -372,10 +368,10 @@ fn disable_legacy_daemon_clears_pins_and_verifies_inactive_routes() {
         response(&routing("unconfigured", "unconfigured")),
     ]);
     cli(&base)
-        .args(["enrichment", "disable"])
+        .args(["steep", "disable"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Background enrichment disabled"));
+        .stdout(predicate::str::contains("Steep disabled"));
     assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     let put = requests.recv().unwrap();
     assert!(put.contains(r#""everyday_source":"""#), "{put}");
@@ -405,7 +401,7 @@ fn disable_does_not_claim_success_when_current_or_legacy_daemon_keeps_work_enabl
             .args(["enrichment", "disable"])
             .assert()
             .failure()
-            .stdout(predicate::str::contains("Background enrichment disabled").not());
+            .stdout(predicate::str::contains("Steep disabled").not());
     }
 }
 
@@ -423,9 +419,7 @@ fn basic_setup_explicitly_disables_previously_enabled_background_work() {
         .args(["setup", "--basic"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Model-backed background enrichment is off",
-        ));
+        .stdout(predicate::str::contains("Steep (background upkeep) is off"));
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(config_path).expect("read saved config"))
             .expect("saved config json");
@@ -442,7 +436,7 @@ fn configure_cancel_keeps_settings_unchanged_even_when_already_enabled() {
     ]);
     cli(&base)
         .args([
-            "enrichment",
+            "steep",
             "configure",
             "--everyday",
             "anthropic",
@@ -452,9 +446,7 @@ fn configure_cancel_keeps_settings_unchanged_even_when_already_enabled() {
         .write_stdin("n\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "Background enrichment settings were not changed",
-        ))
+        .stdout(predicate::str::contains("Steep remains off"))
         .stdout(predicate::str::contains("remains off").not());
     assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests
@@ -480,7 +472,7 @@ fn disable_verification_connection_failure_does_not_fall_back_to_disk() {
         .args(["enrichment", "disable"])
         .assert()
         .failure()
-        .stdout(predicate::str::contains("Background enrichment disabled").not());
+        .stdout(predicate::str::contains("Steep disabled").not());
     assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests.recv().unwrap().starts_with("PUT /api/config "));
     assert_eq!(

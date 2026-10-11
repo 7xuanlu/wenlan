@@ -565,7 +565,16 @@ fn top_level_help() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Wenlan CLI"));
+        .stdout(predicate::str::contains(
+            "a personal wiki your AI tools keep up to date",
+        ))
+        .stdout(predicate::str::contains("\nDaily:\n"))
+        .stdout(predicate::str::contains("\nSetup:\n"))
+        .stdout(predicate::str::contains("\nMaintenance:\n"))
+        .stdout(predicate::str::contains("\n  steep "))
+        .stdout(predicate::str::contains("\n  search ").not())
+        .stdout(predicate::str::contains("\n  sweep ").not())
+        .stdout(predicate::str::contains("\n  agents ").not());
 }
 
 #[test]
@@ -900,6 +909,10 @@ fn setup_subcommands_have_help() {
         &["keys", "status", "--help"][..],
         &["keys", "set", "--help"][..],
         &["keys", "clear", "--help"][..],
+        &["steep", "status", "--help"][..],
+        &["steep", "configure", "--help"][..],
+        &["steep", "disable", "--help"][..],
+        // `enrichment` stays as a hidden alias for one release.
         &["enrichment", "status", "--help"][..],
         &["enrichment", "configure", "--help"][..],
         &["enrichment", "disable", "--help"][..],
@@ -1034,7 +1047,7 @@ fn memories_reports_existing_connection_error_without_autostart() {
         .stderr(predicate::str::contains(
             "GET http://127.0.0.1:9/api/spaces failed",
         ))
-        .stderr(predicate::str::contains("starting com.wenlan.server").not());
+        .stderr(predicate::str::contains("starting it in the background").not());
 }
 
 #[cfg(unix)]
@@ -1060,10 +1073,8 @@ fn autostart_reports_missing_service_without_starting_it() {
         .arg("memories")
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "no background service is registered",
-        ))
-        .stderr(predicate::str::contains("starting com.wenlan.server").not());
+        .stderr(predicate::str::contains("no background service is set up"))
+        .stderr(predicate::str::contains("starting it in the background").not());
     assert!(
         started.elapsed() < std::time::Duration::from_secs(3),
         "missing-service recovery stalled: {:?}",
@@ -1095,9 +1106,9 @@ fn autostart_honours_background_off_marker_without_starting_it() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "daemon stopped by `wenlan background off` — run `wenlan background on` to enable it again",
+            "Wenlan was switched off with `wenlan background off` — run `wenlan background on` to turn it back on",
         ))
-        .stderr(predicate::str::contains("starting com.wenlan.server").not());
+        .stderr(predicate::str::contains("starting it in the background").not());
 }
 
 #[test]
@@ -1300,9 +1311,7 @@ fn setup_background_status_roundtrip_isolated() {
         .stdout(predicate::str::contains(
             "Wenlan is set up for local memory",
         ))
-        .stdout(predicate::str::contains(
-            "Model-backed background enrichment is off",
-        ));
+        .stdout(predicate::str::contains("Steep (background upkeep) is off"));
 
     let config = fs::read_to_string(runtime.config_path()).expect("config written");
     assert!(config.contains(r#""setup_completed": true"#));

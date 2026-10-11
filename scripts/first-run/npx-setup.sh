@@ -73,14 +73,14 @@ check_output doctor "Daemon: running on" -- "$W" doctor
 check launchctl-kill-daemon -- launchctl kill TERM "gui/$UID_NUM/com.wenlan.server"
 sleep 2
 info health-after-kill "$(curl -sf --max-time 2 "$HEALTH" 2>&1 || echo unreachable)"
-check_output autostart-recovery "wenlan: daemon not reachable — starting com.wenlan.server" -- "$W" memories --limit 1
+check_output autostart-recovery "starting it in the background" -- "$W" memories --limit 1
 
 # `background off`: daemon down, registration kept, marker written, CLI explains itself.
 check background-off -- "$W" background off
 check health-unreachable-after-off -- bash -c '! curl -sf --max-time 2 "$1" >/dev/null' _ "$HEALTH"
 check autostart-marker-exists -- test -f "$DATA_ROOT/autostart.off"
 check plist-kept-after-off -- test -f "$PLIST"
-check_fails stopped-marker-error "daemon stopped by" -- env WENLAN_NO_AUTOSTART= "$W" search x
+check_fails stopped-marker-error "switched off with" -- env WENLAN_NO_AUTOSTART= "$W" recall x
 check background-on-again -- "$W" background on
 wait_health "$HEALTH" 120 || true
 assert_version "$HEALTH" "$VERSION"
