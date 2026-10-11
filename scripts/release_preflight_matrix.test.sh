@@ -31,6 +31,10 @@ assert_targets release-please "$all_targets" \
   --event-name pull_request \
   --ref refs/pull/430/merge \
   --head-ref release-please--branches--main
+assert_targets merge-queue "$non_windows" \
+  --event-name merge_group \
+  --ref refs/heads/gh-readonly-queue/main/pr-847-a8108f257f70016a74ede72a829bb6e9dcc5035f \
+  --head-ref ""
 assert_targets workflow-dispatch "$all_targets" \
   --event-name workflow_dispatch \
   --ref refs/heads/main
