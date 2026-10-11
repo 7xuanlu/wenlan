@@ -14,7 +14,8 @@
 #   daemon=<v> expected=<v> release=<v> result=same|older|newer|unknown
 # where `release` is the manifest version without build metadata and `older`
 # means the daemon is older than the plugin. Exit code: 0 same, 2 older,
-# 3 newer, 4 unknown (health down, a version empty, manifest unreadable).
+# 3 newer, 4 unknown (health down, a version empty, manifest unreadable),
+# 64 usage error (unknown flag).
 set -u
 
 HEALTH_URL=""

@@ -29,12 +29,14 @@ const list = (verbs) => [
   ...verbs.map((v) => `- \`${cmd(v)}\` - ${v.line}`),
 ];
 
+const cell = (text) => text.replaceAll("|", "\\|");
+
 const table = (verbs) => [
   NOTE,
   "",
   "| Command | Purpose |",
   "| --- | --- |",
-  ...verbs.map((v) => `| \`${cmd(v).replaceAll("|", "\\|")}\` | ${v.line} |`),
+  ...verbs.map((v) => `| \`${cell(cmd(v))}\` | ${cell(v.line)} |`),
 ];
 
 const TARGETS = [
@@ -69,12 +71,21 @@ function diffHint(path, actual, expected) {
   return out.join("\n");
 }
 
+function rootValue(argv, idx) {
+  const value = argv[idx + 1];
+  if (value === undefined || value.startsWith("--")) {
+    console.error("usage: gen-plugin-verbs.mjs [--check] [--root <dir>]");
+    process.exit(64);
+  }
+  return value;
+}
+
 const args = process.argv.slice(2);
 const check = args.includes("--check");
 const rootIdx = args.indexOf("--root");
 const root =
   rootIdx >= 0
-    ? resolve(args[rootIdx + 1])
+    ? resolve(rootValue(args, rootIdx))
     : resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const verbs = JSON.parse(readFileSync(resolve(root, "plugin/skills/verbs.json"), "utf8"));

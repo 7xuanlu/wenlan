@@ -133,6 +133,10 @@ out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
     "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo' 2>/dev/null)"
 assert_eq '--args with only a token leaves rest empty' $'foo\targ\t' "$out"
 
+out="$(WENLAN_SPACE= WENLAN_DEFAULT_SPACE= PATH="$fake_bin:$PATH" \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args $'space:foo first line\nsecond line' 2>/dev/null)"
+assert_eq '--args collapses newlines so the output stays one line' $'foo\targ\tfirst line second line' "$out"
+
 err="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
     "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo x' 2>&1 >/dev/null)"
 assert_eq '--args stderr reports the resolved space' 'Resolved space: foo (from arg)' "$err"

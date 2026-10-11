@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
             shift $(( $# > 1 ? 2 : 1 ))
             token="$(printf '%s\n' "$raw" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
             [ -n "$token" ] && arg="$token"
-            rest="$(printf '%s\n' "$raw" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            rest="$(printf '%s\n' "$raw" | tr '\n' ' ' | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
             ;;
         --topic) shift $(( $# > 1 ? 2 : 1 )) ;;
         --new-repo-fallback) new_repo_fallback=1; shift ;;

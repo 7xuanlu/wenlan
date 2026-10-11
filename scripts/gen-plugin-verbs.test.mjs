@@ -70,6 +70,12 @@ test("every skill dir has a verb entry and vice versa", () => {
   assert.deepEqual(fromVerbs, dirs);
 });
 
+test("a bare --root is a usage error, not a crash", () => {
+  const res = spawnSync(process.execPath, [script, "--root"], { encoding: "utf8" });
+  assert.equal(res.status, 64);
+  assert.match(res.stderr, /usage:/);
+});
+
 test("the real tree is in sync and the help card keeps the lint grammar", () => {
   assert.equal(run(repo, "--check").status, 0);
   for (const f of ["plugin/skills/help/SKILL.md", "plugin-codex/skills/help/SKILL.md"]) {
