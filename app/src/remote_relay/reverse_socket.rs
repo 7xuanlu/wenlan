@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::{Request, Response};
-use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
+use tokio_tungstenite::tungstenite::protocol::{CloseFrame, WebSocketConfig};
 use tokio_tungstenite::tungstenite::{Error as SocketError, Message};
 use tokio_tungstenite::{connect_async_with_config, MaybeTlsStream, WebSocketStream};
 
@@ -160,6 +160,13 @@ fn connection_id(response: &Response) -> Result<String, RelayError> {
 }
 
 fn upgrade_error(error: SocketError) -> RelayError {
+    match &error {
+        SocketError::Http(response) => log::warn!(
+            "[remote-access] relay upgrade refused: HTTP {}",
+            response.status().as_u16()
+        ),
+        other => log::warn!("[remote-access] relay upgrade failed: {other}"),
+    }
     match error {
         SocketError::Http(response) => match response.status().as_u16() {
             401 | 403 => RelayError::Unauthorized,
@@ -200,7 +207,10 @@ impl RelayClient {
             connect_async_with_config(request, Some(config), true),
         )
         .await
-        .map_err(|_| RelayError::Unavailable)?
+        .map_err(|_| {
+            log::warn!("[remote-access] relay upgrade timed out");
+            RelayError::Unavailable
+        })?
         .map_err(upgrade_error)?;
         let id = connection_id(&response)?;
         let (stop, stopped) = oneshot::channel();
@@ -210,6 +220,26 @@ impl RelayClient {
             stop: Some(stop),
             task: Some(task),
         })
+    }
+}
+
+/// Records why an established relay channel ended. Reasons are fixed labels,
+/// close metadata or error kinds, never frame bodies or credentials.
+fn ended(reason: impl std::fmt::Display, error: RelayError) -> RelayError {
+    log::warn!("[remote-access] relay connection ended: {reason}");
+    error
+}
+
+fn close_reason(frame: Option<&CloseFrame>) -> String {
+    match frame {
+        Some(frame) => {
+            let reason: String = frame.reason.as_str().chars().take(64).collect();
+            format!(
+                "relay closed it (code {}, {reason:?})",
+                u16::from(frame.code)
+            )
+        }
+        None => "relay closed it (no close code)".into(),
     }
 }
 
@@ -234,39 +264,53 @@ async fn run_socket(
         loop {
             tokio::select! {
                 _ = &mut stopped => return Ok(()),
-                completed = peers.join_next() => return completed
-                    .ok_or(RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)?,
+                completed = peers.join_next() => return match completed {
+                    Some(Ok(Ok(()))) => {
+                        log::warn!("[remote-access] relay connection ended: local peer stopped");
+                        Ok(())
+                    }
+                    Some(Ok(Err(error))) => {
+                        let reason = format!("local peer failed: {error}");
+                        Err(ended(reason, error))
+                    }
+                    _ => Err(ended("local peer task failed", RelayError::Unavailable)),
+                },
                 _ = ping.tick() => {
-                    if awaiting_pong { return Err(RelayError::Unavailable); }
+                    if awaiting_pong { return Err(ended("missed pong", RelayError::Unavailable)); }
                     awaiting_pong = true;
                     tokio::time::timeout(IO_TIMEOUT, sink.send(Message::Ping(Vec::new().into())))
-                        .await.map_err(|_| RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)?;
+                        .await.map_err(|_| ended("ping send timed out", RelayError::Unavailable))?
+                        .map_err(|error| ended(format_args!("ping send failed: {error}"), RelayError::Unavailable))?;
                 },
                 frame = frames.recv() => {
-                    let frame = frame.ok_or(RelayError::Unavailable)?;
-                    let text = encode_frame(&frame).map_err(|_| RelayError::InvalidResponse)?;
+                    let frame = frame.ok_or_else(|| ended("local peer closed its frame queue", RelayError::Unavailable))?;
+                    let text = encode_frame(&frame).map_err(|_| ended("frame encode failed", RelayError::InvalidResponse))?;
                     tokio::time::timeout(IO_TIMEOUT, sink.send(Message::Text(text.into())))
-                        .await.map_err(|_| RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)?;
+                        .await.map_err(|_| ended("frame send timed out", RelayError::Unavailable))?
+                        .map_err(|error| ended(format_args!("frame send failed: {error}"), RelayError::Unavailable))?;
                 },
                 message = stream.next() => {
                     if frame_window.elapsed() >= Duration::from_secs(60) {
                         frame_window = tokio::time::Instant::now(); frame_count = 0;
                     }
                     frame_count += 1;
-                    if frame_count > 16_384 { return Err(RelayError::Unavailable); }
-                    match message.ok_or(RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)? {
+                    if frame_count > 16_384 { return Err(ended("frame rate cap exceeded", RelayError::Unavailable)); }
+                    match message.ok_or_else(|| ended("stream ended without a close frame", RelayError::Unavailable))?
+                        .map_err(|error| ended(format_args!("read failed: {error}"), RelayError::Unavailable))? {
                         Message::Text(text) => {
-                            let frame = decode_frame(text.as_str()).map_err(|_| RelayError::InvalidResponse)?;
+                            let frame = decode_frame(text.as_str()).map_err(|_| ended("frame decode failed", RelayError::InvalidResponse))?;
                             tokio::time::timeout(IO_TIMEOUT, requests.send(frame)).await
-                                .map_err(|_| RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)?;
+                                .map_err(|_| ended("local peer queue full", RelayError::Unavailable))?
+                                .map_err(|_| ended("local peer queue closed", RelayError::Unavailable))?;
                         },
                         Message::Pong(_) => awaiting_pong = false,
                         Message::Ping(_) => {
                             tokio::time::timeout(IO_TIMEOUT, sink.flush()).await
-                                .map_err(|_| RelayError::Unavailable)?.map_err(|_| RelayError::Unavailable)?;
+                                .map_err(|_| ended("pong flush timed out", RelayError::Unavailable))?
+                                .map_err(|error| ended(format_args!("pong flush failed: {error}"), RelayError::Unavailable))?;
                         },
-                        Message::Close(_) => return Err(RelayError::Unavailable),
-                        _ => return Err(RelayError::InvalidResponse),
+                        Message::Close(frame) => return Err(ended(close_reason(frame.as_ref()), RelayError::Unavailable)),
+                        _ => return Err(ended("unexpected message type", RelayError::InvalidResponse)),
                     }
                 },
             }

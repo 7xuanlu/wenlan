@@ -143,6 +143,11 @@ async fn check_at(
     }
 }
 
+fn not_ready(reason: &str) -> RenewalError {
+    log::warn!("[remote-access] relay connection not ready: {reason}");
+    RenewalError::Relay(RelayError::Unavailable)
+}
+
 async fn wait_until_ready(
     client: &RelayClient,
     connection: &ReverseConnection,
@@ -157,15 +162,18 @@ async fn wait_until_ready(
         }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            return Err(RenewalError::Relay(RelayError::Unavailable));
+            return Err(not_ready("the relay did not confirm it in time"));
         }
         let status = tokio::time::timeout(
             remaining,
             client.reverse_status(credential, connection.connection_id()),
         )
         .await
-        .map_err(|_| RenewalError::Relay(RelayError::Unavailable))?
-        .map_err(RenewalError::Relay)?;
+        .map_err(|_| not_ready("the relay status check timed out"))?
+        .map_err(|error| {
+            log::warn!("[remote-access] relay connection not ready: status check failed: {error}");
+            RenewalError::Relay(error)
+        })?;
 
         if connection.is_finished() {
             return Err(RenewalError::Relay(RelayError::Unavailable));
@@ -176,7 +184,7 @@ async fn wait_until_ready(
 
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            return Err(RenewalError::Relay(RelayError::Unavailable));
+            return Err(not_ready("the relay did not confirm it in time"));
         }
         tokio::time::sleep(backoff.min(remaining)).await;
         backoff = (backoff + backoff).min(MAX_STATUS_BACKOFF);
