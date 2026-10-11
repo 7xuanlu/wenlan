@@ -1175,9 +1175,14 @@ function SettingUpStep({
         // also writing `~/.claude.json` / `[mcp_servers.wenlan]` would register
         // the Wenlan server twice. `isPluginClient` is the single home for that
         // rule (src/components/connect/pluginClients.ts) — Settings obeys it too.
-        const task: Promise<UndeterminedInput[]> = isPluginClient(clientType)
-          ? installClientPlugin(clientType).then(() => [])
-          : writeMcpConfig(clientType);
+        // The exception is a tool whose raw entry is already there and broken:
+        // the row promised to repair it, and rewriting it in place adds no
+        // second registration (Settings' Repair does the same).
+        const repair = repairReasonOf(row.client!) !== null;
+        const task: Promise<UndeterminedInput[]> =
+          isPluginClient(clientType) && !repair
+            ? installClientPlugin(clientType).then(() => [])
+            : writeMcpConfig(clientType);
         task.then(
           (undetermined) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "done" }));

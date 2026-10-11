@@ -324,8 +324,7 @@ pub async fn write_mcp_config(
     if client_type == "codex_cli" {
         return crate::mcp_config::write_wenlan_entry_toml(&config_path).map_err(|e| e.to_string());
     }
-    let is_claude_code = client_type == "claude_code";
-    crate::mcp_config::write_wenlan_entry(&config_path, is_claude_code).map_err(|e| e.to_string())
+    crate::mcp_config::write_wenlan_entry(&config_path, &client_type).map_err(|e| e.to_string())
 }
 
 /// Removes the raw `wenlan`/legacy `origin` MCP entry from `client_type`'s

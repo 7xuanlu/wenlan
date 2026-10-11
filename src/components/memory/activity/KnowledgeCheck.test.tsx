@@ -248,30 +248,35 @@ describe("KnowledgeCheck", () => {
     expect(onOpenReview).toHaveBeenCalledWith("refinement:lint_review_exact");
   });
 
+  // CPU-bound: it renders 50 rows twice. Role queries compute accessible names
+  // for every element they scan, which made this test take 1.5 s alone and time
+  // out at 5.1 s and 5.9 s on a loaded CI runner. Row counts use plain
+  // selectors (about 0.13 s now), and the explicit timeout keeps headroom.
   it("pages a 101-entry plan in groups of 50 and only loads visible row titles", async () => {
     const entries = Array.from({ length: 101 }, (_, index) => readyEntry(`entry-${index}`, index % 2 === 0));
     const results = Object.fromEntries(entries.map((entry) => [harness.key(entry), "not_started" as const]));
     await renderCheck(state({ entries, results }));
+    const rows = () => screen.getByRole("list").querySelectorAll("button");
 
     const getPageMock = vi.mocked(getPage);
     await waitFor(() => expect(getPageMock).toHaveBeenCalledTimes(50));
-    expect(within(screen.getByRole("list")).getAllByRole("button")).toHaveLength(50);
+    expect(rows()).toHaveLength(50);
     expect(screen.getByText("Page 1 of 3")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Repair 51 items" })).toBeInTheDocument();
+    expect(screen.getByText("Repair 51 items").closest("button")).toBeInTheDocument();
 
-    fireEvent.click(within(screen.getByRole("list")).getAllByRole("button")[0]);
+    fireEvent.click(rows()[0]);
     const detail = await screen.findByRole("dialog", { name: "Issue details" });
     await within(detail).findByText("Rain plan");
     getPageMock.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Issue details" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByText("Next"));
+    await waitFor(() => expect(detail).not.toBeInTheDocument());
     await waitFor(() => expect(getPageMock).toHaveBeenCalledTimes(50));
-    expect(within(screen.getByRole("list")).getAllByRole("button")).toHaveLength(50);
+    expect(rows()).toHaveLength(50);
     expect(screen.getByText("Page 2 of 3")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    fireEvent.click(screen.getByText("Next"));
     await waitFor(() => expect(getPageMock).toHaveBeenCalledTimes(51));
-    expect(within(screen.getByRole("list")).getAllByRole("button")).toHaveLength(1);
+    expect(rows()).toHaveLength(1);
     expect(screen.getByText("Page 3 of 3")).toBeInTheDocument();
-  });
+  }, 20_000);
 });

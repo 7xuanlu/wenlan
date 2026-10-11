@@ -5534,7 +5534,8 @@ def main() -> None:
             False,
         ),
         (
-            "          sed -i 's/\\r$//' \"$RUNNER_TEMP/body.md\"\n",
+            "          sed 's/\\r$//' \"$RUNNER_TEMP/body.md\" > \"$RUNNER_TEMP/body.lf.md\"\n"
+            "          mv \"$RUNNER_TEMP/body.lf.md\" \"$RUNNER_TEMP/body.md\"\n",
             "",
             "the CR strip that lets a CRLF body find its own Install heading",
             True,

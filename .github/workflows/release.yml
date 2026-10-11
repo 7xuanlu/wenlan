@@ -2457,8 +2457,12 @@ jobs:
           # edited through the web UI comes back CRLF. Left alone, awk's
           # `$0 == "## Install"` would be comparing against "## Install\r" and
           # the step would report a missing heading on a release that has one.
-          # Stripping CR changes no rendered character.
-          sed -i 's/\r$//' "$RUNNER_TEMP/body.md"
+          # Stripping CR changes no rendered character. No `sed -i`: BSD sed
+          # reads the script as a backup suffix and the file as its script,
+          # and the contract suite runs this step on macOS too. Two lines, not
+          # `&&`, so `set -e` still stops the step if either one fails.
+          sed 's/\r$//' "$RUNNER_TEMP/body.md" > "$RUNNER_TEMP/body.lf.md"
+          mv "$RUNNER_TEMP/body.lf.md" "$RUNNER_TEMP/body.md"
 
           # Only the Install section counts as "already linked". A bullet
           # identical to ours can sit in a changelog entry or a fenced example
