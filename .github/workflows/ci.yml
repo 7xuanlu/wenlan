@@ -86,8 +86,10 @@ jobs:
       # This is a semantic proof, not a branch-name shortcut. The shared
       # release validator requires exact same-repository identity, current
       # main as the base, the closed release-managed path set, and canonical
-      # version-only transforms. Run it from the immutable base, never from
-      # candidate-controlled code. Any API or parsing uncertainty emits false.
+      # version-only transforms. Run it from the base commit, never from the
+      # candidate's own code. On a merge queue entry that base can include the
+      # PRs queued ahead of it, which is why the release PR is queued alone.
+      # Any API or parsing uncertainty emits false.
       - name: Checkout trusted release candidate classifier
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
