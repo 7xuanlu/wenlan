@@ -19,18 +19,17 @@ never be read as product state.
 
 ```bash
 raw_args="<the full argument string passed to /brief>"
-space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-topic_arg="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
 # The resolver ships inside the installed plugin; the relative path only
 # exists in a wenlan checkout.
 resolver="$(find "$HOME/.codex/plugins/cache" -path '*/wenlan/*/bin/resolve-space.sh' 2>/dev/null | head -1)"
-resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" --args "$raw_args")"
 space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+topic_arg="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-Print `Resolved space: <space> (from <source-layer>)`. If no Space resolves,
-print `Resolved space: none (unscoped)` and omit `space`.
+The resolver prints the resolved Space line itself. An empty `space` means
+unscoped; omit `space`.
 
 ## 2. Read the Brief
 

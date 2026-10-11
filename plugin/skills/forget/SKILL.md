@@ -41,24 +41,3 @@ forget(memory_id="<source_id>")
 Deletion is destructive. Always confirm with the user before calling forget,
 unless the user has already given an explicit, unambiguous instruction in
 the same turn (e.g. they pasted the ID and said "delete this").
-
-## Auto-commit ~/.wenlan/
-
-If the deletion removed a page md (daemon archives the page and
-KnowledgeWriter unlinks the file), snapshot the change. Defensive —
-silent skip if `git` missing, `~/.wenlan/` not a repo, or no diff.
-
-```
-Bash: git -C ~/.wenlan add -A && \
-      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-          commit --quiet -m "forget: <source_id>" 2>/dev/null || \
-      (sleep 1 && git -C ~/.wenlan add -A && \
-       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-           commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
-```
-
-The retry handles index.lock races — the daemon may be writing to
-`~/.wenlan/` at the same moment. Commits land at session boundaries
-(handoff or daemon events), not per capture; uncommitted page edits
-between sessions are normal. One second is enough for the daemon to
-release the lock.

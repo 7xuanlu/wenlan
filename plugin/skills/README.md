@@ -2,39 +2,27 @@
 
 Claude Code workflow skills installed by the Wenlan plugin.
 
-These skills keep the daily interface short:
-
-```text
-/setup       verify setup end-to-end
-/help        one-screen reference
-/brief [topic] read the Space Brief; topic adds same-Space context
-/capture     save one durable memory
-/recall      search local memory
-/lint [deep|repair] [scope]   diagnose, or resolve all findings safely
-/distill     refresh wiki pages
-/pages [q]   browse + open distilled pages (wenlan pages)
-/curate captures|revisions   power-user deep audit; daily flow is /brief
-/forget      delete a memory by ID
-/handoff     end-of-session debrief
-```
-
 The skills do not store data themselves. They guide Claude Code to use the local `wenlan-mcp` tools, which talk to the Wenlan daemon on `127.0.0.1:7878`.
 
-## Files
+## Commands
 
-| Skill | Purpose |
+<!-- verbs:start -->
+<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
+
+| Command | Purpose |
 | --- | --- |
-| `setup` | End-to-end setup verifier (local runtime + MCP + round-trip). |
-| `help` | One-screen quick reference of the daily verbs and flow. |
-| `brief` | Read the current Space Brief; a topic appends related same-Space context. |
-| `capture` | Save one durable memory: decision, lesson, gotcha, preference, fact, or correction. |
-| `recall` | Query Wenlan for focused context. |
-| `lint` | Run read-only diagnostics, or resolve all findings into ready, review, system-action, or blocked items. |
-| `distill` | Refresh wiki pages from accumulated memories. |
-| `pages` | Browse + open distilled pages by delegating to the `wenlan pages` CLI; query to open by title. |
-| `curate` | Power-user deep audit of pending surfaces (captures, revisions). Daily flow handled by `/brief`. |
-| `forget` | Delete a memory by ID. |
-| `handoff` | End-session capture for decisions, lessons, gotchas, and open threads. |
+| `/setup` | set up or repair Wenlan (installs the local runtime) |
+| `/brief [topic]` | load the Brief for the current Space (optional; not a boot step) |
+| `/capture <x>` | save one durable memory in flow |
+| `/recall <q>` | search local memory |
+| `/lint [deep\|repair] [scope]` | diagnose, or resolve all findings safely |
+| `/distill [t]` | synthesize or refresh source-backed pages for the active Space |
+| `/pages [q]` | browse and open distilled pages |
+| `/curate <surface>` | deep audit of captures, revisions or refinements |
+| `/forget <id>` | delete one memory by ID, after confirmation |
+| `/handoff` | end-of-session debrief: captures, session log, Brief update |
+| `/help` | one-screen quick reference |
+<!-- verbs:end -->
 
 Plugin metadata lives in [`.claude-plugin/plugin.json`](../.claude-plugin/plugin.json); the listing README is [`../README.md`](../README.md).
 
@@ -58,10 +46,9 @@ declaratively, copy `plugin/examples/spaces.toml` to
 `~/.wenlan/spaces.toml` and edit. To override per call, prefix any
 space-aware skill arg with `space:<name>`.
 
-On the first space-aware skill call of a session, the skill prints one
-line so the user can confirm the active bucket:
-
-    Resolved space: <name> (from <layer>)
+On each space-aware skill call, the resolver prints one line naming the
+chosen Space and the layer it came from, so the user can confirm the active
+bucket.
 
 If the resolver reports no space, the skill omits the space parameter. The
 daemon then applies its Default save space to new writes; reads remain All
