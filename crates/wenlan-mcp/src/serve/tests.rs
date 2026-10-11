@@ -134,3 +134,21 @@ async fn initialization_guard_case(profile: ToolProfile) {
     assert!(server.await.is_err_and(|error| error.is_cancelled()));
     result.unwrap();
 }
+
+#[test]
+fn query_only_scope_requires_exactly_one_scope() {
+    assert_eq!(
+        query_only_scope(Some("work".into()), false).unwrap(),
+        "work"
+    );
+    assert_eq!(query_only_scope(None, true).unwrap(), WHOLE_LIBRARY_SPACE);
+    for (locked, whole_library, expected) in [
+        (Some("work"), true, WHOLE_LIBRARY_PIN_CONFLICT_ERROR),
+        (Some("*"), false, RESERVED_SPACE_PIN_ERROR),
+        (None, false, QUERY_ONLY_SPACE_ERROR),
+    ] {
+        let error = query_only_scope(locked.map(str::to_string), whole_library)
+            .expect_err("invalid scope must be rejected");
+        assert_eq!(error.to_string(), expected);
+    }
+}

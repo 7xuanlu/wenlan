@@ -75,6 +75,10 @@ impl Profile {
     pub fn space(&self) -> &str {
         &self.space
     }
+    /// Every Space plus everything not in a Space, rather than one Space.
+    pub fn whole_library(&self) -> bool {
+        self.space == super::WHOLE_LIBRARY_SPACE
+    }
     pub fn backend_token(&self) -> &str {
         &self.backend_token
     }

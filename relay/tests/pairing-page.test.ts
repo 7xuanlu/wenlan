@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
-import { authorizeFailureDocument, copy as rawCopy, htmlEscape, negotiateLocale, pairingDocument, returnDocument,
+import { authorizeFailureDocument, copy as rawCopy, htmlEscape, negotiateLocale, pairingDocument, returnDocument, spaceLabel,
   type PageLocale, type PairingPageView } from '../src/pairing-page.ts';
 import { pairingJS } from '../src/pairing-script.ts';
 
@@ -27,7 +27,7 @@ test('Accept-Language maps to en, zh-Hant or zh-Hans', () => {
 test('every locale defines the same keys and none uses an em dash', () => {
   for (const locale of locales) {
     for (const key of ['docTitle', 'title', 'lead', 'allow', 'allowHint', 'waiting', 'approved', 'denied', 'expired',
-      'fallback', 'fallbackBody', 'touchBody', 'sendsTo', 'unknown', 'fallbackName', 'codeLabel', 'space', 'continue',
+      'fallback', 'fallbackBody', 'touchBody', 'sendsTo', 'unknown', 'fallbackName', 'codeLabel', 'space', 'wholeLibrary', 'continue',
       'cancel', 'cancelled', 'details', 'clientId', 'retry', 'error', 'noscript', 'sample', 'privacy', 'terms',
       'failedTitle', 'failedBody', 'localHint'] as const) {
       const value = rawCopy(locale, key, { name: 'Claude', host: 'claude.ai' });
@@ -40,6 +40,9 @@ test('every locale defines the same keys and none uses an em dash', () => {
   assert.equal(copy('zh-Hans', 'title', { name: 'Claude' }), '将 Claude 连接到 Wenlan');
   assert.equal(rawCopy('zh-Hant', 'expired', { name: '你的 AI 應用程式' }), '這個請求已過期，請從你的 AI 應用程式重新開始連接。');
   assert.equal(rawCopy('zh-Hans', 'expired', { name: 'Claude' }), '这个请求已过期，请从 Claude 重新开始连接。');
+  assert.equal(rawCopy('en', 'wholeLibrary'), 'Whole library');
+  assert.equal(rawCopy('zh-Hant', 'wholeLibrary'), '整個資料庫');
+  assert.equal(rawCopy('zh-Hans', 'wholeLibrary'), '整个资料库');
   assert.match(copy('zh-Hant', 'fallbackBody'), /網頁存取/);
   assert.match(copy('zh-Hans', 'fallbackBody'), /网页访问/);
   assert.match(copy('zh-Hans', 'fallbackBody'), /设置/);
@@ -86,7 +89,7 @@ test('approved, denied and expired pages render their state copy', () => {
     const approved = pairingDocument({ ...pending, status: 'approved', userCode: undefined, space: 'Work' }, locale);
     assert.equal(approved.state, 'approved');
     assert(approved.html.includes(copy(locale, 'approved', { name: 'Claude' })));
-    assert.match(approved.html, /<dl id="approved-space"><dt>[^<]+<\/dt><dd>Work<\/dd>/);
+    assert.match(approved.html, /<dl id="approved-space" data-space="Work"><dt>[^<]+<\/dt><dd>Work<\/dd>/);
     assert.doesNotMatch(approved.html, /id="continue"[^>]*disabled/);
     assert.match(approved.html, /<section class="pairing-step" hidden>/);
     const denied = pairingDocument({ ...pending, status: 'denied', userCode: undefined }, locale);
@@ -96,6 +99,35 @@ test('approved, denied and expired pages render their state copy', () => {
     assert.equal(expired.state, 'unavailable');
     assert(expired.html.includes(copy(locale, 'expired', { name: copy(locale, 'fallbackName') })));
     assert(!expired.html.includes('wenlan://'));
+  }
+});
+
+test('the whole-library Space shows a localized label and keeps the raw value for the script', () => {
+  for (const locale of locales) {
+    const label = copy(locale, 'wholeLibrary');
+    const { html } = pairingDocument({ ...pending, status: 'approved', userCode: undefined, space: '*' }, locale);
+    assert(html.includes(`<dl id="approved-space" data-space="*"><dt>${copy(locale, 'space')}</dt><dd>${label}</dd></dl>`), locale);
+    assert(html.includes(`data-text-whole-library="${label}"`), `${locale}: the script gets the label from <main>`);
+    assert.equal(html.split('<dd>*</dd>').length, 1, `${locale}: the raw value is never the visible text`);
+    // Not approved yet: the dl stays hidden but still carries the raw value.
+    const waiting = pairingDocument({ ...pending, space: '*' }, locale).html;
+    assert(waiting.includes('<dl id="approved-space" hidden data-space="*">'), locale);
+  }
+  assert.equal(spaceLabel('en', '*'), 'Whole library');
+  assert.equal(spaceLabel('zh-Hant', '*'), '整個資料庫');
+  assert.equal(spaceLabel('zh-Hans', '*'), '整个资料库');
+});
+
+test('a named Space renders unchanged and escaped in every locale', () => {
+  for (const locale of locales) {
+    for (const space of ['Work', '研究 & <b>"x"</b>', '**', ' * ', 'Whole library']) {
+      const { html } = pairingDocument({ ...pending, status: 'approved', userCode: undefined, space }, locale);
+      const escaped = htmlEscape(space);
+      assert(html.includes(`data-space="${escaped}"><dt>`), `${locale}: ${space}`);
+      assert(html.includes(`<dd>${escaped}</dd></dl>`), `${locale}: ${space}`);
+      assert.equal(spaceLabel(locale, space), space);
+    }
+    assert(!pairingDocument({ ...pending, status: 'approved', userCode: undefined, space: '<b>x</b>' }, locale).html.includes('<b>x</b>'));
   }
 });
 
@@ -124,18 +156,18 @@ interface Node { hidden?: boolean; disabled?: boolean; textContent?: string; dat
   form?: Form; id?: string; querySelector?: (selector: string) => unknown; remove?: () => void }
 interface Form extends Node { action: string; button: Node; listeners: ((event: { preventDefault(): void }) => void)[] }
 
-function harness(initialState: string, responses: Record<string, unknown[]>, start = 0) {
+function harness(initialState: string, responses: Record<string, unknown[]>, start = 0, initialSpace?: { raw: string; shown: string }) {
   let now = start;
   const timers = new Map<number, { at: number; run: () => void }>();
   let timerId = 0;
   const node = (extra: Partial<Node> = {}): Node => ({ dataset: {}, hidden: false, textContent: '', ...extra });
   const main = node({ dataset: { pairingState: initialState, textWaiting: 'WAITING', textApproved: 'APPROVED',
-    textDenied: 'DENIED', textExpired: 'EXPIRED', textRetry: 'RETRY', textError: 'ERROR' } });
+    textDenied: 'DENIED', textExpired: 'EXPIRED', textRetry: 'RETRY', textError: 'ERROR', textWholeLibrary: 'WHOLE' } });
   const status = node();
   const label = node();
   const step = node({ hidden: initialState !== 'pending' });
-  const dd = node();
-  const space = node({ hidden: initialState !== 'approved', querySelector: () => dd });
+  const dd = node({ textContent: initialSpace?.shown ?? '' });
+  const space = node({ hidden: initialState !== 'approved', dataset: initialSpace ? { space: initialSpace.raw } : {}, querySelector: () => dd });
   const notice = node();
   const form = (action: string): Form => {
     const button = node({ disabled: false });
@@ -195,7 +227,7 @@ function harness(initialState: string, responses: Record<string, unknown[]>, sta
     }
     now = target;
   };
-  return { main, label, step, complete, cancel, calls, navigations, settle, advance, pendingTimers: () => timers.size };
+  return { main, label, step, space, dd, complete, cancel, calls, navigations, settle, advance, pendingTimers: () => timers.size };
 }
 
 test('script: approval in Wenlan auto-submits completion once and follows the redirect', async () => {
@@ -221,6 +253,42 @@ test('script: a server-rendered approved page completes without polling first', 
   await page.settle();
   assert.deepEqual(page.calls, [{ url: '/pairing/complete', method: 'POST' }]);
   assert.deepEqual(page.navigations, ['https://client.example/cb?code=c']);
+});
+
+test('script: a whole-library status shows the localized label and keeps the raw value', async () => {
+  const page = harness('pending', {
+    '/pairing/status': [{ status: 'pending' }, { status: 'approved', space: '*' }],
+    '/pairing/complete': [{ redirectTo: 'https://client.example/cb?code=c' }],
+  });
+  await page.settle();
+  await page.advance(3000);
+  assert.equal(page.dd.textContent, 'WHOLE');
+  assert.equal(page.space.dataset.space, '*');
+  assert.equal(page.space.hidden, false);
+});
+
+test('script: a named Space status shows the Space itself', async () => {
+  const page = harness('pending', {
+    '/pairing/status': [{ status: 'approved', space: 'Work' }],
+    '/pairing/complete': [{ redirectTo: 'https://client.example/cb?code=c' }],
+  });
+  await page.settle();
+  assert.equal(page.dd.textContent, 'Work');
+  assert.equal(page.space.dataset.space, 'Work');
+});
+
+test('script: a server-rendered whole-library page reads the raw value back, never the label', async () => {
+  for (const locale of locales) {
+    const { html } = pairingDocument({ ...pending, status: 'approved', userCode: undefined, space: '*' }, locale);
+    const raw = html.match(/<dl id="approved-space"[^>]* data-space="([^"]*)"/)![1];
+    assert.equal(raw, '*');
+    const page = harness('approved', { '/pairing/complete': [{ redirectTo: 'https://client.example/cb?code=c' }] }, 0,
+      { raw, shown: html.match(/<dd>([^<]*)<\/dd><\/dl>/)![1] });
+    await page.settle();
+    assert.equal(page.space.dataset.space, '*', locale);
+    assert.equal(page.dd.textContent, 'WHOLE', `${locale}: the label is re-derived from the raw value`);
+    assert.deepEqual(page.navigations, ['https://client.example/cb?code=c']);
+  }
 });
 
 test('script: a denial auto-submits cancel and returns access_denied to the client', async () => {

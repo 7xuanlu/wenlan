@@ -88,6 +88,7 @@ async fn verify_http(origin_url: String) {
         agent_name: AGENT.into(),
         user_id: None,
         allowed_origins: vec![],
+        whole_library: false,
     };
     let mut task = DaemonTask(tokio::spawn(async move {
         wenlan_mcp::serve::run_serve_with_profile(config, ToolProfile::QueryOnly)

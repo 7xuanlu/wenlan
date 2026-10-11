@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
+/** Reserved Space value meaning the whole library: every Space plus content in
+ * none. It travels as an ordinary string; only allowedRpc and display code
+ * give it meaning.
+ */
+export const WHOLE_LIBRARY_SPACE = '*';
+
 /** The OAuth adapter must obtain this from verified tokens, never request JSON. */
 export interface QueryGrant {
   subject: string;
@@ -353,7 +359,12 @@ function allowedRpc(bytes: Uint8Array, space: string): boolean {
     const args = rpc.params.arguments ?? {};
     if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
     for (const key of ['space', 'domain']) {
-      if (key in args && args[key] !== space) return false;
+      if (!(key in args)) continue;
+      // A whole-library grant lets the model narrow to any Space it names; null
+      // is an unset optional argument, which the MCP server reads as no Space.
+      if (space === WHOLE_LIBRARY_SPACE
+        ? typeof args[key] !== 'string' && args[key] !== null
+        : args[key] !== space) return false;
     }
     return true;
   } catch {

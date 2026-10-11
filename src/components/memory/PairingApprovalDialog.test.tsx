@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup, act, configure } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, act, configure, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
 import PairingApprovalDialog from "./PairingApprovalDialog";
@@ -80,6 +80,15 @@ describe("PairingApprovalDialog", () => {
     // Never the raw client id or a status code in the main dialog.
     expect(screen.queryByText(/synthetic-client-id/)).not.toBeInTheDocument();
     expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
+  });
+
+  it("says plainly when an app would see the whole library", async () => {
+    mocks.getRemoteAccessProfile.mockResolvedValue({ ...profile, space: "*" });
+    setPendingPairingCode(SHORT);
+    mount();
+    await screen.findByRole("heading", { name: "Allow Claude to search your library?" });
+    expect(screen.getByText("It can search and read your whole library: every Space, plus everything not in a Space.")).toBeInTheDocument();
+    expect(screen.queryByText(/\*|other Spaces stay private/)).not.toBeInTheDocument();
   });
 
   it("inspects a long code from a link by its pairing id", async () => {
@@ -315,26 +324,29 @@ describe("PairingApprovalDialog", () => {
       mocks.configureRemoteAccess.mockImplementation(async () => ({ ...profile, enabled: false, revision: "r2" }));
     }
 
-    it("offers to turn it on, then goes on to ask who is connecting", async () => {
+    it("asks what to share with nothing preselected, then goes on to ask who is connecting", async () => {
       goesOnOnceTurnedOn();
       setPendingPairingCode(SHORT);
       mount();
       expect(await screen.findByRole("heading", { name: "Turn on Web access?" })).toBeInTheDocument();
-      expect(screen.getByRole("combobox", { name: "Space to share" })).toHaveValue("review");
+      const question = screen.getByRole("group", { name: "What can web apps search?" });
+      expect(within(question).queryByRole("combobox")).not.toBeInTheDocument();
       expect(mocks.lookupRemotePairing).not.toHaveBeenCalled();
-      fireEvent.change(screen.getByRole("combobox", { name: "Space to share" }), { target: { value: "private" } });
-      fireEvent.click(screen.getByRole("button", { name: "Turn on" }));
+      fireEvent.click(within(question).getByRole("button", { name: "Share one Space…" }));
+      fireEvent.change(within(question).getByRole("combobox", { name: "Space to share" }), { target: { value: "private" } });
+      fireEvent.click(within(question).getByRole("button", { name: "Share this Space" }));
       await waitFor(() => expect(mocks.toggleRemoteAccess).toHaveBeenCalledWith(true, "r2"));
-      expect(mocks.configureRemoteAccess).toHaveBeenCalledWith("private", "r0");
+      expect(mocks.configureRemoteAccess).toHaveBeenCalledWith({ kind: "space", name: "private" }, "r0");
       expect(await screen.findByRole("heading", { name: "Allow Claude to search your library?" })).toBeInTheDocument();
       expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
     });
 
-    it("turning on is not allowing: it stops at the question", async () => {
+    it("turning on is not allowing: the whole library still stops at the question", async () => {
       goesOnOnceTurnedOn();
       setPendingPairingCode(SHORT);
       mount();
-      fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Share whole library" }));
+      await waitFor(() => expect(mocks.configureRemoteAccess).toHaveBeenCalledWith({ kind: "wholeLibrary" }, "r0"));
       await screen.findByRole("button", { name: "Allow" });
       expect(mocks.approveRemotePairing).not.toHaveBeenCalled();
     });
@@ -364,18 +376,19 @@ describe("PairingApprovalDialog", () => {
       mocks.toggleRemoteAccess.mockRejectedValue(new Error("Remote connection unavailable; retry later"));
       setPendingPairingCode(SHORT);
       mount();
-      fireEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Share whole library" }));
       expect(await screen.findByRole("alert")).toHaveTextContent("Can't reach Wenlan's web service.");
-      expect(screen.getByRole("button", { name: "Turn on" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Share whole library" })).toBeEnabled();
     });
 
-    it("cannot turn on without a Space", async () => {
+    it("with no Spaces, can still share the whole library", async () => {
       goesOnOnceTurnedOn();
       mocks.listSpaces.mockResolvedValue([]);
       setPendingPairingCode(SHORT);
       mount();
-      expect(await screen.findByText("Create a Space first. Web access shares one Space.")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Turn on" })).toBeDisabled();
+      expect(await screen.findByText("To share just one Space, create a Space first.")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Share one Space…" })).toBeDisabled();
+      await waitFor(() => expect(screen.getByRole("button", { name: "Share whole library" })).toBeEnabled());
     });
   });
 
@@ -389,7 +402,7 @@ describe("PairingApprovalDialog", () => {
     expect(await screen.findByText(/still removing this computer from the relay/)).toBeInTheDocument();
     await settled();
     expect(screen.queryByRole("button", { name: "Allow" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Turn on" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share whole library" })).not.toBeInTheDocument();
     expect(mocks.lookupRemotePairing).not.toHaveBeenCalled();
   });
 
@@ -398,7 +411,7 @@ describe("PairingApprovalDialog", () => {
     setPendingPairingCode(SHORT);
     mount();
     expect(await screen.findByRole("alert")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Turn on" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Share whole library" })).not.toBeInTheDocument();
     expect(mocks.lookupRemotePairing).not.toHaveBeenCalled();
   });
 

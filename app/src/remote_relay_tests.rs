@@ -1238,3 +1238,28 @@ async fn grants_carry_optional_use_and_end_fields_and_tolerate_unknown_reasons()
     assert_eq!(wire["endReason"], "reset");
     assert_eq!(wire["lastUsedAt"], 1_700_000_000_000u64);
 }
+
+#[test]
+fn scope_choice_saves_whole_library_and_refuses_a_space_named_like_it() {
+    let parse = |value: serde_json::Value| serde_json::from_value::<ScopeChoice>(value);
+    let whole = parse(serde_json::json!({"kind": "wholeLibrary"})).unwrap();
+    assert_eq!(whole.saved_space(), Ok(WHOLE_LIBRARY_SPACE));
+    let work = parse(serde_json::json!({"kind": "space", "name": "work"})).unwrap();
+    assert_eq!(work.saved_space(), Ok("work"));
+    for name in ["*", " * "] {
+        let reserved = parse(serde_json::json!({"kind": "space", "name": name})).unwrap();
+        assert!(
+            reserved.saved_space().is_err(),
+            "{name:?} must not widen to the whole library"
+        );
+    }
+    // A bare string, a missing name, or an extra field is not a choice.
+    for value in [
+        serde_json::json!("*"),
+        serde_json::json!({"kind": "space"}),
+        serde_json::json!({"kind": "wholeLibrary", "name": "work"}),
+        serde_json::json!({"kind": "everything"}),
+    ] {
+        assert!(parse(value.clone()).is_err(), "{value} must be refused");
+    }
+}
