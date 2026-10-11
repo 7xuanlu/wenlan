@@ -526,6 +526,26 @@ pub struct PageInventoryResponse {
     pub pages: Vec<PageInventoryEntry>,
 }
 
+/// The OKF concept an imported page was born from, for display only.
+/// Field names follow the bundle record exactly.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OkfConceptRef {
+    pub source_id: String,
+    pub concept_id: String,
+    /// The concept's frontmatter as parsed, unchanged.
+    pub frontmatter: serde_json::Value,
+    pub updated_at: i64,
+}
+
+/// `GET /api/pages/{id}` response: one browse-visible page with its live-file
+/// metadata, plus the OKF concept it was imported from when there is one.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageReadResponse {
+    pub page: PageInventoryEntry,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub okf: Option<OkfConceptRef>,
+}
+
 /// Wikilink graph centered on a single page. Outbound = labels parsed
 /// out of this page's body; `target_page_id` is `None` for orphans.
 /// Inbound = active pages whose body cites this title.

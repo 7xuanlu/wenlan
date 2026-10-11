@@ -101,7 +101,7 @@ async fn publish_reports_committed_page_with_pending_projection_and_retains_inte
     )
     .await
     .unwrap();
-    assert_eq!(reloaded["page"]["folder_path"], "Missing");
+    assert_eq!(reloaded.page.folder_path.as_deref(), Some("Missing"));
     let Json(published) = handle_publish_page_draft(
         State(state.clone()),
         TruthView::automatic(),
@@ -259,7 +259,7 @@ async fn detail_resolves_a_live_file_when_stored_kind_is_stale_overview() {
     )
     .await
     .unwrap();
-    assert_eq!(detail["page"]["storage_path"], expected);
+    assert_eq!(detail.page.storage_path.as_deref(), Some(expected.as_str()));
 }
 
 #[tokio::test]
@@ -313,7 +313,7 @@ async fn move_accepts_a_live_file_when_stored_kind_is_stale_overview() {
     )
     .await
     .unwrap();
-    assert_eq!(detail["page"]["storage_path"], moved.storage_path);
+    assert_eq!(detail.page.storage_path, Some(moved.storage_path));
 }
 
 #[tokio::test]
@@ -339,7 +339,7 @@ async fn overview_title_with_stale_concept_kind_has_no_file_path() {
     )
     .await
     .unwrap();
-    assert!(detail["page"].get("storage_path").is_none());
+    assert!(detail.page.storage_path.is_none());
 }
 
 #[tokio::test]
