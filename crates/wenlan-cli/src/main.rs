@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use output::OutputFormat;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -14,7 +14,7 @@ use wenlan_types::lint::LintProfile;
 #[command(
     name = "wenlan",
     version,
-    about = "Wenlan CLI. Set up and use the local Wenlan runtime."
+    about = "Wenlan: a personal wiki your AI tools keep up to date. Capture, recall, and hand off across sessions."
 )]
 struct Cli {
     #[command(subcommand)]
@@ -43,7 +43,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show background process, model, API key, and memory state.
+    /// Check whether Wenlan is running.
     Status,
     /// Guided setup for local memory, a local model, or an Anthropic key.
     Setup {
@@ -93,14 +93,16 @@ enum Commands {
         #[command(subcommand)]
         command: commands::setup::KeyCommand,
     },
-    /// Configure, inspect, or disable model-backed background enrichment.
-    Enrichment {
+    /// Configure, inspect, or disable Steep, the optional background upkeep (model-backed).
+    #[command(alias = "enrichment")]
+    Steep {
         #[command(subcommand)]
         command: commands::setup::EnrichmentCommand,
     },
     /// Connect Wenlan to a supported agent or editor.
     Connect(commands::mcp::ConnectArgs),
     /// Search memories and pages by query (hybrid vector + keyword); --limit caps the primary results, plus up to 3 supplemental pages.
+    #[command(hide = true)]
     Search {
         /// Search query.
         query: String,
@@ -108,10 +110,13 @@ enum Commands {
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
     },
-    /// Recall scored memories for a query (up to 20; the table shows the top 10, JSON also carries supplemental pages).
+    /// Recall scored memories for a query, plus the compiled pages that match it.
     Recall {
         /// Query to recall memories for.
         query: String,
+        /// Max memories to return.
+        #[arg(short, long, default_value_t = 10)]
+        limit: usize,
     },
     /// Read the current Space Brief, optionally with related context.
     Brief(commands::brief::BriefArgs),
@@ -161,6 +166,7 @@ enum Commands {
         action: Option<commands::curate::CurateAction>,
     },
     /// Manage registered agents (list / show / edit).
+    #[command(hide = true)]
     Agents {
         #[command(subcommand)]
         cmd: commands::agents::AgentsCmd,
@@ -187,12 +193,77 @@ enum Commands {
     },
     /// Force one bounded pass over every due ambient job now, instead of
     /// waiting for a quiet turn.
+    #[command(hide = true)]
     Sweep,
+}
+
+/// Help groups for `wenlan --help`, in display order. Only names live here;
+/// each description stays on its `Commands` doc comment. Hidden subcommands
+/// (`search`, `sweep`, `agents`) are deliberately absent.
+const HELP_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Daily",
+        &[
+            "brief", "capture", "recall", "pages", "memories", "curate", "lint", "spaces",
+        ],
+    ),
+    (
+        "Setup",
+        &[
+            "setup",
+            "status",
+            "doctor",
+            "background",
+            "restart",
+            "connect",
+            "models",
+            "keys",
+            "steep",
+        ],
+    ),
+    ("Maintenance", &["sources", "outbox", "export", "entities"]),
+];
+
+/// Build a clap help template that lists the subcommands by `HELP_GROUPS`
+/// instead of one flat `Commands:` block. Every line keeps clap's two-space
+/// indent so help parsers that read the first word of indented lines still work.
+fn grouped_help_template(cmd: &clap::Command) -> String {
+    let abouts: std::collections::BTreeMap<&str, String> = cmd
+        .get_subcommands()
+        .map(|sub| {
+            (
+                sub.get_name(),
+                sub.get_about().map(ToString::to_string).unwrap_or_default(),
+            )
+        })
+        .collect();
+    let width = HELP_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .map(|name| name.len())
+        .max()
+        .unwrap_or(0);
+    let mut template =
+        String::from("{before-help}{about-with-newline}\n{usage-heading} {usage}\n\n");
+    for (heading, names) in HELP_GROUPS {
+        template.push_str(heading);
+        template.push_str(":\n");
+        for name in names.iter() {
+            let about = abouts.get(name).map(String::as_str).unwrap_or("");
+            template.push_str(&format!("  {name:<width$}  {about}\n"));
+        }
+        template.push('\n');
+    }
+    template.push_str("Options:\n{options}{after-help}");
+    template
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<ExitCode> {
-    let cli = Cli::parse();
+    let cmd = Cli::command();
+    let template = grouped_help_template(&cmd);
+    let matches = cmd.help_template(template).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     if cli.all_spaces && matches!(&cli.command, Commands::Brief(_)) {
         anyhow::bail!("Brief is owned by one Space; --all-spaces is not supported");
     }
@@ -260,7 +331,7 @@ async fn main() -> anyhow::Result<ExitCode> {
                 )?;
                 if let Some(space) = context.space.as_deref() {
                     eprintln!(
-                        "wenlan: daemon unreachable — queued for Space '{space}' (not validated against the registry)"
+                        "wenlan: Wenlan is not running; saved locally for Space '{space}' and will sync when it starts"
                     );
                 }
                 context
@@ -366,13 +437,13 @@ async fn main() -> anyhow::Result<ExitCode> {
         }
         Commands::Models { command } => commands::setup::run_model(command).await?,
         Commands::Keys { command } => commands::setup::run_key(command).await?,
-        Commands::Enrichment { command } => commands::setup::run_enrichment(command).await?,
+        Commands::Steep { command } => commands::setup::run_enrichment(command).await?,
         Commands::Connect(args) => commands::mcp::run_connect(args, cli.quiet)?,
         Commands::Search { query, limit } => {
             commands::search::run(&client, format, cli.quiet, query, limit).await?
         }
-        Commands::Recall { query } => {
-            commands::recall::run(&client, format, cli.quiet, query).await?
+        Commands::Recall { query, limit } => {
+            commands::recall::run(&client, format, cli.quiet, query, limit).await?
         }
         Commands::Brief(args) => {
             commands::brief::run(
@@ -457,6 +528,33 @@ mod catalog_tests {
         assert_eq!(
             clap_names, manifest,
             "CLI_READERS in wenlan-core/src/truth_manifest.rs drifted from the clap `Commands` enum"
+        );
+    }
+
+    /// `wenlan --help` is rendered from `HELP_GROUPS`, so every visible
+    /// subcommand must be listed exactly once, and no hidden one may leak in.
+    #[test]
+    fn help_groups_cover_every_visible_subcommand() {
+        let mut grouped: Vec<&str> = super::HELP_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect();
+        let unique: BTreeSet<&str> = grouped.iter().copied().collect();
+        assert_eq!(unique.len(), grouped.len(), "duplicate name in HELP_GROUPS");
+        grouped.sort_unstable();
+        let visible: BTreeSet<String> = Cli::command()
+            .get_subcommands()
+            .filter(|sub| !sub.is_hide_set())
+            .map(|sub| sub.get_name().to_string())
+            .filter(|name| name != "help")
+            .collect();
+        assert_eq!(
+            unique
+                .iter()
+                .map(ToString::to_string)
+                .collect::<BTreeSet<_>>(),
+            visible,
+            "HELP_GROUPS in main.rs drifted from the visible clap subcommands"
         );
     }
 }

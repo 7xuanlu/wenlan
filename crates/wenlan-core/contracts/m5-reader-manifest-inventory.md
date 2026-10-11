@@ -785,9 +785,9 @@ must be demoted individually with a recorded reason. **Every MCP tool is
 | `write_page` | yes | automatic | `none` | tool handler |
 | `rename_page` | yes | automatic | `none` | tool handler |
 
-## CLI — all 23 `Commands` variants
+## CLI — all 24 `Commands` variants
 
-From `crates/wenlan-cli/src/main.rs:45`. The count is 23, not 20: `Connect` and
+From `crates/wenlan-cli/src/main.rs:45`. The count is 24, not 20: `Connect` and
 `Brief` are tuple variants, easy to miss when scanning for brace-shaped
 variants, `Outbox` is the last brace variant before `Entities`, and `Sweep`
 follows `Entities`. The CLI
@@ -804,7 +804,7 @@ the projection-directory reader.
 | `wenlan lint` | yes | automatic | `none` | subcommand renderer |
 | `wenlan models` | yes | automatic | `none` | subcommand renderer |
 | `wenlan keys` | yes | automatic | `none` | subcommand renderer |
-| `wenlan enrichment` | yes | automatic | `none` | subcommand renderer |
+| `wenlan steep` | yes | automatic | `none` | subcommand renderer |
 | `wenlan connect` | yes | automatic | `none` | subcommand renderer |
 | `wenlan search` | yes | automatic | `none` | subcommand renderer |
 | `wenlan recall` | yes | automatic | `none` | subcommand renderer |

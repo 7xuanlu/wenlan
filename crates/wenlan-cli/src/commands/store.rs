@@ -69,7 +69,10 @@ pub async fn run(
                         "path": path.display().to_string(),
                         "operation_id": operation_id,
                     }))?,
-                    ResolvedFormat::Table => println!("queued: {}", path.display()),
+                    ResolvedFormat::Table => println!(
+                        "saved locally, syncs when Wenlan starts: {}",
+                        path.display()
+                    ),
                 }
             }
             return Ok(());

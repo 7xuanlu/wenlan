@@ -55,16 +55,17 @@ brief_before=""
 brief_absent=0
 daemon_down=0
 if [ -n "$space" ]; then
+  "$W" --format json status >/dev/null 2>&1 || daemon_down=1
   if [ "$source_layer" = "cwd-repo-new" ]; then
     space_probe_status=0
     space_probe="$("$W" --format json spaces show "$space" 2>&1)" || space_probe_status=$?
     if [ "$space_probe_status" -eq 0 ]; then
+      daemon_down=0
       brief_before="$("$W" --format json --space "$space" brief)"
       source_layer="cwd-repo"
     elif [ "$space_probe" = "Error: space '$space' not found" ]; then
       brief_absent=1
-    elif printf '%s' "$space_probe" | grep -qE 'tcp connect error|daemon not reachable'; then
-      daemon_down=1
+    elif [ "$daemon_down" = 1 ]; then
       brief_before=""
       echo "wenlan daemon unreachable — this handoff will queue its writes"
     else
@@ -75,9 +76,9 @@ if [ -n "$space" ]; then
     brief_status=0
     brief_output="$("$W" --format json --space "$space" brief 2>&1)" || brief_status=$?
     if [ "$brief_status" -eq 0 ]; then
+      daemon_down=0
       brief_before="$brief_output"
-    elif printf '%s' "$brief_output" | grep -qE 'tcp connect error|daemon not reachable'; then
-      daemon_down=1
+    elif [ "$daemon_down" = 1 ]; then
       brief_before=""
       echo "wenlan daemon unreachable — this handoff will queue its writes"
     else

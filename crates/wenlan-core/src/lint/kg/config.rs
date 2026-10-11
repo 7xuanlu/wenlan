@@ -13,7 +13,7 @@ pub(crate) struct KgRunConfig {
     /// is configured, so it cannot answer "has the owner picked a model source".
     /// The pin is what `refinery::resolve_everyday` reads to produce
     /// `RouteMode::Unconfigured`, which is the exact condition on which the
-    /// capture path tells the user that "background enrichment is paused until
+    /// capture path tells the user that "Steep is paused until
     /// you choose a model source". A source that is chosen but unavailable
     /// resolves to `PinnedUnavailable`, so it stays `true` here and is never
     /// told to choose a source it already chose.

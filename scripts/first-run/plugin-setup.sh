@@ -94,7 +94,7 @@ fi
 info plugin-diff-vs-main "$(diff -rq "$RELEASE_SRC/plugin" "$REPO_ROOT/plugin" 2>&1 | head -20)"
 
 # Step 1: SessionStart hook with no runtime.
-check_output hook-daemon-down "[wenlan] local runtime not running" -- bash "$HOOK"
+check_output hook-daemon-down "[wenlan] Wenlan is not running" -- bash "$HOOK"
 
 # Step 2: the bootstrap block, verbatim from the tagged SKILL.md.
 BOOTSTRAP_RE='curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v[0-9][^ ]*/install.sh | bash'

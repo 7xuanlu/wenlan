@@ -1096,7 +1096,7 @@ Expect-Rows -Names @(
     "task-kept-after-off",
     "health-unreachable-after-off",
     "autostart-marker",
-    "stopped-marker-error (wenlan.exe search x)",
+    "stopped-marker-error (wenlan.exe recall x)",
     "background-on-again",
     "health-version",
     "daemon-stopped-at-cleanup",
@@ -1321,7 +1321,7 @@ try {
         if ($stopped.State -eq "alive") { throw "the daemon this run started is still running after Stop-Daemon: $($stopped.Detail); the recovery check below would be testing nothing" }
         throw "could not measure whether the daemon stopped before the recovery check: $($stopped.Detail); recorded as unproven, not as stopped"
     }
-    Check -Name "autostart-recovery (wenlan.exe memories --limit 1)" -Expect "daemon not reachable" -Script { & wenlan.exe memories --limit 1 }
+    Check -Name "autostart-recovery (wenlan.exe memories --limit 1)" -Expect "starting it in the background" -Script { & wenlan.exe memories --limit 1 }
     # All three states, here and at every other caller of this probe. A row that
     # says "recovered" must rest on a reachable daemon, never on a probe whose
     # own failure happened to look like one.
@@ -1354,7 +1354,7 @@ try {
         throw "could not measure whether $Health is reachable after background off: $($h.Detail); recorded as unproven, not as a clean shutdown"
     }
     Check -Name "autostart-marker" -Script { $marker = Join-Path $DataDir "autostart.off"; if (-not (Test-Path $marker)) { throw "missing $marker" }; Write-Output $marker }
-    Check -Name "stopped-marker-error (wenlan.exe search x)" -ExpectFail "daemon stopped by" -Script { & wenlan.exe search x }
+    Check -Name "stopped-marker-error (wenlan.exe recall x)" -ExpectFail "switched off with" -Script { & wenlan.exe recall x }
     Check -Name "background-on-again" -Expect "Installed and started Windows scheduled task" -Script {
         if (-not $TaskOwned) { throw "not attempted: this run does not own $TaskName, so it may not re-register at that name" }
         & wenlan.exe background on

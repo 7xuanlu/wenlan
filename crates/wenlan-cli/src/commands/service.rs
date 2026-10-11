@@ -1163,9 +1163,7 @@ pub async fn print_status() -> Result<()> {
     let url = format!("{}/api/health", origin_host_from_env());
     match reqwest::get(&url).await {
         Ok(resp) if resp.status().is_success() => {
-            let body = resp.text().await.unwrap_or_default();
             println!("Health: ok ({})", url);
-            println!("{}", body);
         }
         Ok(resp) => {
             println!("Health: unhealthy (status {})", resp.status());

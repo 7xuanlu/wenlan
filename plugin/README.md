@@ -8,7 +8,7 @@ Wenlan is local-first. Memories, pages, and session notes live on your machine u
 
 - **Skills**: `/wenlan:setup`, `/brief`, `/capture`, `/recall`, `/lint`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help`. Each skill talks to the local daemon over HTTP on `127.0.0.1:7878`.
 - **One local MCP server** (`wenlan`), started by `plugin/scripts/wenlan-mcp-runner.sh`. It exposes memory tools (capture, recall, brief, distill, and friends) to Claude Code and Cowork. Claude chat on the web ignores local MCP servers.
-- **One `SessionStart` hook** (`plugin/hooks/check-daemon.sh`). It probes the local daemon and prints at most a few lines: a reminder if the daemon is not running, a count of queued handoff writes (from the local `wenlan outbox status` command, parsed with `python3`), and a notice if the daemon and plugin versions have drifted apart. It never blocks a session and never installs anything.
+- **One `SessionStart` hook** (`plugin/hooks/check-daemon.sh`). It probes the local daemon and prints at most a few lines: a reminder if the daemon is not running, a count of handoff notes waiting to sync (from the local `wenlan outbox status` command, parsed with `python3`), and a notice if the daemon and plugin versions have drifted apart. It never blocks a session and never installs anything.
 
 ## Setup
 
