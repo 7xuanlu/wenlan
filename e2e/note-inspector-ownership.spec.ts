@@ -57,7 +57,8 @@ for(const scene of scenes)test.describe(`${scene.width} ${scene.theme} ${scene.l
   for(const width of [375,2560,1680]){
    await page.setViewportSize({width,height:960});
    await expect.poll(async()=>{const g=await geometry(right);return !g.compact&&g.panel.width>=140&&g.content.width>=200&&Math.abs(g.panel.x-g.inspectorHeader.x)<=1&&Math.abs(g.content.right-g.panel.x)<=1;}).toBe(true);
-   await aligned(left);await aligned(right);
+   // The resize poll above only covers the right group; the left one can still be settling, so its hit test polls too.
+   await expect(async()=>{await aligned(left);await aligned(right);}).toPass({timeout:10_000});
    await expect(left.locator('.note-inspector-tabs [role="tab"]').first()).toHaveAttribute('aria-selected','true');
    await expect(right.locator('.note-inspector-tabs [role="tab"]').last()).toHaveAttribute('aria-selected','true');
    await page.screenshot({path:info.outputPath(`resized-${width}.png`)});
