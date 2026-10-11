@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Display-side mirror of the backend's per-claim citation contract
-// (7xuanlu/wenlan crates/wenlan-core/src/citations.rs). Occurrence k is the
+// (wenlan-app/wenlan crates/wenlan-core/src/citations.rs). Occurrence k is the
 // k-th plain \[(\d+)\] regex match over the raw stored body — deliberately no
 // code-fence/wikilink awareness, because the backend counts the same way and
 // parity is the contract. Matches inside code consume occurrence indices but

@@ -85,6 +85,10 @@ changelog. Version changes must keep `version.txt`, `.release-please-manifest.js
 workspace version, and the app version surfaces in lockstep; the existing verifier is
 the authority.
 
+PRs land on `main` only through the merge queue (`gh pr merge <number>` enqueues), so
+never update a branch and rerun CI by hand to land it. Queue the Release PR alone and
+last, as `docs/RELEASING.md` describes.
+
 Removing a worktree also removes its gitignored artifacts. Before cleanup, check for
 the only copy of eval databases, model downloads, or other valuable caches and migrate
 them to their documented external cache location.

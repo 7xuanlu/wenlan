@@ -75,7 +75,11 @@ Bash: npx -y wenlan@0.4.1 setup
 EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.4.1/install.sh | bash
+EOF
+
+cat > "$TMPDIR_TEST/plugin-codex/overlay.json" <<EOF
+{"skills": {"setup": {"replace": [{"from": ["npx -y wenlan@0.4.1 setup"], "to": ["curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash"]}]}}}
 EOF
 
 # Cargo.lock fixture: workspace members at the old version + an external dep
@@ -157,6 +161,9 @@ grep -q 'wenlan-mcp@0\.4\.1' "$TMPDIR_TEST/plugin/scripts/wenlan-mcp-runner.sh" 
 grep -q 'wenlan-mcp@\^\${ver}' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" || { echo "FAIL: Codex runner must keep deriving its pin from plugin.json"; exit 1; }
 grep -Eq 'wenlan-mcp@\^[0-9]' "$TMPDIR_TEST/plugin-codex/bin/wenlan-mcp-runner.sh" && { echo "FAIL: bump-version.sh must not hardcode a Codex runner pin"; exit 1; }
 grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" || { echo "FAIL: Codex setup skill installer not bumped"; exit 1; }
+grep -q 'npx -y wenlan@0.5.0 setup' "$TMPDIR_TEST/plugin-codex/overlay.json" || { echo "FAIL: Codex overlay Claude-side npm pin not bumped"; exit 1; }
+grep -q '/v0.5.0/install.sh' "$TMPDIR_TEST/plugin-codex/overlay.json" || { echo "FAIL: Codex overlay install.sh tag pin not bumped"; exit 1; }
+grep -q '0\.4\.1' "$TMPDIR_TEST/plugin-codex/overlay.json" && { echo "FAIL: Codex overlay still carries the old pin"; exit 1; }
 
 # Cargo.lock: all five workspace members bumped to 0.5.0, exactly as
 # validate-versions.sh reads them (name:version pairs).

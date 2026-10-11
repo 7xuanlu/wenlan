@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "Shared Wenlan plugin contract for the Claude Code and Codex plugin surfaces. This is an inventory and drift guard, not a generator.",
+  "description": "Shared Wenlan plugin contract for the Claude Code and Codex plugin surfaces. It is the skill inventory and drift guard; the Codex skills themselves are generated from the Claude skills by scripts/gen-codex-plugin.mjs with plugin-codex/overlay.json.",
   "surfaces": {
     "claude": {
       "plugin_root": "plugin",
@@ -21,7 +21,7 @@
         "name": "7xuanlu-wenlan",
         "plugin_name": "wenlan",
         "source": "git-subdir",
-        "source_url": "https://github.com/7xuanlu/wenlan.git",
+        "source_url": "https://github.com/wenlan-app/wenlan.git",
         "source_path": "plugin",
         "category": "productivity"
       }

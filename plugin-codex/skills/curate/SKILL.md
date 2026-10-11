@@ -1,9 +1,12 @@
 ---
 name: curate
 description: >
-  Review pending Wenlan captures, revisions, or daemon refinements from Codex.
-  Use for explicit audit walks after /brief or /handoff surfaces pending work.
-  Invoked as /curate captures, /curate revisions, or /curate refinements.
+  Power-user audit of Wenlan's pending surfaces: accept or dismiss pending
+  revisions (conflicts/merges), or audit pending captures (not yet confirmed).
+  Most users want `/brief` for revisions; that handles the daily flow. Use
+  `/curate` only for explicit deep-walk audits after bulk imports, or to walk
+  the full queue rather than the top 3 shown in /brief.
+  Invoked as `/curate captures`, `/curate revisions`, or `/curate refinements`.
 argument-hint: "captures | revisions | refinements"
 allowed-tools: ["Bash", "mcp__wenlan__list_pending", "mcp__wenlan__confirm_memory", "mcp__wenlan__forget", "mcp__wenlan__capture", "mcp__wenlan__recall", "mcp__wenlan__list_refinements", "mcp__wenlan__accept_refinement", "mcp__wenlan__reject_refinement"]
 user-invocable: true
@@ -11,10 +14,20 @@ user-invocable: true
 
 # /curate
 
-Power-user audit of Wenlan pending surfaces. A pending capture is one that is
-not yet confirmed. Daily flow should stay light:
-`/brief` shows the top pending revisions and `/handoff` previews recent pending
-captures. Use `/curate` only when the user asks to walk the queue.
+Power-user audit lever. Most users do not need /curate in daily flow:
+
+- **Pending revisions** surface in `/brief` automatically (top 3 with inline accept/dismiss).
+- **Pending captures from this session** surface in `/handoff`'s preview block (top 3).
+- **Orphan wikilinks** surface in `/distill`'s topic-suggestion block.
+
+Use /curate only when you want the deep walk those skills intentionally do not force.
+
+**Captures are meant to decay.** A capture lands pending (not yet confirmed) and, if nothing
+ever conflicts with it, it quietly fades — that is by design, not a backlog you owe the
+system. The only items that *need* a human are genuine conflicts (a contradiction,
+or a richer re-capture worth merging); those surface as pending revisions. `/curate
+captures` is an **opt-in audit** for when you *want* to seal a batch (e.g. after a
+bulk import), not a daily chore to zero out.
 
 ## Safety protocol
 
@@ -34,37 +47,40 @@ syntax:
 Do not rely on hidden pagination state across turns. After applying a batch,
 re-list before showing another batch.
 
-## `/curate revisions`
+## `/curate revisions` (and bare `/curate`) → via the `wenlan` CLI
 
-Use the local CLI, not MCP, because revision actions must key on the exact
-`revision_source_id`.
+Revisions go through the **CLI**, not MCP, because revision actions must key on
+the exact `revision_source_id`. Resolve the binary once, then list:
 
-Resolve `wenlan`:
-
-```bash
-if command -v wenlan >/dev/null 2>&1; then
-  W="$(command -v wenlan)"
-elif [ -x "$HOME/.wenlan/bin/wenlan" ]; then
-  W="$HOME/.wenlan/bin/wenlan"
-else
-  echo "wenlan not found"
-  exit 127
-fi
+```
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
 "$W" --format json curate
 ```
 
-If `wenlan` is missing, tell the user to run `/setup`.
+That prints a JSON array; each element is ONE logical revision (the CLI already
+groups the per-chunk rows and joins their text, so you never see a mid-sentence
+fragment):
 
-The JSON array contains:
+- `revision_source_id` — the staged revision; the **action key** for accept/dismiss.
+  Keying on this (not the target) means the *named* revision is acted on even when
+  several compete for one memory.
+- `target_source_id` — the memory this revision would replace (context only).
+- `content` — the full revised text.
+- `source_agent` — who proposed it (or `null` = daemon).
+- `original` — the current text the revision would replace (`null` if unavailable).
+- `diff` — a card-ready, length-bounded `OLD:` / `NEW:` preview of what the
+  revision would replace (two labeled lines, original then revision, each clipped).
+  `null` when `original` is unavailable.
 
-- `revision_source_id`: staged revision id; action key for accept/dismiss.
-- `target_source_id`: original memory id; context only.
-- `content`: revised text.
-- `source_agent`: proposer.
-- `original`: current text when available.
-- `diff`: ready-made OLD/NEW preview when available.
+**Read the JSON directly.** Parse the array yourself; do not pipe it through
+`jq`/`python`/`awk` to reshape first. That extra round-trip is slow (each retry
+is a model turn) and failure-prone (quoting, sandboxed temp paths).
 
-Render up to four revisions:
+**Show the diff so the user isn't approving blind.** Print `diff` verbatim under
+each item. If `diff` is `null`, print `content` and say the original is
+unavailable. Don't reformat the diff; it's already length-bounded.
+
+Render up to four revisions, numbered:
 
 ```text
 Pending revisions:
@@ -78,82 +94,81 @@ Pending revisions:
 Reply with: 1 accept, 1 dismiss, 1 skip
 ```
 
-Apply only explicit actions:
+- `accept` → the revision replaces the original memory.
+- `dismiss` → it was NOT an edit: unstage the false revision link and keep BOTH
+  memories as independent rows. (Non-destructive — nothing is deleted. To delete a
+  genuinely unwanted capture, use `/curate captures` → reject.)
+- `skip` → nothing.
 
-```bash
-"$W" curate accept <revision_source_id>
-"$W" curate dismiss <revision_source_id>
+Apply only explicit actions, in ONE Bash call (skips run nothing):
+
+```
+"$W" curate accept <revision_source_id>      # for each Accept
+"$W" curate dismiss <revision_source_id>     # for each Dismiss
 ```
 
-`accept` replaces the original memory with that named revision. `dismiss`
-unstages the false revision link and keeps both memories as independent rows.
-`skip` does nothing.
+If the array is empty, say so in one line ("Nothing needs you — no pending
+conflicts.") and stop. Captures are meant to decay; mention `/curate captures`
+only as an opt-in deep audit the user can run if they *want* to, never as a backlog.
 
-## `/curate captures`
+The list now carries the `original` and a ready-made `diff` alongside the revised
+`content`, so the user can see what changed without a separate lookup.
 
-If the user names a space, parse `space:<name>` and pass it to
-`mcp__wenlan__list_pending`. Otherwise leave `space` off so the audit covers
-all pending captures.
+## `/curate captures` (opt-in audit, MCP)
 
-Call:
+The captures path is the rare opt-in audit, so it stays on MCP. `list_pending`
+lists every pending capture (pass `space` only if the user named one, e.g.
+"curate work captures"; otherwise leave it off for all pending). Each memory has a
+`source_id`. Render up to four, numbered, and ask for `accept`, `reject`, `skip`,
+or `edit: <replacement text>`. Per item:
 
-```text
-mcp__wenlan__list_pending(limit=50, space="<only when user named one>")
-```
-
-Render up to four:
-
-```text
-Pending captures:
-
-1. <source_id>  <memory_type>  <source_agent>
-   "<content>"
-
-Reply with: 1 accept, 1 reject, 1 skip, 1 edit: <replacement text>
-```
-
-Apply only explicit actions:
-
-- `accept`: `mcp__wenlan__confirm_memory(memory_id="<source_id>")`
-- `reject`: `mcp__wenlan__forget(memory_id="<source_id>")`
-- `skip`: no call
-- `edit: <replacement>`:
-  1. `mcp__wenlan__capture(content="<replacement>", supersedes="<source_id>")`
-  2. `mcp__wenlan__forget(memory_id="<source_id>")` — skip this step if the
-     capture response says `gated: true`; the edit was staged for review
-     instead of applied, the original is still the live version, and the
-     user should be told the correction is waiting on approval.
+- `accept` → `confirm_memory(memory_id=<source_id>)`
+- `reject` → `forget(memory_id=<source_id>)`
+- `skip` → nothing
+- `edit: <replacement>` → `capture(content=<replacement>, supersedes=<source_id>)`,
+  then `forget(memory_id=<source_id>)`. If the capture response says
+  `gated: true`, the edit was staged for review instead of applied — skip the
+  `forget` call (the original is still the live version) and tell the user
+  their correction is waiting on approval in the review queue.
 
 Reject and edit delete the original pending capture, so require the numbered
 item and action verb in the same reply.
 
-## `/curate refinements`
+## `/curate refinements` (explicit proposal audit, MCP)
 
 Use `/curate refinements` only when the user explicitly asks to inspect or
 review the daemon proposal/refinement queue. Never poll the refinement queue
 ambiently.
 
-List first with `mcp__wenlan__list_refinements(limit=50)` and show at most four
-items. Include each proposal id, action, confidence, and a bounded payload
-summary. The queue includes `vocab_promote` proposals.
+List first with
+`mcp__wenlan__list_refinements(limit=50)` and show at most four
+items. Include each proposal id, action, confidence, and bounded payload
+summary. The action set includes `vocab_promote`, so vocabulary promotion
+candidates stay discoverable.
 
 Perform no mutation until the user gives an unambiguous item-level accept or
 reject decision. Apply only numbered item decisions:
 
-- `accept`: `mcp__wenlan__accept_refinement(id="<proposal-id>")`
-  (include `space` for `cross_space_discovery`).
-- `reject`: `mcp__wenlan__reject_refinement(id="<proposal-id>")`
-- `skip`: no call
+- `accept` → `mcp__wenlan__accept_refinement(id="<proposal-id>")`
+  (also pass `space` when accepting `cross_space_discovery`).
+- `reject` → `mcp__wenlan__reject_refinement(id="<proposal-id>")`.
+- `skip` → nothing.
 
-Skip or cancel is a no-op. Do not generically accept `lint_repair_review`;
-route it through `/lint repair`. Re-list after every mutation batch.
+Skip or cancel is a no-op. A generic accept does not apply
+`lint_repair_review`; route that action through `/lint repair` instead. Apply
+only the explicit item decisions, then re-list. Re-list after every mutation
+batch.
 
-## Bare `/curate`
+## When to use
 
-Default to `/curate revisions`. Revisions are the conflict surface that most
-often needs human judgment. Mention `/curate captures` only as an opt-in audit.
+- After a bulk import (ChatGPT, Obsidian dump) when you want to audit every
+  auto-classification before sealing.
+- When `/brief` shows ">3 pending revisions" and you want to clear the full
+  queue, not just the top 3.
+- When the user explicitly asks to inspect or review daemon refinement
+  proposals.
 
-## When not to use
+## When NOT to use
 
-- Specific lookup: use `/recall`.
-- One-off correction: use `/capture` with the corrected fact.
+- Daily session work. `/brief` handles the surface that matters today.
+- Specific factual lookup: use `/recall`.

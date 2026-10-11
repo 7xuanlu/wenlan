@@ -972,6 +972,8 @@ class PluginOwnerTests(unittest.TestCase):
             "scripts/validate-plugin-contract.test.sh",
             "scripts/gen-plugin-verbs.mjs",
             "scripts/gen-plugin-verbs.test.mjs",
+            "scripts/gen-codex-plugin.mjs",
+            "scripts/gen-codex-plugin.test.mjs",
         )
 
         for path in paths:

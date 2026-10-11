@@ -20,7 +20,7 @@
 //!
 //! Marketplace *selectors* are resolved at runtime, never hardcoded: the
 //! name a CLI derives from a GitHub source can differ from the repo slug
-//! (Codex derived `wenlan-local` for `7xuanlu/wenlan` as of codex-cli
+//! (Codex derived `wenlan-local` for this repo as of codex-cli
 //! 0.144.0, before the repo's `.agents/plugins/marketplace.json` was named
 //! `7xuanlu-wenlan`) — so after `marketplace add`, each installer reads the
 //! real name back out of `plugin marketplace list --json` and only falls
@@ -34,7 +34,11 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 /// The GitHub source both CLIs' `plugin marketplace add` clone from.
-const WENLAN_REPO: &str = "7xuanlu/wenlan";
+const WENLAN_REPO: &str = "wenlan-app/wenlan";
+/// The source before the repo moved to the `wenlan-app` org. Installs made
+/// from it stay registered under this slug, so marketplace lookup accepts
+/// both; `marketplace add` only ever uses `WENLAN_REPO`.
+const LEGACY_WENLAN_REPO: &str = "7xuanlu/wenlan";
 /// Last-resort marketplace names if runtime resolution fails for any reason
 /// (unexpected CLI output, `marketplace list` unsupported, etc). Both must
 /// equal the `name` in the repo's own marketplace manifests —
@@ -358,21 +362,24 @@ pub fn resolve_binary(binary_name: &str) -> Option<PathBuf> {
 
 // ── Marketplace selector resolution ─────────────────────────────────────
 
-/// Reads the registered marketplace name for `7xuanlu/wenlan` out of
-/// `claude plugin marketplace list --json` output, e.g.
-/// `[{"name":"7xuanlu-wenlan","source":"github","repo":"7xuanlu/wenlan",...}]`.
+/// Reads the registered marketplace name for `wenlan-app/wenlan` (or its
+/// pre-move slug `LEGACY_WENLAN_REPO`) out of `claude plugin marketplace
+/// list --json` output, e.g.
+/// `[{"name":"7xuanlu-wenlan","source":"github","repo":"wenlan-app/wenlan",...}]`.
 fn find_marketplace_name_claude(json: &str) -> Option<String> {
     let value: serde_json::Value = serde_json::from_str(json).ok()?;
     value.as_array()?.iter().find_map(|entry| {
-        (entry.get("repo")?.as_str()? == WENLAN_REPO)
+        let repo = entry.get("repo")?.as_str()?;
+        (repo == WENLAN_REPO || repo == LEGACY_WENLAN_REPO)
             .then(|| entry.get("name")?.as_str().map(String::from))
             .flatten()
     })
 }
 
-/// Reads the registered marketplace name for `7xuanlu/wenlan` out of
-/// `codex plugin marketplace list --json` output, e.g.
-/// `{"marketplaces":[{"name":"wenlan-local","marketplaceSource":{"sourceType":"git","source":"https://github.com/7xuanlu/wenlan.git"}}]}`.
+/// Reads the registered marketplace name for `wenlan-app/wenlan` (or its
+/// pre-move slug `LEGACY_WENLAN_REPO`) out of `codex plugin marketplace
+/// list --json` output, e.g.
+/// `{"marketplaces":[{"name":"wenlan-local","marketplaceSource":{"sourceType":"git","source":"https://github.com/wenlan-app/wenlan.git"}}]}`.
 /// Matches by substring on the git URL rather than exact equality, since the
 /// URL carries a protocol and `.git` suffix the bare repo slug doesn't.
 fn find_marketplace_name_codex(json: &str) -> Option<String> {
@@ -383,8 +390,7 @@ fn find_marketplace_name_codex(json: &str) -> Option<String> {
         .iter()
         .find_map(|entry| {
             let source = entry.get("marketplaceSource")?.get("source")?.as_str()?;
-            source
-                .contains(WENLAN_REPO)
+            (source.contains(WENLAN_REPO) || source.contains(LEGACY_WENLAN_REPO))
                 .then(|| entry.get("name")?.as_str().map(String::from))
                 .flatten()
         })
@@ -504,7 +510,7 @@ fn run_step(bin: &Path, step: &'static str, args: &[&str]) -> Result<(), PluginI
 // ── Public install entry points ─────────────────────────────────────────
 
 /// Installs the Wenlan Claude Code plugin: `claude plugin marketplace add
-/// 7xuanlu/wenlan`, then `claude plugin install wenlan@<resolved>`.
+/// wenlan-app/wenlan`, then `claude plugin install wenlan@<resolved>`.
 /// Idempotent — succeeds if the marketplace or plugin is already present.
 pub fn install_claude_code_plugin() -> Result<(), PluginInstallError> {
     let bin = resolve_binary("claude").ok_or(PluginInstallError::CliNotFound("Claude Code"))?;
@@ -523,7 +529,7 @@ pub fn install_claude_code_plugin() -> Result<(), PluginInstallError> {
 }
 
 /// Installs the Wenlan Codex plugin: `codex plugin marketplace add
-/// 7xuanlu/wenlan`, then `codex plugin add wenlan@<resolved>` (note: `add`,
+/// wenlan-app/wenlan`, then `codex plugin add wenlan@<resolved>` (note: `add`,
 /// not `install` — Codex's subcommand name differs from Claude Code's).
 /// Idempotent — succeeds if the marketplace or plugin is already present.
 pub fn install_codex_plugin() -> Result<(), PluginInstallError> {
@@ -861,7 +867,7 @@ mod tests {
   {
     "name": "7xuanlu-wenlan",
     "source": "github",
-    "repo": "7xuanlu/wenlan",
+    "repo": "wenlan-app/wenlan",
     "installLocation": "/home/u/.claude/plugins/marketplaces/7xuanlu-wenlan"
   }
 ]"#;
@@ -870,6 +876,17 @@ mod tests {
     fn find_marketplace_name_claude_matches_by_repo() {
         assert_eq!(
             find_marketplace_name_claude(CLAUDE_MARKETPLACE_JSON),
+            Some("7xuanlu-wenlan".to_string())
+        );
+    }
+
+    #[test]
+    fn find_marketplace_name_claude_matches_pre_move_repo() {
+        // Installs made before the repo moved to the org stay registered
+        // under the old slug.
+        let json = CLAUDE_MARKETPLACE_JSON.replace(WENLAN_REPO, LEGACY_WENLAN_REPO);
+        assert_eq!(
+            find_marketplace_name_claude(&json),
             Some("7xuanlu-wenlan".to_string())
         );
     }
@@ -895,7 +912,7 @@ mod tests {
       "root": "/home/u/.codex/.tmp/marketplaces/wenlan-local",
       "marketplaceSource": {
         "sourceType": "git",
-        "source": "https://github.com/7xuanlu/wenlan.git"
+        "source": "https://github.com/wenlan-app/wenlan.git"
       }
     }
   ]
@@ -905,6 +922,17 @@ mod tests {
     fn find_marketplace_name_codex_matches_by_source_url_substring() {
         assert_eq!(
             find_marketplace_name_codex(CODEX_MARKETPLACE_JSON),
+            Some("wenlan-local".to_string())
+        );
+    }
+
+    #[test]
+    fn find_marketplace_name_codex_matches_pre_move_repo() {
+        // Installs made before the repo moved to the org stay registered
+        // under the old source URL.
+        let json = CODEX_MARKETPLACE_JSON.replace(WENLAN_REPO, LEGACY_WENLAN_REPO);
+        assert_eq!(
+            find_marketplace_name_codex(&json),
             Some("wenlan-local".to_string())
         );
     }

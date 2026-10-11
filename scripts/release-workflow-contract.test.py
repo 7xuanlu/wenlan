@@ -307,8 +307,9 @@ def contract_violations(
         '"X-GitHub-Api-Version": "2026-03-10"',
         '"state": "open"',
         '"base": BASE_BRANCH',
-        '"head": f"{RELEASE_AUTHOR}:{RELEASE_BRANCH}"',
-        "if owner != RELEASE_AUTHOR:",
+        'RELEASE_REPO_OWNER = "wenlan-app"',
+        '"head": f"{RELEASE_REPO_OWNER}:{RELEASE_BRANCH}"',
+        "if owner != RELEASE_REPO_OWNER:",
         "if not payload:",
         "if len(payload) != 1:",
         'user.get("login") != RELEASE_AUTHOR',
@@ -599,7 +600,7 @@ def contract_violations(
         if line.strip() and not line.strip().startswith("#")
     ]
     for marker in [
-        'url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-darwin-arm64.tar.gz"',
+        'url "https://github.com/wenlan-app/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-darwin-arm64.tar.gz"',
         'bin.install "wenlan", "wenlan-server"',
         'assert_match "wenlan-server", shell_output("#{bin}/wenlan-server --help")',
     ]:
@@ -1002,7 +1003,7 @@ def signpath_signing_contract_violations(ci: str, release: str) -> list[str]:
         )
     else:
         expression = required.group("expr")
-        if "github.repository == '7xuanlu/wenlan'" not in expression:
+        if "github.repository == 'wenlan-app/wenlan'" not in expression:
             violations.append(
                 "SIGNPATH_REQUIRED is not scoped to the upstream repository; a fork "
                 "has no SignPath secrets and must still build green"
@@ -1582,6 +1583,7 @@ def candidate_observer_contract_violations(
         'CI_WORKFLOW_PATH = ".github/workflows/ci.yml"',
         'RELEASE_BRANCH = "release-please--branches--main"',
         'RELEASE_AUTHOR = "7xuanlu"',
+        'RELEASE_REPO_OWNER = "wenlan-app"',
         "class _CredentialStrippingRedirect",
         'redirected.remove_header("Authorization")',
         "/actions/runs/{run_id}",
@@ -1796,6 +1798,8 @@ def trusted_candidate_gate_violations(
         'api.get_json(f"/repos/{repository}/git/ref/heads/main")',
         'event_head_repo.get("fork") is not False',
         'event_user.get("login") != RELEASE_AUTHOR',
+        '"repository owner").get("login")\n        != RELEASE_REPO_OWNER',
+        'owner.get("login") != RELEASE_REPO_OWNER',
     ]:
         if marker not in validator:
             violations.append(f"shared semantic release validator omits {marker!r}")
@@ -2126,7 +2130,7 @@ DESKTOP_LINK_STEP = "Link the desktop app from the release notes"
 # RELEASE_TAG, and a fixture reusing a shipped version would pass just as well
 # against a step that had them hardcoded.
 DESKTOP_LINK_TAG = "v9.9.9"
-DESKTOP_LINK_REPO = "7xuanlu/wenlan"
+DESKTOP_LINK_REPO = "wenlan-app/wenlan"
 DESKTOP_LINK_WIN = "Wenlan_9.9.9_x64-setup.exe"
 DESKTOP_LINK_DMG = "Wenlan_9.9.9_aarch64.dmg"
 DESKTOP_LINK_BASE = (
@@ -3874,9 +3878,9 @@ AUTHENTICODE_STEP_ENV = {
     "GITHUB_REF_NAME": "v9.9.9",
     "GITHUB_REF_PROTECTED": "false",
     "GITHUB_REF_TYPE": "tag",
-    "GITHUB_REPOSITORY": "7xuanlu/wenlan",
+    "GITHUB_REPOSITORY": "wenlan-app/wenlan",
     "GITHUB_REPOSITORY_ID": "0",
-    "GITHUB_REPOSITORY_OWNER": "7xuanlu",
+    "GITHUB_REPOSITORY_OWNER": "wenlan-app",
     "GITHUB_REPOSITORY_OWNER_ID": "0",
     "GITHUB_RETENTION_DAYS": "90",
     "GITHUB_RUN_ATTEMPT": "1",
@@ -3887,7 +3891,7 @@ AUTHENTICODE_STEP_ENV = {
     "GITHUB_STEP_SUMMARY": "",
     "GITHUB_TRIGGERING_ACTOR": "github-actions[bot]",
     "GITHUB_WORKFLOW": "release",
-    "GITHUB_WORKFLOW_REF": "7xuanlu/wenlan/.github/workflows/release.yml@refs/tags/v9.9.9",
+    "GITHUB_WORKFLOW_REF": "wenlan-app/wenlan/.github/workflows/release.yml@refs/tags/v9.9.9",
     "GITHUB_WORKFLOW_SHA": "0" * 40,
     "GITHUB_WORKSPACE": "",
     "RUNNER_ARCH": "X64",
@@ -4896,7 +4900,7 @@ def main() -> None:
             "sync_release_pr",
         ),
         (
-            "if owner != RELEASE_AUTHOR:",
+            "if owner != RELEASE_REPO_OWNER:",
             "if False:",
             "synchronizer omits",
             "sync_release_pr",

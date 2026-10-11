@@ -30,7 +30,7 @@ class ReleaseCandidateManifestTests(unittest.TestCase):
         for asset in release_assets(target=target):
             (root / asset["name"]).write_bytes(asset["name"].encode())
         return MANIFEST.build_manifest(
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
             repository_id=123,
             run_id=456,
             run_attempt=2,
@@ -81,7 +81,7 @@ class ReleaseCandidateManifestTests(unittest.TestCase):
             (root / "extra").write_bytes(b"no")
             with self.assertRaisesRegex(MANIFEST.ManifestError, "inventory mismatch"):
                 MANIFEST.build_manifest(
-                    repository="7xuanlu/wenlan",
+                    repository="wenlan-app/wenlan",
                     repository_id=1,
                     run_id=1,
                     run_attempt=1,

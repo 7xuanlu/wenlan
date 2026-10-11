@@ -24,7 +24,7 @@ default-members = [
 version = "0.18.16"   # x-release-please-version
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/7xuanlu/wenlan"
+repository = "https://github.com/wenlan-app/wenlan"
 
 [workspace.dependencies]
 # Internal crates — both path AND version required for cargo publish

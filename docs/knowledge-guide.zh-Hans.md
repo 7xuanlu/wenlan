@@ -11,7 +11,7 @@
 
 ## 来源与页面
 
-README 中的示例取材自[Agent 设计指南](https://www.anthropic.com/engineering/building-effective-agents)与[这份 README 的图稿审查修正](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296)，示范如何留下可复用的工作准则，不是用户成效数据或自动生成页面的实测记录。示例插图请见 README 的[示意图](../README.zh-Hans.md#what-does-wenlan-build)。
+README 中的示例取材自[Agent 设计指南](https://www.anthropic.com/engineering/building-effective-agents)与[这份 README 的图稿审查修正](https://github.com/wenlan-app/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296)，示范如何留下可复用的工作准则，不是用户成效数据或自动生成页面的实测记录。示例插图请见 README 的[示意图](../README.zh-Hans.md#what-does-wenlan-build)。
 
 Wenlan 让持续进行的工作不只留在聊天窗口里。你可以保存选定的文档和对话，记下过程中的决定，再把它们整理成可阅读、编辑和重用的页面。你可以直接请已连接的 AI 撰写页面；可选的模型支持合成与后台维护则需要[配置模型](setup-and-data.zh-Hans.md#models)。
 

@@ -14,8 +14,8 @@ As sources change, you can ask AI to update the pages or enable background updat
 </p>
 
 <p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
+  <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
+  <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="License: Apache-2.0 and AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
 </p>
 
@@ -45,7 +45,7 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 ### 1. Download and open Wenlan
 
-[Download the app](https://github.com/7xuanlu/wenlan/releases/latest), then open it:
+[Download the app](https://github.com/wenlan-app/wenlan/releases/latest), then open it:
 
 - **macOS (Apple Silicon):** open the `.dmg` and drag Wenlan to Applications. The app is signed and notarized.
 - **Windows x64:** run the `-setup.exe`. It is not signed yet. If SmartScreen warns you, confirm you downloaded it from the official Releases page before choosing "More info" → "Run anyway".
@@ -73,7 +73,7 @@ Restart your AI tool if prompted. For help with setup, paste this into Claude Co
 
 ```text
 Connect this AI tool to Wenlan by following:
-https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
+https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 Reuse my existing Wenlan installation if available.
 Set up only this AI tool, then check that it can save and find a test memory.
@@ -93,7 +93,7 @@ When it's ready, open the new page in Wenlan, click a citation to check its sour
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
-Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/7xuanlu/wenlan/issues). Issues are public: do not include private notes, access credentials, Remote Access identifiers, or unredacted logs.
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: do not include private notes, access credentials, Remote Access identifiers, or unredacted logs.
 
 
 <a id="what-does-wenlan-build"></a>

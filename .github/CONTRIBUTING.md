@@ -13,7 +13,7 @@ Building the **desktop app** additionally needs [Node.js](https://nodejs.org/) w
 macOS Intel is not currently a supported stock build target because the pinned ONNX Runtime dependency has no prebuilt x86_64 macOS binary. See the [platform note](../crates/wenlan-cli/README.md#macos-intel).
 
 ```bash
-git clone https://github.com/7xuanlu/wenlan.git
+git clone https://github.com/wenlan-app/wenlan.git
 cd wenlan
 cargo build -p wenlan-server
 ```
@@ -69,7 +69,7 @@ See `crates/wenlan-core/REFERENCE.md` and `crates/wenlan-server/REFERENCE.md` fo
 
 ## Finding Work
 
-Look for issues labeled [`good first issue`](https://github.com/7xuanlu/wenlan/labels/good%20first%20issue) or [`help wanted`](https://github.com/7xuanlu/wenlan/labels/help%20wanted).
+Look for issues labeled [`good first issue`](https://github.com/wenlan-app/wenlan/labels/good%20first%20issue) or [`help wanted`](https://github.com/wenlan-app/wenlan/labels/help%20wanted).
 
 ## Pull Request Process
 

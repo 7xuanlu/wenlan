@@ -67,7 +67,7 @@ if (-not $env:GAUNTLET_CHANNEL) { $env:GAUNTLET_CHANNEL = $script:GauntletChanne
 Remove-Item Env:\WENLAN_NO_AUTOSTART -ErrorAction SilentlyContinue
 
 function Get-Asset([string]$AssetName, [string]$Dest) {
-    $url = "https://github.com/7xuanlu/wenlan/releases/download/$Tag/$AssetName"
+    $url = "https://github.com/wenlan-app/wenlan/releases/download/$Tag/$AssetName"
     for ($attempt = 1; $attempt -le 3; $attempt++) {
         try { Invoke-WebRequest -Uri $url -OutFile $Dest -UseBasicParsing -ErrorAction Stop; return $true }
         catch { Write-Host "download attempt $attempt failed: $($_.Exception.Message)"; Start-Sleep -Seconds (5 * $attempt) }

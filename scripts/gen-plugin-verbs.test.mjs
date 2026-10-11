@@ -13,7 +13,6 @@ const script = join(repo, "scripts/gen-plugin-verbs.mjs");
 const FILES = [
   "plugin/skills/verbs.json",
   "plugin/skills/help/SKILL.md",
-  "plugin-codex/skills/help/SKILL.md",
   "plugin/README.md",
   "plugin/skills/README.md",
 ];

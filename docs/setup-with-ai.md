@@ -20,15 +20,15 @@ Detect the host before choosing the runtime install path:
 
 | Host | Install path |
 |---|---|
-| macOS Apple Silicon | Run `npx -y wenlan setup` (requires Node.js). Without Node.js, run `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh \| bash` then `wenlan setup --basic`. |
+| macOS Apple Silicon | Run `npx -y wenlan setup` (requires Node.js). Without Node.js, run `curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh \| bash` then `wenlan setup --basic`. |
 | Linux x64 or ARM64 | Run the shell installer below. |
-| Windows x64 | Download `wenlan-windows-x64.zip` from [Releases](https://github.com/7xuanlu/wenlan/releases/latest). |
+| Windows x64 | Download `wenlan-windows-x64.zip` from [Releases](https://github.com/wenlan-app/wenlan/releases/latest). |
 | macOS Intel | No supported complete-runtime install; see the [platform note](../crates/wenlan-cli/README.md#macos-intel). |
 
 On Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash
 export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
 wenlan background on
@@ -48,7 +48,7 @@ wenlan status
 Install the Wenlan plugin from the Claude directory (claude.ai, Cowork, or Claude Code) or from its public marketplace:
 
 ```bash
-claude plugin marketplace add 7xuanlu/wenlan
+claude plugin marketplace add wenlan-app/wenlan
 claude plugin install wenlan@7xuanlu-wenlan
 ```
 
@@ -59,7 +59,7 @@ Start a new Claude Code session if requested, then run `/setup`. The setup skill
 Install the runtime using the host-specific path above, then install the plugin:
 
 ```bash
-codex plugin marketplace add 7xuanlu/wenlan
+codex plugin marketplace add wenlan-app/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 

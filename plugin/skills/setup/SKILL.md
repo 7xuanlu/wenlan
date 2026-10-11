@@ -46,8 +46,8 @@ comparing numerically per component with build metadata (`+g<sha>`) stripped.
 - `result=same`: continue to doctor.
 - If the probe cannot run because the runtime is down: continue to bootstrap.
 - `result=unknown` with a healthy runtime (manifest unreadable or no version
-  reported): continue to doctor; the session hook will keep surfacing a
-  mismatch if one exists.
+  reported): continue to doctor; the next `/setup` will report the mismatch
+  again if one exists.
 - If mismatch, check the direction before repairing. `result=newer`: the
   daemon release is newer than the plugin release, so the plugin cache is
   stale, not the runtime. Skip the repair below (it would only reinstall the
@@ -87,7 +87,7 @@ export PATH="$HOME/.wenlan/bin:$PATH"
 The package supports macOS Apple Silicon and needs Node.js. On any other
 platform, or when `npx` is missing or the command fails, do not fetch or run an
 installer yourself. Stop and tell the user to install the runtime by following
-<https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
+<https://github.com/wenlan-app/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
 then run `/wenlan:setup` again.
 
 If present but the local runtime is down:
@@ -195,8 +195,8 @@ without deleting the model or key.
 ## When to use
 
 - Right after `/plugin install wenlan@7xuanlu-wenlan`.
-- Hook printed "Wenlan is not running" with "/wenlan:setup" as the fix.
-- Hook printed "Run /wenlan:setup to repair" for a version mismatch.
+- The plugin reported "Wenlan is not running" or a version mismatch and named
+  `/wenlan:setup` as the fix.
 - User says "set up wenlan", "is it working", "reinstall wenlan".
 
 ## When NOT to use

@@ -15,7 +15,7 @@ npx -y wenlan setup
 Then install the Codex plugin:
 
 ```bash
-codex plugin marketplace add 7xuanlu/wenlan
+codex plugin marketplace add wenlan-app/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 
@@ -37,6 +37,18 @@ The plugin runner uses `~/.wenlan/bin/wenlan-mcp` when available and falls back
 to the pinned `npx` version in
 [`bin/wenlan-mcp-runner.sh`](bin/wenlan-mcp-runner.sh). It passes
 `--agent-name codex` so captures are labeled as Codex writes.
+
+The skills under `skills/` are generated. Edit the Claude skill of the same
+name in `plugin/skills/<skill>/SKILL.md`; put anything Codex does differently
+(a dropped section, a replaced paragraph, the `agents/openai.yaml` text) in
+[`overlay.json`](overlay.json); then run:
+
+```bash
+node scripts/gen-codex-plugin.mjs
+```
+
+CI runs the same script with `--check`, so a hand edit to a generated file fails
+the plugin job.
 
 Before changing plugin skills, manifests, MCP runner wiring, or the local
 marketplace, run the shared Claude/Codex contract checks:

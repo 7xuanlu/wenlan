@@ -17,14 +17,14 @@ The setup package downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/
 Linux x64/ARM64 has an automated shell path:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash
 export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
 wenlan background on
 wenlan status
 ```
 
-Windows x64 users can unpack `wenlan-windows-x64.zip` from [Releases](https://github.com/7xuanlu/wenlan/releases/latest) into a directory on `PATH`. Keep the bundled `onnxruntime.dll` beside the three `.exe` files, then run the same three `wenlan` commands.
+Windows x64 users can unpack `wenlan-windows-x64.zip` from [Releases](https://github.com/wenlan-app/wenlan/releases/latest) into a directory on `PATH`. Keep the bundled `onnxruntime.dll` beside the three `.exe` files, then run the same three `wenlan` commands.
 
 ### macOS Intel
 
@@ -297,8 +297,8 @@ wenlan lint
 - [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the first memory loop
 - [wenlan.app/docs/commands](https://wenlan.app/docs/commands) — Claude Code commands and MCP tools reference
 - [wenlan.app/docs/troubleshooting](https://wenlan.app/docs/troubleshooting) — common failure modes
-- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
-- [github.com/7xuanlu/wenlan/releases/latest](https://github.com/7xuanlu/wenlan/releases/latest) — desktop app and runtime downloads
+- [github.com/wenlan-app/wenlan](https://github.com/wenlan-app/wenlan) — source
+- [github.com/wenlan-app/wenlan/releases/latest](https://github.com/wenlan-app/wenlan/releases/latest) — desktop app and runtime downloads
 
 ## License
 

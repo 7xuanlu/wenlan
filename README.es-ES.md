@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1516bfcedcc15ee5fdfb0e9baaecc62912d08a21225ce651560e1a92367f2192 -->
+<!-- README_SYNC: source=README.md sha256=1203f0a3d78403e962c19860a87bec858b6bb01c699dea3f22047cc33e45ae20 -->
 
 <p align="center">
   <picture>
@@ -16,8 +16,8 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
 </p>
 
 <p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
+  <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
+  <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="Licencia: Apache-2.0 y AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
 </p>
 
@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 ### 1. Descarga y abre Wenlan
 
-[Descarga la aplicación](https://github.com/7xuanlu/wenlan/releases/latest) y ábrela tras instalarla:
+[Descarga la aplicación](https://github.com/wenlan-app/wenlan/releases/latest) y ábrela tras instalarla:
 
 - **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada.
 - **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado. Si SmartScreen muestra un aviso, confirma que lo has descargado de la página oficial de Releases antes de elegir "Más información" → "Ejecutar de todas formas".
@@ -75,7 +75,7 @@ Reinicia tu herramienta de IA si se te indica. Si necesitas ayuda con la configu
 
 ```text
 Conecta esta herramienta de IA a Wenlan siguiendo:
-https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
+https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 Reutiliza mi instalación de Wenlan si ya existe.
 Configura solo esta herramienta y comprueba que puede guardar y recuperar
@@ -96,7 +96,7 @@ Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consult
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/7xuanlu/wenlan/issues). Los issues son públicos: no incluyas notas privadas, credenciales, identificadores de Acceso remoto ni registros sin anonimizar.
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: no incluyas notas privadas, credenciales, identificadores de Acceso remoto ni registros sin anonimizar.
 
 
 
