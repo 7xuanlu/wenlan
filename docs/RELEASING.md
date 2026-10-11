@@ -4,7 +4,7 @@ This document covers releases of the local runtime: `wenlan` CLI, `wenlan-server
 
 ## How release-please works
 
-Merge conventional commits to `main` (for example, `feat:`, `fix:`, or `chore:`). The push-only `release-pr-maintenance` workflow immediately opens or updates the Release PR, bumps the version, and updates `CHANGELOG.md` while main CI runs in parallel. It sets `skip-github-release: true`: this path may maintain the PR but cannot create a tag or GitHub Release. The later successful-main `workflow_run` keeps the same PR-only operation as a no-op fallback for transient push-workflow failures. Merging the Release PR cuts a release only after the trusted promotion gate binds that exact merge tree to the archives already built and tested by the PR. The gate then creates the exact `v*` tag, which triggers artifact-only publication in `release.yml`.
+Merge conventional commits to `main` through the merge queue (for example, `feat:`, `fix:`, or `chore:`; the squash commit takes the PR title). The push-only `release-pr-maintenance` workflow immediately opens or updates the Release PR, bumps the version, and updates `CHANGELOG.md` while main CI runs in parallel. It sets `skip-github-release: true`: this path may maintain the PR but cannot create a tag or GitHub Release. The later successful-main `workflow_run` keeps the same PR-only operation as a no-op fallback for transient push-workflow failures. Merging the Release PR cuts a release only after the trusted promotion gate binds that exact merge tree to the archives already built and tested by the PR. The gate then creates the exact `v*` tag, which triggers artifact-only publication in `release.yml`.
 
 > This document is the canonical release procedure. Coding changes must preserve
 > the conventional-title and synchronized-version rules in root
@@ -19,6 +19,18 @@ Config files:
 - `.github/workflows/release-pr-maintenance.yml` — immediately maintains the Release PR on `main` pushes; it has no tag, release, or lifecycle-label API path
 - `.github/workflows/release-please.yml` — revalidates successful main CI, provides the delayed ordinary-maintenance fallback, and creates a tag only for a receipt-validated Release PR merge
 - `.github/workflows/release.yml` — consumes exact validated archives and publishes them on the receipt-derived `v*` tag; it does not recompile Rust
+
+## Merging the Release PR
+
+`main` merges through GitHub's merge queue (see [Multiple merge-ready PRs](ci-flake-policy.md#multiple-merge-ready-prs)). The Release PR goes through it too, but by itself and last:
+
+1. Land every other PR meant for this release first, and let the queue empty.
+2. Wait for **Release PR Maintenance** to sync the Release PR with the new `main` head. Then wait for its PR CI and the **Release Candidate Observer** to pass on that final head.
+3. With nothing else queued, add it with `gh pr merge <number> --match-head-commit <head-sha>` or **Merge when ready**.
+
+The Release PR's receipt binds its exact head tree. If another PR lands first or is queued ahead of it, its queue entry has a different tree, and `detect-changes` drops it from the queue before anything reaches `main`. Wait for the next sync and repeat step 2.
+
+After it lands, main CI picks up the receipt, **Release Please** creates the `v*` tag, and the tag starts `release.yml`. Merging the Release PR publishes to GitHub Releases, crates.io, npm, the Homebrew tap, and GHCR, so check [Required secrets](#required-secrets) and the npm trusted publisher before queueing it.
 
 ## Manual version override
 
@@ -109,9 +121,13 @@ Configure these in repository Settings → Secrets and variables → Actions:
 | Secret | Purpose |
 | ------ | ------- |
 | `CARGO_REGISTRY_TOKEN` | Publishes `wenlan-types` and `wenlan-mcp` to crates.io. Create it under crates.io Account Settings → API Tokens. |
-| `RELEASE_TOKEN` | Fine-grained PAT with contents:write and pull-requests:write. It updates the Release PR and creates the validated tag; unlike `GITHUB_TOKEN`, its pushes trigger downstream workflows. |
-| `HOMEBREW_TAP_TOKEN` | Fine-grained PAT with contents:write on the public `7xuanlu/homebrew-tap` repository. The workflow verifies anonymous clone/install separately. |
-| `GITHUB_TOKEN` | Built in. Reads workflow and artifact identity, uploads GitHub release assets, and publishes GHCR. No setup is needed. |
+| `RELEASE_TOKEN` | Fine-grained PAT owned by `7xuanlu`, with resource owner `wenlan-app` and access to `wenlan-app/wenlan`. It needs contents:write and pull-requests:write; tag recovery also needs workflows:write. It updates the Release PR and creates the validated tag; unlike `GITHUB_TOKEN`, its pushes trigger downstream workflows. The release scripts accept only Release PRs authored by `7xuanlu` (`RELEASE_AUTHOR`) in a repository owned by `wenlan-app` (`RELEASE_REPO_OWNER`), so a token from another account opens a Release PR they reject. |
+| `HOMEBREW_TAP_TOKEN` | Fine-grained PAT with contents:write on the public `7xuanlu/homebrew-tap` repository, which stays under the personal account. The workflow verifies anonymous clone/install separately. |
+| `GITHUB_TOKEN` | Built in. Reads workflow and artifact identity, uploads GitHub release assets, and publishes `ghcr.io/wenlan-app/wenlan-server`. No setup is needed. |
+| `APPLE_*`, `TAURI_SIGNING_PRIVATE_KEY*` | Developer ID signing, notarization, and the updater signature for the desktop app. See [code signing](code-signing.md). |
+| `SIGNPATH_*` | Windows Authenticode signing through SignPath. Without them, Windows assets ship unsigned. Once the repository variable `SIGNPATH_ACTIVE` is `true`, missing secrets fail the release instead. |
+
+npm needs no secret. `publish-npm` uses npm trusted publishing (OIDC, `npm publish --provenance`), so each package's trusted publisher on npmjs.com (`wenlan` and `wenlan-mcp`) must name the repository `wenlan-app/wenlan` and the workflow `release.yml`. A mismatch fails only at publish time, after crates.io may already have the new version.
 
 Before merging a Release PR, verify the tap is public without credentials:
 
