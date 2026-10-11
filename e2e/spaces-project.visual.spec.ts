@@ -5,7 +5,7 @@ import { expect, test } from "@playwright/test";
 import { installTauriMock } from "./tauriMock";
 import { createSpaceProjectFixture } from "./fixtures/spaceProject";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
-const root = process.env.WENLAN_UI_EVIDENCE_DIR ?? "/private/tmp/wenlan-notes-first-delivery/spaces-project/ui/screenshots";
+const root = process.env.WENLAN_UI_EVIDENCE_DIR ?? "/tmp/wenlan-notes-first-delivery/spaces-project/ui/screenshots";
 const labels = { en: { spaces: "Spaces", more: "More", notes: "Notes", sources: "Sources", close: "Close" }, "zh-Hant": { spaces: "空間", more: "更多", notes: "筆記", sources: "來源", close: "關閉" }, "zh-Hans": { spaces: "空间", more: "更多", notes: "笔记", sources: "来源", close: "关闭" } };
 for (const variant of [
   { name: "desktop-light-en", width: 1280, theme: "light", locale: "en" },
