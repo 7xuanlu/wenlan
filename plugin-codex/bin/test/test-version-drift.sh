@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Bash tests for version-drift.sh. A loopback HTTP stub answers /api/health with
 # a chosen daemon version; temp manifests carry the plugin version.
 

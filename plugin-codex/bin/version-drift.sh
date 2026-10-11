@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Compare the running Wenlan daemon version against a plugin manifest version.
 #
 # Usage:
