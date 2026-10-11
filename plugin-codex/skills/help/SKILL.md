@@ -26,7 +26,7 @@ the generated verb list and are not part of the card.
 Wenlan plugin — daily verbs
 
 <!-- verbs:start -->
-<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
+<!-- generated from the Claude help card by scripts/gen-codex-plugin.mjs; edit plugin/skills/verbs.json -->
   /setup                       set up or repair Wenlan (installs the local runtime)
   /brief [topic]               load the Brief for the current Space (optional; not a boot step)
   /capture <x>                 save one durable memory in flow

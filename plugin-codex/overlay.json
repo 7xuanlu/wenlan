@@ -219,6 +219,14 @@
           "to": [
             "The local runtime must run at 127.0.0.1:7878. If it or the MCP bridge is down, run /setup."
           ]
+        },
+        {
+          "from": [
+            "<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->"
+          ],
+          "to": [
+            "<!-- generated from the Claude help card by scripts/gen-codex-plugin.mjs; edit plugin/skills/verbs.json -->"
+          ]
         }
       ]
     },

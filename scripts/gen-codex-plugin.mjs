@@ -35,7 +35,17 @@ const CODEX_RESOLVER_BLOCK = [
 const CLAUDE_RESOLVER_RE =
   /^resolved="\$\("\$CLAUDE_PLUGIN_ROOT\/scripts\/resolve-space\.sh"(.*)\)"$/;
 
-const LEFTOVER_TOKENS = ["CLAUDE_PLUGIN_ROOT", ".claude-plugin", "AskUserQuestion"];
+// Any of these in a generated skill means the overlay or a swap rule missed a
+// Claude-only detail. `/wenlan:` is the Claude namespaced slash form (Codex
+// skills are bare `/setup`); `npx -y wenlan@` is the Claude installer.
+const LEFTOVER_TOKENS = [
+  "CLAUDE_PLUGIN_ROOT",
+  ".claude-plugin",
+  "AskUserQuestion",
+  "claude-code",
+  "/wenlan:",
+  "npx -y wenlan@",
+];
 
 class GenError extends Error {}
 
@@ -216,15 +226,25 @@ function swapPluginPaths(text, claudeRoot, codexRoot) {
 function swapHostWords(text) {
   return text
     .replaceAll('"caller_id": "claude-code"', '"caller_id": "codex"')
-    .replaceAll("Claude Code", "Codex");
+    .replaceAll("Claude Code", "Codex")
+    // Claude invokes plugin skills namespaced (`/wenlan:setup`); Codex skills
+    // are bare (`/setup`), as plugin-codex/README.md documents.
+    .replaceAll("/wenlan:", "/");
 }
 
-function guardLeftovers(skill, text, claudePrefix) {
+function guardLeftovers(skill, text, claudePrefix, codexPrefix) {
   for (const token of [...LEFTOVER_TOKENS, claudePrefix]) {
     if (text.includes(token)) {
       const line = text.split("\n").findIndex((l) => l.includes(token)) + 1;
       fail(skill, `generated SKILL.md still contains ${JSON.stringify(token)} (line ${line}); add an overlay replace for it`);
     }
+  }
+  // The prefix swap above is global, so the Claude prefix can never survive it;
+  // what can survive is a misspelt prefix. Every MCP tool name must carry the
+  // Codex prefix.
+  const stray = text.split("\n").findIndex((l) => /mcp__/.test(l.replaceAll(codexPrefix, "")));
+  if (stray >= 0) {
+    fail(skill, `line ${stray + 1} names an MCP tool without the ${JSON.stringify(codexPrefix)} prefix`);
   }
 }
 
@@ -261,7 +281,7 @@ export function generateSkill(skill, claudeText, overlay, contract) {
   text = text.replaceAll(claude.skill_mcp_tool_prefix, codex.skill_mcp_tool_prefix);
   text = swapPluginPaths(text, claude.plugin_root, codex.plugin_root);
   text = swapHostWords(text);
-  guardLeftovers(skill, text, claude.skill_mcp_tool_prefix);
+  guardLeftovers(skill, text, claude.skill_mcp_tool_prefix, codex.skill_mcp_tool_prefix);
   return { skill: text, openai: renderOpenai(skill, overlay.openai) };
 }
 

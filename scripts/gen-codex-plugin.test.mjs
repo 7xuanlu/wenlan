@@ -47,7 +47,7 @@ allowed-tools: ["mcp__plugin_wenlan_wenlan__recall", "AskUserQuestion", "Bash"]
 
 # /sample
 
-Intro for Claude Code.
+Intro for Claude Code. Run \`/wenlan:sample\` again if it fails.
 
 \`\`\`bash
 raw_args="<args>"
@@ -200,8 +200,21 @@ test("body: resolver line becomes the Codex locator block, plugin paths and host
   assert.match(skill, /Intro for Codex\./);
   assert.match(skill, /"caller_id": "codex"/);
   assert.match(skill, /Call `mcp__wenlan__recall`/);
-  for (const token of ["CLAUDE_PLUGIN_ROOT", ".claude-plugin", "mcp__plugin_wenlan_wenlan__", "AskUserQuestion", "Claude Code"]) {
+  assert.match(skill, /Run `\/sample` again if it fails\./);
+  for (const token of ["CLAUDE_PLUGIN_ROOT", ".claude-plugin", "mcp__plugin_wenlan_wenlan__", "AskUserQuestion", "Claude Code", "/wenlan:", "claude-code"]) {
     assert.ok(!skill.includes(token), `leftover ${token}`);
+  }
+});
+
+test("guard: a misspelt MCP prefix, a lone claude-code, or the npx installer fail generation", () => {
+  const cases = [
+    ["mcp__plugin_wenlan__recall", /names an MCP tool without the "mcp__wenlan__" prefix/],
+    ["agent name claude-code", /still contains "claude-code"/],
+    ["install with `npx -y wenlan@0.1.0 setup`", /still contains "npx -y wenlan@"/],
+  ];
+  for (const [needle, re] of cases) {
+    const src = SAMPLE.replace("Gone on Codex.", `Gone on Codex.\n\n## Stay\n\n${needle}`);
+    assert.throws(() => generateSkill("sample", src, { openai: SAMPLE_OPENAI }, contract), re, needle);
   }
 });
 

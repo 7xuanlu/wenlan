@@ -88,7 +88,7 @@ wenlan background on
 
 If the installer fails, stop and tell the user to install the runtime by following
 <https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
-then run `/wenlan:setup` again.
+then run `/setup` again.
 
 If present but the local runtime is down:
 
@@ -134,7 +134,7 @@ Once healthy, rerun the step 2 command. If `result` is still `older` or
 
 ```text
 Runtime and plugin versions still differ after repair; update the Wenlan plugin,
-restart Codex, then run /wenlan:setup again.
+restart Codex, then run /setup again.
 ```
 
 This usually means the runtime is newer than the plugin cached by the current
@@ -196,7 +196,7 @@ without deleting the model or key.
 
 - Right after installing the Wenlan plugin.
 - The plugin reported "Wenlan is not running" or a version mismatch and named
-  `/wenlan:setup` as the fix.
+  `/setup` as the fix.
 - User says "set up wenlan", "is it working", "reinstall wenlan".
 
 ## When NOT to use

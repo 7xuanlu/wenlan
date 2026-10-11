@@ -32,7 +32,7 @@ space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 ```
 
-If the user passed a Space name (`/wenlan:handoff <space>`), pass it as
+If the user passed a Space name (`/handoff <space>`), pass it as
 `--arg <space>` to resolve-space.sh.
 
 Print `space` and `source_layer`. Explicit pins, defaults, and mappings still
