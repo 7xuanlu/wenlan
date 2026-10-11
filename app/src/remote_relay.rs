@@ -19,6 +19,9 @@ pub(crate) mod startup;
 pub mod store;
 
 pub const RELAY_ORIGIN: &str = "https://relay.wenlan.app";
+/// The saved scope for "every Space, plus everything not in a Space". The daemon
+/// refuses it as a Space name, so a one-Space choice can never mean it.
+pub const WHOLE_LIBRARY_SPACE: &str = "*";
 const QUERY_SCOPE: &str = "wenlan:query";
 const RESPONSE_LIMIT: usize = 64 * 1024;
 
@@ -590,6 +593,30 @@ fn clean_redirect_host(host: Option<String>) -> Option<String> {
                     .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
         });
     (port_ok && name_ok).then_some(host)
+}
+
+/// What a person chose to share with web apps. One Space can never name the
+/// whole-library value: that choice is refused, never widened.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum ScopeChoice {
+    // A struct variant, not a unit one: serde ignores extra fields on an
+    // internally tagged unit variant even with deny_unknown_fields.
+    WholeLibrary {},
+    Space { name: String },
+}
+
+impl ScopeChoice {
+    /// The value saved in the profile and sent to the relay.
+    pub fn saved_space(&self) -> Result<&str, &'static str> {
+        match self {
+            ScopeChoice::WholeLibrary {} => Ok(WHOLE_LIBRARY_SPACE),
+            ScopeChoice::Space { name } if name.trim() == WHOLE_LIBRARY_SPACE => {
+                Err("That Space name is reserved; choose another Space")
+            }
+            ScopeChoice::Space { name } => Ok(name),
+        }
+    }
 }
 
 fn valid_space(value: &str) -> bool {

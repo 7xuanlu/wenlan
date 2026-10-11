@@ -53,14 +53,15 @@ for (const [locale, copy] of cases) for (const width of [820, 1440]) {
     await expect(page.locator('[data-testid="setup-wizard"]')).toHaveCount(0);
     const webName = /^(Web access|网页访问|網頁存取)$/;
     await expect(page.getByRole('heading', { name: webName })).toHaveCount(1);
-    // One click turns Web access on: there is no consent checkbox and no
-    // "choose a Space first" step, and the Space to share is already picked.
+    // Turning Web access on is one question with two answers: the whole
+    // library is one click, nothing is preselected, and there is no consent checkbox.
     const webSection = page.locator('section').filter({ has: page.getByRole('heading', { name: webName }) });
-    const webToggle = webSection.getByRole('button', { name: /^(Turn on|开启|開啟)$/ });
+    const webToggle = webSection.getByRole('button', { name: /^(Share whole library|共享整个资料库|分享整個資料庫)$/ });
     await expect(webToggle).toHaveCount(1);
     await expect(webToggle).toBeVisible();
     await expect(webToggle).toBeEnabled();
-    await expect(webSection.getByRole('combobox')).toHaveValue(/.+/);
+    await expect(webSection.getByRole('button', { name: /^(Share one Space…|只共享一个 Space…|只分享一個 Space…)$/ })).toHaveCount(1);
+    await expect(webSection.getByRole('combobox')).toHaveCount(0);
     await expect(webSection.getByRole('checkbox')).toHaveCount(0);
     await expect.poll(() => webToggle.evaluate(node => {
       const section = node.closest('section');

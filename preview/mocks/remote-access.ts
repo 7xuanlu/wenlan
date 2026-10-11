@@ -10,6 +10,8 @@
 //                     also opens the dialog with a code when this is present;
 //                     ?pairKind= picks the same request without opening it, for
 //                     typing a code into "Have a code?" by hand)
+//   ?remoteScope=     whole (the scenario's profile and apps share the whole library)
+//   ?remoteSpaces=    none (a library with no Spaces yet)
 import type { RemoteAccessProfile, RemoteAccessStatus, RemoteGrant, RemotePairing } from "../../src/lib/tauri";
 import { emit } from "./tauri-stubs";
 
@@ -20,19 +22,23 @@ let revision = 0;
 let profile: RemoteAccessProfile | null = null;
 let status: RemoteAccessStatus = { status: "off" };
 const grants: RemoteGrant[] = [];
-const spaces = [{ id: "review", name: "Review workspace" }, { id: "private", name: "Private library" }];
+const query = new URLSearchParams(window.location.search);
+const spaces = query.get("remoteSpaces") === "none"
+  ? []
+  : [{ id: "review", name: "Review workspace" }, { id: "private", name: "Private library" }];
+/** The scope a seeded scenario shares. */
+const seededSpace = query.get("remoteScope") === "whole" || spaces.length === 0 ? "*" : spaces[0].name;
 const relayUrl = "https://relay.wenlan.app/mcp";
 const request: RemotePairing = {
   pairingId: "a".repeat(64), clientId: "synthetic-client-for-review-0123456789",
   resource: relayUrl, scopes: ["wenlan:query"], expiresAt: Date.now() + 10 * MINUTE,
 };
 
-const query = new URLSearchParams(window.location.search);
 const scenario = query.get("remoteScenario");
 const pairKind = query.get("pairKind") ?? query.get("pair") ?? "known";
 
 function enabledProfile(expiresInMs: number): RemoteAccessProfile {
-  return { revision: String(++revision), space: spaces[0].name, enabled: true, disconnect_pending: false, credential_expires_at: Date.now() + expiresInMs };
+  return { revision: String(++revision), space: seededSpace, enabled: true, disconnect_pending: false, credential_expires_at: Date.now() + expiresInMs };
 }
 
 function connectedStatus(): RemoteAccessStatus {
@@ -41,7 +47,7 @@ function connectedStatus(): RemoteAccessStatus {
 
 function grant(id: string, over: Partial<RemoteGrant>): RemoteGrant {
   return {
-    id, clientId: `client-${id}-0123456789abcdef`, space: spaces[0].name,
+    id, clientId: `client-${id}-0123456789abcdef`, space: seededSpace,
     createdAt: Date.now() - 3 * DAY, expiresAt: Date.now() + 60 * DAY,
     status: "active", cleanupPending: false,
     // The relay's own name is attacker-controlled, so the screens never trust it.
@@ -103,7 +109,7 @@ switch (scenario) {
     status = { status: "error", error: "Local transport stop requested; remote access settings are not confirmed (Remote access credentials could not be stored safely); server revoke failed: Remote connection unavailable; retry later; disconnect must be retried before app restart" };
     break;
   case "shutdown-unconfirmed":
-    profile = { revision: String(++revision), space: spaces[0].name, enabled: false, disconnect_pending: false, credential_expires_at: null };
+    profile = { revision: String(++revision), space: seededSpace, enabled: false, disconnect_pending: false, credential_expires_at: null };
     status = { status: "error", error: "Local remote-access processes have not been confirmed stopped. New connections are blocked; retry Stop access." };
     break;
   // Starts enabled and connected with no apps, then a synthetic grant appears
@@ -150,15 +156,19 @@ export async function invokeRemoteFixture(command: string, args?: Record<string,
     case "reconnect_remote_access": {
       if (!profile?.enabled || profile.disconnect_pending || args?.expectedRevision !== profile.revision) throw new Error("Stale fixture revision");
       const profileSpace = profile.space;
-      if (!spaces.some((space) => space.name === profileSpace)) throw new Error("Unknown Space");
+      if (profileSpace !== "*" && !spaces.some((space) => space.name === profileSpace)) throw new Error("Unknown Space");
       status = connectedStatus();
       await emit("remote-access-status", { ...status });
       return { ...status };
     }
     case "configure_remote_access": {
       if (profile?.enabled || (args?.expectedRevision ?? null) !== (profile?.revision ?? null)) throw new Error("Stale fixture revision");
-      if (!spaces.some((space) => space.name === args?.space)) throw new Error("Unknown Space");
-      profile = { revision: String(++revision), space: String(args?.space), enabled: false, disconnect_pending: false, credential_expires_at: null };
+      const scope = args?.scope as { kind?: string; name?: string } | undefined;
+      let saved: string;
+      if (scope?.kind === "wholeLibrary") saved = "*";
+      else if (scope?.kind === "space" && scope.name?.trim() !== "*" && spaces.some((space) => space.name === scope.name)) saved = scope.name!;
+      else throw new Error("Unknown Space");
+      profile = { revision: String(++revision), space: saved, enabled: false, disconnect_pending: false, credential_expires_at: null };
       return { ...profile };
     }
     case "toggle_remote_access": {

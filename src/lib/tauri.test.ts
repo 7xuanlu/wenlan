@@ -24,9 +24,16 @@ describe('remote access consent bridge', () => {
   });
 
   it('passes an explicit Space and expected revision without enabling access', async () => {
-    await tauri.configureRemoteAccess('review', 'revision-1');
+    await tauri.configureRemoteAccess({ kind: 'space', name: 'review' }, 'revision-1');
     expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
-      space: 'review', expectedRevision: 'revision-1',
+      scope: { kind: 'space', name: 'review' }, expectedRevision: 'revision-1',
+    });
+  });
+
+  it('passes the whole library as its own choice, never as a Space name', async () => {
+    await tauri.configureRemoteAccess({ kind: 'wholeLibrary' }, 'revision-1');
+    expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
+      scope: { kind: 'wholeLibrary' }, expectedRevision: 'revision-1',
     });
   });
 
@@ -42,9 +49,9 @@ describe('remote access consent bridge', () => {
   });
 
   it('passes null revision when configuring a first profile', async () => {
-    await tauri.configureRemoteAccess('review');
+    await tauri.configureRemoteAccess({ kind: 'space', name: 'review' });
     expect(mockInvoke).toHaveBeenCalledWith('configure_remote_access', {
-      space: 'review', expectedRevision: null,
+      scope: { kind: 'space', name: 'review' }, expectedRevision: null,
     });
   });
 

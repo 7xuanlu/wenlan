@@ -115,23 +115,43 @@ fn require_enabled(profile: Option<Profile>) -> Result<Profile, StoreError> {
         .ok_or(StoreError::NotConfigured)
 }
 
-pub fn mcp_args(origin_url: &str, port: u16) -> Vec<String> {
-    [
-        "--origin-url".to_string(),
-        origin_url.to_string(),
-        "serve".to_string(),
-        "--host".to_string(),
-        "127.0.0.1".to_string(),
-        "--port".to_string(),
-        port.to_string(),
-        "--tool-profile".to_string(),
-        "query-only".to_string(),
-        "--token-env".to_string(),
-        TOKEN_ENV.to_string(),
-        "--agent-name".to_string(),
-        "remote-mcp".to_string(),
+pub fn mcp_args(origin_url: &str, port: u16, profile: &Profile) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--origin-url",
+        origin_url,
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+        "--tool-profile",
+        "query-only",
+        "--token-env",
+        TOKEN_ENV,
+        "--agent-name",
+        "remote-mcp",
     ]
-    .into()
+    .map(str::to_string)
+    .into();
+    if profile.whole_library() {
+        args.push("--whole-library".into());
+    }
+    args
+}
+
+/// The scope reaches the sidecar only through its environment. One Space is a
+/// strict pin. The whole library clears both Space variables, so nothing the
+/// app inherited can narrow it, and `--whole-library` refuses a pin anyway.
+pub fn mcp_scope_env(profile: &Profile) -> [(&'static str, String); 2] {
+    let pinned = if profile.whole_library() {
+        String::new()
+    } else {
+        profile.space().to_string()
+    };
+    [
+        ("WENLAN_SPACE", pinned),
+        ("WENLAN_DEFAULT_SPACE", String::new()),
+    ]
 }
 
 #[derive(Deserialize)]
