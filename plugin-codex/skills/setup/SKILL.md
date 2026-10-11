@@ -11,8 +11,7 @@ user-invocable: true
 # /setup
 
 Self-healing setup for Codex. Default backend is local memory: no local model,
-no API key, no prompt ceremony. Local model and Anthropic key are optional
-upgrades after the basic path works.
+no API key, no prompt ceremony.
 
 ## Steps
 
@@ -37,36 +36,29 @@ Compare daemon version vs plugin manifest version:
 
 ```bash
 PLUGIN_JSON="${CODEX_PLUGIN_ROOT:-plugin-codex}/.codex-plugin/plugin.json"
-[ -r "$PLUGIN_JSON" ] || PLUGIN_JSON=".codex-plugin/plugin.json"
-if command -v python3 >/dev/null 2>&1 && [ -r "$PLUGIN_JSON" ]; then
-  RESP="$(curl -fsS -m 3 http://127.0.0.1:7878/api/health)"
-  DAEMON_VER="$(printf '%s' "$RESP" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))')"
-  EXPECTED_VER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON")"
-  RELEASE_VER="${EXPECTED_VER%%+*}"
-  printf 'daemon=%s expected=%s release=%s\n' "$DAEMON_VER" "$EXPECTED_VER" "$RELEASE_VER"
-else
-  echo "version_check=skipped"
-fi
+"${CODEX_PLUGIN_ROOT:-plugin-codex}/bin/version-drift.sh" --health-url http://127.0.0.1:7878/api/health --manifest "$PLUGIN_JSON"
 ```
 
-- Same version: continue to doctor.
+It prints one line, `daemon=<v> expected=<v> release=<v> result=<result>`,
+comparing numerically per component with build metadata (`+g<sha>`) stripped.
+`older` means the daemon is older than the plugin.
+
+- `result=same`: continue to doctor.
 - If the probe cannot run because the runtime is down: continue to bootstrap.
-- If `PLUGIN_JSON` is unreadable or `python3` is missing: continue to doctor;
-  Codex will keep using this slice until the plugin cache is updated.
-- If mismatch, check the direction before repairing. Compare the release part
-  of `daemon=` (strip the `+g<sha>` suffix) against `release=`, numeric per
-  component, not lexicographic. Daemon release equal or newer → the plugin
-  cache is stale, not the runtime: skip the repair below (it would only
-  reinstall the same-or-latest runtime and restart a healthy daemon) and go
-  straight to the stop message in step 4 — update the plugin, restart, rerun.
+- `result=unknown` with a healthy runtime (manifest unreadable or no version
+  reported): continue to doctor; Codex will keep using this slice until the
+  plugin cache is updated.
+- If mismatch, check the direction before repairing. `result=newer`: the
+  daemon release is newer than the plugin release, so the plugin cache is
+  stale, not the runtime. Skip the repair below (it would only reinstall the
+  same-or-latest runtime and restart a healthy daemon) and go straight to the
+  stop message in step 4 — update the plugin, restart, rerun.
 - Only if the daemon release is older than the plugin release, repair the
-  runtime:
+  runtime (`result=older`):
 
 ```bash
 PLUGIN_JSON="${CODEX_PLUGIN_ROOT:-plugin-codex}/.codex-plugin/plugin.json"
-[ -r "$PLUGIN_JSON" ] || PLUGIN_JSON=".codex-plugin/plugin.json"
-EXPECTED_VER="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' "$PLUGIN_JSON")"
-RELEASE_VER="${EXPECTED_VER%%+*}"
+RELEASE_VER="$("${CODEX_PLUGIN_ROOT:-plugin-codex}/bin/version-drift.sh" --health-url http://127.0.0.1:7878/api/health --manifest "$PLUGIN_JSON" | sed -n 's/.* release=\([^ ]*\) .*/\1/p')"
 curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash
 export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
@@ -133,8 +125,8 @@ state and where its logs are (a file path on macOS, `journalctl` on Linux);
 stop there. Likely causes: the model download is still running or failed,
 launchd load failure, port 7878 already in use, or a local runtime crash.
 
-Once healthy, repeat the version comparison from step 2. If the versions still
-differ, stop instead of claiming setup succeeded:
+Once healthy, rerun the step 2 command. If `result` is still `older` or
+`newer`, stop instead of claiming setup succeeded:
 
 ```text
 Runtime and plugin versions still differ after repair; update the Wenlan plugin,
@@ -183,14 +175,9 @@ Wenlan ready.
 
 ## Optional upgrades
 
-Mention these only if the user asks for richer synthesis:
+Steep, the optional model-backed background upkeep, is off by default; a connected AI tool writes pages without it. To turn it on:
 
-- `wenlan models install` for local model-backed distillation.
-- `wenlan keys set anthropic` for stronger synthesis.
-
-Installing a model or key only makes that provider available; it does not
-authorize background inference. If the user wants automatic enrichment, run
-`wenlan steep status`, help them choose the exact Everyday and Synthesis
+Run `wenlan steep status`, help the user choose the exact Everyday and Synthesis
 sources, then run `wenlan steep configure --everyday <source> --synthesis
 <source>`. The CLI itself shows the task mapping and cloud/on-device disclosure
 and obtains the one confirmation. Never add `--yes` unless the user already

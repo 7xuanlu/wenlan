@@ -262,6 +262,8 @@ jobs:
               - 'scripts/validate-codex-plugin-slice.py'
               - 'scripts/validate-plugin-contract.py'
               - 'scripts/validate-plugin-contract.test.sh'
+              - 'scripts/gen-plugin-verbs.mjs'
+              - 'scripts/gen-plugin-verbs.test.mjs'
             # Required Rust-side distribution contracts for plugin artifacts.
             # Validator implementation changes remain owned by the fast plugin
             # job above and are deliberately excluded from this compile lane.
@@ -2455,6 +2457,14 @@ jobs:
           bash scripts/validate-plugin-contract.test.sh
       - name: Run the SessionStart hook tests
         run: bash plugin/hooks/test-check-daemon.sh
+      - name: Run the shared plugin script tests
+        run: |
+          bash plugin/scripts/test/test-resolve-space.sh
+          bash plugin/scripts/test/test-version-drift.sh
+      - name: Verb list is generated from plugin/skills/verbs.json
+        run: |
+          node scripts/gen-plugin-verbs.mjs --check
+          node --test scripts/gen-plugin-verbs.test.mjs
       - name: Validate skill frontmatter
         run: |
           for f in plugin/skills/*/SKILL.md; do

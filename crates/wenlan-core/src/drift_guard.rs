@@ -2647,6 +2647,8 @@ fn ci_routing_contract_violations(
         "plugin-contract.json".to_string(),
         "plugin-codex/**".to_string(),
         "plugin/**".to_string(),
+        "scripts/gen-plugin-verbs.mjs".to_string(),
+        "scripts/gen-plugin-verbs.test.mjs".to_string(),
         "scripts/validate-codex-plugin-slice.py".to_string(),
         "scripts/validate-plugin-contract.py".to_string(),
         "scripts/validate-plugin-contract.test.sh".to_string(),

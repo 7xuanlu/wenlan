@@ -41,35 +41,24 @@ Trigger timing is the only thing that differs between background distill
 cycles and this skill. Code path is the same; daemon hands back
 clusters when it can't synthesize; whoever called fills in the rest.
 
-## Argument parsing
-
-The `/distill` skill accepts one optional inline token of the form
-`space:<name>` anywhere in the argument string. Extract it before
-treating the rest as the target:
-
-    raw_args="<the full argument string passed to /distill>"
-    space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-    target="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-
-If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
-
 ## Resolve the active space
 
-Call the bundled resolver:
+The `/distill` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. The bundled resolver strips it
+and returns the rest as the target. It prints the resolved Space line itself:
 
-    resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" \
-        ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
-    space="$(printf '%s\n' "$resolved" | cut -f1)"
-    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+```bash
+raw_args="<the full argument string passed to /distill>"
+resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" --args "$raw_args")"
+space="$(printf '%s\n' "$resolved" | cut -f1)"
+source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+target="$(printf '%s\n' "$resolved" | cut -f3-)"
+```
 
 The `distill` MCP tool has no separate `space` parameter. Use the resolved
 non-empty space as `target` unless an explicit target argument or rebuild target
-is already being forwarded. Print one line before the call:
-
-    Resolved space: <space> (from <source-layer>)
-
-If `space` is empty, print `Resolved space: none (unscoped)` and omit `target`
-unless the user supplied an explicit target.
+is already being forwarded. If `space` is empty, omit `target` unless the user
+supplied an explicit target.
 
 ## Flow
 
@@ -393,27 +382,6 @@ Rules:
 - If the pass produced fewer pages than expected, it's the clustering
   thresholds. Most memories sit alone without enough peers to form a
   cluster of 3+. Capture more on the same topic to grow them.
-
-## Auto-commit ~/.wenlan/
-
-After writing the pages above, snapshot the change so the user can `git
-log` their memory's life timeline. Defensive — silent skip if `git` is
-missing or `~/.wenlan/` is not a repo yet.
-
-```
-Bash: git -C ~/.wenlan add -A && \
-      git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-          commit --quiet -m "distill: <N> pages" 2>/dev/null || \
-      (sleep 1 && git -C ~/.wenlan add -A && \
-       git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-           commit --quiet -m "distill: <N> pages" 2>/dev/null) || true
-```
-
-The retry handles index.lock races — the daemon may be writing to
-`~/.wenlan/` at the same moment. Commits land at session boundaries
-(handoff or daemon events), not per capture; uncommitted page edits
-between sessions are normal. One second is enough for the daemon to
-release the lock.
 
 ## When to use
 

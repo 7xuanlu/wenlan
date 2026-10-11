@@ -100,5 +100,50 @@ out="$(SPACES_FILE=/does/not/exist WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE=''
     WENLAN_DEFAULT_SPACE='' "$RESOLVER" --cwd "$space_repo" 2>/dev/null)"
 assert_eq 'repo basename requires exact registered Space name' $'\tunscoped' "$out"
 
+# --args skill mode: strips the first space:<name> token, adds a third field
+# for the remainder, and reports the resolution on stderr.
+out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo find the thing' 2>/dev/null)"
+assert_eq '--args leading token is the arg layer and is stripped from rest' \
+    'foo	arg	find the thing' "$out"
+
+out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'find space:foo the thing' 2>/dev/null)"
+assert_eq '--args token in the middle is stripped' 'foo	arg	find the thing' "$out"
+
+out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'find the thing space:foo' 2>/dev/null)"
+assert_eq '--args token at the end is stripped' 'foo	arg	find the thing' "$out"
+
+out="$(SPACES_FILE="$config" WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested/leaf" --args '  find the thing  ' 2>/dev/null)"
+assert_eq '--args without a token falls through to cwd mapping with trimmed rest' \
+    'mapped	cwd-config	find the thing' "$out"
+
+out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='locked' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo find the thing' 2>/dev/null)"
+assert_eq '--args strict pin wins and the token is still stripped' \
+    'locked	locked-env	find the thing' "$out"
+
+out="$(SPACES_FILE=/does/not/exist WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd /opt/no-match --args 'just words' 2>/dev/null)"
+assert_eq '--args unscoped keeps an empty space field' $'\tunscoped\tjust words' "$out"
+
+out="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo' 2>/dev/null)"
+assert_eq '--args with only a token leaves rest empty' $'foo\targ\t' "$out"
+
+err="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --args 'space:foo x' 2>&1 >/dev/null)"
+assert_eq '--args stderr reports the resolved space' 'Resolved space: foo (from arg)' "$err"
+
+err="$(SPACES_FILE=/does/not/exist WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd /opt/no-match --args 'x' 2>&1 >/dev/null)"
+assert_eq '--args stderr reports unscoped' 'Resolved space: none (unscoped)' "$err"
+
+err="$(WENLAN_BIN="$fake_bin/wenlan" WENLAN_SPACE='' WENLAN_DEFAULT_SPACE='' \
+    "$RESOLVER" --cwd "$tmpbase/nested" --arg explicit 2>&1 >/dev/null)"
+assert_eq 'stderr is empty without --args' '' "$err"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

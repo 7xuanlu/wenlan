@@ -2,17 +2,34 @@
 # Resolve client-local Wenlan Space context.
 # Precedence: strict pin > explicit arg > default env > cwd mapping >
 # registered repo basename > unscoped. The daemon owns the save default.
+#
+# Default output: one line, "<space>\t<layer>" (space is empty when unscoped).
+# --args "<raw>": skill mode. <raw> is the raw skill argument string. The first
+# `space:<name>` token is stripped and used as --arg. Output becomes one line,
+# "<space>\t<layer>\t<rest>" (rest = <raw> without the token, trimmed, may be
+# empty), and stderr gets "Resolved space: <space> (from <layer>)" or
+# "Resolved space: none (unscoped)". Exit status is always 0.
 
 set -u
 
 cwd=""
 arg=""
 new_repo_fallback=0
+skill_mode=0
+rest=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --cwd) cwd="${2:-}"; shift $(( $# > 1 ? 2 : 1 )) ;;
         --arg) arg="${2:-}"; shift $(( $# > 1 ? 2 : 1 )) ;;
+        --args)
+            skill_mode=1
+            raw="${2:-}"
+            shift $(( $# > 1 ? 2 : 1 ))
+            token="$(printf '%s\n' "$raw" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
+            [ -n "$token" ] && arg="$token"
+            rest="$(printf '%s\n' "$raw" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+            ;;
         --topic) shift $(( $# > 1 ? 2 : 1 )) ;;
         --new-repo-fallback) new_repo_fallback=1; shift ;;
         *) shift ;;
@@ -27,22 +44,34 @@ trim() {
     }'
 }
 
+# emit <space> <layer>: print the result line, then exit 0.
+emit() {
+    if [ "$skill_mode" = "1" ]; then
+        printf '%s\t%s\t%s\n' "$1" "$2" "$rest"
+        if [ -n "$1" ]; then
+            printf 'Resolved space: %s (from %s)\n' "$1" "$2" >&2
+        else
+            printf 'Resolved space: none (unscoped)\n' >&2
+        fi
+    else
+        printf '%s\t%s\n' "$1" "$2"
+    fi
+    exit 0
+}
+
 locked="$(trim "${WENLAN_SPACE:-}")"
 if [ -n "$locked" ]; then
-    printf '%s\tlocked-env\n' "$locked"
-    exit 0
+    emit "$locked" locked-env
 fi
 
 explicit="$(trim "$arg")"
 if [ -n "$explicit" ]; then
-    printf '%s\targ\n' "$explicit"
-    exit 0
+    emit "$explicit" arg
 fi
 
 fallback="$(trim "${WENLAN_DEFAULT_SPACE:-}")"
 if [ -n "$fallback" ]; then
-    printf '%s\tdefault-env\n' "$fallback"
-    exit 0
+    emit "$fallback" default-env
 fi
 
 spaces_file="${SPACES_FILE:-${HOME}/.wenlan/spaces.toml}"
@@ -87,8 +116,7 @@ if [ -n "$cwd" ] && [ -f "$spaces_file" ]; then
     rm -f "$pairs"
 
     if [ -n "$best_space" ]; then
-        printf '%s\tcwd-config\n' "$best_space"
-        exit 0
+        emit "$best_space" cwd-config
     fi
 fi
 
@@ -103,13 +131,11 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
 
         wenlan_bin="${WENLAN_BIN:-wenlan}"
         if "$wenlan_bin" spaces show "$repo_name" --format json >/dev/null 2>&1; then
-            printf '%s\tcwd-repo\n' "$repo_name"
-            exit 0
+            emit "$repo_name" cwd-repo
         elif [ "$new_repo_fallback" = "1" ]; then
-            printf '%s\tcwd-repo-new\n' "$repo_name"
-            exit 0
+            emit "$repo_name" cwd-repo-new
         fi
     fi
 fi
 
-printf '\tunscoped\n'
+emit "" unscoped

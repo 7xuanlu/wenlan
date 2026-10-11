@@ -13,25 +13,20 @@ user-invocable: true
 Run a deliberate Wenlan distillation pass. The daemon finds clusters and stale
 pages; Codex synthesizes any pending clusters the daemon cannot finish.
 
-## Argument parsing
+## Resolve the active space
 
-Accept one optional `space:<name>` token:
+Accept one optional `space:<name>` token. The Codex resolver strips it and
+returns the rest as the target. It prints the resolved Space line itself:
 
 ```bash
 raw_args="<the full argument string passed to /distill>"
-space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-target="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-```
-
-Resolve space:
-
-```bash
 # The resolver ships inside the installed plugin; the relative path only
 # exists in a wenlan checkout.
 resolver="$(find "$HOME/.codex/plugins/cache" -path '*/wenlan/*/bin/resolve-space.sh' 2>/dev/null | head -1)"
-resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" --args "$raw_args")"
 space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+target="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
 Use an explicit target first. For bare `/distill`, use the resolved space as
@@ -160,18 +155,3 @@ Also report:
 - skipped low-coherence clusters,
 - stale pages skipped because the user edited them,
 - orphan topic suggestions.
-
-## Auto-commit `~/.wenlan`
-
-Best effort only:
-
-```bash
-git -C ~/.wenlan add -A && \
-  git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-    commit --quiet -m "distill: <N> pages" 2>/dev/null || \
-(sleep 1 && git -C ~/.wenlan add -A && \
-  git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-    commit --quiet -m "distill: <N> pages" 2>/dev/null) || true
-```
-
-Do not fail the distill pass if the audit-trail commit fails.
