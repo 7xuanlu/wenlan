@@ -27,7 +27,8 @@ source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 content="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-Pass `space="$space"` to the `capture` MCP tool only when `space` is
+If `content` is empty, ask the user what they want to capture before calling
+the tool. Pass `space="$space"` to the `capture` MCP tool only when `space` is
 non-empty.
 
 The resolver line reports the proposed client context. After capture, relay

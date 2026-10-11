@@ -1,31 +1,39 @@
 ---
 name: help
 description: >
-  Show a one-screen Codex reference for the Wenlan plugin. Use when the user
-  asks for Wenlan help, command list, invokes /help, or explicitly asks about
-  import progress.
+  One-screen quick reference for the Wenlan plugin. Lists the daily
+  verbs, the daily flow, where data lives, and how to view it without a
+  GUI. Use when the user says "help", "what can I do", "list wenlan
+  commands", "how do I use wenlan", invokes `/help`, or explicitly asks
+  about import progress.
 allowed-tools: ["mcp__wenlan__list_pending_imports"]
 user-invocable: true
 ---
 
 # /help
 
-Print the Wenlan Codex command card. The default help path is read-only and
-calls no tools. Skip the `<!-- ... -->` comment lines inside the card; they mark
-the generated verb list and are not part of it.
+Print the Wenlan plugin reference card. The default help path is read-only and
+never calls a tool.
 
-```text
-Wenlan for Codex
+## How to invoke
+
+When triggered, output the block below verbatim. No editing, no
+abbreviating, no embellishing. The user is asking for the menu. The one
+exception: skip the `<!-- ... -->` comment lines inside the block; they mark
+the generated verb list and are not part of the card.
+
+```
+Wenlan plugin — daily verbs
 
 <!-- verbs:start -->
-<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
-  /setup                       set up or repair the local runtime and MCP bridge
+<!-- generated from the Claude help card by scripts/gen-codex-plugin.mjs; edit plugin/skills/verbs.json -->
+  /setup                       set up or repair Wenlan (installs the local runtime)
   /brief [topic]               load the Brief for the current Space (optional; not a boot step)
   /capture <x>                 save one durable memory in flow
   /recall <q>                  search local memory
   /lint [deep|repair] [scope]  diagnose, or resolve all findings safely
   /distill [t]                 synthesize or refresh source-backed pages for the active Space
-  /pages [q]                   list or open distilled pages in the OS editor
+  /pages [q]                   browse and open distilled pages
   /curate <surface>            deep audit of captures, revisions or refinements
   /forget <id>                 delete one memory by ID, after confirmation
   /handoff                     end-of-session debrief: captures, session log, Brief update
@@ -34,34 +42,56 @@ Wenlan for Codex
 
 Import progress: ask explicitly; Wenlan checks `list_pending_imports` on demand.
 
-Daily flow:
+Daily flow (~1 min overhead per session):
 
-  1. /setup once after install, or when Wenlan looks broken
-  2. /brief when resuming a project or asking to catch up
-  3. /capture durable decisions, corrections, lessons, or preferences
-  4. /recall when you need a specific memory
-  5. /handoff before ending the session
+  1. /setup         →  once after install, or when Wenlan looks broken
+  2. /brief         →  resume a project or ask to catch up
+  3. work normally  →  Codex proactively /captures durable facts
+  4. /recall X      →  as needed for lookups
+  5. /handoff       →  ~30 s, narrative session log + captures
 
-Data lives under ~/.wenlan/:
+Where your data lives (under ~/.wenlan/):
 
-  pages/              source-backed wiki pages
-  sessions/           narrative session logs
-  sessions/_status/   human receipts projected from Space Briefs
-  bin/                installed wenlan and wenlan-mcp binaries
+  ~/.wenlan/pages/      wiki pages distilled from your memories (md)
+  ~/.wenlan/sessions/   session logs by date (md)
+  ~/.wenlan/sessions/_status/  human receipts projected from Space Briefs
 
-Open pages with /pages. Memories and the graph live in a local database;
-location in docs/setup-and-data.md.
+Memories and the graph live in a local database; location in docs/setup-and-data.md.
+
+View it without a GUI:
+
+  open ~/.wenlan/                  browse in Finder
+  code ~/.wenlan/                  open in VS Code
+  ln -s ~/.wenlan/pages ~/Vault/wenlan   # symlink into Obsidian for graph view
+
+Three classes of artifact:
+  - memories: granular, queryable, live in DB only (confirmed = stays in DB)
+  - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
+  - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
+
+The local runtime must run at 127.0.0.1:7878. If it or the MCP bridge is down, run /setup.
 
 Models and keys do not enable background inference by themselves:
-
-  wenlan steep status             show Everyday + Synthesis as off/ready/paused
+  wenlan steep status             show Everyday + Synthesis as off, ready, or paused
   wenlan steep configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
   wenlan steep disable            turn model-backed background work off
 ```
 
-Only when the user explicitly asks whether an import/export is still running,
-call `mcp__wenlan__list_pending_imports`. Never call it during ordinary
-`/help`, `/brief`, setup, or session-start flows.
+## Import progress (explicit only)
 
-If the local runtime or MCP bridge is down, tell the user to run `/setup`.
+Only when the user explicitly asks whether an import/export is still running,
+call `mcp__wenlan__list_pending_imports`. Never call it during
+ordinary `/help`, `/brief`, setup, or session-start flows.
+
+## When to use
+
+- User explicitly types `/help`.
+- User asks "what can I do with wenlan", "list wenlan commands", "how
+  does this plugin work", "remind me what verbs are available".
+- First session after install — print this once on `/setup` success too.
+
+## When NOT to use
+
+- Specific factual lookup → use `/recall`.
+- Setup troubleshooting → use `/setup` (it diagnoses + auto-installs).

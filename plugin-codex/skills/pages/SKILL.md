@@ -1,8 +1,9 @@
 ---
 name: pages
 description: >
-  List or open distilled Wenlan pages from Codex by delegating to the local
-  `wenlan pages` CLI. Invoked as /pages [query].
+  List or open distilled pages by delegating to the local `wenlan pages` CLI.
+  `/pages <query>` opens the page when one matches, or prints the matches when
+  several do. `/pages` lists recent pages. Invoked as `/pages [query]`.
 argument-hint: "[query]"
 allowed-tools: ["Bash", "mcp__wenlan__get_page_revisions"]
 user-invocable: true
@@ -10,77 +11,52 @@ user-invocable: true
 
 # /pages
 
-Open or list distilled Wenlan pages without pulling page bodies into chat.
-The `wenlan pages` CLI owns title and filename matching plus the OS editor
-open. This skill is only the Codex slash workflow wrapper.
+Open a distilled page fast. The **`wenlan pages`** CLI does the open (one local
+command on your PATH — nothing to register, source, or install). This skill is
+only the slash workflow wrapper.
 
-Never read a page body. Never render a metadata card. Resolve by title or
-filename only; the page opens in the user's editor where Markdown search and
-navigation belong.
+**Never read a page body. Never render a metadata card.** Resolve by title /
+filename only — the file opens in your editor, which renders and searches it
+better than chat. Keeping bodies out is what keeps this cheap.
 
-## Resolve the CLI
-
-Use the agent shell's PATH first, then the standard Wenlan install path:
+Resolve the binary once (the agent shell's PATH may omit `~/.wenlan/bin`):
 
 ```bash
-if command -v wenlan >/dev/null 2>&1; then
-  W="$(command -v wenlan)"
-elif [ -x "$HOME/.wenlan/bin/wenlan" ]; then
-  W="$HOME/.wenlan/bin/wenlan"
-else
-  echo "wenlan not found"
-  exit 127
-fi
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
 ```
 
-If `wenlan` is not found, tell the user to run `/setup`.
+## `/pages <query>` — open, or print the matches
 
-## `/pages <query>`
-
-Run one Bash block:
+Run ONE Bash block:
 
 ```bash
-if command -v wenlan >/dev/null 2>&1; then
-  W="$(command -v wenlan)"
-elif [ -x "$HOME/.wenlan/bin/wenlan" ]; then
-  W="$HOME/.wenlan/bin/wenlan"
-else
-  echo "wenlan not found"
-  exit 127
-fi
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
 "$W" pages "<query>"
 ```
 
-Act only on the command output:
+Act on its output — do NOT re-fetch, list again, or read bodies:
 
-- `Opened <path>`: print that line. The page is open.
-- A bare path: print it and say the OS launcher did not open it automatically.
-- `no page matches: ...`: print it and suggest `/distill <query>`.
-- `N matches for ...` followed by `title  ·  filename` lines: several pages
-  matched. If several pages match, print the CLI output. Ask the user to rerun
-  `/pages` with one of the filenames or a narrower query.
+- **`Opened <path>`** → one page matched and is now open. Print that line. Done.
+- **A bare path** → print it and say the OS launcher did not open it automatically.
+- **`no page matches: …`** → print it; suggest `/distill <query>`.
+- **`N matches for … `** followed by `title · filename` lines → several matched.
+  If several pages match, print the CLI output verbatim and ask the user to rerun
+  `/pages` with one of the filenames or a narrower query (titles can repeat, so
+  the filename is the real handle).
 
 Do not use a picker. Do not re-fetch, list again, or read any page file.
 
-## `/pages`
-
-Run one Bash block:
+## `/pages` — list recent
 
 ```bash
-if command -v wenlan >/dev/null 2>&1; then
-  W="$(command -v wenlan)"
-elif [ -x "$HOME/.wenlan/bin/wenlan" ]; then
-  W="$HOME/.wenlan/bin/wenlan"
-else
-  echo "wenlan not found"
-  exit 127
-fi
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
 "$W" --format table pages
 ```
 
-Print the newest topics exactly as the CLI returns them. The CLI caps the list
-by default and prints `--limit 0` when the user wants all topics. Tell the user
-to run `/pages <query>` to open one.
+Prints the newest ~20 titles (CLI-capped; `--limit 0` for all). Show them and
+tell the user to `/pages <query>` to open one.
+
+If `wenlan` is not found, tell the user to run `/setup`; the CLI is not installed.
 
 ## Explicit changelog lookup
 
@@ -93,15 +69,10 @@ with `wenlan pages "<query-or-filename>" --resolve-id`.
 ```
 
 If several pages match, ask the user to narrow by filename and rerun the
-resolver. Then call:
-
-```text
-mcp__wenlan__get_page_revisions(page_id="<page-id>")
-```
-
+resolver. Then call `get_page_revisions(page_id="<resolved-id>")`.
 Do not fetch changelogs during ordinary `/pages` list/open flows.
 
-## When not to use
+## When NOT to use
 
-- Raw memory lookup: use `/recall`.
-- Synthesize a new page: use `/distill`.
+- Raw memory lookups → `/recall`.
+- Synthesize a new page → `/distill`.

@@ -158,8 +158,20 @@ assert_rejects "claude curate lint repair review route drift" \
     "$TMPDIR_TEST/root/plugin/skills/curate/SKILL.md"
 
 assert_rejects "codex curate lint repair review route drift" \
-    perl -0pi -e 's/Do not generically accept `lint_repair_review`;\s+route it through `\/lint repair`\./Accept `lint_repair_review` directly./' \
+    perl -0pi -e 's/A generic accept does not apply\s+`lint_repair_review`; route that action through `\/lint repair` instead\./A generic accept applies `lint_repair_review` directly./' \
     "$TMPDIR_TEST/root/plugin-codex/skills/curate/SKILL.md"
+
+assert_rejects "codex skill hand-edited instead of generated" \
+    perl -0pi -e 's/Capture a single memory in the moment\./Capture a memory./' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/capture/SKILL.md"
+
+assert_rejects "codex overlay no longer matches the Claude skill" \
+    perl -0pi -e 's/Right after `\/plugin install wenlan\@7xuanlu-wenlan`\./Right after the plugin is installed./' \
+    "$TMPDIR_TEST/root/plugin/skills/setup/SKILL.md"
+
+assert_rejects "codex skill carries a Claude-only token" \
+    perl -0pi -e 's/Permanently delete a memory by its `source_id`\./Permanently delete a memory by its `source_id` (never via AskUserQuestion)./' \
+    "$TMPDIR_TEST/root/plugin-codex/skills/forget/SKILL.md"
 
 assert_rejects "setup autocomplete drift" \
     perl -0pi -e 's/user-invocable: true/user-invocable: false/' \
@@ -250,7 +262,7 @@ assert_rejects "claude capture ordinary entity policy drift" \
     "$TMPDIR_TEST/root/plugin/skills/capture/SKILL.md"
 
 assert_rejects "codex capture ordinary entity policy drift" \
-    perl -0pi -e 's/Do not call\s+`mcp__wenlan__create_entity` for ordinary captures\./Call `mcp__wenlan__create_entity` for ordinary captures./' \
+    perl -0pi -e 's/Do not call\s+`create_entity` for ordinary captures\./Call `create_entity` for ordinary captures./' \
     "$TMPDIR_TEST/root/plugin-codex/skills/capture/SKILL.md"
 
 assert_rejects "claude capture inference policy drift" \

@@ -1,9 +1,9 @@
 ---
 name: brief
 description: >
-  Read the current Space-owned project Brief from Wenlan for Codex. With an
-  optional topic, appends separately labeled related context from the same
-  Space. Invoked as /brief [topic] when resuming work or asking to catch up.
+  Read the current Space-owned project Brief from Wenlan. With an optional
+  topic, appends separately labeled related context from the same Space.
+  Invoked as `/brief [topic]` when resuming work or asking to catch up.
 argument-hint: "[topic]"
 allowed-tools: ["Bash", "mcp__wenlan__brief", "mcp__wenlan__list_pending_revisions", "mcp__wenlan__accept_revision", "mcp__wenlan__dismiss_revision"]
 user-invocable: true
@@ -17,6 +17,9 @@ never be read as product state.
 
 ## 1. Resolve the Space
 
+Run the bundled resolver once. It prints the resolved Space line itself; an
+empty `space` means unscoped, so omit `space`.
+
 ```bash
 raw_args="<the full argument string passed to /brief>"
 # The resolver ships inside the installed plugin; the relative path only
@@ -27,9 +30,6 @@ space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 topic_arg="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
-
-The resolver prints the resolved Space line itself. An empty `space` means
-unscoped; omit `space`.
 
 ## 2. Read the Brief
 
@@ -51,23 +51,32 @@ that the first `/handoff` update will create it. If the state is
 `space_not_resolved`, ask for a Space only when the working directory and
 configuration cannot resolve one safely.
 
-Render the last-session summary, Active, Backlog, then Related Context only
-when returned. Keep stable item IDs and versions available for later
-`/handoff` reconciliation, but omit them from the normal user-facing list.
+Render:
+
+1. Last-session summary.
+2. Active items.
+3. Backlog items.
+4. Related Context, only when returned.
+
+Keep stable item IDs and versions available for later `/handoff` reconciliation,
+but do not clutter the normal user-facing list with them.
 
 ## 3. Pending revisions
 
-Call:
+After the Brief, call:
 
 ```text
 mcp__wenlan__list_pending_revisions(limit=10)
 ```
 
-If empty, say nothing. If it fails, emit one warning and keep the Brief. If
-non-empty, show at most three. Never auto-action them.
+If empty, say nothing. If the call fails, emit one warning and keep the Brief.
+If non-empty, show at most the top three with `target_source_id`,
+`revision_content`, and source agent. Never auto-action them.
 
-- accept: `mcp__wenlan__accept_revision(target_source_id="<id>")`
-- dismiss: `mcp__wenlan__dismiss_revision(target_source_id="<id>")`
+- accept:
+  `mcp__wenlan__accept_revision(target_source_id="<id>")`
+- dismiss:
+  `mcp__wenlan__dismiss_revision(target_source_id="<id>")`
 - skip: no call
 
 If more than three exist, point to `/curate revisions`.

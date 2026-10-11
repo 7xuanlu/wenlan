@@ -12,20 +12,40 @@ allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan
 
 Permanently delete a memory by its `source_id`.
 
-## How to invoke
+## Safety
 
-You need the `source_id`. If the user did not provide it, call
-`/recall` first to find the matching memory and confirm with the
-user before deleting.
+This cannot be undone by Wenlan. Prefer `/capture` with `supersedes` pointing
+at the old memory when history should be preserved.
 
+Always confirm with the user before calling forget, unless the same user message
+already includes an exact id and an unambiguous delete instruction (for example
+they pasted the ID and said "delete this").
+
+If the id is missing, call `/recall` first to find candidates or ask the user
+for the exact id. The confirmation reply must include the action and id:
+
+```text
+delete <id>
 ```
+
+A bare id is not confirmation.
+
+## Call
+
+After confirmation, call:
+
+```text
 forget(memory_id="<source_id>")
 ```
+
+Delete only one memory per tool call. For bulk cleanup, use `/curate captures`
+so each item has its own decision.
 
 ## When to use
 
 - User says "forget this", "delete that", "that's wrong, remove it".
-- User explicitly identifies a memory by ID.
+- User explicitly identifies a memory by ID, or confirms `delete <id>` after
+  recall found the matching memory.
 
 ## When NOT to use
 
@@ -33,11 +53,5 @@ forget(memory_id="<source_id>")
   at the old one. That preserves history. Use `/capture` with the
   `supersedes` arg instead. If your agent's trust level is below full, that
   write may stage for human review instead of taking effect immediately.
-- Bulk deletions — call `/curate` first, confirm with the user,
-  then delete one at a time.
-
-## Safety
-
-Deletion is destructive. Always confirm with the user before calling forget,
-unless the user has already given an explicit, unambiguous instruction in
-the same turn (e.g. they pasted the ID and said "delete this").
+- Bulk deletions: use `/curate captures` so each item has its own decision.
+- Page rebuilds: use `/distill rebuild <page-id>`.
