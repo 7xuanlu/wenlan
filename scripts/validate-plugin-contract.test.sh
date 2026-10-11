@@ -34,8 +34,8 @@ copy_fixture
 python3 "$VALIDATOR" --root "$TMPDIR_TEST/root"
 echo "PASS valid plugin contract"
 
-assert_rejects "brief context adapter regression" \
-    perl -0pi -e 's/mcp__wenlan__brief/mcp__wenlan__context/g' \
+assert_rejects "brief adapter renamed to a tool that does not exist" \
+    perl -0pi -e 's/mcp__wenlan__brief/mcp__wenlan__ghost_tool/g' \
     "$TMPDIR_TEST/root/plugin-codex/skills/brief/SKILL.md"
 
 assert_rejects "brief mandatory session-start regression" \
@@ -434,11 +434,11 @@ assert_rejects "codex lint appended agent argument" \
     "$TMPDIR_TEST/root/plugin-codex/skills/lint/SKILL.md"
 
 assert_rejects "claude lint dropped repair permission" \
-    perl -0pi -e 's/, "mcp__plugin_wenlan_wenlan__prepare_lint_repair_plan"//' \
+    perl -0pi -e 's/, "mcp__plugin_wenlan_wenlan__lint_repair_apply"//' \
     "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
 
-assert_rejects "claude lint dropped review-choice prepare permission" \
-    perl -0pi -e 's/, "mcp__plugin_wenlan_wenlan__prepare_lint_repair"//' \
+assert_rejects "claude lint dropped prepare permission" \
+    perl -0pi -e 's/, "mcp__plugin_wenlan_wenlan__lint_repair_prepare"//' \
     "$TMPDIR_TEST/root/plugin/skills/lint/SKILL.md"
 
 assert_rejects "codex lint review-choice flow drift" \

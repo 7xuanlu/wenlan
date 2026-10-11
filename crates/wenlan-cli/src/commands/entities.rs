@@ -1,16 +1,54 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `wenlan entities merge/alias` — knowledge-graph entity identity surface.
+//! `wenlan entities list/archive/restore/merge/alias` — knowledge-graph entity surface.
 
 use anyhow::Result;
 use clap::Subcommand;
 
-use wenlan_types::responses::ListEntitiesResponse;
+use wenlan_types::entities::EntityStatus;
+use wenlan_types::requests::ListEntitiesRequest;
+use wenlan_types::responses::{EntityBulkResponse, ListEntitiesResponse};
 
 use crate::client::WenlanClient;
 use crate::output::ResolvedFormat;
 
 #[derive(Subcommand)]
 pub enum EntitiesCmd {
+    /// List entities in every state, with their type, status, and memory count.
+    List {
+        /// Only this entity type (e.g. person, project).
+        #[arg(long = "type")]
+        entity_type: Option<String>,
+        /// Only this state: detected, established, or archived.
+        #[arg(long, value_parser = parse_status)]
+        status: Option<EntityStatus>,
+        /// Only entities whose name or alias contains this text.
+        #[arg(long)]
+        query: Option<String>,
+        /// Max entities to return.
+        #[arg(short, long, default_value_t = 50)]
+        limit: u32,
+        /// Skip this many entities first.
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+    },
+    /// Archive entities by id. They stay stored and can be restored.
+    Archive {
+        /// Entity ids to archive.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// Show what would be archived without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore archived entities by id.
+    Restore {
+        /// Entity ids to restore.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// Show what would be restored without changing anything.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Merge one entity into another. The loser is deleted; its observations,
     /// memory links, edges, and aliases move to the canonical.
     Merge {
@@ -39,6 +77,29 @@ pub async fn run(
     cmd: EntitiesCmd,
 ) -> Result<()> {
     match cmd {
+        EntitiesCmd::List {
+            entity_type,
+            status,
+            query,
+            limit,
+            offset,
+        } => {
+            let req = ListEntitiesRequest {
+                entity_type,
+                status,
+                query,
+                limit: Some(limit),
+                offset: Some(offset),
+                ..Default::default()
+            };
+            list(client, format, quiet, &req).await
+        }
+        EntitiesCmd::Archive { ids, dry_run } => {
+            bulk(client, format, quiet, ids, dry_run, BulkAction::Archive).await
+        }
+        EntitiesCmd::Restore { ids, dry_run } => {
+            bulk(client, format, quiet, ids, dry_run, BulkAction::Restore).await
+        }
         EntitiesCmd::Merge {
             loser,
             into,
@@ -48,6 +109,121 @@ pub async fn run(
             alias_cmd(client, format, quiet, &entity, &alias).await
         }
     }
+}
+
+fn parse_status(value: &str) -> Result<EntityStatus, String> {
+    match value.to_lowercase().as_str() {
+        "detected" => Ok(EntityStatus::Detected),
+        "established" => Ok(EntityStatus::Established),
+        "archived" => Ok(EntityStatus::Archived),
+        _ => Err("expected detected, established, or archived".to_string()),
+    }
+}
+
+async fn list(
+    client: &WenlanClient,
+    format: ResolvedFormat,
+    quiet: bool,
+    req: &ListEntitiesRequest,
+) -> Result<()> {
+    let response = client.query_entities(req).await?;
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        ResolvedFormat::Json => crate::output::print_json(&response)?,
+        ResolvedFormat::Table => {
+            if response.entities.is_empty() {
+                println!("(no entities match)");
+                return Ok(());
+            }
+            println!(
+                "{:36}  {:28}  {:12}  {:11}  MEMORIES",
+                "ID", "NAME", "TYPE", "STATUS"
+            );
+            for e in &response.entities {
+                println!(
+                    "{:36}  {:28}  {:12}  {:11}  {}",
+                    e.id,
+                    e.name,
+                    e.entity_type,
+                    e.status.as_str(),
+                    e.memory_count
+                );
+            }
+            let offset = u64::from(req.offset.unwrap_or(0));
+            let shown_to = offset + response.entities.len() as u64;
+            if shown_to < response.total {
+                println!(
+                    "Showing {}-{} of {}. Use --offset to see more.",
+                    offset + 1,
+                    shown_to,
+                    response.total
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum BulkAction {
+    Archive,
+    Restore,
+}
+
+async fn bulk(
+    client: &WenlanClient,
+    format: ResolvedFormat,
+    quiet: bool,
+    ids: Vec<String>,
+    dry_run: bool,
+    action: BulkAction,
+) -> Result<()> {
+    let response = match action {
+        BulkAction::Archive => client.archive_entities(ids.clone(), dry_run).await?,
+        BulkAction::Restore => client.restore_entities(ids.clone(), dry_run).await?,
+    };
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        ResolvedFormat::Json => crate::output::print_json(&response)?,
+        ResolvedFormat::Table => {
+            for line in bulk_lines(action, &ids, &response) {
+                println!("{line}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One line per requested id (applied, or skipped because the daemon left it
+/// alone), then a count line. Skipped ids are only named when the daemon
+/// returned its full id list.
+fn bulk_lines(action: BulkAction, ids: &[String], response: &EntityBulkResponse) -> Vec<String> {
+    let (done, would, noun_state) = match action {
+        BulkAction::Archive => ("Archived", "Would archive", "already archived"),
+        BulkAction::Restore => ("Restored", "Would restore", "not archived"),
+    };
+    let verb = if response.dry_run { would } else { done };
+    let mut lines: Vec<String> = response
+        .entity_ids
+        .iter()
+        .map(|id| format!("{verb} {id}"))
+        .collect();
+    if response.entity_ids.len() as u64 == response.count {
+        for id in ids.iter().filter(|id| !response.entity_ids.contains(id)) {
+            lines.push(format!("Skipped {id} (not found, or {noun_state})"));
+        }
+    }
+    let plural = if response.count == 1 {
+        "entity"
+    } else {
+        "entities"
+    };
+    lines.push(format!("{verb} {} {plural}.", response.count));
+    lines
 }
 
 /// Resolve `id_or_name` to an entity's (id, name): a direct id lookup first,

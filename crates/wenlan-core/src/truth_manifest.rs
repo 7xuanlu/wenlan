@@ -377,39 +377,39 @@ pub const HTTP_READERS: &[HttpReader] = &[
     HttpReader { method: ReaderMethod::Get, path: "/ws/updates", builder: Builder::Main, page_bearing: PageBearing::No, class: TruthClass::NotApplicable, marker_shape: MarkerShape::None, adapter: "—", evidence: "DEMOTED — proof in the inventory doc" },
 ];
 
-/// All 29 `#[tool(` declarations in `crates/wenlan-mcp/src/tools.rs`.
+/// All 30 `#[tool(` declarations in `crates/wenlan-mcp/src/tools.rs`.
 #[rustfmt::skip]
 pub const MCP_READERS: &[McpReader] = &[
     McpReader { tool: "accept_refinement", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "accept_revision", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "apply_lint_repair", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "brief", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "capture", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "confirm_memory", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "context", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "create_entity", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "create_relation", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "delete_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "dismiss_revision", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "distill", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "forget", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "get_lint_agent_work_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "get_lint_repair_plan_entries", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "get_memory_revisions", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "get_page_revisions", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "get_page_sources", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "lint", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "lint_repair_apply", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "lint_repair_prepare", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "lint_repair_verify", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "list_pages", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "list_pending", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "list_pending_imports", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "list_pending_revisions", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "list_refinements", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "list_rejections", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "prepare_lint_repair", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "prepare_lint_repair_plan", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "read_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "recall", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "reject_refinement", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "verify_lint_repair", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
-    McpReader { tool: "write_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
     McpReader { tool: "rename_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "update_brief", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
+    McpReader { tool: "write_page", page_bearing: PageBearing::Yes, class: TruthClass::Automatic, marker_shape: MarkerShape::None, adapter: "tool handler" },
 ];
 
 /// All 24 top-level `Commands` variants in `crates/wenlan-cli/src/main.rs`.

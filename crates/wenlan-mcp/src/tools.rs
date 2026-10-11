@@ -91,69 +91,6 @@ fn recall_search_request(params: RecallParams) -> SearchMemoryRequest {
     }
 }
 
-/// Convert the `list_entities`/`archive_entities`/`restore_entities` status
-/// filter text to the wire enum, or a tool error naming the accepted values.
-fn parse_entity_status(status: Option<&str>) -> Result<Option<EntityStatus>, McpError> {
-    match status {
-        None => Ok(None),
-        Some("detected") => Ok(Some(EntityStatus::Detected)),
-        Some("established") => Ok(Some(EntityStatus::Established)),
-        Some("archived") => Ok(Some(EntityStatus::Archived)),
-        Some(other) => Err(McpError::invalid_params(
-            format!(
-                "status must be one of \"detected\", \"established\", \"archived\" (got \"{other}\")"
-            ),
-            None,
-        )),
-    }
-}
-
-/// Build the daemon filter for `list_entities`, and the `filter` half of
-/// `archive_entities`/`restore_entities`.
-fn list_entities_request(params: ListEntitiesParams) -> Result<ListEntitiesRequest, McpError> {
-    Ok(ListEntitiesRequest {
-        entity_type: params.entity_type,
-        space: effective_space(&params.space),
-        status: parse_entity_status(params.status.as_deref())?,
-        min_memories: params.min_memories,
-        max_memories: params.max_memories,
-        query: params.query,
-        limit: params.limit,
-        offset: params.offset,
-    })
-}
-
-/// Build the `EntitySelection` half of `archive_entities`/`restore_entities`
-/// (flattened into the request body alongside `dry_run`).
-fn entity_selection(
-    ids: Option<Vec<String>>,
-    filter: Option<ListEntitiesParams>,
-) -> Result<EntitySelection, McpError> {
-    Ok(EntitySelection {
-        ids,
-        filter: filter.map(list_entities_request).transpose()?,
-    })
-}
-
-/// Format an `EntityBulkResponse` from `archive_entities`/`restore_entities`.
-/// `action`/`past_tense` name the operation, e.g. `("archive", "Archived")`.
-fn format_entity_bulk_response(
-    resp: &EntityBulkResponse,
-    action: &str,
-    past_tense: &str,
-) -> String {
-    let ids = resp.entity_ids.join(", ");
-    match (resp.dry_run, ids.is_empty()) {
-        (true, true) => format!("Would {action} 0 entities (dry run, nothing changed)"),
-        (true, false) => format!(
-            "Would {action} {} entities (dry run, nothing changed): {ids}",
-            resp.count
-        ),
-        (false, true) => format!("{past_tense} 0 entities"),
-        (false, false) => format!("{past_tense} {} entities: {ids}", resp.count),
-    }
-}
-
 /// Controls which operations are allowed based on transport.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TransportMode {
@@ -174,6 +111,11 @@ pub enum ToolProfile {
 }
 
 const QUERY_ONLY_TOOL_NAMES: &[&str] = &["brief", "recall", "get_page_sources"];
+/// Ceiling for the summed length of every visible stdio tool description:
+/// the total measured by `scripts/measure-mcp-surface.py` when the 30-tool
+/// surface was cut, plus ten percent.
+#[cfg(test)]
+const DESCRIPTION_BUDGET_CHARS: usize = 15_078;
 const QUERY_ONLY_REFUSAL_MESSAGE: &str =
     "This tool is not available in the query-only profile. Allowed tools: brief, recall, get_page_sources.";
 
@@ -380,7 +322,8 @@ impl LintReportCache {
         }))
     }
 
-    #[cfg(test)]
+    /// Non-consuming read, for `lint_repair_prepare` with `choice`: the plan
+    /// path still owns the consuming `take_reports_for_plan`.
     fn reports_for_plan(
         &self,
         lint_scope: &wenlan_types::repair::RepairLintScope,
@@ -575,13 +518,15 @@ pub struct LintParams {
     #[schemars(description = "Typed verdicts over a prior agent-assist work packet. Deep only.")]
     #[serde(default)]
     pub agent_submission: Option<LintAgentSubmissionParam>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GetLintAgentWorkPageParams {
-    pub work_digest: String,
+    #[schemars(
+        description = "Page the cached agent-assisted Deep work packet instead of running lint: the work_digest from the compact lint prepare response. Reads only this local MCP process; the other parameters are ignored."
+    )]
+    #[serde(default)]
+    pub work_digest: Option<String>,
+    #[schemars(description = "Work packet page offset, default 0. Only with work_digest.")]
     #[serde(default)]
     pub offset: Option<usize>,
+    #[schemars(description = "Work packet page size, 1 to 10, default 10. Only with work_digest.")]
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -668,37 +613,44 @@ impl TryFrom<PrepareLintRepairChoiceParam> for wenlan_types::repair::RepairChoic
     }
 }
 
+/// One tool for the three read-mostly repair steps: open a plan (no `choice`,
+/// no `plan_id`), page a plan (`plan_id` + `plan_digest`), or turn one Review
+/// Item into a manifest (`choice`). The report fields stay off the advertised
+/// schema: the local MCP process supplies cached reports, and the hidden
+/// fields only keep older callers that still paste reports working.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct PrepareLintRepairParams {
+pub struct LintRepairPrepareParams {
+    #[schemars(
+        description = "Durable lint scope: global, uncategorized, or one registered Space."
+    )]
     pub lint_scope: RepairLintScopeParam,
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
-    pub general_report: wenlan_types::lint::LintReport,
+    #[schemars(
+        description = "Turn exactly one Review Item into an approval-gated manifest. Omit to open or page a repair plan."
+    )]
     #[serde(default)]
-    #[schemars(with = "Option<std::collections::BTreeMap<String, serde_json::Value>>")]
-    pub deep_report: Option<wenlan_types::lint::LintReport>,
-    pub choice: PrepareLintRepairChoiceParam,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct PrepareLintRepairPlanParams {
-    pub lint_scope: RepairLintScopeParam,
+    pub choice: Option<PrepareLintRepairChoiceParam>,
+    #[schemars(
+        description = "Page an existing plan: the plan_id returned when the plan was opened. Omit to open a new plan."
+    )]
+    #[serde(default)]
+    pub plan_id: Option<String>,
+    #[schemars(
+        description = "Required with plan_id: the plan_digest returned when the plan was opened."
+    )]
+    #[serde(default)]
+    pub plan_digest: Option<String>,
+    #[schemars(description = "Entry offset when paging a plan, default 0.")]
+    #[serde(default)]
+    pub offset: Option<usize>,
+    #[schemars(description = "Entries per page, 1 to 100, default 100.")]
+    #[serde(default)]
+    pub limit: Option<usize>,
     #[serde(default)]
     #[schemars(skip)]
     pub general_report: Option<wenlan_types::lint::LintReport>,
     #[serde(default)]
     #[schemars(skip)]
     pub deep_report: Option<wenlan_types::lint::LintReport>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct GetLintRepairPlanEntriesParams {
-    pub plan_id: String,
-    pub plan_digest: String,
-    #[serde(default)]
-    pub offset: Option<usize>,
-    #[serde(default)]
-    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -947,80 +899,6 @@ pub struct CreateRelationParams {
     pub source_memory_id: String,
 }
 
-/// Filter fields for `list_entities`, `archive_entities` and
-/// `restore_entities`. Mirrors `wenlan_types::ListEntitiesRequest` field for
-/// field; a local mirror is needed because `wenlan-types` stays free of the
-/// `schemars` dependency the MCP tool schema machinery requires.
-#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
-pub struct ListEntitiesParams {
-    #[schemars(
-        description = "Entity category filter (e.g. 'person', 'project', 'tool'). Omit to match every type."
-    )]
-    #[serde(default)]
-    pub entity_type: Option<String>,
-    #[schemars(description = "Topic scope (e.g. 'work', 'personal'). Optional.")]
-    #[serde(default, alias = "domain")]
-    pub space: Option<String>,
-    #[schemars(
-        description = "Lifecycle filter: 'detected' (the automatic index Wenlan grows on its own, not yet established), 'established' (earned substance, shown in the Wiki), or 'archived'. Omit to match every state."
-    )]
-    #[serde(default)]
-    pub status: Option<String>,
-    #[schemars(description = "Inclusive lower bound on linked-memory count.")]
-    #[serde(default)]
-    pub min_memories: Option<u32>,
-    #[schemars(description = "Inclusive upper bound on linked-memory count.")]
-    #[serde(default)]
-    pub max_memories: Option<u32>,
-    #[schemars(description = "Case-insensitive substring match on name and aliases.")]
-    #[serde(default)]
-    pub query: Option<String>,
-    #[schemars(description = "Page size. Default 100, clamped to 1000.")]
-    #[serde(default)]
-    pub limit: Option<u32>,
-    #[schemars(description = "Offset for pagination.")]
-    #[serde(default)]
-    pub offset: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ArchiveEntitiesParams {
-    #[schemars(
-        description = "Explicit entity ids to archive. Provide this or filter, never both."
-    )]
-    #[serde(default)]
-    pub ids: Option<Vec<String>>,
-    #[schemars(
-        description = "Filter selecting every entity to archive when ids is omitted; same shape as list_entities's parameters."
-    )]
-    #[serde(default)]
-    pub filter: Option<ListEntitiesParams>,
-    #[schemars(
-        description = "When true, returns the count and ids that would be archived without changing anything."
-    )]
-    #[serde(default)]
-    pub dry_run: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct RestoreEntitiesParams {
-    #[schemars(
-        description = "Explicit entity ids to restore. Provide this or filter, never both."
-    )]
-    #[serde(default)]
-    pub ids: Option<Vec<String>>,
-    #[schemars(
-        description = "Filter selecting every archived entity to restore when ids is omitted; same shape as list_entities's parameters."
-    )]
-    #[serde(default)]
-    pub filter: Option<ListEntitiesParams>,
-    #[schemars(
-        description = "When true, returns the count and ids that would be restored without changing anything."
-    )]
-    #[serde(default)]
-    pub dry_run: Option<bool>,
-}
-
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct WritePageParams {
     #[schemars(
@@ -1081,6 +959,162 @@ pub struct GetPageSourcesParams {
         description = "Opaque page id (e.g. 'page_abc' or legacy 'concept_abc'), using ASCII letters, digits, underscores, and hyphens only; not a URL or file path. Returns the source memories that distilled into this page, each enriched with the memory's metadata for display."
     )]
     pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ReadPageParams {
+    #[schemars(
+        description = "Opaque page id from list_pages, recall, or write_page; ASCII letters, digits, underscores, and hyphens only, never a URL or file path."
+    )]
+    pub page_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListPagesParams {
+    #[schemars(
+        description = "Only pages in this Space (project). Omit to list every Space the caller may read; a locked WENLAN_SPACE always wins."
+    )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(description = "Page status: active (default), draft, or archived.")]
+    #[serde(default)]
+    pub status: Option<String>,
+    #[schemars(description = "Maximum pages to return, 1 to 200, default 50.")]
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[schemars(description = "Skip this many pages first, default 0.")]
+    #[serde(default)]
+    pub offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BriefItemStateParam {
+    Active,
+    Backlog,
+}
+
+impl From<BriefItemStateParam> for wenlan_types::brief::BriefItemState {
+    fn from(value: BriefItemStateParam) -> Self {
+        match value {
+            BriefItemStateParam::Active => Self::Active,
+            BriefItemStateParam::Backlog => Self::Backlog,
+        }
+    }
+}
+
+/// Schema mirror of `wenlan_types::brief::BriefMutation`, so the advertised
+/// tool schema is stable and tagged exactly like the daemon wire.
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BriefMutationParam {
+    /// Add a new item to the Brief.
+    Add {
+        text: String,
+        state: BriefItemStateParam,
+        #[serde(default)]
+        gate: Option<String>,
+    },
+    /// Rewrite an item's text; expected_version is the item version last read.
+    Edit {
+        item_id: String,
+        expected_version: i64,
+        text: String,
+    },
+    /// Move an item between active and backlog.
+    Move {
+        item_id: String,
+        expected_version: i64,
+        state: BriefItemStateParam,
+    },
+    /// Set or clear the gate note on an item.
+    SetGate {
+        item_id: String,
+        expected_version: i64,
+        #[serde(default)]
+        gate: Option<String>,
+    },
+    /// Mark an item done; it leaves the Brief.
+    Complete {
+        item_id: String,
+        expected_version: i64,
+    },
+}
+
+impl From<BriefMutationParam> for wenlan_types::brief::BriefMutation {
+    fn from(value: BriefMutationParam) -> Self {
+        match value {
+            BriefMutationParam::Add { text, state, gate } => Self::Add {
+                text,
+                state: state.into(),
+                added_at: None,
+                gate,
+            },
+            BriefMutationParam::Edit {
+                item_id,
+                expected_version,
+                text,
+            } => Self::Edit {
+                item_id,
+                expected_version,
+                text,
+            },
+            BriefMutationParam::Move {
+                item_id,
+                expected_version,
+                state,
+            } => Self::Move {
+                item_id,
+                expected_version,
+                state: state.into(),
+            },
+            BriefMutationParam::SetGate {
+                item_id,
+                expected_version,
+                gate,
+            } => Self::SetGate {
+                item_id,
+                expected_version,
+                gate,
+            },
+            BriefMutationParam::Complete {
+                item_id,
+                expected_version,
+            } => Self::Complete {
+                item_id,
+                expected_version,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct BriefSummaryParam {
+    pub text: String,
+    #[schemars(description = "The brief_version returned by the last brief read.")]
+    pub expected_version: i64,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct UpdateBriefParams {
+    #[schemars(
+        description = "Space (project) whose Brief to update. Uses the locked or configured default Space when omitted."
+    )]
+    #[serde(default, alias = "domain")]
+    pub space: Option<String>,
+    #[schemars(
+        description = "Idempotency key for this handoff. Omit to let the server generate one; reuse the same value to retry safely."
+    )]
+    #[serde(default)]
+    pub operation_id: Option<String>,
+    #[schemars(description = "Replace the Brief summary, guarded by its expected_version.")]
+    #[serde(default)]
+    pub summary: Option<BriefSummaryParam>,
+    #[schemars(
+        description = "Item changes in order; each is tagged by kind: add, edit, move, set_gate, or complete."
+    )]
+    #[serde(default)]
+    pub mutations: Vec<BriefMutationParam>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1342,6 +1376,14 @@ fn render_brief_items(output: &mut String, label: &str, items: &[wenlan_types::B
 
 // A pinned connection must not expose identifiers of unavailable source memories.
 // Unpinned local clients retain their full source-link representation.
+/// Page identifiers are one opaque path segment, never URL syntax.
+fn is_opaque_page_id(page_id: &str) -> bool {
+    !page_id.is_empty()
+        && page_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
 fn visible_page_sources_for_standard(
     sources: &[PageSourceWithMemory],
     scoped: bool,
@@ -1528,6 +1570,9 @@ impl WenlanMcpServer {
     }
 
     pub async fn lint_impl(&self, params: LintParams) -> Result<CallToolResult, McpError> {
+        if let Some(work_digest) = params.work_digest.as_deref() {
+            return self.lint_agent_work_page(work_digest, params.offset, params.limit);
+        }
         let profile = params.profile.map(Into::into);
         let submission: Option<wenlan_types::lint::LintAgentSubmission> = params
             .agent_submission
@@ -1616,19 +1661,23 @@ impl WenlanMcpServer {
         )]))
     }
 
-    pub async fn get_lint_agent_work_page_impl(
+    /// `lint` with `work_digest`: one bounded page of the cached agent-assisted
+    /// Deep work packet. Never touches the daemon.
+    pub fn lint_agent_work_page(
         &self,
-        params: GetLintAgentWorkPageParams,
+        work_digest: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<CallToolResult, McpError> {
         if self.transport == TransportMode::Http {
             return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Lint agent work pages are available only over local stdio MCP.".to_string(),
             )]));
         }
-        let digest = wenlan_types::lint::LintDigest::from_hex(&params.work_digest)
+        let digest = wenlan_types::lint::LintDigest::from_hex(work_digest)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
-        let offset = params.offset.unwrap_or(0);
-        let limit = params.limit.unwrap_or(10);
+        let offset = offset.unwrap_or(0);
+        let limit = limit.unwrap_or(10);
         if !(1..=10).contains(&limit) {
             return Err(McpError::invalid_params(
                 "lint agent work page limit must be between 1 and 10",
@@ -1690,9 +1739,9 @@ impl WenlanMcpServer {
         })
     }
 
-    pub async fn prepare_lint_repair_impl(
+    pub async fn lint_repair_prepare_impl(
         &self,
-        params: PrepareLintRepairParams,
+        params: LintRepairPrepareParams,
     ) -> Result<CallToolResult, McpError> {
         if let Some(blocked) = self.reject_remote_lint_repair() {
             return Ok(blocked);
@@ -1702,12 +1751,77 @@ impl WenlanMcpServer {
                 McpError::invalid_params(error.to_string(), None)
             },
         )?;
-        let choice = wenlan_types::repair::RepairChoice::try_from(params.choice)
+        match (params.choice, params.plan_id) {
+            (Some(_), Some(_)) => Err(McpError::invalid_params(
+                "pass either choice (prepare one manifest) or plan_id (page a plan), not both",
+                None,
+            )),
+            (Some(choice), None) => {
+                self.prepare_repair_manifest(
+                    lint_scope,
+                    choice,
+                    params.general_report,
+                    params.deep_report,
+                )
+                .await
+            }
+            (None, Some(plan_id)) => {
+                let plan_digest = params.plan_digest.ok_or_else(|| {
+                    McpError::invalid_params("plan_digest is required with plan_id", None)
+                })?;
+                self.repair_plan_entries(plan_id, &plan_digest, params.offset, params.limit)
+                    .await
+            }
+            (None, None) => {
+                if params.plan_digest.is_some() {
+                    return Err(McpError::invalid_params(
+                        "plan_id is required with plan_digest",
+                        None,
+                    ));
+                }
+                self.open_repair_plan(
+                    lint_scope,
+                    params.general_report,
+                    params.deep_report,
+                    params.limit,
+                )
+                .await
+            }
+        }
+    }
+
+    /// `lint_repair_prepare` with `choice`: one Review Item becomes one
+    /// approval-gated manifest. Reports come inline from older callers or from
+    /// the cache the last `lint` calls filled for this exact scope.
+    async fn prepare_repair_manifest(
+        &self,
+        lint_scope: wenlan_types::repair::RepairLintScope,
+        choice: PrepareLintRepairChoiceParam,
+        general_report: Option<wenlan_types::lint::LintReport>,
+        deep_report: Option<wenlan_types::lint::LintReport>,
+    ) -> Result<CallToolResult, McpError> {
+        let (general_report, deep_report) = match general_report {
+            Some(general_report) => (general_report, deep_report),
+            None => {
+                let cached = self
+                    .lint_report_cache
+                    .lock()
+                    .map_err(|_| McpError::internal_error("lint report cache poisoned", None))?
+                    .reports_for_plan(&lint_scope);
+                cached.ok_or_else(|| {
+                    McpError::invalid_params(
+                        "a complete General report is not cached for this lint scope; run lint first",
+                        None,
+                    )
+                })?
+            }
+        };
+        let choice = wenlan_types::repair::RepairChoice::try_from(choice)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let request = wenlan_types::repair::PrepareRepairRequest::try_new_with_choice(
             lint_scope,
-            params.general_report,
-            params.deep_report,
+            general_report,
+            deep_report,
             choice,
         )
         .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
@@ -1720,19 +1834,16 @@ impl WenlanMcpServer {
         Ok(CallToolResult::structured(value))
     }
 
-    pub async fn prepare_lint_repair_plan_impl(
+    /// `lint_repair_prepare` with neither `choice` nor `plan_id`: open a plan
+    /// from the cached reports and return its summary with the first page.
+    async fn open_repair_plan(
         &self,
-        params: PrepareLintRepairPlanParams,
+        lint_scope: wenlan_types::repair::RepairLintScope,
+        general_report: Option<wenlan_types::lint::LintReport>,
+        deep_report: Option<wenlan_types::lint::LintReport>,
+        limit: Option<usize>,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(blocked) = self.reject_remote_lint_repair() {
-            return Ok(blocked);
-        }
-        let lint_scope = effective_repair_lint_scope(params.lint_scope).map_err(
-            |error: wenlan_types::repair::RepairContractError| {
-                McpError::invalid_params(error.to_string(), None)
-            },
-        )?;
-        let (general_report, deep_report) = match (params.general_report, params.deep_report) {
+        let (general_report, deep_report) = match (general_report, deep_report) {
             (Some(general_report), deep_report) => (general_report, deep_report),
             (None, Some(_)) => {
                 return Err(McpError::invalid_params(
@@ -1771,26 +1882,80 @@ impl WenlanMcpServer {
         );
         let value = serde_json::to_value(summary)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
-        let value =
+        let mut value =
             add_repair_plan_source_reports(value, request.general_report(), request.deep_report())
                 .map_err(|error| McpError::internal_error(error, None))?;
+        // The plan now exists whatever happens next, so a failed first page
+        // degrades to a warning instead of hiding the plan id and digest.
+        let first_page = match (
+            value.get("plan_id").and_then(serde_json::Value::as_str),
+            value.get("plan_digest").and_then(serde_json::Value::as_str),
+        ) {
+            (Some(plan_id), Some(plan_digest)) => {
+                self.fetch_repair_plan_page(plan_id.to_string(), plan_digest, None, limit)
+                    .await
+            }
+            _ => Err("plan summary did not carry plan_id and plan_digest".to_string()),
+        };
+        match first_page {
+            Ok(page) => {
+                if let Some(object) = page.as_object() {
+                    for key in ["offset", "next_offset", "total_entries", "entries"] {
+                        if let Some(field) = object.get(key) {
+                            value[key] = field.clone();
+                        }
+                    }
+                }
+            }
+            Err(error) => {
+                value["warnings"] = serde_json::json!([format!(
+                    "first page of entries unavailable ({error}); page it with plan_id and plan_digest"
+                )]);
+            }
+        }
         Ok(CallToolResult::structured(value))
     }
 
-    pub async fn get_lint_repair_plan_entries_impl(
+    async fn fetch_repair_plan_page(
         &self,
-        params: GetLintRepairPlanEntriesParams,
+        plan_id: String,
+        plan_digest: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
+    ) -> Result<serde_json::Value, String> {
+        let plan_digest = wenlan_types::repair::RepairDigest::parse(plan_digest)
+            .map_err(|error| error.to_string())?;
+        let request = wenlan_types::repair_plan::RepairPlanEntriesRequest::try_new(
+            plan_id,
+            plan_digest,
+            offset.unwrap_or(0),
+            limit.unwrap_or(wenlan_types::repair_plan::REPAIR_PLAN_PAGE_MAX_ENTRIES),
+        )
+        .map_err(|error| error.to_string())?;
+        let page: wenlan_types::repair_plan::RepairPlanEntriesPage = self
+            .client
+            .post("/api/repairs/plan/entries", &request)
+            .await
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(page).map_err(|error| error.to_string())
+    }
+
+    /// `lint_repair_prepare` with `plan_id` and `plan_digest`: one page of
+    /// entries from a plan opened earlier.
+    async fn repair_plan_entries(
+        &self,
+        plan_id: String,
+        plan_digest: &str,
+        offset: Option<usize>,
+        limit: Option<usize>,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(blocked) = self.reject_remote_lint_repair() {
-            return Ok(blocked);
-        }
-        let plan_digest = wenlan_types::repair::RepairDigest::parse(&params.plan_digest)
+        let plan_digest = wenlan_types::repair::RepairDigest::parse(plan_digest)
             .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let request = wenlan_types::repair_plan::RepairPlanEntriesRequest::try_new(
-            params.plan_id,
+            plan_id,
             plan_digest,
-            params.offset.unwrap_or(0),
-            params.limit.unwrap_or(50),
+            offset.unwrap_or(0),
+            limit.unwrap_or(wenlan_types::repair_plan::REPAIR_PLAN_PAGE_MAX_ENTRIES),
         )
         .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
         let page: wenlan_types::repair_plan::RepairPlanEntriesPage = try_call!(
@@ -1802,7 +1967,7 @@ impl WenlanMcpServer {
         Ok(CallToolResult::structured(value))
     }
 
-    pub async fn apply_lint_repair_impl(
+    pub async fn lint_repair_apply_impl(
         &self,
         params: ApplyLintRepairParams,
     ) -> Result<CallToolResult, McpError> {
@@ -1826,7 +1991,7 @@ impl WenlanMcpServer {
         Ok(CallToolResult::structured(value))
     }
 
-    pub async fn verify_lint_repair_impl(
+    pub async fn lint_repair_verify_impl(
         &self,
         params: VerifyLintRepairParams,
     ) -> Result<CallToolResult, McpError> {
@@ -1998,73 +2163,6 @@ impl WenlanMcpServer {
         );
         Ok(CallToolResult::success(vec![ContentBlock::text(
             format_entity_ready_response(resp),
-        )]))
-    }
-
-    pub async fn list_entities_impl(
-        &self,
-        params: ListEntitiesParams,
-    ) -> Result<CallToolResult, McpError> {
-        let req = list_entities_request(params)?;
-        let resp: ListEntitiesResponse = try_call!(
-            self.client.post("/api/memory/entities/query", &req),
-            "list_entities"
-        );
-        let pretty = serde_json::to_string_pretty(&resp)
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "{} entities (total {})\n{}",
-            resp.entities.len(),
-            resp.total,
-            pretty
-        ))]))
-    }
-
-    pub async fn archive_entities_impl(
-        &self,
-        params: ArchiveEntitiesParams,
-    ) -> Result<CallToolResult, McpError> {
-        if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                "Archive operations are not available over remote connections. \
-                 Use local MCP on the machine running Wenlan to archive detected entities."
-                    .to_string(),
-            )]));
-        }
-        let req = ArchiveEntitiesRequest {
-            selection: entity_selection(params.ids, params.filter)?,
-            dry_run: params.dry_run.unwrap_or(false),
-        };
-        let resp: EntityBulkResponse = try_call!(
-            self.client.post("/api/memory/entities/archive", &req),
-            "archive_entities"
-        );
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            format_entity_bulk_response(&resp, "archive", "Archived"),
-        )]))
-    }
-
-    pub async fn restore_entities_impl(
-        &self,
-        params: RestoreEntitiesParams,
-    ) -> Result<CallToolResult, McpError> {
-        if self.transport == TransportMode::Http {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                "Restore operations are not available over remote connections. \
-                 Use local MCP on the machine running Wenlan to restore archived entities."
-                    .to_string(),
-            )]));
-        }
-        let req = RestoreEntitiesRequest {
-            selection: entity_selection(params.ids, params.filter)?,
-            dry_run: params.dry_run.unwrap_or(false),
-        };
-        let resp: EntityBulkResponse = try_call!(
-            self.client.post("/api/memory/entities/restore", &req),
-            "restore_entities"
-        );
-        Ok(CallToolResult::success(vec![ContentBlock::text(
-            format_entity_bulk_response(&resp, "restore", "Restored"),
         )]))
     }
 
@@ -2320,12 +2418,7 @@ impl WenlanMcpServer {
     }
 
     pub async fn get_page_sources_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
-        // Page identifiers are one opaque path segment, never URL syntax.
-        if page_id.is_empty()
-            || !page_id
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        {
+        if !is_opaque_page_id(page_id) {
             return Ok(CallToolResult::error(vec![ContentBlock::text(
                 "Invalid page id. Use the page's opaque identifier, not a URL or file path.",
             )]));
@@ -2346,6 +2439,123 @@ impl WenlanMcpServer {
             visible.len(),
             pretty
         ))]))
+    }
+
+    pub async fn read_page_impl(&self, page_id: &str) -> Result<CallToolResult, McpError> {
+        if !is_opaque_page_id(page_id) {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Invalid page id. Use the page's opaque identifier, not a URL or file path.",
+            )]));
+        }
+        let page: wenlan_types::responses::PageReadResponse = try_call!(
+            self.client.get(&format!("/api/pages/{page_id}")),
+            "read_page"
+        );
+        let sources: Vec<PageSourceWithMemory> = try_call!(
+            self.client.get(&format!("/api/pages/{page_id}/sources")),
+            "read_page"
+        );
+        let visible = visible_page_sources_for_standard(&sources, crate::lock_state::is_locked());
+        let value = serde_json::json!({
+            "page": page.page,
+            "okf": page.okf,
+            "sources": visible,
+        });
+        Ok(CallToolResult::structured(value))
+    }
+
+    pub async fn list_pages_impl(
+        &self,
+        params: ListPagesParams,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.limit.unwrap_or(50);
+        if !(1..=200).contains(&limit) {
+            return Err(McpError::invalid_params(
+                "limit must be between 1 and 200",
+                None,
+            ));
+        }
+        let space = crate::lock_state::locked_space().or_else(|| {
+            params
+                .space
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        });
+        let mut query: Vec<(&str, String)> = vec![
+            (
+                "status",
+                params.status.unwrap_or_else(|| "active".to_string()),
+            ),
+            ("limit", limit.to_string()),
+            ("offset", params.offset.unwrap_or(0).to_string()),
+        ];
+        if let Some(space) = space {
+            query.push(("space", space));
+        }
+        let resp: PageInventoryResponse = try_call!(
+            self.client.get_with_query("/api/pages", &query),
+            "list_pages"
+        );
+        let pages: Vec<serde_json::Value> = resp
+            .pages
+            .iter()
+            .map(|entry| {
+                serde_json::json!({
+                    "page_id": entry.page.id,
+                    "title": entry.page.title,
+                    "summary": entry.page.summary,
+                    "space": entry.page.space,
+                    "status": entry.page.status,
+                    "last_modified": entry.page.last_modified,
+                    "stale_reason": entry.page.stale_reason,
+                    "storage_path": entry.storage_path,
+                })
+            })
+            .collect();
+        let count = pages.len();
+        Ok(CallToolResult::structured(serde_json::json!({
+            "count": count,
+            "pages": pages,
+        })))
+    }
+
+    pub async fn update_brief_impl(
+        &self,
+        params: UpdateBriefParams,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(space) = effective_space(&params.space) else {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(
+                "Space not resolved. Pass `space` or configure a default Space.".to_string(),
+            )]));
+        };
+        if params.summary.is_none() && params.mutations.is_empty() {
+            return Err(McpError::invalid_params(
+                "update_brief needs a summary or at least one mutation",
+                None,
+            ));
+        }
+        let request = wenlan_types::brief::BriefUpdateRequest {
+            space,
+            caller_id: self.agent_name.clone(),
+            operation_id: params
+                .operation_id
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| format!("mcp_{}", crate::token::generate_token())),
+            summary: params
+                .summary
+                .map(|summary| wenlan_types::brief::BriefSummaryUpdate {
+                    text: summary.text,
+                    expected_version: summary.expected_version,
+                }),
+            mutations: params.mutations.into_iter().map(Into::into).collect(),
+        };
+        let receipt: wenlan_types::brief::BriefUpdateReceipt =
+            try_call!(self.client.patch("/api/brief", &request), "update_brief");
+        let value = serde_json::to_value(receipt)
+            .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+        Ok(CallToolResult::structured(value))
     }
 
     pub async fn get_memory_revisions_impl(
@@ -2627,7 +2837,7 @@ impl WenlanMcpServer {
     // --- Primary Tools ---
 
     #[tool(
-        description = "Capture a memory. Call PROACTIVELY when you learn something durable about the user — preferences, decisions, corrections, or facts about people/projects/tools they care about. Don't wait for the user to say 'remember this' or 'capture that' — that phrasing is a floor, not a trigger.\n\nWrite content as a complete, self-contained statement — someone reading it months later with no conversation context should understand it. Include the WHY, not just the WHAT. Name people, projects, and tools explicitly.\n\nThe backend auto-classifies type, extracts structured fields, detects entities, and links to the knowledge graph. You don't need to set memory_type or structured_fields unless you're confident — omitting them gets better results than guessing wrong. If `supersedes` is supplied for a correction, this call can replace an existing memory in retrieval; use it only when that replacement is intended.\n\nDo NOT store: system prompts, boot logs, heartbeat/health checks, transient task state ('currently working on...'), tool output/responses, architecture dumps, single-word acknowledgments, or content you have already stored. Focus on durable facts, preferences, decisions, lessons, gotchas, and identity information. Each call is one atomic idea — \"prefers TDD\" and \"uses pytest\" are two calls, not one.",
+        description = "Capture a memory: one durable insight the user's wiki should keep.\n\nSTORE PROACTIVELY, without waiting for 'remember this' (a floor, not a trigger): when the user states a preference, makes a decision, corrects you or earlier information, or shares a durable fact about themselves or the people, projects, and tools they care about.\n\nWHEN NOT TO STORE: conversation filler; things the user can trivially re-derive (file paths, recent git history); anything already stored (recall first if unsure); Tool output or command results (file contents, build logs, system prompts); transient task state; general world facts not personal to this user; Your own inferences the user did not express; agent operating rules ('always X' / 'never Y' belong in the agent's own config, not shared memory: store the preference as a fact, never the rule).\n\nCONTENT QUALITY: Specific beats vague ('prefers Rust for CLI tools because of compile-time safety' > 'likes Rust'). Include the WHY, which only you know. Name people, projects, and tools; this powers the knowledge graph. Atomic: one idea per memory. Each call is one atomic idea: 'prefers TDD' and 'uses pytest' are two calls. Declarative, not narrative: 'User prefers X because Y', not 'User said today they prefer X'; memories outlive the conversation.\n\nMEMORY TYPES: omit and trust the backend. By default do NOT set memory_type; the backend auto-classifies into identity / preference / decision / lesson / gotcha / fact with more context than you have, and agents that over-specify pick wrong. Opt in only when sure: 'profile' (about the user: identity / preference), 'knowledge' (about the world: decision / lesson / gotcha / fact), or a precise type when the distinction matters. EXCEPTION: set memory_type=\"decision\" explicitly ONLY when the user articulated the alternatives weighed AND the reasoning; those structured fields power the Decision Log view. A bare 'I'm switching to Cursor' is a preference change, not a decision.\n\nOmitting structured_fields beats guessing. If `supersedes` is supplied for a correction, this call can replace an existing memory in retrieval; use it only when that replacement is intended.",
         annotations(
             title = "Capture",
             read_only_hint = false,
@@ -2676,7 +2886,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks plus full-store local semantic candidate generation; bounded candidate packets are adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a typed prepare-and-submit protocol. General returns the text `wenlan lint` prints; Deep returns the canonical typed report. Incomplete takes precedence over findings.",
+        description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks plus full-store local semantic candidate generation; bounded candidate packets are adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a typed prepare-and-submit protocol. General returns the text `wenlan lint` prints; Deep returns the canonical typed report. Incomplete takes precedence over findings. With work_digest (plus offset and limit) it instead pages the cached agent-assisted Deep work packet from this local MCP process: each page holds candidates plus only their referenced records; follow next_offset until absent, then submit exactly one verdict per candidate in the second lint call.",
         annotations(
             title = "Lint",
             read_only_hint = true,
@@ -2692,24 +2902,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Read one bounded page from the exact agent-assisted Deep work packet returned by lint. Requires the work_digest from the compact lint prepare response. Each page includes candidates plus only their referenced records; follow next_offset until absent, then submit exactly one verdict per candidate in the second lint call. Local stdio only.",
-        annotations(
-            title = "Get lint agent work page",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_lint_agent_work_page(
-        &self,
-        Parameters(params): Parameters<GetLintAgentWorkPageParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.get_lint_agent_work_page_impl(params).await
-    }
-
-    #[tool(
-        description = "Prepare one approval-gated lint repair manifest from fresh reports and one exact tagged choice. Reclassification requires complete General plus agent-assisted Deep; deterministic Review Item choices may use General alone. This binds one durable owner, exact mutation, rollback artifact, and post-repair assertion without mutating the Review Item or canonical data. Page-title choices contain title intent only; the fully initialized daemon computes the canonical embedding before manifest persistence. Local stdio only.",
+        description = "Plan or prepare lint repairs from the reports this local MCP process cached for the exact lint_scope (never paste reports). With only lint_scope: open a new repair plan; returns the summary with source_reports, the first page of entries (up to 100), and next_offset. With plan_id, plan_digest and offset: read the next page; pages are byte-bounded, so follow next_offset until absent. With choice: turn exactly one Review Item into one approval-gated manifest (reclassification needs complete General plus agent-assisted Deep). Planning and preparing write private immutable artifacts and never mutate canonical data. Do not retry a lost plan response: artifacts may already exist. Local stdio only.",
         annotations(
             title = "Prepare lint repair",
             read_only_hint = false,
@@ -2718,45 +2911,11 @@ impl WenlanMcpServer {
             open_world_hint = false
         )
     )]
-    async fn prepare_lint_repair(
+    async fn lint_repair_prepare(
         &self,
-        Parameters(params): Parameters<PrepareLintRepairParams>,
+        Parameters(params): Parameters<LintRepairPrepareParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.prepare_lint_repair_impl(params).await
-    }
-
-    #[tool(
-        description = "Prepare a complete lint-repair plan from the latest complete General report and, when available, the final agent-assisted Deep report cached for the exact lint scope in this local MCP process. Pass only lint_scope; report payloads stay inside the MCP process. A missing Deep report keeps semantic planning incomplete but does not block General-only deterministic planning. Returns a compact verified summary, exact plan digest, counts, source report metadata, and durable artifact path without inlining the potentially large entry set. Fetch every ready, review, system_action, or blocked entry with get_lint_repair_plan_entries before presenting or applying anything. This writes only repair-control-plane artifacts and durable Review Items, never canonical memory or Page data. Local stdio only.",
-        annotations(
-            title = "Prepare lint repair plan",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn prepare_lint_repair_plan(
-        &self,
-        Parameters(params): Parameters<PrepareLintRepairPlanParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.prepare_lint_repair_plan_impl(params).await
-    }
-
-    #[tool(
-        description = "Read one verified byte-bounded page of entries from a previously prepared lint-repair plan. Requires the exact plan id and digest returned by prepare_lint_repair_plan. The daemon may return fewer entries than the requested limit to keep the response safe; follow the returned next_offset until absent. Returns stable ordered entries and total_entries. This is read-only and local stdio only.",
-        annotations(
-            title = "Get lint repair plan entries",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn get_lint_repair_plan_entries(
-        &self,
-        Parameters(params): Parameters<GetLintRepairPlanEntriesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.get_lint_repair_plan_entries_impl(params).await
+        self.lint_repair_prepare_impl(params).await
     }
 
     #[tool(
@@ -2769,11 +2928,11 @@ impl WenlanMcpServer {
             open_world_hint = false
         )
     )]
-    async fn apply_lint_repair(
+    async fn lint_repair_apply(
         &self,
         Parameters(params): Parameters<ApplyLintRepairParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.apply_lint_repair_impl(params).await
+        self.lint_repair_apply_impl(params).await
     }
 
     #[tool(
@@ -2786,11 +2945,11 @@ impl WenlanMcpServer {
             open_world_hint = false
         )
     )]
-    async fn verify_lint_repair(
+    async fn lint_repair_verify(
         &self,
         Parameters(params): Parameters<VerifyLintRepairParams>,
     ) -> Result<CallToolResult, McpError> {
-        self.verify_lint_repair_impl(params).await
+        self.lint_repair_verify_impl(params).await
     }
 
     #[tool(
@@ -2946,23 +3105,6 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "List entities in Wenlan's knowledge graph with additive filters: lifecycle status (detected, established, archived), entity type, linked-memory count range, and a name/alias substring search. Detected entities are the automatic index Wenlan grows on its own as memories are captured; established entities have earned enough substance to appear in the Wiki; archived entities are hidden but stay resolvable. Use when the user wants to browse or audit entities beyond a single recall, e.g. 'show me detected entities with no memories' or 'list established people'.",
-        annotations(
-            title = "List entities",
-            read_only_hint = true,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn list_entities(
-        &self,
-        Parameters(params): Parameters<ListEntitiesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.list_entities_impl(params).await
-    }
-
-    #[tool(
         description = "Create or refresh a distilled wiki page. This write can replace an existing page: omit page_id to create a new page (title required); the daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Refresh is not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Write page",
@@ -3014,40 +3156,6 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Archive detected or established entities in bulk — by explicit ids, or every entity matching a filter (same shape as list_entities). Archiving is reversible: use restore_entities to bring them back. Pass dry_run=true first to see the count and ids that would be archived without changing anything. Use only after the user explicitly asks to archive entities, and confirm a broad filter's dry-run count with them before archiving for real. Not available over remote HTTP MCP transport (local stdio only).",
-        annotations(
-            title = "Archive entities",
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn archive_entities(
-        &self,
-        Parameters(params): Parameters<ArchiveEntitiesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.archive_entities_impl(params).await
-    }
-
-    #[tool(
-        description = "Restore previously archived entities in bulk — by explicit ids, or every archived entity matching a filter (same shape as list_entities). Exact inverse of archive_entities. Pass dry_run=true to preview the count and ids without changing anything. Not available over remote HTTP MCP transport (local stdio only).",
-        annotations(
-            title = "Restore entities",
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn restore_entities(
-        &self,
-        Parameters(params): Parameters<RestoreEntitiesParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.restore_entities_impl(params).await
-    }
-
-    #[tool(
         description = "Fetch the source memories of a page — the memory ids the page was distilled from, each enriched with the memory's title, content, type, and space. The /distill skill uses this on the stale-page refresh path after obtaining the page id from the `stale_pages` block in distill output.",
         annotations(
             title = "Get page sources",
@@ -3062,6 +3170,60 @@ impl WenlanMcpServer {
         Parameters(params): Parameters<GetPageSourcesParams>,
     ) -> Result<CallToolResult, McpError> {
         self.get_page_sources_impl(&params.page_id).await
+    }
+
+    #[tool(
+        description = "Read one wiki page in full: its title, body, status, Space, and the source memories it cites, in one call. Use it after list_pages or recall when the user wants the page itself rather than search snippets. The page id is opaque; never guess it from a title.",
+        annotations(
+            title = "Read page",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn read_page(
+        &self,
+        Parameters(params): Parameters<ReadPageParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.read_page_impl(&params.page_id).await
+    }
+
+    #[tool(
+        name = "list_pages",
+        description = "List wiki pages with their ids, titles, summaries, Space, status, and last-modified time. Use it to browse what the wiki already covers before writing a page, or to find the page id read_page needs. Filter by Space or status; page with limit and offset.",
+        annotations(
+            title = "List pages",
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    // Named explicitly: the method is `list_pages_tool` so the M5 reader sweep
+    // keeps `core/db.rs::list_pages` unambiguous.
+    async fn list_pages_tool(
+        &self,
+        Parameters(params): Parameters<ListPagesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.list_pages_impl(params).await
+    }
+
+    #[tool(
+        description = "Hand off to the next session by updating the Space Brief: replace the summary (guarded by expected_version) and add, edit, move, gate, or complete items. Read brief first and reuse its brief_version and item versions; conflicts are reported, never silently overwritten. The first update creates the Brief. Local stdio only.",
+        annotations(
+            title = "Update brief",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn update_brief(
+        &self,
+        Parameters(params): Parameters<UpdateBriefParams>,
+    ) -> Result<CallToolResult, McpError> {
+        self.update_brief_impl(params).await
     }
 
     #[tool(
@@ -3223,12 +3385,10 @@ fn query_success<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
 }
 
 const LOCAL_ONLY_TOOL_NAMES: &[&str] = &[
-    "get_lint_agent_work_page",
-    "prepare_lint_repair_plan",
-    "get_lint_repair_plan_entries",
-    "prepare_lint_repair",
-    "apply_lint_repair",
-    "verify_lint_repair",
+    "lint_repair_prepare",
+    "lint_repair_apply",
+    "lint_repair_verify",
+    "update_brief",
     "forget",
     "confirm_memory",
     "rename_page",
@@ -3237,8 +3397,6 @@ const LOCAL_ONLY_TOOL_NAMES: &[&str] = &[
     "reject_refinement",
     "accept_revision",
     "dismiss_revision",
-    "archive_entities",
-    "restore_entities",
 ];
 
 impl WenlanMcpServer {
@@ -3378,62 +3536,22 @@ impl ServerHandler for WenlanMcpServer {
             Implementation::new("wenlan-mcp", env!("CARGO_PKG_VERSION"))
         )
         .with_instructions(
-            "Wenlan is your personal memory layer — a local knowledge base that persists across sessions and tools.\n\
-             Think of yourself as a curator, not a logger. Store insights, not conversation artifacts.\n\n\
-             Wenlan is cumulative: each memory you store can be recalled, linked, and distilled into knowledge over time. \
-             It's also shared across all the user's tools: what you write, other agents (Claude Desktop, Claude Code, \
-             ChatGPT, Cursor, etc.) will read later. Write for any future reader, not just this conversation.\n\n\
-             BRIEF: When resuming project work or when the user asks to catch up, call brief for the current Space. \
-             Omit topic for the complete Brief alone; provide topic only when same-Space related context is useful. \
-             Brief reads never create or mutate state.\n\n\
-             STORE PROACTIVELY — don't wait for the user to ask.\n\
-             - The user states a preference (\"I use X because...\", \"I prefer Y over Z\")\n\
-             - The user makes a decision (\"going with approach A\", \"switching to B\")\n\
-             - The user corrects you or prior info (\"actually, it's C, not D\") — store the correction so it sticks\n\
-             - The user shares a durable fact about themselves, their work, or people/projects/tools they care about — \
-               anchor it to the entity\n\n\
-             If the user asks explicitly (\"remember this\", \"save this\", \"don't forget\"), that's a floor — you \
-             should have already stored it.\n\n\
-             WHEN NOT TO STORE:\n\
-             - Conversation filler (\"ok\", \"thanks\", \"let's move on\")\n\
-             - Things the user can trivially re-derive (file paths, recent git history)\n\
-             - Anything already stored — recall first if unsure\n\
-             - Tool output or command results (file contents, git history, build logs) — these are derivable\n\
-             - General world facts or documentation that aren't personal to this user (e.g., \"Rust has a borrow \
-               checker\", \"PostgreSQL supports JSONB\") — those are not memory material.\n\
-             - Your own inferences about the user that they didn't express. Store what they said; infer from that \
-               when responding.\n\
-             - Agent operating rules — standing \"always X\" / \"never Y\" directives about how an agent should \
-               behave (workflow, escalation, tooling). Those are obey-tier instructions for the agent's own config \
-               (CLAUDE.md / AGENTS.md / MEMORY.md), not shared memory. Store the user's preference as a fact \
-               (\"prefers TDD because…\"); never the agent-facing rule (\"always run TDD first\").\n\n\
-             CONTENT QUALITY — this is where you make the biggest difference:\n\
-             - Specific beats vague: \"prefers Rust for CLI tools because of compile-time safety\" > \"likes Rust\"\n\
-             - Include the WHY: the backend can classify \"dark mode\" as a preference, but only you know\n\
-               \"switched to dark mode because of migraines from bright screens\"\n\
-             - Name the entities: mention people, projects, tools by name — this powers the knowledge graph\n\
-             - Atomic: one idea per memory — \"prefers TDD\" and \"uses pytest\" should be two memories, not one\n\
-             - Declarative, not narrative: \"User prefers X because Y\" — not \"User said today they prefer X\". \
-               Memories outlive the conversation that produced them.\n\n\
-             MEMORY TYPES — omit and trust the backend.\n\n\
-             By default, do NOT set memory_type. The backend auto-classifies into identity / preference / \
-             decision / lesson / gotcha / fact with more context than you have. Agents that over-specify \
-             types tend to pick wrong.\n\n\
-             Opt-in specification:\n\
-             - \"profile\"   — you're sure it's about the user (identity / preference)\n\
-             - \"knowledge\" — you're sure it's about the world (decision / lesson / gotcha / fact)\n\
-             - Precise type — only if you're confident and the distinction matters.\n\n\
-             EXCEPTION — decisions carry structured fields (alternatives considered, reversibility, domain) \
-             that power the Decision Log view. Set memory_type=\"decision\" explicitly ONLY when the user \
-             articulated alternatives weighed AND the reasoning for the choice. A bare \"I'm switching to Cursor\" \
-             is just a preference change — omit the type. \"Switching to Cursor over VSCode because of better \
-             Claude integration, and we can always go back\" — that's a decision.\n\n\
-             BRIEF vs RECALL:\n\
-             - brief: Space-owned project snapshot; topic optionally adds same-Space related context\n\
-             - recall: specific lookup (\"what's Alice's role?\", \"database preferences\", \"our auth decision\")\n\n\
-             The backend handles classification, entity extraction, structured fields, quality scoring,\n\
-             and dedup — you don't need to replicate that logic. Focus on what only you know:\n\
-             the conversational context, why something matters, and what the user actually cares about."
+            "Wenlan is the user's personal wiki, kept up to date by their AI tools and shared across all of them: \
+             what you write here, Claude Desktop, Claude Code, ChatGPT, Cursor, and other agents read later. \
+             It is cumulative, so write for any future reader, not just this conversation.\n\n\
+             How the pieces fit:\n\
+             - Pages are the result: wiki pages that cite their sources. list_pages shows what exists; \
+               read_page returns one page in full.\n\
+             - capture feeds it: one durable insight per call (a preference, decision, correction, or fact), \
+               with the why. What to store and what to skip is spelled out in the capture tool description.\n\
+             - brief carries work across sessions: read it when resuming project work or when the user asks to \
+               catch up; update_brief hands off to the next session.\n\
+             - recall finds one specific thing (\"what's Alice's role?\", \"our auth decision\").\n\
+             - get_page_sources shows what a page rests on.\n\n\
+             BRIEF vs RECALL: brief is the Space-owned project snapshot; recall is a targeted lookup. \
+             Brief reads never create or mutate state; only update_brief writes.\n\n\
+             The backend classifies, extracts entities, scores quality, and deduplicates. Focus on what only \
+             you know: the conversational context, why something matters, and what the user actually cares about."
         )
     }
 }
@@ -3467,6 +3585,24 @@ mod tests {
         tool_profile: ToolProfile,
     ) -> WenlanMcpServer {
         make_server(transport, agent_name, user_id).with_tool_profile(tool_profile)
+    }
+
+    /// `lint_repair_prepare` arguments for the open-a-plan path.
+    fn plan_params(
+        lint_scope: RepairLintScopeParam,
+        general_report: Option<wenlan_types::lint::LintReport>,
+        deep_report: Option<wenlan_types::lint::LintReport>,
+    ) -> LintRepairPrepareParams {
+        LintRepairPrepareParams {
+            lint_scope,
+            choice: None,
+            plan_id: None,
+            plan_digest: None,
+            offset: None,
+            limit: None,
+            general_report,
+            deep_report,
+        }
     }
 
     fn make_lint_agent_work(seed: u64) -> wenlan_types::lint::LintAgentWork {
@@ -3709,12 +3845,10 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         for name in [
-            "get_lint_agent_work_page",
-            "prepare_lint_repair_plan",
-            "get_lint_repair_plan_entries",
-            "prepare_lint_repair",
-            "apply_lint_repair",
-            "verify_lint_repair",
+            "lint_repair_prepare",
+            "lint_repair_apply",
+            "lint_repair_verify",
+            "update_brief",
             "forget",
             "confirm_memory",
             "delete_page",
@@ -3722,17 +3856,10 @@ mod tests {
             "reject_refinement",
             "accept_revision",
             "dismiss_revision",
-            "archive_entities",
-            "restore_entities",
         ] {
             assert!(stdio.iter().any(|candidate| candidate == name));
             assert!(!http.iter().any(|candidate| candidate == name));
         }
-
-        // list_entities is a read-only query, not local-only: it stays
-        // visible over both transports.
-        assert!(stdio.iter().any(|candidate| candidate == "list_entities"));
-        assert!(http.iter().any(|candidate| candidate == "list_entities"));
     }
 
     #[test]
@@ -3742,7 +3869,7 @@ mod tests {
                 .get_info()
                 .instructions
                 .expect("standard instructions");
-            assert!(standard.contains("STORE PROACTIVELY"));
+            assert!(standard.contains("update_brief hands off"));
 
             let query = make_server_with_profile(transport, "agent", None, ToolProfile::QueryOnly)
                 .get_info()
@@ -4105,12 +4232,7 @@ mod tests {
 
         for digest in ["0000000000000007", "0000000000000008"] {
             let result = server
-                .get_lint_agent_work_page_impl(GetLintAgentWorkPageParams {
-                    work_digest: digest.to_string(),
-                    offset: Some(0),
-                    limit: Some(1),
-                })
-                .await
+                .lint_agent_work_page(digest, Some(0), Some(1))
                 .unwrap();
             let value = result.structured_content.unwrap();
             assert_eq!(value["work_digest"], digest);
@@ -4121,12 +4243,7 @@ mod tests {
         }
 
         assert!(server
-            .get_lint_agent_work_page_impl(GetLintAgentWorkPageParams {
-                work_digest: "0000000000000009".to_string(),
-                offset: Some(0),
-                limit: Some(1),
-            })
-            .await
+            .lint_agent_work_page("0000000000000009", Some(0), Some(1))
             .is_err());
     }
 
@@ -4211,21 +4328,30 @@ mod tests {
     }
 
     #[test]
-    fn prepare_lint_repair_plan_schema_requires_scope_only_but_legacy_reports_deserialize() {
-        let schema =
-            serde_json::to_value(schemars::schema_for!(PrepareLintRepairPlanParams)).unwrap();
+    fn lint_repair_prepare_schema_hides_reports_but_legacy_reports_deserialize() {
+        let schema = serde_json::to_value(schemars::schema_for!(LintRepairPrepareParams)).unwrap();
         assert_eq!(
             schema["properties"]
                 .as_object()
                 .unwrap()
                 .keys()
                 .cloned()
-                .collect::<Vec<_>>(),
-            vec!["lint_scope"]
+                .collect::<std::collections::BTreeSet<_>>(),
+            [
+                "choice",
+                "limit",
+                "lint_scope",
+                "offset",
+                "plan_digest",
+                "plan_id"
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect()
         );
         assert_eq!(schema["required"], serde_json::json!(["lint_scope"]));
 
-        let scope_only: PrepareLintRepairPlanParams = serde_json::from_value(serde_json::json!({
+        let scope_only: LintRepairPrepareParams = serde_json::from_value(serde_json::json!({
             "lint_scope": { "kind": "global" }
         }))
         .unwrap();
@@ -4238,7 +4364,7 @@ mod tests {
             10,
             None,
         );
-        let legacy: PrepareLintRepairPlanParams = serde_json::from_value(serde_json::json!({
+        let legacy: LintRepairPrepareParams = serde_json::from_value(serde_json::json!({
             "lint_scope": { "kind": "global" },
             "general_report": general
         }))
@@ -4281,8 +4407,8 @@ mod tests {
 
         let tools = make_server(TransportMode::Stdio, "agent", None).visible_tools();
         for (tool_name, fields) in [
-            ("prepare_lint_repair", &["general_report", "choice"][..]),
-            ("verify_lint_repair", &["general_report", "deep_report"][..]),
+            ("lint_repair_prepare", &["choice"][..]),
+            ("lint_repair_verify", &["general_report", "deep_report"][..]),
         ] {
             let tool = tools
                 .iter()
@@ -4304,8 +4430,8 @@ mod tests {
     }
 
     #[test]
-    fn prepare_lint_repair_schema_and_serde_expose_one_exact_tagged_choice() {
-        let schema = serde_json::to_value(schemars::schema_for!(PrepareLintRepairParams)).unwrap();
+    fn lint_repair_prepare_schema_and_serde_expose_one_exact_tagged_choice() {
+        let schema = serde_json::to_value(schemars::schema_for!(LintRepairPrepareParams)).unwrap();
         let properties = schema["properties"].as_object().unwrap();
         assert!(properties.contains_key("choice"));
         assert!(!properties.contains_key("selected_finding"));
@@ -4316,12 +4442,7 @@ mod tests {
             .iter()
             .map(|field| field.as_str().unwrap())
             .collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(
-            required,
-            ["choice", "general_report", "lint_scope"]
-                .into_iter()
-                .collect()
-        );
+        assert_eq!(required, ["lint_scope"].into_iter().collect());
 
         let rename: PrepareLintRepairChoiceParam = serde_json::from_value(serde_json::json!({
             "kind": "rename_page_title",
@@ -4609,6 +4730,9 @@ mod tests {
                 space: None,
                 agent_assist: false,
                 agent_submission: None,
+                work_digest: None,
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -4637,6 +4761,9 @@ mod tests {
                 space: None,
                 agent_assist: true,
                 agent_submission: None,
+                work_digest: None,
+                offset: None,
+                limit: None,
             })
             .await
             .unwrap();
@@ -4660,16 +4787,16 @@ mod tests {
 
         let server = make_server(TransportMode::Stdio, "agent", None);
         let deep_only = server
-            .prepare_lint_repair_plan_impl(PrepareLintRepairPlanParams {
-                lint_scope: RepairLintScopeParam::Global,
-                general_report: None,
-                deep_report: Some(make_complete_lint_report(
+            .lint_repair_prepare_impl(plan_params(
+                RepairLintScopeParam::Global,
+                None,
+                Some(make_complete_lint_report(
                     LintProfile::Deep,
                     LintScope::global(),
                     1,
                     None,
                 )),
-            })
+            ))
             .await
             .unwrap_err();
         assert!(deep_only
@@ -4690,13 +4817,13 @@ mod tests {
             );
         }
         let wrong_scope = server
-            .prepare_lint_repair_plan_impl(PrepareLintRepairPlanParams {
-                lint_scope: RepairLintScopeParam::Registered {
+            .lint_repair_prepare_impl(plan_params(
+                RepairLintScopeParam::Registered {
                     space: "other".to_string(),
                 },
-                general_report: None,
-                deep_report: None,
-            })
+                None,
+                None,
+            ))
             .await
             .unwrap_err();
         assert!(wrong_scope
@@ -4722,11 +4849,7 @@ mod tests {
         );
 
         let first = server
-            .prepare_lint_repair_plan_impl(PrepareLintRepairPlanParams {
-                lint_scope: RepairLintScopeParam::Global,
-                general_report: None,
-                deep_report: None,
-            })
+            .lint_repair_prepare_impl(plan_params(RepairLintScopeParam::Global, None, None))
             .await
             .unwrap();
         assert_eq!(first.is_error, Some(true));
@@ -4738,11 +4861,7 @@ mod tests {
             .is_none());
 
         let second = server
-            .prepare_lint_repair_plan_impl(PrepareLintRepairPlanParams {
-                lint_scope: RepairLintScopeParam::Global,
-                general_report: None,
-                deep_report: None,
-            })
+            .lint_repair_prepare_impl(plan_params(RepairLintScopeParam::Global, None, None))
             .await
             .unwrap_err();
         assert!(second
@@ -4814,20 +4933,24 @@ mod tests {
             None,
         );
         let prepare = server
-            .prepare_lint_repair_impl(PrepareLintRepairParams {
+            .lint_repair_prepare_impl(LintRepairPrepareParams {
                 lint_scope: RepairLintScopeParam::Global,
-                general_report: general.clone(),
-                deep_report: None,
-                choice: PrepareLintRepairChoiceParam::CompleteEntityExtraction {
+                choice: Some(PrepareLintRepairChoiceParam::CompleteEntityExtraction {
                     review_id: "lint_review_exact".to_string(),
                     memory_id: "mem_exact".to_string(),
                     entity_ids: vec!["entity_exact".to_string()],
-                },
+                }),
+                plan_id: None,
+                plan_digest: None,
+                offset: None,
+                limit: None,
+                general_report: Some(general.clone()),
+                deep_report: None,
             })
             .await
             .unwrap();
         let apply = server
-            .apply_lint_repair_impl(ApplyLintRepairParams {
+            .lint_repair_apply_impl(ApplyLintRepairParams {
                 manifest_id: manifest_id.to_string(),
                 approved_manifest_digest: digest.to_string(),
                 approval: format!("apply repair {manifest_id} {digest}"),
@@ -4835,7 +4958,7 @@ mod tests {
             .await
             .unwrap();
         let verify = server
-            .verify_lint_repair_impl(VerifyLintRepairParams {
+            .lint_repair_verify_impl(VerifyLintRepairParams {
                 manifest_id: manifest_id.to_string(),
                 manifest_digest: digest.to_string(),
                 apply_receipt_digest: digest.to_string(),
@@ -5859,6 +5982,81 @@ mod tests {
             .expect("server must ship with_instructions")
     }
 
+    /// The capture policy moved out of the opening instructions into the
+    /// `capture` tool description; these pins follow it there.
+    fn capture_policy() -> String {
+        tool_descriptions()
+            .remove("capture")
+            .expect("capture tool exists")
+    }
+
+    #[test]
+    fn instructions_open_with_the_wiki_and_stay_short() {
+        let i = server_instructions();
+        assert!(
+            i.starts_with("Wenlan is the user's personal wiki"),
+            "with_instructions must open by describing Wenlan as the user's wiki, got: {i}"
+        );
+        assert!(
+            !i.to_ascii_lowercase().contains("memory layer"),
+            "with_instructions must not fall back to the memory-layer framing"
+        );
+        for tool in [
+            "list_pages",
+            "read_page",
+            "capture",
+            "brief",
+            "update_brief",
+            "recall",
+        ] {
+            assert!(i.contains(tool), "with_instructions must place {tool}");
+        }
+        assert!(
+            i.contains("capture tool description"),
+            "with_instructions must point at the capture description for the storing policy"
+        );
+        let len = i.chars().count();
+        assert!(
+            len <= 1_500,
+            "standard with_instructions must stay within 1,500 characters, got {len}"
+        );
+    }
+
+    #[test]
+    fn visible_tool_descriptions_stay_within_budget() {
+        let total: usize = make_server(TransportMode::Stdio, "test", None)
+            .visible_tools()
+            .iter()
+            .map(|tool| {
+                tool.description
+                    .as_ref()
+                    .map(|d| d.chars().count())
+                    .unwrap_or(0)
+            })
+            .sum();
+        assert!(
+            total <= DESCRIPTION_BUDGET_CHARS,
+            "visible tool descriptions total {total} characters, over the {DESCRIPTION_BUDGET_CHARS} budget; trim repetition before raising it"
+        );
+    }
+
+    #[test]
+    fn tool_router_matches_truth_manifest_mcp_readers() {
+        let router: std::collections::BTreeSet<String> = WenlanMcpServer::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        let manifest: std::collections::BTreeSet<String> = wenlan_core::truth_manifest::MCP_READERS
+            .iter()
+            .map(|reader| reader.tool.to_string())
+            .collect();
+        assert_eq!(
+            router, manifest,
+            "truth_manifest::MCP_READERS must name exactly the registered #[tool( declarations"
+        );
+    }
+
     #[test]
     fn instructions_mention_cumulative_knowledge() {
         assert!(
@@ -5880,76 +6078,77 @@ mod tests {
         let instructions = server_instructions();
         assert!(instructions.contains("BRIEF vs RECALL"));
         assert!(instructions.contains("Brief reads never create or mutate state"));
+        assert!(instructions.contains("only update_brief writes"));
         assert!(!instructions.contains("FIRST THING EVERY SESSION"));
     }
 
     #[test]
-    fn instructions_use_proactive_framing() {
+    fn capture_policy_uses_proactive_framing() {
         assert!(
-            server_instructions().contains("STORE PROACTIVELY"),
-            "with_instructions must use STORE PROACTIVELY framing (not passive WHEN TO STORE)"
+            capture_policy().contains("STORE PROACTIVELY"),
+            "capture description must use STORE PROACTIVELY framing (not passive WHEN TO STORE)"
         );
     }
 
     #[test]
-    fn instructions_ban_tool_output_storage() {
+    fn capture_policy_bans_tool_output_storage() {
         assert!(
-            server_instructions().contains("Tool output or command results"),
-            "with_instructions must explicitly rule out tool output as storage material"
+            capture_policy().contains("Tool output or command results"),
+            "capture description must explicitly rule out tool output as storage material"
         );
     }
 
     #[test]
-    fn instructions_ban_ghost_inferences() {
+    fn capture_policy_bans_ghost_inferences() {
         assert!(
-            server_instructions().contains("Your own inferences"),
-            "with_instructions must rule out storing agent's own inferences user didn't express"
+            capture_policy().contains("Your own inferences"),
+            "capture description must rule out storing agent's own inferences user didn't express"
         );
     }
 
     #[test]
-    fn instructions_call_out_atomic_memory() {
+    fn capture_policy_calls_out_atomic_memory() {
         assert!(
-            server_instructions().contains("Atomic: one idea per memory"),
-            "with_instructions must call out the atomic-memory rule explicitly by name"
+            capture_policy().contains("Atomic: one idea per memory"),
+            "capture description must call out the atomic-memory rule explicitly by name"
         );
     }
 
     #[test]
-    fn instructions_specify_declarative_writing() {
+    fn capture_policy_specifies_declarative_writing() {
         assert!(
-            server_instructions().contains("Declarative, not narrative"),
-            "with_instructions must require declarative (not narrative) writing style"
+            capture_policy().contains("Declarative, not narrative"),
+            "capture description must require declarative (not narrative) writing style"
         );
     }
 
     #[test]
-    fn instructions_default_to_omit_memory_type() {
-        let i = server_instructions();
+    fn capture_policy_defaults_to_omit_memory_type() {
+        let i = capture_policy();
         assert!(
             i.contains("omit and trust the backend"),
-            "with_instructions must default agents to omitting memory_type"
+            "capture description must default agents to omitting memory_type"
         );
         assert!(
             i.contains("do NOT set memory_type"),
-            "with_instructions must explicitly say do NOT set memory_type by default"
+            "capture description must explicitly say do NOT set memory_type by default"
         );
     }
 
     #[test]
-    fn instructions_list_every_canonical_memory_type() {
-        let i = server_instructions();
+    fn capture_policy_lists_every_canonical_memory_type() {
+        let i = capture_policy();
         for ty in wenlan_types::MemoryType::all_values() {
             assert!(
                 contains_word(&i, ty),
-                "with_instructions must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
+                "capture description must list canonical memory type \"{ty}\" so MCP clients see the full vocabulary",
             );
         }
     }
 
     #[test]
-    fn instructions_omit_legacy_goal_type() {
-        let i = server_instructions();
+    fn capture_policy_omits_legacy_goal_type() {
+        let i = capture_policy();
         // "goal" (singular) is a legacy memory_type folded to Identity by
         // MemoryType::FromStr. The plural English noun "goals" (life goals,
         // profile.goals chat-context field) is a separate concern and must
@@ -5957,6 +6156,10 @@ mod tests {
         // through while still catching the legacy memory-type token.
         assert!(
             !contains_word(&i, "goal"),
+            "capture description must not advertise legacy \"goal\" memory_type"
+        );
+        assert!(
+            !contains_word(&server_instructions(), "goal"),
             "with_instructions must not advertise legacy \"goal\" memory_type"
         );
     }
@@ -5972,15 +6175,15 @@ mod tests {
     }
 
     #[test]
-    fn instructions_carve_out_decisions_for_decision_log() {
-        let i = server_instructions();
+    fn capture_policy_carves_out_decisions_for_decision_log() {
+        let i = capture_policy();
         assert!(
             i.contains("Decision Log"),
-            "with_instructions must name the Decision Log as the reason for explicit decision typing"
+            "capture description must name the Decision Log as the reason for explicit decision typing"
         );
         assert!(
             i.contains("memory_type=\"decision\""),
-            "with_instructions must tell agents to set memory_type=\"decision\" explicitly for decisions"
+            "capture description must tell agents to set memory_type=\"decision\" explicitly for decisions"
         );
     }
 
@@ -6465,222 +6668,6 @@ mod tests {
         );
     }
 
-    // --- ArchiveEntitiesParams / RestoreEntitiesParams (local-only, like delete_page) ---
-
-    fn ids_only_selection_params() -> (Option<Vec<String>>, Option<ListEntitiesParams>) {
-        (Some(vec!["ent_1".to_string()]), None)
-    }
-
-    #[tokio::test]
-    async fn test_archive_entities_blocked_on_http_transport() {
-        let server = make_server(TransportMode::Http, "agent", None);
-        let (ids, filter) = ids_only_selection_params();
-        let result = server
-            .archive_entities_impl(ArchiveEntitiesParams {
-                ids,
-                filter,
-                dry_run: None,
-            })
-            .await
-            .unwrap();
-        let content = &result.content[0];
-        match content {
-            rmcp::model::ContentBlock::Text(ref tc) => {
-                assert!(tc.text.contains("not available over remote connections"));
-            }
-            _ => panic!("expected text content"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_archive_entities_allowed_on_stdio_transport() {
-        // No daemon running → falls through to connection error (not transport block).
-        let server = make_server(TransportMode::Stdio, "agent", None);
-        let (ids, filter) = ids_only_selection_params();
-        let result = server
-            .archive_entities_impl(ArchiveEntitiesParams {
-                ids,
-                filter,
-                dry_run: None,
-            })
-            .await
-            .unwrap();
-        assert!(
-            result.is_error.unwrap_or(false),
-            "should fail with connection error, not transport block"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_restore_entities_blocked_on_http_transport() {
-        let server = make_server(TransportMode::Http, "agent", None);
-        let (ids, filter) = ids_only_selection_params();
-        let result = server
-            .restore_entities_impl(RestoreEntitiesParams {
-                ids,
-                filter,
-                dry_run: None,
-            })
-            .await
-            .unwrap();
-        let content = &result.content[0];
-        match content {
-            rmcp::model::ContentBlock::Text(ref tc) => {
-                assert!(tc.text.contains("not available over remote connections"));
-            }
-            _ => panic!("expected text content"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_restore_entities_allowed_on_stdio_transport() {
-        let server = make_server(TransportMode::Stdio, "agent", None);
-        let (ids, filter) = ids_only_selection_params();
-        let result = server
-            .restore_entities_impl(RestoreEntitiesParams {
-                ids,
-                filter,
-                dry_run: None,
-            })
-            .await
-            .unwrap();
-        assert!(
-            result.is_error.unwrap_or(false),
-            "should fail with connection error, not transport block"
-        );
-    }
-
-    // --- list_entities / archive_entities / restore_entities: selection wire shape ---
-
-    #[test]
-    fn archive_entities_ids_only_selection_serializes_flattened() {
-        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
-        std::env::remove_var("WENLAN_SPACE");
-        crate::lock_state::init_from_env();
-
-        let req = ArchiveEntitiesRequest {
-            selection: entity_selection(Some(vec!["ent_1".to_string(), "ent_2".to_string()]), None)
-                .unwrap(),
-            dry_run: false,
-        };
-        assert_eq!(
-            serde_json::to_value(&req).unwrap(),
-            serde_json::json!({
-                "ids": ["ent_1", "ent_2"],
-                "filter": null,
-                "dry_run": false,
-            })
-        );
-    }
-
-    #[test]
-    fn restore_entities_filter_only_selection_serializes_flattened() {
-        let _guard = crate::lock_state::ENV_LOCK.blocking_lock();
-        std::env::remove_var("WENLAN_SPACE");
-        crate::lock_state::init_from_env();
-
-        let filter = ListEntitiesParams {
-            entity_type: Some("person".to_string()),
-            status: Some("archived".to_string()),
-            min_memories: Some(1),
-            ..Default::default()
-        };
-        let req = RestoreEntitiesRequest {
-            selection: entity_selection(None, Some(filter)).unwrap(),
-            dry_run: true,
-        };
-        assert_eq!(
-            serde_json::to_value(&req).unwrap(),
-            serde_json::json!({
-                "ids": null,
-                "filter": {
-                    "entity_type": "person",
-                    "space": null,
-                    "status": "archived",
-                    "min_memories": 1,
-                    "max_memories": null,
-                    "query": null,
-                    "limit": null,
-                    "offset": null,
-                },
-                "dry_run": true,
-            })
-        );
-    }
-
-    #[test]
-    fn entity_selection_rejects_unknown_status() {
-        let filter = ListEntitiesParams {
-            status: Some("pending_review".to_string()),
-            ..Default::default()
-        };
-        let err = entity_selection(None, Some(filter)).unwrap_err();
-        assert!(err.message.contains("detected"));
-        assert!(err.message.contains("established"));
-        assert!(err.message.contains("archived"));
-    }
-
-    // --- list_entities / archive_entities / restore_entities: response shapes ---
-
-    #[test]
-    fn list_entities_response_deserializes_sample_payload() {
-        let json = serde_json::json!({
-            "entities": [{
-                "id": "ent_1",
-                "name": "Alice",
-                "entity_type": "person",
-                "space": "work",
-                "source_agent": "claude-code",
-                "confidence": 0.9,
-                "confirmed": true,
-                "created_at": 1_700_000_000i64,
-                "updated_at": 1_700_000_100i64,
-                "aliases": ["alicia"],
-                "memory_count": 4,
-                "status": "established",
-                "established_by": "auto:memories",
-            }],
-            "total": 1,
-        });
-        let resp: ListEntitiesResponse = serde_json::from_value(json).unwrap();
-        assert_eq!(resp.total, 1);
-        assert_eq!(resp.entities.len(), 1);
-        let entity = &resp.entities[0];
-        assert_eq!(entity.id, "ent_1");
-        assert_eq!(entity.memory_count, 4);
-        assert_eq!(entity.status, EntityStatus::Established);
-        assert_eq!(entity.established_by.as_deref(), Some("auto:memories"));
-    }
-
-    #[test]
-    fn entity_bulk_response_deserializes_sample_payload() {
-        let json = serde_json::json!({
-            "count": 2,
-            "entity_ids": ["ent_1", "ent_2"],
-            "dry_run": true,
-        });
-        let resp: EntityBulkResponse = serde_json::from_value(json).unwrap();
-        assert_eq!(resp.count, 2);
-        assert_eq!(
-            resp.entity_ids,
-            vec!["ent_1".to_string(), "ent_2".to_string()]
-        );
-        assert!(resp.dry_run);
-        assert_eq!(
-            format_entity_bulk_response(&resp, "archive", "Archived"),
-            "Would archive 2 entities (dry run, nothing changed): ent_1, ent_2"
-        );
-
-        let applied = EntityBulkResponse {
-            dry_run: false,
-            ..resp
-        };
-        assert_eq!(
-            format_entity_bulk_response(&applied, "restore", "Restored"),
-            "Restored 2 entities: ent_1, ent_2"
-        );
-    }
-
     // --- Tool registration ---
 
     #[test]
@@ -6863,8 +6850,6 @@ mod tests {
         let mut expected = std::collections::BTreeMap::from([
             ("accept_refinement", (false, true, false)),
             ("accept_revision", (false, true, false)),
-            ("apply_lint_repair", (false, true, false)),
-            ("archive_entities", (false, true, false)),
             ("brief", (true, false, false)),
             ("capture", (false, true, false)),
             ("confirm_memory", (false, false, false)),
@@ -6874,25 +6859,24 @@ mod tests {
             ("dismiss_revision", (false, true, false)),
             ("distill", (false, true, true)),
             ("forget", (false, true, false)),
-            ("get_lint_agent_work_page", (true, false, false)),
-            ("get_lint_repair_plan_entries", (true, false, false)),
             ("get_memory_revisions", (true, false, false)),
             ("get_page_revisions", (true, false, false)),
             ("get_page_sources", (true, false, false)),
             ("lint", (true, false, false)),
-            ("list_entities", (true, false, false)),
+            ("lint_repair_apply", (false, true, false)),
+            ("lint_repair_prepare", (false, false, false)),
+            ("lint_repair_verify", (false, false, false)),
+            ("list_pages", (true, false, false)),
             ("list_pending", (true, false, false)),
             ("list_pending_imports", (true, false, false)),
             ("list_pending_revisions", (true, false, false)),
             ("list_refinements", (true, false, false)),
             ("list_rejections", (true, false, false)),
-            ("prepare_lint_repair", (false, false, false)),
-            ("prepare_lint_repair_plan", (false, false, false)),
+            ("read_page", (true, false, false)),
             ("recall", (false, false, false)),
             ("rename_page", (false, true, false)),
             ("reject_refinement", (false, true, false)),
-            ("restore_entities", (false, false, false)),
-            ("verify_lint_repair", (false, false, false)),
+            ("update_brief", (false, false, false)),
             ("write_page", (false, true, false)),
         ]);
         let mut missing = Vec::new();
@@ -7259,8 +7243,6 @@ mod tests {
         vec![
             "accept_refinement",
             "accept_revision",
-            "apply_lint_repair",
-            "archive_entities",
             "capture",
             "confirm_memory",
             "brief",
@@ -7270,25 +7252,24 @@ mod tests {
             "dismiss_revision",
             "distill",
             "forget",
-            "get_lint_agent_work_page",
-            "get_lint_repair_plan_entries",
             "get_memory_revisions",
             "get_page_revisions",
             "get_page_sources",
             "lint",
-            "list_entities",
+            "lint_repair_apply",
+            "lint_repair_prepare",
+            "lint_repair_verify",
+            "list_pages",
             "list_pending",
             "list_pending_imports",
             "list_pending_revisions",
             "list_refinements",
             "list_rejections",
-            "prepare_lint_repair",
-            "prepare_lint_repair_plan",
+            "read_page",
             "recall",
             "rename_page",
             "reject_refinement",
-            "restore_entities",
-            "verify_lint_repair",
+            "update_brief",
             "write_page",
         ]
     }

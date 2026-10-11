@@ -14,19 +14,21 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use wenlan_types::{
     requests::{
-        AddEntityAliasRequest, ExportFormat, ExportPagesRequest, ListEntitiesRequest,
-        ListMemoriesRequest, MergeEntityRequest, SearchMemoryRequest, SearchRequest,
-        SetDefaultSpaceRequest, StoreMemoryRequest, UpdateAgentRequest,
+        AddEntityAliasRequest, ArchiveEntitiesRequest, EntitySelection, ExportFormat,
+        ExportPagesRequest, ListEntitiesRequest, ListMemoriesRequest, MergeEntityRequest,
+        RestoreEntitiesRequest, SearchMemoryRequest, SearchRequest, SetDefaultSpaceRequest,
+        StoreMemoryRequest, UpdateAgentRequest,
     },
     responses::{
-        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, ExportStats, HealthResponse,
-        ListEntitiesResponse, ListMemoriesResponse, MemoryDetailResponse, MergeEntityResponse,
-        PendingRevisionItem, RevisionAcceptResponse, RevisionDismissResponse, SearchMemoryResponse,
-        SearchResponse, StoreMemoryResponse,
+        AgentResponse, DefaultSpaceResponse, EntityAliasesResponse, EntityBulkResponse,
+        ExportStats, HealthResponse, ListEntitiesResponse, ListMemoriesResponse,
+        MemoryDetailResponse, MergeEntityResponse, PageReadResponse, PendingRevisionItem,
+        RevisionAcceptResponse, RevisionDismissResponse, SearchMemoryResponse, SearchResponse,
+        StoreMemoryResponse,
     },
     sources::Source,
     BriefReadRequest, BriefReadResponse, BriefUpdateReceipt, BriefUpdateRequest, EntityDetail,
-    OutboxDrainReport,
+    OutboxDrainReport, PageSourceWithMemory,
 };
 
 mod lint;
@@ -554,6 +556,57 @@ impl WenlanClient {
         resp.json()
             .await
             .context("parsing /api/memory/entities/list response")
+    }
+
+    /// POST /api/memory/entities/query — filtered, paged entity list in all
+    /// three lifecycle states.
+    pub async fn query_entities(&self, req: &ListEntitiesRequest) -> Result<ListEntitiesResponse> {
+        self.post_json("/api/memory/entities/query", req).await
+    }
+
+    /// POST /api/memory/entities/archive — archive the entities named by `ids`
+    /// (or only count them when `dry_run`).
+    pub async fn archive_entities(
+        &self,
+        ids: Vec<String>,
+        dry_run: bool,
+    ) -> Result<EntityBulkResponse> {
+        let req = ArchiveEntitiesRequest {
+            selection: EntitySelection {
+                ids: Some(ids),
+                filter: None,
+            },
+            dry_run,
+        };
+        self.post_json("/api/memory/entities/archive", &req).await
+    }
+
+    /// POST /api/memory/entities/restore — restore archived entities named by `ids`
+    /// (or only count them when `dry_run`).
+    pub async fn restore_entities(
+        &self,
+        ids: Vec<String>,
+        dry_run: bool,
+    ) -> Result<EntityBulkResponse> {
+        let req = RestoreEntitiesRequest {
+            selection: EntitySelection {
+                ids: Some(ids),
+                filter: None,
+            },
+            dry_run,
+        };
+        self.post_json("/api/memory/entities/restore", &req).await
+    }
+
+    /// GET /api/pages/{id} — one page with its live-file metadata.
+    pub async fn read_page(&self, id: &str) -> Result<PageReadResponse> {
+        self.get_json(&format!("/api/pages/{}", id), true).await
+    }
+
+    /// GET /api/pages/{id}/sources — the memories a page was written from.
+    pub async fn get_page_sources(&self, id: &str) -> Result<Vec<PageSourceWithMemory>> {
+        self.get_json(&format!("/api/pages/{}/sources", id), true)
+            .await
     }
 
     /// POST /api/memory/entities/{id}/merge — merge `loser_id` into `into`.

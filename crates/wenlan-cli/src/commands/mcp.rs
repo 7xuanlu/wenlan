@@ -588,7 +588,7 @@ fn claude_desktop_config_file() -> Result<PathBuf> {
 }
 
 fn claude_code_tools_only_note() -> &'static str {
-    "Claude Code MCP tools only: capture, recall, context, doctor, and related Wenlan tools. \
+    "Claude Code MCP tools only: capture, recall, doctor, and related Wenlan tools. \
 This does not install Wenlan plugin skills like /brief, /handoff, /distill, or /setup."
 }
 

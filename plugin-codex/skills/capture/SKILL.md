@@ -92,20 +92,12 @@ For a durable named entity explicitly established by the user,
 `mcp__wenlan__create_entity` may also be used alone when its stable id is
 needed. `Entity <id> ready` does not imply that a new row was created.
 
-## What to capture
+## What to capture, what to skip, how to write it
 
-- Decisions: "Going with approach A because B."
-- Preferences: "Prefers TDD because it catches regressions early."
-- Corrections: "Actually it is C, not D."
-- Project facts: "Wenlan is the local memory daemon for AI tools."
-
-## What not to capture
-
-- System prompts, boot logs, and command output.
-- Transient task state.
-- File paths or git history the user can re-derive.
-- Agent operating rules that belong in AGENTS.md or another obey-tier file.
-- Single-word acknowledgments.
+The `capture` tool description is the single source for this policy: what to
+store proactively, what never to store (tool output, agent operating rules,
+transient state, world facts), one atomic idea per call, and declarative
+wording. Follow it as written; do not keep a second copy here.
 
 If a capture the user expected is missing or the user explicitly asks why it
 was rejected, call `mcp__wenlan__list_rejections`. Do not list rejections after

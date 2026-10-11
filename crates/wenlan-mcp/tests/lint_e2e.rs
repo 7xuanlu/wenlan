@@ -94,6 +94,9 @@ async fn mcp_general_lint_returns_the_cli_text_and_no_structured_report() {
             space: None,
             agent_assist: false,
             agent_submission: None,
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();
@@ -134,6 +137,9 @@ async fn mcp_lint_forwards_typed_profile_and_scope_and_returns_canonical_report(
             space: Some("work".to_string()),
             agent_assist: false,
             agent_submission: None,
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();
@@ -170,6 +176,9 @@ async fn mcp_lint_rejects_unknown_report_schema_via_typed_deserialization() {
             space: None,
             agent_assist: false,
             agent_submission: None,
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();
@@ -203,6 +212,9 @@ async fn mcp_lint_rejects_oversized_daemon_response_without_echoing_it() {
             space: None,
             agent_assist: false,
             agent_submission: None,
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();
@@ -238,6 +250,9 @@ async fn mcp_lint_agent_prepare_and_submission_use_one_typed_tool_and_endpoint()
             space: None,
             agent_assist: true,
             agent_submission: None,
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();
@@ -276,6 +291,9 @@ async fn mcp_lint_agent_prepare_and_submission_use_one_typed_tool_and_endpoint()
             space: None,
             agent_assist: false,
             agent_submission: Some(submission),
+            work_digest: None,
+            offset: None,
+            limit: None,
         })
         .await
         .unwrap();

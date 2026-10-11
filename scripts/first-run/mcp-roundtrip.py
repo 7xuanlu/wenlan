@@ -22,6 +22,7 @@ Env:
 """
 
 import json
+import re
 import os
 import queue
 import subprocess
@@ -54,7 +55,8 @@ def record(status, name, rc, detail=""):
 
 def expect(names):
     """Declare the PASS/FAIL rows this run owes. Derived from MCP_TOOLS, never
-    pasted by the calling channel: `brief` is only stepped when it is required."""
+    pasted by the calling channel: every tool beyond capture/recall is only
+    stepped when it is required."""
     with (OUT / "expected.tsv").open("a", encoding="utf-8") as fh:
         for name in names:
             fh.write(f"{CHANNEL}\t{name}\n")
@@ -77,8 +79,9 @@ class Transport(StepFailed):
 required_tools = [t.strip() for t in (os.environ.get("MCP_TOOLS") or "capture,recall").split(",") if t.strip()]
 # Declared before the first guard below, so a run that dies at MCP_BIN still owes
 # the rows it never recorded rather than quietly owing nothing.
+OPTIONAL_STEPS = ("update_brief", "brief", "write_page", "list_pages", "read_page")
 expect(["mcp-initialize", "mcp-tools-list", "mcp-capture", "mcp-recall"]
-       + (["mcp-brief"] if "brief" in required_tools else []))
+       + [f"mcp-{t}" for t in OPTIONAL_STEPS if t in required_tools])
 
 if not os.environ.get("MCP_BIN"):
     record("FAIL", "mcp-initialize", 2, "MCP_BIN (path to wenlan-mcp) is required")
@@ -266,22 +269,137 @@ def do_recall():
     raise StepFailed(f"captured sentinel not present in recall output within 60s ({polls} polls); last: {json.dumps(last)}")
 
 
+BRIEF_ITEM = f"Follow up on the {SENTINEL} sentinel from the MCP smoke"
+PAGE_TITLE = f"{SENTINEL} sentinel notes"
+# Three distinct facts: the daemon rejects near-duplicate captures, and a page
+# needs at least three different cited memories whose text its body restates.
+PAGE_FACTS = [
+    f"The {SENTINEL} observatory logs one tide reading every six hours.",
+    f"Tide readings at the {SENTINEL} observatory are kept for ninety days before archiving.",
+    f"The {SENTINEL} observatory archive is exported as CSV on the first day of each month.",
+]
+
+
+def _text_of(result):
+    return "\n".join(
+        block.get("text", "") for block in result.get("content", []) if block.get("type") == "text"
+    )
+
+
+# Explicit Space: the smoke daemon has no default Space configured and
+# update_brief refuses to guess one. update_brief also registers the Space, so
+# the page steps only scope to it when that step runs first.
+SMOKE_SPACE = {"space": "smoke"} if "update_brief" in required_tools else {}
+
+
+def do_update_brief():
+    msg = call("tools/call", {"name": "update_brief", "arguments": {
+        "space": "smoke",
+        "operation_id": f"first-run-{SENTINEL}",
+        "mutations": [{"kind": "add", "text": BRIEF_ITEM, "state": "backlog"}]}})
+    log("mcp-update_brief", json.dumps(msg, indent=2))
+    result = expect_ok(msg, "update_brief")
+    receipt = result.get("structuredContent") or {}
+    if receipt.get("conflicts"):
+        raise StepFailed(f"update_brief reported conflicts: {receipt['conflicts']}")
+    if not receipt.get("applied"):
+        raise StepFailed(f"update_brief applied nothing: {json.dumps(receipt)}")
+    return True, f"brief version {receipt.get('brief_version')} ({len(receipt['applied'])} applied)"
+
+
 def do_brief():
-    msg = call("tools/call", {"name": "brief", "arguments": {}})
+    msg = call("tools/call", {"name": "brief", "arguments": dict(SMOKE_SPACE)})
     log("mcp-brief", json.dumps(msg, indent=2))
     result = expect_ok(msg, "brief")
+    if "update_brief" in required_tools and BRIEF_ITEM not in json.dumps(result):
+        raise StepFailed("the item added by update_brief is missing from the brief read")
     return True, f"brief ok ({len(json.dumps(result))} bytes)"
+
+
+def do_write_page():
+    # A page needs three distinct cited memories whose text its body matches.
+    ids = []
+    for fact in PAGE_FACTS:
+        msg = call("tools/call", {"name": "capture", "arguments": {"content": fact, **SMOKE_SPACE}})
+        log("mcp-write_page", json.dumps(msg, indent=2))
+        text = _text_of(expect_ok(msg, "capture"))
+        m = re.search(r"^source_memory_id: (\S+)$", text, re.M)
+        if not m:
+            raise StepFailed(f"capture returned no source_memory_id: {text!r}")
+        ids.append(m.group(1))
+    msg = call("tools/call", {"name": "write_page", "arguments": {
+        "title": PAGE_TITLE, **SMOKE_SPACE,
+        "content": "\n\n".join(PAGE_FACTS),
+        "summary": f"Notes on the {SENTINEL} sentinel.",
+        "source_memory_ids": ids}})
+    log("mcp-write_page", json.dumps(msg, indent=2))
+    text = _text_of(expect_ok(msg, "write_page"))
+    m = re.search(r"^(?:Created page|Attached to existing page) (\S+)", text, re.M)
+    if not m:
+        raise StepFailed(f"write_page returned no page id: {text!r}")
+    return m.group(1), f"page {m.group(1)}"
+
+
+def do_list_pages():
+    msg = call("tools/call", {"name": "list_pages", "arguments": {"limit": 50, **SMOKE_SPACE}})
+    log("mcp-list_pages", json.dumps(msg, indent=2))
+    result = expect_ok(msg, "list_pages")
+    pages = (result.get("structuredContent") or {}).get("pages")
+    if not isinstance(pages, list):
+        raise StepFailed(f"list_pages returned no pages array: {json.dumps(result)[:300]}")
+    if page_id is not None and not any(p.get("page_id") == page_id for p in pages):
+        raise StepFailed(f"page {page_id} written this run is missing from list_pages")
+    return pages, f"{len(pages)} page(s)"
+
+
+def do_read_page():
+    target = page_id
+    if target is None:
+        listed = step_results.get("mcp-list_pages") or []
+        target = listed[0]["page_id"] if listed else None
+    if target is None:
+        raise StepFailed("no page to read: write_page did not run and list_pages returned nothing")
+    msg = call("tools/call", {"name": "read_page", "arguments": {"page_id": target}})
+    log("mcp-read_page", json.dumps(msg, indent=2))
+    result = expect_ok(msg, "read_page")
+    body = result.get("structuredContent") or {}
+    # The page object is the daemon's inventory entry: the id key is `id`.
+    if (body.get("page") or {}).get("id") != target:
+        raise StepFailed(f"read_page returned a different page: {json.dumps(body)[:300]}")
+    sources = body.get("sources")
+    if page_id is not None and (not isinstance(sources, list) or len(sources) < 3):
+        raise StepFailed(f"read_page returned {sources!r} sources for a page written with three")
+    return True, f"page {target} with {len(sources) if isinstance(sources, list) else '?'} source(s)"
+
+
+step_results = {}
+page_id = None
+
+
+def optional(name, fn):
+    """Run one MCP_TOOLS-gated step and keep its value for later steps."""
+    if tools is not None and name not in tools:
+        record("FAIL", f"mcp-{name}", 1, f"not run: {name} is not advertised by tools/list")
+        return None
+    value = step(f"mcp-{name}", fn)
+    step_results[f"mcp-{name}"] = value
+    return value
 
 
 step("mcp-initialize", do_initialize)
 tools = step("mcp-tools-list", do_tools_list)
 step("mcp-capture", do_capture)
 step("mcp-recall", do_recall)
+if "update_brief" in required_tools:
+    optional("update_brief", do_update_brief)
 if "brief" in required_tools:
-    if tools is not None and "brief" not in tools:
-        record("FAIL", "mcp-brief", 1, "not run: brief is not advertised by tools/list")
-    else:
-        step("mcp-brief", do_brief)
+    optional("brief", do_brief)
+if "write_page" in required_tools:
+    page_id = optional("write_page", do_write_page)
+if "list_pages" in required_tools:
+    optional("list_pages", do_list_pages)
+if "read_page" in required_tools:
+    optional("read_page", do_read_page)
 
 try:
     proc.stdin.close()

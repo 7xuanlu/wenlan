@@ -130,6 +130,9 @@ enum Commands {
         /// Print the matched page's stable internal id instead of opening it.
         #[arg(long)]
         resolve_id: bool,
+        /// Print the matched page's text and its sources instead of opening it.
+        #[arg(long, requires = "query", conflicts_with = "resolve_id")]
+        print: bool,
     },
     /// Manage folders and files Wenlan should learn from.
     Sources {
@@ -181,7 +184,7 @@ enum Commands {
         #[command(subcommand)]
         command: commands::outbox::OutboxCommand,
     },
-    /// Merge or alias knowledge-graph entities (id or exact name).
+    /// List, archive, restore, merge, or alias knowledge-graph entities.
     Entities {
         #[command(subcommand)]
         cmd: commands::entities::EntitiesCmd,
@@ -460,7 +463,11 @@ async fn main() -> anyhow::Result<ExitCode> {
             query,
             limit,
             resolve_id,
-        } => commands::pages::run(format, cli.quiet, query, limit, resolve_id)?,
+            print,
+        } => {
+            commands::pages::run(&client, format, cli.quiet, query, limit, resolve_id, print)
+                .await?
+        }
         Commands::Sources { command } => {
             commands::ingest::run_sources(&client, format, cli.quiet, command).await?
         }
@@ -556,5 +563,50 @@ mod catalog_tests {
             visible,
             "HELP_GROUPS in main.rs drifted from the visible clap subcommands"
         );
+    }
+
+    #[test]
+    fn entities_list_archive_restore_parse() {
+        use super::commands::entities::EntitiesCmd;
+        use super::Commands;
+        use clap::Parser;
+        use wenlan_types::entities::EntityStatus;
+
+        let list = Cli::try_parse_from([
+            "wenlan", "entities", "list", "--type", "person", "--status", "archived", "--limit",
+            "5", "--offset", "10", "--query", "ali",
+        ])
+        .expect("list parses");
+        let Commands::Entities {
+            cmd:
+                EntitiesCmd::List {
+                    entity_type,
+                    status,
+                    query,
+                    limit,
+                    offset,
+                },
+        } = list.command
+        else {
+            panic!("expected entities list");
+        };
+        assert_eq!(entity_type.as_deref(), Some("person"));
+        assert_eq!(status, Some(EntityStatus::Archived));
+        assert_eq!(query.as_deref(), Some("ali"));
+        assert_eq!((limit, offset), (5, 10));
+
+        let archive = Cli::try_parse_from(["wenlan", "entities", "archive", "a", "b", "--dry-run"])
+            .expect("archive parses");
+        let Commands::Entities {
+            cmd: EntitiesCmd::Archive { ids, dry_run },
+        } = archive.command
+        else {
+            panic!("expected entities archive");
+        };
+        assert_eq!(ids, ["a", "b"]);
+        assert!(dry_run);
+
+        assert!(Cli::try_parse_from(["wenlan", "entities", "restore"]).is_err());
+        assert!(Cli::try_parse_from(["wenlan", "entities", "list", "--status", "x"]).is_err());
     }
 }

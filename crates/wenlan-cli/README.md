@@ -212,6 +212,20 @@ Browse distilled pages, or open one in your editor by title query.
 ```bash
 wenlan pages
 wenlan pages "project roadmap"
+wenlan pages "project roadmap" --print
+```
+
+`--print` writes the page text and the memories it was written from to the terminal instead of opening it. If the query matches more than one page, it lists them and asks you to narrow the query. With `--format json` it prints one object with `page` and `sources`.
+
+### `wenlan entities <list|archive|restore>`
+
+See the people, projects, and topics Wenlan has found, and archive or restore them by id.
+
+```bash
+wenlan entities list --status detected --limit 20
+wenlan entities archive ent_123 ent_456 --dry-run
+wenlan entities archive ent_123 ent_456
+wenlan entities restore ent_123
 ```
 
 ### `wenlan agents list/show/edit`

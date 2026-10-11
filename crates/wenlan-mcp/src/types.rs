@@ -7,16 +7,14 @@
 
 pub use wenlan_types::memory::{RejectionRecord, SearchResult, Space};
 pub use wenlan_types::requests::{
-    ArchiveEntitiesRequest, CreateConceptRequest, CreateEntityRequest, CreateRelationRequest,
-    EntitySelection, ListEntitiesRequest, ListMemoriesRequest, RestoreEntitiesRequest,
+    CreateConceptRequest, CreateEntityRequest, CreateRelationRequest, ListMemoriesRequest,
     SearchMemoryRequest, StoreMemoryRequest,
 };
 pub use wenlan_types::responses::{
     AcceptRefinementResponse, ConfirmResponse, CreateEntityResponse, CreatePageResponse,
-    CreateRelationResponse, DeleteResponse, EntityBulkResponse, ListEntitiesResponse,
-    ListMemoriesResponse, ListMemoryRevisionsResponse, ListPageRevisionsResponse,
-    ListRefinementsResponse, RejectRefinementResponse, RevisionAcceptResponse,
-    RevisionDismissResponse, SearchMemoryResponse, StoreMemoryResponse,
+    CreateRelationResponse, DeleteResponse, ListMemoriesResponse, ListMemoryRevisionsResponse,
+    ListPageRevisionsResponse, ListRefinementsResponse, PageInventoryResponse,
+    RejectRefinementResponse, RevisionAcceptResponse, RevisionDismissResponse,
+    SearchMemoryResponse, StoreMemoryResponse,
 };
-pub use wenlan_types::EntityStatus;
 pub use wenlan_types::PageSourceWithMemory;

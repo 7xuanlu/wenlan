@@ -55,7 +55,7 @@ LINT_SHARED_GUARDRAILS = [
     "General uses exactly one lint MCP call",
     "Agent-assisted Deep uses exactly two lint MCP calls",
     "never evaluate records outside agent_work",
-    "get_lint_agent_work_page",
+    "`work_digest`",
     "submit verdicts exactly once",
     "authorized record refs (`evidence_refs` plus `counterevidence_refs`)",
     "Do not mechanically copy every evidence ref",
@@ -73,10 +73,9 @@ LINT_SHARED_GUARDRAILS = [
     "Lint creates durable Review Items for choices that are not yet exact.",
     "turns exactly one Review Item into a separately approved manifest",
     "`lint_repair_review` generic accept remains rejected and non-mutating",
-    "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair`.",
-    "prepare_lint_repair",
-    "prepare_lint_repair_plan",
-    "get_lint_repair_plan_entries",
+    "Never call `lint_repair_apply` in the same turn as `lint_repair_prepare`.",
+    "lint_repair_prepare",
+    "the exact `plan_id` and `plan_digest`",
     "every observed family",
     "`ready`",
     "`review`",
@@ -99,7 +98,7 @@ LINT_SHARED_GUARDRAILS = [
     "Do not apply any later approved manifest",
     "`verified`, `applied_unverified`, `failed`, or `not_attempted`",
     "Use `applied_unverified` whenever an apply receipt exists but durable verification does not",
-    "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair_plan`",
+    "Never call lint_repair_apply in the same turn as lint_repair_prepare, whether",
     "applied_unverified",
     "Match every line byte-for-byte",
     "the MCP repair-manifest tools have no CLI equivalent yet",
@@ -656,12 +655,9 @@ def validate_skill_surface(
             )
             for tool in (
                 "lint",
-                "get_lint_agent_work_page",
-                "prepare_lint_repair",
-                "prepare_lint_repair_plan",
-                "get_lint_repair_plan_entries",
-                "apply_lint_repair",
-                "verify_lint_repair",
+                "lint_repair_prepare",
+                "lint_repair_apply",
+                "lint_repair_verify",
             ):
                 expected_tool = f"{expected_prefix}{tool}"
                 if expected_tool not in text:
@@ -674,12 +670,9 @@ def validate_skill_surface(
                 "Bash",
                 *(f"{expected_prefix}{tool}" for tool in (
                     "lint",
-                    "get_lint_agent_work_page",
-                    "prepare_lint_repair",
-                    "prepare_lint_repair_plan",
-                    "get_lint_repair_plan_entries",
-                    "apply_lint_repair",
-                    "verify_lint_repair",
+                    "lint_repair_prepare",
+                    "lint_repair_apply",
+                    "lint_repair_verify",
                 )),
             }
             if not isinstance(allowed_tools, list) or set(allowed_tools) != expected_allowed_tools:

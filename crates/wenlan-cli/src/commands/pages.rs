@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 //! `wenlan pages [query]` — browse distilled pages, or open one in your editor.
 //!
-//! Pure-local: reads the page markdown files the daemon writes under
+//! Local by default: reads the page markdown files the daemon writes under
 //! `knowledge_path_or_default()` (default `~/.wenlan/pages/`) and hands the
 //! match to the OS default `.md` app via `open`/`xdg-open`/`start`. No daemon
 //! round-trip and no agent turn, so it stays instant and works offline. This
 //! reads the user's own local page files, not daemon DB state, so it does not
-//! cross the "CLI talks HTTP only" boundary.
+//! cross the "CLI talks HTTP only" boundary. Only `--print` talks to the
+//! daemon: it finds the page file the same way, then fetches the page body and
+//! its sources over HTTP.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -14,6 +16,7 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 
+use crate::client::WenlanClient;
 use crate::output::{print_json, ResolvedFormat};
 
 /// One distilled page on disk.
@@ -181,12 +184,14 @@ fn collapse_by_title(pages: &[PageEntry]) -> Vec<(String, usize)> {
         .collect()
 }
 
-pub fn run(
+pub async fn run(
+    client: &WenlanClient,
     format: ResolvedFormat,
     quiet: bool,
     query: Option<String>,
     limit: usize,
     resolve_id: bool,
+    print: bool,
 ) -> Result<()> {
     // An empty/whitespace query (e.g. a skill passing "" for no-arg) means "list".
     let query = query.filter(|q| !q.trim().is_empty());
@@ -225,18 +230,24 @@ pub fn run(
         }
         // Query -> open the match.
         Some(q) => match match_query(&pages, &q) {
+            QueryMatch::None if print => {
+                anyhow::bail!("no page matches: {q}. Run `wenlan pages` to list them.")
+            }
             QueryMatch::None => {
                 eprintln!("no page matches: {q}");
                 eprintln!("run `wenlan pages` to list, or `/distill {q}` to synthesize one");
             }
             QueryMatch::One(p) => {
-                if resolve_id {
+                if resolve_id || print {
                     let page_id = p.page_id.as_deref().ok_or_else(|| {
                         anyhow::anyhow!(
                             "page projection {} has no origin_id frontmatter",
                             p.path.display()
                         )
                     })?;
+                    if print {
+                        return print_page(client, format, quiet, page_id).await;
+                    }
                     if !quiet {
                         println!("{page_id}");
                     }
@@ -252,6 +263,7 @@ pub fn run(
                     }
                 }
             }
+            QueryMatch::Many(hits) if print => anyhow::bail!(many_matches_message(&q, &hits)),
             QueryMatch::Many(hits) => {
                 if !quiet {
                     // Titles can collide (many distilled revisions share a name),
@@ -275,13 +287,6 @@ pub fn run(
 /// citations show plain, unverified ones carry the exact spec-mandated badge
 /// text (never "false" — see spec §5). Empty input renders empty (no
 /// dangling "Citations:" header for uncited pages).
-///
-/// Reference implementation: `wenlan pages` currently reads pages from local
-/// markdown files (no daemon round-trip, by design — see module doc), so
-/// citation data (which lives on the DB-backed `Page`/`PageCitation` served
-/// via `GET /api/pages/{id}`) isn't wired into this command's print path yet.
-/// This helper demonstrates the rendering contract for that future caller.
-#[allow(dead_code)] // reference implementation — not yet wired to a live fetch path, see doc above
 fn render_citations(citations: &[wenlan_types::pages::PageCitation]) -> String {
     if citations.is_empty() {
         return String::new();
@@ -298,6 +303,72 @@ fn render_citations(citations: &[wenlan_types::pages::PageCitation]) -> String {
         }
     }
     out
+}
+
+/// Error text for `--print` when the query names several pages: every
+/// candidate's title and path, so the user can pick one and narrow the query.
+fn many_matches_message(query: &str, hits: &[&PageEntry]) -> String {
+    let mut out = format!(
+        "{} pages match \"{query}\". Narrow the query to one of:",
+        hits.len()
+    );
+    for p in hits {
+        out.push_str(&format!("\n  {}  ({})", p.title, p.path.display()));
+    }
+    out
+}
+
+/// One "Sources" line: the short memory id, then the first line of the
+/// memory's content (title when the content is blank), cut to 100 characters.
+fn source_line(source: &wenlan_types::PageSourceWithMemory) -> String {
+    let id: String = source.source.memory_source_id.chars().take(8).collect();
+    let text = source
+        .memory
+        .as_ref()
+        .map(|m| {
+            let first = m.content.lines().find(|l| !l.trim().is_empty());
+            first.unwrap_or(m.title.as_str()).trim().to_string()
+        })
+        .unwrap_or_else(|| "(memory no longer available)".to_string());
+    let text = if text.chars().count() > 100 {
+        let cut: String = text.chars().take(99).collect();
+        format!("{cut}…")
+    } else {
+        text
+    };
+    format!("  {id}  {text}")
+}
+
+/// `--print`: fetch the page and its sources and write them to stdout.
+async fn print_page(
+    client: &WenlanClient,
+    format: ResolvedFormat,
+    quiet: bool,
+    page_id: &str,
+) -> Result<()> {
+    let read = client.read_page(page_id).await?;
+    let sources = client.get_page_sources(page_id).await?;
+    if quiet {
+        return Ok(());
+    }
+    match format {
+        ResolvedFormat::Json => {
+            print_json(&serde_json::json!({ "page": read.page, "sources": sources }))?
+        }
+        ResolvedFormat::Table => {
+            let page = &read.page.page;
+            println!("{}\n", page.title);
+            println!("{}", page.content.trim_end());
+            print!("{}", render_citations(&page.citations));
+            if !sources.is_empty() {
+                println!("\nSources:");
+                for source in &sources {
+                    println!("{}", source_line(source));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn print_list(shown: &[(String, usize)], total_titles: usize, total_pages: usize, dir: &Path) {
@@ -439,6 +510,58 @@ mod tests {
         sort_newest_first(&mut v);
         let order: Vec<&str> = v.iter().map(|p| p.title.as_str()).collect();
         assert_eq!(order, ["New", "Mid", "Old"]);
+    }
+
+    #[test]
+    fn many_matches_message_lists_every_candidate_title_and_path() {
+        let a = mk("Rust Systems", "/pages/rust-systems.md", 1);
+        let b = mk("Rust Async", "/pages/rust-async.md", 2);
+        let msg = many_matches_message("rust", &[&a, &b]);
+        assert!(msg.starts_with("2 pages match \"rust\". Narrow the query"));
+        assert!(msg.contains("Rust Systems  (/pages/rust-systems.md)"));
+        assert!(msg.contains("Rust Async  (/pages/rust-async.md)"));
+    }
+
+    fn source_with(
+        memory_source_id: &str,
+        content: &str,
+        title: &str,
+    ) -> wenlan_types::PageSourceWithMemory {
+        serde_json::from_value(serde_json::json!({
+            "source": {
+                "page_id": "page_1",
+                "memory_source_id": memory_source_id,
+                "linked_at": 1
+            },
+            "memory": {
+                "source_id": memory_source_id,
+                "title": title,
+                "content": content,
+                "summary": null,
+                "memory_type": null,
+                "source_agent": null,
+                "confidence": null,
+                "confirmed": true,
+                "pinned": false,
+                "supersedes": null,
+                "last_modified": 1,
+                "chunk_count": 1,
+                "enrichment_status": "enriched",
+        "supersede_mode": "hide",
+        "access_count": 0
+            }
+        }))
+        .expect("source fixture")
+    }
+
+    #[test]
+    fn source_line_uses_short_id_and_first_content_line() {
+        let s = source_with("mem_0123456789", "\nFirst line\nSecond line", "A title");
+        assert_eq!(source_line(&s), "  mem_0123  First line");
+        let blank = source_with("mem_abc", "  \n ", "Only a title");
+        assert_eq!(source_line(&blank), "  mem_abc  Only a title");
+        let long = source_with("mem_abc", &"x".repeat(150), "t");
+        assert_eq!(source_line(&long).chars().count(), 2 + 7 + 2 + 100);
     }
 
     #[test]
