@@ -116,6 +116,10 @@ impl ConnectorCandidate {
     }
 }
 
+/// What the relay says about the app asking for access. Every identity field is
+/// optional so the app keeps working against a relay that predates them; absent
+/// means "not recognized". The display name is never taken from `client_name`
+/// (the app registers it itself): the UI derives it from `redirect_host`.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingView {
@@ -124,6 +128,12 @@ pub struct PairingView {
     pub resource: String,
     pub scopes: Vec<String>,
     pub expires_at: u64,
+    #[serde(default)]
+    pub client_name: Option<String>,
+    #[serde(default)]
+    pub redirect_host: Option<String>,
+    #[serde(default)]
+    pub known_client: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -131,6 +141,19 @@ pub struct PairingView {
 pub enum GrantStatus {
     Active,
     Inactive,
+}
+
+/// Why a connection stopped working. A value this app does not know yet reads
+/// as `Other` instead of failing the whole page.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum GrantEndReason {
+    Revoked,
+    Reset,
+    Expired,
+    Replaced,
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -143,6 +166,16 @@ pub struct GrantView {
     pub expires_at: u64,
     pub status: GrantStatus,
     pub cleanup_pending: bool,
+    #[serde(default)]
+    pub client_name: Option<String>,
+    #[serde(default)]
+    pub redirect_host: Option<String>,
+    #[serde(default)]
+    pub known_client: bool,
+    #[serde(default)]
+    pub last_used_at: Option<u64>,
+    #[serde(default)]
+    pub end_reason: Option<GrantEndReason>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -314,8 +347,61 @@ impl RelayClient {
             Some(credential),
         )?)
         .await?;
-        let view: PairingView = decode(response).await?;
-        if view.pairing_id != pairing_id
+        self.accept_view(decode(response).await?, Some(pairing_id))
+    }
+
+    /// Find a pending request by the short code the browser page shows
+    /// (`XXXX-XXXX`). The code travels in the body, never in a URL. A shape the
+    /// relay could never have issued fails here, before it spends one of the
+    /// relay's limited misses.
+    pub async fn lookup_pairing(
+        &self,
+        credential: &DeviceCredential,
+        code: &str,
+    ) -> Result<PairingView, RelayError> {
+        let code = normalize_user_code(code).ok_or(RelayError::InvalidInput)?;
+        let response = Self::send(
+            self.request(Method::POST, "/pairings/lookup", Some(credential))?
+                .json(&serde_json::json!({ "code": code })),
+        )
+        .await?;
+        self.accept_view(decode(response).await?, None)
+    }
+
+    /// Tell the browser the person declined. Only the explicit 204 counts: any
+    /// other success is not the contract.
+    pub async fn deny_pairing(
+        &self,
+        credential: &DeviceCredential,
+        pairing_id: &str,
+    ) -> Result<(), RelayError> {
+        if !valid_id(pairing_id, 32) {
+            return Err(RelayError::InvalidInput);
+        }
+        let response = Self::send(
+            self.request(
+                Method::POST,
+                &format!("/pairings/{pairing_id}/deny"),
+                Some(credential),
+            )?
+            .json(&serde_json::json!({})),
+        )
+        .await?;
+        if response.status() == StatusCode::NO_CONTENT {
+            Ok(())
+        } else {
+            Err(RelayError::InvalidResponse)
+        }
+    }
+
+    /// The same checks for a request found by id or by code: it must be for this
+    /// relay's fixed resource and query-only scope, and not already expired.
+    fn accept_view(
+        &self,
+        mut view: PairingView,
+        expected_id: Option<&str>,
+    ) -> Result<PairingView, RelayError> {
+        if expected_id.map_or(!valid_id(&view.pairing_id, 32), |id| view.pairing_id != id)
             || view.client_id.is_empty()
             || view.client_id.len() > 2048
             || view.resource != self.mcp_url()
@@ -324,6 +410,8 @@ impl RelayClient {
         {
             return Err(RelayError::InvalidResponse);
         }
+        view.client_name = clean_client_name(view.client_name.take());
+        view.redirect_host = clean_redirect_host(view.redirect_host.take());
         Ok(view)
     }
 
@@ -374,7 +462,11 @@ impl RelayClient {
         if let Some(cursor) = cursor {
             request = request.query(&[("cursor", cursor)]);
         }
-        let page: GrantPage = decode(Self::send(request).await?).await?;
+        let mut page: GrantPage = decode(Self::send(request).await?).await?;
+        for item in &mut page.items {
+            item.client_name = clean_client_name(item.client_name.take());
+            item.redirect_host = clean_redirect_host(item.redirect_host.take());
+        }
         let mut ids = std::collections::HashSet::new();
         if page.items.len() > 25
             || page
@@ -438,6 +530,68 @@ fn valid_id(value: &str, minimum: usize) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
+/// Short pairing codes use this alphabet (no 0/O/1/I/L/U look-alikes).
+const USER_CODE_ALPHABET: &str = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
+const USER_CODE_LEN: usize = 8;
+
+/// Accept what a person types: any case, with spaces or dashes between groups.
+/// `None` when the result could not be a code the relay issued.
+pub(crate) fn normalize_user_code(input: &str) -> Option<String> {
+    let code: String = input
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '-')
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    (code.chars().count() == USER_CODE_LEN && code.chars().all(|c| USER_CODE_ALPHABET.contains(c)))
+        .then_some(code)
+}
+
+const MAX_CLIENT_NAME_CHARS: usize = 80;
+
+/// Direction overrides and invisible marks can make one name read as another.
+fn is_display_spoofing(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061C}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}' | '\u{FEFF}'
+    )
+}
+
+/// The name an app registered for itself is untrusted text. Keep it short and
+/// printable; an empty result is treated as no name.
+fn clean_client_name(name: Option<String>) -> Option<String> {
+    let cleaned: String = name?
+        .chars()
+        .filter(|c| !c.is_control() && !is_display_spoofing(*c))
+        .collect();
+    let cleaned: String = cleaned.trim().chars().take(MAX_CLIENT_NAME_CHARS).collect();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// A redirect host is a lowercase DNS-style name or IPv4 address with an
+/// optional port. Anything else is dropped and the request is shown as unknown.
+fn clean_redirect_host(host: Option<String>) -> Option<String> {
+    let host = host?.trim().to_ascii_lowercase();
+    let (name, port) = match host.split_once(':') {
+        Some((name, port)) => (name, Some(port)),
+        None => (host.as_str(), None),
+    };
+    let port_ok = port.is_none_or(|port| {
+        (1..=5).contains(&port.len()) && port.bytes().all(|b| b.is_ascii_digit())
+    });
+    let name_ok = !name.is_empty()
+        && name.len() <= 253
+        && name.split('.').all(|label| {
+            (1..=63).contains(&label.len())
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        });
+    (port_ok && name_ok).then_some(host)
+}
+
 fn valid_space(value: &str) -> bool {
     !value.is_empty()
         && value.trim() == value

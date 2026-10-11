@@ -19,7 +19,7 @@ import {
   type SearchResult,
   type Space,
 } from "../../lib/tauri";
-import { clearPendingPairingCode, setPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
+import { setPendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
 import { useSearch } from "../../hooks/useSearch";
@@ -52,6 +52,8 @@ import {
 import SourcesView from "./SourcesView";
 import type { SourceLibraryState } from "./sources/SourceLibrary";
 import AboutWenlanDialog from "./AboutWenlanDialog";
+import PairingApprovalDialog from "./PairingApprovalDialog";
+import RemoteAccessNotifier from "./RemoteAccessNotifier";
 import { searchResultTarget } from "../../lib/searchResultTarget";
 import { readRecentPageHistory, recordRecentPageVisit } from "../../lib/recentPages";
 import { readWikiInventoryMode, type WikiInventoryMode } from "../../lib/wikiNotesPreferences";
@@ -975,7 +977,7 @@ export default function Main({
 
   // "Open in Wenlan" on the relay pairing page sends a wenlan://pair link. The
   // native side holds the code until asked, so a link that launched the app is
-  // not lost before this listener exists.
+  // not lost before this listener exists. The approval dialog takes it from here.
   useEffect(() => {
     const pull = () => {
       takeRemotePairingLink()
@@ -986,15 +988,6 @@ export default function Main({
     const unlisten = listen("remote-pairing-link", pull);
     return () => { unlisten.then((f) => f()); };
   }, []);
-
-  // The Connections panel takes the code; it stays pending until the panel is
-  // shown. Keeping unsaved page edits drops the link rather than parking it.
-  const pendingPairingCode = usePendingPairingCode();
-  useEffect(() => {
-    if (!pendingPairingCode || pageSavePending) return;
-    if (view.kind === "settings" && view.section === "agents") return;
-    navigateTo({ kind: "settings", section: "agents" }, clearPendingPairingCode);
-  }, [pendingPairingCode, pageSavePending]);
 
   // Cmd/Ctrl+K is delivered by App.tsx and opens the shared search dialog.
   useEffect(() => {
@@ -1530,6 +1523,9 @@ export default function Main({
       <div className="workspace-pane-host" ref={setWorkspacePaneHostRef} />
 
       <AboutWenlanDialog open={aboutOpen} onClose={() => setAboutOpen(false)} />
+      {/* The approval dialog opens over whatever screen is showing; it never navigates. */}
+      <PairingApprovalDialog currentSpace={contextSpace?.spaceName} />
+      <RemoteAccessNotifier />
       <QuickCaptureScrim />
       <SearchModal
         open={mobileSearchOpen}

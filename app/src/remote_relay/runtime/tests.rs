@@ -233,6 +233,9 @@ fn inspected() -> crate::remote_relay::PairingView {
         resource: format!("{}/mcp", crate::remote_relay::RELAY_ORIGIN),
         scopes: vec!["wenlan:query".into()],
         expires_at: now_ms() + 60_000,
+        client_name: None,
+        redirect_host: None,
+        known_client: false,
     }
 }
 
@@ -606,4 +609,124 @@ async fn actual_sidecar_uses_child_environment_and_protected_contract() {
     })
     .await
     .expect("missing token must stop startup");
+}
+
+fn rotated(old: &DeviceCredential) -> String {
+    serde_json::json!({
+        "id": old.id,
+        "managementToken": "n".repeat(64),
+        "expiresAt": now_ms() + 90 * 24 * 60 * 60 * 1000,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn renewing_keeps_the_device_and_saves_the_new_key_under_a_new_revision() {
+    let (_dir, store, profile) = configured();
+    let old = device();
+    let profile = store
+        .attach_device(profile.revision(), old.clone())
+        .unwrap();
+    let (port, task) = serve(vec![(200, rotated(&old))], |_| {}).await;
+    let renewed = rotate_device_at(store.clone(), client(port), profile.revision().into())
+        .await
+        .unwrap();
+    let key = renewed.device().unwrap();
+    assert_eq!(key.id, old.id);
+    assert_eq!(key.management_token, "n".repeat(64));
+    assert!(key.expires_at > old.expires_at + 80 * 24 * 60 * 60 * 1000);
+    assert_ne!(renewed.revision(), profile.revision());
+    assert!(renewed.enabled());
+    assert_eq!(renewed.space(), profile.space());
+    assert_eq!(renewed.backend_token(), profile.backend_token());
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(saved.revision(), renewed.revision());
+    assert_eq!(saved.device().unwrap().management_token, "n".repeat(64));
+    let requests = task.await.unwrap();
+    assert!(requests[0].starts_with("POST /devices/rotate "));
+    assert!(requests[0].contains(&format!("authorization: Bearer {}", old.management_token)));
+}
+
+#[tokio::test]
+async fn renewing_a_stale_or_unenrolled_profile_never_reaches_the_relay() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = client(listener.local_addr().unwrap().port());
+    let (_dir, store, profile) = configured();
+    // No device yet.
+    assert!(
+        rotate_device_at(store.clone(), relay.clone(), profile.revision().into())
+            .await
+            .is_err()
+    );
+    let enrolled = store.attach_device(profile.revision(), device()).unwrap();
+    // A revision the person is no longer looking at.
+    assert!(
+        rotate_device_at(store.clone(), relay.clone(), "x".repeat(64))
+            .await
+            .is_err()
+    );
+    // Turned off.
+    let off = store.disable(enrolled.revision()).unwrap();
+    assert!(rotate_device_at(store, relay, off.revision().into())
+        .await
+        .is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_renew_that_loses_a_race_with_stop_ends_the_new_key_and_keeps_nothing_new() {
+    let (_dir, store, profile) = configured();
+    let old = device();
+    let profile = store
+        .attach_device(profile.revision(), old.clone())
+        .unwrap();
+    let stop_store = store.clone();
+    let revision = profile.revision().to_string();
+    let (port, task) = serve(
+        vec![(200, rotated(&old)), (200, "{\"success\":true}".into())],
+        move |index| {
+            if index == 0 {
+                stop_store.disable(&revision).unwrap();
+            }
+        },
+    )
+    .await;
+    assert!(
+        rotate_device_at(store.clone(), client(port), profile.revision().into())
+            .await
+            .is_err()
+    );
+    let requests = task.await.unwrap();
+    assert!(requests[1].starts_with("POST /devices/revoke "));
+    assert!(requests[1].contains(&format!("authorization: Bearer {}", "n".repeat(64))));
+    let saved = store.load().unwrap().unwrap();
+    assert!(!saved.enabled());
+    assert_eq!(
+        saved.device().unwrap().management_token,
+        old.management_token
+    );
+}
+
+#[tokio::test]
+async fn a_failed_renew_keeps_the_saved_key_and_shows_no_relay_text() {
+    for status in [401, 429, 503] {
+        let (_dir, store, profile) = configured();
+        let profile = store.attach_device(profile.revision(), device()).unwrap();
+        let (port, task) = serve(vec![(status, "PRIVATE_ERROR".into())], |_| {}).await;
+        let error = rotate_device_at(store.clone(), client(port), profile.revision().into())
+            .await
+            .unwrap_err();
+        assert!(!error.contains("PRIVATE_ERROR"));
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.revision(), profile.revision());
+        assert_eq!(
+            saved.device().unwrap().management_token,
+            profile.device().unwrap().management_token
+        );
+        assert_eq!(task.await.unwrap().len(), 1);
+    }
 }

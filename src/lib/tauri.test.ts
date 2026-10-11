@@ -91,6 +91,34 @@ describe('remote access consent bridge', () => {
     expect(mockInvoke).toHaveBeenCalledWith('take_remote_pairing_link');
   });
 
+  it('looks a request up by the short code under the current revision', async () => {
+    await tauri.lookupRemotePairing('revision-3', 'K7MQ-4WXZ');
+    expect(mockInvoke).toHaveBeenCalledWith('lookup_remote_pairing', {
+      expectedRevision: 'revision-3', code: 'K7MQ-4WXZ',
+    });
+  });
+
+  it('declines the exact request under the current revision', async () => {
+    await tauri.denyRemotePairing('revision-3', 'pairing-1');
+    expect(mockInvoke).toHaveBeenCalledWith('deny_remote_pairing', {
+      expectedRevision: 'revision-3', pairingId: 'pairing-1',
+    });
+  });
+
+  it('renews under the current revision and nothing else', async () => {
+    mockInvoke.mockResolvedValueOnce({ status: 'starting' });
+    await expect(tauri.renewRemoteAccess('revision-3')).resolves.toEqual({ status: 'starting' });
+    expect(mockInvoke).toHaveBeenCalledWith('renew_remote_access', { expectedRevision: 'revision-3' });
+  });
+
+  it('takes the waiting notice without forwarding arguments, once', async () => {
+    mockInvoke.mockResolvedValueOnce({ kind: 'expired' });
+    await expect(tauri.takeRemoteAccessNotice()).resolves.toEqual({ kind: 'expired' });
+    expect(mockInvoke).toHaveBeenCalledWith('take_remote_access_notice');
+    mockInvoke.mockResolvedValueOnce(null);
+    await expect(tauri.takeRemoteAccessNotice()).resolves.toBeNull();
+  });
+
   it('queries status and connection health without forwarding arguments', async () => {
     await tauri.getRemoteAccessStatus();
     expect(mockInvoke).toHaveBeenLastCalledWith('get_remote_access_status');

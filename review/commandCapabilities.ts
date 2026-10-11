@@ -44,6 +44,18 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     // The main shell asks once per launch whether a wenlan://pair link
     // opened the app. Shared chrome, so it belongs in the contract.
     "take_remote_pairing_link",
+    // The same shell listens for "Web access stopped on its own" and asks for
+    // the one pending notice. Shared chrome, so it belongs in the contract.
+    "take_remote_access_notice",
+  ],
+  // Web access (the relay) requests. The fixture shows no live connection, so
+  // these answer from baseResponses with the quietest shape; they exist so the
+  // approval dialog, a denied request and a renewed key dispatch through the
+  // Review runtime instead of falling through to "Unknown Tauri command".
+  remoteAccess: [
+    "lookup_remote_pairing",
+    "deny_remote_pairing",
+    "renew_remote_access",
   ],
   backgroundAi: [
     // Fixture-only preference state; this never starts a background service.

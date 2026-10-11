@@ -206,6 +206,12 @@ vi.mock("./ImportView", () => ({
   ImportView: () => <div data-testid="import-view" />,
 }));
 vi.mock("./AboutWenlanDialog", () => ({ default: () => <div /> }));
+// The approval dialog has its own tests; here only that Main shows it over the page.
+vi.mock("./PairingApprovalDialog", async () => {
+  const { usePendingPairingCode } = await import("../../lib/pairingLink");
+  return { default: () => (usePendingPairingCode() ? <div role="dialog" data-testid="pairing-dialog" /> : null) };
+});
+vi.mock("./RemoteAccessNotifier", () => ({ default: () => null }));
 
 interface RenderMainProps {
   initialView?: React.ComponentProps<typeof Main>["initialView"];
@@ -475,31 +481,17 @@ describe("Main published PageDetail navigation guards", () => {
     expect(flushHarness.flush).toHaveBeenCalledTimes(2);
   });
 
-  it("opens Connections for a pairing link only after a pending page save", async () => {
-    const { user } = renderMain();
-    expect(await screen.findByText("Pending page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Start page save" }));
-    act(() => setPendingPairingCode("a".repeat(64)));
-    expect(screen.getByText("Pending page")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "Finish page save" }));
-    await waitFor(() => expect(screen.queryByTestId("page-detail")).toBeNull());
-  });
-
-  it("drops a pairing link when the user keeps unsaved page edits", async () => {
+  it("shows the pairing dialog over a page that is saving or has unsaved edits, without navigating or asking", async () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     const { user } = renderMain();
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
-    act(() => setPendingPairingCode("a".repeat(64)));
-    expect(confirmSpy).toHaveBeenCalledOnce();
-    expect(screen.getByText("Pending page")).toBeInTheDocument();
-
-    // A later save must not bring the dropped link back.
     await user.click(screen.getByRole("button", { name: "Start page save" }));
-    await user.click(screen.getByRole("button", { name: "Finish page save" }));
-    expect(confirmSpy).toHaveBeenCalledOnce();
+    act(() => setPendingPairingCode("a".repeat(64)));
+    expect(screen.getByTestId("pairing-dialog")).toBeVisible();
+    // The page stays open, and nothing asked to discard its edits.
     expect(screen.getByText("Pending page")).toBeInTheDocument();
+    expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it("blocks sidebar, search focus, and quit while a page save is pending", async () => {

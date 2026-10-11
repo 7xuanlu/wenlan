@@ -1,301 +1,305 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useId, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useId, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { listen } from "@tauri-apps/api/event";
-import { Copy, ArrowClockwise, Check } from "@phosphor-icons/react";
+import { ArrowClockwise, Check, Copy } from "@phosphor-icons/react";
 import {
-  approveRemotePairing, clipboardWrite, configureRemoteAccess, getRemoteAccessProfile,
-  getRemoteAccessStatus, inspectRemotePairing, listRemoteGrants, listSpaces,
-  reconnectRemoteAccess, revokeRemoteGrant, testRemoteMcpConnection, toggleRemoteAccess,
-  type RemoteAccessStatus, type RemotePairing, type RemoteGrantPage,
+  clipboardWrite, testRemoteMcpConnection, type RemoteConnectionTest,
 } from "../../lib/tauri";
-import { clearPendingPairingCode, usePendingPairingCode } from "../../lib/pairingLink";
-import { Button, Card, SectionHeader, StatusChip, Tag, Toggle } from "./settings/primitives";
+import { setPendingPairingCode } from "../../lib/pairingLink";
+import { classifyPairingCode } from "../../lib/pairingCode";
+import { Button, Card, Field, Input, Select, SectionHeader, StatusChip, Tag } from "./settings/primitives";
+import {
+  Disclosure, InlineConfirm, RemoteErrorMessage, errorText, secondaryText,
+} from "./remoteAccessParts";
+import { ConnectedApps } from "./RemoteAccessApps";
+import { useRemoteAccess } from "./useRemoteAccess";
 
-const STATUS = ["remote-access-status"] as const;
-const PROFILE = ["remote-access-profile"] as const;
-const GRANTS = ["remote-access-grants"] as const;
-const fieldClass = "w-full min-w-0 rounded border px-3 py-2 bg-[var(--mem-bg)] border-[var(--mem-border)] text-[var(--mem-text)]";
-const secondary = "text-[var(--mem-text-secondary)] text-sm";
-const errorClass = "text-sm text-[var(--mem-status-danger-text)] break-words";
+/** The key is offered a renewal this long before it ends. */
+const EXPIRY_WARNING_MS = 14 * 24 * 60 * 60 * 1000;
 
+type Confirming =
+  | { kind: "off" }
+  | { kind: "renew" }
+  | { kind: "change"; space: string };
+
+function useNow(intervalMs: number): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), intervalMs);
+    return () => window.clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
+/**
+ * Web access: let a web or phone AI app, like Claude or ChatGPT, search one
+ * Space of this library. Turning it on is one click; each app is allowed
+ * separately, in the approval dialog that opens from its own link.
+ */
 export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const { t, i18n } = useTranslation();
-  const id = useId();
-  const cache = useQueryClient();
-  const statusQuery = useQuery({ queryKey: STATUS, queryFn: getRemoteAccessStatus });
-  const profileQuery = useQuery({ queryKey: PROFILE, queryFn: getRemoteAccessProfile });
-  const spacesQuery = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
-  const status = statusQuery.data;
-  const profile = profileQuery.data;
-  const spaces = spacesQuery.data ?? [];
+  const language = i18n.resolvedLanguage ?? i18n.language;
+  const spaceId = useId();
+  const remote = useRemoteAccess({ currentSpace });
+  const { status, profile, spaces, connected, relayUrl, isOn, pendingDisconnect, ready, nativeReadFailed, nativeLoading, queryError } = remote;
+  const now = useNow(60_000);
   const [selected, setSelected] = useState<string | null>(null);
-  const [consented, setConsented] = useState(false);
-  const [pairingId, setPairingId] = useState("");
-  // fromLink: the request came from a wenlan://pair link, not a pasted code.
-  const [inspection, setInspection] = useState<{ request: RemotePairing; revision: string; fromLink: boolean } | null>(null);
-  const [approved, setApproved] = useState(false);
+  const [confirming, setConfirming] = useState<Confirming | null>(null);
   const [copied, setCopied] = useState(false);
-  const [probe, setProbe] = useState<string | null>(null);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [grantNotice, setGrantNotice] = useState<string | null>(null);
-  const [autoInspect, setAutoInspect] = useState<string | null>(null);
-  const pairingRef = useRef<HTMLDivElement>(null);
-  const linkedCode = usePendingPairingCode();
-  const implicitSpace = currentSpace && spaces.some((space) => space.name === currentSpace)
-    ? currentSpace : spaces.length === 1 ? spaces[0].name : "";
-  const space = selected ?? profile?.space ?? implicitSpace;
-  const connected = status?.status === "connected";
-  const publicMcp = status?.status === "connected" ? status.relay_url : null;
-  const isOn = Boolean(profile?.enabled || status?.status === "starting" || connected);
-  const pending = Boolean(profile?.disconnect_pending);
-  const ready = profileQuery.isSuccess && statusQuery.isSuccess && spacesQuery.isSuccess;
-  const scopeExists = spaces.some((item) => item.name === space);
-  const grantsEnabled = connected && Boolean(profile?.enabled && profile.credential_expires_at);
-  const grantQuery = useQuery({
-    queryKey: [...GRANTS, profile?.revision, cursor],
-    queryFn: () => listRemoteGrants(profile!.revision, cursor),
-    enabled: grantsEnabled,
-    retry: false,
-    // Poll for grants created by the external OAuth exchange after pairing
-    // approval. Pause the interval after a query error until a manual
-    // refresh or focus refetch succeeds; focus refetch stays enabled.
-    refetchInterval: (query) =>
-      query.state.status === "error" || !grantsEnabled ? false : 5000,
-    refetchOnWindowFocus: true,
-    refetchIntervalInBackground: false,
-  });
+  const [probe, setProbe] = useState<RemoteConnectionTest | null>(null);
 
-  useEffect(() => { setConsented(false); }, [space]);
+  const space = selected ?? remote.defaultSpace;
+  const spaceExists = spaces.some((item) => item.name === space);
+  const expiresAt = profile?.enabled ? profile.credential_expires_at : null;
+  const ended = expiresAt !== null && expiresAt !== undefined && expiresAt <= now;
+  const expiringSoon = expiresAt !== null && expiresAt !== undefined && !ended && expiresAt - now <= EXPIRY_WARNING_MS;
+  const stuck = status?.status === "error" && !profile?.enabled;
+  const spacesFailed = !nativeReadFailed && Boolean(queryError);
+  const revision = profile?.revision;
 
+  // A different saved state is a different situation: forget stale answers.
   useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | undefined;
-    listen<RemoteAccessStatus>("remote-access-status", ({ payload }) => {
-      cache.setQueryData(STATUS, payload);
-      void cache.invalidateQueries({ queryKey: PROFILE });
-      void cache.invalidateQueries({ queryKey: GRANTS });
-    }).then((stop) => {
-      if (disposed) stop(); else unlisten = stop;
-    }).catch(() => { void cache.invalidateQueries({ queryKey: STATUS }); });
-    return () => { disposed = true; unlisten?.(); };
-  }, [cache]);
-
-  useEffect(() => {
-    setInspection(null);
-    setApproved(false);
-    setCursor(null);
+    setConfirming(null);
     setProbe(null);
-    setGrantNotice(null);
-  }, [profile?.revision]);
-
-  // A link fills in the code and opens the review. Approving still takes a click.
-  useEffect(() => {
-    if (!linkedCode) return;
-    clearPendingPairingCode();
-    setAutoInspect(linkedCode);
-  }, [linkedCode]);
+  }, [revision]);
 
   const action = useMutation({
     mutationFn: (operation: () => Promise<void>) => operation(),
-    onSettled: async () => {
-      await cache.invalidateQueries({ queryKey: PROFILE });
-      await cache.invalidateQueries({ queryKey: STATUS });
-      await cache.invalidateQueries({ queryKey: GRANTS });
-    },
+    onSettled: () => remote.refresh(),
   });
-
-  const enable = async () => {
-    if (!ready || !consented || !scopeExists || pending) throw new Error(t("remoteAccess.scopeRequired"));
-    const saved = await configureRemoteAccess(space, profile?.revision);
-    const next = await toggleRemoteAccess(true, saved.revision);
-    cache.setQueryData(STATUS, next);
-    setConsented(false);
-  };
-  const stop = async () => {
-    cache.setQueryData(STATUS, await toggleRemoteAccess(false));
-    setInspection(null);
-  };
-  const reconnect = async () => {
-    if (!ready || !profile?.enabled || pending || !scopeExists) throw new Error(t("remoteAccess.scopeRequired"));
-    cache.setQueryData(STATUS, await reconnectRemoteAccess(profile.revision));
-  };
-  const inspect = async (code = pairingId, fromLink = false) => {
-    setApproved(false);
-    setInspection(null);
-    if (!profile) throw new Error(t("remoteAccess.scopeRequired"));
-    const revision = profile.revision;
-    const request = await inspectRemotePairing(revision, code.trim());
-    setInspection({ revision, request, fromLink });
-  };
-  const approve = async () => {
-    if (!inspection || inspection.revision !== profile?.revision || inspection.request.expiresAt <= Date.now()) {
-      throw new Error(t("remoteAccess.pairingExpired"));
-    }
-    await approveRemotePairing(inspection.revision, inspection.request);
-    setInspection(null);
-    setPairingId("");
-    setCursor(null);
-    setApproved(true);
-  };
-  const queryError = profileQuery.error ?? statusQuery.error ?? spacesQuery.error;
   const busy = action.isPending;
-  const canReview = connected && Boolean(profile?.enabled);
+  const run = (operation: () => Promise<void>) => { action.reset(); action.mutate(operation); };
 
-  // A cold start can deliver the link before Web access reconnects; review it once connected.
-  useEffect(() => {
-    if (!autoInspect || !canReview || busy) return;
-    setAutoInspect(null);
-    setPairingId(autoInspect);
-    pairingRef.current?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    action.mutate(() => inspect(autoInspect, true));
-  }, [autoInspect, canReview, busy]);
+  const turnOn = (target: string) => run(async () => {
+    if (!ready || pendingDisconnect || !spaces.some((item) => item.name === target)) return;
+    await remote.switchOn(target);
+    setSelected(null);
+  });
+  const turnOff = () => run(async () => { await remote.stop(); setConfirming(null); });
+  const turnOnAgain = () => run(async () => {
+    const target = spaces.some((item) => item.name === profile?.space) ? profile!.space : remote.defaultSpace;
+    await remote.stop();
+    await remote.switchOn(target);
+  });
+  const changeSpace = (target: string) => run(async () => {
+    await remote.stop();
+    await remote.switchOn(target);
+    setConfirming(null);
+    setSelected(null);
+  });
+  const renew = () => run(async () => { await remote.renew(profile!.revision); setConfirming(null); });
+  const testConnection = () => run(async () => {
+    setProbe(null);
+    setProbe(await testRemoteMcpConnection());
+  });
+  const copyUrl = (url: string) => run(async () => { await clipboardWrite(url); setCopied(true); });
+
+  const stopButton = (
+    <Button variant="secondary" size="sm" disabled={busy} onClick={() => run(async () => { await remote.stop(); })}>
+      {t("remoteAccess.stopAccess")}
+    </Button>
+  );
+
+  let body: React.ReactNode;
+  if (nativeLoading) {
+    body = <p role="status" className={secondaryText}>{t("settings.controlState.loading")}</p>;
+  } else if (nativeReadFailed) {
+    // The saved settings could not be read, so nothing here may look like permission to turn on.
+    body = <div className="space-y-2"><RemoteErrorMessage error={queryError} />{stopButton}</div>;
+  } else if (pendingDisconnect) {
+    body = (
+      <div className="space-y-2">
+        <p role="status" className={secondaryText}>{t("remoteAccess.disconnectPending")}</p>
+        <Button variant="secondary" size="sm" disabled={busy} onClick={() => run(async () => { await remote.stop(); })}>
+          {t("remoteAccess.retryDisconnect")}
+        </Button>
+      </div>
+    );
+  } else if (stuck && status?.status === "error") {
+    body = <div className="space-y-2"><RemoteErrorMessage error={status.error} />{stopButton}</div>;
+  } else if (!isOn) {
+    body = (
+      <div className="min-w-0 space-y-3">
+        {spacesFailed
+          ? <RemoteErrorMessage error={queryError} />
+          : ready && spaces.length === 0
+            ? <p className={secondaryText}>{t("remoteAccess.noSpaces")}</p>
+            : (
+              <div className="max-w-sm">
+                <Field label={t("remoteAccess.spaceToShare")} htmlFor={spaceId}>
+                  <Select value={space} disabled={busy || !ready} onChange={(event) => setSelected(event.target.value)}>
+                    {!spaceExists && <option value="" />}
+                    {spaces.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                  </Select>
+                </Field>
+              </div>
+            )}
+        <div className="flex flex-wrap items-center gap-3">
+          <StatusChip state={{ kind: "idle" }} label={t("remoteAccess.statusOff")} />
+          <Button variant="primary" size="sm" loading={busy} disabled={!ready || !spaceExists || spacesFailed}
+            onClick={() => turnOn(space)}>
+            {t(profile ? "remoteAccess.turnOnAgain" : "remoteAccess.turnOn")}
+          </Button>
+        </div>
+      </div>
+    );
+  } else if (ended) {
+    body = (
+      <div className="min-w-0 space-y-3">
+        <div role="status" className="space-y-2 rounded border border-[var(--mem-status-warning-border)] bg-[var(--mem-status-warning-bg)] p-3 text-sm text-[var(--mem-status-warning-text)]">
+          <p className="break-words">{t("remoteAccess.endedBanner", { date: new Date(expiresAt!).toLocaleDateString(language) })}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="primary" size="sm" loading={busy} disabled={!ready} onClick={turnOnAgain}>{t("remoteAccess.turnOnAgain")}</Button>
+            <Button variant="secondary" size="sm" disabled={busy} onClick={() => run(async () => { await remote.stop(); })}>{t("remoteAccess.turnOff")}</Button>
+          </div>
+        </div>
+      </div>
+    );
+  } else {
+    const failed = status?.status === "error";
+    body = (
+      <div className="min-w-0 space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          {connected && <StatusChip state={{ kind: "up" }} label={t("remoteAccess.statusConnected")} />}
+          {status?.status === "starting" && <StatusChip state={{ kind: "probing" }} label={t("remoteAccess.statusConnecting")} />}
+          {!connected && status?.status === "off" && <StatusChip state={{ kind: "idle" }} label={t("remoteAccess.statusOff")} />}
+          {profile && <span className="text-sm break-words">{t("remoteAccess.sharing", { space: profile.space })}</span>}
+        </div>
+
+        {failed && <RemoteErrorMessage error={status.error} />}
+
+        {expiringSoon && (
+          <div role="status" className="space-y-2 rounded border border-[var(--mem-status-warning-border)] bg-[var(--mem-status-warning-bg)] p-3 text-sm text-[var(--mem-status-warning-text)]">
+            <p className="break-words">{t("remoteAccess.expiringSoon", { date: new Date(expiresAt!).toLocaleDateString(language) })}</p>
+            {confirming?.kind === "renew"
+              ? <InlineConfirm message={t("remoteAccess.renewConfirm")} confirmLabel={t("remoteAccess.renew")} busy={busy}
+                  onConfirm={renew} onCancel={() => setConfirming(null)} />
+              : <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming({ kind: "renew" })}>{t("remoteAccess.renew")}</Button>}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {profile?.enabled && (
+            <Button variant="secondary" size="sm" disabled={busy || !ready} onClick={() => run(async () => { await remote.reconnect(profile.revision); })}>
+              <ArrowClockwise size={14} aria-hidden="true" />{t("remoteAccess.reconnect")}
+            </Button>
+          )}
+          {connected && (
+            <Button variant="secondary" size="sm" disabled={busy} onClick={testConnection}>
+              {t("remoteAccess.testConnection")}
+            </Button>
+          )}
+          {failed
+            ? stopButton
+            : <>
+                <Button variant="secondary" size="sm" disabled={busy || spacesFailed || spaces.length < 2}
+                  onClick={() => setConfirming({ kind: "change", space: profile?.space ?? space })}>{t("remoteAccess.changeSpace")}</Button>
+                <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming({ kind: "off" })}>{t("remoteAccess.turnOff")}</Button>
+              </>}
+        </div>
+
+        {probe?.ok && <p role="status" className={secondaryText}>{t("remoteAccess.testOk", { ms: probe.latency_ms ?? "?" })}</p>}
+        {probe && !probe.ok && (
+          <div className="space-y-1">
+            <p role="alert" className={errorText}>{t("remoteAccess.connectionFailed")}</p>
+            {probe.error && <Disclosure label={t("remoteAccess.details")}><p className="text-xs break-words text-[var(--mem-text-secondary)]">{probe.error}</p></Disclosure>}
+          </div>
+        )}
+
+        {confirming?.kind === "off" && (
+          <InlineConfirm message={t("remoteAccess.offConfirm")} confirmLabel={t("remoteAccess.turnOff")} busy={busy}
+            onConfirm={turnOff} onCancel={() => setConfirming(null)} />
+        )}
+        {confirming?.kind === "change" && (
+          <div className="min-w-0 space-y-2">
+            <div className="max-w-sm">
+              <Field label={t("remoteAccess.spaceToShare")} htmlFor={spaceId}>
+                <Select value={confirming.space} disabled={busy} onChange={(event) => setConfirming({ kind: "change", space: event.target.value })}>
+                  {spaces.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                </Select>
+              </Field>
+            </div>
+            {confirming.space !== profile?.space
+              ? <InlineConfirm message={t("remoteAccess.changeConfirm", { space: confirming.space })} confirmLabel={t("remoteAccess.change")}
+                  busy={busy} onConfirm={() => changeSpace(confirming.space)} onCancel={() => setConfirming(null)} />
+              : <Button variant="ghost" size="sm" onClick={() => setConfirming(null)}>{t("remoteAccess.cancel")}</Button>}
+          </div>
+        )}
+
+        {connected && relayUrl && (
+          <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
+            <ol className="list-decimal pl-5 space-y-2 text-sm">
+              <li className="min-w-0">
+                <span>{t("remoteAccess.howTo1")}</span>
+                <span className="mt-1 flex items-start gap-2 min-w-0">
+                  <code className="flex-1 min-w-0 break-all text-xs py-1">{relayUrl}</code>
+                  <button type="button" className="p-2 shrink-0 rounded border border-[var(--mem-border)]"
+                    title={t("connectMatrix.copyUrl")} aria-label={t("connectMatrix.copyUrl")}
+                    disabled={busy} onClick={() => copyUrl(relayUrl)}>
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </span>
+              </li>
+              <li>{t("remoteAccess.howTo2")}</li>
+              <li>{t("remoteAccess.howTo3")}</li>
+            </ol>
+            <p className={secondaryText}>{t("remoteAccess.localAppsHint")}</p>
+          </div>
+        )}
+
+        {/* Only while connected: asking the relay otherwise would only fail, and an empty header reads as broken. */}
+        {profile?.enabled && connected && Boolean(profile.credential_expires_at) && (
+          <div className="border-t border-[var(--mem-border)] pt-4">
+            <ConnectedApps key={profile.revision} revision={profile.revision} enabled />
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div className="min-w-0 space-y-4" style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text)" }}>
-      <SectionHeader
-        label={t("remoteAccess.title")}
-        action={
-          <div className="flex flex-wrap items-center gap-3">
-            <Tag tone="neutral">{t("remoteAccess.experimentalBadge")}</Tag>
-            <fieldset disabled={busy || (!isOn && (!ready || pending || !consented || !scopeExists))}>
-              <Toggle enabled={isOn} valueUnknown={!profileQuery.isSuccess || !statusQuery.isSuccess}
-                unknownState={profileQuery.isError || statusQuery.isError ? "unavailable" : "loading"}
-                onToggle={() => action.mutate(isOn ? stop : enable)}
-                aria-label={t("remoteAccess.title")} aria-describedby={id + "-consent"} />
-            </fieldset>
-          </div>
-        }
-      />
+      <SectionHeader label={t("remoteAccess.title")} action={<Tag tone="neutral">{t("remoteAccess.experimentalBadge")}</Tag>} />
       <Card padding="card">
         <div className="min-w-0 space-y-4">
-          <p id={id + "-consent"} className={secondary}>{t("remoteAccess.consentDisclosure")}</p>
-          <fieldset disabled={busy || isOn || pending || !ready} className="min-w-0 space-y-2">
-            <label htmlFor={id + "-space"} className="block text-sm font-medium">{t("remoteAccess.dataScope")}</label>
-            {spaces.length === 1 && scopeExists
-              ? <p className="text-sm break-words">{space}</p>
-              : <select id={id + "-space"} className={fieldClass} value={space}
-                  onChange={(event) => { setSelected(event.target.value); setConsented(false); }}>
-                  <option value="">{t("remoteAccess.chooseSpace")}</option>
-                  {spaces.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
-                </select>}
-            {!isOn && !pending && <label className="flex items-start gap-2 text-sm">
-              <input type="checkbox" checked={consented} disabled={!scopeExists}
-                onChange={(event) => setConsented(event.target.checked)} className="mt-1 shrink-0" />
-              <span>{scopeExists
-                ? t("remoteAccess.scopeConsent", { space })
-                : t("remoteAccess.scopeConsentPending")}</span>
-            </label>}
-          </fieldset>
-          {queryError && <p role="alert" className={errorClass}>{String(queryError)}</p>}
-          {action.error && <p role="alert" className={errorClass}>{String(action.error)}</p>}
-          {status?.status === "starting" && <StatusChip state={{ kind: "probing" }} label={t("remoteAccess.statusConnecting")} />}
-          {status?.status === "error" && <p role="alert" className={errorClass}>{status.error}</p>}
-          {(queryError || (status?.status === "error" && !pending)) &&
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(stop)}>{t("remoteAccess.stopAccess")}</Button>}
-          {pending && <div className="space-y-2">
-            <p role="status" className={secondary}>{t("remoteAccess.disconnectPending")}</p>
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(stop)}>{t("remoteAccess.retryDisconnect")}</Button>
-          </div>}
-          {isOn && <div className="flex flex-wrap items-center gap-3">
-            {connected && <StatusChip state={{ kind: "up" }} label={t("remoteAccess.transportConnected")} />}
-            <Button variant="secondary" size="sm" disabled={busy || !ready || !profile?.enabled || pending || !scopeExists} onClick={() => action.mutate(reconnect)}>
-              <ArrowClockwise size={14} aria-hidden="true" />{t("remoteAccess.reconnect")}
-            </Button>
-            {connected && <Button variant="secondary" size="sm" disabled={busy} onClick={() => action.mutate(async () => {
-              setProbe(null);
-              const result = await testRemoteMcpConnection();
-              if (!result.ok) throw new Error(result.error ?? t("remoteAccess.connectionFailed"));
-              setProbe(t("remoteAccess.backendVerified", { ms: result.latency_ms ?? "?" }));
-            })}>{t("remoteAccess.testConnection")}</Button>}
-            {probe && <span role="status" className={secondary}>{probe}</span>}
-          </div>}
-          {autoInspect && !canReview &&
-            <p role="status" className={secondary}>{t(isOn ? "remoteAccess.pairingLinkWaiting" : "remoteAccess.pairingLinkAccessOff")}</p>}
-          {canReview && profile && <>
-            {publicMcp && <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
-              <h4 className="text-sm font-semibold">{t("remoteAccess.endpoint")}</h4>
-              <div className="flex items-start gap-2 min-w-0">
-                <code className="flex-1 min-w-0 break-all text-xs py-2">{publicMcp}</code>
-                <button type="button" className="p-2 shrink-0 rounded border border-[var(--mem-border)]"
-                  title={t("connectMatrix.copyUrl")} aria-label={t("connectMatrix.copyUrl")}
-                  disabled={busy} onClick={() => action.mutate(async () => { await clipboardWrite(publicMcp); setCopied(true); })}>
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
-              </div>
-              <p className={secondary}>{t("remoteAccess.localAppsHint")}</p>
-            </div>}
-            <div ref={pairingRef} className="border-t border-[var(--mem-border)] pt-4 space-y-3">
-              <h4 className="text-sm font-semibold">{t("remoteAccess.pairingTitle")}</h4>
-              <label htmlFor={id + "-pairing"} className="block text-sm">{t("remoteAccess.pairingCode")}</label>
-              <div className="flex flex-wrap gap-2">
-                <input id={id + "-pairing"} className={fieldClass + " flex-1 basis-48"} value={pairingId}
-                  maxLength={64} autoComplete="off" spellCheck={false} disabled={busy}
-                  onChange={(event) => { setPairingId(event.target.value); setInspection(null); setApproved(false); }} />
-                <Button variant="secondary" size="sm" disabled={busy || !/^[a-zA-Z0-9_-]{64}$/.test(pairingId.trim())}
-                  onClick={() => action.mutate(inspect)}>{t("remoteAccess.inspectPairing")}</Button>
-              </div>
-              {inspection && inspection.revision === profile.revision && <div className="space-y-2">
-                {inspection.fromLink && <p role="note" className="text-sm font-medium break-words">{t("remoteAccess.pairingFromLink")}</p>}
-                <dl className="text-sm space-y-1">
-                  <dt className={secondary}>{t("remoteAccess.clientId")}</dt>
-                  <dd className="break-all font-mono text-xs">{inspection.request.clientId}</dd>
-                  <dt className={secondary}>{t("remoteAccess.dataScope")}</dt><dd className="break-words">{profile.space}</dd>
-                  <dt className={secondary}>{t("remoteAccess.expires")}</dt><dd>{new Date(inspection.request.expiresAt).toLocaleString()}</dd>
-                </dl>
-                <p className={secondary}>{t("remoteAccess.approvalDisclosure", { space: profile.space })}</p>
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" disabled={busy} onClick={() => action.mutate(approve)}>{t("remoteAccess.approvePairing")}</Button>
-                  <Button variant="secondary" size="sm" disabled={busy} onClick={() => { setInspection(null); setPairingId(""); }}>{t("common.close")}</Button>
-                </div>
-              </div>}
-              {approved && <p role="status" className={secondary}>{t("remoteAccess.pairingApproved")}</p>}
-            </div>
-            <div className="border-t border-[var(--mem-border)] pt-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="text-sm font-semibold">{t("remoteAccess.authorizedClients")}</h4>
-                <button type="button" className="p-2 rounded" disabled={busy || grantQuery.isFetching}
-                  aria-label={t("remoteAccess.refreshGrants")} title={t("remoteAccess.refreshGrants")}
-                  onClick={() => { void grantQuery.refetch(); }}><ArrowClockwise size={16} /></button>
-              </div>
-              {grantQuery.isPending && <p className={secondary}>{t("remoteAccess.loadingGrants")}</p>}
-              {grantQuery.error && <p role="alert" className={errorClass}>{String(grantQuery.error)}</p>}
-              {grantQuery.data?.items.length === 0 && <p className={secondary}>{t("remoteAccess.noGrants")}</p>}
-              <ul className="divide-y divide-[var(--mem-border)]">
-                {grantQuery.data?.items.map((grant) => <li key={grant.id} className="py-3 flex flex-wrap items-start gap-3">
-                  <div className="flex-1 min-w-0 basis-40 space-y-1">
-                    <p className="font-mono text-xs break-all">{grant.clientId}</p>
-                    <p className={secondary + " break-words"}>{grant.space}</p>
-                    <p className={secondary}>{t(grant.status === "active" ? "remoteAccess.grantActive" : "remoteAccess.grantRevoked")}</p>
-                    {/* The relay's latest end for this connection; 30 idle days end it sooner. */}
-                    {grant.status === "active" && Number.isFinite(grant.expiresAt) && <p className={secondary}>
-                      {t("remoteAccess.grantExpires", { date: new Date(grant.expiresAt).toLocaleDateString(i18n.resolvedLanguage ?? i18n.language) })}
-                    </p>}
-                    {grant.cleanupPending && <p className={secondary}>{t("remoteAccess.cleanupPending")}</p>}
-                  </div>
-                  {(grant.status === "active" || grant.cleanupPending) && <Button variant="secondary" size="sm" disabled={busy}
-                    onClick={() => action.mutate(async () => {
-                      const result = await revokeRemoteGrant(profile.revision, grant.id);
-                      cache.setQueryData<RemoteGrantPage>([...GRANTS, profile.revision, cursor], (page) => page && ({
-                        ...page,
-                        items: page.items.map((item) => item.id === grant.id
-                          ? { ...item, status: "inactive", cleanupPending: result.cleanupPending } : item),
-                      }));
-                      setApproved(false);
-                      setGrantNotice(t(result.cleanupPending ? "remoteAccess.cleanupPending" : "remoteAccess.grantRevoked"));
-                    })}>{t(grant.status === "active" ? "remoteAccess.revokeGrant" : "remoteAccess.retry")}</Button>}
-                </li>)}
-              </ul>
-              {grantNotice && <p role="status" className={secondary}>{grantNotice}</p>}
-              <div className="flex gap-2">
-                {cursor && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setCursor(null)}>{t("remoteAccess.firstPage")}</Button>}
-                {grantQuery.data?.cursor && <Button variant="secondary" size="sm" disabled={busy} onClick={() => setCursor(grantQuery.data!.cursor)}>{t("remoteAccess.nextPage")}</Button>}
-              </div>
-            </div>
-          </>}
+          <p className={secondaryText}>{t("remoteAccess.intro")}</p>
+          {/* Said once, always: requests and results go through the relay. */}
+          <p className={secondaryText}>{t("remoteAccess.relayDisclosure")}</p>
+          {body}
+          {action.error && <RemoteErrorMessage error={action.error} />}
+          {!nativeLoading && !nativeReadFailed && !pendingDisconnect && !stuck && !ended && <CodeEntry />}
         </div>
       </Card>
+    </div>
+  );
+}
+
+/** For when the browser's link did not open Wenlan: type what the page shows. */
+function CodeEntry() {
+  const { t } = useTranslation();
+  const id = useId();
+  const [value, setValue] = useState("");
+  const classified = classifyPairingCode(value);
+  const invalid = value.trim() !== "" && classified.kind === "invalid";
+  return (
+    <div className="border-t border-[var(--mem-border)] pt-4">
+      <Disclosure label={t("remoteAccess.haveCode")}>
+        <form className="space-y-3 max-w-sm" onSubmit={(event) => {
+          event.preventDefault();
+          if (classified.kind === "invalid") return;
+          // The approval dialog does the rest, the same as for a link.
+          setPendingPairingCode(classified.code);
+          setValue("");
+        }}>
+          <p className={secondaryText}>{t("remoteAccess.codeHint")}</p>
+          <Field label={t("remoteAccess.pairingCode")} htmlFor={id} error={invalid ? t("remoteAccess.codeInvalid") : undefined}>
+            <Input value={value} invalid={invalid} mono maxLength={80} autoComplete="off" spellCheck={false}
+              onChange={(event) => setValue(event.target.value)} />
+          </Field>
+          <Button type="submit" variant="secondary" size="sm" disabled={classified.kind === "invalid"}>{t("remoteAccess.inspectPairing")}</Button>
+        </form>
+      </Disclosure>
     </div>
   );
 }

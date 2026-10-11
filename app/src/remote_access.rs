@@ -66,6 +66,38 @@ pub enum RemoteAccessStatus {
     },
 }
 
+/// Web access stopped without the person asking. The webview turns this into a
+/// localized system notification: only it knows the display language, so no
+/// user-facing text lives in native code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RemoteAccessNotice {
+    /// Reconnecting gave up, or the relay no longer accepts this computer.
+    Stopped,
+    /// The 90-day device key ended.
+    Expired,
+}
+
+/// Whether giving up deserves a notification, and which one. `retrying` means a
+/// later attempt is already scheduled, so nothing has stopped yet.
+fn give_up_notice(
+    error: &RenewalError,
+    retrying: bool,
+    device_expires_at: Option<u64>,
+    now: u64,
+) -> Option<RemoteAccessNotice> {
+    if retrying {
+        return None;
+    }
+    let key_ended = matches!(error, RenewalError::Relay(RelayError::Unauthorized))
+        && device_expires_at.is_some_and(|expires_at| expires_at <= now);
+    Some(if key_ended {
+        RemoteAccessNotice::Expired
+    } else {
+        RemoteAccessNotice::Stopped
+    })
+}
+
 fn generation_is_current(generation: u64, expected: u64) -> bool {
     generation == expected
 }
@@ -127,6 +159,11 @@ pub struct RemoteAccessState {
     orphan_cleanup_failed: bool,
     /// Invalidates stale start/reconnect tasks when the user turns access off.
     pub generation: u64,
+    /// Set when access stops on its own; the webview takes it once. Holding it
+    /// here (not only in an event) means a notice raised before the window's
+    /// listener exists, such as a key that ended while the app was closed, is
+    /// delivered on the next load instead of lost.
+    pub pending_notice: Option<RemoteAccessNotice>,
 }
 
 impl Default for RemoteAccessState {
@@ -139,6 +176,7 @@ impl Default for RemoteAccessState {
             pending_stops: Vec::new(),
             orphan_cleanup_failed: false,
             generation: 0,
+            pending_notice: None,
         }
     }
 }
@@ -150,6 +188,45 @@ async fn remote_access_mutex<R: tauri::Runtime>(
     // Do not hold the AppState RwLock while waiting for the controller mutex.
     let remote = state.read().await.remote_access.clone();
     remote
+}
+
+/// What the connection test needs: the local protected port and the id of the
+/// live relay connection this app opened. `None` unless fully connected.
+pub(crate) fn connection_target(state: &RemoteAccessState) -> Option<(u16, String)> {
+    live_target(
+        &state.status,
+        state.port,
+        state
+            .reverse
+            .as_ref()
+            .map(|active| active.connection.connection_id()),
+    )
+}
+
+/// The decision behind `connection_target`, on plain values so every
+/// combination can be tested without opening a relay connection.
+fn live_target(
+    status: &RemoteAccessStatus,
+    port: Option<u16>,
+    connection_id: Option<&str>,
+) -> Option<(u16, String)> {
+    if !matches!(status, RemoteAccessStatus::Connected { .. }) {
+        return None;
+    }
+    Some((port?, connection_id?.to_owned()))
+}
+
+/// Record the notice and wake the webview. The webview takes it with
+/// `take_remote_access_notice`, which is the only consumer, so a notice is shown
+/// once however many times it listens or reloads.
+async fn publish_notice<R: tauri::Runtime>(
+    app_handle: &tauri::AppHandle<R>,
+    notice: RemoteAccessNotice,
+) {
+    use tauri::Emitter;
+    let remote = remote_access_mutex(app_handle).await;
+    remote.lock().await.pending_notice = Some(notice);
+    let _ = app_handle.emit("remote-access-notice", notice);
 }
 
 fn spawn_and_store_child<T, P>(
@@ -271,6 +348,35 @@ pub(crate) async fn resume_reconnect(app_handle: tauri::AppHandle, ticket: Start
     .await;
 }
 
+/// Renew Web access: stop the connection, give this computer a fresh 90-day key,
+/// and bring the connection back on it. Apps connected before this need to
+/// connect again, because the relay ends their access when the key changes.
+///
+/// When the relay does not hand back a new key the old one is kept and the
+/// connection resumes on it, so a failed renew never leaves the person with
+/// Web access silently switched off. An ambiguous failure (reply lost after the
+/// relay already switched keys) shows up as the resumed connection being
+/// refused; the person then turns Web access on again.
+pub(crate) async fn renew_access(
+    app_handle: &tauri::AppHandle,
+    expected_revision: String,
+    client: crate::api::WenlanClient,
+) -> Result<(), String> {
+    let ticket = prepare_reconnect(app_handle, expected_revision.clone(), client).await?;
+    let (revision, outcome) = match relay_runtime::rotate_device(expected_revision).await {
+        Ok(profile) => (profile.revision().to_string(), Ok(())),
+        Err(error) => (ticket.revision.clone(), Err(error)),
+    };
+    tauri::async_runtime::spawn(resume_reconnect(
+        app_handle.clone(),
+        StartupResume {
+            generation: ticket.generation,
+            revision,
+        },
+    ));
+    outcome
+}
+
 /// Cleanup does not require a healthy daemon, local indexing or a file watcher.
 /// A deferred resume ticket cannot override a later user action or profile edit.
 pub(crate) async fn prepare_startup(app_handle: tauri::AppHandle) -> Option<StartupResume> {
@@ -319,6 +425,10 @@ pub(crate) async fn prepare_startup(app_handle: tauri::AppHandle) -> Option<Star
 }
 
 async fn disconnect_startup(app_handle: &tauri::AppHandle, generation: u64, profile: Profile) {
+    let key_ended = profile.enabled()
+        && profile
+            .device()
+            .is_some_and(|device| device.expires_at <= crate::remote_relay::now_ms());
     let plan = relay_runtime::prepare_disconnect(Some(profile.revision().to_string())).await;
     let Some(off_generation) = transition_off(app_handle, Some(generation)).await else {
         return;
@@ -334,6 +444,9 @@ async fn disconnect_startup(app_handle: &tauri::AppHandle, generation: u64, prof
         );
     }
     let _ = publish_disconnect_result(app_handle, off_generation, result).await;
+    if key_ended {
+        publish_notice(app_handle, RemoteAccessNotice::Expired).await;
+    }
 }
 
 async fn publish_disconnect_result(
@@ -1205,7 +1318,7 @@ async fn recover_remote(
     let Some(next_generation) = transition_off(&app, Some(generation)).await else {
         return;
     };
-    {
+    let cleanup_ok = {
         let remote = remote_access_mutex(&app).await;
         let mut ra = remote.lock().await;
         if !generation_is_current(ra.generation, next_generation) {
@@ -1221,11 +1334,25 @@ async fn recover_remote(
         };
         ra.status = status.clone();
         let _ = app.emit("remote-access-status", &status);
-        if cleanup.is_err() {
-            return;
+        cleanup.is_ok()
+    };
+    let retrying = cleanup_ok && delay.is_some();
+    if !retrying {
+        let expires_at = relay_runtime::storage(|store| {
+            Ok(store
+                .load()?
+                .and_then(|profile| profile.device().map(|device| device.expires_at)))
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some(notice) =
+            give_up_notice(&error, retrying, expires_at, crate::remote_relay::now_ms())
+        {
+            publish_notice(&app, notice).await;
         }
     }
-    if let Some(delay) = delay {
+    if let (true, Some(delay)) = (cleanup_ok, delay) {
         tokio::select! {
             _ = sleep(delay) => {
                 toggle_on_with_retries(app.clone(), attempts + 1, next_generation).await;
@@ -2803,5 +2930,177 @@ mod tests {
 
         assert_ne!(port, held_port, "must skip the port already held");
         assert!((held_port..=held_port + 3).contains(&port));
+    }
+}
+
+#[cfg(test)]
+mod notice_tests {
+    use super::*;
+
+    const NOW: u64 = 1_000_000;
+
+    fn offline() -> RenewalError {
+        RenewalError::Relay(RelayError::Unavailable)
+    }
+    fn refused() -> RenewalError {
+        RenewalError::Relay(RelayError::Unauthorized)
+    }
+
+    #[test]
+    fn nothing_is_announced_while_a_retry_is_still_scheduled() {
+        assert_eq!(give_up_notice(&offline(), true, None, NOW), None);
+        assert_eq!(give_up_notice(&refused(), true, Some(NOW - 1), NOW), None);
+    }
+
+    #[test]
+    fn giving_up_announces_a_stop_unless_the_key_itself_ended() {
+        // Out of attempts while the relay is unreachable.
+        assert_eq!(
+            give_up_notice(&offline(), false, Some(NOW + 1), NOW),
+            Some(RemoteAccessNotice::Stopped)
+        );
+        // Refused while the key is still valid: revoked or reset elsewhere.
+        assert_eq!(
+            give_up_notice(&refused(), false, Some(NOW + 1), NOW),
+            Some(RemoteAccessNotice::Stopped)
+        );
+        assert_eq!(
+            give_up_notice(&refused(), false, None, NOW),
+            Some(RemoteAccessNotice::Stopped)
+        );
+        // Refused because the key's date has passed (the boundary counts as ended).
+        assert_eq!(
+            give_up_notice(&refused(), false, Some(NOW), NOW),
+            Some(RemoteAccessNotice::Expired)
+        );
+        assert_eq!(
+            give_up_notice(&refused(), false, Some(NOW - 1), NOW),
+            Some(RemoteAccessNotice::Expired)
+        );
+        // A past date does not turn an unrelated failure into "expired".
+        assert_eq!(
+            give_up_notice(&offline(), false, Some(NOW - 1), NOW),
+            Some(RemoteAccessNotice::Stopped)
+        );
+    }
+
+    #[test]
+    fn a_retryable_failure_with_attempts_left_is_not_a_give_up_but_the_last_attempt_is() {
+        let retrying = |attempts| recovery_delay(&offline(), attempts).is_some();
+        assert_eq!(give_up_notice(&offline(), retrying(0), None, NOW), None);
+        assert_eq!(
+            give_up_notice(&offline(), retrying(MAX_RECONNECT_RETRIES), None, NOW),
+            Some(RemoteAccessNotice::Stopped)
+        );
+        // Authorization failures are never retried, so they announce at once.
+        assert_eq!(
+            give_up_notice(
+                &refused(),
+                recovery_delay(&refused(), 0).is_some(),
+                None,
+                NOW
+            ),
+            Some(RemoteAccessNotice::Stopped)
+        );
+    }
+
+    #[test]
+    fn the_wire_shape_is_a_tagged_kind_the_window_can_switch_on() {
+        assert_eq!(
+            serde_json::to_value(RemoteAccessNotice::Stopped).unwrap(),
+            serde_json::json!({ "kind": "stopped" })
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteAccessNotice::Expired).unwrap(),
+            serde_json::json!({ "kind": "expired" })
+        );
+    }
+
+    #[test]
+    fn a_connection_is_offered_for_testing_only_when_connected_with_a_port_and_a_live_id() {
+        let connected = || RemoteAccessStatus::Connected {
+            tunnel_url: None,
+            relay_url: None,
+        };
+        assert_eq!(
+            live_target(&connected(), Some(18080), Some("conn-1")),
+            Some((18080, "conn-1".to_owned()))
+        );
+        assert_eq!(live_target(&connected(), None, Some("conn-1")), None);
+        assert_eq!(live_target(&connected(), Some(18080), None), None);
+        // A live connection id is not enough while the controller says otherwise.
+        for status in [
+            RemoteAccessStatus::Off,
+            RemoteAccessStatus::Starting,
+            RemoteAccessStatus::Error {
+                error: "x".to_owned(),
+            },
+        ] {
+            assert_eq!(live_target(&status, Some(18080), Some("conn-1")), None);
+        }
+    }
+
+    #[test]
+    fn only_a_fully_connected_state_offers_a_connection_to_test() {
+        let mut state = RemoteAccessState::default();
+        assert_eq!(connection_target(&state), None);
+        state.port = Some(18080);
+        state.status = RemoteAccessStatus::Connected {
+            tunnel_url: None,
+            relay_url: None,
+        };
+        // Connected in name only: no live relay connection to check.
+        assert_eq!(connection_target(&state), None);
+        assert_eq!(state.pending_notice.take(), None);
+        state.pending_notice = Some(RemoteAccessNotice::Expired);
+        assert_eq!(
+            state.pending_notice.take(),
+            Some(RemoteAccessNotice::Expired)
+        );
+        assert_eq!(state.pending_notice.take(), None);
+    }
+
+    #[tokio::test]
+    async fn a_published_notice_wakes_the_window_and_is_taken_exactly_once() {
+        use tauri::{Listener, Manager};
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("build a windowless test runtime");
+        app.manage(std::sync::Arc::new(tokio::sync::RwLock::new(
+            crate::state::AppState::new(),
+        )));
+        let woken = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let heard = woken.clone();
+        app.listen("remote-access-notice", move |event| {
+            heard.lock().unwrap().push(event.payload().to_string());
+        });
+
+        // Nothing is waiting before anything stopped.
+        assert_eq!(
+            crate::search::take_remote_access_notice(app.state())
+                .await
+                .unwrap(),
+            None
+        );
+
+        publish_notice(app.handle(), RemoteAccessNotice::Expired).await;
+
+        assert_eq!(
+            woken.lock().unwrap().as_slice(),
+            [r#"{"kind":"expired"}"#.to_string()]
+        );
+        // A window that was not listening yet still finds it, once.
+        assert_eq!(
+            crate::search::take_remote_access_notice(app.state())
+                .await
+                .unwrap(),
+            Some(RemoteAccessNotice::Expired)
+        );
+        assert_eq!(
+            crate::search::take_remote_access_notice(app.state())
+                .await
+                .unwrap(),
+            None
+        );
     }
 }
