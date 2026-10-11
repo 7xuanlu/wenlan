@@ -544,24 +544,6 @@ pub struct BriefParams {
     pub space: Option<String>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-pub struct ContextParams {
-    #[schemars(
-        description = "Topic or conversation summary to focus context retrieval. Omit at session start for general orientation; provide when shifting topics."
-    )]
-    pub topic: Option<String>,
-    #[schemars(
-        description = "Max context chunks, default 20. Increase for complex topics, decrease for quick check-ins."
-    )]
-    #[serde(default, deserialize_with = "deserialize_optional_usize_lenient")]
-    pub limit: Option<usize>,
-    #[schemars(
-        description = "Scope context to a space (e.g. 'work', 'personal'). Auto-detected from conversation if omitted."
-    )]
-    #[serde(default, alias = "domain")]
-    pub space: Option<String>,
-}
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LintProfileParam {
@@ -1517,43 +1499,6 @@ impl WenlanMcpServer {
         };
 
         Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
-    }
-
-    pub async fn context_impl(&self, params: ContextParams) -> Result<CallToolResult, McpError> {
-        let space_arg = effective_space(&params.space);
-        #[allow(deprecated)]
-        let req = ChatContextRequest {
-            query: None,
-            conversation_id: params.topic,
-            max_chunks: params.limit.unwrap_or(20),
-            relevance_threshold: None,
-            include_goals: true,
-            space: space_arg,
-        };
-
-        // Extract only the `context` string field from the response.
-        //
-        // The full ChatContextResponse embeds Vec<SearchResult> which may
-        // contain fields added after the published wenlan-types version.
-        // Since context_impl only uses `resp.context`, we parse the raw
-        // JSON and pull that field directly — this makes the tool forward-
-        // compatible with any new fields the daemon might add.
-        let raw: serde_json::Value =
-            try_call!(self.client.post("/api/context", &req), "context load");
-
-        let context = raw
-            .get("context")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
-
-        if context.is_empty() {
-            Ok(CallToolResult::success(vec![ContentBlock::text(
-                "No relevant context found".to_string(),
-            )]))
-        } else {
-            Ok(CallToolResult::success(vec![ContentBlock::text(context)]))
-        }
     }
 
     fn remove_submitted_agent_work(
@@ -2731,22 +2676,6 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Deprecated compatibility adapter for known callers. Use brief for Space-owned project orientation and recall for targeted memory lookup.",
-        annotations(
-            title = "Context (deprecated)",
-            read_only_hint = true,
-            destructive_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn context(
-        &self,
-        Parameters(params): Parameters<ContextParams>,
-    ) -> Result<CallToolResult, McpError> {
-        self.context_impl(params).await
-    }
-
-    #[tool(
         description = "Run Wenlan's read-only system lint on demand. General is the default bounded deterministic profile. Deep adds expensive deterministic checks plus full-store local semantic candidate generation; bounded candidate packets are adjudicated either by the daemon's configured provider or, with explicit agent_assist consent, by the calling agent through a typed prepare-and-submit protocol. General returns the text `wenlan lint` prints; Deep returns the canonical typed report. Incomplete takes precedence over findings.",
         annotations(
             title = "Lint",
@@ -3293,9 +3222,6 @@ fn query_success<T: Serialize>(output: T) -> Result<CallToolResult, McpError> {
         .map_err(|error| McpError::internal_error(error.to_string(), None))
 }
 
-/// Deprecated tools remain routable for known callers but are not advertised.
-const HIDDEN_LEGACY_TOOL_NAMES: &[&str] = &["context"];
-
 const LOCAL_ONLY_TOOL_NAMES: &[&str] = &[
     "get_lint_agent_work_page",
     "prepare_lint_repair_plan",
@@ -3318,7 +3244,6 @@ const LOCAL_ONLY_TOOL_NAMES: &[&str] = &[
 impl WenlanMcpServer {
     fn visible_tools(&self) -> Vec<Tool> {
         let mut tools = Self::tool_router().list_all();
-        tools.retain(|tool| !HIDDEN_LEGACY_TOOL_NAMES.contains(&tool.name.as_ref()));
         if self.transport == TransportMode::Http {
             tools.retain(|tool| !LOCAL_ONLY_TOOL_NAMES.contains(&tool.name.as_ref()));
         }
@@ -3518,8 +3443,7 @@ mod tests {
     use super::*;
     use crate::client::WenlanClient;
     use crate::types::{
-        ChatContextRequest, ChatContextResponse, SearchMemoryRequest, SearchResult,
-        StoreMemoryRequest, StoreMemoryResponse,
+        SearchMemoryRequest, SearchResult, StoreMemoryRequest, StoreMemoryResponse,
     };
 
     fn make_server(
@@ -4139,7 +4063,7 @@ mod tests {
     fn query_only_refuses_denied_hidden_and_unknown_names_before_dispatch() {
         let server =
             make_server_with_profile(TransportMode::Stdio, "agent", None, ToolProfile::QueryOnly);
-        for name in ["context", "capture", "write_page", "future_tool"] {
+        for name in ["capture", "write_page", "future_tool"] {
             let refusal = server
                 .query_only_refusal(name)
                 .unwrap_or_else(|| panic!("query-only must refuse {name}"));
@@ -5016,39 +4940,12 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ===== Param deserialization: ContextParams =====
-
-    #[test]
-    fn test_context_params_empty() {
-        let json = r#"{}"#;
-        let params: ContextParams = serde_json::from_str(json).unwrap();
-        assert!(params.topic.is_none());
-        assert!(params.limit.is_none());
-        assert!(params.space.is_none());
-    }
-
-    #[test]
-    fn test_context_params_full() {
-        let json = r#"{"topic": "project Wenlan architecture", "limit": 30, "space": "work"}"#;
-        let params: ContextParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.topic.as_deref(), Some("project Wenlan architecture"));
-        assert_eq!(params.limit, Some(30));
-        assert_eq!(params.space.as_deref(), Some("work"));
-    }
-
-    #[test]
-    fn test_context_params_limit_as_string() {
-        let json = r#"{"limit": "20"}"#;
-        let params: ContextParams = serde_json::from_str(json).unwrap();
-        assert_eq!(params.limit, Some(20));
-    }
-
     #[test]
     fn legacy_domain_alias_still_deserializes() {
         // Cached MCP clients (pre-0.7.0 schema) send `"domain"` instead of `"space"`.
         // The serde alias must accept legacy JSON so they don't break for the one-release window.
         let json = r#"{"topic": "project work", "domain": "work"}"#;
-        let params: ContextParams =
+        let params: BriefParams =
             serde_json::from_str(json).expect("legacy 'domain' key must deserialize");
         assert_eq!(
             params.space.as_deref(),
@@ -5195,52 +5092,6 @@ mod tests {
             "entity must not be on the wire; got keys: {:?}",
             obj.keys().collect::<Vec<_>>()
         );
-    }
-
-    #[test]
-    fn chat_context_request_serialization_includes_domain() {
-        #[allow(deprecated)]
-        let req = ChatContextRequest {
-            query: None,
-            conversation_id: Some("topic".into()),
-            max_chunks: 20,
-            relevance_threshold: None,
-            include_goals: true,
-            space: Some("work".into()),
-        };
-        let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["space"], serde_json::json!("work"));
-        assert_eq!(json["conversation_id"], serde_json::json!("topic"));
-    }
-
-    #[test]
-    fn chat_context_response_deserializes_with_profile_and_knowledge() {
-        let json = r#"{
-            "context": "user is Lucian, prefers Rust",
-            "profile": {
-                "narrative": "n",
-                "identity": ["rust"],
-                "preferences": [],
-                "goals": []
-            },
-            "knowledge": {
-                "pages": [],
-                "decisions": [],
-                "relevant_memories": [],
-                "graph_context": []
-            },
-            "took_ms": 42.0,
-            "token_estimates": {
-                "tier1_identity": 10,
-                "tier2_project": 20,
-                "tier3_relevant": 30,
-                "total": 60
-            }
-        }"#;
-        let parsed: ChatContextResponse = serde_json::from_str(json).unwrap();
-        assert_eq!(parsed.context, "user is Lucian, prefers Rust");
-        assert_eq!(parsed.profile.identity, vec!["rust"]);
-        assert_eq!(parsed.token_estimates.total, 60);
     }
 
     #[test]
@@ -5758,66 +5609,6 @@ mod tests {
         );
     }
 
-    // ===== Context default limit =====
-
-    #[test]
-    fn test_context_request_default_limit() {
-        let params = ContextParams {
-            topic: Some("test".into()),
-            limit: None,
-            space: None,
-        };
-        #[allow(deprecated)]
-        let req = ChatContextRequest {
-            query: None,
-            conversation_id: params.topic,
-            max_chunks: params.limit.unwrap_or(20),
-            relevance_threshold: None,
-            include_goals: true,
-            space: params.space,
-        };
-        assert_eq!(req.max_chunks, 20);
-    }
-
-    #[test]
-    fn test_context_request_custom_limit() {
-        let params = ContextParams {
-            topic: None,
-            limit: Some(5),
-            space: Some("work".into()),
-        };
-        #[allow(deprecated)]
-        let req = ChatContextRequest {
-            query: None,
-            conversation_id: params.topic,
-            max_chunks: params.limit.unwrap_or(20),
-            relevance_threshold: None,
-            include_goals: true,
-            space: params.space,
-        };
-        assert_eq!(req.max_chunks, 5);
-        assert_eq!(req.space.as_deref(), Some("work"));
-    }
-
-    #[test]
-    fn test_context_maps_topic_to_conversation_id() {
-        let params = ContextParams {
-            topic: Some("project Wenlan".into()),
-            limit: None,
-            space: None,
-        };
-        #[allow(deprecated)]
-        let req = ChatContextRequest {
-            query: None,
-            conversation_id: params.topic.clone(),
-            max_chunks: params.limit.unwrap_or(20),
-            relevance_threshold: None,
-            include_goals: true,
-            space: params.space,
-        };
-        assert_eq!(req.conversation_id.as_deref(), Some("project Wenlan"));
-    }
-
     // ===== Remember request construction =====
 
     #[test]
@@ -6053,67 +5844,6 @@ mod tests {
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["structured_fields"], serde_json::json!({"key":"val"}));
         assert_eq!(json["retrieval_cue"], "What is the key?");
-    }
-
-    // ===== ChatContextResponse deserialization =====
-
-    #[test]
-    fn test_chat_context_response() {
-        let json = r#"{
-            "context": "User prefers dark mode. Works on Wenlan project.",
-            "profile": {
-                "narrative": "narrative",
-                "identity": [],
-                "preferences": [],
-                "goals": []
-            },
-            "knowledge": {
-                "pages": [],
-                "decisions": [],
-                "relevant_memories": [],
-                "graph_context": []
-            },
-            "took_ms": 12.5,
-            "token_estimates": {
-                "tier1_identity": 1,
-                "tier2_project": 2,
-                "tier3_relevant": 3,
-                "total": 6
-            }
-        }"#;
-        let resp: ChatContextResponse = serde_json::from_str(json).unwrap();
-        assert!(!resp.context.is_empty());
-        assert!(resp.profile.identity.is_empty());
-        assert_eq!(resp.took_ms, 12.5);
-        assert_eq!(resp.token_estimates.total, 6);
-    }
-
-    #[test]
-    fn test_chat_context_response_empty() {
-        let json = r#"{
-            "context": "",
-            "profile": {
-                "narrative": "",
-                "identity": [],
-                "preferences": [],
-                "goals": []
-            },
-            "knowledge": {
-                "pages": [],
-                "decisions": [],
-                "relevant_memories": [],
-                "graph_context": []
-            },
-            "took_ms": 1.0,
-            "token_estimates": {
-                "tier1_identity": 0,
-                "tier2_project": 0,
-                "tier3_relevant": 0,
-                "total": 0
-            }
-        }"#;
-        let resp: ChatContextResponse = serde_json::from_str(json).unwrap();
-        assert!(resp.context.is_empty());
     }
 
     // ===== with_instructions content assertions =====
@@ -7138,7 +6868,6 @@ mod tests {
             ("brief", (true, false, false)),
             ("capture", (false, true, false)),
             ("confirm_memory", (false, false, false)),
-            ("context", (true, false, false)),
             ("create_entity", (false, false, false)),
             ("create_relation", (false, true, false)),
             ("delete_page", (false, true, false)),
@@ -7562,16 +7291,6 @@ mod tests {
             "verify_lint_repair",
             "write_page",
         ]
-    }
-
-    #[test]
-    fn legacy_context_is_registered_but_not_visible() {
-        let raw = WenlanMcpServer::tool_router().list_all();
-        assert!(raw.iter().any(|tool| tool.name == "context"));
-        assert!(make_server(TransportMode::Stdio, "agent", None)
-            .visible_tools()
-            .iter()
-            .all(|tool| tool.name != "context"));
     }
 
     #[test]
