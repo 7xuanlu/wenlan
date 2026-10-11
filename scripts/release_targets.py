@@ -16,6 +16,8 @@ class TargetError(ValueError):
     """A requested target is not part of the shipped release surface."""
 
 
+MERGE_QUEUE_REF_PREFIX = "refs/heads/gh-readonly-queue/main/"
+
 _TARGETS = (
     {
         "target": "aarch64-apple-darwin",
@@ -124,6 +126,13 @@ def release_preflight_matrix(*, event_name: str, ref: str, head_ref: str) -> dic
                 "x86_64-unknown-linux-gnu",
             ]
         )
+    if event_name == "merge_group":
+        # A queue entry re-proves the PR's targets on the commit main will
+        # become. The Windows cache warmer stays on the main push, the only
+        # event allowed to save that cache.
+        if not ref.startswith(MERGE_QUEUE_REF_PREFIX):
+            raise TargetError(f"release preflight does not accept merge queue ref {ref!r}")
+        return release_matrix(exclude_targets=["x86_64-pc-windows-msvc"])
     if event_name == "workflow_dispatch":
         return release_matrix()
     raise TargetError(f"release preflight does not accept event {event_name!r}")
