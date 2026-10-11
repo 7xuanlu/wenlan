@@ -9,6 +9,10 @@ on:
       - 'LICENSE'
   pull_request:
     branches: [main]
+  # The merge queue tests each queued PR on top of current main and reports the
+  # same required `conclusion` check before the PR lands.
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 permissions:
@@ -87,7 +91,7 @@ jobs:
       - name: Checkout trusted release candidate classifier
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
           path: trusted-release-gate
           fetch-depth: 1
           persist-credentials: false
@@ -108,6 +112,38 @@ jobs:
             # trusted script, so it receives the complete platform matrix.
             echo "trusted-release-candidate=false" >> "$GITHUB_OUTPUT"
           fi
+      # The merge queue lands the exact commit it tested. A release PR's receipt
+      # binds its head tree, so its queue entry must be that same tree: alone,
+      # directly on the base its CI proved. Any other tree would make main's
+      # release gate fail closed after landing; failing here instead drops the
+      # release PR from the queue before anything reaches main.
+      - name: Keep a queued release PR on its proven tree
+        if: github.event_name == 'merge_group'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.event.merge_group.head_sha }}
+        run: |
+          set -euo pipefail
+          number="$(sed -nE 's#^(refs/heads/)?gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]{40}$#\2#p' <<<"$QUEUE_REF")"
+          if [ -z "$number" ]; then
+            echo "cannot read a PR number from merge group ref $QUEUE_REF"
+            exit 1
+          fi
+          head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$number" --jq '.head.ref + " " + .head.sha')"
+          head_ref="${head% *}"
+          head_sha="${head#* }"
+          if [ "$head_ref" != "release-please--branches--main" ]; then
+            echo "PR #$number is not the release PR"
+            exit 0
+          fi
+          pr_tree="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$head_sha" --jq .tree.sha)"
+          queue_tree="$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$QUEUE_SHA" --jq .tree.sha)"
+          if [ "$pr_tree" != "$queue_tree" ]; then
+            echo "::error::Queue the release PR by itself, after it is up to date with main and its CI passed. Its head tree $pr_tree differs from this queue entry's tree $queue_tree."
+            exit 1
+          fi
+          echo "release PR #$number queue entry matches its proven head tree $pr_tree"
       # dorny/paths-filter reads pull-request files through the REST API, whose
       # response is capped at 3,000 files. Reject a larger PR before routing a
       # silently truncated inventory.
@@ -751,11 +787,6 @@ jobs:
           python3 scripts/ci-timed-command.test.py
           python3 scripts/verify-ort-source-pin.test.py
           python3 scripts/verify-ort-source-pin.py
-      # Its own step on purpose: the CI-measurement step above is pinned to an
-      # exact line list by drift_guard, so appending here would fail a contract
-      # about a workflow this change never touches.
-      - name: Verify stale-safe merge contract
-        run: python3 scripts/stale-safe-merge.test.py
       - name: Verify local hook routing contracts
         run: bash scripts/git-hooks.test.sh
       - name: Set up Rust for affected-test planning

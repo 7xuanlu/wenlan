@@ -602,6 +602,28 @@ class PlatformPlanTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "differential")
         self.assertFalse(any(required_suite_outputs(plan).values()))
 
+    def test_merge_group_plans_from_its_diff_like_a_pull_request(self) -> None:
+        # The merge queue reruns CI on each queued PR plus current main. A full
+        # backstop there would make every queued PR pay for the whole workspace.
+        paths = ["crates/wenlan-types/src/lib.rs", *self.INFRASTRUCTURE_PATHS]
+        for build in (build_plan, build_platform_plan):
+            with self.subTest(build=build.__name__):
+                plans = {
+                    event_name: build(
+                        paths,
+                        cargo_metadata(),
+                        event_name=event_name,
+                        existing_paths=set(paths),
+                    )
+                    for event_name in ("merge_group", "pull_request")
+                }
+
+                self.assertEqual(plans["merge_group"], plans["pull_request"])
+                self.assertNotIn(
+                    "merge_group keeps the full backstop",
+                    plans["merge_group"].get("reasons", []),
+                )
+
     def test_filtered_m4_only_pr_inventory_skips_generic_platform_suites(
         self,
     ) -> None:
@@ -1168,7 +1190,7 @@ class SuiteOutputTests(unittest.TestCase):
             "crates/wenlan-mcp/npm/install.js": (False, False),
         }
 
-        for event_name in ("pull_request", "push"):
+        for event_name in ("pull_request", "merge_group", "push"):
             for path, (fmt_required, clippy_required) in cases.items():
                 with self.subTest(event_name=event_name, path=path):
                     outputs = required_suite_outputs(
