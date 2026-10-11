@@ -12,6 +12,10 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SERVER_NAME: &str = "wenlan";
+/// The name `wenlan connect` registered the server under before the rename
+/// (#294). It is the same server, so a connect replaces it instead of leaving
+/// a second launch beside the new entry.
+const LEGACY_SERVER_NAME: &str = "origin";
 const FALLBACK_SERVER_COMMAND: &str = "npx";
 const FALLBACK_SERVER_ARGS: [&str; 2] = ["-y", "wenlan-mcp"];
 
@@ -53,13 +57,31 @@ pub fn run_connect(args: ConnectArgs, quiet: bool) -> Result<()> {
     add(args, quiet)
 }
 
+/// The name a client's Wenlan entry reports to the daemon (`--agent-name`),
+/// so a search from Cursor is recorded as Cursor's and not as the stdio
+/// default (`claude-code`). The names are the tool families the app matches
+/// presence rows against (`clientTypeFamily` and `KNOWN_CLIENT_DISPLAY_NAMES`
+/// in `src/lib/agents.ts`), the same ones the app's writer uses
+/// (`agent_name_for_client` in `app/src/mcp_config.rs`).
+fn agent_name_for_client(client: McpClient) -> &'static str {
+    match client {
+        McpClient::ClaudeCode => "claude-code",
+        McpClient::Codex => "codex",
+        McpClient::Gemini => "gemini-cli",
+        McpClient::Cursor => "cursor",
+        McpClient::ClaudeDesktop => "claude-desktop",
+        McpClient::Vscode => "vscode",
+    }
+}
+
 fn add(args: ConnectArgs, quiet: bool) -> Result<()> {
-    let server = server_command();
+    let server = with_agent_name(server_command(), agent_name_for_client(args.client));
     match args.client {
         McpClient::ClaudeCode => add_native(
             "claude-code",
             "claude",
             native_args("mcp", &["add", "-s", "user", SERVER_NAME, "--"], &server),
+            legacy_remove_args(&["-s", "user"]),
             args.dry_run,
             quiet,
             Some(claude_code_tools_only_note()),
@@ -68,6 +90,7 @@ fn add(args: ConnectArgs, quiet: bool) -> Result<()> {
             "codex",
             "codex",
             native_args("mcp", &["add", SERVER_NAME, "--"], &server),
+            legacy_remove_args(&[]),
             args.dry_run,
             quiet,
             None,
@@ -76,6 +99,7 @@ fn add(args: ConnectArgs, quiet: bool) -> Result<()> {
             "gemini",
             "gemini",
             native_args("mcp", &["add", "-s", "user", SERVER_NAME], &server),
+            legacy_remove_args(&["-s", "user"]),
             args.dry_run,
             quiet,
             None,
@@ -106,10 +130,20 @@ fn add(args: ConnectArgs, quiet: bool) -> Result<()> {
     }
 }
 
+/// `<tool> mcp remove [scope] origin`, in the scope the pre-rename CLI added
+/// it to (the same scope the `wenlan` entry is added to now).
+fn legacy_remove_args(scope: &[&str]) -> Vec<String> {
+    let mut out = vec!["mcp".to_string(), "remove".to_string()];
+    out.extend(scope.iter().map(|arg| (*arg).to_string()));
+    out.push(LEGACY_SERVER_NAME.to_string());
+    out
+}
+
 fn add_native(
     client: &str,
     binary: &str,
     add_args: Vec<String>,
+    legacy_remove: Vec<String>,
     dry_run: bool,
     quiet: bool,
     note: Option<&str>,
@@ -117,6 +151,11 @@ fn add_native(
     if dry_run {
         println!("Would run:");
         println!("  {} {}", binary, add_args.join(" "));
+        println!(
+            "  {} {}   (retires the pre-rename `{LEGACY_SERVER_NAME}` entry, if any)",
+            binary,
+            legacy_remove.join(" ")
+        );
         if let Some(note) = note {
             println!();
             println!("{note}");
@@ -124,7 +163,10 @@ fn add_native(
         return Ok(());
     }
 
+    // Add first: the legacy entry is only retired once its replacement is in
+    // place, so a failed add never leaves the client with neither.
     run_external(binary, &add_args)?;
+    retire_legacy_native(binary, &legacy_remove);
 
     if !quiet {
         println!("Configured Wenlan MCP for {client}.");
@@ -133,6 +175,20 @@ fn add_native(
         }
     }
     Ok(())
+}
+
+/// Best effort, and silent: an absent legacy entry is the common case and the
+/// tools report it differently (`codex` exits 0, `claude` exits 1), so neither
+/// the status nor the output says anything the user needs. The `wenlan` entry
+/// is already configured whatever this returns.
+fn retire_legacy_native(binary: &str, args: &[String]) {
+    let Ok(resolved) = which::which(binary) else {
+        return;
+    };
+    let _ = Command::new(resolved)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .output();
 }
 
 fn run_external(binary: &str, args: &[String]) -> Result<()> {
@@ -185,7 +241,10 @@ fn add_json_config_with(
     let ConfigFile { value, raw } = read_json_config(&path)?;
     let mut config = value;
     after_read();
-    let changed = upsert_server(&mut config, section_name, server)?;
+    let Upsert {
+        changed,
+        replaced_legacy,
+    } = upsert_server(&mut config, section_name, server)?;
 
     if !changed {
         if !quiet {
@@ -206,6 +265,9 @@ fn add_json_config_with(
             "{}",
             serde_json::to_string_pretty(&config[section_name][SERVER_NAME])?
         );
+        if replaced_legacy {
+            println!("Would remove the pre-rename `{section_name}.{LEGACY_SERVER_NAME}` entry.");
+        }
         return Ok(());
     }
 
@@ -226,6 +288,9 @@ fn add_json_config_with(
 
     if !quiet {
         println!("Updated {} for Wenlan MCP.", path.display());
+        if replaced_legacy {
+            println!("Replaced the pre-rename `{LEGACY_SERVER_NAME}` entry.");
+        }
         if let Some(backup) = backup {
             println!("Backup: {}", backup.display());
         }
@@ -350,7 +415,18 @@ fn resolve_write_target(path: &Path) -> Result<PathBuf> {
     )
 }
 
-fn upsert_server(config: &mut Value, section_name: &str, server: Value) -> Result<bool> {
+/// What [`upsert_server`] did. `changed` is false only when the `wenlan`
+/// entry already matched and there was no legacy entry to remove.
+#[derive(Debug, PartialEq, Eq)]
+struct Upsert {
+    changed: bool,
+    replaced_legacy: bool,
+}
+
+/// Set `section.wenlan` to `server` and drop a legacy `section.origin`: it is
+/// the same server under its old name, and keeping it would leave a second
+/// launch, possibly a broken one, that this connect never touched.
+fn upsert_server(config: &mut Value, section_name: &str, server: Value) -> Result<Upsert> {
     let root = config
         .as_object_mut()
         .ok_or_else(|| anyhow!("MCP config root must be a JSON object"))?;
@@ -363,12 +439,19 @@ fn upsert_server(config: &mut Value, section_name: &str, server: Value) -> Resul
         .as_object_mut()
         .ok_or_else(|| anyhow!("`{section_name}` must be a JSON object"))?;
 
+    let replaced_legacy = servers.remove(LEGACY_SERVER_NAME).is_some();
     if servers.get(SERVER_NAME) == Some(&server) {
-        return Ok(false);
+        return Ok(Upsert {
+            changed: replaced_legacy,
+            replaced_legacy,
+        });
     }
 
     servers.insert(SERVER_NAME.to_string(), server);
-    Ok(true)
+    Ok(Upsert {
+        changed: true,
+        replaced_legacy,
+    })
 }
 
 fn server_json(server: &ServerCommand) -> Value {
@@ -546,6 +629,15 @@ fn sibling_origin_mcp() -> Option<PathBuf> {
         .find(|candidate| candidate.is_file())
 }
 
+/// `server` with `--agent-name <name>` appended (a global `wenlan-mcp` flag,
+/// so it is valid after `npx -y wenlan-mcp` as well as after the bare binary).
+fn with_agent_name(mut server: ServerCommand, agent_name: &str) -> ServerCommand {
+    server
+        .args
+        .extend(["--agent-name".to_string(), agent_name.to_string()]);
+    server
+}
+
 fn native_args(prefix: &str, args: &[&str], server: &ServerCommand) -> Vec<String> {
     let mut out = Vec::with_capacity(1 + args.len() + 1 + server.args.len());
     out.push(prefix.to_string());
@@ -649,6 +741,146 @@ mod tests {
         assert_eq!(restart_hint("claude-code"), None);
         assert_eq!(restart_hint("codex"), None);
         assert_eq!(restart_hint("gemini"), None);
+    }
+
+    // ---- Naming the client --------------------------------------------------
+
+    #[test]
+    fn every_client_is_named_with_its_app_tool_family() {
+        // The app's families (`clientTypeFamily`, plus `vscode` from
+        // `KNOWN_CLIENT_DISPLAY_NAMES`); `claude-code` is also the stdio
+        // default, so it is the one a missing flag would silently claim.
+        let cases = [
+            (McpClient::ClaudeCode, "claude-code"),
+            (McpClient::Codex, "codex"),
+            (McpClient::Gemini, "gemini-cli"),
+            (McpClient::Cursor, "cursor"),
+            (McpClient::ClaudeDesktop, "claude-desktop"),
+            (McpClient::Vscode, "vscode"),
+        ];
+        for (client, name) in cases {
+            assert_eq!(agent_name_for_client(client), name, "{client:?}");
+        }
+    }
+
+    #[test]
+    fn the_agent_name_follows_both_launch_forms() {
+        let sibling = with_agent_name(wenlan_server(), "cursor");
+        assert_eq!(sibling.command, "wenlan-mcp");
+        assert_eq!(sibling.args, ["--agent-name", "cursor"]);
+
+        let npx = with_agent_name(
+            ServerCommand {
+                command: FALLBACK_SERVER_COMMAND.to_string(),
+                args: FALLBACK_SERVER_ARGS.map(str::to_string).to_vec(),
+            },
+            "gemini-cli",
+        );
+        assert_eq!(npx.command, "npx");
+        assert_eq!(npx.args, ["-y", "wenlan-mcp", "--agent-name", "gemini-cli"]);
+        assert_eq!(
+            server_json(&npx)["args"],
+            json!(["-y", "wenlan-mcp", "--agent-name", "gemini-cli"])
+        );
+    }
+
+    #[test]
+    fn native_commands_carry_the_agent_name_after_the_server() {
+        let server = with_agent_name(wenlan_server(), "claude-code");
+        assert_eq!(
+            native_args("mcp", &["add", "-s", "user", SERVER_NAME, "--"], &server),
+            [
+                "mcp",
+                "add",
+                "-s",
+                "user",
+                "wenlan",
+                "--",
+                "wenlan-mcp",
+                "--agent-name",
+                "claude-code"
+            ]
+        );
+        assert_eq!(
+            legacy_remove_args(&["-s", "user"]),
+            ["mcp", "remove", "-s", "user", "origin"]
+        );
+        assert_eq!(legacy_remove_args(&[]), ["mcp", "remove", "origin"]);
+    }
+
+    // ---- Replacing the pre-rename entry -------------------------------------
+
+    #[test]
+    fn upsert_replaces_a_legacy_origin_entry() {
+        let server = server_json(&with_agent_name(wenlan_server(), "cursor"));
+        let mut config = json!({"mcpServers": {
+            "origin": {"command": "/gone/origin-mcp"},
+            "other": {"command": "keep-me"},
+        }});
+
+        let outcome = upsert_server(&mut config, "mcpServers", server.clone()).expect("upsert");
+
+        assert_eq!(
+            outcome,
+            Upsert {
+                changed: true,
+                replaced_legacy: true
+            }
+        );
+        assert!(config["mcpServers"]["origin"].is_null(), "{config}");
+        assert_eq!(config["mcpServers"]["wenlan"], server);
+        assert_eq!(config["mcpServers"]["other"]["command"], "keep-me");
+    }
+
+    #[test]
+    fn a_matching_entry_beside_a_legacy_one_is_still_a_change() {
+        // `wenlan` already right is not "nothing to do" while `origin` is
+        // still configured next to it.
+        let server = server_json(&wenlan_server());
+        let mut config = json!({"servers": {
+            "wenlan": server.clone(),
+            "origin": {"command": "npx", "args": ["-y", "origin-mcp"]},
+        }});
+
+        let outcome = upsert_server(&mut config, "servers", server.clone()).expect("upsert");
+
+        assert_eq!(
+            outcome,
+            Upsert {
+                changed: true,
+                replaced_legacy: true
+            }
+        );
+        assert_eq!(config, json!({"servers": {"wenlan": server}}));
+
+        let again = upsert_server(&mut config, "servers", server).expect("upsert");
+        assert_eq!(
+            again,
+            Upsert {
+                changed: false,
+                replaced_legacy: false
+            }
+        );
+    }
+
+    #[test]
+    fn connecting_writes_out_the_legacy_removal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("mcp.json");
+        let seeded = r#"{"mcpServers":{"origin":{"command":"/gone/origin-mcp"},"other":{"command":"keep-me"}}}"#;
+        fs::write(&path, seeded).expect("seed");
+
+        connect(&path).expect("connect");
+
+        let written: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(written["mcpServers"]["origin"].is_null(), "{written}");
+        assert_eq!(written["mcpServers"]["wenlan"]["command"], "wenlan-mcp");
+        assert_eq!(written["mcpServers"]["other"]["command"], "keep-me");
+        let backup = names_in(dir.path())
+            .into_iter()
+            .find(|name| name.starts_with("mcp.json.bak."))
+            .expect("the original, legacy entry included, is backed up");
+        assert_eq!(fs::read_to_string(dir.path().join(backup)).unwrap(), seeded);
     }
 
     // ---- Writing a client's JSON config -------------------------------------
