@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8a2a6a1713d374177d0d70418acfc3793d2a31bab4dd18308765e7d86907a0a7 -->
+<!-- README_SYNC: source=README.md sha256=1516bfcedcc15ee5fdfb0e9baaecc62912d08a21225ce651560e1a92367f2192 -->
 
 <p align="center">
   <picture>
@@ -203,7 +203,7 @@ Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus notas. 
 - **[Busca por palabras y significado](docs/technical-foundations.md#retrieval-pipeline):** Combina coincidencias exactas con búsqueda semántica local; las conexiones del grafo pueden aportar contexto.
 - **[Búsqueda avanzada opcional](docs/technical-foundations.md#optional-channels-and-defaults):** Busca en Páginas y Memorias más detalladas, con reordenación opcional para afinar los resultados.
 - **[Separa tus proyectos](https://wenlan.app/docs/spaces):** Usa Espacios para elegir qué conocimiento laboral, personal, de clientes o de repositorios busca tu IA.
-- **Acceso web (experimental):** Conecta un cliente web de IA compatible a un Espacio autorizado mientras tu ordenador está conectado. Las consultas y los resultados pasan por un relay; consulta el [funcionamiento del acceso y sus límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
+- **Acceso web (experimental):** Conecta un cliente web de IA compatible a toda tu biblioteca, o a un Espacio que elijas, mientras tu ordenador está conectado. Las consultas y los resultados pasan por un relay; consulta el [funcionamiento del acceso y sus límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 - **Conecta tus propias herramientas:** Envía texto preparado, contenido web o Memorias mediante la API HTTP local. Acepta contenido, no URL para descargar.
 
 ### Mantén el conocimiento al día
