@@ -79,7 +79,7 @@ Bash: curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.4.1/inst
 EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/overlay.json" <<EOF
-{"skills": {"setup": {"replace": [{"from": ["npx -y wenlan@0.4.1 setup"], "to": ["curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash"]}]}}}
+{"skills": {"setup": {"replace": [{"from": ["npx -y wenlan@0.4.1 setup"], "to": ["curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.4.1/install.sh | bash"]}]}}}
 EOF
 
 # Cargo.lock fixture: workspace members at the old version + an external dep
