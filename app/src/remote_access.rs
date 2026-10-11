@@ -1331,6 +1331,14 @@ async fn recover_remote(
     let Some(next_generation) = transition_off(&app, Some(generation)).await else {
         return;
     };
+    match delay {
+        Some(delay) => log::warn!(
+            "[remote-access] reconnecting in {}s (attempt {}) after: {error}",
+            delay.as_secs(),
+            attempts + 1
+        ),
+        None => log::warn!("[remote-access] stopping after: {error}"),
+    }
     let cleanup_ok = {
         let remote = remote_access_mutex(&app).await;
         let mut ra = remote.lock().await;
@@ -1392,7 +1400,10 @@ async fn monitor_reverse(
     let mut failures = 0u8;
     let failure = loop {
         tokio::select! {
-            _ = wait_for_exit(&mut mcp_rx) => break RenewalError::Relay(RelayError::Unavailable),
+            reason = wait_for_exit(&mut mcp_rx) => {
+                log::warn!("[remote-access] {MCP_SIDECAR_NAME} exited: {reason}");
+                break RenewalError::Relay(RelayError::Unavailable);
+            }
             _ = wait_for_generation_change(&app, generation) => return,
             _ = sleep(Duration::from_secs(5)) => {}
         }
@@ -1405,6 +1416,7 @@ async fn monitor_reverse(
                 return;
             }
             let (Some(active), Some(port)) = (ra.reverse.as_ref(), ra.port) else {
+                log::warn!("[remote-access] relay connection state missing");
                 break RenewalError::Relay(RelayError::Unavailable);
             };
             (
@@ -1418,6 +1430,8 @@ async fn monitor_reverse(
             attempts = 0;
         }
         if finished {
+            // The transport logs why it ended.
+            log::warn!("[remote-access] relay connection finished");
             break RenewalError::Relay(RelayError::Unavailable);
         }
         health_tick += 1;
@@ -1453,6 +1467,7 @@ async fn monitor_reverse(
                         RelayError::Unavailable | RelayError::RateLimited { .. },
                     ),
                 ) => {
+                    log::warn!("[remote-access] route renewal deferred: {error}");
                     let retry_after = match error {
                         RenewalError::Relay(RelayError::RateLimited {
                             retry_after_seconds,
@@ -1465,29 +1480,36 @@ async fn monitor_reverse(
                         retry_after,
                     );
                 }
-                Err(error) => break error,
+                Err(error) => {
+                    log::warn!("[remote-access] route renewal failed: {error}");
+                    break error;
+                }
             }
         }
-        let health = async {
-            reverse_runtime::check(&profile, &id).await?;
-            relay_runtime::verify_backend(port, &profile)
+        let health = match reverse_runtime::check(&profile, &id).await {
+            Ok(()) => relay_runtime::verify_backend(port, &profile)
                 .await
-                .map_err(RenewalError::Relay)
-        }
-        .await;
+                .map_err(|error| ("local server check", RenewalError::Relay(error))),
+            Err(error) => Err(("relay status check", error)),
+        };
         match health {
             Ok(()) => failures = 0,
-            Err(
+            Err((
+                check,
                 error @ RenewalError::Relay(
                     RelayError::Unavailable | RelayError::RateLimited { .. },
                 ),
-            ) => {
+            )) => {
                 failures += 1;
+                log::warn!("[remote-access] {check} failed ({failures}/3): {error}");
                 if failures >= 3 {
                     break error;
                 }
             }
-            Err(error) => break error,
+            Err((check, error)) => {
+                log::warn!("[remote-access] {check} failed: {error}");
+                break error;
+            }
         }
     };
     recover_remote(app, generation, attempts, failure).await;
