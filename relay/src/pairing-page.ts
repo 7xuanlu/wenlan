@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Browser pairing page markup and copy. Pure functions: no storage or auth.
 import { formatUserCode } from './pairing.ts';
+import { WHOLE_LIBRARY_SPACE } from './proxy.ts';
 
 export type PageLocale = 'en' | 'zh-Hant' | 'zh-Hans';
 
@@ -23,6 +24,7 @@ const COPY = {
     fallbackName: 'your AI app',
     codeLabel: 'Your code',
     space: 'Space',
+    wholeLibrary: 'Whole library',
     continue: 'Continue',
     cancel: 'Cancel',
     cancelled: 'Cancelled. Continue to return to your AI app.',
@@ -56,6 +58,7 @@ const COPY = {
     fallbackName: '你的 AI 應用程式',
     codeLabel: '你的代碼',
     space: 'Space',
+    wholeLibrary: '整個資料庫',
     continue: '繼續',
     cancel: '取消',
     cancelled: '已取消。按「繼續」返回你的 AI 應用程式。',
@@ -89,6 +92,7 @@ const COPY = {
     fallbackName: '你的 AI 应用',
     codeLabel: '你的代码',
     space: 'Space',
+    wholeLibrary: '整个资料库',
     continue: '继续',
     cancel: '取消',
     cancelled: '已取消。按“继续”返回你的 AI 应用。',
@@ -136,6 +140,11 @@ export function negotiateLocale(header: string | null | undefined): PageLocale {
   return 'en';
 }
 
+/** What a person reads for a Space value; the raw value stays in data-space. */
+export function spaceLabel(locale: PageLocale, space: string): string {
+  return space === WHOLE_LIBRARY_SPACE ? copy(locale, 'wholeLibrary') : space;
+}
+
 export function htmlEscape(value: string): string {
   return value.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!);
 }
@@ -159,8 +168,8 @@ export function pairingDocument(view: PairingPageView | null, locale: PageLocale
   const name = view?.displayName || copy(locale, 'fallbackName');
   const state = !view ? 'unavailable'
     : view.status === 'approved' ? 'approved' : view.status === 'denied' ? 'denied' : 'pending';
-  const data = (['waiting', 'approved', 'denied', 'expired', 'retry', 'error'] as const)
-    .map(key => ` data-text-${key}="${t(key, { name })}"`).join('');
+  const data = (['waiting', 'approved', 'denied', 'expired', 'retry', 'error', 'wholeLibrary'] as const)
+    .map(key => ` data-text-${key.replace(/[A-Z]/g, letter => `-${letter.toLowerCase()}`)}="${t(key, { name })}"`).join('');
   if (!view) {
     const body = `<h1>${t('docTitle')}</h1>
 <p class="status" data-state="unavailable" role="status" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span id="pairing-status">${t('expired', { name })}</span></p>`;
@@ -181,7 +190,7 @@ ${code ? `<div class="fallback"><h2 class="desktop-only">${t('fallback')}</h2>
 <p><span class="desktop-only">${t('fallbackBody')}</span><span class="touch-only">${t('touchBody')}</span></p>
 <p class="user-code"><span class="visually-hidden">${t('codeLabel')}: </span><output id="user-code">${htmlEscape(code)}</output></p></div>` : ''}
 </section>
-<dl id="approved-space"${approved ? '' : ' hidden'}><dt>${t('space')}</dt><dd>${htmlEscape(view.space ?? '')}</dd></dl>
+<dl id="approved-space"${approved ? '' : ' hidden'} data-space="${htmlEscape(view.space ?? '')}"><dt>${t('space')}</dt><dd>${htmlEscape(spaceLabel(locale, view.space ?? ''))}</dd></dl>
 ${host ? `<p class="sends-to">${t('sendsTo', { host })}</p>` : ''}
 <details class="client-details"><summary>${t('details')}</summary><dl><dt>${t('clientId')}</dt><dd>${htmlEscape(view.clientId)}</dd></dl><p class="local-hint">${t('localHint')}</p></details>
 <p id="notice" role="status" aria-live="polite"></p>

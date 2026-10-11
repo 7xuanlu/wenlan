@@ -68,7 +68,7 @@ These are off until you turn them on. Aside from the remote images described abo
 
 - **A cloud AI provider (bring your own key).** If you save an API key and pick that provider for enrichment, Wenlan sends the text of the memory or document being processed, plus its prompt, to that provider. Anthropic goes to `https://api.anthropic.com/v1/messages`. Any other provider goes to the endpoint you entered -- the app offers presets for OpenAI, Google, Groq, OpenRouter, Mistral, DeepSeek and xAI, and an endpoint on your own machine such as Ollama stays local. What that provider does with the text is governed by its own terms. Read them rather than assuming: several of these companies say their consumer privacy policy does not cover text submitted through their API, and point to a separate business or API agreement instead. Your key is stored in the local config and sent only to that provider. Turn it off with `wenlan enrichment disable`, or by clearing the key.
 - **Testing a provider.** The "test endpoint" button sends one fixed sentence, `Say 'hello' and nothing else.`, and the model-list button asks the provider what models it offers. Neither sends anything you captured.
-- **Web access (experimental, desktop app only; called Remote Access in earlier versions).** When you turn it on, the app connects out to Wenlan's web service at `https://relay.wenlan.app` so web and phone AI apps, such as Claude and ChatGPT, can search one Space that you choose. No tunnel program runs. The service keeps the records listed under "Pre-release standalone `wenlan-relay` connector" below: a device key that ends after 90 days unless you renew it, the Space you chose, and a record of each app you allow. An app is allowed only after you click Allow in a Wenlan window that shows which app is asking; you can decline, and you can remove an app at any time under Connected apps. While access is on, a search from an allowed app travels through the service to your computer and the result returns the same way, so the service and the AI app can read what is searched and found. Turning Web access off, or renewing the key, ends every connected app right away. Nothing is sent while it is off.
+- **Web access (experimental, desktop app only; called Remote Access in earlier versions).** When you turn it on, the app connects out to Wenlan's web service at `https://relay.wenlan.app` so web and phone AI apps, such as Claude and ChatGPT, can search what you choose to share: the whole library (every Space, plus everything not in a Space) or one Space. No tunnel program runs. The service keeps the records listed under "Pre-release standalone `wenlan-relay` connector" below: a device key that ends after 90 days unless you renew it, what you chose to share (one Space, or a marker meaning the whole library), and a record of each app you allow. An app is allowed only after you click Allow in a Wenlan window that shows which app is asking; you can decline, and you can remove an app at any time under Connected apps. While access is on, a search from an allowed app travels through the service to your computer and the result returns the same way, so the service and the AI app can read what is searched and found. Turning Web access off, or renewing the key, ends every connected app right away. Nothing is sent while it is off.
 - **On-device model download.** If you run `wenlan models install` or start the download from Settings, a Qwen model is fetched from `https://huggingface.co`. This is separate from the search model above and does not happen on its own. Once installed, enrichment runs on your machine and the text being enriched does not leave it.
 - **Better search ranking.** If you turn on the reranker, its weights are downloaded from `https://huggingface.co` the next time the daemon starts, between roughly 146 MB and 1.1 GB depending on which one you choose. It is off unless you set it.
 
@@ -126,8 +126,10 @@ That client, and its provider where applicable, can receive the query and
 returned knowledge as part of the conversation.
 
 The public MCP endpoint is `https://relay.wenlan.app/mcp`. OAuth grants access
-only to the existing Space approved during pairing; new Spaces are not
-automatically included. Normal desktop pairing does not require a separate
+only to what was approved during pairing: one existing Space, or the whole
+library. A one-Space grant does not include new Spaces. A whole-library grant
+reaches every Space, including Spaces created later, plus everything not in a
+Space. Normal desktop pairing does not require a separate
 Wenlan email/password account. The exposed tools are `brief`, `recall`, and
 `get_page_sources`; the local query activity described above still applies.
 
@@ -143,7 +145,7 @@ Not all credentials are stored as one-way hashes.
 The relay's control-plane records include:
 
 - Device and route state: generated device/subject identifiers, a hash of the
-  management credential, enabled/revision/expiry state, the Space, tunnel
+  management credential, enabled/revision/expiry state, the shared Space or whole-library marker, tunnel
   origin or opaque reverse-connection identifier, and backend connector
   credential needed to route the request. Pending reverse enrollment retains
   the proposed Space and backend credential without enabling an OAuth route.

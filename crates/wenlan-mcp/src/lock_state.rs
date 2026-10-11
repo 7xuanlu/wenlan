@@ -46,6 +46,13 @@ pub fn default_space() -> Option<String> {
         .clone()
 }
 
+/// Drop the `WENLAN_DEFAULT_SPACE` fallback for this process. Whole-library
+/// serving calls this so an inherited default can never silently narrow
+/// searches to one Space.
+pub fn clear_default_space() {
+    *DEFAULT.write().expect("default_state write lock poisoned") = None;
+}
+
 /// Return `true` if a space lock is active.
 pub fn is_locked() -> bool {
     LOCKED
@@ -92,6 +99,19 @@ mod tests {
         init_from_env();
         assert_eq!(locked_space(), None);
         std::env::remove_var("WENLAN_SPACE");
+        init_from_env();
+    }
+
+    #[test]
+    fn clear_default_space_drops_only_the_fallback() {
+        let _guard = ENV_LOCK.blocking_lock();
+        std::env::remove_var("WENLAN_SPACE");
+        std::env::set_var("WENLAN_DEFAULT_SPACE", "fallback");
+        init_from_env();
+        clear_default_space();
+        assert_eq!(default_space(), None);
+        assert!(!is_locked());
+        std::env::remove_var("WENLAN_DEFAULT_SPACE");
         init_from_env();
     }
 

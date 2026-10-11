@@ -3193,8 +3193,11 @@ export async function getRemoteAccessProfile(): Promise<RemoteAccessProfile | nu
   return invoke<RemoteAccessProfile | null>("get_remote_access_profile");
 }
 
-export async function configureRemoteAccess(space: string, expectedRevision?: string): Promise<RemoteAccessProfile> {
-  return invoke<RemoteAccessProfile>("configure_remote_access", { space, expectedRevision: expectedRevision ?? null });
+/** What Web access shares: every Space plus everything not in one, or one Space. */
+export type RemoteScope = { kind: "wholeLibrary" } | { kind: "space"; name: string };
+
+export async function configureRemoteAccess(scope: RemoteScope, expectedRevision?: string): Promise<RemoteAccessProfile> {
+  return invoke<RemoteAccessProfile>("configure_remote_access", { scope, expectedRevision: expectedRevision ?? null });
 }
 
 export async function getRemoteAccessStatus(): Promise<RemoteAccessStatus> {

@@ -186,4 +186,33 @@ mod tests {
         assert_eq!(finalized.space_name, None);
         assert_eq!(finalized.source, WriteSpaceSource::Uncategorized);
     }
+
+    #[tokio::test]
+    async fn whole_library_scope_is_not_a_legal_space_name() {
+        let (db, _dir) = test_db().await;
+        db.run_migrations(&NoopEmitter).await.unwrap();
+
+        for name in ["*", " * "] {
+            assert!(
+                matches!(
+                    db.create_space(name, None, false).await,
+                    Err(WenlanError::Validation(_))
+                ),
+                "creating a Space named {name:?} must be rejected"
+            );
+        }
+        assert!(db.get_space("*").await.unwrap().is_none());
+
+        db.create_space("work", None, false).await.unwrap();
+        assert!(matches!(
+            db.update_space("work", "*", None).await,
+            Err(WenlanError::Validation(_))
+        ));
+        assert!(db.get_space("work").await.unwrap().is_some());
+        assert!(db.get_space("*").await.unwrap().is_none());
+
+        // Names that only contain the character stay legal.
+        db.create_space("a*b", None, false).await.unwrap();
+        db.update_space("a*b", "**", None).await.unwrap();
+    }
 }

@@ -24,7 +24,20 @@ pub const QUERY_ONLY_AUTH_ERROR: &str =
     "Query-only tool profile requires bearer token authentication; --no-auth is not allowed.";
 
 pub const QUERY_ONLY_SPACE_ERROR: &str =
-    "Query-only tool profile requires a strict WENLAN_SPACE pin; WENLAN_DEFAULT_SPACE alone does not satisfy it.";
+    "Query-only tool profile requires a strict WENLAN_SPACE pin or --whole-library; WENLAN_DEFAULT_SPACE alone does not satisfy it.";
+
+/// Reserved scope value for a connector that searches the whole library:
+/// every Space plus everything not in a Space. Core refuses it as a Space name.
+pub const WHOLE_LIBRARY_SPACE: &str = "*";
+
+pub const WHOLE_LIBRARY_PROFILE_ERROR: &str =
+    "--whole-library is only valid with --tool-profile query-only.";
+
+pub const WHOLE_LIBRARY_PIN_CONFLICT_ERROR: &str =
+    "--whole-library cannot be combined with a WENLAN_SPACE pin; choose one scope.";
+
+pub const RESERVED_SPACE_PIN_ERROR: &str =
+    "WENLAN_SPACE cannot be the reserved whole-library value \"*\"; use --whole-library instead.";
 
 #[derive(Debug, Clone)]
 pub struct ServeConfig {
@@ -35,6 +48,24 @@ pub struct ServeConfig {
     pub agent_name: String,
     pub user_id: Option<String>,
     pub allowed_origins: Vec<String>,
+    /// Query-only: search the whole library instead of one pinned Space.
+    pub whole_library: bool,
+}
+
+/// Resolve the scope a query-only connector reports in `/connector-info`:
+/// the strict Space pin, or [`WHOLE_LIBRARY_SPACE`]. Exactly one must be chosen,
+/// and a pin can never spell the reserved value, so a one-Space connector is
+/// never widened into the whole library.
+pub fn query_only_scope(locked: Option<String>, whole_library: bool) -> anyhow::Result<String> {
+    match (locked, whole_library) {
+        (Some(_), true) => anyhow::bail!(WHOLE_LIBRARY_PIN_CONFLICT_ERROR),
+        (Some(space), false) if space == WHOLE_LIBRARY_SPACE => {
+            anyhow::bail!(RESERVED_SPACE_PIN_ERROR)
+        }
+        (Some(space), false) => Ok(space),
+        (None, true) => Ok(WHOLE_LIBRARY_SPACE.to_string()),
+        (None, false) => anyhow::bail!(QUERY_ONLY_SPACE_ERROR),
+    }
 }
 
 async fn health() -> impl IntoResponse {
@@ -61,10 +92,21 @@ pub async fn run_serve_with_profile(
     {
         anyhow::bail!(QUERY_ONLY_AUTH_ERROR);
     }
+    if config.whole_library && tool_profile != ToolProfile::QueryOnly {
+        anyhow::bail!(WHOLE_LIBRARY_PROFILE_ERROR);
+    }
     // A Space pin scopes retrieval to one Space; it is a data-scoping control,
     // not authentication or per-caller tenant isolation.
-    if tool_profile == ToolProfile::QueryOnly && lock_state::locked_space().is_none() {
-        anyhow::bail!(QUERY_ONLY_SPACE_ERROR);
+    let connector_space = if tool_profile == ToolProfile::QueryOnly {
+        Some(query_only_scope(
+            lock_state::locked_space(),
+            config.whole_library,
+        )?)
+    } else {
+        None
+    };
+    if config.whole_library {
+        lock_state::clear_default_space();
     }
 
     let client =
@@ -108,10 +150,9 @@ pub async fn run_serve_with_profile(
         .nest_service("/mcp", mcp_service)
         .route("/health", get(health));
 
-    if tool_profile == ToolProfile::QueryOnly {
+    if let Some(space) = connector_space {
         // Enrollment reads this only through the same bearer gate as MCP.
         // Never put the Space pin in the public health response.
-        let space = lock_state::locked_space().expect("query-only Space checked above");
         router = router.route(
             "/connector-info",
             get(move || {

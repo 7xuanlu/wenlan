@@ -223,6 +223,23 @@ fn expired_credentials_remain_available_for_explicit_disconnect_recovery() {
 }
 
 #[test]
+fn whole_library_profile_survives_reload() {
+    let (_dir, store) = fixture();
+    let profile = store
+        .configure(None, super::super::WHOLE_LIBRARY_SPACE)
+        .unwrap();
+    assert!(profile.whole_library());
+    let enabled = store.enable(profile.revision()).unwrap();
+    let reloaded = store.load().unwrap().unwrap();
+    assert_eq!(reloaded.revision(), enabled.revision());
+    assert!(reloaded.whole_library());
+    assert_eq!(reloaded.view().space, "*");
+
+    let (_dir, store) = fixture();
+    assert!(!store.configure(None, "review").unwrap().whole_library());
+}
+
+#[test]
 fn oversized_storage_and_invalid_spaces_fail_closed() {
     let (_dir, store) = fixture();
     for space in ["", " review", "review\n", &"x".repeat(257)] {
