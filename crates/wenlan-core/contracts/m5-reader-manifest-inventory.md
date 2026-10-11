@@ -739,7 +739,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `DELETE` | `/api/tags/{name}` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/ws/updates` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 
-## MCP — all 29 `#[tool(` declarations
+## MCP — all 30 `#[tool(` declarations
 
 From `crates/wenlan-mcp/src/tools.rs` **in this tree**. An earlier draft listed
 `search_pages`, `get_page`, `get_page_links`, `list_pages_recent`, and
@@ -756,34 +756,34 @@ must be demoted individually with a recorded reason. **Every MCP tool is
 |---|---|---|---|---|
 | `accept_refinement` | yes | automatic | `none` | tool handler |
 | `accept_revision` | yes | automatic | `none` | tool handler |
-| `apply_lint_repair` | yes | automatic | `none` | tool handler |
+| `brief` | yes | automatic | `none` | tool handler |
 | `capture` | yes | automatic | `none` | tool handler |
 | `confirm_memory` | yes | automatic | `none` | tool handler |
-| `context` | yes | automatic | `none` | tool handler |
 | `create_entity` | yes | automatic | `none` | tool handler |
 | `create_relation` | yes | automatic | `none` | tool handler |
 | `delete_page` | yes | automatic | `none` | tool handler |
 | `dismiss_revision` | yes | automatic | `none` | tool handler |
 | `distill` | yes | automatic | `none` | tool handler |
 | `forget` | yes | automatic | `none` | tool handler |
-| `get_lint_agent_work_page` | yes | automatic | `none` | tool handler |
-| `get_lint_repair_plan_entries` | yes | automatic | `none` | tool handler |
 | `get_memory_revisions` | yes | automatic | `none` | tool handler |
 | `get_page_revisions` | yes | automatic | `none` | tool handler |
 | `get_page_sources` | yes | automatic | `none` | tool handler |
 | `lint` | yes | automatic | `none` | tool handler |
+| `lint_repair_apply` | yes | automatic | `none` | tool handler |
+| `lint_repair_prepare` | yes | automatic | `none` | tool handler |
+| `lint_repair_verify` | yes | automatic | `none` | tool handler |
+| `list_pages` | yes | automatic | `none` | tool handler |
 | `list_pending` | yes | automatic | `none` | tool handler |
 | `list_pending_imports` | yes | automatic | `none` | tool handler |
 | `list_pending_revisions` | yes | automatic | `none` | tool handler |
 | `list_refinements` | yes | automatic | `none` | tool handler |
 | `list_rejections` | yes | automatic | `none` | tool handler |
-| `prepare_lint_repair` | yes | automatic | `none` | tool handler |
-| `prepare_lint_repair_plan` | yes | automatic | `none` | tool handler |
+| `read_page` | yes | automatic | `none` | tool handler |
 | `recall` | yes | automatic | `none` | tool handler |
 | `reject_refinement` | yes | automatic | `none` | tool handler |
-| `verify_lint_repair` | yes | automatic | `none` | tool handler |
-| `write_page` | yes | automatic | `none` | tool handler |
 | `rename_page` | yes | automatic | `none` | tool handler |
+| `update_brief` | yes | automatic | `none` | tool handler |
+| `write_page` | yes | automatic | `none` | tool handler |
 
 ## CLI — all 24 `Commands` variants
 

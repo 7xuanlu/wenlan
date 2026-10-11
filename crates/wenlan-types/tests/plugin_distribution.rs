@@ -249,10 +249,10 @@ fn lint_is_the_only_public_repair_flow_on_both_surfaces() {
             "Lint creates durable Review Items for choices that are not yet exact.",
             "turns exactly one Review Item into a separately approved manifest",
             "`lint_repair_review` generic accept remains rejected and non-mutating",
-            "Never call `apply_lint_repair` in the same turn as `prepare_lint_repair`.",
-            "prepare_lint_repair",
+            "Never call `lint_repair_apply` in the same turn as `lint_repair_prepare`.",
+            "lint_repair_prepare",
             "apply repair <manifest-id> <manifest-digest>",
-            "Never call apply_lint_repair in the same turn as prepare_lint_repair",
+            "Never call lint_repair_apply in the same turn as lint_repair_prepare",
             "applied_unverified",
             "CLI fallback: `wenlan lint --profile deep --agent-assist`",
         ] {

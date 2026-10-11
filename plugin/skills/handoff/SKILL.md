@@ -4,7 +4,7 @@ description: >
   End a work session. Stores durable captures, writes a narrative session log,
   and automatically applies typed item-level deltas to the current Space Brief.
   Invoked as `/handoff`.
-allowed-tools: ["Bash"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__update_brief"]
 ---
 
 # /handoff
@@ -156,7 +156,11 @@ If `space` is empty, skip this typed update entirely.
 - Never auto-demote untouched Active work.
 - Do not add an unchanged duplicate.
 
-Apply exactly once:
+Apply exactly once. When the daemon is up (`daemon_down=0`), call
+`mcp__plugin_wenlan_wenlan__update_brief` with the same `space`,
+`operation_id`, `summary`, and `mutations`; it is the same typed request over
+MCP and returns the same receipt. When `daemon_down=1`, use the CLI, which
+queues the file in the outbox for replay:
 
 ```bash
 "$W" --format json --space "$space" brief update --file "$update_file"

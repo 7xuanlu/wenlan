@@ -17,8 +17,8 @@ use wenlan_types::requests::{
     MovePageRequest, PageDraftVersionRequest, SearchPagesRequest, UpdatePageDraftRequest,
 };
 use wenlan_types::responses::{
-    CreatePageResponse, MovePageResponse, PageDraftResponse, PageInventoryEntry,
-    PageInventoryResponse, PageProjectionStatus,
+    CreatePageResponse, MovePageResponse, OkfConceptRef, PageDraftResponse, PageInventoryEntry,
+    PageInventoryResponse, PageProjectionStatus, PageReadResponse,
 };
 use wenlan_types::{WriteOutcome, WriteSpaceSource, WriteSpaceTarget};
 
@@ -150,7 +150,7 @@ pub async fn handle_get_page(
     crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
     view: crate::truth_guard::TruthView,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<PageReadResponse>, ServerError> {
     let (db, page_root) = {
         let s = state.read().await;
         (
@@ -177,36 +177,42 @@ pub async fn handle_get_page(
             // authorized internal record before serialization.
             let is_draft = page.status == "draft";
             let has_live_file = wenlan_core::pages::is_active_file_page(&page);
-            let mut body = serde_json::json!({ "page": page });
+            let mut folder_path = None;
+            let mut storage_path = None;
             if is_draft {
-                body["page"]["folder_path"] = db.page_initial_folder_path(&id).await?.into();
+                folder_path = Some(db.page_initial_folder_path(&id).await?);
             } else if has_live_file {
                 // Resolve only after scope and truth authorization. A path is verified
                 // physical metadata, never a guess from title or initial folder intent.
-                let storage_path = if let Some(root) = page_root {
+                if let Some(root) = page_root {
                     let db = db.clone();
                     let page_id = id.clone();
-                    tokio::task::spawn_blocking(move || {
+                    storage_path = tokio::task::spawn_blocking(move || {
                         wenlan_core::export::knowledge::KnowledgeWriter::new(root, &db)
                             .live_page_filenames(&[page_id.as_str()])
                             .remove(&page_id)
                     })
                     .await
-                    .unwrap_or_default()
-                } else {
-                    None
-                };
-                body["page"]["storage_path"] = serde_json::json!(storage_path);
+                    .unwrap_or_default();
+                }
             }
-            if let Ok(Some(record)) = db.get_okf_concept(&id).await {
-                body["okf"] = serde_json::json!({
-                    "source_id": record.source_id,
-                    "concept_id": record.concept_id,
-                    "frontmatter": record.frontmatter,
-                    "updated_at": record.updated_at,
-                });
-            }
-            Ok(Json(body))
+            let okf = match db.get_okf_concept(&id).await {
+                Ok(Some(record)) => Some(OkfConceptRef {
+                    source_id: record.source_id,
+                    concept_id: record.concept_id,
+                    frontmatter: record.frontmatter,
+                    updated_at: record.updated_at,
+                }),
+                _ => None,
+            };
+            Ok(Json(PageReadResponse {
+                page: PageInventoryEntry {
+                    page,
+                    storage_path,
+                    folder_path,
+                },
+                okf,
+            }))
         }
         // A hidden page 404s rather than 200-ing empty: for this caller it is
         // not there, and the existing not-found answer is the honest one.

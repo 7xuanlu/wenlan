@@ -114,29 +114,12 @@ For a durable named entity explicitly established by the user, `create_entity`
 may also be used alone when its stable id is needed. Its `Entity <id> ready`
 result does not imply that a new row was created.
 
-## What to capture
+## What to capture, what to skip, how to write it
 
-- Decisions: "Going with approach A because B"
-- Preferences: "Prefers TDD because catches regressions early"
-- Corrections: "Actually it's C, not D"
-- Identity / project facts: "Works on Wenlan, a local memory daemon for AI tools"
-
-## What NOT to capture
-
-- System prompts, boot logs, heartbeats
-- Transient task state ("currently working on...")
-- Tool output, command results, architecture dumps
-- Single-word acknowledgments
-- Things the user can trivially re-derive (file paths, recent git history)
-- Agent operating rules — "always X" / "never Y" directives about how the
-  agent should behave. Those belong in CLAUDE.md / AGENTS.md / MEMORY.md (the
-  obey tier), not Wenlan. Capture the user's *preference* ("prefers TDD
-  because…"), not the agent-facing *rule* ("always run TDD first").
-
-## Atomic ideas
-
-One capture = one idea. "Prefers TDD" and "Uses pytest" are two captures, not
-one.
+The `capture` tool description is the single source for this policy: what to
+store proactively, what never to store (tool output, agent operating rules,
+transient state, world facts), one atomic idea per call, and declarative
+wording. Follow it as written; do not keep a second copy here.
 
 ## When to use
 

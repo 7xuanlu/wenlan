@@ -7,6 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
+mod common;
+
 fn cli() -> Command {
     let mut command = Command::cargo_bin("wenlan").expect("origin binary built");
     command.env("WENLAN_NO_AUTOSTART", "1");
@@ -670,6 +672,9 @@ fn entities_subcommands_have_help() {
     for args in [
         &["entities", "merge", "--help"][..],
         &["entities", "alias", "--help"][..],
+        &["entities", "list", "--help"][..],
+        &["entities", "archive", "--help"][..],
+        &["entities", "restore", "--help"][..],
     ] {
         cli().args(args).assert().success();
     }
@@ -687,6 +692,102 @@ fn entities_commands_require_arguments() {
         .args(["entities", "alias", "Alicia"])
         .assert()
         .failure();
+
+    cli().args(["entities", "archive"]).assert().failure();
+    cli().args(["entities", "restore"]).assert().failure();
+    cli()
+        .args(["entities", "list", "--status", "bogus"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "detected, established, or archived",
+        ));
+}
+
+#[test]
+fn entities_list_posts_the_filters_and_prints_a_table() {
+    let body = serde_json::json!({
+        "entities": [{
+            "id": "ent_1",
+            "name": "Alicia",
+            "entity_type": "person",
+            "confirmed": true,
+            "created_at": 1,
+            "updated_at": 2,
+            "memory_count": 4,
+            "status": "established"
+        }],
+        "total": 1
+    })
+    .to_string();
+    let (host, requests) = common::spawn_stub(vec![("POST /api/memory/entities/query", body)]);
+
+    let output = cli()
+        .env("WENLAN_HOST", &host)
+        .args([
+            "entities",
+            "list",
+            "--type",
+            "person",
+            "--status",
+            "established",
+            "--query",
+            "ali",
+            "--limit",
+            "5",
+            "--format",
+            "table",
+        ])
+        .output()
+        .expect("run entities list");
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ent_1"), "{stdout}");
+    assert!(stdout.contains("Alicia"), "{stdout}");
+    assert!(stdout.contains("person"), "{stdout}");
+    assert!(stdout.contains("established"), "{stdout}");
+
+    let (_, sent) = requests.recv().expect("one request");
+    let sent: serde_json::Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["entity_type"], "person");
+    assert_eq!(sent["status"], "established");
+    assert_eq!(sent["query"], "ali");
+    assert_eq!(sent["limit"], 5);
+}
+
+#[test]
+fn entities_archive_dry_run_names_what_would_change() {
+    let body = serde_json::json!({
+        "count": 1,
+        "entity_ids": ["ent_1"],
+        "dry_run": true
+    })
+    .to_string();
+    let (host, requests) = common::spawn_stub(vec![("POST /api/memory/entities/archive", body)]);
+
+    let output = cli()
+        .env("WENLAN_HOST", &host)
+        .args([
+            "entities",
+            "archive",
+            "ent_1",
+            "ent_2",
+            "--dry-run",
+            "--format",
+            "table",
+        ])
+        .output()
+        .expect("run entities archive");
+    assert!(output.status.success(), "stderr: {:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Would archive ent_1"), "{stdout}");
+    assert!(stdout.contains("Skipped ent_2"), "{stdout}");
+    assert!(stdout.contains("Would archive 1 entity."), "{stdout}");
+
+    let (_, sent) = requests.recv().expect("one request");
+    let sent: serde_json::Value = serde_json::from_str(&sent).unwrap();
+    assert_eq!(sent["ids"], serde_json::json!(["ent_1", "ent_2"]));
+    assert_eq!(sent["dry_run"], true);
 }
 
 #[test]

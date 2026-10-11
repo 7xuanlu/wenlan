@@ -106,7 +106,7 @@ async fn test_health_bypasses_auth() {
 ///
 /// This test exercises the production shape: bearer auth on, foreign
 /// Host header, and the full two-leg handshake (`initialize` to mint a
-/// session, then `tools/call` for `context` using that session). Both
+/// session, then `tools/call` for `brief` using that session). Both
 /// legs must return 200; the old default fails the first leg with 403.
 ///
 /// The downstream daemon is intentionally unreachable (dead port in
@@ -156,7 +156,7 @@ async fn test_tunneled_host_passes_full_mcp_handshake_with_auth() {
     );
     let session_id = session_id.expect("Mcp-Session-Id header must be present after initialize");
 
-    // Leg 2: tools/call context, reusing the session from leg 1.
+    // Leg 2: tools/call brief, reusing the session from leg 1.
     let call_resp = client
         .post(format!("http://127.0.0.1:{}/mcp", port))
         .header("Host", "origin-mcp.example.com")
@@ -166,7 +166,7 @@ async fn test_tunneled_host_passes_full_mcp_handshake_with_auth() {
         .header("Content-Type", "application/json")
         .header("Accept", "application/json, text/event-stream")
         .body(
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context","arguments":{}}}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"brief","arguments":{}}}"#,
         )
         .send()
         .await
@@ -175,7 +175,7 @@ async fn test_tunneled_host_passes_full_mcp_handshake_with_auth() {
     assert_eq!(
         call_resp.status(),
         200,
-        "tools/call context with tunneled Host + auth must return 200 (rmcp HTTP layer success)",
+        "tools/call brief with tunneled Host + auth must return 200 (rmcp HTTP layer success)",
     );
 
     handle.abort();

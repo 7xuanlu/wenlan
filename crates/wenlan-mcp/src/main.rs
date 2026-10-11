@@ -11,7 +11,7 @@ use wenlan_mcp::{serve, token};
 #[derive(Parser)]
 #[command(
     name = "wenlan-mcp",
-    about = "MCP server for Wenlan — personal agent memory layer",
+    about = "MCP server for Wenlan, the personal wiki your AI tools keep up to date",
     version
 )]
 struct Cli {

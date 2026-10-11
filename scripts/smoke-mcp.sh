@@ -83,7 +83,7 @@ echo "==> Driving wenlan-mcp over stdio JSON-RPC"
 # the expectation below is computed from the SAME value the driver reads. The
 # row set is a function of that value, so a pasted literal would be wrong for
 # any caller that changes it.
-MCP_TOOLS="${MCP_TOOLS:-capture,recall}"
+MCP_TOOLS="${MCP_TOOLS:-capture,recall,brief,update_brief,write_page,list_pages,read_page}"
 export MCP_TOOLS
 GAUNTLET_OUT="$NATIVE_GAUNTLET_OUT" GAUNTLET_CHANNEL=smoke-mcp \
 WENLAN_NO_AUTOSTART=1 \
@@ -93,17 +93,22 @@ MCP_ARGS='["--origin-url","'"$HOST"'","--agent-name","smoke-mcp"]' \
     "$PYTHON" "$NATIVE_DRIVER"
 
 # mcp-roundtrip.py always records initialize / tools-list / tool-count(INFO) /
-# capture / recall, and emits an `mcp-brief` row only when `brief` is in
+# capture / recall, and emits one `mcp-<tool>` row per optional tool named in
 # MCP_TOOLS, so the expectation is derived rather than observed.
 EXPECTED_ROWS="mcp-capture=PASS
 mcp-initialize=PASS
 mcp-recall=PASS
 mcp-tool-count=INFO
 mcp-tools-list=PASS"
-case ",$MCP_TOOLS," in
-    *,brief,*) EXPECTED_ROWS="$EXPECTED_ROWS
-mcp-brief=PASS" ;;
-esac
+# Trim whitespace the same way mcp-roundtrip.py does, so "capture, brief" owes
+# the same rows on both sides.
+MCP_TOOLS_TRIMMED=$(printf '%s' "$MCP_TOOLS" | tr -d '[:space:]')
+for optional_tool in brief update_brief write_page list_pages read_page; do
+    case ",$MCP_TOOLS_TRIMMED," in
+        *,"$optional_tool",*) EXPECTED_ROWS="$EXPECTED_ROWS
+mcp-$optional_tool=PASS" ;;
+    esac
+done
 smoke_assert_ledger "$DATA_DIR/gauntlet/findings.tsv" "$EXPECTED_ROWS" MCP
 
 BODY_OK=1

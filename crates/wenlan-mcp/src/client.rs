@@ -245,6 +245,24 @@ impl WenlanClient {
         Self::parse_response(&bytes)
     }
 
+    /// PATCH request with JSON body, deserialize JSON response.
+    pub async fn patch<B: Serialize, R: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<R, WenlanError> {
+        let url = format!("{}{}", self.base_url, path);
+        let agent = self.agent_name.clone();
+        let resp = self
+            .send_with_retry(|| {
+                let req = self.client.patch(&url).json(body);
+                Self::attach_common_headers(req, agent.as_deref())
+            })
+            .await?;
+        let bytes = Self::read_body(resp).await?;
+        Self::parse_response(&bytes)
+    }
+
     /// Query the daemon's /api/health, compare versions, and return a
     /// human-readable warning if wenlan-mcp is older than the daemon's minor.
     /// Returns None if compatible OR if the daemon is unreachable / response

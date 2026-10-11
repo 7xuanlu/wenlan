@@ -59,12 +59,17 @@ wenlan-mcp --origin-url http://127.0.0.1:7879
 
 ## Tools
 
-The local stdio surface is locked at exactly 29 tools. The table below calls
-out the primary memory loop and the unique refinement-review queue.
+The local stdio surface is locked at exactly 30 tools. The table below calls
+out the wiki loop, the primary memory loop, and the unique refinement-review
+queue.
 
 | Tool | Purpose |
 | --- | --- |
+| `list_pages` | List wiki pages (id, title, summary, Space, status, last modified) to browse what exists. |
+| `read_page` | Read one wiki page in full together with the source memories it cites. |
+| `write_page` | Create or update a wiki page; a changed page with an edited file goes through a revision card. |
 | `brief` | Read the current Space Brief; an optional topic appends separately labeled same-Space context. |
+| `update_brief` | Hand off to the next session: replace the summary and add, edit, move, gate, or complete items. Local stdio only. |
 | `capture` | Save one durable memory and return its explicit `source_memory_id`. |
 | `recall` | Search memories and pages by natural-language query. |
 | `distill` | Trigger page distillation for new clusters or a specific `page_id`. |
@@ -78,6 +83,12 @@ out the primary memory loop and the unique refinement-review queue.
 The refinement trio remains because this review queue has no CLI or replacement
 path. Remote HTTP clients can list it, but `accept_refinement` and
 `reject_refinement` are hidden and hard-rejected remotely.
+
+Lint repair is three tools behind `/lint repair`: `lint_repair_prepare` opens
+and pages a plan or turns one Review Item into a manifest, `lint_repair_apply`
+applies one approved manifest, and `lint_repair_verify` records the follow-up
+check. All three are local stdio only. The agent-assisted Deep work packet is
+paged through `lint` itself with `work_digest`.
 
 Runtime diagnostics live in the CLI: `wenlan doctor`. They are not part of the
 MCP memory loop.

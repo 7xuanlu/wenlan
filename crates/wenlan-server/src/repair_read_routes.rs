@@ -374,7 +374,7 @@ pub async fn handle_get_repair_page(
     space: SpaceHeader,
     view: TruthView,
     Path(id): Path<String>,
-) -> Result<Json<serde_json::Value>, ServerError> {
+) -> Result<Json<wenlan_types::responses::PageReadResponse>, ServerError> {
     require_target(&state, &id, target_allows_page).await?;
     crate::page_routes::handle_get_page(State(state), space, view, Path(id)).await
 }
