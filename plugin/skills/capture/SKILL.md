@@ -13,39 +13,26 @@ allowed-tools: ["mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan
 Capture a single memory in the moment. Active verb: agent captures the
 moment of insight, like a photograph.
 
-## Argument parsing
-
-The `/capture` skill accepts one optional inline token of the form
-`space:<name>` anywhere in the argument string. Extract it before
-treating the rest as content:
-
-    raw_args="<the full argument string passed to /capture>"
-    space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-    content="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-
-If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
-
 ## Resolve the active space
 
-Call the bundled resolver:
+The `/capture` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. The bundled resolver strips it
+and returns the rest as the content. It prints the resolved Space line itself:
 
-    resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" \
-        ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
-    space="$(printf '%s\n' "$resolved" | cut -f1)"
-    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+```bash
+raw_args="<the full argument string passed to /capture>"
+resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" --args "$raw_args")"
+space="$(printf '%s\n' "$resolved" | cut -f1)"
+source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+content="$(printf '%s\n' "$resolved" | cut -f3-)"
+```
 
 Pass `space="$space"` to the `capture` MCP tool only when `space` is
-non-empty. Before every capture, also print:
+non-empty.
 
-    Resolved space: <space> (from <source-layer>)
-
-If `space` is empty, print:
-
-    Resolved space: none (unscoped)
-
-This line reports the proposed client context. After capture, relay the tool's
-returned `space`, `space_source`, and `write_outcome`; those fields describe
-what the daemon actually persisted and are authoritative.
+The resolver line reports the proposed client context. After capture, relay
+the tool's returned `space`, `space_source`, and `write_outcome`; those fields
+describe what the daemon actually persisted and are authoritative.
 
 Unknown spaces are not auto-created. Register one through the resolved CLI
 binary, or omit `space` to store uncategorized:

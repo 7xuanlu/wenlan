@@ -948,6 +948,8 @@ class PluginOwnerTests(unittest.TestCase):
             "scripts/validate-codex-plugin-slice.py",
             "scripts/validate-plugin-contract.py",
             "scripts/validate-plugin-contract.test.sh",
+            "scripts/gen-plugin-verbs.mjs",
+            "scripts/gen-plugin-verbs.test.mjs",
         )
 
         for path in paths:

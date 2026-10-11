@@ -156,7 +156,7 @@ enum Commands {
         /// Filter by memory type.
         #[arg(short = 't', long = "type")]
         memory_type: Option<String>,
-        /// Only unconfirmed memories (what the MCP list_pending tool returns).
+        /// Only pending captures (not yet confirmed; what the MCP list_pending tool returns).
         #[arg(long)]
         pending: bool,
     },

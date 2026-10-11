@@ -16,19 +16,16 @@ never be read as product state.
 
 ## 1. Resolve the Space
 
-Run the bundled resolver once:
+Run the bundled resolver once. It prints the resolved Space line itself; an
+empty `space` means unscoped, so omit `space`.
 
 ```bash
 raw_args="<the full argument string passed to /brief>"
-space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-topic_arg="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" --args "$raw_args")"
 space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+topic_arg="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
-
-Print `Resolved space: <space> (from <source-layer>)`. If no Space resolves,
-print `Resolved space: none (unscoped)` and omit `space`.
 
 ## 2. Read the Brief
 

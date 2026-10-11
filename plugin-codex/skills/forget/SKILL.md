@@ -40,22 +40,6 @@ mcp__wenlan__forget(memory_id="<source_id>")
 Delete only one memory per tool call. For bulk cleanup, use `/curate captures`
 so each item has its own decision.
 
-## Auto-commit `~/.wenlan`
-
-After a successful delete, snapshot any Markdown projection changes. Best
-effort only:
-
-```bash
-git -C ~/.wenlan add -A && \
-  git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-    commit --quiet -m "forget: <source_id>" 2>/dev/null || \
-(sleep 1 && git -C ~/.wenlan add -A && \
-  git -C ~/.wenlan -c user.name=Wenlan -c user.email=daemon@wenlan.local \
-    commit --quiet -m "forget: <source_id>" 2>/dev/null) || true
-```
-
-Do not fail the delete if this commit fails.
-
 ## When to use
 
 - User says to forget or delete a specific memory and gives the id.

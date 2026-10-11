@@ -13,43 +13,24 @@ user-invocable: true
 Search Wenlan memory by natural-language query. Use `/brief` for broad session
 orientation and `/recall` for a specific fact, decision, lesson, or preference.
 
-## Argument parsing
+## Resolve the active space
 
 Accept one optional inline token of the form `space:<name>` anywhere in the
-argument string. Extract it before treating the rest as the query:
+argument string. The Codex resolver strips it and returns the rest as the
+query. It prints the resolved Space line itself:
 
 ```bash
 raw_args="<the full argument string passed to /recall>"
-space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-query="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-```
-
-If `query` is empty, ask the user what they want to search for.
-
-## Resolve the active space
-
-Call the Codex resolver:
-
-```bash
 # The resolver ships inside the installed plugin; the relative path only
 # exists in a wenlan checkout.
 resolver="$(find "$HOME/.codex/plugins/cache" -path '*/wenlan/*/bin/resolve-space.sh' 2>/dev/null | head -1)"
-resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" --args "$raw_args")"
 space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+query="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-If `space` is non-empty, print:
-
-```text
-Resolved space: <space> (from <source-layer>)
-```
-
-If `space` is empty, print:
-
-```text
-Resolved space: none (unscoped)
-```
+If `query` is empty, ask the user what they want to search for.
 
 Pass `space="<resolved>"` to `mcp__wenlan__recall` only when `space` is
 non-empty. Do not substitute `personal` for an unscoped result.

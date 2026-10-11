@@ -4,7 +4,7 @@ import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
-const evidenceDirectory = process.env.WENLAN_UI_EVIDENCE_DIR || "/private/tmp/wenlan-wiki-ui-evidence";
+const evidenceDirectory = process.env.WENLAN_UI_EVIDENCE_DIR || "/tmp/wenlan-wiki-ui-evidence";
 
 function wikiPages() {
   const defaults = createSpacesNavigationFixture().pages;

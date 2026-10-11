@@ -84,6 +84,8 @@ done
 port=$(cat "$tmpbase/port")
 plugin_root="$tmpbase/plugin"
 mkdir -p "$plugin_root/.claude-plugin"
+mkdir -p "$plugin_root/scripts"
+cp "$SCRIPT_DIR/../scripts/version-drift.sh" "$plugin_root/scripts/version-drift.sh"
 
 drift_run() { # $1 daemon version, $2 plugin version
     printf '{"status":"ok","version":"%s"}' "$1" > "$www/api/health"
