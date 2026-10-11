@@ -599,7 +599,7 @@ async fn configure_enrichment(
     if !yes {
         let answer = prompt_line("Write these two hard pins and turn on Steep? [y/N]: ")?;
         if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
-            println!("Steep remains off.");
+            println!("Steep settings were not changed.");
             return Ok(());
         }
     }

@@ -446,7 +446,7 @@ fn configure_cancel_keeps_settings_unchanged_even_when_already_enabled() {
         .write_stdin("n\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Steep remains off"))
+        .stdout(predicate::str::contains("Steep settings were not changed"))
         .stdout(predicate::str::contains("remains off").not());
     assert!(requests.recv().unwrap().starts_with("GET /api/config "));
     assert!(requests
