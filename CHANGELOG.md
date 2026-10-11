@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.18.17](https://github.com/7xuanlu/wenlan/compare/v0.18.16...v0.18.17) (2026-10-11)
+
+
+### Features
+
+* **ai:** make background AI explicitly optional ([#804](https://github.com/7xuanlu/wenlan/issues/804)) ([9a53ef4](https://github.com/7xuanlu/wenlan/commit/9a53ef4184a5039a20b384c63705e9a801c94481))
+* **app:** add knowledge checks with verified repairs ([#830](https://github.com/7xuanlu/wenlan/issues/830)) ([1f81d09](https://github.com/7xuanlu/wenlan/commit/1f81d0934c9069d95eba5bc7cdfc96ef755e9e40))
+* **app:** approve web pairing with one click ([#835](https://github.com/7xuanlu/wenlan/issues/835)) ([571d1fd](https://github.com/7xuanlu/wenlan/commit/571d1fd1566e3ebf8c54f3ae31b1ccedacb7c6e0))
+* **app:** clarify Activity results and actionable page review ([#829](https://github.com/7xuanlu/wenlan/issues/829)) ([58bd55d](https://github.com/7xuanlu/wenlan/commit/58bd55dc88b03d85482b85a31bf43e0b42b07c9d))
+* **app:** preserve writing across independent note workspaces ([#828](https://github.com/7xuanlu/wenlan/issues/828)) ([0c127b4](https://github.com/7xuanlu/wenlan/commit/0c127b4e30066e29c6bbe1f15b5b87affb6a0520))
+* **app:** unify workspace history and simplify page navigation ([#813](https://github.com/7xuanlu/wenlan/issues/813)) ([00b9f91](https://github.com/7xuanlu/wenlan/commit/00b9f915efcf862b6500e4da2ce587ec274c0de6))
+* **connect:** show when a local tool has actually connected ([#834](https://github.com/7xuanlu/wenlan/issues/834)) ([f057b9b](https://github.com/7xuanlu/wenlan/commit/f057b9b73a7fbeb51adba6c33c24168a0953c478))
+* **core:** persist independent mind maps and streamline collections ([#827](https://github.com/7xuanlu/wenlan/issues/827)) ([6863241](https://github.com/7xuanlu/wenlan/commit/6863241c472c10b298db14e38af39d930468922c))
+* **editor:** support direct page editing with safe autosave ([#805](https://github.com/7xuanlu/wenlan/issues/805)) ([9fa8bb1](https://github.com/7xuanlu/wenlan/commit/9fa8bb1686c547f6a2f0996979b2f339306aa6cb))
+* **memories:** make content the focus of memory reading ([#811](https://github.com/7xuanlu/wenlan/issues/811)) ([4e0e9f7](https://github.com/7xuanlu/wenlan/commit/4e0e9f7005d3f1113d93c39523c28891202e361f))
+* organize project spaces around notes and sources ([#819](https://github.com/7xuanlu/wenlan/issues/819)) ([4894b28](https://github.com/7xuanlu/wenlan/commit/4894b28036450eb8b18d47494719e0d1a7f14562))
+* **relay:** keep web connections signed in while they are used ([#798](https://github.com/7xuanlu/wenlan/issues/798)) ([2f0d6a2](https://github.com/7xuanlu/wenlan/commit/2f0d6a20a8b672136e6e886f7c784624d74b4616))
+* **relay:** one-click web pairing with short-code fallback ([#831](https://github.com/7xuanlu/wenlan/issues/831)) ([308ee22](https://github.com/7xuanlu/wenlan/commit/308ee22d2c3b833cc5cd7833eee353fbba3433ce))
+* **repair:** support durable entity relation source repairs ([#750](https://github.com/7xuanlu/wenlan/issues/750)) ([d9ca0ce](https://github.com/7xuanlu/wenlan/commit/d9ca0cee342fb6b255907cddde51e0638bf8d553))
+* **sources:** add a source library and safe web excerpts ([#806](https://github.com/7xuanlu/wenlan/issues/806)) ([8257f74](https://github.com/7xuanlu/wenlan/commit/8257f74b7d43d018717be6d22eca1656218b514f))
+* **sources:** add safe public webpage text previews ([#801](https://github.com/7xuanlu/wenlan/issues/801)) ([00ce717](https://github.com/7xuanlu/wenlan/commit/00ce717a259986263900583937174fd820516bd2))
+* **sources:** ingest DOCX with bounded extraction ([#803](https://github.com/7xuanlu/wenlan/issues/803)) ([b3bfa17](https://github.com/7xuanlu/wenlan/commit/b3bfa1753f6a9132eb7d2d4419c4cc0cf0a3c430))
+* **spaces:** foreground pages and simplify settings navigation ([#810](https://github.com/7xuanlu/wenlan/issues/810)) ([1c6dd6d](https://github.com/7xuanlu/wenlan/commit/1c6dd6d71f9a7de1acd6af8c96fddbf40b775f22))
+* **topics:** align detail with document tools and context panel ([#816](https://github.com/7xuanlu/wenlan/issues/816)) ([fb4ba7e](https://github.com/7xuanlu/wenlan/commit/fb4ba7e41212221176561b8f55f9de06054fa7f4))
+* **topics:** browse topics and manage lifecycle in detail ([#808](https://github.com/7xuanlu/wenlan/issues/808)) ([90f9cc0](https://github.com/7xuanlu/wenlan/commit/90f9cc01de0d084b969c443a61e20dfc8206812a))
+* **ui:** connect notes and memories through contextual navigation ([#814](https://github.com/7xuanlu/wenlan/issues/814)) ([7918bf5](https://github.com/7xuanlu/wenlan/commit/7918bf5c16b32c0860aec746e83849c32b1678a3))
+* **wiki:** make notes the default workspace ([#807](https://github.com/7xuanlu/wenlan/issues/807)) ([9ad010d](https://github.com/7xuanlu/wenlan/commit/9ad010d318c010ea8246c4a5f7e66a9b3166a29a))
+* **wiki:** organize notes in real folders ([#818](https://github.com/7xuanlu/wenlan/issues/818)) ([bcad56b](https://github.com/7xuanlu/wenlan/commit/bcad56b5f42fba2026731b50d68a938009bbf16d))
+
+
+### Bug Fixes
+
+* **app:** remove standalone quick capture shadow on macOS ([#779](https://github.com/7xuanlu/wenlan/issues/779)) ([6ae4425](https://github.com/7xuanlu/wenlan/commit/6ae4425062da3b85638a2c32e67c2dfb90a6e7f7))
+* **app:** simplify settings controls and graph navigation ([#826](https://github.com/7xuanlu/wenlan/issues/826)) ([5e6a0be](https://github.com/7xuanlu/wenlan/commit/5e6a0bec0bdcca4a96a8c70ce2ea040a8f716728))
+* **connect:** correct local tool detection and setup on every OS ([#832](https://github.com/7xuanlu/wenlan/issues/832)) ([771fe9e](https://github.com/7xuanlu/wenlan/commit/771fe9e047fc597059a3fa3c85fa2251af69ba74))
+* **pages:** keep mind maps accessible while writing ([#812](https://github.com/7xuanlu/wenlan/issues/812)) ([c9d2048](https://github.com/7xuanlu/wenlan/commit/c9d20484176340e9903d07f894c0c941e16884b6))
+* **pages:** repair Markdown projections after canonical saves ([#802](https://github.com/7xuanlu/wenlan/issues/802)) ([20ffb83](https://github.com/7xuanlu/wenlan/commit/20ffb83bea9c1c0782bafa0b5e2cd17655b9a3bc))
+* **pages:** support explicit page renaming ([#825](https://github.com/7xuanlu/wenlan/issues/825)) ([b06b55c](https://github.com/7xuanlu/wenlan/commit/b06b55cb8da65747129ea8ed4902ac8577abf6ef))
+* **release:** strip CR from release notes without GNU-only sed -i ([#833](https://github.com/7xuanlu/wenlan/issues/833)) ([6a2e054](https://github.com/7xuanlu/wenlan/commit/6a2e054d08c6ff2e310981cb29c096f26a5cec43))
+* **security:** patch dependencies and guard unauthenticated MCP hosts ([#800](https://github.com/7xuanlu/wenlan/issues/800)) ([49bbf3b](https://github.com/7xuanlu/wenlan/commit/49bbf3bb56c6f46f6ae5bca99d5693dc71506ccb))
+* **setup:** make the setup check copy clear and drop its em-dash ([#758](https://github.com/7xuanlu/wenlan/issues/758)) ([dc6b7a9](https://github.com/7xuanlu/wenlan/commit/dc6b7a94b62a78d436ceace7f788d426e2ac7a9a))
+* **ui:** open document tools from the title menu ([#815](https://github.com/7xuanlu/wenlan/issues/815)) ([28ff072](https://github.com/7xuanlu/wenlan/commit/28ff07289a5ad6bd78707f5e32e82273bf55f0a0))
+
 ## [0.18.16](https://github.com/7xuanlu/wenlan/compare/v0.18.15...v0.18.16) (2026-10-04)
 
 
