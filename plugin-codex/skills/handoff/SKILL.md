@@ -52,7 +52,6 @@ Space, and the Brief update and captures still run.
 ```bash
 W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
 brief_before=""
-brief_absent=0
 daemon_down=0
 if [ -n "$space" ]; then
   "$W" --format json status >/dev/null 2>&1 || daemon_down=1
@@ -64,10 +63,10 @@ if [ -n "$space" ]; then
       brief_before="$("$W" --format json --space "$space" brief)"
       source_layer="cwd-repo"
     elif [ "$space_probe" = "Error: space '$space' not found" ]; then
-      brief_absent=1
+      : # absent Space: the typed update creates it
     elif [ "$daemon_down" = 1 ]; then
       brief_before=""
-      echo "wenlan daemon unreachable — this handoff will queue its writes"
+      echo "Wenlan is not running; this handoff will be saved locally and sync when it starts"
     else
       printf "%s\n" "$space_probe" >&2
       exit "$space_probe_status"
@@ -80,7 +79,7 @@ if [ -n "$space" ]; then
       brief_before="$brief_output"
     elif [ "$daemon_down" = 1 ]; then
       brief_before=""
-      echo "wenlan daemon unreachable — this handoff will queue its writes"
+      echo "Wenlan is not running; this handoff will be saved locally and sync when it starts"
     else
       printf "%s\n" "$brief_output" >&2
       exit "$brief_status"
@@ -125,9 +124,6 @@ Write `~/.wenlan/sessions/<YYYY-MM-DD-HHmm>-<slug>.md` with Accomplished,
 Decisions, Lessons & Gotchas, Open Threads, Captures stored, and Git summary.
 This is narrative history, not current-work authority. It is a plain file and
 must never depend on the daemon, so write it before the Brief update.
-
-Best-effort commit the logical `~/.wenlan/` file batch; do not fail if no
-repository is configured or a commit races.
 
 ## 5. Build and apply one typed Brief update
 

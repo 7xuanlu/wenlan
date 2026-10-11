@@ -11,7 +11,8 @@ user-invocable: true
 
 # /curate
 
-Power-user audit of Wenlan pending surfaces. Daily flow should stay light:
+Power-user audit of Wenlan pending surfaces. A pending capture is one that is
+not yet confirmed. Daily flow should stay light:
 `/brief` shows the top pending revisions and `/handoff` previews recent pending
 captures. Use `/curate` only when the user asks to walk the queue.
 

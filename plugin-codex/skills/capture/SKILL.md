@@ -14,35 +14,26 @@ user-invocable: true
 Capture one memory in the moment. Write the memory as a self-contained
 statement with the reason it matters.
 
-## Argument parsing
+## Resolve the active space
 
 Accept one optional inline token of the form `space:<name>` anywhere in the
-argument string. Extract it before treating the rest as content:
+argument string. The Codex resolver strips it and returns the rest as the
+content. It prints the resolved Space line itself:
 
 ```bash
 raw_args="<the full argument string passed to /capture>"
-space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-content="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-```
-
-If `content` is empty, ask the user what they want to capture.
-
-## Resolve the active space
-
-Call the Codex resolver:
-
-```bash
 # The resolver ships inside the installed plugin; the relative path only
 # exists in a wenlan checkout.
 resolver="$(find "$HOME/.codex/plugins/cache" -path '*/wenlan/*/bin/resolve-space.sh' 2>/dev/null | head -1)"
-resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
+resolved="$("${resolver:-plugin-codex/bin/resolve-space.sh}" --cwd "$PWD" --args "$raw_args")"
 space="$(printf '%s\n' "$resolved" | cut -f1)"
 source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+content="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-If `space` is non-empty, print `Resolved space: <space> (from <source-layer>)`
-and pass it to the `capture` MCP tool. If `space` is empty, print
-`Resolved space: none (unscoped)` and omit the `space` parameter.
+If `content` is empty, ask the user what they want to capture. If `space` is
+non-empty, pass it to the `capture` MCP tool; if empty, omit the `space`
+parameter.
 
 After capture, relay the tool's returned `space`, `space_source`, and
 `write_outcome`; those fields describe what the daemon actually persisted and

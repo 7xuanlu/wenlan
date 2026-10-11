@@ -1,0 +1,13 @@
+[
+  { "verb": "/setup", "line": "set up or repair Wenlan (installs the local runtime)", "codex_line": "set up or repair the local runtime and MCP bridge" },
+  { "verb": "/brief", "args": "[topic]", "line": "load the Brief for the current Space (optional; not a boot step)" },
+  { "verb": "/capture", "args": "<x>", "line": "save one durable memory in flow" },
+  { "verb": "/recall", "args": "<q>", "line": "search local memory" },
+  { "verb": "/lint", "args": "[deep|repair] [scope]", "line": "diagnose, or resolve all findings safely" },
+  { "verb": "/distill", "args": "[t]", "line": "synthesize or refresh source-backed pages for the active Space" },
+  { "verb": "/pages", "args": "[q]", "line": "browse and open distilled pages", "codex_line": "list or open distilled pages in the OS editor" },
+  { "verb": "/curate", "args": "<surface>", "line": "deep audit of captures, revisions or refinements" },
+  { "verb": "/forget", "args": "<id>", "line": "delete one memory by ID, after confirmation" },
+  { "verb": "/handoff", "line": "end-of-session debrief: captures, session log, Brief update" },
+  { "verb": "/help", "line": "one-screen quick reference" }
+]

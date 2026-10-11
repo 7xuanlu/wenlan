@@ -2,10 +2,10 @@
 name: curate
 description: >
   Power-user audit of Wenlan's pending surfaces: accept or dismiss pending
-  revisions (conflicts/merges), or audit unconfirmed captures. Most users want
-  `/brief` for revisions; that handles the daily flow. Use `/curate` only for
-  explicit deep-walk audits after bulk imports, or to walk the full queue rather
-  than the top 3 shown in /brief.
+  revisions (conflicts/merges), or audit pending captures (not yet confirmed).
+  Most users want `/brief` for revisions; that handles the daily flow. Use
+  `/curate` only for explicit deep-walk audits after bulk imports, or to walk
+  the full queue rather than the top 3 shown in /brief.
   Invoked as `/curate captures`, `/curate revisions`, or `/curate refinements`.
 argument-hint: "captures | revisions | refinements"
 allowed-tools: ["Bash", "AskUserQuestion", "mcp__plugin_wenlan_wenlan__list_pending", "mcp__plugin_wenlan_wenlan__confirm_memory", "mcp__plugin_wenlan_wenlan__forget", "mcp__plugin_wenlan_wenlan__capture", "mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__list_refinements", "mcp__plugin_wenlan_wenlan__accept_refinement", "mcp__plugin_wenlan_wenlan__reject_refinement"]
@@ -21,8 +21,8 @@ Power-user audit lever. Most users do not need /curate in daily flow:
 
 Use /curate only when you want the deep walk those skills intentionally do not force.
 
-**Captures are meant to decay.** A capture lands unconfirmed and, if nothing ever
-conflicts with it, it quietly fades — that is by design, not a backlog you owe the
+**Captures are meant to decay.** A capture lands pending (not yet confirmed) and, if nothing
+ever conflicts with it, it quietly fades — that is by design, not a backlog you owe the
 system. The only items that *need* a human are genuine conflicts (a contradiction,
 or a richer re-capture worth merging); those surface as pending revisions. `/curate
 captures` is an **opt-in audit** for when you *want* to seal a batch (e.g. after a
@@ -111,7 +111,7 @@ The list now carries the `original` and a ready-made `diff` alongside the revise
 ## `/curate captures` (opt-in audit, MCP)
 
 The captures path is the rare opt-in audit, so it stays on MCP. `list_pending`
-lists every unconfirmed memory (pass `space` only if the user named one, e.g.
+lists every pending capture (pass `space` only if the user named one, e.g.
 "curate work captures"; otherwise leave it off for all pending). Each memory has a
 `source_id`. Per item, options:
 
