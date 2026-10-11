@@ -2,14 +2,14 @@
 set -euo pipefail
 
 # Wenlan installer — downloads Wenlan runtime binaries to ~/.wenlan/bin/
-# Usage:      curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+# Usage:      curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash
 # Prerelease: curl -fsSL ... | WENLAN_RELEASE_TAG=v0.2.0-alpha.1 bash
 # Skip checksum verification (only if the release predates SHA256SUMS): WENLAN_SKIP_CHECKSUM=1
 #
 # Supported platforms: macOS (arm64), Linux (aarch64, x86_64).
 # Windows users: download wenlan-windows-x64.zip from the GitHub release page.
 
-REPO="7xuanlu/wenlan"
+REPO="wenlan-app/wenlan"
 REQUESTED_TAG="${WENLAN_RELEASE_TAG:-${WENLAN_TAG:-${ORIGIN_RELEASE_TAG:-${ORIGIN_TAG:-}}}}"
 
 if [[ -n "${REQUESTED_TAG}" ]]; then

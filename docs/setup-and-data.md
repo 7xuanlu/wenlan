@@ -13,7 +13,7 @@ Contents: [Installation](#installation) · [Models and privacy](#models) · [Bac
 
 ### Download and open Wenlan
 
-[Download the app](https://github.com/7xuanlu/wenlan/releases/latest), then open it:
+[Download the app](https://github.com/wenlan-app/wenlan/releases/latest), then open it:
 
 - **macOS (Apple Silicon):** open the `.dmg` and drag Wenlan to Applications. The app is signed and notarized.
 - **Windows x64:** run the `-setup.exe`. It is not signed yet. If SmartScreen warns you, confirm you downloaded it from the official Releases page before choosing "More info" → "Run anyway".
@@ -30,7 +30,7 @@ Optional background organization and automatic Page updates need a [configured m
 The installer downloads the app, checks its SHA-256, and moves it to Applications:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/scripts/install-macos-app.sh)"
 ```
 
 **Without the desktop app**
@@ -41,9 +41,9 @@ On macOS Apple Silicon:
 npx -y wenlan setup
 ```
 
-`npx` requires Node.js; without it, run `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash` then `wenlan setup --basic`.
+`npx` requires Node.js; without it, run `curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash` then `wenlan setup --basic`.
 
-This downloads the prebuilt CLI, daemon, and MCP connector, starts the local runtime, and verifies it. No Rust toolchain or Cargo is required. Linux x64/ARM64 with glibc has an automated [shell setup path](setup-with-ai.md#install-the-runtime); Windows x64 uses the matching archive from [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel currently has [no supported complete-runtime install](../crates/wenlan-cli/README.md#macos-intel).
+This downloads the prebuilt CLI, daemon, and MCP connector, starts the local runtime, and verifies it. No Rust toolchain or Cargo is required. Linux x64/ARM64 with glibc has an automated [shell setup path](setup-with-ai.md#install-the-runtime); Windows x64 uses the matching archive from [Releases](https://github.com/wenlan-app/wenlan/releases/latest). macOS Intel currently has [no supported complete-runtime install](../crates/wenlan-cli/README.md#macos-intel).
 
 **What is installed and how to update**
 

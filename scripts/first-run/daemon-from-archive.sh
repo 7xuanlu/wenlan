@@ -8,7 +8,7 @@
 #   DATA_DIR        scratch root: bin/, daemon.log, daemon.pid live here (required)
 #   VERSION         when set, /api/health .version must equal it (leading v ok)
 #   HEALTH_TIMEOUT  seconds to wait for /api/health (default 180)
-#   REPO            GitHub repo (default 7xuanlu/wenlan)
+#   REPO            GitHub repo (default wenlan-app/wenlan)
 #
 # Records each stage through lib.sh. Prints `DAEMON_BIN=<dir> DAEMON_PID=<pid>`
 # as the last line. Exits 1 when the daemon never became healthy (after
@@ -21,7 +21,7 @@ set -uo pipefail
 : "${PORT:?PORT is required}"
 : "${DATA_DIR:?DATA_DIR is required}"
 HEALTH_TIMEOUT="${HEALTH_TIMEOUT:-180}"
-REPO="${REPO:-7xuanlu/wenlan}"
+REPO="${REPO:-wenlan-app/wenlan}"
 BIN="$DATA_DIR/bin"
 HEALTH_URL="http://127.0.0.1:$PORT/api/health"
 

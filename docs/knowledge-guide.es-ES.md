@@ -11,7 +11,7 @@ Contenido: [Fuentes y páginas](#sources-and-pages) · [Grafo y búsqueda](#grap
 
 ## Fuentes y páginas
 
-El ejemplo del README adapta una [guía de diseño de agentes](https://www.anthropic.com/engineering/building-effective-agents) y las [correcciones de los diagramas de este README](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296). Ilustra conocimiento reutilizable, no resultados medidos de clientes ni una página generada automáticamente. La ilustración está en el [README en español](../README.es-ES.md#what-does-wenlan-build).
+El ejemplo del README adapta una [guía de diseño de agentes](https://www.anthropic.com/engineering/building-effective-agents) y las [correcciones de los diagramas de este README](https://github.com/wenlan-app/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296). Ilustra conocimiento reutilizable, no resultados medidos de clientes ni una página generada automáticamente. La ilustración está en el [README en español](../README.es-ES.md#what-does-wenlan-build).
 
 Con Wenlan, el trabajo en curso no se queda dentro de la ventana del chat. Puedes guardar los documentos y conversaciones que elijas, anotar las decisiones que tomes y organizarlos en páginas que puedas leer, editar y reutilizar. Puedes redactar una página directamente con tu IA conectada; la síntesis opcional basada en modelos y el mantenimiento en segundo plano requieren un [modelo configurado](setup-and-data.es-ES.md#models).
 

@@ -1,6 +1,6 @@
 # wenlan-types
 
-Shared wire-format types for [Wenlan](https://github.com/7xuanlu/wenlan) — a personal agent memory system.
+Shared wire-format types for [Wenlan](https://github.com/wenlan-app/wenlan) — a personal agent memory system.
 
 This crate defines the HTTP API request/response types and core enums used by:
 - `wenlan-server` (HTTP backend daemon)
@@ -17,7 +17,7 @@ Pre-1.0. Expect minor version bumps to include breaking changes, per Rust 0.x co
 - [wenlan.app](https://wenlan.app) — project home
 - [wenlan.app/docs](https://wenlan.app/docs) — install + daily workflow
 - [wenlan-mcp on crates.io](https://crates.io/crates/wenlan-mcp) — sibling crate
-- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
+- [github.com/wenlan-app/wenlan](https://github.com/wenlan-app/wenlan) — source
 
 ## License
 

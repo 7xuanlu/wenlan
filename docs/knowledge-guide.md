@@ -11,7 +11,7 @@ Contents: [Sources and pages](#sources-and-pages) · [Graph and search](#graph-a
 
 ## Sources and pages
 
-The example adapts [agent-design guidance](https://www.anthropic.com/engineering/building-effective-agents) and [this README's diagram-review fixes](https://github.com/7xuanlu/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296) into a working note. It illustrates reusable knowledge, not a measured customer outcome or an automatically generated page.
+The example adapts [agent-design guidance](https://www.anthropic.com/engineering/building-effective-agents) and [this README's diagram-review fixes](https://github.com/wenlan-app/wenlan/commit/061fbc6ab12a76ec805869e46d464a58a06db296) into a working note. It illustrates reusable knowledge, not a measured customer outcome or an automatically generated page.
 
 Wenlan gives ongoing work a place outside the chat window. Keep selected documents and conversations, save decisions made along the way, and organize them into pages you can read, edit, and reuse. You can author a page directly with your connected AI; optional model-backed synthesis and background maintenance require a [configured model](setup-and-data.md#models).
 

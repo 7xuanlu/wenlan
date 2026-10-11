@@ -49,7 +49,7 @@ trap cleanup EXIT
 
 # ── Part A: the .dmg a user downloads from the Releases page ─────────────────
 DMG="Wenlan_${VERSION}_aarch64.dmg"
-check dmg-download -- curl -fsSL --retry 3 -o "$DL/$DMG" "https://github.com/7xuanlu/wenlan/releases/download/$TAG/$DMG"
+check dmg-download -- curl -fsSL --retry 3 -o "$DL/$DMG" "https://github.com/wenlan-app/wenlan/releases/download/$TAG/$DMG"
 # A browser stamps com.apple.quarantine on everything it downloads and curl
 # stamps nothing, and that attribute is the only reason Gatekeeper is consulted
 # at all. Set it by hand, in the four-field shape Safari writes, so the
@@ -76,9 +76,9 @@ check_output app-gatekeeper "source=Notarized Developer ID" -- spctl -a -t exec 
 check dmg-detach -- hdiutil detach "$MOUNT"
 
 # ── Part B: the README one-liner, launching the app ──────────────────────────
-ONE_LINER='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"'
+ONE_LINER='/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/scripts/install-macos-app.sh)"'
 if [ "$IS_LATEST" != true ]; then
-    export WENLAN_APP_RELEASE_JSON_URL="https://api.github.com/repos/7xuanlu/wenlan/releases/tags/$TAG"
+    export WENLAN_APP_RELEASE_JSON_URL="https://api.github.com/repos/wenlan-app/wenlan/releases/tags/$TAG"
     info pinned-mode "WENLAN_APP_RELEASE_JSON_URL=$WENLAN_APP_RELEASE_JSON_URL (unpinned installer reads releases/latest)"
 fi
 info app-install-command "$ONE_LINER"

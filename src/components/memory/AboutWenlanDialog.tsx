@@ -85,9 +85,9 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
     ? t("aboutWenlan.available", { version: status.version })
     : t(`aboutWenlan.${status?.state ?? "automatic"}`);
   const links = [
-    ["releaseNotes", "https://github.com/7xuanlu/wenlan/releases"],
+    ["releaseNotes", "https://github.com/wenlan-app/wenlan/releases"],
     ["website", "https://wenlan.app"],
-    ["reportIssue", "https://github.com/7xuanlu/wenlan/issues"],
+    ["reportIssue", "https://github.com/wenlan-app/wenlan/issues"],
   ] as const;
 
   return (
@@ -118,7 +118,7 @@ export default function AboutWenlanDialog({ open, onClose }: AboutWenlanDialogPr
           {status?.state === "unavailable" ? (
             <button type="button" className="about-wenlan-check" onClick={() => {
               setLinkFailed(false);
-              void openExternal("https://github.com/7xuanlu/wenlan/releases").catch(() => setLinkFailed(true));
+              void openExternal("https://github.com/wenlan-app/wenlan/releases").catch(() => setLinkFailed(true));
             }}>{t("aboutWenlan.viewReleases")}</button>
           ) : (
             <button type="button" className="about-wenlan-check" disabled={status?.state === "checking"}

@@ -274,14 +274,14 @@ def candidate_pr_detail(*, state: str, merged: bool) -> dict:
         "merge_commit_sha": "f" * 40 if merged else None,
         "base": {
             "ref": "main",
-            "repo": {"id": 2, "full_name": "7xuanlu/wenlan"},
+            "repo": {"id": 2, "full_name": "wenlan-app/wenlan"},
         },
         "head": {
             "ref": VALIDATOR.RELEASE_BRANCH,
             "sha": HEAD_SHA,
             "repo": {
                 "id": 2,
-                "full_name": "7xuanlu/wenlan",
+                "full_name": "wenlan-app/wenlan",
                 "fork": False,
             },
         },
@@ -303,11 +303,11 @@ class TrustedCandidateApi(FakeContentApi):
         self.pr["base"]["sha"] = BASE_SHA
 
     def get_json(self, path: str, *, params=None):
-        prefix = "/repos/7xuanlu/wenlan"
+        prefix = "/repos/wenlan-app/wenlan"
         if path == prefix:
             return {
                 "id": 2,
-                "full_name": "7xuanlu/wenlan",
+                "full_name": "wenlan-app/wenlan",
                 "owner": {"login": "7xuanlu"},
             }
         if path == f"{prefix}/pulls/42":
@@ -371,10 +371,10 @@ class HappyPathApi(FakeContentApi):
         }
 
     def get_json(self, path: str, *, params=None):
-        prefix = "/repos/7xuanlu/wenlan"
+        prefix = "/repos/wenlan-app/wenlan"
         repository = {
             "id": 2,
-            "full_name": "7xuanlu/wenlan",
+            "full_name": "wenlan-app/wenlan",
             "owner": {"login": "7xuanlu"},
         }
         if path == prefix:
@@ -385,7 +385,7 @@ class HappyPathApi(FakeContentApi):
                 "path": VALIDATOR.CI_WORKFLOW_PATH,
                 "head_repository": {
                     "id": 2,
-                    "full_name": "7xuanlu/wenlan",
+                    "full_name": "wenlan-app/wenlan",
                     "fork": False,
                 },
                 "repository": repository,
@@ -465,7 +465,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=candidate_event(),
             api=TrustedCandidateApi(old, new),
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertTrue(trusted, reason)
 
@@ -481,7 +481,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=event,
             api=NoReadApi(),
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("exact trusted release identity", reason)
@@ -512,7 +512,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=candidate_event(),
             api=api,
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("paths mismatch", reason)
@@ -523,7 +523,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=candidate_event(),
             api=TrustedCandidateApi(old, new),
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("exact version-only", reason)
@@ -543,7 +543,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=candidate_event(),
             api=api,
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("not the current main", reason)
@@ -552,7 +552,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=[],
             api=api,
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("not an object", reason)
@@ -565,7 +565,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             event_name="pull_request",
             event=candidate_event(),
             api=ApiFailure(),
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
         )
         self.assertFalse(trusted)
         self.assertIn("injected API failure", reason)
@@ -584,7 +584,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                         "--event-name",
                         "pull_request",
                         "--repository",
-                        "7xuanlu/wenlan",
+                        "wenlan-app/wenlan",
                         "--github-output",
                         str(output),
                     ]
@@ -616,12 +616,12 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 "head_sha": HEAD_SHA,
                 "head_repository": {
                     "id": 2,
-                    "full_name": "7xuanlu/wenlan",
+                    "full_name": "wenlan-app/wenlan",
                     "fork": False,
                 },
                 "repository": {
                     "id": 2,
-                    "full_name": "7xuanlu/wenlan",
+                    "full_name": "wenlan-app/wenlan",
                 },
             }
             wrappers: dict[int, Path] = {}
@@ -647,7 +647,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 dist = target_root / "dist"
                 PACKAGE.package_target(target, binary_dir, dist, 1_700_000_000)
                 manifest = MANIFEST.build_manifest(
-                    repository="7xuanlu/wenlan",
+                    repository="wenlan-app/wenlan",
                     repository_id=2,
                     run_id=1,
                     run_attempt=artifact_attempt,
@@ -738,7 +738,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             receipt = VALIDATOR.validate_candidate(
                 event,
                 api,
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 root,
                 validated_assets_dir=validated_assets,
             )
@@ -804,7 +804,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         self.assertEqual(
             VALIDATOR._candidate_pr_state(
                 PrStateApi(),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 candidate_pr_detail(state="open", merged=False),
                 pr_number=42,
                 repository_id=2,
@@ -815,7 +815,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         self.assertEqual(
             VALIDATOR._candidate_pr_state(
                 PrStateApi(),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 candidate_pr_detail(state="closed", merged=True),
                 pr_number=42,
                 repository_id=2,
@@ -830,7 +830,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         self.assertEqual(
             VALIDATOR._candidate_pr_state(
                 PrStateApi(),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 merged_without_response_sha,
                 pr_number=42,
                 repository_id=2,
@@ -843,7 +843,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "closed without being merged"):
             VALIDATOR._candidate_pr_state(
                 PrStateApi(),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 candidate_pr_detail(state="closed", merged=False),
                 pr_number=42,
                 repository_id=2,
@@ -852,7 +852,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "tree differs"):
             VALIDATOR._candidate_pr_state(
                 PrStateApi("1" * 40),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 candidate_pr_detail(state="closed", merged=True),
                 pr_number=42,
                 repository_id=2,
@@ -913,7 +913,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         )
         validated = VALIDATOR._latest_release_target_attempts(
             api,
-            "7xuanlu/wenlan",
+            "wenlan-app/wenlan",
             run_id=1,
             current_attempt=2,
             head_sha=HEAD_SHA,
@@ -947,7 +947,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         ):
             VALIDATOR._latest_release_target_attempts(
                 api,
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 run_id=1,
                 current_attempt=2,
                 head_sha=HEAD_SHA,
@@ -964,7 +964,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "more than once"):
             VALIDATOR._latest_release_target_attempts(
                 AttemptJobsApi({1: jobs}),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 run_id=1,
                 current_attempt=1,
                 head_sha=HEAD_SHA,
@@ -982,7 +982,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "control-plane identity"):
             VALIDATOR._latest_release_target_attempts(
                 AttemptJobsApi({1: jobs}),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 run_id=1,
                 current_attempt=1,
                 head_sha=HEAD_SHA,
@@ -1038,7 +1038,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
 
     def test_cross_host_artifact_redirect_strips_bearer_token(self) -> None:
         request = urllib.request.Request(
-            "https://api.github.com/repos/7xuanlu/wenlan/actions/artifacts/1/zip",
+            "https://api.github.com/repos/wenlan-app/wenlan/actions/artifacts/1/zip",
             headers={"Authorization": "Bearer secret"},
         )
         redirected = VALIDATOR._CredentialStrippingRedirect().redirect_request(
@@ -1061,7 +1061,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 raise AssertionError("ordinary CI run must not download artifacts")
 
         event = {"workflow_run": {"head_branch": "feature/not-a-release"}}
-        receipt = VALIDATOR.validate_candidate(event, NoApi(), "7xuanlu/wenlan", Path("."))
+        receipt = VALIDATOR.validate_candidate(event, NoApi(), "wenlan-app/wenlan", Path("."))
         self.assertEqual(receipt["status"], "skipped")
 
     def test_unsuccessful_candidate_ci_run_skips_without_api_access(self) -> None:
@@ -1082,7 +1082,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                     },
                 }
                 receipt = VALIDATOR.validate_candidate(
-                    event, NoApi(), "7xuanlu/wenlan", Path(".")
+                    event, NoApi(), "wenlan-app/wenlan", Path(".")
                 )
                 self.assertEqual(receipt["status"], "skipped")
 
@@ -1110,7 +1110,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                         "--event",
                         str(event_path),
                         "--repository",
-                        "7xuanlu/wenlan",
+                        "wenlan-app/wenlan",
                         "--temp-root",
                         str(root),
                         "--summary",
@@ -1126,10 +1126,10 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             self.assertIn("Status: **skipped**", summary_path.read_text(encoding="utf-8"))
 
     def test_candidate_trigger_name_cannot_replace_api_workflow_path_proof(self) -> None:
-        repository = {"id": 2, "full_name": "7xuanlu/wenlan", "owner": {"login": "7xuanlu"}}
+        repository = {"id": 2, "full_name": "wenlan-app/wenlan", "owner": {"login": "7xuanlu"}}
         head_repository = {
             "id": 2,
-            "full_name": "7xuanlu/wenlan",
+            "full_name": "wenlan-app/wenlan",
             "fork": False,
         }
         event = {
@@ -1152,7 +1152,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
 
         class WrongPathApi:
             def get_json(self, path: str, *, params=None):
-                if path == "/repos/7xuanlu/wenlan":
+                if path == "/repos/wenlan-app/wenlan":
                     return repository
                 if path.endswith("/actions/runs/1"):
                     return {
@@ -1170,13 +1170,13 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
 
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "control-plane identity"):
             VALIDATOR.validate_candidate(
-                event, WrongPathApi(), "7xuanlu/wenlan", Path(".")
+                event, WrongPathApi(), "wenlan-app/wenlan", Path(".")
             )
 
     def test_release_pr_content_requires_exact_paths_and_version_only_deltas(self) -> None:
         old, new = release_contents()
         version, base_sha, paths = VALIDATOR.validate_release_pr_content(
-            FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+            FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
         )
         self.assertEqual((version, base_sha), ("0.15.4", BASE_SHA))
         self.assertEqual(paths, VALIDATOR.REQUIRED_RELEASE_PATHS)
@@ -1184,7 +1184,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         new["plugin-codex/skills/setup/SKILL.md"] += "unrelated executable instruction\n"
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "exact version-only"):
             VALIDATOR.validate_release_pr_content(
-                FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+                FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
             )
 
     def test_exact_transform_rejects_new_version_camouflage(self) -> None:
@@ -1203,7 +1203,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                     new[path] = hostile
                 with self.assertRaisesRegex(VALIDATOR.CandidateError, "exact version-only"):
                     VALIDATOR.validate_release_pr_content(
-                        FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+                        FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
                     )
 
     def test_runner_pin_bump_preserves_executable_mode_and_exact_content(self) -> None:
@@ -1224,7 +1224,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 return records
 
         version, _, paths = VALIDATOR.validate_release_pr_content(
-            ExecutableRunnerApi(old, new), "7xuanlu/wenlan", candidate_pr()
+            ExecutableRunnerApi(old, new), "wenlan-app/wenlan", candidate_pr()
         )
         self.assertEqual(version, "0.15.4")
         self.assertIn(runner, paths)
@@ -1237,12 +1237,12 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 with self.assertRaisesRegex(VALIDATOR.CandidateError, "exact version-only"):
                     VALIDATOR.validate_release_pr_content(
                         ExecutableRunnerApi(old, {**new, runner: changed}),
-                        "7xuanlu/wenlan", candidate_pr(),
+                        "wenlan-app/wenlan", candidate_pr(),
                     )
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "Git mode/type changed"):
             VALIDATOR.validate_release_pr_content(
                 ExecutableRunnerApi(old, new, head_mode_overrides={runner: "100644"}),
-                "7xuanlu/wenlan", candidate_pr(),
+                "wenlan-app/wenlan", candidate_pr(),
             )
 
     def test_runner_pin_path_cannot_be_omitted(self) -> None:
@@ -1261,7 +1261,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         pr["changed_files"] -= 1
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "paths mismatch"):
             VALIDATOR.validate_release_pr_content(
-                MissingRunnerApi(old, new), "7xuanlu/wenlan", pr
+                MissingRunnerApi(old, new), "wenlan-app/wenlan", pr
             )
 
     def test_app_cargo_transform_rejects_extra_line_changes(self) -> None:
@@ -1278,7 +1278,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             'some-dep = "0.15.3"\n'
         )
         version, _, _ = VALIDATOR.validate_release_pr_content(
-            FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+            FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
         )
         self.assertEqual(version, "0.15.4")
 
@@ -1293,7 +1293,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "marker-line-only"):
             VALIDATOR.validate_release_pr_content(
-                FakeContentApi(old, hostile_new), "7xuanlu/wenlan", candidate_pr()
+                FakeContentApi(old, hostile_new), "wenlan-app/wenlan", candidate_pr()
             )
 
     def test_root_cargo_transform_leaves_a_colliding_dependency_literal_alone(self) -> None:
@@ -1304,7 +1304,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         old["Cargo.toml"] = root_cargo_contents("0.15.3", decoy_version="0.15.3")
         new["Cargo.toml"] = root_cargo_contents("0.15.4", decoy_version="0.15.3")
         version, _, _ = VALIDATOR.validate_release_pr_content(
-            FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+            FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
         )
         self.assertEqual(version, "0.15.4")
 
@@ -1314,7 +1314,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         hostile_new["Cargo.toml"] = root_cargo_contents("0.15.4", decoy_version="0.15.4")
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "marker-and-member-pin"):
             VALIDATOR.validate_release_pr_content(
-                FakeContentApi(old, hostile_new), "7xuanlu/wenlan", candidate_pr()
+                FakeContentApi(old, hostile_new), "wenlan-app/wenlan", candidate_pr()
             )
 
         # A member pin left at the base version is a broken `cargo publish`,
@@ -1326,7 +1326,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "marker-and-member-pin"):
             VALIDATOR.validate_release_pr_content(
-                FakeContentApi(old, stale_pin), "7xuanlu/wenlan", candidate_pr()
+                FakeContentApi(old, stale_pin), "wenlan-app/wenlan", candidate_pr()
             )
 
         # The base itself must carry both pins exactly once, or the validator
@@ -1342,7 +1342,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             broken_old["Cargo.toml"] = broken_base
             with self.assertRaisesRegex(VALIDATOR.CandidateError, "Cargo.toml"):
                 VALIDATOR.validate_release_pr_content(
-                    FakeContentApi(broken_old, new), "7xuanlu/wenlan", candidate_pr()
+                    FakeContentApi(broken_old, new), "wenlan-app/wenlan", candidate_pr()
                 )
 
     def test_json_trio_transforms_reject_extra_field_changes(self) -> None:
@@ -1354,7 +1354,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 old[path] = json.dumps({"version": "0.15.3", "productName": "Wenlan"})
                 new[path] = json.dumps({"version": "0.15.4", "productName": "Wenlan"})
                 version, _, _ = VALIDATOR.validate_release_pr_content(
-                    FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+                    FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
                 )
                 self.assertEqual(version, "0.15.4")
 
@@ -1368,7 +1368,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                     VALIDATOR.CandidateError, "changed more than the version field"
                 ):
                     VALIDATOR.validate_release_pr_content(
-                        FakeContentApi(old, hostile_new), "7xuanlu/wenlan", candidate_pr()
+                        FakeContentApi(old, hostile_new), "wenlan-app/wenlan", candidate_pr()
                     )
 
     def test_lock_transform_tolerates_dependency_at_the_old_release_version(self) -> None:
@@ -1379,7 +1379,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         # and still reject any dependency-stanza mutation.
         old, new = release_contents()
         version, _, _ = VALIDATOR.validate_release_pr_content(
-            FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+            FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
         )
         self.assertEqual(version, "0.15.4")
 
@@ -1404,7 +1404,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                     VALIDATOR.CandidateError, "workspace-stanza version-only"
                 ):
                     VALIDATOR.validate_release_pr_content(
-                        FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+                        FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
                     )
 
     def test_unchanged_lock_is_rejected_before_the_lock_transform(self) -> None:
@@ -1414,7 +1414,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
         new["Cargo.lock"] = stale
         with self.assertRaisesRegex(VALIDATOR.CandidateError, "did not change"):
             VALIDATOR.validate_release_pr_content(
-                FakeContentApi(old, new), "7xuanlu/wenlan", candidate_pr()
+                FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
             )
 
     def test_lock_transform_refuses_ambiguous_workspace_stanzas(self) -> None:
@@ -1585,7 +1585,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                     new,
                     head_mode_overrides={"version.txt": "100755"},
                 ),
-                "7xuanlu/wenlan",
+                "wenlan-app/wenlan",
                 candidate_pr(),
             )
 
@@ -1724,7 +1724,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 archive.addfile(member, io.BytesIO(b"x"))
             canonical_gzip(hostile_tar, dist / "wenlan-linux-x64.tar.gz")
         manifest = MANIFEST.build_manifest(
-            repository="7xuanlu/wenlan",
+            repository="wenlan-app/wenlan",
             repository_id=2,
             run_id=1,
             run_attempt=1,
@@ -1750,7 +1750,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             "digest": "sha256:" + hashlib.sha256(raw).hexdigest(),
         }
         trusted = {
-            "repository": "7xuanlu/wenlan",
+            "repository": "wenlan-app/wenlan",
             "repository_id": 2,
             "run_id": 1,
             "run_attempt": 1,
@@ -1833,7 +1833,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 1_700_000_000,
             )
             manifest = MANIFEST.build_manifest(
-                repository="7xuanlu/wenlan",
+                repository="wenlan-app/wenlan",
                 repository_id=2,
                 run_id=1,
                 run_attempt=1,
@@ -1861,7 +1861,7 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             work = root / "work"
             work.mkdir()
             trusted = {
-                "repository": "7xuanlu/wenlan",
+                "repository": "wenlan-app/wenlan",
                 "repository_id": 2,
                 "run_id": 1,
                 "run_attempt": 1,

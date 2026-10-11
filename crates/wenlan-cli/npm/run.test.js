@@ -94,7 +94,7 @@ describe("installBinaries version cache", () => {
 
     assert.equal(result, dir);
     assert.deepEqual(h.calls.download, [
-      `https://github.com/7xuanlu/wenlan/releases/download/v1.0.0/${ASSET}`,
+      `https://github.com/wenlan-app/wenlan/releases/download/v1.0.0/${ASSET}`,
     ]);
     assert.equal(h.calls.extract, 1);
     assert.deepEqual(h.calls.log, ["Downloading Wenlan v1.0.0...\n"]);

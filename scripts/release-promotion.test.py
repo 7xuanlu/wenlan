@@ -22,7 +22,7 @@ PROMOTION = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = PROMOTION
 SPEC.loader.exec_module(PROMOTION)
 
-REPOSITORY = "7xuanlu/wenlan"
+REPOSITORY = "wenlan-app/wenlan"
 HEAD_SHA = "1" * 40
 
 

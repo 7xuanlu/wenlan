@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 const CACHE_TTL: Duration = Duration::from_secs(24 * 3600);
-const LATEST_RELEASE_URL: &str = "https://github.com/7xuanlu/wenlan/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://github.com/wenlan-app/wenlan/releases/latest";
 
 /// Process-wide in-memory fallback for environments where on-disk cache writes
 /// fail (locked-down sandboxes, missing dirs::cache_dir, etc). Without this,
@@ -154,16 +154,16 @@ mod tests {
     #[test]
     fn the_latest_version_comes_from_the_release_page_redirect() {
         assert_eq!(
-            version_from_location("https://github.com/7xuanlu/wenlan/releases/tag/v0.17.0")
+            version_from_location("https://github.com/wenlan-app/wenlan/releases/tag/v0.17.0")
                 .as_deref(),
             Some("0.17.0")
         );
         assert_eq!(
-            version_from_location("/7xuanlu/wenlan/releases/tag/v0.18.0-rc.1?raw=1").as_deref(),
+            version_from_location("/wenlan-app/wenlan/releases/tag/v0.18.0-rc.1?raw=1").as_deref(),
             Some("0.18.0-rc.1")
         );
         assert_eq!(
-            version_from_location("https://github.com/7xuanlu/wenlan/releases"),
+            version_from_location("https://github.com/wenlan-app/wenlan/releases"),
             None
         );
         assert_eq!(version_from_location(""), None);
