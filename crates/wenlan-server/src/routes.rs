@@ -218,10 +218,10 @@ async fn handle_search_inner(
 ) -> Result<Json<SearchResponse>, ServerError> {
     let start = std::time::Instant::now();
 
-    let (db, reranker_light) = {
+    let (db, reranker_light, agent_presence) = {
         let s = state.read().await;
         let db = s.db.clone().ok_or(ServerError::DbNotInitialized)?;
-        (db, s.reranker_light.clone())
+        (db, s.reranker_light.clone(), s.agent_presence.clone())
     };
     let scope =
         crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
@@ -254,6 +254,15 @@ async fn handle_search_inner(
             .await
             .map_err(|e| ServerError::SearchFailed(e.to_string()))?
     };
+
+    // Mark the caller seen (throttled, off the response path, never writes
+    // trust or memory counts), so the Connections list shows a tool that only
+    // searches. `/api/context` and the Brief stay strictly read-only.
+    crate::agent_presence::note_agent_read(
+        db.clone(),
+        agent_presence,
+        &crate::memory_routes::extract_agent_name(&headers, None),
+    );
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;
 
