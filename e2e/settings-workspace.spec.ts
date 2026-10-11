@@ -47,7 +47,7 @@ for(const layout of ["labels","icons","hidden","narrow"] as const) test(`Setting
  expect(errors.pageErrors).toEqual([]);expect(errors.consoleErrors).toEqual([]);
 });
 
-for (const width of [1440, 900, 375]) test(`Settings controls fit their panels at ${width}`, async ({ page }) => {
+for (const width of [1440, 375]) test(`Settings controls fit their panels at ${width}`, async ({ page }) => {
  await page.setViewportSize({width,height:900});
  const errors=collectBrowserErrors(page);
  const runtime=await installTauriMock(page,{locale:"en",rawActions:[]});

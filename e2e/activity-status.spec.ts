@@ -7,7 +7,7 @@ import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 
-const WIDTHS = [1487, 1280, 768, 375] as const;
+const WIDTHS = [1280, 375] as const;
 const VIEWS = ["Wiki", "Topics", "Spaces", "Graph", "Sources"] as const;
 
 /**

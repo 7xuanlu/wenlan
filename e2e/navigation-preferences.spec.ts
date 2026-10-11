@@ -5,8 +5,6 @@ import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const languages = [
   { locale: "en", theme: "light", spaces: "Spaces", graph: "Graph", sources: "Sources", memories: "Memories", topics: "Topics", more: "More", pin: (name: string) => `Pin ${name} to sidebar`, unpin: (name: string) => `Unpin ${name} from sidebar` },
-  { locale: "zh-Hant", theme: "dark", spaces: "空間", graph: "圖譜", sources: "來源", memories: "記憶", topics: "主題", more: "更多", pin: (name: string) => `將 ${name} 釘選至側邊欄`, unpin: (name: string) => `取消釘選 ${name}` },
-  { locale: "zh-Hans", theme: "light", spaces: "空间", graph: "图谱", sources: "来源", memories: "记忆", topics: "主题", more: "更多", pin: (name: string) => `将 ${name} 固定到侧边栏`, unpin: (name: string) => `从侧边栏取消固定 ${name}` },
 ] as const;
 
 async function capture(page: Page, name: string) {

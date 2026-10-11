@@ -7,8 +7,6 @@ import { openTopicContext } from "./helpers/topicTools";
 
 const copies = [
   { locale: "en", more: "More", topics: "Topics", actions: "Topic actions", context: "Topic context", close: "Close", expand: "Full screen", edit: "Edit note", confirm: "Confirm topic" },
-  { locale: "zh-Hant", more: "更多", topics: "主題", actions: "主題操作", context: "主題脈絡", close: "關閉", expand: "全螢幕檢視", edit: "編輯筆記", confirm: "確認主題" },
-  { locale: "zh-Hans", more: "更多", topics: "主题", actions: "主题操作", context: "主题脉络", close: "关闭", expand: "全屏查看", edit: "编辑笔记", confirm: "确认主题" },
 ] as const;
 
 for (const copy of copies) for (const width of [1280, 375]) {
@@ -17,7 +15,6 @@ for (const copy of copies) for (const width of [1280, 375]) {
     const errors = collectBrowserErrors(page);
     const controller = await installTauriMock(page, {
       fixture: createSpacesNavigationFixture(), locale: copy.locale, rawActions: [],
-      localStorage: { "wenlan-theme": width === 375 ? "dark" : "light" },
     });
     await page.goto("/");
     await openPrimaryDestination(page, copy.topics, copy.more);

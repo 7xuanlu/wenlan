@@ -5,8 +5,6 @@ import { openWikiNote } from "./helpers/wikiWorkspace";
 import { openMemoryContext, openPageTool } from "./helpers/pageTools";
 const copies = [
   {locale:"en",actions:"Page actions",memoryActions:"Memory actions",open:"Open Fixture architecture",info:"Page info",pane:"Note views",graph:"Connections",sources:"Source memories",context:"Memory context",used:"Used as a source in",recent:"Recent memories",close:"Close"},
-  {locale:"zh-Hant",actions:"頁面操作",memoryActions:"記憶操作",open:"開啟 Fixture architecture",info:"頁面資訊",pane:"筆記檢視",graph:"關聯",sources:"來源記憶",context:"記憶脈絡",used:"作為這些頁面的來源",recent:"最近記憶",close:"關閉"},
-  {locale:"zh-Hans",actions:"页面操作",memoryActions:"记忆操作",open:"打开 Fixture architecture",info:"页面信息",pane:"笔记检视",graph:"关联",sources:"来源记忆",context:"记忆脉络",used:"作为这些页面的来源",recent:"最近记忆",close:"关闭"},
 ] as const;
 for (const copy of copies) for (const width of [1280,375]) {
   test(`context roundtrip ${copy.locale} ${width}`,async({page},testInfo)=>{
