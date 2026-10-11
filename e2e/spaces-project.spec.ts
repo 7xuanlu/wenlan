@@ -75,3 +75,22 @@ test("Space source failures retry and remain distinct from an empty document lis
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Actions for Wenlan" })).toBeFocused();
 });
+
+test("project Notes, Sources and the source preview fit a narrow window", async ({ page }) => {
+  const errors = collectBrowserErrors(page);
+  await page.setViewportSize({ width: 375, height: 900 });
+  await installTauriMock(page, { locale: "en", rawActions: [], fixture: createSpaceProjectFixture(), localStorage: { "wenlan-spaces-view-mode": "rows" } });
+  await page.goto("/");
+  await openPrimaryDestination(page, "Spaces");
+  await page.getByTestId("space-row-project-wenlan").getByRole("button", { name: "Wenlan", exact: true }).click();
+  const overflow = () => page.evaluate(async () => { await document.fonts.ready; return document.documentElement.scrollWidth - innerWidth; });
+  await expect(page.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await page.getByRole("tab", { name: "Sources" }).click();
+  await expect(page.getByText("Writing experience observations", { exact: true })).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await page.getByText("Writing experience observations", { exact: true }).click();
+  await expect(page.getByText("Start with the note itself. Keep references close when the reader needs them.")).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  expect(errors.pageErrors).toEqual([]); expect(errors.consoleErrors).toEqual([]);
+});

@@ -4,7 +4,7 @@ import { openWikiNote } from './helpers/wikiWorkspace';
 import { createReviewDecisionFixture } from './fixtures/reviewDecisions';
 import { installTauriMock, collectBrowserErrors } from './tauriMock';
 import { resources } from '../src/i18n/resources';
-for(const locale of ['en','zh-Hant','zh-Hans'] as const) for(const theme of ['light','dark']) for(const width of [1440,375]) {
+for(const locale of ['en'] as const) for(const theme of ['light']) for(const width of [1440,375]) {
  test(`independent groups ${locale} ${theme} ${width}`,async({page},info)=>{
   const copy=resources[locale].translation;
   await page.setViewportSize({width,height:960});

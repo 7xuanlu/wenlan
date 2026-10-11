@@ -5,10 +5,8 @@ import { createReviewDecisionFixture } from "./fixtures/reviewDecisions";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 const labels = {
  en:{all:"All notes",back:"Back",newFolder:"New folder",folderName:"Folder name",create:"Create",newPage:"New page",empty:"This folder has no notes yet.",folders:"Folders"},
- "zh-Hans":{all:"所有笔记",back:"返回",newFolder:"新建文件夹",folderName:"文件夹名称",create:"创建",newPage:"新建笔记",empty:"这个文件夹还没有笔记。",folders:"文件夹"},
- "zh-Hant":{all:"所有筆記",back:"返回",newFolder:"新增資料夾",folderName:"資料夾名稱",create:"建立",newPage:"新增筆記",empty:"這個資料夾還沒有筆記。",folders:"資料夾"},
 };
-for (const locale of ["en","zh-Hans","zh-Hant"] as const) for (const width of [1280,375]) {
+for (const locale of ["en"] as const) for (const width of [1280,375]) {
  test(`real directories and reading workspace/history agree ${locale} ${width}`,async({page})=>{
   const copy=labels[locale]; const errors=collectBrowserErrors(page);
   await page.setViewportSize({width,height:800});

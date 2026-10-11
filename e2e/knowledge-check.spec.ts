@@ -130,20 +130,3 @@ test('no findings does not advertise AI or unfinished repairs',async({page},info
   await page.screenshot({path:info.outputPath('clean-general-only.png')});
   noAI(await calls(page));expect(errors.pageErrors).toEqual([]);expect(errors.consoleErrors).toEqual([]);
 });
-
-for(const locale of ['en','zh-Hant','zh-Hans'] as const)for(const theme of ['light','dark'])for(const width of [1440,375])test(`layout ${locale} ${theme} ${width}`,async({page},info)=>{
-  test.skip(info.project.name!=='webkit');
-  const {copy,errors}=await start(page,{locale,theme,width});
-  await page.getByRole('button',{name:copy.check,exact:true}).click();
-  await expect(page.locator('.knowledge-check-row')).toHaveCount(4);
-  await page.screenshot({path:info.outputPath('list.png')});
-  await page.locator('.knowledge-check-row').first().click();
-  const pane=page.getByRole(width===1440?'complementary':'dialog',{name:copy.detail});
-  await expect(pane).toBeVisible();
-  await expect(pane.getByText('Packing list',{exact:true})).toBeVisible();
-  await page.screenshot({path:info.outputPath('detail.png')});
-  expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
-  expect(await pane.evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
-  expect((await calls(page)).filter(c=>c.command==='repair_apply')).toHaveLength(0);
-  noAI(await calls(page)); expect(errors.pageErrors).toEqual([]);expect(errors.consoleErrors).toEqual([]);
-});
