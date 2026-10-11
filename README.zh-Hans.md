@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1516bfcedcc15ee5fdfb0e9baaecc62912d08a21225ce651560e1a92367f2192 -->
+<!-- README_SYNC: source=README.md sha256=1203f0a3d78403e962c19860a87bec858b6bb01c699dea3f22047cc33e45ae20 -->
 
 <p align="center">
   <picture>
@@ -16,8 +16,8 @@ Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链
 </p>
 
 <p align="center">
-  <a href="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/7xuanlu/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <a href="https://github.com/7xuanlu/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/7xuanlu/wenlan?sort=semver&label=release"></a>
+  <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
+  <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="许可证：Apache-2.0 与 AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
 </p>
 
@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 ### 1. 下载并打开 Wenlan
 
-[下载桌面版](https://github.com/7xuanlu/wenlan/releases/latest)，安装后打开：
+[下载桌面版](https://github.com/wenlan-app/wenlan/releases/latest)，安装后打开：
 
 - **macOS（Apple Silicon）：** 打开 `.dmg`，把 Wenlan 拖进「应用程序」。App 已签名并通过公证。
 - **Windows x64：** 运行 `-setup.exe`。安装包尚未签名。如果 SmartScreen 显示警告，请先确认文件来自官方 Releases 页面，再点「更多信息」→「仍要运行」。
@@ -75,7 +75,7 @@ https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad
 
 ```text
 请按照这份指南，将当前的 AI 工具连接到 Wenlan：
-https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
+https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 如果已安装 Wenlan，请沿用现有安装。
 只设置当前这个 AI 工具，并确认它能保存及找回一条测试记忆。
@@ -95,7 +95,7 @@ https://raw.githubusercontent.com/7xuanlu/wenlan/main/docs/setup-with-ai.md
 
 后台整理与自动更新是可选功能，需要[设置模型](#models-and-privacy)。终端安装、其他平台与更新方式，请见[设置指南](docs/setup-and-data.zh-Hans.md#installation)。
 
-遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/7xuanlu/wenlan/issues)。Issue 是公开的，请勿附上私人笔记、访问凭据、远程访问标识或未脱敏的日志。
+遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/wenlan-app/wenlan/issues)。Issue 是公开的，请勿附上私人笔记、访问凭据、远程访问标识或未脱敏的日志。
 
 
 

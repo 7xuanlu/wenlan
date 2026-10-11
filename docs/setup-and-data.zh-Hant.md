@@ -13,7 +13,7 @@
 
 ### 下載並開啟 Wenlan
 
-[下載桌面版](https://github.com/7xuanlu/wenlan/releases/latest)，安裝後開啟：
+[下載桌面版](https://github.com/wenlan-app/wenlan/releases/latest)，安裝後開啟：
 
 - **macOS（Apple Silicon）：** 打開 `.dmg`，把 Wenlan 拖進「應用程式」。App 已簽署並通過公證。
 - **Windows x64：** 執行 `-setup.exe`。安裝包尚未簽署。如果 SmartScreen 顯示警告，請先確認檔案來自官方 Releases 頁面，再點選「其他資訊」→「仍要執行」。
@@ -30,7 +30,7 @@
 安裝程式會下載 app、核對 SHA-256，並放進「應用程式」：
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/scripts/install-macos-app.sh)"
 ```
 
 **不使用桌面 app**
@@ -41,9 +41,9 @@
 npx -y wenlan setup
 ```
 
-`npx` 需要 Node.js；若未安裝，可先執行 `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash`，再執行 `wenlan setup --basic`。
+`npx` 需要 Node.js；若未安裝，可先執行 `curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash`，再執行 `wenlan setup --basic`。
 
-這個命令會下載預先編譯的 CLI、背景服務（daemon）與 MCP 連接器，啟動並驗證本地服務；不需要安裝 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以採用自動化的 [shell 設定流程](setup-with-ai.md#install-the-runtime)；Windows x64 請從 [Releases](https://github.com/7xuanlu/wenlan/releases/latest) 下載對應的 archive。macOS Intel 目前[沒有受支援的完整 runtime 安裝方式](../crates/wenlan-cli/README.md#macos-intel)。
+這個命令會下載預先編譯的 CLI、背景服務（daemon）與 MCP 連接器，啟動並驗證本地服務；不需要安裝 Rust 或 Cargo。使用 glibc 的 Linux x64/ARM64 可以採用自動化的 [shell 設定流程](setup-with-ai.md#install-the-runtime)；Windows x64 請從 [Releases](https://github.com/wenlan-app/wenlan/releases/latest) 下載對應的 archive。macOS Intel 目前[沒有受支援的完整 runtime 安裝方式](../crates/wenlan-cli/README.md#macos-intel)。
 
 **安裝內容與更新方式**
 

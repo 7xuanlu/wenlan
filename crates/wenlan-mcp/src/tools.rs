@@ -1219,7 +1219,7 @@ Setup choices:
 - Anthropic Key: richer extraction and distill cycles using your API key.
 
 Install:
-  curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash
   export PATH=\"$HOME/.wenlan/bin:$PATH\"
   wenlan setup
   wenlan background on

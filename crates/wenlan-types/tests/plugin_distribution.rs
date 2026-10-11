@@ -78,7 +78,7 @@ fn plugin_setup_repairs_stale_daemon_versions() {
     );
     assert!(
         codex_setup.contains(
-            "curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash"
+            "curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v${RELEASE_VER}/install.sh | bash"
         ),
         "Codex /setup missing stale-daemon repair contract: tag-pinned install.sh"
     );

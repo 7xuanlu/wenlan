@@ -75,7 +75,7 @@ Bash: npx -y wenlan@0.4.1 setup
 EOF
 
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
-Bash: curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.4.1/install.sh | bash
+Bash: curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.4.1/install.sh | bash
 EOF
 
 # Cargo.lock fixture: workspace members at the old version + an external dep

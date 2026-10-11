@@ -87,7 +87,7 @@ export PATH="$HOME/.wenlan/bin:$PATH"
 The package supports macOS Apple Silicon and needs Node.js. On any other
 platform, or when `npx` is missing or the command fails, do not fetch or run an
 installer yourself. Stop and tell the user to install the runtime by following
-<https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
+<https://github.com/wenlan-app/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
 then run `/wenlan:setup` again.
 
 If present but the local runtime is down:

@@ -18,10 +18,10 @@ XDG_RUNTIME_DIR="/run/user/$(id -u)"
 export XDG_RUNTIME_DIR
 SAFE_TAG="$(printf '%s' "$TAG" | LC_ALL=C tr -c 'A-Za-z0-9._-' '_')"
 if [ "$IS_LATEST" = true ]; then
-    CMD='curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash'
+    CMD='curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash'
     BIN_DIR="$HOME/.wenlan/bin"
 else
-    CMD="curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | WENLAN_RELEASE_TAG=$TAG bash"
+    CMD="curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | WENLAN_RELEASE_TAG=$TAG bash"
     BIN_DIR="$HOME/.wenlan/releases/$SAFE_TAG"
     info pinned-mode "$CMD installs into $BIN_DIR and leaves ~/.bashrc alone (unpinned install.sh fetches releases/latest)"
 fi

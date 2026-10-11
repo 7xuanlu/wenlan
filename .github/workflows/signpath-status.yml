@@ -49,7 +49,7 @@ jobs:
     # configuration it is not supposed to have. Dispatch still works everywhere,
     # because a fork maintainer asking the question deliberately deserves the
     # answer.
-    if: github.repository == '7xuanlu/wenlan' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'wenlan-app/wenlan' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Ask SignPath
         env:

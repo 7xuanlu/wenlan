@@ -18,6 +18,7 @@ from typing import Callable, Sequence
 BASE_BRANCH = "main"
 RELEASE_BRANCH = "release-please--branches--main"
 RELEASE_AUTHOR = "7xuanlu"
+RELEASE_REPO_OWNER = "wenlan-app"
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -57,14 +58,14 @@ def resolve_release_pr(api: GitHubApi, repository: str) -> ReleasePullRequest | 
     if len(parts) != 2 or not all(parts):
         raise SyncError("repository must be owner/name")
     owner = parts[0]
-    if owner != RELEASE_AUTHOR:
-        raise SyncError("repository owner does not match the pinned Release PR author")
+    if owner != RELEASE_REPO_OWNER:
+        raise SyncError("repository owner does not match the pinned release repository owner")
     payload = api.get_json(
         f"/repos/{repository}/pulls",
         params={
             "state": "open",
             "base": BASE_BRANCH,
-            "head": f"{RELEASE_AUTHOR}:{RELEASE_BRANCH}",
+            "head": f"{RELEASE_REPO_OWNER}:{RELEASE_BRANCH}",
             "per_page": 100,
         },
     )

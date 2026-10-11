@@ -85,9 +85,9 @@ echo "  Updated $SETUP_SKILL (exact wenlan npm pin)"
 
 CODEX_SETUP_SKILL="plugin-codex/skills/setup/SKILL.md"
 if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/wenlan-app/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
 else
-    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
+    sed -i -E "s|(raw\\.githubusercontent\\.com/wenlan-app/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_SETUP_SKILL"
 fi
 echo "  Updated $CODEX_SETUP_SKILL (install.sh tag pin)"
 

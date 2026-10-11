@@ -85,7 +85,7 @@ trap cleanup EXIT
 # login prompt fails fast instead of hanging.
 best_effort claude-code-install npm i -g @anthropic-ai/claude-code
 if command -v claude >/dev/null 2>&1; then
-    check claude-marketplace-add -- bash -c 'exec </dev/null; claude plugin marketplace add 7xuanlu/wenlan'
+    check claude-marketplace-add -- bash -c 'exec </dev/null; claude plugin marketplace add wenlan-app/wenlan'
     check claude-plugin-install -- bash -c 'exec </dev/null; claude plugin install wenlan@7xuanlu-wenlan'
 else
     info claude-marketplace-add "unchecked: claude CLI unavailable on this runner"
@@ -97,7 +97,7 @@ info plugin-diff-vs-main "$(diff -rq "$RELEASE_SRC/plugin" "$REPO_ROOT/plugin" 2
 check_output hook-daemon-down "[wenlan] Wenlan is not running" -- bash "$HOOK"
 
 # Step 2: the bootstrap block, verbatim from the tagged SKILL.md.
-BOOTSTRAP_RE='curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v[0-9][^ ]*/install.sh | bash'
+BOOTSTRAP_RE='curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v[0-9][^ ]*/install.sh | bash'
 BOOTSTRAP="$(grep -o "$BOOTSTRAP_RE" "$SKILL" | head -1)"
 info skill-bootstrap-line "${BOOTSTRAP:-not found in $SKILL}"
 check_output skill-pin-matches-release "/v$VERSION/install.sh" -- grep -o "$BOOTSTRAP_RE" "$SKILL"

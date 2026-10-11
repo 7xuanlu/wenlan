@@ -60,7 +60,7 @@ describe("About Wenlan", () => {
     expect(document.querySelector(".about-wenlan-feedback")).toBeNull();
     api.emit.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "View releases" }));
-    await waitFor(() => expect(api.open).toHaveBeenCalledWith("https://github.com/7xuanlu/wenlan/releases"));
+    await waitFor(() => expect(api.open).toHaveBeenCalledWith("https://github.com/wenlan-app/wenlan/releases"));
     expect(api.emit).not.toHaveBeenCalledWith("updater://check-now");
   });
   it("traps keyboard focus, closes with Escape and restores the trigger", async () => {
@@ -83,6 +83,6 @@ describe("About Wenlan", () => {
     fireEvent.click(screen.getByRole("button", {name:"Check for updates"}));
     expect(await screen.findByText("Couldn’t check for updates. Try again.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("link",{name:"Release notes"}));
-    await waitFor(() => expect(api.open).toHaveBeenCalledWith("https://github.com/7xuanlu/wenlan/releases"));
+    await waitFor(() => expect(api.open).toHaveBeenCalledWith("https://github.com/wenlan-app/wenlan/releases"));
   });
 });

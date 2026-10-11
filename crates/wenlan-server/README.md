@@ -10,7 +10,7 @@ Most users install Wenlan through the [Claude Code plugin](../../plugin/README.m
 npx -y wenlan setup
 ```
 
-The npm installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Linux x64/ARM64 users can run the automated [shell setup](../../docs/setup-with-ai.md#install-the-runtime); Windows x64 users install the matching archive from [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel currently has no supported complete-runtime install. The `wenlan` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
+The npm installer downloads `wenlan`, `wenlan-server`, and `wenlan-mcp` into `~/.wenlan/bin/`. Linux x64/ARM64 users can run the automated [shell setup](../../docs/setup-with-ai.md#install-the-runtime); Windows x64 users install the matching archive from [Releases](https://github.com/wenlan-app/wenlan/releases/latest). macOS Intel currently has no supported complete-runtime install. The `wenlan` CLI owns setup and service management; `wenlan-server` is the daemon binary the host's service manager runs (launchd on macOS, systemd-user on Linux, Task Scheduler ONLOGON task on Windows).
 
 ## Setup modes
 
@@ -85,7 +85,7 @@ See [CLAUDE.md](../../CLAUDE.md) for the full route and module map.
 - [wenlan.app](https://wenlan.app) — project home
 - [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started) — install + verify the first memory loop
 - [wenlan.app/docs/mcp-clients](https://wenlan.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
-- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
+- [github.com/wenlan-app/wenlan](https://github.com/wenlan-app/wenlan) — source
 
 ## License
 

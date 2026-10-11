@@ -16,7 +16,7 @@ SCRIPT = Path(__file__).with_name("verify-release-merge.py")
 CURRENT_SHA = "61386c967734c3fe819586098f8236b2b9a6d961"
 HEAD_SHA = "4e4efe0f772e9d3d0b29c1b668f91c2f93d0e5bb"
 TREE_SHA = "98fa6fb36b6f0cfdd9a58b9a308ddc66be35d294"
-REPOSITORY = "7xuanlu/wenlan"
+REPOSITORY = "wenlan-app/wenlan"
 RELEASE_FILES = (
     ".release-please-manifest.json",
     "CHANGELOG.md",

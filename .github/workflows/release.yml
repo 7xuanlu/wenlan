@@ -90,7 +90,7 @@ jobs:
 
           $CHANGELOG
 
-          **Full Changelog**: https://github.com/7xuanlu/wenlan/compare/${PREV_TAG}...${RELEASE_TAG}
+          **Full Changelog**: https://github.com/wenlan-app/wenlan/compare/${PREV_TAG}...${RELEASE_TAG}
 
           ## Install
 
@@ -111,12 +111,12 @@ jobs:
 
           **Shell installer:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash
           \`\`\`
 
           **Exact shell install for this release:**
           \`\`\`
-          curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
+          curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/${RELEASE_TAG}/install.sh | WENLAN_RELEASE_TAG=${RELEASE_TAG} bash
           \`\`\`
           Downloads exact binaries and prints manual isolated daemon/MCP setup steps.
 
@@ -862,7 +862,7 @@ jobs:
       # `vars.SIGNPATH_ACTIVE` set to `false`, `0` or `no` reads as off instead
       # of as on.
       SIGNPATH_CONFIGURED: ${{ secrets.SIGNPATH_API_TOKEN != '' && secrets.SIGNPATH_ORGANIZATION_ID != '' && secrets.SIGNPATH_PROJECT_SLUG != '' && secrets.SIGNPATH_SIGNING_POLICY_SLUG != '' }}
-      SIGNPATH_REQUIRED: ${{ github.repository == '7xuanlu/wenlan' && vars.SIGNPATH_ACTIVE == 'true' }}
+      SIGNPATH_REQUIRED: ${{ github.repository == 'wenlan-app/wenlan' && vars.SIGNPATH_ACTIVE == 'true' }}
     outputs:
       setup_filename: ${{ steps.stage.outputs.setup_filename }}
       sig_filename: ${{ steps.stage.outputs.sig_filename }}
@@ -1643,9 +1643,9 @@ jobs:
             --arg notes "$notes" \
             --arg pub_date "$pub_date" \
             --arg signature "$signature" \
-            --arg url "https://github.com/7xuanlu/wenlan/releases/download/$RELEASE_TAG/$tarball_name" \
+            --arg url "https://github.com/wenlan-app/wenlan/releases/download/$RELEASE_TAG/$tarball_name" \
             --arg win_signature "$win_signature" \
-            --arg win_url "https://github.com/7xuanlu/wenlan/releases/download/$RELEASE_TAG/$win_setup_name" \
+            --arg win_url "https://github.com/wenlan-app/wenlan/releases/download/$RELEASE_TAG/$win_setup_name" \
             '{
               version: $version,
               notes: $notes,
@@ -1710,7 +1710,7 @@ jobs:
       - name: Reuse an already-published release image for this architecture
         id: existing
         env:
-          IMG: ghcr.io/7xuanlu/wenlan-server
+          IMG: ghcr.io/wenlan-app/wenlan-server
           ARCH: ${{ matrix.tag-suffix }}
           DIGEST_FILE: ${{ runner.temp }}/docker-image-digest-${{ matrix.tag-suffix }}.txt
           EVIDENCE_FILE: ${{ runner.temp }}/runtime-image-evidence-${{ matrix.tag-suffix }}.json
@@ -1733,7 +1733,7 @@ jobs:
       - name: Revalidate bytes, build runtime-only image, and smoke
         if: steps.existing.outputs.reuse != 'true'
         env:
-          LOCAL_IMAGE: ghcr.io/7xuanlu/wenlan-server:staging-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.tag-suffix }}
+          LOCAL_IMAGE: ghcr.io/wenlan-app/wenlan-server:staging-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.tag-suffix }}
         run: |
           set -euo pipefail
           jq -e '.receipt' \
@@ -1769,7 +1769,7 @@ jobs:
       - name: Push content-scoped staging image and record registry digest
         if: steps.existing.outputs.reuse != 'true'
         env:
-          LOCAL_IMAGE: ghcr.io/7xuanlu/wenlan-server:staging-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.tag-suffix }}
+          LOCAL_IMAGE: ghcr.io/wenlan-app/wenlan-server:staging-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.tag-suffix }}
           DIGEST_FILE: ${{ runner.temp }}/docker-image-digest-${{ matrix.tag-suffix }}.txt
         run: |
           set -euo pipefail
@@ -1847,7 +1847,7 @@ jobs:
             exit 1
           fi
           TAG="${{ env.RELEASE_TAG }}"
-          IMG="ghcr.io/7xuanlu/wenlan-server"
+          IMG="ghcr.io/wenlan-app/wenlan-server"
           amd="$(cat "$RUNNER_TEMP/docker-digests/docker-image-digest-amd64.txt")"
           arm="$(cat "$RUNNER_TEMP/docker-digests/docker-image-digest-arm64.txt")"
           [[ "$amd" =~ ^${IMG}@sha256:[0-9a-f]{64}$ ]]
@@ -2128,9 +2128,9 @@ jobs:
           cat > tap/Formula/wenlan-mcp.rb << 'FORMULA'
           class WenlanMcp < Formula
             desc "MCP server for Wenlan — personal agent memory layer"
-            homepage "https://github.com/7xuanlu/wenlan"
+            homepage "https://github.com/wenlan-app/wenlan"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
+            url "https://github.com/wenlan-app/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-mcp-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 
@@ -2168,9 +2168,9 @@ jobs:
           cat > tap/Formula/wenlan.rb << 'FORMULA'
           class Wenlan < Formula
             desc "Wenlan CLI and daemon — local-first memory + knowledge layer for AI agents"
-            homepage "https://github.com/7xuanlu/wenlan"
+            homepage "https://github.com/wenlan-app/wenlan"
             version "VERSION_PLACEHOLDER"
-            url "https://github.com/7xuanlu/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-darwin-arm64.tar.gz"
+            url "https://github.com/wenlan-app/wenlan/releases/download/vVERSION_PLACEHOLDER/wenlan-darwin-arm64.tar.gz"
             sha256 "SHA_PLACEHOLDER"
             license "Apache-2.0"
 

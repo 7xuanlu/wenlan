@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // These tests spawn real login shells, which is slow on a loaded CI runner and
 // unrelated to what they assert. One of them timed out at vitest's 5s default in
-// https://github.com/7xuanlu/wenlan/actions/runs/31474105312 while the rest of
+// https://github.com/wenlan-app/wenlan/actions/runs/31474105312 while the rest of
 // the file passed; the deadline moves, no assertion does.
 vi.setConfig({ testTimeout: 60_000 });
 
