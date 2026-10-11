@@ -204,8 +204,8 @@ stated that exact mapping. `wenlan steep disable` reverses the consent
 without deleting the model or key.
 
 Default flow ignores both. Storage, search, recall, and MCP memory all work in
-local memory mode; deterministic indexing and sync continue while model-backed
-background enrichment is off.
+local memory mode; deterministic indexing and sync continue while Steep (model-backed
+background upkeep) is off.
 
 ## When to use
 
