@@ -33,8 +33,8 @@ export function claudeAddConnectorUrl(relayUrl: string): string {
   return `https://claude.ai/customize/connectors?${params.toString()}`;
 }
 
-/** ChatGPT has no link that fills in a connector, so Wenlan copies the link and opens it. */
-export const CHATGPT_URL = "https://chatgpt.com/";
+/** ChatGPT has no link that fills in a connector, so Wenlan copies the link and opens the Plugins page, where "Add custom MCP server" lives. */
+export const CHATGPT_URL = "https://chatgpt.com/plugins";
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());

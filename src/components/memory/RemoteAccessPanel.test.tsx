@@ -223,10 +223,10 @@ describe("a connection that is on", () => {
     await connectedPanel();
     expect(screen.queryByText(/Developer mode/)).not.toBeInTheDocument();
     fireEvent.click(button("Copy link and open ChatGPT"));
-    await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://chatgpt.com/"));
+    await waitFor(() => expect(openExternal).toHaveBeenCalledWith("https://chatgpt.com/plugins"));
     expect(mocks.clipboardWrite).toHaveBeenCalledWith(relayUrl);
     expect(mocks.clipboardWrite.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(openExternal).mock.invocationCallOrder[0]);
-    expect(await screen.findByText(/Link copied\. In ChatGPT, open Settings/)).toBeInTheDocument();
+    expect(await screen.findByText(/Link copied\. In ChatGPT, click Add, then Add custom MCP server\./)).toBeInTheDocument();
   });
 
   it("copies only the relay URL", async () => {
