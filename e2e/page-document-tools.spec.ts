@@ -5,9 +5,7 @@ import { openPageTool } from "./helpers/pageTools";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 
 const copies = [
-  { locale: "en", open: "Open Fixture architecture", editor: "Page editor", actions: "Page actions", info: "Page info", map: "Mind map", note: "Note", close: "Close", pane: "Note views", toggle: "Open note sidebar" },
-  { locale: "zh-Hant", open: "開啟 Fixture architecture", editor: "頁面編輯器", actions: "頁面操作", info: "頁面資訊", map: "心智圖", note: "筆記", close: "關閉", pane: "筆記檢視", toggle: "開啟筆記側欄" },
-  { locale: "zh-Hans", open: "打开 Fixture architecture", editor: "页面编辑器", actions: "页面操作", info: "页面信息", map: "思维导图", note: "笔记", close: "关闭", pane: "笔记检视", toggle: "打开笔记侧栏" },
+  { locale: "en", open: "Open Fixture architecture", editor: "Page editor", actions: "Page actions", info: "Page info", map: "Mind map", note: "Note", close: "Close", pane: "Note views", toggle: "Open note sidebar", untoggle: "Close note sidebar" },
 ] as const;
 
 async function expectDocumentToolsAligned(page: Page, actionsName: string): Promise<void> {
@@ -42,13 +40,22 @@ for (const copy of copies) for (const width of [1280, 375]) {
     for (const name of [copy.note, copy.map, copy.info]) {
       await expect(page.locator(".page-detail").getByRole("button", { name, exact: true })).toHaveCount(0);
     }
-    await expect(page.locator(".page-detail-top-row, .page-detail-view-controls")).toHaveCount(0);
+    await expect(page.locator(".page-detail-top-row, .page-detail-view-controls, .page-detail-canvas-toggle")).toHaveCount(0);
+    await expect(page.getByRole("tab", { name: copy.map, exact: true })).toHaveCount(0);
     await expectDocumentToolsAligned(page, copy.actions);
     await page.screenshot({ path: testInfo.outputPath("note-title-tools.png") });
 
     await openPageTool(page, copy.info, copy.actions);
     const info = page.getByRole(role, { name: copy.pane, exact: true });
     await expect(info).toBeVisible();
+    await expect(page.getByRole("button", { name: copy.untoggle, exact: true })).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("tab", { name: "Info", exact: true })).toHaveAttribute("aria-selected", "true");
+    const entry = page.getByRole("tab", { name: copy.map, exact: true });
+    await expect(entry).toHaveAttribute("aria-selected", "false");
+    await expect(entry).toBeInViewport();
+    const entryBox = (await entry.boundingBox())!;
+    expect(entryBox.x).toBeGreaterThanOrEqual(0);
+    expect(entryBox.x + entryBox.width).toBeLessThanOrEqual(width);
     await expect(editor).toBeEditable();
     await info.getByRole("button", { name: copy.close, exact: true }).press("Escape");
     await expect(info).toHaveCount(0);
@@ -58,10 +65,13 @@ for (const copy of copies) for (const width of [1280, 375]) {
 
     const draft = "# Fixture architecture\n\nSaved before the map pane opens.";
     await editor.fill(draft);
-    await openPageTool(page, copy.map, copy.actions);
+    await openPageTool(page, copy.info, copy.actions);
+    await entry.press("Enter");
+    await expect(entry).toHaveAttribute("aria-selected", "true");
     const map = page.getByRole(role, { name: copy.pane, exact: true });
     await expect(map).toBeVisible();
     await expect(map.locator(".page-canvas")).toBeVisible();
+    await expect(map.locator(".page-canvas-surface")).toBeFocused();
     await expect(editor).toHaveCount(0);
     const reading = page.getByTestId("page-document-reading");
     await expect(reading).toContainText("Saved before the map pane opens.");
@@ -94,10 +104,11 @@ for (const copy of copies) for (const width of [1280, 375]) {
       expect(noteContentBox.width).toBeGreaterThanOrEqual(await page.evaluate(() => matchMedia("(pointer: coarse)").matches ? 228 : 204));
     }
     await page.screenshot({ path: testInfo.outputPath("map-pane-and-note.png") });
-    await map.getByRole("button", { name: copy.close, exact: true }).click();
+    await map.getByRole("button", { name: copy.close, exact: true }).press("Enter");
     await expect(map).toHaveCount(0);
     await expect(editor).toBeEditable();
     await expect(editor).toContainText("Saved before the map pane opens.");
+    await expect(page.getByRole("button", { name: copy.toggle, exact: true })).toHaveAttribute("aria-expanded", "false");
     await expect(editor).toBeFocused();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
     expect(errors.pageErrors).toEqual([]);

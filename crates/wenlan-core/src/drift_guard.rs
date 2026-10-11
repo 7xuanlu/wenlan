@@ -2237,7 +2237,9 @@ fn ci_routing_contract_violations(
         || trusted_checkout.and_then(|step| step["uses"].as_str())
             != Some("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803")
         || trusted_checkout.and_then(|step| step["with"]["ref"].as_str())
-            != Some("${{ github.event.pull_request.base.sha || github.sha }}")
+            != Some(
+                "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}",
+            )
         || trusted_checkout.and_then(|step| step["with"]["path"].as_str())
             != Some("trusted-release-gate")
         || trusted_checkout.and_then(|step| step["with"]["fetch-depth"].as_u64()) != Some(1)
@@ -5965,8 +5967,9 @@ fn release_promotion_contract_violations(
         "\"X-GitHub-Api-Version\": \"2026-03-10\"",
         "\"state\": \"open\"",
         "\"base\": BASE_BRANCH",
-        "\"head\": f\"{RELEASE_AUTHOR}:{RELEASE_BRANCH}\"",
-        "if owner != RELEASE_AUTHOR:",
+        "RELEASE_REPO_OWNER = \"wenlan-app\"",
+        "\"head\": f\"{RELEASE_REPO_OWNER}:{RELEASE_BRANCH}\"",
+        "if owner != RELEASE_REPO_OWNER:",
         "if not payload:",
         "if len(payload) != 1:",
         "user.get(\"login\") != RELEASE_AUTHOR",
@@ -6459,7 +6462,7 @@ fn release_promotion_contract_rejects_rebuild_and_unbounded_receipts() {
         ("multiple", "if len(payload) != 1:", "if False:"),
         (
             "repository owner",
-            "if owner != RELEASE_AUTHOR:",
+            "if owner != RELEASE_REPO_OWNER:",
             "if False:",
         ),
         (

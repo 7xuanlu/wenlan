@@ -71,7 +71,7 @@ The workflow is already wired, and the secrets are in place: releases from v0.17
 
 Windows installers are not code-signed. No certificate provider is active for the published Windows installer.
 
-The [v0.18.16 Windows release job](https://github.com/7xuanlu/wenlan/actions/runs/37169138734/job/111338400326) skipped the prepared signing and signature-verification steps. The [release notes](https://github.com/7xuanlu/wenlan/releases/tag/v0.18.16) disclose the unsigned installer. Prepared workflow steps are not evidence of a signed release.
+The [v0.18.16 Windows release job](https://github.com/wenlan-app/wenlan/actions/runs/37169138734/job/111338400326) skipped the prepared signing and signature-verification steps. The [release notes](https://github.com/wenlan-app/wenlan/releases/tag/v0.18.16) disclose the unsigned installer. Prepared workflow steps are not evidence of a signed release.
 
 The `.sig` distributed with an installer is for the Tauri updater. It is not a Windows Authenticode signature and does not establish a verified Windows publisher.
 

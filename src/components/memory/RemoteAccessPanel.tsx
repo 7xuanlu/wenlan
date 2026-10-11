@@ -33,8 +33,8 @@ export function claudeAddConnectorUrl(relayUrl: string): string {
   return `https://claude.ai/customize/connectors?${params.toString()}`;
 }
 
-/** ChatGPT has no link that fills in a connector, so Wenlan copies the link and opens it. */
-export const CHATGPT_URL = "https://chatgpt.com/";
+/** ChatGPT has no link that fills in a connector, so Wenlan copies the link and opens the Plugins page, where "Add custom MCP server" lives. */
+export const CHATGPT_URL = "https://chatgpt.com/plugins";
 
 function useNow(intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now());
@@ -230,7 +230,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
           <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
             <ol className="list-decimal pl-5 space-y-2 text-sm">
               <li className="min-w-0 space-y-2">
-                <span>{t("remoteAccess.howTo1")}</span>
+                <span className="block">{t("remoteAccess.howTo1")}</span>
                 <span className="flex flex-wrap gap-2">
                   <Button variant="primary" size="sm" disabled={busy} onClick={() => addToClaude(relayUrl)}>
                     {t("remoteAccess.addToClaude")}<ArrowSquareOut size={14} aria-hidden="true" />

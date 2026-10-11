@@ -72,7 +72,7 @@ cat > "$TMPDIR_TEST/plugin/skills/setup/SKILL.md" <<EOF
 npx -y wenlan@0.5.0 setup
 EOF
 cat > "$TMPDIR_TEST/plugin-codex/skills/setup/SKILL.md" <<EOF
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.5.0/install.sh | bash
 EOF
 
 # Test 1: all match → exit 0
@@ -204,7 +204,7 @@ perl -0pi -e 's|wenlan\@0\.4\.9 setup|wenlan\@0.5.0 setup|g' "$TMPDIR_TEST/plugi
 
 # Test 8e: a download piped into a shell, or an unpinned package, in the
 # Claude setup skill is rejected even when the exact pin is also present.
-for bad in 'curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.5.0/install.sh | bash' 'npx -y wenlan@latest setup' 'npx -y wenlan setup'; do
+for bad in 'curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.5.0/install.sh | bash' 'npx -y wenlan@latest setup' 'npx -y wenlan setup'; do
     echo "$bad" >> "$TMPDIR_TEST/plugin/skills/setup/SKILL.md"
     if (cd "$TMPDIR_TEST" && RELEASE_TAG="v0.5.0" bash "$OLDPWD/scripts/validate-versions.sh") 2>/dev/null; then
         echo "FAIL test 8e: should have rejected Claude setup line: $bad"

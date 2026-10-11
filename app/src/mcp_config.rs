@@ -381,7 +381,7 @@ fn claude_code_plugin_enabled_on_disk(home: Option<&Path>) -> Reading {
 
 /// Whether a Codex CLI `config.toml` blob has the Wenlan plugin enabled —
 /// `[plugins."wenlan@<marketplace>"] enabled = true`. The marketplace name
-/// varies (`wenlan-local` pre-7xuanlu/wenlan#348, `7xuanlu-wenlan` after),
+/// varies (`wenlan-local` pre-wenlan-app/wenlan#348, `7xuanlu-wenlan` after),
 /// so match the `wenlan@` prefix, never a literal marketplace name — same
 /// reasoning as `claude_code_plugin_enabled`.
 fn codex_cli_plugin_enabled(toml_str: &str) -> Result<bool, String> {
@@ -2660,7 +2660,7 @@ mod tests {
         assert!(error.contains("not valid JSON"), "{error}");
     }
 
-    /// Prefix matching again: `wenlan-local` is the pre-7xuanlu/wenlan#348
+    /// Prefix matching again: `wenlan-local` is the pre-wenlan-app/wenlan#348
     /// marketplace name and `7xuanlu-wenlan` the post-rename one.
     #[test]
     fn test_codex_cli_plugin_enabled() {

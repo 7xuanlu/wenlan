@@ -59,7 +59,7 @@ comparing numerically per component with build metadata (`+g<sha>`) stripped.
 ```bash
 PLUGIN_JSON="${CODEX_PLUGIN_ROOT:-plugin-codex}/.codex-plugin/plugin.json"
 RELEASE_VER="$("${CODEX_PLUGIN_ROOT:-plugin-codex}/bin/version-drift.sh" --health-url http://127.0.0.1:7878/api/health --manifest "$PLUGIN_JSON" | sed -n 's/.* release=\([^ ]*\) .*/\1/p')"
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v${RELEASE_VER}/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v${RELEASE_VER}/install.sh | bash
 export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
 wenlan background on
@@ -80,7 +80,7 @@ command -v wenlan >/dev/null 2>&1 && echo present || echo absent
 If absent, install and configure local memory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/v0.18.16/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/v0.18.16/install.sh | bash
 export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
 wenlan background on

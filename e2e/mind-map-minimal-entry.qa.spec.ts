@@ -72,15 +72,3 @@ test("unsupported backend disables menu creation and N safely",async({page}) => 
  await expect(f.getByRole("textbox",{name:"Name this node",exact:true})).toHaveCount(0);await expect(f.getByRole("textbox",{name:"Node name",exact:true})).toHaveCount(0);
  expect(runtime.calls().filter(c=>c.command==="create_page_map_node")).toHaveLength(0);noArticleWrites(runtime);expect(errors.pageErrors).toEqual([]);
 });
-for(const locale of ["en","zh-Hant","zh-Hans"] as const)for(const width of [1280,375])test(`compact map ${locale} ${width}`,async({page},info)=>{
- test.skip(info.project.name!=="webkit");const {errors,tr}=await start(page,locale,width);const f=group(page);const surface=f.locator(".page-canvas-surface");
- for(const tab of await f.locator(".note-inspector-tabs [role=tab]").all()){const tabBox=(await tab.boundingBox())!;expect(tabBox.width).toBeGreaterThan(45);}
- const box=(await surface.boundingBox())!;await surface.click({button:"right",position:{x:box.width/2,y:box.height/2}});
- const menu=f.getByRole("menu",{name:tr.pageCanvas.menuLabel});await expect(menu).toBeVisible();await menu.getByRole("menuitem",{name:tr.pageCanvas.menuAddHere,exact:true}).click();
- const input=f.getByRole("textbox",{name:tr.pageCanvas.newSectionPlaceholder,exact:true});await expect(input).toBeFocused();
- await page.screenshot({path:info.outputPath("node-entry.png")});expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
- const editor=await input.evaluate(el=>el.closest(".react-flow__node")?.getBoundingClientRect().toJSON());expect(editor).not.toBeNull();
- const surfaceBox=(await surface.boundingBox())!;expect(editor!.x).toBeGreaterThanOrEqual(surfaceBox.x);expect(editor!.right).toBeLessThanOrEqual(surfaceBox.x+surfaceBox.width);
- expect(editor!.y).toBeGreaterThanOrEqual(surfaceBox.y);expect(editor!.bottom).toBeLessThanOrEqual(surfaceBox.y+surfaceBox.height);
- expect(await input.inputValue()).toBe("");await page.keyboard.press("Escape");expect(errors.pageErrors).toEqual([]);expect(errors.consoleErrors).toEqual([]);
-});

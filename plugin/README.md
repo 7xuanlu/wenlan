@@ -15,7 +15,7 @@ Wenlan is local-first. Memories, pages, and session notes live on your machine u
 Install from the Claude directory, or from the Claude Code marketplace:
 
 ```text
-/plugin marketplace add 7xuanlu/wenlan
+/plugin marketplace add wenlan-app/wenlan
 /plugin install wenlan@7xuanlu-wenlan
 ```
 
@@ -30,7 +30,7 @@ Everything the plugin does is listed here so you can decide whether to install i
 | Component | What it runs | Network destination |
 |---|---|---|
 | Skills and MCP server | Read and write memories, pages, and session notes | `127.0.0.1:7878` (the local Wenlan daemon on your machine) |
-| `/wenlan:setup` | When the runtime is missing, runs `npx -y wenlan@<pinned version> setup` (macOS Apple Silicon). On other platforms it stops and points you to the install guide | `registry.npmjs.org` (npm package `wenlan`), which downloads release binaries from `github.com/7xuanlu/wenlan/releases` (GitHub serves the files from `objects.githubusercontent.com`) |
+| `/wenlan:setup` | When the runtime is missing, runs `npx -y wenlan@<pinned version> setup` (macOS Apple Silicon). On other platforms it stops and points you to the install guide | `registry.npmjs.org` (npm package `wenlan`), which downloads release binaries from `github.com/wenlan-app/wenlan/releases` (GitHub serves the files from `objects.githubusercontent.com`) |
 | MCP runner fallback | If no local `wenlan-mcp` binary exists, runs `npx -y wenlan-mcp@<pinned version>` | `registry.npmjs.org` (npm package `wenlan-mcp`) |
 | `SessionStart` hook | One health probe of the local daemon, plus the local outbox and version checks above | `127.0.0.1:7878` only |
 | Local daemon, first start | Downloads the search embedding model (about 210 MB, `Qdrant/bge-base-en-v1.5-onnx-Q`) once | `huggingface.co`. No memory content is sent. If a Hugging Face token is already saved on the machine, the download library attaches it |
@@ -102,7 +102,7 @@ Reload the plugin (`/reload-plugins`) and the runner uses the local binary on th
 - [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory): Claude Code memory concept article
 - [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow): the brief, capture, recall, handoff loop
 - [wenlan.app/docs/get-started](https://wenlan.app/docs/get-started): install and verify
-- [Privacy](https://github.com/7xuanlu/wenlan/blob/main/docs/PRIVACY.md): privacy policy, covering what Wenlan stores locally and what can leave your machine
+- [Privacy](https://github.com/wenlan-app/wenlan/blob/main/docs/PRIVACY.md): privacy policy, covering what Wenlan stores locally and what can leave your machine
 
 ## License
 

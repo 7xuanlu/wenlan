@@ -292,7 +292,7 @@ SH
   PATH="$fake_bin:$PATH" \
     CURL_RECORD="$fixture_dir/curl-args" \
     GH_TOKEN=test-token \
-    WENLAN_APP_RELEASE_JSON_URL="https://api.github.com/repos/7xuanlu/wenlan/releases/latest" \
+    WENLAN_APP_RELEASE_JSON_URL="https://api.github.com/repos/wenlan-app/wenlan/releases/latest" \
     WENLAN_APP_INSTALL_DIR="$fixture_dir/Applications" \
     WENLAN_APP_NO_LAUNCH=1 \
     WENLAN_APP_SKIP_PLATFORM_CHECK=1 \

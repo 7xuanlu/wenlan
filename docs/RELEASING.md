@@ -35,7 +35,7 @@ This updates workspace Cargo versions, npm package manifests, plugin metadata, a
 If a merged Release PR has a valid closed observer receipt but its historical tag-trigger workflow cannot be rerun (for example, a GitHub REST-version regression in the old workflow), first merge the release-recovery workflow fix to `main`. Then dispatch **Release** from `main` with all four exact values from the receipt and the successful Release PR CI run:
 
 ```bash
-gh workflow run Release --repo 7xuanlu/wenlan --ref main \
+gh workflow run Release --repo wenlan-app/wenlan --ref main \
   -f release_sha=<40-character-merged-release-sha> \
   -f release_tag=v<receipt-version> \
   -f source_run_id=<successful-release-pr-ci-run-id> \

@@ -19,9 +19,17 @@ const BACKGROUND_PHASE_LABELS = [
   "Distilling pages",
 ] as const;
 
+type ImportChunkArgs = {
+  batchId?: string | null;
+  chunkIndex?: number | null;
+  chunkTotal?: number | null;
+  content?: unknown;
+};
+
 declare global {
   interface Window {
     __releaseHandoffImport?: boolean;
+    __handoffImportCalls?: ImportChunkArgs[];
   }
 }
 
@@ -34,6 +42,8 @@ declare global {
 async function installHandoffMock(page: Page): Promise<void> {
   await page.addInitScript(() => {
     let imported = false;
+    const calls: ImportChunkArgs[] = [];
+    window.__handoffImportCalls = calls;
     const internals = window.__TAURI_INTERNALS__;
     if (!internals) return;
     const orig = internals.invoke.bind(internals);
@@ -49,9 +59,10 @@ async function installHandoffMock(page: Page): Promise<void> {
     });
 
     internals.invoke = (async (command: string, args?: unknown) => {
-      const params = (args ?? {}) as { batchId?: string | null; content?: unknown };
+      const params = (args ?? {}) as ImportChunkArgs;
 
       if (command === "import_memories_cmd") {
+        calls.push(params);
         // Held until the spec has asserted on the progress phase, so the
         // summary cannot race past it.
         await new Promise<void>((resolve) => {
@@ -169,14 +180,26 @@ test("an import hands background work to Activity after returning to the workspa
   for (const label of BACKGROUND_PHASE_LABELS) {
     await expect(page.getByText(label)).toHaveCount(0);
   }
+  // The daemon's row counts, not an elapsed-time bar or a generic spinner line.
+  await expect(page.getByText("3 of 3").first()).toBeVisible();
+  await expect(page.getByText(/Processing your memories/)).not.toBeVisible();
 
   await page.evaluate(() => {
     window.__releaseHandoffImport = true;
   });
 
   // ── The handoff sentence, naming the number stored ──
+  await expect(page.getByText(/3 memories imported/i)).toBeVisible();
   await expect(page.getByText(/3 memories stored and searchable now/)).toBeVisible();
   await expect(page.getByText(/See further progress on Activity/)).toBeVisible();
+
+  // One chunk, one batch id.
+  const calls = await page.evaluate(() => window.__handoffImportCalls ?? []);
+  expect(calls).toHaveLength(1);
+  expect(typeof calls[0]?.batchId).toBe("string");
+  expect(calls[0]?.batchId).not.toHaveLength(0);
+  expect(calls[0]?.chunkIndex).toBe(0);
+  expect(calls[0]?.chunkTotal).toBe(1);
 
   // The background phases stay gone on the summary too, along with the
   // trailing figures that used to read as an unpaid bill.

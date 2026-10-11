@@ -15,7 +15,7 @@ npx -y wenlan setup
 Then install the Codex plugin:
 
 ```bash
-codex plugin marketplace add 7xuanlu/wenlan
+codex plugin marketplace add wenlan-app/wenlan
 codex plugin add wenlan@7xuanlu-wenlan
 ```
 

@@ -1,6 +1,6 @@
 # wenlan-mcp
 
-MCP server for [Wenlan](https://github.com/7xuanlu/wenlan). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Wenlan daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
+MCP server for [Wenlan](https://github.com/wenlan-app/wenlan). It lets Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI, and other MCP clients read and write to the local Wenlan daemon through the [Model Context Protocol](https://modelcontextprotocol.io).
 
 Wenlan owns storage, search, embeddings, pages, and distill cycles. `wenlan-mcp` is the connector.
 
@@ -171,7 +171,7 @@ See [`src/tools.rs`](src/tools.rs) for the full instructions.
 - [wenlan.app/learn/mcp-memory-server](https://wenlan.app/learn/mcp-memory-server) — concept article on Wenlan as an MCP memory server
 - [wenlan.app/docs/mcp-clients](https://wenlan.app/docs/mcp-clients) — connect Claude Code, Cursor, Codex, Claude Desktop, Gemini CLI
 - [npm: wenlan-mcp](https://www.npmjs.com/package/wenlan-mcp) — standalone npm package
-- [github.com/7xuanlu/wenlan](https://github.com/7xuanlu/wenlan) — source
+- [github.com/wenlan-app/wenlan](https://github.com/wenlan-app/wenlan) — source
 
 ## License
 

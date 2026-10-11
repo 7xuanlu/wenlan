@@ -13,7 +13,7 @@ Contenido: [Instalación](#installation) · [Modelos y privacidad](#models) · [
 
 ### Descarga y abre Wenlan
 
-[Descarga la aplicación](https://github.com/7xuanlu/wenlan/releases/latest) y ábrela tras instalarla:
+[Descarga la aplicación](https://github.com/wenlan-app/wenlan/releases/latest) y ábrela tras instalarla:
 
 - **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada.
 - **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado. Si SmartScreen muestra un aviso, confirma que lo has descargado de la página oficial de Releases antes de elegir "Más información" → "Ejecutar de todas formas".
@@ -30,7 +30,7 @@ La organización en segundo plano y la actualización automática de Páginas so
 El instalador descarga la aplicación, comprueba su SHA-256 y la mueve a Aplicaciones:
 
 ```bash
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/scripts/install-macos-app.sh)"
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/scripts/install-macos-app.sh)"
 ```
 
 **Sin la aplicación de escritorio**
@@ -41,9 +41,9 @@ En macOS Apple Silicon:
 npx -y wenlan setup
 ```
 
-`npx` requiere Node.js. Si no lo tienes, ejecuta `curl -fsSL https://raw.githubusercontent.com/7xuanlu/wenlan/main/install.sh | bash` y después `wenlan setup --basic`.
+`npx` requiere Node.js. Si no lo tienes, ejecuta `curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/main/install.sh | bash` y después `wenlan setup --basic`.
 
-Esto descarga la CLI precompilada, el daemon y el conector MCP, inicia el entorno local y lo verifica. No se requiere toolchain de Rust ni Cargo. Linux x64/ARM64 con glibc tiene una [ruta de configuración automática de shell](setup-with-ai.md#install-the-runtime); Windows x64 utiliza el archivo correspondiente de [Releases](https://github.com/7xuanlu/wenlan/releases/latest). macOS Intel actualmente [no tiene una instalación completa soportada del runtime](../crates/wenlan-cli/README.md#macos-intel).
+Esto descarga la CLI precompilada, el daemon y el conector MCP, inicia el entorno local y lo verifica. No se requiere toolchain de Rust ni Cargo. Linux x64/ARM64 con glibc tiene una [ruta de configuración automática de shell](setup-with-ai.md#install-the-runtime); Windows x64 utiliza el archivo correspondiente de [Releases](https://github.com/wenlan-app/wenlan/releases/latest). macOS Intel actualmente [no tiene una instalación completa soportada del runtime](../crates/wenlan-cli/README.md#macos-intel).
 
 **Qué se instala y cómo actualizar**
 

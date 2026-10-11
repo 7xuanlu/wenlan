@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import re
 import unittest
+from pathlib import Path
 
 from release_targets import (
     TargetError,
@@ -86,6 +88,39 @@ class ReleaseTargetTests(unittest.TestCase):
             {"include": EXPECTED[-1:]},
         )
 
+    def test_merge_queue_preflight_matches_an_ordinary_pr(self) -> None:
+        self.assertEqual(
+            release_preflight_matrix(
+                event_name="merge_group",
+                ref="refs/heads/gh-readonly-queue/main/pr-847-a8108f257f70016a74ede72a829bb6e9dcc5035f",
+                head_ref="",
+            ),
+            {"include": EXPECTED[:-1]},
+        )
+
+    def test_preflight_matrix_accepts_every_ci_trigger(self) -> None:
+        # A trigger added to ci.yml without a matrix here fails detect-changes
+        # for every run of that event, so read the triggers from the workflow.
+        workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text()
+        block = re.search(r"^on:\n((?:[ #].*\n|\n)+)", workflow, re.MULTILINE)
+        self.assertIsNotNone(block)
+        triggers = re.findall(r"^  ([a-z_]+):", block.group(1), re.MULTILINE)
+        self.assertEqual(
+            sorted(triggers), ["merge_group", "pull_request", "push", "workflow_dispatch"]
+        )
+        refs = {
+            "merge_group": "refs/heads/gh-readonly-queue/main/pr-1-0000000000000000000000000000000000000000",
+            "pull_request": "refs/pull/1/merge",
+        }
+        for trigger in triggers:
+            with self.subTest(trigger=trigger):
+                matrix = release_preflight_matrix(
+                    event_name=trigger,
+                    ref=refs.get(trigger, "refs/heads/main"),
+                    head_ref="",
+                )
+                self.assertTrue(matrix["include"])
+
     def test_release_please_and_manual_preflight_keep_every_target(self) -> None:
         release_please = release_preflight_matrix(
             event_name="pull_request",
@@ -112,6 +147,12 @@ class ReleaseTargetTests(unittest.TestCase):
             release_preflight_matrix(
                 event_name="push",
                 ref="refs/heads/not-main",
+                head_ref="",
+            )
+        with self.assertRaisesRegex(TargetError, "does not accept merge queue ref"):
+            release_preflight_matrix(
+                event_name="merge_group",
+                ref="refs/heads/main",
                 head_ref="",
             )
 
