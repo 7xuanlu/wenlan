@@ -63,7 +63,7 @@ fi
   runtime:
 
 ```bash
-npx -y wenlan@0.18.16 setup
+npx -y wenlan@0.18.17 setup
 export PATH="$HOME/.wenlan/bin:$PATH"
 ```
 
@@ -86,7 +86,7 @@ pinned to this plugin's exact version. It installs the runtime into
 prints the status:
 
 ```bash
-npx -y wenlan@0.18.16 setup
+npx -y wenlan@0.18.17 setup
 export PATH="$HOME/.wenlan/bin:$PATH"
 ```
 
