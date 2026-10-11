@@ -7,15 +7,16 @@ import { openPageTool } from "./helpers/pageTools";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 
 /**
- * The canvas's control surface in every state, both themes, photographed to
- * shots/ so the design can be looked at rather than imagined.
+ * The canvas's control surface in every state, photographed to shots/ so the
+ * design can be looked at rather than imagined. Light theme only: nothing here
+ * asserts a colour, so a dark run would repeat the same checks.
  *
  * It carries the coverage those states have nowhere else — waiting and failing
  * are only reachable with a stalled or broken daemon — plus the one check the
  * pure layout tests cannot make: that boxes measured by the real browser, with
  * the real font, still land clear of each other.
  */
-const THEMES = ["light", "dark"] as const;
+const THEMES = ["light"] as const;
 
 for (const theme of THEMES) {
   test.describe(`canvas look — ${theme}`, () => {

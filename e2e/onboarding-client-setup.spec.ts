@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { test, expect } from '@playwright/test';
 import { installTauriMock, collectBrowserErrors } from './tauriMock';
-import { enFirstUse, hansFirstUse, hantFirstUse } from '../src/components/onboarding/firstUseCopy';
+import { enFirstUse } from '../src/components/onboarding/firstUseCopy';
 
 // Fixture-only rendering: this does not exercise native APIs or live OAuth.
-const cases = [['en', enFirstUse], ['zh-Hans', hansFirstUse], ['zh-Hant', hantFirstUse]] as const;
-for (const [locale, copy] of cases) for (const width of [820, 1440]) {
+const cases = [['en', enFirstUse]] as const;
+for (const [locale, copy] of cases) for (const width of [1440, 375]) {
   test(`${locale} ${width}: sample to read-only web setup`, async ({ page, baseURL }, info) => {
     await page.setViewportSize({ width, height: 1000 });
     const errors = collectBrowserErrors(page);

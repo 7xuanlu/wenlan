@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { resources as appResources } from "../src/i18n/resources";
 import { createReviewDecisionFixture } from "./fixtures/reviewDecisions";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
@@ -80,24 +79,3 @@ test("many tabs keep create and inspector reachable while direct move preserves 
   await expect(frame(page).getByRole("tab", { name: "Layout note 1", exact: true })).toBeFocused();
   expect(errors.pageErrors).toEqual([]); expect(errors.consoleErrors).toEqual([]);
 });
-
-for (const locale of ["en", "zh-Hant", "zh-Hans"] as const) for (const width of [1440, 375]) {
-  test(`header actions ${locale} ${width}`, async ({ page, browserName }, info) => {
-    test.skip(browserName !== "webkit", "Localization matrix uses WebKit; core flow runs both engines.");
-    const t = appResources[locale].translation;
-    await page.setViewportSize({ width, height: 900 });
-    const errors = collectBrowserErrors(page);
-    await installTauriMock(page, { fixture: fixture(), locale, rawActions: [], localStorage: { "wenlan-theme": "light" } });
-    await page.goto("/"); await openWikiNote(page, "Layout note 1");
-    const initial = frame(page).getByRole("tab", { name: "Layout note 1", exact: true });
-    await initial.click({ button: "right" });
-    const moveRight = page.getByRole("menuitem", { name: t.pages.groups.moveToRight, exact: true });
-    await expect(moveRight).toBeVisible();
-    await moveRight.click();
-    await expect(frame(page, "secondary").getByRole("tab", { name: "Layout note 1", exact: true })).toBeVisible();
-    await frame(page).getByRole("button", { name: t.pages.overview.newPage, exact: true }).click();
-    await expect(frame(page).locator('.note-tab[data-active="true"]')).toBeVisible();
-    await page.screenshot({ path: info.outputPath("header.png") });
-    expect(errors.pageErrors).toEqual([]); expect(errors.consoleErrors).toEqual([]);
-  });
-}

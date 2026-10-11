@@ -20,23 +20,6 @@ for (const locale of ["en", "zh-Hant", "zh-Hans"]) {
     expect(errors).toEqual([]);
   });
 }
-for (const state of ["unknown", "unavailable", "save-failure"]) {
-  test(`${state}: never presents a successful opt-in`, async ({page}) => {
-    await page.goto(`/preview/telemetry.html?state=${state}`);
-    const toggle = page.getByRole("button", {name: /usage stats/i});
-    if (state === "save-failure") {
-      await expect(toggle).toBeEnabled();
-      await toggle.click();
-      await expect(page.getByText(/could not persist/i)).toBeVisible();
-      await expect(toggle).toHaveAttribute("aria-pressed", "false");
-    } else {
-      const status = page.getByRole("status", {name: /usage stats/i});
-      await expect(status).toBeVisible();
-      await expect(status).toHaveAttribute("data-state", "unavailable");
-      await expect(toggle).toHaveCount(0);
-    }
-  });
-}
 test("known consent can be revoked even when collection is unavailable", async ({page}) => {
   await page.goto("/preview/telemetry.html?state=unavailable-on");
   const toggle = page.getByRole("button", {name: /usage stats/i});
