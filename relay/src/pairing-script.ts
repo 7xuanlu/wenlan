@@ -1,9 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 // Browser pairing page behavior. Localized strings come from data attributes
 // on <main>, rendered by the server, because the CSP forbids inline script.
+import { WHOLE_LIBRARY_SPACE } from './proxy.ts';
+
 export const pairingJS = `
 const main = document.querySelector('main');
 const text = key => main.dataset['text' + key[0].toUpperCase() + key.slice(1)] || '';
+// The raw Space value lives in data-space; only the visible text is localized.
+const spaceLabel = raw => raw === ${JSON.stringify(WHOLE_LIBRARY_SPACE)} ? text('wholeLibrary') : raw;
 const notice = document.querySelector('#notice');
 const continueButton = document.querySelector('#continue');
 const completeForm = continueButton ? continueButton.form : null;
@@ -34,7 +38,9 @@ function renderState(result) {
   const space = document.querySelector('#approved-space');
   if (space) {
     space.hidden = status !== 'approved';
-    space.querySelector('dd').textContent = typeof result.space === 'string' ? result.space : '';
+    const raw = typeof result.space === 'string' ? result.space : '';
+    space.dataset.space = raw;
+    space.querySelector('dd').textContent = spaceLabel(raw);
   }
   if (continueButton) {
     continueButton.hidden = status !== 'approved';
@@ -115,7 +121,7 @@ for (const form of document.querySelectorAll('form')) form.addEventListener('sub
 if (continueButton) {
   const initial = main.dataset.pairingState;
   if (initial === 'approved' || initial === 'denied') renderState({ status: initial,
-    space: document.querySelector('#approved-space dd')?.textContent || undefined });
+    space: document.querySelector('#approved-space')?.dataset.space || undefined });
   else pollStatus();
 }
 `;

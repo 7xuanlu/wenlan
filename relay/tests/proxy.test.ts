@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { forwardQuery, routeDenial, TOOL_UNAVAILABLE_TEXT, tunnelOrigin, type QueryGrant, type ConnectorRoute } from '../src/proxy.ts';
+import { forwardQuery, routeDenial, TOOL_UNAVAILABLE_TEXT, tunnelOrigin, WHOLE_LIBRARY_SPACE, type QueryGrant, type ConnectorRoute } from '../src/proxy.ts';
 
 const publicOrigin = 'https://relay.example';
 const now = 1_000;
@@ -162,6 +162,37 @@ test('only query tools and authorized Space are accepted', async () => {
   for (const name of ['brief', 'recall', 'get_page_sources']) {
     assert.equal((await forwardQuery(request('tools/call', { space: 'shared' }, name), grant, setup().options)).status, 200);
   }
+});
+
+test('a whole-library grant lets the model name any Space, a named grant keeps strict equality', async () => {
+  assert.equal(WHOLE_LIBRARY_SPACE, '*');
+  const whole = { grant: { ...grant, space: WHOLE_LIBRARY_SPACE }, route: { ...route, space: WHOLE_LIBRARY_SPACE } };
+  const named = { grant: { ...grant, space: 'work' }, route: { ...route, space: 'work' } };
+  const status = async (args: object, scope: typeof whole, name = 'recall') => {
+    const state = setup(scope.route);
+    const response = await forwardQuery(request('tools/call', args, name), scope.grant, state.options);
+    return { status: response.status, forwarded: state.calls.length };
+  };
+  for (const args of [{ query: 'decision' }, {}, { space: 'work' }, { space: 'other' }, { domain: 'x' },
+    { space: 'work', domain: 'x' }, { space: '' }, { space: '*' }, { space: null }, { query: 'decision', space: 'Uncategorized' }]) {
+    for (const name of ['brief', 'recall', 'get_page_sources']) {
+      assert.deepEqual(await status(args, whole, name), { status: 200, forwarded: 1 }, JSON.stringify(args));
+    }
+  }
+  for (const args of [{ space: 5 }, { domain: 5 }, { space: ['work'] }, { space: { name: 'work' } },
+    { domain: false }, { space: 'work', domain: 5 }, { space: 5, domain: 'x' }]) {
+    assert.deepEqual(await status(args, whole), { status: 403, forwarded: 0 }, JSON.stringify(args));
+  }
+  assert.deepEqual(await status({}, whole, 'capture'), { status: 403, forwarded: 0 }, 'write tools stay denied');
+  assert.deepEqual(await status({ query: 'decision' }, named), { status: 200, forwarded: 1 });
+  assert.deepEqual(await status({ space: 'work' }, named), { status: 200, forwarded: 1 });
+  for (const args of [{ space: 'other' }, { domain: 'other' }, { space: '*' }, { space: '' }, { space: 5 }, { space: null }]) {
+    assert.deepEqual(await status(args, named), { status: 403, forwarded: 0 }, JSON.stringify(args));
+  }
+  // The reserved value is still an ordinary string for route matching.
+  assert.equal(routeDenial(whole.route, whole.grant, now), null);
+  assert.equal(routeDenial(route, whole.grant, now), 'revoked');
+  assert.equal(routeDenial(whole.route, grant, now), 'revoked');
 });
 
 test('arbitrary proxy paths and query-string route selection are rejected', async () => {

@@ -2,7 +2,7 @@
 import { authenticateDevice, enrollDevice, refreshDevice, revokeDevice, rotateDeviceCredential } from './devices.ts';
 import { approvePairing, browserPairingView, denyPairing, inspectPairing, lookupPairing, PAIRING_TTL_MS, type PairingStore } from './pairing.ts';
 import { cancelOAuthPairing, finishOAuthPairing, startOAuthPairing, type OAuthEnv } from './oauth.ts';
-import { authorizeFailureDocument, htmlEscape, negotiateLocale, pairingDocument, returnDocument, shell, type PageLocale } from './pairing-page.ts';
+import { authorizeFailureDocument, htmlEscape, negotiateLocale, pairingDocument, returnDocument, shell, spaceLabel, type PageLocale } from './pairing-page.ts';
 import { AuthorityCapacityError } from './bounded-store.ts';
 import { validSecret } from './secrets.ts';
 import { listDeviceGrants, revokeDeviceGrant, validGrantId } from './grants.ts';
@@ -144,7 +144,7 @@ function pairingPage(view: Parameters<typeof pairingDocument>[0], locale: PageLo
 
 function samplePage(clientId: string, account: SampleAccount): Response {
   return authorizationPage(`<h2>Sample library</h2>
-<dl><dt>Client</dt><dd>${htmlEscape(clientId)}</dd><dt>Space</dt><dd>${htmlEscape(account.space)}</dd>
+<dl><dt>Client</dt><dd>${htmlEscape(clientId)}</dd><dt>Space</dt><dd>${htmlEscape(spaceLabel('en', account.space))}</dd>
 <dt>Permission</dt><dd>Read Briefs, search knowledge and inspect supporting sources.</dd></dl>
 <form id="sample-login" action="/pairing/sample" method="post" data-client-id="${htmlEscape(clientId)}" data-resource="${htmlEscape(account.resource)}" data-space="${htmlEscape(account.space)}">
 <label for="sample-username">Username</label><input id="sample-username" name="username" autocomplete="username" maxlength="64" required>
