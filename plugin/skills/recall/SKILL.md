@@ -5,7 +5,7 @@ description: >
   Invoked as `/recall <query>`. Use when the user asks "do you
   remember", "what do you know about", "look up".
 argument-hint: "<query>"
-allowed-tools: ["mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__get_memory_revisions"]
+allowed-tools: ["Bash", "mcp__plugin_wenlan_wenlan__recall", "mcp__plugin_wenlan_wenlan__get_memory_revisions"]
 ---
 
 # /recall
@@ -28,8 +28,9 @@ source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 query="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-Pass `space="$space"` to the `recall` MCP tool only when `space` is
-non-empty; otherwise omit the space filter.
+If `query` is empty, ask the user what they want to search for. Pass
+`space="$space"` to the `recall` MCP tool only when `space` is non-empty;
+otherwise omit the space filter.
 
 ## Two phases
 

@@ -1,9 +1,9 @@
 ---
 name: capture
 description: >
-  Save a durable memory to Wenlan from Codex. Use proactively when the user
-  states a preference, makes a decision, corrects you, or shares a durable
-  fact. Invoked as /capture <content>.
+  Save a memory to Wenlan in flow. Active capture verb — use proactively
+  when the user states a preference, makes a decision, corrects you, or
+  shares a durable fact. Invoked as `/capture <content>`.
 argument-hint: "<content>"
 allowed-tools: ["Bash", "mcp__wenlan__capture", "mcp__wenlan__recall", "mcp__wenlan__create_entity", "mcp__wenlan__create_relation", "mcp__wenlan__list_rejections", "mcp__wenlan__accept_revision", "mcp__wenlan__dismiss_revision"]
 user-invocable: true
@@ -11,14 +11,14 @@ user-invocable: true
 
 # /capture
 
-Capture one memory in the moment. Write the memory as a self-contained
-statement with the reason it matters.
+Capture a single memory in the moment. Active verb: agent captures the
+moment of insight, like a photograph.
 
 ## Resolve the active space
 
-Accept one optional inline token of the form `space:<name>` anywhere in the
-argument string. The Codex resolver strips it and returns the rest as the
-content. It prints the resolved Space line itself:
+The `/capture` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. The bundled resolver strips it
+and returns the rest as the content. It prints the resolved Space line itself:
 
 ```bash
 raw_args="<the full argument string passed to /capture>"
@@ -31,106 +31,166 @@ source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
 content="$(printf '%s\n' "$resolved" | cut -f3-)"
 ```
 
-If `content` is empty, ask the user what they want to capture. If `space` is
-non-empty, pass it to the `capture` MCP tool; if empty, omit the `space`
-parameter.
+If `content` is empty, ask the user what they want to capture before calling
+the tool. Pass `space="$space"` to the `capture` MCP tool only when `space` is
+non-empty.
 
-After capture, relay the tool's returned `space`, `space_source`, and
-`write_outcome`; those fields describe what the daemon actually persisted and
-are authoritative.
+The resolver line reports the proposed client context. After capture, relay
+the tool's returned `space`, `space_source`, and `write_outcome`; those fields
+describe what the daemon actually persisted and are authoritative.
+
+Unknown spaces are not auto-created. Register one through the resolved CLI
+binary, or omit `space` to store uncategorized:
+
+```bash
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
+"$W" spaces add <space>
+```
 
 ## How to invoke
 
-Call the Wenlan MCP `capture` tool with the user's content as a complete,
-self-contained statement. Attach topic from cwd or the conversation when useful.
+Call the `wenlan` MCP server's `capture` tool with the user's content as a
+complete, self-contained statement. Attach `topic` from cwd or the
+conversation — don't make the user type it.
 
-```text
-capture(
-  content="<content, written as a full sentence with WHY>",
-  memory_type="<picked from the 6 types>",
-  entity="<primary entity name, if any>",
-  space="<resolved if non-empty>"
-)
+```
+capture(content="<args, written as a full sentence with WHY>",
+        memory_type="<picked from the 6 types>",
+        entity="<primary entity name, if any>",
+        space=<resolved if non-empty>)
 ```
 
-## Pick `memory_type`
+### `memory_type` — agent picks one of 6
 
-The daemon classifies when a model or API key is configured. In local memory
-mode it may not, so pick the type from the content itself.
+The daemon classifies when a local model or API key is configured. In
+local memory mode it does not, so the agent picks the type from the content itself. Use this
+mapping:
 
 | Type | Use for |
 |---|---|
-| `identity` | Durable facts about the user |
-| `preference` | A habit, correction, or stylistic choice with a reason |
-| `decision` | A specific choice with rationale |
-| `lesson` | Root cause, workaround, or technical insight |
-| `gotcha` | Sharp edge or surprising behavior |
-| `fact` | Durable info about people, projects, tools, or places |
+| `identity` | Durable facts about the user (role, company, language preference) |
+| `preference` | "I prefer X because Y" — a habit, a correction, a stylistic choice |
+| `decision` | "Going with A over B because C" — a specific choice with rationale |
+| `lesson` | Root cause found, workaround discovered, technical insight earned |
+| `gotcha` | Sharp edge, surprising behavior, a thing to watch out for |
+| `fact` | Durable info about people, projects, tools — anchor to `entity` when possible |
 
-If two types fit, pick the one closest to why the memory matters.
+If two types fit, pick the one closest to *why the memory matters*. A
+decision *also* implies a preference, but `decision` is more specific.
 
-## Extract `entity`
+### `entity` — extract the anchor
 
-Pick the single most important named anchor: person, project, tool, or place.
-Use the exact name. If there is no named anchor, omit `entity`.
+Pick the single most important named thing in the content: a person,
+project, tool, place. Use the exact name. Example: "Alice prefers TDD
+because…" → `entity="Alice"`. If the content has no named anchor,
+omit `entity`.
 
-Pass the single most important named anchor through `capture.entity`. Ordinary
-captures stop there; daemon enrichment handles routine extraction. Do not call
-`mcp__wenlan__create_entity` for ordinary captures. Never infer a relation the
-user did not state.
+### Space inference
+
+- cwd inside a repo → repo name (e.g. `~/Repos/wenlan/...` → `"wenlan"`).
+- Outside configured or registered repo context → omit the client Space and
+  let the daemon Default decide the write.
+- Pass `space` only when scope is known. If uncertain, omit it or inspect the
+  registered spaces first:
+
+```bash
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
+"$W" spaces list
+```
+
+### Multiple entities or relations
+
+Ordinary captures stop after `capture`: pass the single most important named
+anchor through `capture.entity` and let daemon enrichment handle routine
+extraction. Do not call `create_entity` for ordinary captures. Never infer a
+relation the user did not state.
 
 Use the explicit KG tools only when the user explicitly states a durable relation:
 
-1. Call `mcp__wenlan__create_entity` for both named endpoints first and collect
-   their stable ids. The call is idempotent and may return an existing id.
-2. Call `mcp__wenlan__capture` with the complete relation statement and pass
-   the primary entity name as `entity` so the memory resolves and links to it.
-3. Call `mcp__wenlan__create_relation` with `from_entity_id`, `to_entity_id`,
+1. Call `create_entity` for both named endpoints first and collect their stable
+   ids. This is idempotent and may return an existing id.
+2. Call `capture` with the complete relation statement and pass the primary
+   entity name as `entity` so the memory resolves and links to it.
+3. Call `create_relation` with `from_entity_id`, `to_entity_id`,
    `relation_type`, and the capture result's required `source_memory_id`.
 
-For a durable named entity explicitly established by the user,
-`mcp__wenlan__create_entity` may also be used alone when its stable id is
-needed. `Entity <id> ready` does not imply that a new row was created.
+For a durable named entity explicitly established by the user, `create_entity`
+may also be used alone when its stable id is needed. Its `Entity <id> ready`
+result does not imply that a new row was created.
 
 ## What to capture
 
-- Decisions: "Going with approach A because B."
-- Preferences: "Prefers TDD because it catches regressions early."
-- Corrections: "Actually it is C, not D."
-- Project facts: "Wenlan is the local memory daemon for AI tools."
+- Decisions: "Going with approach A because B"
+- Preferences: "Prefers TDD because catches regressions early"
+- Corrections: "Actually it's C, not D"
+- Identity / project facts: "Works on Wenlan, a local memory daemon for AI tools"
 
-## What not to capture
+## What NOT to capture
 
-- System prompts, boot logs, and command output.
-- Transient task state.
-- File paths or git history the user can re-derive.
-- Agent operating rules that belong in AGENTS.md or another obey-tier file.
-- Single-word acknowledgments.
+- System prompts, boot logs, heartbeats
+- Transient task state ("currently working on...")
+- Tool output, command results, architecture dumps
+- Single-word acknowledgments
+- Things the user can trivially re-derive (file paths, recent git history)
+- Agent operating rules — "always X" / "never Y" directives about how the
+  agent should behave. Those belong in CLAUDE.md / AGENTS.md / MEMORY.md (the
+  obey tier), not Wenlan. Capture the user's *preference* ("prefers TDD
+  because…"), not the agent-facing *rule* ("always run TDD first").
+
+## Atomic ideas
+
+One capture = one idea. "Prefers TDD" and "Uses pytest" are two captures, not
+one.
+
+## When to use
+
+- User explicitly says "remember this", "save that", "capture this".
+- User states a durable preference / decision / correction proactively (no
+  ask required — that's the floor, not the trigger).
+
+## When NOT to use
+
+- End of session bulk store → use `/handoff` (multi-item batch).
+- Pulling memories back out → use `/recall`.
 
 If a capture the user expected is missing or the user explicitly asks why it
-was rejected, call `mcp__wenlan__list_rejections`. Do not list rejections after
-successful ordinary captures.
+was rejected, call `list_rejections` to diagnose the quality gate. Do not list
+rejections after successful ordinary captures.
 
 ## Post-capture contradiction signal
 
-After `capture` returns, check `triggered_revisions` and `auto_superseded`.
+After `capture` returns, check `response.triggered_revisions` and `response.auto_superseded`.
 
-If `auto_superseded` is non-empty, surface it as informational. No follow-up
-tool call is needed.
+### auto_superseded (no action needed)
 
-If `triggered_revisions` is non-empty and `auto_superseded` is empty, render:
+If `auto_superseded` is non-empty, the daemon already resolved the contradiction. Surface it as informational:
 
-```text
-Stored <new id>.
+```
+Note: auto-superseded mem_X. Wenlan replaced a prior protected memory because
+trust=high and similarity > 0.9. No action needed.
+```
+
+No accept/dismiss call required. The revision was applied automatically.
+
+### triggered_revisions (human review needed)
+
+If `triggered_revisions` is non-empty (and `auto_superseded` is empty), render an inline block to the user:
+
+```
+Stored mem_new.
 
 This capture topic-matches a protected memory now flagged for revision:
-  - <target id>
+  - mem_target_abc
 
-Action: accept (replace original) | dismiss (drop revision) | leave (decide later)
+Action: accept (replace original content) | dismiss (drop the revision) | leave (decide later)
 ```
 
 Inline verb map:
 
-- accept: `accept_revision(target_source_id="<target id>")`
-- dismiss: `dismiss_revision(target_source_id="<target id>")`
-- leave: no call
+- accept: `accept_revision(target_source_id="mem_target_abc")`
+- dismiss: `dismiss_revision(target_source_id="mem_target_abc")`
+- leave: no call; surfaces again in next `/brief`
+
+Both fields can technically be non-empty in a single response (multiple protected matches), but in practice only one fires per capture: `auto_superseded` fires when trust=full and similarity > 0.9, `triggered_revisions` fires otherwise.
+
+If neither field is non-empty, the capture stored cleanly with no conflicts.

@@ -1,9 +1,9 @@
 ---
 name: handoff
 description: >
-  End a Codex work session. Stores durable captures, writes a narrative session
-  log, and automatically applies typed item-level deltas to the current Space
-  Brief. Invoked as /handoff.
+  End a work session. Stores durable captures, writes a narrative session log,
+  and automatically applies typed item-level deltas to the current Space Brief.
+  Invoked as `/handoff`.
 allowed-tools: ["Bash"]
 user-invocable: true
 ---

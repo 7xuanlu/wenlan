@@ -117,6 +117,8 @@ PLUGIN_JOB_FILES = {
     "scripts/validate-plugin-contract.test.sh",
     "scripts/gen-plugin-verbs.mjs",
     "scripts/gen-plugin-verbs.test.mjs",
+    "scripts/gen-codex-plugin.mjs",
+    "scripts/gen-codex-plugin.test.mjs",
 }
 
 DOCS_JOB_PREFIXES = ("docs",)

@@ -10,8 +10,8 @@ user-invocable: true
 
 # /setup
 
-Self-healing setup for Codex. Default backend is local memory: no local model,
-no API key, no prompt ceremony.
+Self-healing setup. Goal: two user actions max: install plugin, type `/setup`.
+Default backend is local memory: no local model, no API key, no prompts.
 
 ## Steps
 
@@ -46,8 +46,8 @@ comparing numerically per component with build metadata (`+g<sha>`) stripped.
 - `result=same`: continue to doctor.
 - If the probe cannot run because the runtime is down: continue to bootstrap.
 - `result=unknown` with a healthy runtime (manifest unreadable or no version
-  reported): continue to doctor; Codex will keep using this slice until the
-  plugin cache is updated.
+  reported): continue to doctor; the next `/setup` will report the mismatch
+  again if one exists.
 - If mismatch, check the direction before repairing. `result=newer`: the
   daemon release is newer than the plugin release, so the plugin cache is
   stale, not the runtime. Skip the repair below (it would only reinstall the
@@ -85,6 +85,10 @@ export PATH="$HOME/.wenlan/bin:$PATH"
 wenlan setup --basic
 wenlan background on
 ```
+
+If the installer fails, stop and tell the user to install the runtime by following
+<https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
+then run `/wenlan:setup` again.
 
 If present but the local runtime is down:
 
@@ -157,8 +161,9 @@ Call the Wenlan MCP `brief` tool as a read-only round-trip.
 brief()
 ```
 
-If it fails, report: "wenlan-mcp did not respond through Codex. Start a new
-Codex thread after reinstalling the plugin so Codex respawns the MCP server."
+Pass: continue. Fail: MCP is not wired. Tell the user:
+"wenlan-mcp did not respond through Codex. Start a new Codex thread after
+reinstalling the plugin so Codex respawns the MCP server."
 
 ### 7. Ready report
 
@@ -169,9 +174,12 @@ Wenlan ready.
   Runtime:  up on 127.0.0.1:7878
   Mode:     <mode from CLI doctor>
   MCP:      connected
-  Data:     ~/.wenlan/
-  Try:      /brief, /capture <thing>
+  Data:     ~/.wenlan/  (pages, sessions; database location in docs/setup-and-data.md)
+  Try:      /brief, /capture <thing>, /recall <query>, /help
 ```
+
+If this was the first `/setup` invocation in the session, dispatch `/help` once
+so the user sees the verb cheat sheet without asking.
 
 ## Optional upgrades
 
@@ -184,7 +192,15 @@ and obtains the one confirmation. Never add `--yes` unless the user already
 stated that exact mapping. `wenlan steep disable` reverses the consent
 without deleting the model or key.
 
-## Codex note
+## When to use
 
-This Codex slice has no session-start hook. `/setup` is the explicit health and
-version check until Codex exposes a lifecycle hook this plugin can use.
+- Right after installing the Wenlan plugin.
+- The plugin reported "Wenlan is not running" or a version mismatch and named
+  `/wenlan:setup` as the fix.
+- User says "set up wenlan", "is it working", "reinstall wenlan".
+
+## When NOT to use
+
+- Runtime already verified this session: `/brief` instead.
+- Editing one config field: rerun the CLI doctor command from Step 5 or edit the
+  settings file directly.

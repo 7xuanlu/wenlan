@@ -1,8 +1,9 @@
 ---
 name: forget
 description: >
-  Delete a Wenlan memory by exact id from Codex. Destructive and confirmation
-  gated. Invoked as /forget <source_id>.
+  Delete a memory from Wenlan by ID. Destructive and cannot be undone —
+  prefer `/capture` with `supersedes` for corrections. Invoked as
+  `/forget <source_id>`.
 argument-hint: "<source_id>"
 allowed-tools: ["Bash", "mcp__wenlan__forget", "mcp__wenlan__recall"]
 user-invocable: true
@@ -10,18 +11,19 @@ user-invocable: true
 
 # /forget
 
-Delete one memory by exact `source_id`.
+Permanently delete a memory by its `source_id`.
 
 ## Safety
 
-This cannot be undone by Wenlan. Prefer `/capture` with a corrected memory when
-history should be preserved.
+This cannot be undone by Wenlan. Prefer `/capture` with `supersedes` pointing
+at the old memory when history should be preserved.
 
 Always confirm with the user before calling forget, unless the same user message
-already includes an exact id and an unambiguous delete instruction.
+already includes an exact id and an unambiguous delete instruction (for example
+they pasted the ID and said "delete this").
 
-If the id is missing, use `mcp__wenlan__recall` to find candidates or ask the
-user for the exact id. The confirmation reply must include the action and id:
+If the id is missing, call `/recall` first to find candidates or ask the user
+for the exact id. The confirmation reply must include the action and id:
 
 ```text
 delete <id>
@@ -34,7 +36,7 @@ A bare id is not confirmation.
 After confirmation, call:
 
 ```text
-mcp__wenlan__forget(memory_id="<source_id>")
+forget(memory_id="<source_id>")
 ```
 
 Delete only one memory per tool call. For bulk cleanup, use `/curate captures`
@@ -42,10 +44,15 @@ so each item has its own decision.
 
 ## When to use
 
-- User says to forget or delete a specific memory and gives the id.
-- User confirms `delete <id>` after recall found the matching memory.
+- User says "forget this", "delete that", "that's wrong, remove it".
+- User explicitly identifies a memory by ID, or confirms `delete <id>` after
+  recall found the matching memory.
 
-## When not to use
+## When NOT to use
 
-- Corrections where history matters: capture a superseding memory.
+- For corrections, prefer storing a new memory with `supersedes` pointing
+  at the old one. That preserves history. Use `/capture` with the
+  `supersedes` arg instead. If your agent's trust level is below full, that
+  write may stage for human review instead of taking effect immediately.
+- Bulk deletions: use `/curate captures` so each item has its own decision.
 - Page rebuilds: use `/distill rebuild <page-id>`.

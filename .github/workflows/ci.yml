@@ -264,6 +264,8 @@ jobs:
               - 'scripts/validate-plugin-contract.test.sh'
               - 'scripts/gen-plugin-verbs.mjs'
               - 'scripts/gen-plugin-verbs.test.mjs'
+              - 'scripts/gen-codex-plugin.mjs'
+              - 'scripts/gen-codex-plugin.test.mjs'
             # Required Rust-side distribution contracts for plugin artifacts.
             # Validator implementation changes remain owned by the fast plugin
             # job above and are deliberately excluded from this compile lane.
@@ -2466,6 +2468,10 @@ jobs:
         run: |
           node scripts/gen-plugin-verbs.mjs --check
           node --test scripts/gen-plugin-verbs.test.mjs
+      - name: Codex skills are generated from the Claude skills
+        run: |
+          node scripts/gen-codex-plugin.mjs --check
+          node --test scripts/gen-codex-plugin.test.mjs
       - name: Validate skill frontmatter
         run: |
           for f in plugin/skills/*/SKILL.md; do

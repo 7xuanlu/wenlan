@@ -11,6 +11,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -121,8 +123,10 @@ def validate_capture_relation_flow(
     expected_prefix: str,
     text: str,
 ) -> None:
+    # Both surfaces name the tools bare in prose; the Codex skill is generated
+    # from the Claude one, so the wording is identical.
     def tool(name: str) -> str:
-        return name if surface == "claude" else f"{expected_prefix}{name}"
+        return name
 
     steps = [
         (
@@ -619,9 +623,6 @@ def validate_skill_surface(
             lint_repair_guardrail = (
                 "A generic accept does not apply `lint_repair_review`; route that "
                 "action through `/lint repair` instead."
-                if surface == "claude"
-                else "Do not generically accept `lint_repair_review`; route it "
-                "through `/lint repair`."
             )
             guardrails = [
                 (
@@ -739,6 +740,28 @@ def validate_skill_surface(
                 fail(f"{rel(root, metadata_path)} must declare interface metadata")
 
 
+GENERATOR = Path(__file__).resolve().parent / "gen-codex-plugin.mjs"
+
+
+def validate_codex_generated(root: Path) -> None:
+    """Every Codex skill must equal what gen-codex-plugin.mjs produces from the
+    Claude skill plus plugin-codex/overlay.json. A hand edit to a generated file,
+    an overlay `from` run that no longer matches the Claude text, or a leftover
+    Claude-only token all fail here."""
+    node = shutil.which("node")
+    if node is None:
+        fail("node is required to check the generated Codex skills (scripts/gen-codex-plugin.mjs)")
+    result = subprocess.run(
+        [node, str(GENERATOR), "--check", "--root", str(root)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        fail(f"Codex skills are not what the generator produces:\n{detail}")
+
+
 def validate_contract(root: Path) -> None:
     contract = load_contract(root)
     shared_now, claude_only = contract_skill_sets(contract)
@@ -750,6 +773,7 @@ def validate_contract(root: Path) -> None:
         validate_runner(root, surface, config)
 
     validate_resolver_parity(root)
+    validate_codex_generated(root)
     validate_codex_readme(root)
     validate_marketplace(root, "claude", surfaces["claude"])
     validate_marketplace(root, "codex", surfaces["codex"])
