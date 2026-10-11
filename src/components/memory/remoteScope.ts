@@ -18,11 +18,6 @@ export function savedScope(space: string | null | undefined): RemoteScope | null
   return space === WHOLE_LIBRARY ? wholeLibrary : { kind: "space", name: space };
 }
 
-export function sameScope(a: RemoteScope | null, b: RemoteScope | null): boolean {
-  if (!a || !b || a.kind !== b.kind) return false;
-  return a.kind === "wholeLibrary" || a.name === (b as { name: string }).name;
-}
-
 /** "Whole library" in the person's language, or the Space name. */
 export function scopeLabel(t: TFunction, scope: RemoteScope | string): string {
   const resolved = typeof scope === "string" ? savedScope(scope) : scope;
