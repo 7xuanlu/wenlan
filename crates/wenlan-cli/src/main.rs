@@ -513,6 +513,9 @@ async fn main() -> anyhow::Result<ExitCode> {
 }
 
 #[cfg(test)]
+mod cli_reference;
+
+#[cfg(test)]
 mod catalog_tests {
     use super::Cli;
     use clap::CommandFactory;

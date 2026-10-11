@@ -1055,6 +1055,22 @@ class NonRustOwnerTests(unittest.TestCase):
         ):
             self.assertEqual(mixed[suite], rust_only[suite])
 
+    def test_cli_readme_is_owned_by_the_cli_package_not_docs(self) -> None:
+        plan = plan_for("crates/wenlan-cli/README.md")
+
+        self.assertNotEqual(plan["workspace_lib"], {"mode": "skip"})
+        self.assertIn("wenlan", plan["workspace_lib"].get("packages", []))
+        groups = command_groups_for("workspace-lib", plan, cargo_metadata())
+        self.assertTrue(
+            any("--bin" in group and "wenlan" in group for group in groups),
+            groups,
+        )
+
+    def test_other_crate_readmes_stay_on_the_docs_lane(self) -> None:
+        for path in ("crates/wenlan-mcp/README.md", "crates/wenlan-server/README.md"):
+            with self.subTest(path=path):
+                self.assert_non_rust_owner(path)
+
     def test_markdown_test_fixture_is_not_misclassified_as_docs_only(self) -> None:
         plan = plan_for("crates/wenlan-core/tests/fixtures/example.md")
 
@@ -1735,6 +1751,8 @@ class CommandGenerationTests(unittest.TestCase):
                     "--lib",
                     "--bin",
                     "wenlan-server",
+                    "--bin",
+                    "wenlan",
                     "--partition",
                     "slice:1/2",
                 ]
@@ -1763,6 +1781,8 @@ class CommandGenerationTests(unittest.TestCase):
                     "--lib",
                     "--bin",
                     "wenlan-server",
+                    "--bin",
+                    "wenlan",
                 ]
             ],
         )
@@ -1809,6 +1829,8 @@ class CommandGenerationTests(unittest.TestCase):
                 "--lib",
                 "--bin",
                 "wenlan-server",
+                "--bin",
+                "wenlan",
             ],
         )
 
@@ -1837,6 +1859,8 @@ class CommandGenerationTests(unittest.TestCase):
                 "--lib",
                 "--bin",
                 "wenlan-server",
+                "--bin",
+                "wenlan",
             ],
         )
         self.assertEqual(
