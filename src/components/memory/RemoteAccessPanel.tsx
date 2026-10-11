@@ -230,7 +230,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
           <div className="border-t border-[var(--mem-border)] pt-4 space-y-2">
             <ol className="list-decimal pl-5 space-y-2 text-sm">
               <li className="min-w-0 space-y-2">
-                <span>{t("remoteAccess.howTo1")}</span>
+                <span className="block">{t("remoteAccess.howTo1")}</span>
                 <span className="flex flex-wrap gap-2">
                   <Button variant="primary" size="sm" disabled={busy} onClick={() => addToClaude(relayUrl)}>
                     {t("remoteAccess.addToClaude")}<ArrowSquareOut size={14} aria-hidden="true" />
