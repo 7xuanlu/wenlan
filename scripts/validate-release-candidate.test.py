@@ -308,7 +308,7 @@ class TrustedCandidateApi(FakeContentApi):
             return {
                 "id": 2,
                 "full_name": "wenlan-app/wenlan",
-                "owner": {"login": "7xuanlu"},
+                "owner": {"login": "wenlan-app"},
             }
         if path == f"{prefix}/pulls/42":
             return self.pr
@@ -375,7 +375,7 @@ class HappyPathApi(FakeContentApi):
         repository = {
             "id": 2,
             "full_name": "wenlan-app/wenlan",
-            "owner": {"login": "7xuanlu"},
+            "owner": {"login": "wenlan-app"},
         }
         if path == prefix:
             return repository
@@ -1125,8 +1125,61 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
             self.assertFalse(receipt_path.exists())
             self.assertIn("Status: **skipped**", summary_path.read_text(encoding="utf-8"))
 
+    def test_old_account_owner_is_not_the_release_repository_owner(self) -> None:
+        old, new = release_contents()
+        api = TrustedCandidateApi(old, new)
+        original_get_json = api.get_json
+
+        def old_owner(path: str, *, params=None):
+            record = original_get_json(path, params=params)
+            if path == "/repos/wenlan-app/wenlan":
+                return {**record, "owner": {"login": "7xuanlu"}}
+            return record
+
+        api.get_json = old_owner  # type: ignore[method-assign]
+        trusted, reason = CLASSIFIER.classify(
+            event_name="pull_request",
+            event=candidate_event(),
+            api=api,
+            repository="wenlan-app/wenlan",
+        )
+        self.assertFalse(trusted)
+        self.assertIn("candidate repository identity mismatch", reason)
+
+        class OldOwnerApi:
+            def get_json(self, path: str, *, params=None):
+                if path == "/repos/wenlan-app/wenlan":
+                    return {
+                        "id": 2,
+                        "full_name": "wenlan-app/wenlan",
+                        "owner": {"login": "7xuanlu"},
+                    }
+                raise AssertionError(path)
+
+        event = {
+            "action": "completed",
+            "workflow_run": {
+                "id": 1,
+                "run_attempt": 1,
+                "workflow_id": 3,
+                "check_suite_id": 4,
+                "name": "CI",
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success",
+                "head_branch": VALIDATOR.RELEASE_BRANCH,
+                "head_sha": HEAD_SHA,
+            },
+        }
+        with self.assertRaisesRegex(
+            VALIDATOR.CandidateError, "release repository owner policy"
+        ):
+            VALIDATOR.validate_candidate(
+                event, OldOwnerApi(), "wenlan-app/wenlan", Path(".")
+            )
+
     def test_candidate_trigger_name_cannot_replace_api_workflow_path_proof(self) -> None:
-        repository = {"id": 2, "full_name": "wenlan-app/wenlan", "owner": {"login": "7xuanlu"}}
+        repository = {"id": 2, "full_name": "wenlan-app/wenlan", "owner": {"login": "wenlan-app"}}
         head_repository = {
             "id": 2,
             "full_name": "wenlan-app/wenlan",

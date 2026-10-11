@@ -307,8 +307,9 @@ def contract_violations(
         '"X-GitHub-Api-Version": "2026-03-10"',
         '"state": "open"',
         '"base": BASE_BRANCH',
-        '"head": f"{RELEASE_AUTHOR}:{RELEASE_BRANCH}"',
-        "if owner != RELEASE_AUTHOR:",
+        'RELEASE_REPO_OWNER = "wenlan-app"',
+        '"head": f"{RELEASE_REPO_OWNER}:{RELEASE_BRANCH}"',
+        "if owner != RELEASE_REPO_OWNER:",
         "if not payload:",
         "if len(payload) != 1:",
         'user.get("login") != RELEASE_AUTHOR',
@@ -1582,6 +1583,7 @@ def candidate_observer_contract_violations(
         'CI_WORKFLOW_PATH = ".github/workflows/ci.yml"',
         'RELEASE_BRANCH = "release-please--branches--main"',
         'RELEASE_AUTHOR = "7xuanlu"',
+        'RELEASE_REPO_OWNER = "wenlan-app"',
         "class _CredentialStrippingRedirect",
         'redirected.remove_header("Authorization")',
         "/actions/runs/{run_id}",
@@ -1782,6 +1784,8 @@ def trusted_candidate_gate_violations(
         'api.get_json(f"/repos/{repository}/git/ref/heads/main")',
         'event_head_repo.get("fork") is not False',
         'event_user.get("login") != RELEASE_AUTHOR',
+        '"repository owner").get("login")\n        != RELEASE_REPO_OWNER',
+        'owner.get("login") != RELEASE_REPO_OWNER',
     ]:
         if marker not in validator:
             violations.append(f"shared semantic release validator omits {marker!r}")
@@ -3862,7 +3866,7 @@ AUTHENTICODE_STEP_ENV = {
     "GITHUB_REF_TYPE": "tag",
     "GITHUB_REPOSITORY": "wenlan-app/wenlan",
     "GITHUB_REPOSITORY_ID": "0",
-    "GITHUB_REPOSITORY_OWNER": "7xuanlu",
+    "GITHUB_REPOSITORY_OWNER": "wenlan-app",
     "GITHUB_REPOSITORY_OWNER_ID": "0",
     "GITHUB_RETENTION_DAYS": "90",
     "GITHUB_RUN_ATTEMPT": "1",
@@ -4882,7 +4886,7 @@ def main() -> None:
             "sync_release_pr",
         ),
         (
-            "if owner != RELEASE_AUTHOR:",
+            "if owner != RELEASE_REPO_OWNER:",
             "if False:",
             "synchronizer omits",
             "sync_release_pr",

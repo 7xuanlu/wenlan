@@ -17,7 +17,7 @@ SYNC = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = SYNC
 SPEC.loader.exec_module(SYNC)
 
-REPOSITORY = "7xuanlu/wenlan"
+REPOSITORY = "wenlan-app/wenlan"
 HEAD_SHA = "a" * 40
 
 
@@ -83,7 +83,11 @@ class FakeRunner:
 class SyncReleasePrTests(unittest.TestCase):
     def test_zero_one_and_multiple_release_prs_are_closed(self) -> None:
         self.assertIsNone(SYNC.resolve_release_pr(FakeApi([]), REPOSITORY))
-        resolved = SYNC.resolve_release_pr(FakeApi([release_pr()]), REPOSITORY)
+        api = FakeApi([release_pr()])
+        resolved = SYNC.resolve_release_pr(api, REPOSITORY)
+        self.assertEqual(
+            api.calls[0][1]["head"], "wenlan-app:release-please--branches--main"
+        )
         self.assertEqual(resolved.number, 430)
         self.assertEqual(resolved.head_sha, HEAD_SHA)
         with self.assertRaisesRegex(SYNC.SyncError, "at most one"):
@@ -92,8 +96,11 @@ class SyncReleasePrTests(unittest.TestCase):
             )
 
     def test_wrong_release_pr_identity_fails_closed(self) -> None:
-        with self.assertRaisesRegex(SYNC.SyncError, "pinned Release PR author"):
-            SYNC.resolve_release_pr(FakeApi([release_pr()]), "mallory/wenlan")
+        for repository in ("mallory/wenlan", "7xuanlu/wenlan"):
+            with self.subTest(repository=repository), self.assertRaisesRegex(
+                SYNC.SyncError, "pinned release repository owner"
+            ):
+                SYNC.resolve_release_pr(FakeApi([release_pr()]), repository)
         mutations = {
             "draft": {"draft": True},
             "owner": {"user": {"login": "mallory"}},

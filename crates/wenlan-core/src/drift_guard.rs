@@ -5963,8 +5963,9 @@ fn release_promotion_contract_violations(
         "\"X-GitHub-Api-Version\": \"2026-03-10\"",
         "\"state\": \"open\"",
         "\"base\": BASE_BRANCH",
-        "\"head\": f\"{RELEASE_AUTHOR}:{RELEASE_BRANCH}\"",
-        "if owner != RELEASE_AUTHOR:",
+        "RELEASE_REPO_OWNER = \"wenlan-app\"",
+        "\"head\": f\"{RELEASE_REPO_OWNER}:{RELEASE_BRANCH}\"",
+        "if owner != RELEASE_REPO_OWNER:",
         "if not payload:",
         "if len(payload) != 1:",
         "user.get(\"login\") != RELEASE_AUTHOR",
@@ -6457,7 +6458,7 @@ fn release_promotion_contract_rejects_rebuild_and_unbounded_receipts() {
         ("multiple", "if len(payload) != 1:", "if False:"),
         (
             "repository owner",
-            "if owner != RELEASE_AUTHOR:",
+            "if owner != RELEASE_REPO_OWNER:",
             "if False:",
         ),
         (

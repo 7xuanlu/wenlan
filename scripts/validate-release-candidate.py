@@ -43,6 +43,7 @@ CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 CI_WORKFLOW_NAME = "CI"
 RELEASE_BRANCH = "release-please--branches--main"
 RELEASE_AUTHOR = "7xuanlu"
+RELEASE_REPO_OWNER = "wenlan-app"
 OBSERVER_WORKFLOW_PATH = ".github/workflows/release-candidate-observer.yml"
 RECEIPT_SCHEMA_VERSION = 1
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -753,7 +754,7 @@ def validate_trusted_release_candidate(
     if (
         repository_record.get("full_name") != repository
         or _mapping(repository_record.get("owner"), "repository owner").get("login")
-        != RELEASE_AUTHOR
+        != RELEASE_REPO_OWNER
     ):
         raise CandidateError("candidate repository identity mismatch")
 
@@ -1253,8 +1254,8 @@ def validate_candidate(
     if repository_info.get("full_name") != repository:
         raise CandidateError("repository full_name differs from validator scope")
     owner = _mapping(repository_info.get("owner"), "repository owner")
-    if owner.get("login") != RELEASE_AUTHOR:
-        raise CandidateError("repository owner differs from release PR author policy")
+    if owner.get("login") != RELEASE_REPO_OWNER:
+        raise CandidateError("repository owner differs from release repository owner policy")
 
     run = _mapping(
         api.get_json(f"/repos/{repository}/actions/runs/{run_id}"), "workflow run"
