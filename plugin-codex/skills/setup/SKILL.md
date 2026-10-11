@@ -87,7 +87,7 @@ wenlan background on
 ```
 
 If the installer fails, stop and tell the user to install the runtime by following
-<https://github.com/7xuanlu/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
+<https://github.com/wenlan-app/wenlan/blob/main/docs/setup-with-ai.md#install-the-runtime>,
 then run `/setup` again.
 
 If present but the local runtime is down:

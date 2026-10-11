@@ -275,7 +275,7 @@ test("openai.yaml is rendered from the overlay and the real files match the slic
 
 test("real tree: generated skills carry the pins the validators and Rust tests read", () => {
   const codex = (name) => readFileSync(join(repo, `plugin-codex/skills/${name}/SKILL.md`), "utf8");
-  assert.match(codex("setup"), /curl -fsSL https:\/\/raw\.githubusercontent\.com\/7xuanlu\/wenlan\/v\$\{RELEASE_VER\}\/install\.sh \| bash/);
+  assert.match(codex("setup"), /curl -fsSL https:\/\/raw\.githubusercontent\.com\/wenlan-app\/wenlan\/v\$\{RELEASE_VER\}\/install\.sh \| bash/);
   assert.ok(!codex("setup").includes("npx -y wenlan@"), "Codex setup must not inherit the npm installer");
   assert.ok(claudeSkill("setup").includes("npx -y wenlan@"), "Claude setup keeps the npm installer");
   for (const needle of ["Do not use a picker", "If several pages match, print the CLI output", "Never read a page body"]) {
