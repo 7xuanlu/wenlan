@@ -1664,7 +1664,7 @@ def trusted_candidate_gate_violations(
     )
     for marker in [
         "actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803",
-        "ref: ${{ github.event.pull_request.base.sha || github.sha }}",
+        "ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}",
         "path: trusted-release-gate",
         "fetch-depth: 1",
         "persist-credentials: false",
@@ -1685,6 +1685,20 @@ def trusted_candidate_gate_violations(
         owner = ci if marker.startswith("trusted-release-candidate:") else trust_step
         if marker not in owner:
             violations.append(f"trusted candidate detect gate omits {marker!r}")
+
+    # A queued release PR must land as the exact tree its receipt binds, or
+    # main's release gate fails closed after the merge.
+    queue_guard = named_step_body(detect, "Keep a queued release PR on its proven tree")
+    if "  merge_group:\n    types: [checks_requested]" not in ci:
+        violations.append("CI omits the merge_group trigger the merge queue waits on")
+    for marker in [
+        "if: github.event_name == 'merge_group'",
+        "QUEUE_SHA: ${{ github.event.merge_group.head_sha }}",
+        'if [ "$head_ref" != "release-please--branches--main" ]; then',
+        'if [ "$pr_tree" != "$queue_tree" ]; then',
+    ]:
+        if marker not in queue_guard:
+            violations.append(f"merge queue release guard omits {marker!r}")
 
     matrix = re.search(
         r"^      - id: matrix\n(?P<body>.*?)(?=^      - )",

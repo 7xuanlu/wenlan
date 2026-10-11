@@ -2237,7 +2237,9 @@ fn ci_routing_contract_violations(
         || trusted_checkout.and_then(|step| step["uses"].as_str())
             != Some("actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803")
         || trusted_checkout.and_then(|step| step["with"]["ref"].as_str())
-            != Some("${{ github.event.pull_request.base.sha || github.sha }}")
+            != Some(
+                "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}",
+            )
         || trusted_checkout.and_then(|step| step["with"]["path"].as_str())
             != Some("trusted-release-gate")
         || trusted_checkout.and_then(|step| step["with"]["fetch-depth"].as_u64()) != Some(1)

@@ -18,7 +18,8 @@ class PlanError(ValueError):
     """Planner input is malformed and CI must stop."""
 
 
-DIFFERENTIAL_EVENTS = frozenset({"pull_request", "push"})
+# A merge-queue group is planned from its own base..head diff, like a PR.
+DIFFERENTIAL_EVENTS = frozenset({"pull_request", "merge_group", "push"})
 
 
 ISOLATED_UNIT_MODULES = {
@@ -409,10 +410,10 @@ def _daily_gate_requirements(
     event_name: str,
     existing: set[str],
 ) -> tuple[bool, bool]:
-    # PRs and ordinary main pushes pay only for gates that can observe their
-    # inputs. Manual, release, and unknown events retain the full backstop. A
-    # full differential fallback remains conservative unless every path has an
-    # explicit non-Clippy contract owner.
+    # PRs, merge-queue groups, and ordinary main pushes pay only for gates that
+    # can observe their inputs. Manual, release, and unknown events retain the
+    # full backstop. A full differential fallback remains conservative unless
+    # every path has an explicit non-Clippy contract owner.
     if event_name not in DIFFERENTIAL_EVENTS:
         return True, True
     fmt_required = any(PurePosixPath(path).suffix.lower() == ".rs" for path in paths)

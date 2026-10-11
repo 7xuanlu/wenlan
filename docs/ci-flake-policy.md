@@ -34,16 +34,24 @@ job is not automatically a flake, and a green rerun is not automatically a fix.
 
 ## Multiple merge-ready PRs
 
-When several PRs are ready together, freeze their dependency order, merge every
-predecessor, then update the follower once against the final base. Use stacked
-PR bases only for real code dependencies. Let the workflow's
-[concurrency group](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#concurrency)
-cancel superseded heads, and never rerun a stale SHA. Keep
-[strict required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches):
-repeated builds are the cost of proving each new merge result, not a reason to
-accept an untested combination.
+`main` uses GitHub's
+[merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue).
+Add each ready PR with **Merge when ready**, or `gh pr merge <number>`. The
+queue rebuilds the PR on top of `main` plus every PR ahead of it, runs `ci.yml`
+on that exact commit (a `merge_group` event, planned like a PR from the files
+that differ between the queue base and that commit, which can include PRs
+queued ahead of it), and lands it only when the required `conclusion` check
+passes. Each PR still lands as its own commit with its own `main` push run. A PR
+that fails leaves the queue, and the PRs behind it are rebuilt without it, so no
+PR needs a manual update and rerun after another one lands. Use stacked PR bases
+only for real code dependencies, and never rerun a stale SHA.
 
-If this personal repository later moves to an eligible GitHub organization,
-prefer a [merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
-and add the `merge_group` trigger to every required workflow. GitHub's native
-merge queue is not available to personal-owned repositories today.
+Queue the release PR by itself, last, after release PR maintenance has synced
+it with `main` and its PR CI and observer receipt have passed on that final
+head. Its release receipt binds its exact head tree, so `detect-changes`
+fails any queue entry for it whose tree differs; GitHub then drops it from the
+queue before anything lands.
+
+Every workflow that reports a check required on `main` must keep its
+`merge_group` trigger. A required check that never reports leaves the queue
+entry waiting until the queue's status-check timeout.
