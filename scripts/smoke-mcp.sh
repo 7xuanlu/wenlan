@@ -100,8 +100,11 @@ mcp-initialize=PASS
 mcp-recall=PASS
 mcp-tool-count=INFO
 mcp-tools-list=PASS"
+# Trim whitespace the same way mcp-roundtrip.py does, so "capture, brief" owes
+# the same rows on both sides.
+MCP_TOOLS_TRIMMED=$(printf '%s' "$MCP_TOOLS" | tr -d '[:space:]')
 for optional_tool in brief update_brief write_page list_pages read_page; do
-    case ",$MCP_TOOLS," in
+    case ",$MCP_TOOLS_TRIMMED," in
         *,"$optional_tool",*) EXPECTED_ROWS="$EXPECTED_ROWS
 mcp-$optional_tool=PASS" ;;
     esac

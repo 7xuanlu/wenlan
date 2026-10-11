@@ -56,6 +56,7 @@ LINT_SHARED_GUARDRAILS = [
     "Agent-assisted Deep uses exactly two lint MCP calls",
     "never evaluate records outside agent_work",
     "`work_digest`",
+    "do not retry: immutable plan artifacts may already exist",
     "submit verdicts exactly once",
     "authorized record refs (`evidence_refs` plus `counterevidence_refs`)",
     "Do not mechanically copy every evidence ref",

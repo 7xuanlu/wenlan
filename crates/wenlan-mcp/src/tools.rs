@@ -1876,10 +1876,23 @@ impl WenlanMcpServer {
             deep_report,
         )
         .map_err(|error| McpError::invalid_params(error.to_string(), None))?;
-        let summary: wenlan_types::repair_plan::RepairPlanSummary = try_call!(
-            self.client.post("/api/repairs/plan", &request),
-            "repair plan prepare"
-        );
+        // The cached reports are already consumed, so a lost response must not
+        // read as "nothing happened": the daemon may have written the plan.
+        let summary: wenlan_types::repair_plan::RepairPlanSummary =
+            match self.client.post("/api/repairs/plan", &request).await {
+                Ok(summary) => summary,
+                Err(WenlanError::Unreachable(_)) => {
+                    return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                        "The repair plan request was sent but no response came back \
+                         (retried 3x over ~6s). Wenlan may already have written the plan, \
+                         so its completion is unknown. Do not retry this call: the cached \
+                         lint reports were consumed. Run `lint` again and open a new plan \
+                         once Wenlan answers.\n\n{}",
+                        daemon_setup_hint()
+                    ))]));
+                }
+                Err(error) => return Ok(tool_error(error, "repair plan prepare")),
+            };
         let value = serde_json::to_value(summary)
             .map_err(|error| McpError::internal_error(error.to_string(), None))?;
         let mut value =
