@@ -2589,13 +2589,16 @@ jobs:
   # (Vite serves the app), so it starts beside app-check instead of after its
   # Rust and unit steps, and the suite is sharded across runners. Each shard
   # keeps playwright.config.ts's single worker, so no two specs ever share a
-  # runner. macos-14 because the approved screenshots are macOS renders. Same
-  # gate as app-check.
+  # runner. Linux, not macOS: the suite is Chromium against mocked Tauri IPC
+  # with no native code, Latin fonts ship in public/fonts, and the one pixel
+  # comparison (spaces-navigation.visual) is skipped for every surface it
+  # captures, so no assertion depends on a macOS render. macOS runners are the
+  # queue bottleneck. Same gate as app-check.
   app-e2e:
     name: app-e2e (shard ${{ matrix.shard }}/4)
     needs: detect-changes
     if: needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true'
-    runs-on: macos-14
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -2610,8 +2613,10 @@ jobs:
           cache: pnpm
       - name: Install frontend dependencies
         run: pnpm install
+      # --with-deps adds the system libraries and fonts (CJK included) that a
+      # bare Ubuntu image lacks.
       - name: Install Playwright Chromium
-        run: pnpm exec playwright install chromium
+        run: pnpm exec playwright install --with-deps chromium
       - name: Frontend e2e
         run: pnpm test:e2e --shard=${{ matrix.shard }}/4
       # Keep rendered proof as a run artifact, never as new screenshots in Git.
