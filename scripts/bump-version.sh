@@ -98,10 +98,10 @@ echo "  Updated $CODEX_SETUP_SKILL (install.sh tag pin)"
 CODEX_OVERLAY="plugin-codex/overlay.json"
 if [[ "$(uname)" == "Darwin" ]]; then
     sed -i '' -E "s|(npx -y wenlan@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( setup)|\\1${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
-    sed -i '' -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
+    sed -i '' -E "s|(raw\\.githubusercontent\\.com/wenlan-app/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
 else
     sed -i -E "s|(npx -y wenlan@)[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?( setup)|\\1${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
-    sed -i -E "s|(raw\\.githubusercontent\\.com/7xuanlu/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
+    sed -i -E "s|(raw\\.githubusercontent\\.com/wenlan-app/wenlan/)(main\|v[0-9]+\\.[0-9]+\\.[0-9]+)(/install\\.sh)|\\1v${NEW_VERSION}\\3|g" "$CODEX_OVERLAY"
 fi
 grep -q "npx -y wenlan@${NEW_VERSION} setup" "$CODEX_OVERLAY" || { echo "ERROR: $CODEX_OVERLAY has no exact wenlan pin to rewrite" >&2; exit 1; }
 grep -q "/v${NEW_VERSION}/install.sh" "$CODEX_OVERLAY" || { echo "ERROR: $CODEX_OVERLAY has no install.sh tag pin to rewrite" >&2; exit 1; }
