@@ -9,10 +9,12 @@ import {
   type McpClient,
 } from "../../lib/tauri";
 import { readingIsNo, readingIsYes } from "../../lib/reading";
+import { describeSetupError, setupErrorHeadingKey, type DescribedSetupError } from "../../lib/setupErrors";
 import { isPluginClient } from "./pluginClients";
 import { unreadPluginWriteRisk } from "./setupRisk";
-import { clientTypeFamily } from "../../lib/agents";
 import ClientRow, { clientRowDescId } from "./ClientRow";
+import { familyOfClient, type ConnectionStatus } from "./connectionState";
+import { entryUnreadable, repairReasonOf } from "./clientHealth";
 import { Button } from "../memory/settings/primitives";
 
 /** Apps & CLIs group. Every detected client has the same one-click "Set up" —
@@ -22,20 +24,38 @@ import { Button } from "../memory/settings/primitives";
  *  Writing a config for a plugin client would register Wenlan twice, so this
  *  surface obeys the same invariant the wizard does.
  *
- *  `connectedFamilies` (the tool families the roster above already shows as
- *  connected) is the single source of truth for what to hide here: a client
- *  whose family already has an identity is represented above, so re-listing
- *  it — even when its own config file looks unconfigured — is the duplication
- *  the user vetoed. */
+ *  `connectedFamilies` (the tool families the roster above already shows)
+ *  is the single source of truth for what to hide here: a client whose family
+ *  already has an identity is represented above, so re-listing it — even when
+ *  its own config file looks unconfigured — is the duplication the user
+ *  vetoed.
+ *
+ *  `seenFamilies` is the narrower set whose identities have actually called
+ *  Wenlan. It decides Added versus Connected. A tool the user adds from this
+ *  list stays in place, saying "Added. Restart it to finish", and flips to
+ *  Connected when its family first shows up in `seenFamilies`, instead of
+ *  vanishing the moment its config is written. */
 export default function ClientSetupList({
   connectedFamilies,
+  seenFamilies,
 }: {
   connectedFamilies?: Set<string>;
+  seenFamilies?: Set<string>;
 } = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [errors, setErrors] = useState<
+    Record<string, (DescribedSetupError & { mode: "setup" | "repair" }) | null>
+  >({});
+  // Clients this list added since it mounted. They keep their row.
+  const [added, setAdded] = useState<Record<string, true>>({});
+  // The subset of those that were repaired rather than set up, which changes
+  // what the row says next ("Repaired. Restart X to finish.").
+  const [repaired, setRepaired] = useState<Record<string, true>>({});
+  const seen = seenFamilies ?? connectedFamilies;
+  const statusOf = (clientType: string): ConnectionStatus =>
+    seen?.has(familyOfClient(clientType)) ? "connected" : "added";
   // Non-fatal notes from a write that SUCCEEDED. Round 6, D3's boundary
   // defect: `writeMcpConfig` now resolves with the resolver inputs it could not
   // determine, and a success that skipped candidates it never built must not
@@ -48,18 +68,35 @@ export default function ClientSetupList({
   // `!readingIsYes`, not `!configured`: a client whose config could not be
   // READ is still actionable — hiding it would be "nothing left to do here"
   // stated from a look that failed. Its row carries the unknown chip.
-  const actionable = (clients ?? []).filter(
-    (client) =>
-      !readingIsYes(client.already_configured) &&
-      !(connectedFamilies?.has(clientTypeFamily(client.client_type)) ?? false),
-  );
+  //
+  // A client whose own entry would not start is kept even when it is
+  // configured or its family is connected: "nothing left to do" is false while
+  // the entry is broken, and this row carries the Repair button.
+  //
+  // An entry that could not be read is kept too, for the same reason an
+  // unreadable `already_configured` is: hiding it would state "nothing left to
+  // do" from a look that failed. A family the roster already shows is the
+  // evidence that the tool works, so that wins over a failed look.
+  const actionable = (clients ?? []).filter((client) => {
+    const familyConnected = connectedFamilies?.has(familyOfClient(client.client_type)) ?? false;
+    return (
+      added[client.client_type] ||
+      repairReasonOf(client) !== null ||
+      (entryUnreadable(client) && !familyConnected) ||
+      (!readingIsYes(client.already_configured) && !familyConnected)
+    );
+  });
 
-  const setUp = async (clientType: string) => {
+  /** `repair` rewrites the entry the client already has through the same
+   *  `write_mcp_config` Set up uses, for every client including the plugin
+   *  ones: the broken thing IS the raw entry, and rewriting it in place adds
+   *  no second registration. */
+  const setUp = async (clientType: string, mode: "setup" | "repair" = "setup") => {
     setBusy(clientType);
-    setErrors((prev) => ({ ...prev, [clientType]: "" }));
+    setErrors((prev) => ({ ...prev, [clientType]: null }));
     setWarnings((prev) => ({ ...prev, [clientType]: "" }));
     try {
-      if (isPluginClient(clientType)) {
+      if (mode === "setup" && isPluginClient(clientType)) {
         await installClientPlugin(clientType);
       } else {
         const undetermined = await writeMcpConfig(clientType);
@@ -77,9 +114,17 @@ export default function ClientSetupList({
           }));
         }
       }
+      setAdded((prev) => ({ ...prev, [clientType]: true }));
+      if (mode === "repair") setRepaired((prev) => ({ ...prev, [clientType]: true }));
       queryClient.invalidateQueries({ queryKey: ["mcp-clients"] });
+      // The tool may already be running and reach Wenlan on its own; look now
+      // rather than at the next poll.
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
     } catch (err) {
-      setErrors((prev) => ({ ...prev, [clientType]: String(err) }));
+      setErrors((prev) => ({
+        ...prev,
+        [clientType]: { ...describeSetupError(err), mode },
+      }));
     } finally {
       setBusy(null);
     }
@@ -102,7 +147,24 @@ export default function ClientSetupList({
   // withholding the action would be the same false negative wearing a
   // different coat.
   const trailing = (client: McpClient) => {
+    // A tool added from this list has nothing left to press.
+    if (added[client.client_type]) return null;
     if (client.detected.kind === "no") return notInstalled;
+    // The entry exists and would not start: one action, and it is a fix.
+    if (repairReasonOf(client) !== null) {
+      return (
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          onClick={() => setUp(client.client_type, "repair")}
+          disabled={busy === client.client_type}
+          aria-describedby={clientRowDescId(client.client_type)}
+        >
+          {busy === client.client_type ? t("connectMatrix.repairing") : t("connectMatrix.repair")}
+        </Button>
+      );
+    }
     // Round 6, D6a. A write that could produce a duplicate registration must
     // not be offered as the SAME unqualified action a measured `no` gets. The
     // label changes to "Set up anyway", and the button points at the body line
@@ -138,14 +200,16 @@ export default function ClientSetupList({
 
   if (clients && actionable.length === 0) {
     // A written config is not a live connection. Clients that are configured
-    // but whose family never appeared in the roster still need an editor
-    // restart, so they are named instead of claimed as connected. An
-    // undetected client is never named: nothing measured says it is there.
+    // but whose family never appeared in the roster are "added", not
+    // "connected", so the note claims only what is measured. The restart
+    // instruction is not repeated here: it lives on that tool's own row in the
+    // list above. An undetected client is never counted: nothing measured says
+    // it is there.
     const pendingRestart = clients.filter(
       (client) =>
         readingIsYes(client.already_configured) &&
         !readingIsNo(client.detected) &&
-        !(connectedFamilies?.has(clientTypeFamily(client.client_type)) ?? false),
+        !(seen?.has(familyOfClient(client.client_type)) ?? false),
     );
     if (pendingRestart.length === 0) {
       return (
@@ -156,7 +220,7 @@ export default function ClientSetupList({
     }
     return (
       <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-        {t("connectMatrix.allConfiguredRestart", { tools: pendingRestart.map((client) => client.name).join(", ") })}
+        {t("connectMatrix.allAdded")}
       </span>
     );
   }
@@ -165,12 +229,23 @@ export default function ClientSetupList({
     <div className="flex flex-col" style={{ gap: "8px" }}>
       {actionable.map((client) => {
         const duplicateRiskError = unreadPluginWriteRisk(client);
+        const addedHere = added[client.client_type] === true;
+        const failure = errors[client.client_type];
         return (
           <ClientRow
             key={client.client_type}
             client={client}
             configured={client.already_configured}
-            error={errors[client.client_type]}
+            status={addedHere ? statusOf(client.client_type) : null}
+            error={
+              failure
+                ? `${t(
+                    failure.mode === "repair" ? "connectMatrix.repairFailed" : "connectMatrix.addFailed",
+                    { name: client.name },
+                  )} ${t(setupErrorHeadingKey(failure.kind))}`
+                : null
+            }
+            errorDetail={failure?.detail}
             warning={
               // Two independent non-fatal notes, and they can both be live:
               // the plugin state could not be read BEFORE the write, and the
@@ -185,7 +260,26 @@ export default function ClientSetupList({
                 .join(" ") || null
             }
             trailing={trailing(client)}
-          />
+          >
+            {addedHere && (
+              <p
+                role="status"
+                style={{
+                  fontFamily: "var(--mem-font-body)",
+                  fontSize: "var(--mem-text-sm)",
+                  color: "var(--mem-text-tertiary)",
+                  lineHeight: "1.5",
+                  margin: 0,
+                }}
+              >
+                {repaired[client.client_type]
+                  ? t("connectMatrix.repairedRestart", { name: client.name })
+                  : statusOf(client.client_type) === "connected"
+                    ? t("connectMatrix.connectedHint", { name: client.name })
+                    : t("connectMatrix.addedRestart", { name: client.name })}
+              </p>
+            )}
+          </ClientRow>
         );
       })}
     </div>

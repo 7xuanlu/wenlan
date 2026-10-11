@@ -237,6 +237,7 @@ async fn test_rejects_disallowed_origin() {
         agent_name: "test-agent".into(),
         user_id: None,
         allowed_origins: vec!["https://claude.ai".into()],
+        whole_library: false,
     };
 
     let handle = tokio::spawn(async move {
@@ -305,6 +306,30 @@ async fn query_only_requires_a_strict_space_pin() {
     assert_eq!(error.to_string(), wenlan_mcp::serve::QUERY_ONLY_SPACE_ERROR);
 }
 
+/// Run a `serve` invocation that must refuse to start. A regression that lets
+/// it start would otherwise block `output()` forever, so it is killed and
+/// reported after a bounded wait.
+fn output_of_rejected_serve(mut command: std::process::Command) -> std::process::Output {
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("wenlan-mcp binary must run");
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while child.try_wait().expect("child status").is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            let output = child.wait_with_output().expect("killed child output");
+            panic!(
+                "serve started instead of refusing; stderr={}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    child.wait_with_output().expect("child output")
+}
+
 /// Isolated child-process regression: each scenario spawns the real
 /// `wenlan-mcp` binary with its own environment, so `WENLAN_SPACE` /
 /// `WENLAN_DEFAULT_SPACE` mutation here can never race the env-reading
@@ -347,7 +372,7 @@ fn query_only_without_strict_space_pin_rejects_before_bind() {
             }
         }
 
-        let output = command.output().expect("wenlan-mcp binary must run");
+        let output = output_of_rejected_serve(command);
         assert!(
             !output.status.success(),
             "{label}: must reject without a strict Space pin"
@@ -364,6 +389,266 @@ fn query_only_without_strict_space_pin_rejects_before_bind() {
     }
 }
 
+/// Each invalid scope combination must exit with its own error before the
+/// server binds, in a child process so env mutation cannot race other tests.
+#[test]
+fn whole_library_scope_conflicts_reject_before_bind() {
+    let scenarios: [(&str, &str, Option<&str>, bool, &str); 3] = [
+        (
+            "whole library plus a Space pin",
+            "query-only",
+            Some("work"),
+            true,
+            wenlan_mcp::serve::WHOLE_LIBRARY_PIN_CONFLICT_ERROR,
+        ),
+        (
+            "pin spelled as the reserved value",
+            "query-only",
+            Some("*"),
+            false,
+            wenlan_mcp::serve::RESERVED_SPACE_PIN_ERROR,
+        ),
+        (
+            "whole library on the standard profile",
+            "standard",
+            None,
+            true,
+            wenlan_mcp::serve::WHOLE_LIBRARY_PROFILE_ERROR,
+        ),
+    ];
+
+    for (label, profile, space, whole_library, expected) in scenarios {
+        let port = portpicker::pick_unused_port().expect("no free port");
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wenlan-mcp"));
+        command
+            .env("WENLAN_NO_AUTOSTART", "1")
+            .env_remove("WENLAN_DEFAULT_SPACE");
+        command.args([
+            "serve",
+            "--tool-profile",
+            profile,
+            "--token",
+            "test-token",
+            "--port",
+            &port.to_string(),
+        ]);
+        if whole_library {
+            command.arg("--whole-library");
+        }
+        match space {
+            Some(value) => command.env("WENLAN_SPACE", value),
+            None => command.env_remove("WENLAN_SPACE"),
+        };
+
+        let output = output_of_rejected_serve(command);
+        assert!(!output.status.success(), "{label}: must be rejected");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains(expected), "{label}: stderr={stderr}");
+        assert!(
+            std::net::TcpListener::bind(("127.0.0.1", port)).is_ok(),
+            "{label}: port must remain free; process must exit before binding"
+        );
+    }
+}
+
+/// Read the JSON-RPC payload from a Streamable HTTP response, which arrives
+/// either as plain JSON or as an SSE `data:` event after an empty priming event.
+async fn rpc_result(response: reqwest::Response) -> serde_json::Value {
+    let text = response.text().await.unwrap();
+    let body = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .find(|data| !data.trim().is_empty())
+        .unwrap_or(&text);
+    serde_json::from_str(body.trim()).unwrap_or_else(|error| panic!("{error}: {text}"))
+}
+
+#[tokio::test]
+async fn whole_library_reports_star_and_keeps_the_space_argument() {
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    use wiremock::{matchers::path, Mock, MockServer, ResponseTemplate};
+
+    // (scope flag, WENLAN_SPACE, connector-info space, recall keeps `space`,
+    //  daemon-side space for a recall without and with `space: "work"`)
+    for (whole_library, pin, expected_space, keeps_space, sent) in [
+        (true, None, "*", true, [None, Some("work")]),
+        (
+            false,
+            Some("synthetic-review"),
+            "synthetic-review",
+            false,
+            [Some("synthetic-review"), Some("synthetic-review")],
+        ),
+    ] {
+        let daemon = MockServer::start().await;
+        Mock::given(path("/api/memory/search"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"results": [], "took_ms": 1.0})),
+            )
+            .mount(&daemon)
+            .await;
+        let port = portpicker::pick_unused_port().expect("no free port");
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_wenlan-mcp"));
+        command
+            .env("WENLAN_NO_AUTOSTART", "1")
+            // An inherited fallback must never narrow a whole-library connector.
+            .env("WENLAN_DEFAULT_SPACE", "fallback")
+            .args([
+                "--origin-url",
+                &daemon.uri(),
+                "serve",
+                "--tool-profile",
+                "query-only",
+                "--token",
+                "synthetic-connector-token",
+                "--port",
+                &port.to_string(),
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if whole_library {
+            command.arg("--whole-library");
+        }
+        match pin {
+            Some(value) => command.env("WENLAN_SPACE", value),
+            None => command.env_remove("WENLAN_SPACE"),
+        };
+        let _guard = ChildGuard(command.spawn().expect("binary must start"));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let base = format!("http://127.0.0.1:{port}");
+        tokio::time::timeout(Duration::from_secs(8), async {
+            loop {
+                if client
+                    .get(format!("{base}/health"))
+                    .send()
+                    .await
+                    .is_ok_and(|response| response.status().is_success())
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("server must become ready");
+
+        let info: serde_json::Value = client
+            .get(format!("{base}/connector-info"))
+            .bearer_auth("synthetic-connector-token")
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(info["space"], expected_space);
+
+        let initialized = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .bearer_auth("synthetic-connector-token")
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "synthetic", "version": "1"}}
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(initialized.status(), 200);
+        let session_id = initialized.headers()["mcp-session-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        initialized.text().await.unwrap();
+        let notified = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .header("Mcp-Session-Id", &session_id)
+            .bearer_auth("synthetic-connector-token")
+            .json(&serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(notified.status(), 202);
+        let listed = client
+            .post(format!("{base}/mcp"))
+            .header("Accept", "application/json, text/event-stream")
+            .header("Mcp-Session-Id", &session_id)
+            .bearer_auth("synthetic-connector-token")
+            .json(&serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
+            .send()
+            .await
+            .unwrap();
+        let listed = rpc_result(listed).await;
+        let recall = listed["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "recall")
+            .expect("query-only lists recall");
+        assert_eq!(
+            recall["inputSchema"]["properties"].get("space").is_some(),
+            keeps_space,
+            "whole library lets the model narrow; a pin hides the argument"
+        );
+
+        for (id, arguments) in [
+            (3, serde_json::json!({"query": "synthetic"})),
+            (
+                4,
+                serde_json::json!({"query": "synthetic", "space": "work"}),
+            ),
+        ] {
+            let called = client
+                .post(format!("{base}/mcp"))
+                .header("Accept", "application/json, text/event-stream")
+                .header("Mcp-Session-Id", &session_id)
+                .bearer_auth("synthetic-connector-token")
+                .json(
+                    &serde_json::json!({"jsonrpc":"2.0","id":id,"method":"tools/call",
+                    "params": {"name": "recall", "arguments": arguments}}),
+                )
+                .send()
+                .await
+                .unwrap();
+            let called = rpc_result(called).await;
+            assert!(called["error"].is_null(), "recall failed: {called}");
+        }
+        let searches: Vec<_> = daemon
+            .received_requests()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|request| request.url.path() == "/api/memory/search")
+            .collect();
+        assert_eq!(searches.len(), 2);
+        for (request, expected) in searches.iter().zip(sent) {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["space"].as_str(), expected, "search body {body}");
+            assert_eq!(
+                request
+                    .headers
+                    .get("x-wenlan-space")
+                    .map(|value| value.to_str().unwrap()),
+                pin,
+                "only a pin sends the Space header"
+            );
+        }
+    }
+}
+
 fn test_config(port: u16, token: Option<String>) -> wenlan_mcp::serve::ServeConfig {
     wenlan_mcp::serve::ServeConfig {
         port,
@@ -373,6 +658,7 @@ fn test_config(port: u16, token: Option<String>) -> wenlan_mcp::serve::ServeConf
         agent_name: "test-agent".into(),
         user_id: None,
         allowed_origins: vec!["*".into()],
+        whole_library: false,
     }
 }
 

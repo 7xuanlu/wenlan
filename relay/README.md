@@ -378,7 +378,10 @@ token. The grant is trusted adapter output, never client-supplied JSON. It reads
 an authoritative connector route on every call, checks user, device, Space,
 grant generation, expiry and revocation, and forwards only query operations.
 The local backend must run `query-only`, with a separate bearer credential and
-the same strict `WENLAN_SPACE` pin. The client OAuth token is never forwarded.
+the same strict `WENLAN_SPACE` pin. A whole-library grant stores the Space value
+`*` instead, and its backend runs `--whole-library` with no Space pin; core
+refuses `*` as a Space name, so one Space can never claim it. The client OAuth
+token is never forwarded.
 
 `verifyConnector` in `src/connector-check.ts` verifies the authenticated local
 `/connector-info` contract before a future enrollment handler stores a route.

@@ -68,6 +68,22 @@ export function baseResponse(command: string, args: unknown, context: BaseRespon
     case "get_resolved_routing": return resolvedRouting();
     // The main shell asks on every launch whether a wenlan://pair link is waiting.
     case "take_remote_pairing_link": return null;
+    // Web access stopped on its own: the fixture never stops, so no notice waits.
+    case "take_remote_access_notice": return null;
+    // A short code finds the one synthetic request. The fixture knows no relay,
+    // so the host is the only identity it can offer, and it is not a known app.
+    case "lookup_remote_pairing": return {
+      pairingId: "a".repeat(64),
+      clientId: "synthetic-client-for-review-0123456789",
+      resource: "https://relay.wenlan.app/mcp",
+      scopes: ["wenlan:query"],
+      expiresAt: 1_783_728_000_000 + 600_000,
+      clientName: null,
+      redirectHost: "example.com",
+      knownClient: false,
+    };
+    case "deny_remote_pairing": return null;
+    case "renew_remote_access": return { status: "off" };
     case "get_profile": case "get_pending_revision": return null;
     case "get_briefing": return { content: "", new_today: 0, primary_agent: null, generated_at: 1_783_728_000, is_stale: false };
     case "get_enrichment_status": return { source_id: optionalString(args, "sourceId") ?? "", summary: "", steps: [] };

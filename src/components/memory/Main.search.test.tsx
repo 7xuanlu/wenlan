@@ -84,6 +84,12 @@ vi.mock("../../lib/tauri", () => ({
 }));
 
 vi.mock("./ActivityFeed", () => ({ default: () => <div data-testid="activity-feed" /> }));
+// The approval dialog has its own tests; here only that Main shows it, and where.
+vi.mock("./PairingApprovalDialog", async () => {
+  const { usePendingPairingCode } = await import("../../lib/pairingLink");
+  return { default: () => (usePendingPairingCode() ? <div role="dialog" data-testid="pairing-dialog" /> : null) };
+});
+vi.mock("./RemoteAccessNotifier", () => ({ default: () => <div data-testid="remote-access-notifier" /> }));
 vi.mock("./IdentityDetail", () => ({ default: () => <div /> }));
 vi.mock("./MemoryStream", () => ({ default: ({ toolbarActions }: { toolbarActions?: import("react").ReactNode }) => <div><h2>Memories</h2>{toolbarActions}</div> }));
 vi.mock("./AtlasView", () => ({
@@ -734,19 +740,28 @@ describe("Main search", () => {
     expect(screen.queryByTestId("space-detail")).not.toBeInTheDocument();
   });
 
-  it("opens Connections for a wenlan://pair link that launched the app", async () => {
+  it("shows the approval dialog for a wenlan://pair link that launched the app, without leaving the screen", async () => {
     takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
     renderMain();
-    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
-  });
-
-  it("opens Connections when a pairing link arrives while the app is open", async () => {
-    renderMain();
+    expect(await screen.findByTestId("pairing-dialog")).toBeVisible();
     expect(screen.getByTestId("pages-overview")).toBeVisible();
     expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
+  });
+
+  it("listens for Web access notices from the app shell, whichever screen is open", async () => {
+    renderMain();
+    expect(await screen.findByTestId("remote-access-notifier")).toBeInTheDocument();
+  });
+
+  it("shows the approval dialog when a pairing link arrives while the app is open", async () => {
+    renderMain();
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.queryByTestId("pairing-dialog")).not.toBeInTheDocument();
     takeRemotePairingLinkMock.mockResolvedValueOnce("a".repeat(64));
     await act(async () => { eventListeners.get("remote-pairing-link")?.(); });
-    expect(await screen.findByTestId("settings-page")).toHaveAttribute("data-section", "agents");
+    expect(await screen.findByTestId("pairing-dialog")).toBeVisible();
+    expect(screen.getByTestId("pages-overview")).toBeVisible();
+    expect(screen.queryByTestId("settings-page")).not.toBeInTheDocument();
   });
 
   it("completes a Settings import in Memories and returns to Wiki", async () => {

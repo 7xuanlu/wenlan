@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import "../../../../i18n";
 import type { AgentConnection } from "../../../../lib/tauri";
 
@@ -139,18 +139,161 @@ describe("AgentsSection", () => {
     expect(fullTags[0].style.border).toBe("");
   });
 
-  // A configured client whose family already has a connected identity folds
-  // in as a restart note on that family's row — not a separate pending row.
-  it("shows a pending client's restart note on the family row when the family is already connected", async () => {
-    mocks.listAgents.mockResolvedValue([agent("codex", "mcp", { memory_count: 3 })]);
-    mocks.detectMcpClients.mockResolvedValue([
-      { name: "Codex CLI", client_type: "codex_cli", config_path: "~/.codex/config.toml", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
-    ]);
+  const CODEX_CLI = {
+    name: "Codex CLI",
+    client_type: "codex_cli",
+    config_path: "~/.codex/config.toml",
+    detected: YES,
+    already_configured: YES,
+    has_raw_entry: YES,
+    has_raw_duplicate: NO,
+    has_plugin: NO,
+  };
+
+  // A configured client whose family has a registered identity that has not
+  // called Wenlan yet folds in as an Added chip and a restart note on that
+  // family's row, not a separate pending row. A registered identity is not a
+  // sighting: only a call is.
+  it("shows Added and a restart note on the family row while no identity has called yet", async () => {
+    mocks.listAgents.mockResolvedValue([agent("codex", "mcp")]);
+    mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
     renderAgentsSection();
 
     const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
-    expect(within(codexRow).getByText("Restart Codex to activate")).toBeInTheDocument();
+    expect(within(codexRow).getByText("Restart Codex to finish.")).toBeInTheDocument();
+    expect(within(codexRow).getByText("Added")).toBeInTheDocument();
+    expect(within(codexRow).queryByText("Connected")).not.toBeInTheDocument();
   });
+
+  // The old note was shown for a family with stored memories. A tool that
+  // already wrote memories is talking to Wenlan: "restart to finish" would be
+  // false of it.
+  it("shows no restart note for a family that has already called Wenlan", async () => {
+    mocks.listAgents.mockResolvedValue([agent("codex", "mcp", { memory_count: 3 })]);
+    mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+    renderAgentsSection();
+
+    const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
+    expect(within(codexRow).queryByText(/Restart Codex/)).not.toBeInTheDocument();
+    expect(within(codexRow).queryByText("Added")).not.toBeInTheDocument();
+  });
+
+  it("a search alone counts as a call: a last_seen_at with no memories is a seen family", async () => {
+    mocks.listAgents.mockResolvedValue([
+      agent("codex", "mcp", { memory_count: 0, last_seen_at: 1_700_000_000, trust_level: "unknown" }),
+    ]);
+    mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+    renderAgentsSection();
+
+    const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
+    expect(within(codexRow).queryByText(/Restart Codex/)).not.toBeInTheDocument();
+  });
+
+  it("a configured tool with no identity yet gets its own Added row with the restart line", async () => {
+    mocks.listAgents.mockResolvedValue([]);
+    mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+    renderAgentsSection();
+
+    expect(await screen.findByText("Restart Codex CLI to finish.")).toBeInTheDocument();
+    expect(screen.getByText("Added")).toBeInTheDocument();
+  });
+
+  // An Added tool ("Restart Codex CLI to finish.") used to sit under a
+  // "Connected" heading, which contradicted its own chip. The list holds every
+  // tool in either state, so it is titled for what it is.
+  it("titles the list 'Your tools', never 'Connected', so an Added row does not contradict its heading", async () => {
+    mocks.listAgents.mockResolvedValue([]);
+    mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+    renderAgentsSection();
+
+    expect(await screen.findByText("Restart Codex CLI to finish.")).toBeInTheDocument();
+    expect(screen.getByText("Added")).toBeInTheDocument();
+    expect(screen.getByText("Your tools")).toBeInTheDocument();
+    expect(screen.queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("makes no restart claim for an entry that would not start: that needs a repair, not a restart", async () => {
+    mocks.listAgents.mockResolvedValue([]);
+    // The healthy second client is the anchor: its restart line proves the
+    // clients query has been applied before the broken one's absence is
+    // asserted (a negative checked against the first, empty render proves
+    // nothing).
+    mocks.detectMcpClients.mockResolvedValue([
+      { ...CODEX_CLI, entry_health: { kind: "needs_repair", reason: "command_not_found", detail: "x" } },
+      { ...CODEX_CLI, name: "Cursor", client_type: "cursor", config_path: "~/.cursor/mcp.json" },
+    ]);
+    renderAgentsSection();
+
+    expect(await screen.findByText("Restart Cursor to finish.")).toBeInTheDocument();
+    expect(screen.queryByText(/Restart Codex CLI/)).not.toBeInTheDocument();
+  });
+
+  // Live state: the section must notice a tool that has just been restarted
+  // without the user reopening Settings.
+  describe("live roster", () => {
+    afterEach(() => {
+      focusManager.setFocused(undefined);
+      vi.useRealTimers();
+    });
+
+    it("flips Added to connected when the window regains focus", async () => {
+      mocks.listAgents.mockResolvedValue([agent("codex", "mcp")]);
+      mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+      renderAgentsSection();
+      const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
+      expect(within(codexRow).getByText("Restart Codex to finish.")).toBeInTheDocument();
+      const callsBefore = mocks.listAgents.mock.calls.length;
+
+      mocks.listAgents.mockResolvedValue([agent("codex", "mcp", { memory_count: 0, last_seen_at: 1_700_000_000 })]);
+      act(() => {
+        focusManager.setFocused(false);
+        focusManager.setFocused(true);
+      });
+
+      await waitFor(() => expect(mocks.listAgents.mock.calls.length).toBeGreaterThan(callsBefore));
+      await waitFor(() => expect(screen.queryByText("Restart Codex to finish.")).not.toBeInTheDocument());
+      expect(screen.queryByText("Added")).not.toBeInTheDocument();
+    });
+
+    it("polls every 30 seconds while the window is visible", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mocks.listAgents.mockResolvedValue([agent("codex", "mcp")]);
+      mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+      renderAgentsSection();
+      await screen.findByText("Restart Codex to finish.");
+      const callsBefore = mocks.listAgents.mock.calls.length;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(29_000);
+      });
+      expect(mocks.listAgents.mock.calls.length).toBe(callsBefore);
+
+      mocks.listAgents.mockResolvedValue([agent("codex", "mcp", { memory_count: 0, last_seen_at: 1_700_000_000 })]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+
+      await waitFor(() => expect(mocks.listAgents.mock.calls.length).toBeGreaterThan(callsBefore));
+      await waitFor(() => expect(screen.queryByText("Restart Codex to finish.")).not.toBeInTheDocument());
+    });
+
+    it("does not poll while the window is hidden", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      mocks.listAgents.mockResolvedValue([agent("codex", "mcp")]);
+      mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
+      renderAgentsSection();
+      await screen.findByText("Restart Codex to finish.");
+      const callsBefore = mocks.listAgents.mock.calls.length;
+
+      act(() => focusManager.setFocused(false));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(95_000);
+      });
+
+      expect(mocks.listAgents.mock.calls.length).toBe(callsBefore);
+    });
+  });
+
   // Round 5, defect 4. The gate was `if (!client.already_configured) continue;`
   // — and `!` on a read that FAILED is `true`, so an unreadable config was
   // treated exactly like a config measured to have no Wenlan entry. Skipping
@@ -174,7 +317,7 @@ describe("AgentsSection", () => {
     renderAgentsSection();
 
     const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
-    expect(within(codexRow).queryByText("Restart Codex to activate")).not.toBeInTheDocument();
+    expect(within(codexRow).queryByText(/Restart Codex/)).not.toBeInTheDocument();
   });
 
   // The measured negative, for contrast: same shape, `no` instead of
@@ -188,6 +331,6 @@ describe("AgentsSection", () => {
     renderAgentsSection();
 
     const codexRow = (await screen.findByText("Codex")).closest("div.px-5") as HTMLElement;
-    expect(within(codexRow).queryByText("Restart Codex to activate")).not.toBeInTheDocument();
+    expect(within(codexRow).queryByText(/Restart Codex/)).not.toBeInTheDocument();
   });
 });

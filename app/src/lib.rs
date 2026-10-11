@@ -81,6 +81,20 @@ pub(crate) fn reveal_main_window<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     }
 }
 
+/// [`reveal_main_window`] on the main thread. A deep link can arrive on any
+/// thread, and AppKit window and activation calls are only safe on the main one.
+/// Hop through Tauri's runtime first so the work runs after the current AppKit
+/// event returns, as `schedule_main_window_traffic_lights_alignment` does.
+pub(crate) fn reveal_main_window_on_main_thread<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    let scheduler = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let target = scheduler.clone();
+        if let Err(error) = scheduler.run_on_main_thread(move || reveal_main_window(&target)) {
+            log::warn!("[reveal] could not schedule the window on the main thread: {error}");
+        }
+    });
+}
+
 /// Keep the AppKit traffic lights on the same centreline as Wenlan's header.
 ///
 /// Tao's `trafficLightPosition.y` is an inset used to size and place the
@@ -1683,7 +1697,11 @@ pub fn run() {
             search::get_remote_access_profile,
             search::configure_remote_access,
             search::inspect_remote_pairing,
+            search::lookup_remote_pairing,
+            search::deny_remote_pairing,
             search::approve_remote_pairing,
+            search::renew_remote_access,
+            search::take_remote_access_notice,
             search::list_remote_grants,
             search::revoke_remote_grant,
             pairing_link::take_remote_pairing_link,

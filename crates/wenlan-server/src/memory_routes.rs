@@ -949,14 +949,14 @@ async fn handle_store_memory_inner(
             ),
             wenlan_core::refinery::RouteMode::Unconfigured => (
                 "paused".to_string(),
-                "Stored. Recall is available now; background enrichment is paused \
-             until you choose a model source."
+                "Stored. Recall is available now; Steep is paused until you \
+             choose a model source."
                     .to_string(),
             ),
             wenlan_core::refinery::RouteMode::PinnedUnavailable => (
                 "paused".to_string(),
-                "Stored. Recall is available now; background enrichment is paused \
-             because the selected model source is unavailable."
+                "Stored. Recall is available now; Steep is paused because the \
+             selected model source is unavailable."
                     .to_string(),
             ),
         }
@@ -1041,14 +1041,14 @@ async fn handle_search_memory_inner(
     Json(req): Json<SearchMemoryRequest>,
 ) -> Result<Json<SearchMemoryResponse>, ServerError> {
     let start = std::time::Instant::now();
-    let (db, reranker) = {
+    let (db, reranker, agent_presence) = {
         // Snapshot the Arcs we need before any await so we never hold the
         // read guard across the search call (LLM reranker or model load can
         // be slow; see AGENTS.md "Repository invariants").
         let s = state.read().await;
         let db = s.db.as_ref().ok_or(ServerError::DbNotInitialized)?.clone();
         let reranker = s.reranker.clone();
-        (db, reranker)
+        (db, reranker, s.agent_presence.clone())
     };
     let scope =
         crate::read_scope::effective_read_scope(&db, req.space.as_deref(), header_space.as_deref())
@@ -1124,6 +1124,10 @@ async fn handle_search_memory_inner(
         {
             tracing::warn!("Failed to log agent activity: {}", e);
         }
+        // Mark the caller seen so the Connections list can tell a tool that
+        // only reads from one that was never used. Throttled and off the
+        // response path; this route never writes trust or memory counts.
+        crate::agent_presence::note_agent_read(db.clone(), agent_presence, &agent);
     }
 
     let took_ms = start.elapsed().as_secs_f64() * 1000.0;

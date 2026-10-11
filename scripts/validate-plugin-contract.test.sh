@@ -166,7 +166,7 @@ assert_rejects "setup autocomplete drift" \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
 assert_rejects "codex background-consent command drift" \
-    perl -0pi -e 's/wenlan enrichment disable/wenlan background off/' \
+    perl -0pi -e 's/wenlan steep disable/wenlan background off/' \
     "$TMPDIR_TEST/root/plugin-codex/skills/setup/SKILL.md"
 
 assert_rejects "codex README setup command drift" \
@@ -176,6 +176,10 @@ assert_rejects "codex README setup command drift" \
 assert_rejects "codex resolver parity drift" \
     perl -0pi -e 's/locked-env/codex-locked-env/' \
         "$TMPDIR_TEST/root/plugin-codex/bin/resolve-space.sh"
+
+assert_rejects "codex version-drift parity drift" \
+    perl -0pi -e 's/result=same/result=equal/' \
+        "$TMPDIR_TEST/root/plugin-codex/bin/version-drift.sh"
 
 assert_rejects "codex resolver checkout-only path regression" \
     perl -0pi -e 's|find "\$HOME/.codex/plugins/cache"|find "\$HOME/.codex/plugins/stale"|' \

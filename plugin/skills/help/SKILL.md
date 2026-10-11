@@ -17,22 +17,27 @@ never calls a tool.
 ## How to invoke
 
 When triggered, output the block below verbatim. No editing, no
-abbreviating, no embellishing. The user is asking for the menu.
+abbreviating, no embellishing. The user is asking for the menu. The one
+exception: skip the `<!-- ... -->` comment lines inside the block; they mark
+the generated verb list and are not part of the card.
 
 ```
 Wenlan plugin — daily verbs
 
-  /setup        set up or repair Wenlan (auto-installs local runtime)
-  /brief [topic] read the current Space Brief; topic adds related context
-  /capture <x>  save one durable memory in flow
-  /recall <q>   search local memory
-  /lint [deep|repair] [scope]   diagnose, or resolve all findings safely
-  /distill [t]  synthesize pages from clusters (scoped to current repo)
-  /pages [q]    browse + open distilled pages (wenlan pages)
-  /curate <surface>   deep audit (surface = captures|revisions); /brief handles daily
-  /forget <id>  delete a memory by ID
-  /handoff      end-of-session ritual (session log + captures)
-  /help         this card
+<!-- verbs:start -->
+<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
+  /setup                       set up or repair Wenlan (installs the local runtime)
+  /brief [topic]               load the Brief for the current Space (optional; not a boot step)
+  /capture <x>                 save one durable memory in flow
+  /recall <q>                  search local memory
+  /lint [deep|repair] [scope]  diagnose, or resolve all findings safely
+  /distill [t]                 synthesize or refresh source-backed pages for the active Space
+  /pages [q]                   browse and open distilled pages
+  /curate <surface>            deep audit of captures, revisions or refinements
+  /forget <id>                 delete one memory by ID, after confirmation
+  /handoff                     end-of-session debrief: captures, session log, Brief update
+  /help                        one-screen quick reference
+<!-- verbs:end -->
 
 Import progress: ask explicitly; Wenlan checks `list_pending_imports` on demand.
 
@@ -44,42 +49,32 @@ Daily flow (~1 min overhead per session):
   4. /recall X      →  as needed for lookups
   5. /handoff       →  ~30 s, narrative session log + captures
 
-Where your data lives (everything under ~/.wenlan/):
+Where your data lives (under ~/.wenlan/):
 
   ~/.wenlan/pages/      wiki pages distilled from your memories (md)
   ~/.wenlan/sessions/   session logs by date (md)
   ~/.wenlan/sessions/_status/  human receipts projected from Space Briefs
-  ~/.wenlan/db/         memories + knowledge graph (symlink to libSQL)
-  ~/.wenlan/bin/        installed binaries
+
+Memories and the graph live in a local database; location in docs/setup-and-data.md.
 
 View it without a GUI:
 
   open ~/.wenlan/                  browse in Finder
   code ~/.wenlan/                  open in VS Code
-  git -C ~/.wenlan log --oneline   timeline of every memory + distill pass
   ln -s ~/.wenlan/pages ~/Vault/wenlan   # symlink into Obsidian for graph view
-
-~/.wenlan/ is a git repo. Commits land at session boundaries (handoff
-or daemon events), not per capture; uncommitted page edits between
-sessions are normal. Use git log / git diff / git revert as a free
-audit trail. No remote — purely local history.
 
 Three classes of artifact:
   - memories: granular, queryable, live in DB only (confirmed = stays in DB)
   - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
   - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
 
-The local runtime must run at 127.0.0.1:7878. Hook prints "/wenlan:setup" if down.
-
-Optional upgrades for richer distill cycles:
-  wenlan models install           local Qwen, no API cost
-  wenlan keys set anthropic       Anthropic API, higher quality
+The local runtime must run at 127.0.0.1:7878. Hook prints "Wenlan is not running" and "/wenlan:setup" if down.
 
 Models and keys do not enable background inference by themselves:
-  wenlan enrichment status        show Everyday + Synthesis as off, ready, or paused
-  wenlan enrichment configure --everyday <source> --synthesis <source>
+  wenlan steep status             show Everyday + Synthesis as off, ready, or paused
+  wenlan steep configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
-  wenlan enrichment disable       turn model-backed background work off
+  wenlan steep disable            turn model-backed background work off
 ```
 
 ## Import progress (explicit only)

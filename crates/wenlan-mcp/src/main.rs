@@ -72,6 +72,11 @@ struct ServeArgs {
     /// Comma-separated list of allowed Origin header values
     #[arg(long, default_value = "https://claude.ai,https://chatgpt.com")]
     allowed_origins: String,
+
+    /// Query-only: search the whole library (every Space and Uncategorized)
+    /// instead of one pinned Space
+    #[arg(long)]
+    whole_library: bool,
 }
 
 #[derive(Parser)]
@@ -112,7 +117,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     wenlan_mcp::lock_state::init_from_env();
-    if let Some(space) = wenlan_mcp::lock_state::locked_space() {
+    let whole_library = matches!(&cli.command, Some(Commands::Serve(args)) if args.whole_library);
+    if whole_library && wenlan_mcp::lock_state::locked_space().is_none() {
+        eprintln!("wenlan-mcp: whole-library scope, WENLAN_DEFAULT_SPACE ignored");
+    } else if let Some(space) = wenlan_mcp::lock_state::locked_space() {
         eprintln!(
             "wenlan-mcp: WENLAN_SPACE strict pin active, space=\"{}\"",
             space
@@ -192,9 +200,9 @@ async fn run_serve(
         {
             anyhow::bail!("{}", serve::QUERY_ONLY_AUTH_ERROR);
         }
-        if wenlan_mcp::lock_state::locked_space().is_none() {
-            anyhow::bail!("{}", serve::QUERY_ONLY_SPACE_ERROR);
-        }
+        serve::query_only_scope(wenlan_mcp::lock_state::locked_space(), args.whole_library)?;
+    } else if args.whole_library {
+        anyhow::bail!("{}", serve::WHOLE_LIBRARY_PROFILE_ERROR);
     }
 
     if resolved_token.is_none() && !args.no_auth {
@@ -248,6 +256,7 @@ async fn run_serve(
         agent_name,
         user_id: args.user_id,
         allowed_origins,
+        whole_library: args.whole_library,
     };
 
     serve::run_serve_with_profile(config, args.tool_profile).await
@@ -421,6 +430,7 @@ mod tests {
             no_auth: true,
             user_id: None,
             allowed_origins: "*".into(),
+            whole_library: false,
         };
 
         let error = run_serve(args, Some("http://127.0.0.1:19999".into()), "test".into())
@@ -441,6 +451,7 @@ mod tests {
             no_auth: false,
             user_id: None,
             allowed_origins: "*".into(),
+            whole_library: false,
         };
 
         let error = run_serve(args, Some("http://127.0.0.1:19999".into()), "test".into())

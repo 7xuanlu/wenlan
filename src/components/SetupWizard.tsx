@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   detectMcpClients,
   writeMcpConfig,
@@ -36,6 +37,14 @@ import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectC
 import { isPluginClient } from "./connect/pluginClients";
 import { unreadPluginWriteRisk } from "./connect/setupRisk";
 import ClientRow, { clientRowDescId } from "./connect/ClientRow";
+import { entryUnreadable, isConfigOnly, repairReasonOf } from "./connect/clientHealth";
+import {
+  familyOfAnyId,
+  familyOfClient,
+  heardSince,
+  seenFamiliesOf,
+  useLiveAgents,
+} from "./connect/connectionState";
 import { OnDeviceModelCard } from "./intelligence/IntelligenceSetup";
 import type { PresetGroup } from "./intelligence/providerPresets";
 import AnyProviderCard from "./intelligence/AnyProviderCard";
@@ -594,6 +603,14 @@ function ImportStep({
 
 // ── Connect Step ────────────────────────────────────────────────────────
 
+/** Interpolation for the "any time in Settings → Connections" pointers. Both
+ *  halves come from the labels the app actually shows, so the copy cannot
+ *  name a section that is not there (it said "Agents" after the section was
+ *  renamed Connections). */
+function settingsPath(t: TFunction) {
+  return { settings: t("settings.title"), section: t("settings.groups.agents.label") };
+}
+
 function ConnectStep({
   onNext,
   onBack,
@@ -635,8 +652,15 @@ function ConnectStep({
           // button. The row still offers the checkbox, beside a line saying
           // what could not be read and what ticking it will do — the write
           // stays available, it just stops being the default.
+          //
+          // And never preselect a client that is only a leftover settings
+          // folder ("Settings found, app not found"): pressing Continue would
+          // write an entry for an app that is not there, and the Done screen
+          // would then ask the user to restart it. The user can still tick it.
           next[client.client_type] =
-            readingIsYes(client.detected) && unreadPluginWriteRisk(client) === null;
+            readingIsYes(client.detected) &&
+            unreadPluginWriteRisk(client) === null &&
+            !isConfigOnly(client);
         }
       }
       return next;
@@ -742,7 +766,7 @@ function ConnectStep({
             lineHeight: 1.5,
           }}
         >
-          {t("setup.connect.detectionFailed")}
+          {t("setup.connect.detectionFailed", settingsPath(t))}
         </p>
       )}
 
@@ -766,6 +790,11 @@ function ConnectStep({
             {detectedClients.map((client) => {
               const isSelected = !!selectedClients[client.client_type];
               const isConfigured = readingIsYes(client.already_configured);
+              // A raw entry that would not start. The row says why; ticking it
+              // is the repair, since Continue rewrites a selected tool's entry.
+              const needsRepair = repairReasonOf(client) !== null;
+              const hasHealthLine =
+                needsRepair || entryUnreadable(client) || isConfigOnly(client);
               // Round 6, D6a: the reason this row is not preselected, and the
               // reason ticking it is a decision rather than a default.
               const duplicateRiskError = unreadPluginWriteRisk(client);
@@ -794,6 +823,7 @@ function ConnectStep({
                         // duplicate-registration line, which is the whole
                         // reason this box starts unticked.
                         isConfigured ||
+                        hasHealthLine ||
                         client.detected.kind === "unreadable" ||
                         duplicateRiskError
                           ? clientRowDescId(client.client_type)
@@ -821,7 +851,9 @@ function ConnectStep({
                         lineHeight: "1.5",
                       }}
                     >
-                      {t("setup.connect.alreadySetUp")}
+                      {needsRepair
+                        ? t("setup.connect.repairOnContinue")
+                        : t("setup.connect.alreadySetUp")}
                     </p>
                   ) : null}
                 </ClientRow>
@@ -840,7 +872,7 @@ function ConnectStep({
             lineHeight: "1.5",
           }}
         >
-          {t("setup.connect.settingsPointer")}
+          {t("setup.connect.settingsPointer", settingsPath(t))}
         </p>
       )}
     </div>
@@ -1143,9 +1175,14 @@ function SettingUpStep({
         // also writing `~/.claude.json` / `[mcp_servers.wenlan]` would register
         // the Wenlan server twice. `isPluginClient` is the single home for that
         // rule (src/components/connect/pluginClients.ts) — Settings obeys it too.
-        const task: Promise<UndeterminedInput[]> = isPluginClient(clientType)
-          ? installClientPlugin(clientType).then(() => [])
-          : writeMcpConfig(clientType);
+        // The exception is a tool whose raw entry is already there and broken:
+        // the row promised to repair it, and rewriting it in place adds no
+        // second registration (Settings' Repair does the same).
+        const repair = repairReasonOf(row.client!) !== null;
+        const task: Promise<UndeterminedInput[]> =
+          isPluginClient(clientType) && !repair
+            ? installClientPlugin(clientType).then(() => [])
+            : writeMcpConfig(clientType);
         task.then(
           (undetermined) => {
             setStatuses((prev) => ({ ...prev, [row.id]: "done" }));
@@ -1425,11 +1462,17 @@ function SettingUpStep({
   // proves some older install worked; it says nothing about the configs we
   // just wrote. The old VerifyStep accepted any past write and called onNext()
   // from an effect, which is why a returning user never saw this step at all.
+  //
+  // `heardSince` is inclusive: a tool whose first call lands in the same second
+  // the wizard opened is a sighting, not a miss.
   const freshAgents = useMemo(
-    () =>
-      (agents ?? []).filter(
-        (a) => a.last_seen_at != null && a.last_seen_at > wizardEnteredAt,
-      ),
+    () => (agents ?? []).filter((a) => heardSince(a, wizardEnteredAt)),
+    [agents, wizardEnteredAt],
+  );
+  // The same scoping, by tool family: which of the rows below has actually
+  // been called since the wizard opened.
+  const seenSinceEntry = useMemo(
+    () => seenFamiliesOf(agents, wizardEnteredAt),
     [agents, wizardEnteredAt],
   );
 
@@ -1670,6 +1713,12 @@ function SettingUpStep({
       if (row.kind === "daemon") return t("setup.settingUp.statusDoneDaemon");
       if (row.kind === "model") return t("setup.settingUp.statusDoneModel");
       if (row.kind === "import") return t("setup.settingUp.statusDoneImport");
+      // A written config is "Added". It becomes "Connected" only once the
+      // tool has called Wenlan since this wizard opened, so a tool that was
+      // never restarted never reads like one that works.
+      if (seenSinceEntry.has(familyOfClient(row.client!.client_type))) {
+        return t("setup.settingUp.statusConnected");
+      }
       return t("setup.settingUp.statusDone");
     }
     // A stall is a failure for control-flow purposes (Retry is live, the row
@@ -2039,7 +2088,7 @@ function SettingUpStep({
               lineHeight: "1.5",
             }}
           >
-            {t("setup.settingUp.failedHint")}
+            {t("setup.settingUp.failedHint", settingsPath(t))}
           </p>
         )}
       </div>
@@ -2094,23 +2143,35 @@ type OnboardingPin = SourcePin;
 // runs unbounded.
 const MAX_AGENT_CHIPS = 6;
 
+/** Done is where a user waits for the tool they just added to call in, so it
+ *  looks more often than Settings does. */
+const DONE_AGENTS_POLL_MS = 5_000;
+
 export function DoneStep({
   importResult,
   chatImportResult,
   connectedAgents,
+  seenSince,
   onComplete,
   hideDots,
   wireRouting,
 }: {
   importResult: ImportResult | null;
   chatImportResult?: Pick<ImportChatExportResponse, "memories_stored"> | null;
+  /** Every tool the wizard added or found already set up, as client types or
+   *  agent names. Whether each is Added or Connected is decided here, from
+   *  the live roster, not by the fact that it is on this list. */
   connectedAgents: string[];
+  /** Epoch seconds. Only a call after this moment makes a tool Connected, so
+   *  an older install's sighting cannot vouch for the config just written.
+   *  Without it, any sighting counts. */
+  seenSince?: number;
   onComplete: () => void | Promise<void>;
   hideDots: boolean;
   wireRouting: boolean;
 }) {
   const { t } = useTranslation();
-  const { data: agentConnections } = useQuery({ queryKey: ["agents"], queryFn: listAgents });
+  const { data: agentConnections } = useLiveAgents(DONE_AGENTS_POLL_MS);
   const hasLegacyImportData = importResult !== null && importResult.imported > 0;
   const chatImportedMemories = chatImportResult?.memories_stored ?? 0;
   const importedMemoryCount = hasLegacyImportData
@@ -2128,20 +2189,27 @@ export function DoneStep({
       importResult.relations_created
     : 0;
 
-  const resolvedAgentNames = useMemo(() => {
-    const seen = new Set<string>();
-    const resolved: string[] = [];
+  // One chip per tool, split by what is actually known: Connected once the
+  // tool has called Wenlan, Added while only the wizard's side is done. The
+  // list this reads is "everything the wizard wrote or found", which is why it
+  // cannot be shown under a "Connected:" label as it is.
+  const { connectedNames, addedNames } = useMemo(() => {
+    const seenFamilies = seenFamiliesOf(agentConnections, seenSince);
+    const byName = new Map<string, boolean>();
     for (const rawId of connectedAgents) {
       const displayName = resolveAgentDisplayName(rawId, agentConnections);
-      if (!seen.has(displayName)) {
-        seen.add(displayName);
-        resolved.push(displayName);
-      }
+      const isConnected = seenFamilies.has(familyOfAnyId(rawId));
+      byName.set(displayName, (byName.get(displayName) ?? false) || isConnected);
     }
-    return resolved;
-  }, [connectedAgents, agentConnections]);
-  const visibleAgentNames = resolvedAgentNames.slice(0, MAX_AGENT_CHIPS);
-  const overflowAgentCount = resolvedAgentNames.length - visibleAgentNames.length;
+    const connected: string[] = [];
+    const added: string[] = [];
+    for (const [name, isConnected] of byName) (isConnected ? connected : added).push(name);
+    return { connectedNames: connected, addedNames: added };
+  }, [connectedAgents, agentConnections, seenSince]);
+  const visibleConnectedNames = connectedNames.slice(0, MAX_AGENT_CHIPS);
+  const overflowConnectedCount = connectedNames.length - visibleConnectedNames.length;
+  const visibleAddedNames = addedNames.slice(0, MAX_AGENT_CHIPS);
+  const overflowAddedCount = addedNames.length - visibleAddedNames.length;
 
   // Onboarding completion wires explicit per-job pins from what the user
   // configured, so the defaults are visible instead of silent. Only on the
@@ -2460,11 +2528,12 @@ export function DoneStep({
         </div>
       )}
 
-      {/* Connected agents */}
-      {visibleAgentNames.length > 0 && (
+      {/* Tools that have called Wenlan. */}
+      {visibleConnectedNames.length > 0 && (
         <div
           className="flex flex-wrap items-center justify-center gap-2"
           style={{ marginTop: "-8px" }}
+          data-testid="done-connected-agents"
         >
           <span
             style={{
@@ -2475,14 +2544,43 @@ export function DoneStep({
           >
             {t("setup.done.connected")}
           </span>
-          {visibleAgentNames.map((name) => (
+          {visibleConnectedNames.map((name) => (
             <Tag key={name} tone="accent">
               {name}
             </Tag>
           ))}
-          {overflowAgentCount > 0 && (
+          {overflowConnectedCount > 0 && (
             <Tag tone="neutral">
-              {t("setup.done.moreAgents", { count: overflowAgentCount })}
+              {t("setup.done.moreAgents", { count: overflowConnectedCount })}
+            </Tag>
+          )}
+        </div>
+      )}
+
+      {/* Tools Wenlan added that have not called yet. */}
+      {visibleAddedNames.length > 0 && (
+        <div
+          className="flex flex-wrap items-center justify-center gap-2"
+          style={{ marginTop: visibleConnectedNames.length > 0 ? "-16px" : "-8px" }}
+          data-testid="done-added-agents"
+        >
+          <span
+            style={{
+              fontFamily: "var(--mem-font-body)",
+              fontSize: "13px",
+              color: "var(--mem-text-secondary)",
+            }}
+          >
+            {t("setup.done.added")}
+          </span>
+          {visibleAddedNames.map((name) => (
+            <Tag key={name} tone="neutral">
+              {name}
+            </Tag>
+          ))}
+          {overflowAddedCount > 0 && (
+            <Tag tone="neutral">
+              {t("setup.done.moreAgents", { count: overflowAddedCount })}
             </Tag>
           )}
         </div>
@@ -2603,6 +2701,7 @@ function SetupWizardFlow({
       importResult={null}
       chatImportResult={chatImportResult}
       connectedAgents={connectedAgents}
+      seenSince={wizardEnteredAtRef.current}
       onComplete={onComplete}
     />
   );

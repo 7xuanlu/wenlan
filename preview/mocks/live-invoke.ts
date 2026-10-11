@@ -421,6 +421,9 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   reconnect_remote_access: nativeRemoteAccessRequired,
   inspect_remote_pairing: nativeRemoteAccessRequired,
   approve_remote_pairing: nativeRemoteAccessRequired,
+  lookup_remote_pairing: nativeRemoteAccessRequired,
+  deny_remote_pairing: nativeRemoteAccessRequired,
+  renew_remote_access: nativeRemoteAccessRequired,
   revoke_remote_grant: nativeRemoteAccessRequired,
 
   // --- import ---
@@ -1096,6 +1099,8 @@ export const DEFAULTS: Record<string, unknown> = {
   set_traffic_lights_visible: null,
   // No wenlan://pair link can reach a browser preview.
   take_remote_pairing_link: null,
+  // Web access never runs in a browser preview, so it cannot stop on its own.
+  take_remote_access_notice: null,
   set_setup_completed: null,
   is_run_at_login_enabled: false,
   list_watch_paths: [],

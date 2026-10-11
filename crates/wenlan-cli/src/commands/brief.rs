@@ -115,7 +115,10 @@ fn print_queued(format: ResolvedFormat, path: &Path, operation_id: &str) -> Resu
             operation_id,
         }),
         ResolvedFormat::Table => {
-            println!("queued: {}", path.display());
+            println!(
+                "saved locally, syncs when Wenlan starts: {}",
+                path.display()
+            );
             Ok(())
         }
     }

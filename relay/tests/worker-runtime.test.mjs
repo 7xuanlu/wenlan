@@ -136,7 +136,7 @@ test('actual Worker entry owns enrollment, safe cookies, consent and OAuth forwa
       assert.equal((await post(`/pairings/${pairId}/approve`, { ...consent, approved: true }, deviceHeaders())).status, 200);
       const page = await (await request('/pairing', { headers: { cookie } })).text();
       assert.match(page, /Allowed\. Taking you back to client\.example\.\.\./);
-      assert.match(page, /<dl id="approved-space"><dt>Space<\/dt><dd>review<\/dd><\/dl>/);
+      assert.match(page, /<dl id="approved-space" data-space="review"><dt>Space<\/dt><dd>review<\/dd><\/dl>/);
       assert.doesNotMatch(page, /id="continue"[^>]*disabled/);
       assert.deepEqual(await (await request('/pairing/status', { headers: { cookie } })).json(),
         { status: 'approved', space: candidate.space });

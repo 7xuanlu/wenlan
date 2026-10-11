@@ -13,7 +13,7 @@ pub use wenlan_types::onboarding::{MilestoneId, MilestoneRecord};
 /// user's first memory and not an agent joining.
 pub(crate) const SETUP_PROBE_AGENT: &str = "wenlan-setup";
 
-fn is_setup_probe_agent(agent: &str) -> bool {
+pub(crate) fn is_setup_probe_agent(agent: &str) -> bool {
     crate::db::canonicalize_agent_id(agent) == SETUP_PROBE_AGENT
 }
 

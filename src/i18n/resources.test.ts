@@ -388,7 +388,6 @@ const PLUGIN_WORD_ALLOWLIST = new Set([
   "connectMatrix.claudePluginStep1",
   "connectMatrix.claudePluginStep2",
   "connectMatrix.claudePluginStep3",
-  "connectMatrix.chatgptStep1", // ChatGPT's own "Plugins" (插件/外掛程式) menu name, referenced verbatim
 ]);
 const BANNED_PLUGIN_WORDS = ["plugin", "插件", "外掛"];
 

@@ -108,9 +108,9 @@ PAGES_SHARED_GUARDRAILS = [
     'Resolve the page ID first with `wenlan pages "<query-or-filename>" --resolve-id`.',
 ]
 ENRICHMENT_CONSENT_GUARDRAILS = [
-    "wenlan enrichment status",
-    "wenlan enrichment configure --everyday <source> --synthesis <source>",
-    "wenlan enrichment disable",
+    "wenlan steep status",
+    "wenlan steep configure --everyday <source> --synthesis <source>",
+    "wenlan steep disable",
 ]
 
 
@@ -439,11 +439,22 @@ def validate_runner(root: Path, surface: str, config: dict[str, Any]) -> None:
         fail(f"{surface} has unsupported agent mode {agent['mode']!r}")
 
 
+SHARED_PLUGIN_SCRIPTS = (
+    ("scripts/resolve-space.sh", "bin/resolve-space.sh"),
+    ("scripts/version-drift.sh", "bin/version-drift.sh"),
+    ("scripts/test/test-resolve-space.sh", "bin/test/test-resolve-space.sh"),
+    ("scripts/test/test-version-drift.sh", "bin/test/test-version-drift.sh"),
+)
+
+
 def validate_resolver_parity(root: Path) -> None:
-    claude_resolver = read_text(root, root / "plugin" / "scripts" / "resolve-space.sh")
-    codex_resolver = read_text(root, root / "plugin-codex" / "bin" / "resolve-space.sh")
-    if claude_resolver != codex_resolver:
-        fail("plugin-codex/bin/resolve-space.sh must match plugin/scripts/resolve-space.sh")
+    # The Codex plugin ships byte-identical copies of the Claude plugin's shell
+    # helpers under bin/; a fix landing on one side only is a contract break.
+    for claude_rel, codex_rel in SHARED_PLUGIN_SCRIPTS:
+        claude_copy = read_text(root, root / "plugin" / claude_rel)
+        codex_copy = read_text(root, root / "plugin-codex" / codex_rel)
+        if claude_copy != codex_copy:
+            fail(f"plugin-codex/{codex_rel} must match plugin/{claude_rel}")
 
 
 def validate_codex_readme(root: Path) -> None:

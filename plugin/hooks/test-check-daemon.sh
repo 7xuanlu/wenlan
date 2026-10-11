@@ -43,18 +43,18 @@ HEALTH='http://127.0.0.1:1/api/health'
 
 out=$(OUTBOX_JSON='{"queued":2,"failed":1}' WENLAN_HEALTH_URL="$HEALTH" WENLAN_CLI="$stub" bash "$HOOK" 2>&1)
 rc=$?
-check 'not-running line present' 'local runtime not running' contains "$out"
-check 'outbox counts reported' '2 queued handoff write(s), 1 failed' contains "$out"
+check 'not-running line present' 'Wenlan is not running' contains "$out"
+check 'outbox counts reported' '2 handoff note(s) waiting to sync, 1 failed' contains "$out"
 [ "$rc" -eq 0 ] || { echo "FAIL exit 0 with queued+failed (got $rc)" >&2; fail=$((fail + 1)); }
 
 out=$(OUTBOX_JSON='{"queued":0,"failed":0}' WENLAN_HEALTH_URL="$HEALTH" WENLAN_CLI="$stub" bash "$HOOK" 2>&1)
 rc=$?
-check 'no outbox line when empty' 'outbox:' missing "$out"
+check 'no outbox line when empty' 'waiting to sync' missing "$out"
 [ "$rc" -eq 0 ] || { echo "FAIL exit 0 with empty outbox (got $rc)" >&2; fail=$((fail + 1)); }
 
 out=$(WENLAN_HEALTH_URL="$HEALTH" WENLAN_CLI='/nonexistent' bash "$HOOK" 2>&1)
 rc=$?
-check 'no outbox line when CLI missing' 'outbox:' missing "$out"
+check 'no outbox line when CLI missing' 'waiting to sync' missing "$out"
 [ "$rc" -eq 0 ] || { echo "FAIL exit 0 with missing CLI (got $rc)" >&2; fail=$((fail + 1)); }
 
 # Version drift: the stub answers with a chosen daemon version.
@@ -84,6 +84,8 @@ done
 port=$(cat "$tmpbase/port")
 plugin_root="$tmpbase/plugin"
 mkdir -p "$plugin_root/.claude-plugin"
+mkdir -p "$plugin_root/scripts"
+cp "$SCRIPT_DIR/../scripts/version-drift.sh" "$plugin_root/scripts/version-drift.sh"
 
 drift_run() { # $1 daemon version, $2 plugin version
     printf '{"status":"ok","version":"%s"}' "$1" > "$www/api/health"

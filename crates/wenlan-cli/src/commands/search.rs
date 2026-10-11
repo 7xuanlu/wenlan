@@ -56,79 +56,8 @@ fn format_table(resp: &SearchResponse) -> String {
             r.score, title_disp, r.source_id
         ));
     }
-    if let Some(pages) = &resp.supplemental_pages {
-        if !pages.is_empty() {
-            output.push_str("Compiled pages:\n");
-            for p in pages {
-                let t = if p.title.is_empty() {
-                    p.content.lines().next().unwrap_or("(page)")
-                } else {
-                    &p.title
-                };
-                output.push_str(&format!("  - {} ({})\n", t, p.source_id));
-            }
-        }
-    }
+    output.push_str(&super::format_supplemental_pages(
+        resp.supplemental_pages.as_deref(),
+    ));
     output
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use wenlan_types::memory::SearchResult;
-
-    fn search_result(id: &str, title: &str, source_id: &str) -> SearchResult {
-        SearchResult {
-            id: id.to_string(),
-            content: "First page line\nSecond page line".to_string(),
-            source: "page".to_string(),
-            source_id: source_id.to_string(),
-            title: title.to_string(),
-            url: None,
-            chunk_index: 0,
-            last_modified: 0,
-            score: 0.9,
-            chunk_type: None,
-            language: None,
-            semantic_unit: None,
-            memory_type: None,
-            space: None,
-            source_agent: None,
-            confidence: None,
-            confirmed: None,
-            stability: None,
-            supersedes: None,
-            summary: None,
-            entity_id: None,
-            entity_name: None,
-            quality: None,
-            importance: None,
-            event_date: None,
-            is_archived: false,
-            is_recap: false,
-            structured_fields: None,
-            retrieval_cue: None,
-            source_text: None,
-            content_hash: None,
-            raw_score: 0.0,
-            version: 0,
-            pending_revision: false,
-            merged_from: None,
-            last_delta_summary: None,
-        }
-    }
-
-    #[test]
-    fn format_table_renders_supplemental_pages_section() {
-        let resp = SearchResponse {
-            results: vec![search_result("r1", "Memory result", "memory-1")],
-            took_ms: 12.0,
-            supplemental_pages: Some(vec![search_result("p1", "Compiled page", "page-source-1")]),
-        };
-
-        let output = format_table(&resp);
-
-        assert!(output.contains("Compiled pages:"));
-        assert!(output.contains("page-source-1"));
-    }
 }

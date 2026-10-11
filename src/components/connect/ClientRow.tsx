@@ -4,6 +4,8 @@ import { useTranslation } from "react-i18next";
 import type { McpClient } from "../../lib/tauri";
 import type { Reading } from "../../lib/reading";
 import { StatusChip } from "../memory/settings/primitives";
+import { ConnectionChip, type ConnectionStatus } from "./connectionState";
+import { REPAIR_REASON_KEYS, entryUnreadable, isConfigOnly, repairReasonOf } from "./clientHealth";
 
 interface ClientRowProps {
   client: McpClient;
@@ -21,7 +23,11 @@ interface ClientRowProps {
    *  Always a sibling of the label — never nested inside it — for the same
    *  reason. */
   children?: ReactNode;
+  /** The failure sentence, already localized by the caller. */
   error?: string | null;
+  /** The raw failure text under `error`, verbatim. It is the only thing a bug
+   *  report can use, so it is demoted below the sentence, never dropped. */
+  errorDetail?: string | null;
   /** Non-fatal, and rendered in the BODY the row's `descId` covers, so a
    *  caller can point its button's `aria-describedby` at it.
    *
@@ -32,12 +38,18 @@ interface ClientRowProps {
    *  be silent, which is the only other thing this row used to be able to do
    *  with them. */
   warning?: string | null;
-  /** Three-valued — see [`Reading`]. A measured `yes` renders the "up"
-   *  StatusChip (honest: it came from actually parsing the config file), a
+  /** Three-valued — see [`Reading`]. A measured `yes` renders the "Added"
+   *  chip (honest: it came from actually parsing the config file, and a
+   *  config says nothing about a live connection), a
    *  failed read renders an "unknown" chip, and a measured `no` renders
    *  nothing. It used to be a boolean, so "we could not read the config" and
    *  "the config has no Wenlan entry" rendered identically — as nothing. */
   configured: Reading;
+  /** What the roster knows about this tool, when the caller has asked it:
+   *  `connected` once the tool has called Wenlan, `added` while only Wenlan's
+   *  side is done. It replaces the config-derived chip, because the config
+   *  alone can never say `connected`. */
+  status?: ConnectionStatus | null;
   /** Highlights the card border — wizard rows use this when their checkbox
    *  is checked. */
   selected?: boolean;
@@ -61,8 +73,10 @@ export default function ClientRow({
   trailing,
   children,
   error,
+  errorDetail,
   warning,
   configured,
+  status,
   selected,
 }: ClientRowProps) {
   const { t } = useTranslation();
@@ -75,7 +89,21 @@ export default function ClientRow({
   // any row whose `detected` was falsy, and the Settings list labelled it
   // "Not installed".
   const detectionFailed = client.detected.kind === "unreadable" ? client.detected.error : null;
-  const hasBody = Boolean(showConfigPath || children || error || warning || detectionFailed);
+  // What the daemon's own checks add. Each is chosen by `kind` / `reason`, never
+  // by the Rust `detail`, which is English-only text.
+  const repairReason = repairReasonOf(client);
+  const entryCannotBeRead = entryUnreadable(client);
+  const configOnly = isConfigOnly(client);
+  const hasBody = Boolean(
+    showConfigPath ||
+      children ||
+      error ||
+      warning ||
+      detectionFailed ||
+      repairReason ||
+      entryCannotBeRead ||
+      configOnly,
+  );
 
   const nameBadges = (
     <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -90,15 +118,33 @@ export default function ClientRow({
       >
         {client.name}
       </span>
-      {configured.kind === "yes" && (
-        <StatusChip state={{ kind: "up" }} label={t("connectMatrix.configured")} />
+      {repairReason ? (
+        // The entry is there but would not start, so "Added" (restart to
+        // finish) would send the user to do the wrong thing.
+        <StatusChip state={{ kind: "down" }} label={t("connectMatrix.needsRepair")} />
+      ) : status ? (
+        <ConnectionChip status={status} />
+      ) : (
+        configured.kind === "yes" && (
+          // A written entry, read back from the config file. That is "added",
+          // not "connected": nothing here has seen the tool call Wenlan.
+          <ConnectionChip status="added" />
+        )
       )}
       {configured.kind === "unreadable" && (
         // A read that FAILED. Not the "up" chip (we did not see a Wenlan
         // entry) and not silence (silence is what a measured `no` renders,
         // and reading them the same is the whole defect).
+        //
+        // When the row already carries the localized "can't read this tool's
+        // settings" line, the raw OS error in the chip says the same thing
+        // again in English, so the chip keeps only its localized label. Any
+        // other unreadable entry keeps the detail: nothing else explains it.
         <StatusChip
-          state={{ kind: "unknown", detail: configured.error }}
+          state={{
+            kind: "unknown",
+            detail: entryCannotBeRead ? undefined : configured.error,
+          }}
           label={t("connectMatrix.configuredUnknown")}
         />
       )}
@@ -160,6 +206,45 @@ export default function ClientRow({
               {t("connectMatrix.detectionUnknown", { error: detectionFailed })}
             </p>
           )}
+          {configOnly && (
+            // Not a claim that the app is installed: only its settings were found.
+            <p
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "var(--mem-text-xs)",
+                color: "var(--mem-text-tertiary)",
+                margin: 0,
+              }}
+            >
+              {t("connectMatrix.configOnly")}
+            </p>
+          )}
+          {repairReason && (
+            <p
+              data-testid={`client-row-repair-${client.client_type}`}
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "var(--mem-text-xs)",
+                color: "var(--mem-status-warning-text)",
+                margin: 0,
+              }}
+            >
+              {t(REPAIR_REASON_KEYS[repairReason], { name: client.name })}
+            </p>
+          )}
+          {entryCannotBeRead && (
+            <p
+              data-testid={`client-row-entry-unreadable-${client.client_type}`}
+              style={{
+                fontFamily: "var(--mem-font-body)",
+                fontSize: "var(--mem-text-xs)",
+                color: "var(--mem-status-warning-text)",
+                margin: 0,
+              }}
+            >
+              {t("connectMatrix.entryUnreadable")}
+            </p>
+          )}
           {warning && (
             <p
               style={{
@@ -174,7 +259,7 @@ export default function ClientRow({
           )}
           {children}
           {error && (
-            <p
+            <div
               role="alert"
               style={{
                 fontFamily: "var(--mem-font-body)",
@@ -183,8 +268,20 @@ export default function ClientRow({
                 margin: 0,
               }}
             >
-              {error}
-            </p>
+              <p style={{ margin: 0 }}>{error}</p>
+              {errorDetail && (
+                <p
+                  data-testid={`client-row-error-detail-${client.client_type}`}
+                  style={{
+                    color: "var(--mem-text-tertiary)",
+                    margin: "2px 0 0",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {errorDetail}
+                </p>
+              )}
+            </div>
           )}
         </div>
       )}

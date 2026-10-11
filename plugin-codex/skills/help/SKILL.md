@@ -11,22 +11,26 @@ user-invocable: true
 # /help
 
 Print the Wenlan Codex command card. The default help path is read-only and
-calls no tools.
+calls no tools. Skip the `<!-- ... -->` comment lines inside the card; they mark
+the generated verb list and are not part of it.
 
 ```text
 Wenlan for Codex
 
-  /setup          set up or repair the local runtime and MCP bridge
-  /brief [topic]  read the Space Brief; topic adds related context
-  /capture <x>    save one durable memory
-  /recall <q>     search local memory
-  /lint [deep|repair] [scope]   diagnose, or resolve all findings safely
-  /distill [t]    synthesize or refresh source-backed pages
-  /pages [q]      list or open distilled pages in the OS editor
-  /curate <s>     review pending captures or revisions (s = captures|revisions)
-  /forget <id>    delete one memory by exact id after confirmation
-  /handoff        close a session with captures, session log, and a Brief update
-  /help           show this card
+<!-- verbs:start -->
+<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
+  /setup                       set up or repair the local runtime and MCP bridge
+  /brief [topic]               load the Brief for the current Space (optional; not a boot step)
+  /capture <x>                 save one durable memory in flow
+  /recall <q>                  search local memory
+  /lint [deep|repair] [scope]  diagnose, or resolve all findings safely
+  /distill [t]                 synthesize or refresh source-backed pages for the active Space
+  /pages [q]                   list or open distilled pages in the OS editor
+  /curate <surface>            deep audit of captures, revisions or refinements
+  /forget <id>                 delete one memory by ID, after confirmation
+  /handoff                     end-of-session debrief: captures, session log, Brief update
+  /help                        one-screen quick reference
+<!-- verbs:end -->
 
 Import progress: ask explicitly; Wenlan checks `list_pending_imports` on demand.
 
@@ -45,16 +49,15 @@ Data lives under ~/.wenlan/:
   sessions/_status/   human receipts projected from Space Briefs
   bin/                installed wenlan and wenlan-mcp binaries
 
-Open pages with /pages. Inspect history with:
+Open pages with /pages. Memories and the graph live in a local database;
+location in docs/setup-and-data.md.
 
-  git -C ~/.wenlan log --oneline
+Models and keys do not enable background inference by themselves:
 
-Optional models and keys do not enable background inference by themselves:
-
-  wenlan enrichment status        show Everyday + Synthesis as off/ready/paused
-  wenlan enrichment configure --everyday <source> --synthesis <source>
+  wenlan steep status             show Everyday + Synthesis as off/ready/paused
+  wenlan steep configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
-  wenlan enrichment disable       turn model-backed background work off
+  wenlan steep disable            turn model-backed background work off
 ```
 
 Only when the user explicitly asks whether an import/export is still running,

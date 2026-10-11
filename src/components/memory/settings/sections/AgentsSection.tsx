@@ -3,7 +3,6 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
-  listAgents,
   updateAgent,
   deleteAgent,
   detectMcpClients,
@@ -12,7 +11,6 @@ import {
 } from "../../../../lib/tauri";
 import { readingIsYes } from "../../../../lib/reading";
 import {
-  clientTypeFamily,
   describeTrustLevel,
   familyDisplayName,
   resolveAgentDisplayName,
@@ -22,6 +20,13 @@ import {
 import { RemoteAccessPanel } from "../../RemoteAccessPanel";
 import { Button, Card, ConfirmActionButton, SectionHeader, Select, Tag, Toggle } from "../primitives";
 import ClientSetupList from "../../../connect/ClientSetupList";
+import { repairReasonOf } from "../../../connect/clientHealth";
+import {
+  ConnectionChip,
+  familyOfClient,
+  seenFamiliesOf,
+  useLiveAgents,
+} from "../../../connect/connectionState";
 
 type AgentUpdate = { enabled?: boolean; trustLevel?: string };
 
@@ -32,8 +37,9 @@ interface FamilyRow {
   identities: AgentConnection[];
   /** The wizard's internal connection probe — rendered muted, sorted last. */
   isProbe: boolean;
-  /** A configured-but-not-yet-active client sharing this family: show the
-   *  restart note in the row meta instead of as a separate pending row. */
+  /** A tool Wenlan added whose family has an identity that has not called
+   *  yet: show Added and the restart note in the row meta instead of as a
+   *  separate pending row. */
   hasPendingNote: boolean;
   memoryCount: number;
   latestLastSeen: number | null;
@@ -47,14 +53,19 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
-  const { data: agents = [] } = useQuery({
-    queryKey: ["agents"],
-    queryFn: listAgents,
-  });
+  // Live: refetched when the window regains focus and every 30 s while
+  // visible, so a tool the user just restarted flips from Added to Connected
+  // without reopening Settings.
+  const { data: agents = [] } = useLiveAgents();
 
+  // Focus only. Detection reads config files from disk, so it gets no
+  // interval, and a short staleTime keeps quick window switches from
+  // re-running it.
   const { data: mcpClients = [] } = useQuery({
     queryKey: ["mcp-clients"],
     queryFn: detectMcpClients,
+    refetchOnWindowFocus: true,
+    staleTime: 15_000,
   });
 
   const updateAgentMut = useMutation({
@@ -81,19 +92,28 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
     if (list) list.push(agent);
     else familyMap.set(family, [agent]);
   }
+  // Every family with an identity has a row. Only the ones that have called
+  // Wenlan are connected: a registered identity that never has is just Added.
   const connectedFamilies = new Set(familyMap.keys());
+  const seenFamilies = seenFamiliesOf(agents);
 
-  // A configured client with no connected identity in its family is a pending
-  // tool row of its own; one whose family IS already connected folds in as a
-  // "restart to activate" note on that family's row (mockup: Codex).
+  // A client Wenlan added whose family has not called yet is a pending tool
+  // row of its own; one whose family has an identity folds in as an Added note
+  // on that family's row (mockup: Codex). A family that has called is
+  // connected, so the note is gone: "restart to finish" is not true of a tool
+  // that is already talking to Wenlan.
   const pendingNoteFamilies = new Set<string>();
   const pendingClients: McpClient[] = [];
   for (const client of mcpClients) {
-    // A pending row is a CLAIM that this client is configured and waiting for
+    // A pending row is a CLAIM that this client was added and is waiting for
     // a restart. Only a measured yes may make it; a failed read makes no claim
     // in either direction.
     if (!readingIsYes(client.already_configured)) continue;
-    const family = clientTypeFamily(client.client_type) || client.client_type;
+    // An entry that would not start is not waiting for a restart: restarting
+    // changes nothing. The Add a tool list below owns it, with a Repair button.
+    if (repairReasonOf(client) !== null) continue;
+    const family = familyOfClient(client.client_type);
+    if (seenFamilies.has(family)) continue;
     if (connectedFamilies.has(family)) pendingNoteFamilies.add(family);
     else pendingClients.push(client);
   }
@@ -129,7 +149,7 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
     <>
       {/* ── Connected Agents ─────────────────────────────────────── */}
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-        <SectionHeader label={t("settings.agents.connectedAgents")} />
+        <SectionHeader label={t("settings.agents.yourTools")} />
         <Card padding={isEmpty ? "none" : "rows"}>
           {isEmpty ? (
             <div className="px-5 py-6 text-center space-y-3">
@@ -235,7 +255,7 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
       {/* ── Add a tool ────────────────────────────────────────────── */}
       <section className="mem-fade-up" style={{ animationDelay: "30ms" }}>
         <SectionHeader label={t("connectMatrix.addToolTitle")} />
-        <ClientSetupList connectedFamilies={connectedFamilies} />
+        <ClientSetupList connectedFamilies={connectedFamilies} seenFamilies={seenFamilies} />
       </section>
 
       {/* ── Web access ────────────────────────────────────────────── */}
@@ -246,9 +266,9 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
   );
 }
 
-/** A tool that wrote its MCP config but hasn't sent a first memory yet, and
- *  whose family has no connected identity — a row of its own until it
- *  activates. */
+/** A tool Wenlan added (its MCP config or plugin is written) that has not
+ *  called Wenlan yet, and whose family has no identity — a row of its own
+ *  until its first call. */
 function PendingClientRow({ client }: { client: McpClient }) {
   const { t } = useTranslation();
   return (
@@ -257,10 +277,10 @@ function PendingClientRow({ client }: { client: McpClient }) {
         <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
           {client.name}
         </span>
-        <Tag tone="neutral">{t("settings.agents.configured")}</Tag>
+        <ConnectionChip status="added" />
       </div>
       <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", marginTop: "2px" }}>
-        {t("settings.agents.restartToActivate", { name: client.name })}
+        {t("connectMatrix.restartToFinish", { name: client.name })}
       </p>
     </div>
   );
@@ -304,7 +324,7 @@ function ToolFamilyRow({
             {identities.length > 1 && (
               <Tag tone="neutral">{t("connections.identities", { count: identities.length })}</Tag>
             )}
-            {hasPendingNote && <Tag tone="neutral">{t("settings.agents.configured")}</Tag>}
+            {hasPendingNote && <ConnectionChip status="added" />}
           </div>
           <div className="flex items-center gap-3 mt-1 flex-wrap">
             {isProbe && (
@@ -324,7 +344,7 @@ function ToolFamilyRow({
             )}
             {hasPendingNote && (
               <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-                {t("settings.agents.restartToActivate", { name: displayName })}
+                {t("connectMatrix.restartToFinish", { name: displayName })}
               </span>
             )}
           </div>

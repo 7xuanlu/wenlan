@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! `wenlan://pair?code=<pairing code>` links from the relay pairing page.
 //!
-//! A link only fills in the code and opens the review screen. Approving still
-//! takes an explicit click in Settings > Connections, so a link someone else
-//! sends can never grant access on its own.
+//! A link only raises the window and opens the approval dialog. Allowing still
+//! takes an explicit click there, so a link someone else sends can never grant
+//! access on its own.
 
 use std::sync::Mutex;
 
@@ -64,7 +64,9 @@ fn valid_code(code: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
-/// Handles URLs the OS opened the app with. The first valid pairing link wins.
+/// Handles URLs the OS opened the app with. The first valid pairing link in
+/// `urls` is kept, and it replaces a link the window has not taken yet. Once the
+/// window holds a request open for a decision, it drops newer links itself.
 pub fn accept_urls<R: Runtime>(app: &AppHandle<R>, urls: &[Url]) {
     let Some(code) = urls.iter().find_map(pairing_code) else {
         if !urls.is_empty() {
@@ -79,7 +81,7 @@ pub fn accept_urls<R: Runtime>(app: &AppHandle<R>, urls: &[Url]) {
     if let Some(pending) = app.try_state::<PendingPairingLink>() {
         pending.put(code);
     }
-    crate::reveal_main_window(app);
+    crate::reveal_main_window_on_main_thread(app);
     if let Err(error) = app.emit_to("main", PAIRING_LINK_EVENT, ()) {
         log::warn!("[pairing-link] could not notify the main window: {error}");
     }

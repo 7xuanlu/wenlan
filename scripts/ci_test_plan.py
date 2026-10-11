@@ -115,6 +115,8 @@ PLUGIN_JOB_FILES = {
     "scripts/validate-codex-plugin-slice.py",
     "scripts/validate-plugin-contract.py",
     "scripts/validate-plugin-contract.test.sh",
+    "scripts/gen-plugin-verbs.mjs",
+    "scripts/gen-plugin-verbs.test.mjs",
 }
 
 DOCS_JOB_PREFIXES = ("docs",)

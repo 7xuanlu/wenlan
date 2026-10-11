@@ -14,34 +14,22 @@ Search Wenlan's memory by natural-language query. Returns matching memories
 ranked by hybrid vector + FTS search, then re-ordered by the agent if it
 helps.
 
-## Argument parsing
-
-The `/recall` skill accepts one optional inline token of the form
-`space:<name>` anywhere in the argument string. Extract it before
-treating the rest as the query:
-
-    raw_args="<the full argument string passed to /recall>"
-    space_arg="$(printf '%s\n' "$raw_args" | grep -oE 'space:[A-Za-z0-9_-]+' | head -1 | cut -d: -f2)"
-    query="$(printf '%s\n' "$raw_args" | sed -E 's/[[:space:]]*space:[A-Za-z0-9_-]+[[:space:]]*/ /g' | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
-
-If `space_arg` is non-empty, pass it to the resolver as `--arg "$space_arg"`.
-
 ## Resolve the active space
 
-Call the bundled resolver:
+The `/recall` skill accepts one optional inline token of the form
+`space:<name>` anywhere in the argument string. The bundled resolver strips it
+and returns the rest as the query. It prints the resolved Space line itself:
 
-    resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" \
-        ${space_arg:+--arg "$space_arg"} 2>/dev/null)"
-    space="$(printf '%s\n' "$resolved" | cut -f1)"
-    source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+```bash
+raw_args="<the full argument string passed to /recall>"
+resolved="$("$CLAUDE_PLUGIN_ROOT/scripts/resolve-space.sh" --cwd "$PWD" --args "$raw_args")"
+space="$(printf '%s\n' "$resolved" | cut -f1)"
+source_layer="$(printf '%s\n' "$resolved" | cut -f2)"
+query="$(printf '%s\n' "$resolved" | cut -f3-)"
+```
 
 Pass `space="$space"` to the `recall` MCP tool only when `space` is
-non-empty. Print one line before the call:
-
-    Resolved space: <space> (from <source-layer>)
-
-If `space` is empty, print `Resolved space: none (unscoped)` and omit the
-space filter.
+non-empty; otherwise omit the space filter.
 
 ## Two phases
 

@@ -22,7 +22,7 @@ try:
     d = json.load(sys.stdin)
     q, f = d.get("queued", 0), d.get("failed", 0)
     if q > 0 or f > 0:
-        print(f"[wenlan] outbox: {q} queued handoff write(s), {f} failed — run \`wenlan outbox status\`.")
+        print(f"[wenlan] {q} handoff note(s) waiting to sync, {f} failed — run \`wenlan outbox status\`.")
 except Exception:
     pass
 ' 2>/dev/null
@@ -37,7 +37,7 @@ done
 
 if [ -z "$RESP" ]; then
   cat <<MSG
-[wenlan] local runtime not running. Handoff writes will queue in the outbox; run /wenlan:setup or \`wenlan background on\`.
+[wenlan] Wenlan is not running. Handoff notes are saved locally and sync when it starts; run /wenlan:setup or \`wenlan background on\`.
 MSG
   report_outbox
   exit 0
@@ -45,28 +45,21 @@ fi
 
 report_outbox
 
-# Compare daemon version vs plugin manifest version. Silent unless mismatch.
-[ -r "$PLUGIN_JSON" ] || exit 0
-command -v python3 >/dev/null 2>&1 || exit 0  # fail closed without python3
+# Compare daemon version vs plugin manifest version. Silent unless the
+# major.minor differ: the daemon and plugin ride one release train, so a patch
+# drift (e.g. 0.13.1 vs 0.13.2) is compatible and must NOT nag every session.
+# version-drift.sh strips build metadata (`+g<sha8>`), which must never silence
+# the drift check, and prints one `daemon=.. expected=.. release=.. result=..`
+# line; `unknown` (manifest unreadable, health gone) stays silent.
+DRIFT="${CLAUDE_PLUGIN_ROOT:-}/scripts/version-drift.sh"
+[ -r "$DRIFT" ] || exit 0
+LINE=$(bash "$DRIFT" --health-url "$URL" --manifest "$PLUGIN_JSON" --ignore-patch 2>/dev/null)
+field() { printf '%s\n' "$LINE" | tr ' ' '\n' | sed -n "s/^$1=//p"; }
+RESULT=$(field result)
+DAEMON_VER=$(field daemon)
+EXPECTED_VER=$(field expected)
 
-extract_version() {
-  python3 -c 'import json,sys; print(json.load(sys.stdin).get("version",""))' 2>/dev/null
-}
-
-DAEMON_VER=$(printf '%s' "$RESP" | extract_version)
-EXPECTED_VER=$(extract_version <"$PLUGIN_JSON")
-
-# Compare the release part only: build metadata (`+g<sha8>`) is semver noise,
-# and a published daemon can carry it too (its binary is built before the tag
-# exists), so it must never silence the drift check. Compare only major.minor:
-# the daemon and plugin ride one release train, so a patch drift (e.g. 0.13.1
-# vs 0.13.2) is compatible and must NOT nag every session. Only a minor/major
-# gap is a real, actionable drift worth surfacing.
-mm() { printf '%s' "${1%%+*}" | cut -d. -f1,2; }
-DAEMON_MM=$(mm "$DAEMON_VER")
-EXPECTED_MM=$(mm "$EXPECTED_VER")
-
-if [ -n "$DAEMON_MM" ] && [ -n "$EXPECTED_MM" ] && [ "$DAEMON_MM" != "$EXPECTED_MM" ]; then
+if [ "$RESULT" = older ] || [ "$RESULT" = newer ]; then
   cat <<MSG
 [wenlan] daemon v${DAEMON_VER}, plugin expects v${EXPECTED_VER}.
   Run /wenlan:setup to repair: it updates an older runtime, or says when the plugin cache is stale, then verifies MCP.

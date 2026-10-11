@@ -233,6 +233,9 @@ fn inspected() -> crate::remote_relay::PairingView {
         resource: format!("{}/mcp", crate::remote_relay::RELAY_ORIGIN),
         scopes: vec!["wenlan:query".into()],
         expires_at: now_ms() + 60_000,
+        client_name: None,
+        redirect_host: None,
+        known_client: false,
     }
 }
 
@@ -301,7 +304,7 @@ async fn approval_rejects_changed_client_or_local_stop_without_posting_consent()
 #[test]
 fn launch_arguments_require_protected_query_only_and_no_secret_on_command_line() {
     let (_dir, _store, profile) = configured();
-    let args = mcp_args("http://127.0.0.1:17917", 18080);
+    let args = mcp_args("http://127.0.0.1:17917", 18080, &profile);
     for pair in [
         ["--host", "127.0.0.1"],
         ["--tool-profile", "query-only"],
@@ -320,6 +323,62 @@ fn launch_arguments_require_protected_query_only_and_no_secret_on_command_line()
     ] {
         assert!(!line.contains(forbidden));
     }
+}
+
+fn whole_library() -> (tempfile::TempDir, Store, Profile) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::in_directory(dir.path().join("relay"));
+    let profile = store
+        .configure(None, crate::remote_relay::WHOLE_LIBRARY_SPACE)
+        .unwrap();
+    let profile = store.enable(profile.revision()).unwrap();
+    (dir, store, profile)
+}
+
+#[test]
+fn launch_scope_pins_one_space_or_asks_for_the_whole_library() {
+    let (_dir, _store, pinned) = configured();
+    assert!(!mcp_args("http://127.0.0.1:17917", 18080, &pinned)
+        .contains(&"--whole-library".to_string()));
+    assert_eq!(
+        mcp_scope_env(&pinned),
+        [
+            ("WENLAN_SPACE", "review".to_string()),
+            ("WENLAN_DEFAULT_SPACE", String::new()),
+        ]
+    );
+
+    let (_dir, _store, whole) = whole_library();
+    let args = mcp_args("http://127.0.0.1:17917", 18080, &whole);
+    assert_eq!(args.last().map(String::as_str), Some("--whole-library"));
+    assert!(args
+        .windows(2)
+        .any(|pair| pair[0] == "--tool-profile" && pair[1] == "query-only"));
+    assert!(!args.iter().any(|arg| arg == "*"));
+    // Both Space variables are cleared, so nothing inherited narrows the scope.
+    assert_eq!(
+        mcp_scope_env(&whole),
+        [
+            ("WENLAN_SPACE", String::new()),
+            ("WENLAN_DEFAULT_SPACE", String::new()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn readiness_matches_the_whole_library_scope_exactly() {
+    let (_dir, _store, profile) = whole_library();
+    let (port, task) = serve(vec![(200, info("*")), (401, "denied".into())], |_| {}).await;
+    verify_backend(port, &profile).await.unwrap();
+    task.await.unwrap();
+    let (port, task) = serve(vec![(200, info("review"))], |_| {}).await;
+    assert!(verify_backend(port, &profile).await.is_err());
+    task.await.unwrap();
+    // A one-Space profile never accepts a whole-library sidecar.
+    let (_dir, _store, pinned) = configured();
+    let (port, task) = serve(vec![(200, info("*"))], |_| {}).await;
+    assert!(verify_backend(port, &pinned).await.is_err());
+    task.await.unwrap();
 }
 
 #[test]
@@ -495,9 +554,9 @@ async fn actual_sidecar_uses_child_environment_and_protected_contract() {
     drop(listener);
     let mut command = Command::new(&binary);
     command
-        .args(mcp_args("http://127.0.0.1:1", port))
+        .args(mcp_args("http://127.0.0.1:1", port, &profile))
         .env(TOKEN_ENV, profile.backend_token())
-        .env("WENLAN_SPACE", profile.space())
+        .envs(mcp_scope_env(&profile))
         .env("WENLAN_NO_AUTOSTART", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -606,4 +665,124 @@ async fn actual_sidecar_uses_child_environment_and_protected_contract() {
     })
     .await
     .expect("missing token must stop startup");
+}
+
+fn rotated(old: &DeviceCredential) -> String {
+    serde_json::json!({
+        "id": old.id,
+        "managementToken": "n".repeat(64),
+        "expiresAt": now_ms() + 90 * 24 * 60 * 60 * 1000,
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn renewing_keeps_the_device_and_saves_the_new_key_under_a_new_revision() {
+    let (_dir, store, profile) = configured();
+    let old = device();
+    let profile = store
+        .attach_device(profile.revision(), old.clone())
+        .unwrap();
+    let (port, task) = serve(vec![(200, rotated(&old))], |_| {}).await;
+    let renewed = rotate_device_at(store.clone(), client(port), profile.revision().into())
+        .await
+        .unwrap();
+    let key = renewed.device().unwrap();
+    assert_eq!(key.id, old.id);
+    assert_eq!(key.management_token, "n".repeat(64));
+    assert!(key.expires_at > old.expires_at + 80 * 24 * 60 * 60 * 1000);
+    assert_ne!(renewed.revision(), profile.revision());
+    assert!(renewed.enabled());
+    assert_eq!(renewed.space(), profile.space());
+    assert_eq!(renewed.backend_token(), profile.backend_token());
+    let saved = store.load().unwrap().unwrap();
+    assert_eq!(saved.revision(), renewed.revision());
+    assert_eq!(saved.device().unwrap().management_token, "n".repeat(64));
+    let requests = task.await.unwrap();
+    assert!(requests[0].starts_with("POST /devices/rotate "));
+    assert!(requests[0].contains(&format!("authorization: Bearer {}", old.management_token)));
+}
+
+#[tokio::test]
+async fn renewing_a_stale_or_unenrolled_profile_never_reaches_the_relay() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let relay = client(listener.local_addr().unwrap().port());
+    let (_dir, store, profile) = configured();
+    // No device yet.
+    assert!(
+        rotate_device_at(store.clone(), relay.clone(), profile.revision().into())
+            .await
+            .is_err()
+    );
+    let enrolled = store.attach_device(profile.revision(), device()).unwrap();
+    // A revision the person is no longer looking at.
+    assert!(
+        rotate_device_at(store.clone(), relay.clone(), "x".repeat(64))
+            .await
+            .is_err()
+    );
+    // Turned off.
+    let off = store.disable(enrolled.revision()).unwrap();
+    assert!(rotate_device_at(store, relay, off.revision().into())
+        .await
+        .is_err());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn a_renew_that_loses_a_race_with_stop_ends_the_new_key_and_keeps_nothing_new() {
+    let (_dir, store, profile) = configured();
+    let old = device();
+    let profile = store
+        .attach_device(profile.revision(), old.clone())
+        .unwrap();
+    let stop_store = store.clone();
+    let revision = profile.revision().to_string();
+    let (port, task) = serve(
+        vec![(200, rotated(&old)), (200, "{\"success\":true}".into())],
+        move |index| {
+            if index == 0 {
+                stop_store.disable(&revision).unwrap();
+            }
+        },
+    )
+    .await;
+    assert!(
+        rotate_device_at(store.clone(), client(port), profile.revision().into())
+            .await
+            .is_err()
+    );
+    let requests = task.await.unwrap();
+    assert!(requests[1].starts_with("POST /devices/revoke "));
+    assert!(requests[1].contains(&format!("authorization: Bearer {}", "n".repeat(64))));
+    let saved = store.load().unwrap().unwrap();
+    assert!(!saved.enabled());
+    assert_eq!(
+        saved.device().unwrap().management_token,
+        old.management_token
+    );
+}
+
+#[tokio::test]
+async fn a_failed_renew_keeps_the_saved_key_and_shows_no_relay_text() {
+    for status in [401, 429, 503] {
+        let (_dir, store, profile) = configured();
+        let profile = store.attach_device(profile.revision(), device()).unwrap();
+        let (port, task) = serve(vec![(status, "PRIVATE_ERROR".into())], |_| {}).await;
+        let error = rotate_device_at(store.clone(), client(port), profile.revision().into())
+            .await
+            .unwrap_err();
+        assert!(!error.contains("PRIVATE_ERROR"));
+        let saved = store.load().unwrap().unwrap();
+        assert_eq!(saved.revision(), profile.revision());
+        assert_eq!(
+            saved.device().unwrap().management_token,
+            profile.device().unwrap().management_token
+        );
+        assert_eq!(task.await.unwrap().len(), 1);
+    }
 }

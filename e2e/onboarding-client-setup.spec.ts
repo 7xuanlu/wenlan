@@ -53,16 +53,16 @@ for (const [locale, copy] of cases) for (const width of [820, 1440]) {
     await expect(page.locator('[data-testid="setup-wizard"]')).toHaveCount(0);
     const webName = /^(Web access|网页访问|網頁存取)$/;
     await expect(page.getByRole('heading', { name: webName })).toHaveCount(1);
-    const webToggle = page.getByRole('button', { name: webName });
+    // Turning Web access on is one question with two answers: the whole
+    // library is one click, nothing is preselected, and there is no consent checkbox.
+    const webSection = page.locator('section').filter({ has: page.getByRole('heading', { name: webName }) });
+    const webToggle = webSection.getByRole('button', { name: /^(Share whole library|共享整个资料库|分享整個資料庫)$/ });
+    await expect(webToggle).toHaveCount(1);
     await expect(webToggle).toBeVisible();
-    await expect(webToggle).toHaveAttribute('aria-pressed', 'false');
-    await expect(webToggle).toBeDisabled();
-    const pendingConsent = {
-      en: 'Choose a Space before allowing remote queries.',
-      'zh-Hans': '请先选择 Space，再授权远程查询。',
-      'zh-Hant': '請先選擇 Space，再授權遠端查詢。',
-    }[locale];
-    await expect(page.getByRole('checkbox', { name: pendingConsent, exact: true })).toBeDisabled();
+    await expect(webToggle).toBeEnabled();
+    await expect(webSection.getByRole('button', { name: /^(Share one Space…|只共享一个 Space…|只分享一個 Space…)$/ })).toHaveCount(1);
+    await expect(webSection.getByRole('combobox')).toHaveCount(0);
+    await expect(webSection.getByRole('checkbox')).toHaveCount(0);
     await expect.poll(() => webToggle.evaluate(node => {
       const section = node.closest('section');
       return section ? getComputedStyle(section).opacity : null;

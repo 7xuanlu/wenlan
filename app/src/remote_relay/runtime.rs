@@ -72,29 +72,86 @@ async fn approve_inspected_at(
         .map_err(|e| e.to_string())
 }
 
+/// Replace the saved management key with a fresh one for the same device.
+/// Only a profile that is on, at the revision the person saw, with a device that
+/// has not ended, can be renewed. Nothing here enrolls or revokes a device for
+/// another profile.
+pub async fn rotate_device(expected_revision: String) -> Result<Profile, String> {
+    let client = RelayClient::new().map_err(|e| e.to_string())?;
+    rotate_device_at(Store::current(), client, expected_revision).await
+}
+
+async fn rotate_device_at(
+    store: Store,
+    client: RelayClient,
+    expected_revision: String,
+) -> Result<Profile, String> {
+    let profile = consent_profile_at(store.clone(), expected_revision).await?;
+    let device = profile
+        .device()
+        .ok_or_else(|| StoreError::Stale.to_string())?;
+    // Never retried here: the relay may have switched keys before a lost reply.
+    let next = client.rotate(device).await.map_err(|e| e.to_string())?;
+    let stored = next.clone();
+    let revision = profile.revision().to_string();
+    let saved = tokio::task::spawn_blocking(move || store.attach_device(&revision, stored))
+        .await
+        .map_err(|_| "Remote access storage task failed".to_string())
+        .and_then(|result| result.map_err(|e| e.to_string()));
+    match saved {
+        Ok(profile) => Ok(profile),
+        Err(error) => {
+            // The new key cannot be kept (a newer profile or a stop won the race):
+            // end it rather than leave a live key nothing here can use.
+            let _ = client.revoke_device(&next).await;
+            Err(error)
+        }
+    }
+}
+
 fn require_enabled(profile: Option<Profile>) -> Result<Profile, StoreError> {
     profile
         .filter(Profile::enabled)
         .ok_or(StoreError::NotConfigured)
 }
 
-pub fn mcp_args(origin_url: &str, port: u16) -> Vec<String> {
-    [
-        "--origin-url".to_string(),
-        origin_url.to_string(),
-        "serve".to_string(),
-        "--host".to_string(),
-        "127.0.0.1".to_string(),
-        "--port".to_string(),
-        port.to_string(),
-        "--tool-profile".to_string(),
-        "query-only".to_string(),
-        "--token-env".to_string(),
-        TOKEN_ENV.to_string(),
-        "--agent-name".to_string(),
-        "remote-mcp".to_string(),
+pub fn mcp_args(origin_url: &str, port: u16, profile: &Profile) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "--origin-url",
+        origin_url,
+        "serve",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        &port.to_string(),
+        "--tool-profile",
+        "query-only",
+        "--token-env",
+        TOKEN_ENV,
+        "--agent-name",
+        "remote-mcp",
     ]
-    .into()
+    .map(str::to_string)
+    .into();
+    if profile.whole_library() {
+        args.push("--whole-library".into());
+    }
+    args
+}
+
+/// The scope reaches the sidecar only through its environment. One Space is a
+/// strict pin. The whole library clears both Space variables, so nothing the
+/// app inherited can narrow it, and `--whole-library` refuses a pin anyway.
+pub fn mcp_scope_env(profile: &Profile) -> [(&'static str, String); 2] {
+    let pinned = if profile.whole_library() {
+        String::new()
+    } else {
+        profile.space().to_string()
+    };
+    [
+        ("WENLAN_SPACE", pinned),
+        ("WENLAN_DEFAULT_SPACE", String::new()),
+    ]
 }
 
 #[derive(Deserialize)]

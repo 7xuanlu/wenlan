@@ -8,7 +8,7 @@ Wenlan is local-first. Memories, pages, and session notes live on your machine u
 
 - **Skills**: `/wenlan:setup`, `/brief`, `/capture`, `/recall`, `/lint`, `/distill`, `/pages`, `/curate`, `/forget`, `/handoff`, and `/help`. Each skill talks to the local daemon over HTTP on `127.0.0.1:7878`.
 - **One local MCP server** (`wenlan`), started by `plugin/scripts/wenlan-mcp-runner.sh`. It exposes memory tools (capture, recall, brief, distill, and friends) to Claude Code and Cowork. Claude chat on the web ignores local MCP servers.
-- **One `SessionStart` hook** (`plugin/hooks/check-daemon.sh`). It probes the local daemon and prints at most a few lines: a reminder if the daemon is not running, a count of queued handoff writes (from the local `wenlan outbox status` command, parsed with `python3`), and a notice if the daemon and plugin versions have drifted apart. It never blocks a session and never installs anything.
+- **One `SessionStart` hook** (`plugin/hooks/check-daemon.sh`). It probes the local daemon and prints at most a few lines: a reminder if the daemon is not running, a count of handoff notes waiting to sync (from the local `wenlan outbox status` command, parsed with `python3`), and a notice if the daemon and plugin versions have drifted apart. It never blocks a session and never installs anything.
 
 ## Setup
 
@@ -45,9 +45,10 @@ The MCP runner picks a binary in this order: the `WENLAN_MCP_DEV_BIN` environmen
 ~/.wenlan/pages/               wiki pages distilled from memories (Markdown)
 ~/.wenlan/sessions/            session logs by date (Markdown)
 ~/.wenlan/sessions/_status/    current per-project goals and last-handoff timestamp
-~/.wenlan/db/                  the libSQL store
 ~/.wenlan/bin/                 installed binaries
 ```
+
+Memories and the graph live in a local database; location in [docs/setup-and-data.md](../docs/setup-and-data.md).
 
 Browse with any editor, or symlink `~/.wenlan/pages/` into an Obsidian vault for the graph view. No desktop app is required.
 
@@ -66,19 +67,21 @@ The daemon stays the single writer and storage owner. Claude does the thinking.
 
 ## Daily commands
 
-```text
-/wenlan:setup   set up and verify Wenlan works (run once, or to diagnose)
-/help           one-screen reference
-/brief          load identity and topic context (start of session)
-/capture        save one durable memory in flow
-/recall         search local memory
-/lint           diagnose or repair memory quality and hygiene
-/distill        synthesize pages from clusters (scoped to the active Space)
-/pages          browse and open distilled pages
-/curate         audit pending captures or revisions
-/forget         delete a memory by ID
-/handoff        end-of-session debrief
-```
+<!-- verbs:start -->
+<!-- generated from plugin/skills/verbs.json by scripts/gen-plugin-verbs.mjs; do not edit -->
+
+- `/setup` - set up or repair Wenlan (installs the local runtime)
+- `/brief [topic]` - load the Brief for the current Space (optional; not a boot step)
+- `/capture <x>` - save one durable memory in flow
+- `/recall <q>` - search local memory
+- `/lint [deep|repair] [scope]` - diagnose, or resolve all findings safely
+- `/distill [t]` - synthesize or refresh source-backed pages for the active Space
+- `/pages [q]` - browse and open distilled pages
+- `/curate <surface>` - deep audit of captures, revisions or refinements
+- `/forget <id>` - delete one memory by ID, after confirmation
+- `/handoff` - end-of-session debrief: captures, session log, Brief update
+- `/help` - one-screen quick reference
+<!-- verbs:end -->
 
 Skill instructions live in [`skills/`](skills/). Plugin metadata is in [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json), the MCP declaration in [`.mcp.json`](.mcp.json), and the marketplace entry in [`../.claude-plugin/marketplace.json`](../.claude-plugin/marketplace.json) at the repository root.
 
