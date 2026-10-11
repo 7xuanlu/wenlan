@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Smoke test: the shipped `wenlan` CLI binary drives a real daemon over HTTP.
-# Black-box per-surface loop: capture -> memories -> search -> status, all
+# Black-box per-surface loop: capture -> memories -> recall -> status, all
 # through the CLI, never curl. Isolated port + data dir + pages dir per repo
 # smoke-test policy — never touches prod data (dev/prod share 7878 by default).
 #
@@ -26,7 +26,7 @@ if (( HOST_IS_WINDOWS == 1 )); then
 fi
 
 SMOKE_NAME=smoke-cli
-SMOKE_PASS_MESSAGE="PASS: CLI surface smoke (status, capture, memories, search) against isolated daemon"
+SMOKE_PASS_MESSAGE="PASS: CLI surface smoke (status, capture, memories, recall) against isolated daemon"
 # shellcheck source=scripts/lib/smoke-common.sh
 . "$ROOT/scripts/lib/smoke-common.sh"
 trap smoke_cleanup EXIT
@@ -56,7 +56,7 @@ WENLAN_NO_AUTOSTART=1 WENLAN_BIN="$CLI_BIN" WENLAN_HOST="$HOST" \
 # no conditional row, so the expectation is derived rather than observed.
 EXPECTED_ROWS="cli-capture=PASS
 cli-memories=PASS
-cli-search=PASS
+cli-recall=PASS
 cli-status=PASS"
 smoke_assert_ledger "$DATA_DIR/gauntlet/findings.tsv" "$EXPECTED_ROWS" CLI
 

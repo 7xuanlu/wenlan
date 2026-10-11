@@ -133,7 +133,7 @@ pub async fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
         configure_basic_memory()?;
         println!("Wenlan is set up for local memory.");
         println!("Storage, search, recall, and MCP memory work without a local model or API key.");
-        println!("Model-backed background enrichment is off.");
+        println!("Steep (background upkeep) is off.");
         return Ok(());
     }
 
@@ -333,15 +333,6 @@ fn print_daemon_log_paths() {
         "Launchd stderr log: {}",
         super::service::launchd_stderr_log_path(&data_root).display()
     );
-}
-
-pub async fn print_runtime_status() -> anyhow::Result<()> {
-    print_key_status();
-    print_model_status();
-    print_model_provider_hint();
-    print_reranker_status().await;
-    print_enrichment_status().await;
-    Ok(())
 }
 
 async fn interactive_setup() -> anyhow::Result<()> {
@@ -552,10 +543,8 @@ fn configure_basic_memory() -> anyhow::Result<()> {
 }
 
 fn print_enrichment_opt_in(source: &str) {
-    println!("{source} is available, but model-backed background enrichment is still off.");
-    println!(
-        "To review the exact task mapping and enable it, run `wenlan enrichment configure --help`."
-    );
+    println!("{source} is available, but Steep is still off.");
+    println!("To review the task mapping and turn it on, run `wenlan steep configure --help`.");
 }
 
 async fn configure_enrichment(
@@ -566,7 +555,7 @@ async fn configure_enrichment(
     let current = get_json("/api/config").await?;
     anyhow::ensure!(
         supports_background_consent(&current),
-        "the running Wenlan daemon does not support explicit background consent; upgrade it before enabling enrichment"
+        "the running Wenlan daemon does not support explicit background consent; upgrade it before turning on Steep"
     );
     let routing = get_json("/api/config/routing").await.map_err(|err| {
         anyhow::anyhow!(
@@ -576,7 +565,7 @@ async fn configure_enrichment(
     require_configured_source(&routing, everyday)?;
     require_configured_source(&routing, synthesis)?;
 
-    println!("Enable model-backed background enrichment?");
+    println!("Turn on Steep?");
     println!(
         "  Everyday organization: {} (classify, structure, entities, links, titles, citations, and page inputs)",
         everyday.label()
@@ -608,10 +597,9 @@ async fn configure_enrichment(
     }
 
     if !yes {
-        let answer =
-            prompt_line("Write these two hard pins and enable background enrichment? [y/N]: ")?;
+        let answer = prompt_line("Write these two hard pins and turn on Steep? [y/N]: ")?;
         if !matches!(answer.trim(), "y" | "Y" | "yes" | "YES") {
-            println!("Background enrichment settings were not changed.");
+            println!("Steep settings were not changed.");
             return Ok(());
         }
     }
@@ -629,7 +617,7 @@ async fn configure_enrichment(
             && saved["synthesis_source"].as_str() == Some(synthesis.as_pin()),
         "the running Wenlan daemon did not verify the requested background consent and pins; check status before relying on this change"
     );
-    println!("Background enrichment consent saved.");
+    println!("Steep consent saved.");
     print_enrichment_status().await;
     Ok(())
 }
@@ -638,7 +626,7 @@ async fn disable_enrichment() -> anyhow::Result<()> {
     match get_json("/api/config").await {
         Ok(current) => {
             disable_running_enrichment(&current).await?;
-            println!("Background enrichment disabled. Providers and downloaded models were kept.");
+            println!("Steep disabled. Providers and downloaded models were kept.");
         }
         Err(err)
             if err
@@ -651,12 +639,12 @@ async fn disable_enrichment() -> anyhow::Result<()> {
             cfg.synthesis_source = None;
             config::save_config_with_background_ai(&cfg, false)?;
             println!(
-                "Background enrichment disabled in local config. Saved source choices were cleared for older-daemon safety. Restart Wenlan if an older daemon is running."
+                "Steep disabled in local config. Saved source choices were cleared for older-daemon safety. Restart Wenlan if an older daemon is running."
             );
         }
         Err(err) => {
             return Err(anyhow::anyhow!(
-                "the running Wenlan daemon could not verify enrichment is disabled; no local config was changed: {err}"
+                "the running Wenlan daemon could not verify Steep is disabled; no local config was changed: {err}"
             ));
         }
     }
@@ -721,24 +709,60 @@ fn require_configured_source(
 pub async fn print_enrichment_status() {
     match get_json("/api/config").await {
         Ok(cfg) if cfg["background_ai_enabled"].as_bool() == Some(false) => {
-            println!("Background enrichment: off");
+            println!("Steep: off");
             println!("  Model-backed background work is disabled; saved source choices are kept.");
         }
         Ok(cfg) if supports_background_consent(&cfg) => {
             match get_json("/api/config/routing").await {
                 Ok(routing) => {
-                    println!("Background enrichment:");
+                    println!("Steep:");
                     print_job_route("Everyday organization", &routing["everyday"]);
                     print_job_route("Page synthesis", &routing["synthesis"]);
                 }
-                Err(err) => println!("Background enrichment: status unavailable ({err})"),
+                Err(err) => println!("Steep: status unavailable ({err})"),
             }
         }
         Ok(_) => println!(
-            "Background enrichment: status unavailable (daemon does not expose the background consent preference)"
+            "Steep: status unavailable (daemon does not expose the background consent preference)"
         ),
-        Err(err) => println!("Background enrichment: status unavailable ({err})"),
+        Err(err) => println!("Steep: status unavailable ({err})"),
     }
+}
+
+/// One line for `wenlan status`: is Steep off, ready, or paused? The
+/// per-task breakdown stays in `wenlan steep status`.
+pub async fn print_steep_summary() {
+    let summary = match get_json("/api/config").await {
+        Ok(cfg) if cfg["background_ai_enabled"].as_bool() == Some(false) => "off".to_string(),
+        Ok(cfg) if supports_background_consent(&cfg) => match get_json("/api/config/routing").await
+        {
+            Ok(routing) => {
+                let modes = [&routing["everyday"], &routing["synthesis"]]
+                    .map(|route| route["mode"].as_str().unwrap_or("unsupported"));
+                if modes.contains(&"pinned_unavailable") {
+                    "paused (run `wenlan steep status`)".to_string()
+                } else if modes.iter().all(|mode| *mode == "unconfigured") {
+                    "off".to_string()
+                } else if modes.iter().all(|mode| *mode == "pinned") {
+                    "ready".to_string()
+                } else {
+                    "status unavailable (run `wenlan steep status`)".to_string()
+                }
+            }
+            Err(err) => format!("status unavailable ({err})"),
+        },
+        Ok(_) => "status unavailable (daemon does not expose the background consent preference)"
+            .to_string(),
+        Err(err)
+            if err
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_connect) =>
+        {
+            "unknown until Wenlan is running".to_string()
+        }
+        Err(err) => format!("status unavailable ({err})"),
+    };
+    println!("Steep: {summary}");
 }
 
 fn print_job_route(label: &str, route: &serde_json::Value) {

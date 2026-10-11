@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-//! `wenlan status` — show daemon, service, model, and key state.
+//! `wenlan status` — answer whether Wenlan is running (service, health, Steep).
+//! The full diagnosis (keys, models, reranker, logs) lives in `wenlan doctor`.
 
 use anyhow::Result;
 
@@ -37,7 +38,7 @@ pub async fn run(client: &WenlanClient, format: ResolvedFormat, quiet: bool) -> 
         ResolvedFormat::Table => {
             println!("Wenlan runtime");
             service::print_status().await?;
-            setup::print_runtime_status().await?;
+            setup::print_steep_summary().await;
         }
     }
     Ok(())

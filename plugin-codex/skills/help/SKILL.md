@@ -51,10 +51,10 @@ Open pages with /pages. Inspect history with:
 
 Optional models and keys do not enable background inference by themselves:
 
-  wenlan enrichment status        show Everyday + Synthesis as off/ready/paused
-  wenlan enrichment configure --everyday <source> --synthesis <source>
+  wenlan steep status             show Everyday + Synthesis as off/ready/paused
+  wenlan steep configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
-  wenlan enrichment disable       turn model-backed background work off
+  wenlan steep disable            turn model-backed background work off
 ```
 
 Only when the user explicitly asks whether an import/export is still running,

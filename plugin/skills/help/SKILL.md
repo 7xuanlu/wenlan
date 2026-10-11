@@ -69,17 +69,17 @@ Three classes of artifact:
   - pages:    synthesized wikis, DB + ~/.wenlan/pages/*.md projection
   - sessions: chronological narrative, ~/.wenlan/sessions/*.md only
 
-The local runtime must run at 127.0.0.1:7878. Hook prints "/wenlan:setup" if down.
+The local runtime must run at 127.0.0.1:7878. Hook prints "Wenlan is not running" and "/wenlan:setup" if down.
 
 Optional upgrades for richer distill cycles:
   wenlan models install           local Qwen, no API cost
   wenlan keys set anthropic       Anthropic API, higher quality
 
 Models and keys do not enable background inference by themselves:
-  wenlan enrichment status        show Everyday + Synthesis as off, ready, or paused
-  wenlan enrichment configure --everyday <source> --synthesis <source>
+  wenlan steep status             show Everyday + Synthesis as off, ready, or paused
+  wenlan steep configure --everyday <source> --synthesis <source>
                                   review the exact mapping, disclosure, and confirm
-  wenlan enrichment disable       turn model-backed background work off
+  wenlan steep disable            turn model-backed background work off
 ```
 
 ## Import progress (explicit only)
