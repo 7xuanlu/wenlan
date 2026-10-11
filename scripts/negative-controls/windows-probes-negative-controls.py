@@ -118,7 +118,7 @@ WHAT IS STUBBED, NAMED SO NO READER HAS TO INFER IT:
       against lib.ps1 on every run (SHIPPED_CHECK_RULES) and its outcomes are
       driven in real processes and then made to come out wrong
       (REPLICA_MUTATIONS).
-  wenlan.exe -- the product CLI, including the `search` verb the -ExpectFail row
+  wenlan.exe -- the product CLI, including the `recall` verb the -ExpectFail row
       runs, so a refusal after `background off` can be told from an answer.
 
 THE STUBS ARE CHECKED TO STILL BE THE STUBS, by the guard emitted into every
@@ -414,20 +414,20 @@ function wenlan.exe {
     $joined = ($Rest -join " ")
     if ($joined -like "background on*") { $script:CliDroveTask = "on"; return "Installed and started Windows scheduled task" }
     if ($joined -like "background off*") { $script:CliDroveTask = "off"; return "Background registration kept" }
-    # `search` is what the one shipped -ExpectFail row runs. After `background
+    # `recall` is what the one shipped -ExpectFail row runs. After `background
     # off` the CLI must REFUSE with the stopped marker instead of autostarting
     # the daemon, and the three things it can do instead are the three modes
     # here. A refusal is a NONZERO EXIT plus the marker text, which is why the
     # exit code is set the way a native command sets it -- `& wenlan.exe` is a
     # bare call in the shipped block, not one routed through Invoke-Native, so
     # its $LASTEXITCODE is exactly what Check reads.
-    if ($joined -like "search*") {
-        if ($script:CliSearchMode -eq "refuses") {
-            Write-Output "error: daemon stopped by 'wenlan background off'; run 'wenlan background on' to start it again"
+    if ($joined -like "recall*") {
+        if ($script:CliRecallMode -eq "refuses") {
+            Write-Output "error: Wenlan was switched off with 'wenlan background off' -- run 'wenlan background on' to turn it back on"
             $global:LASTEXITCODE = 1
             return
         }
-        if ($script:CliSearchMode -eq "fails-otherwise") {
+        if ($script:CliRecallMode -eq "fails-otherwise") {
             Write-Output "error: could not connect to 127.0.0.1:7878 after 3 attempts"
             $global:LASTEXITCODE = 1
             return
@@ -436,7 +436,7 @@ function wenlan.exe {
     return "wenlan.exe $joined"
 }
 $script:CliDroveTask = "none"
-$script:CliSearchMode = "succeeds"   # succeeds | refuses | fails-otherwise
+$script:CliRecallMode = "succeeds"   # succeeds | refuses | fails-otherwise
 
 # --- lib.ps1's Check, MODELLED, not summarised -------------------------------
 #
@@ -444,7 +444,7 @@ $script:CliSearchMode = "succeeds"   # succeeds | refuses | fails-otherwise
 # say "reduced to its PASS/FAIL rule", and the reduction had quietly dropped a
 # rule: `-ExpectFail` was declared and never read. `$status` consulted `$Expect`
 # alone, so the one shipped row that asserts a REFUSAL
-# -- `stopped-marker-error (wenlan.exe search x)` -- was judged by the rule for
+# -- `stopped-marker-error (wenlan.exe recall x)` -- was judged by the rule for
 # rows that assert a SUCCESS, which fails every nonzero block, including the
 # refusal that row exists to require. A parameter accepted and ignored is worse
 # than one not accepted at all: the call site reads as measured.
@@ -1464,8 +1464,8 @@ function schtasks.exe {
     # answer normally (the daemon is still up, or autostart fired), or fail for
     # an unrelated reason (which proves nothing about the marker). The default
     # mode is `succeeds`, so a case that wants a refusal has to ask for one.
-    "cli-search-refuses": '$script:CliSearchMode = "refuses"\n',
-    "cli-search-fails-otherwise": '$script:CliSearchMode = "fails-otherwise"\n',
+    "cli-recall-refuses": '$script:CliRecallMode = "refuses"\n',
+    "cli-recall-fails-otherwise": '$script:CliRecallMode = "fails-otherwise"\n',
 }
 
 # Emitted into every driver, immediately before the block under test.
@@ -1928,20 +1928,20 @@ CASES = [
     # whole review cycle without a single case noticing. These three are the
     # rule's three answers, and each of them is a different verdict: only the
     # first is the measured refusal the row claims.
-    ("stopped-marker-refusal-measured", "zip", ("cli-search-refuses",),
-     "stopped-marker-error (wenlan.exe search x)", "PASS",
-     "daemon stopped by 'wenlan background off'", "RC[0]"),
+    ("stopped-marker-refusal-measured", "zip", ("cli-recall-refuses",),
+     "stopped-marker-error (wenlan.exe recall x)", "PASS",
+     "switched off with 'wenlan background off'", "RC[0]"),
     # The CLI answered the search instead of refusing -- the daemon is still
     # reachable, or autostart brought it back. Nonzero-exit-and-the-marker is
     # the whole rule, and this is the half that fails on the exit code.
     ("stopped-marker-cli-answered-instead", "zip", (),
-     "stopped-marker-error (wenlan.exe search x)", "FAIL",
-     "expected nonzero exit with substring: daemon stopped by; got: wenlan.exe search x"),
+     "stopped-marker-error (wenlan.exe recall x)", "FAIL",
+     "expected nonzero exit with substring: switched off with; got: wenlan.exe recall x"),
     # ...and the half that fails on the text: the CLI did fail, for a reason
     # that says nothing about whether `background off` left a stopped marker.
-    ("stopped-marker-failed-for-another-reason", "zip", ("cli-search-fails-otherwise",),
-     "stopped-marker-error (wenlan.exe search x)", "FAIL",
-     "expected nonzero exit with substring: daemon stopped by; got: error: could not connect"),
+    ("stopped-marker-failed-for-another-reason", "zip", ("cli-recall-fails-otherwise",),
+     "stopped-marker-error (wenlan.exe recall x)", "FAIL",
+     "expected nonzero exit with substring: switched off with; got: error: could not connect"),
 
     # --- finding 3: the process liveness probe -------------------------
     ("app-exited", "nsis", ("proc-gone-table-good",),
@@ -2493,8 +2493,8 @@ CONTROLS = [
      "that answered the search after `background off` certifies the stopped "
      "marker instead of a refusal proving it",
      "zip",
-     ''' -ExpectFail "daemon stopped by" -Script { & wenlan.exe search x }''',
-     ''' -Expect "daemon stopped by" -Script { & wenlan.exe search x }''',
+     ''' -ExpectFail "switched off with" -Script { & wenlan.exe recall x }''',
+     ''' -Expect "switched off with" -Script { & wenlan.exe recall x }''',
      ["stopped-marker-refusal-measured", "stopped-marker-cli-answered-instead",
       "stopped-marker-failed-for-another-reason"]),
 
@@ -3994,26 +3994,26 @@ CHECK_RULE_DRIFT_FIXTURES = [
 # case for it belongs in CASES.
 REPLICA_CONTRACT_PROBES = (
     ("a single-pipeline -ExpectFail block that failed with the expected text",
-     '$script:CliSearchMode = "refuses"\n'
-     'Check -Name "probe" -ExpectFail "daemon stopped by" -Script { & wenlan.exe search x }\n',
-     "PASS", 1, "daemon stopped by"),
+     '$script:CliRecallMode = "refuses"\n'
+     'Check -Name "probe" -ExpectFail "switched off with" -Script { & wenlan.exe recall x }\n',
+     "PASS", 1, "switched off with"),
     ("an -ExpectFail block that SUCCEEDED",
-     'Check -Name "probe" -ExpectFail "daemon stopped by" -Script { & wenlan.exe search x }\n',
-     "FAIL", 0, "expected nonzero exit with substring: daemon stopped by"),
+     'Check -Name "probe" -ExpectFail "switched off with" -Script { & wenlan.exe recall x }\n',
+     "FAIL", 0, "expected nonzero exit with substring: switched off with"),
     ("an -ExpectFail block that failed with the WRONG text",
-     '$script:CliSearchMode = "fails-otherwise"\n'
-     'Check -Name "probe" -ExpectFail "daemon stopped by" -Script { & wenlan.exe search x }\n',
-     "FAIL", 1, "expected nonzero exit with substring: daemon stopped by"),
+     '$script:CliRecallMode = "fails-otherwise"\n'
+     'Check -Name "probe" -ExpectFail "switched off with" -Script { & wenlan.exe recall x }\n',
+     "FAIL", 1, "expected nonzero exit with substring: switched off with"),
     ("a MULTI-statement -ExpectFail block with nothing witnessing the reach",
-     '$script:CliSearchMode = "refuses"\n'
-     'Check -Name "probe" -ExpectFail "daemon stopped by" -Script '
-     '{ $q = "x"; & wenlan.exe search $q }\n',
+     '$script:CliRecallMode = "refuses"\n'
+     'Check -Name "probe" -ExpectFail "switched off with" -Script '
+     '{ $q = "x"; & wenlan.exe recall $q }\n',
      "FAIL", 2, "nothing witnesses that execution reached the construct under test"),
     ("...the same block, with Reached called immediately before the construct",
-     '$script:CliSearchMode = "refuses"\n'
-     'Check -Name "probe" -ExpectFail "daemon stopped by" -Script '
-     '{ $q = "x"; Reached "the CLI call"; & wenlan.exe search $q }\n',
-     "PASS", 1, "daemon stopped by"),
+     '$script:CliRecallMode = "refuses"\n'
+     'Check -Name "probe" -ExpectFail "switched off with" -Script '
+     '{ $q = "x"; Reached "the CLI call"; & wenlan.exe recall $q }\n',
+     "PASS", 1, "switched off with"),
     ("a fault raised by the harness\'s OWN output capture, not by the block",
      "$ErrorActionPreference = 'Stop'\n"
      '$obj = New-Object PSObject\n'

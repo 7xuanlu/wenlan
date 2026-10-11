@@ -12,6 +12,7 @@ import { clientIdentity } from "../../lib/remoteClient";
 import { relativeTime } from "../../lib/relativeTime";
 import { Button } from "./settings/primitives";
 import { Disclosure, InlineConfirm, RemoteErrorMessage, secondaryText } from "./remoteAccessParts";
+import { scopeLabel } from "./remoteScope";
 import { REMOTE_GRANTS } from "./useRemoteAccess";
 
 /** The list is quiet: a slow refresh, and a fast one only while a new app is expected. */
@@ -166,7 +167,7 @@ function GrantRow({ grant, language, busy, confirming, onAskRemove, onCancelRemo
       <Disclosure label={t("remoteAccess.details")}>
         <dl className="text-xs space-y-1 break-all text-[var(--mem-text-secondary)]">
           <div><dt className="inline">{t("remoteAccess.clientId")}: </dt><dd className="inline font-mono">{grant.clientId}</dd></div>
-          <div><dd className="break-words">{t("remoteAccess.sharing", { space: grant.space })}</dd></div>
+          <div><dd className="break-words">{t("remoteAccess.sharing", { space: scopeLabel(t, grant.space) })}</dd></div>
         </dl>
       </Disclosure>
     </li>

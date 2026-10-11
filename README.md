@@ -198,7 +198,7 @@ Connect your existing Obsidian vault as a read-only source without moving your n
 - **[Search by words and meaning](docs/technical-foundations.md#retrieval-pipeline):** Combine exact matches with local semantic search; graph connections can add relevant context.
 - **[Optional deeper search](docs/technical-foundations.md#optional-channels-and-defaults):** Search Pages and finer-grained Memories, with optional reranking to refine results.
 - **[Keep projects separate](https://wenlan.app/docs/spaces):** Use Spaces to choose which work, personal, client, or repository knowledge your AI searches.
-- **Web access (experimental):** Connect a supported web AI client to one approved Space while your computer is online. Queries and results pass through a relay; see [how access works and its privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
+- **Web access (experimental):** Connect a supported web AI client to your whole library, or to one Space you choose, while your computer is online. Queries and results pass through a relay; see [how access works and its privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 - **Connect your own tools:** Send prepared text, webpage content, or Memories through the local HTTP API. It accepts content, not URLs to fetch.
 
 ### Keep knowledge current

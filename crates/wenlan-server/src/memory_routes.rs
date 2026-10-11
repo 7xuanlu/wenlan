@@ -949,14 +949,14 @@ async fn handle_store_memory_inner(
             ),
             wenlan_core::refinery::RouteMode::Unconfigured => (
                 "paused".to_string(),
-                "Stored. Recall is available now; background enrichment is paused \
-             until you choose a model source."
+                "Stored. Recall is available now; Steep is paused until you \
+             choose a model source."
                     .to_string(),
             ),
             wenlan_core::refinery::RouteMode::PinnedUnavailable => (
                 "paused".to_string(),
-                "Stored. Recall is available now; background enrichment is paused \
-             because the selected model source is unavailable."
+                "Stored. Recall is available now; Steep is paused because the \
+             selected model source is unavailable."
                     .to_string(),
             ),
         }

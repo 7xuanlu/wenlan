@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::commands::service;
 
 pub(crate) const NO_SERVICE_HINT: &str =
-    "daemon not reachable and no background service is registered — run `wenlan background on`";
+    "Wenlan is not running and no background service is set up — run `wenlan background on`";
 
 pub(crate) fn autostart_allowed(env_no_autostart: Option<&str>, recovery_enabled: bool) -> bool {
     recovery_enabled && matches!(env_no_autostart, None | Some(""))
@@ -38,7 +38,7 @@ pub(crate) fn connect_failure_hint(base_url: &str) -> String {
         return format!("cannot connect to the Wenlan daemon at {base_url} (from WENLAN_HOST)");
     }
     let mut hint = format!(
-        "no Wenlan daemon is listening at {base_url} — run `wenlan status`; if Wenlan is \
+        "Wenlan is not running at {base_url} — run `wenlan status`; if Wenlan is \
          installed, `wenlan background on` starts it"
     );
     if std::env::var_os("WENLAN_NO_AUTOSTART").is_some_and(|value| !value.is_empty()) {
@@ -53,7 +53,7 @@ pub(crate) async fn recover(base_url: &str) -> Result<()> {
     }
     if service::autostart_off_marker_exists() {
         anyhow::bail!(
-            "daemon stopped by `wenlan background off` — run `wenlan background on` to enable it again"
+            "Wenlan was switched off with `wenlan background off` — run `wenlan background on` to turn it back on"
         );
     }
     if !service::is_installed() {
@@ -61,7 +61,7 @@ pub(crate) async fn recover(base_url: &str) -> Result<()> {
     }
 
     eprintln!(
-        "wenlan: daemon not reachable — starting {}…",
+        "wenlan: Wenlan is not running; starting it in the background ({})…",
         service::SERVICE_LABEL
     );
     service::start_registered(false).context("start registered daemon service")?;
@@ -102,7 +102,7 @@ mod tests {
     fn connect_failure_hint_names_the_next_command_for_a_loopback_daemon() {
         let hint = connect_failure_hint("http://127.0.0.1:1");
         assert!(
-            hint.starts_with("no Wenlan daemon is listening at http://127.0.0.1:1"),
+            hint.starts_with("Wenlan is not running at http://127.0.0.1:1"),
             "{hint}"
         );
         assert!(hint.contains("`wenlan background on`"), "{hint}");
@@ -131,7 +131,7 @@ mod tests {
     fn no_service_hint_is_actionable() {
         assert_eq!(
             NO_SERVICE_HINT,
-            "daemon not reachable and no background service is registered — run `wenlan background on`"
+            "Wenlan is not running and no background service is set up — run `wenlan background on`"
         );
     }
 

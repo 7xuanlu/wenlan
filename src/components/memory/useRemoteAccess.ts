@@ -5,8 +5,9 @@ import { listen } from "@tauri-apps/api/event";
 import {
   configureRemoteAccess, getRemoteAccessProfile, getRemoteAccessStatus, listSpaces,
   reconnectRemoteAccess, renewRemoteAccess, toggleRemoteAccess,
-  type RemoteAccessStatus,
+  type RemoteAccessStatus, type RemoteScope,
 } from "../../lib/tauri";
+import { WHOLE_LIBRARY, savedScope } from "./remoteScope";
 
 export const REMOTE_STATUS = ["remote-access-status"] as const;
 export const REMOTE_PROFILE = ["remote-access-profile"] as const;
@@ -26,7 +27,8 @@ export function useRemoteAccess({ active = true, currentSpace }: { active?: bool
   const spacesQuery = useQuery({ queryKey: ["spaces"], queryFn: listSpaces, enabled: active });
   const status = statusQuery.data;
   const profile = profileQuery.data;
-  const spaces = spacesQuery.data ?? [];
+  // `*` is the whole-library value; it is never offered as a Space.
+  const spaces = (spacesQuery.data ?? []).filter((item) => item.name !== WHOLE_LIBRARY);
 
   useEffect(() => {
     if (!active) return;
@@ -70,14 +72,16 @@ export function useRemoteAccess({ active = true, currentSpace }: { active?: bool
     nativeLoading: profileQuery.isPending || statusQuery.isPending,
     queryError: profileQuery.error ?? statusQuery.error ?? spacesQuery.error,
     defaultSpace,
+    /** What the saved profile shares, or null before anything is chosen. */
+    scope: savedScope(profile?.space),
     refresh,
     /**
-     * Saves the Space and turns Web access on. The saved settings are read again
-     * first: turning off just changed their revision, and a stale one is refused.
+     * Saves what to share and turns Web access on. The saved settings are read
+     * again first: turning off just changed their revision, and a stale one is refused.
      */
-    async switchOn(space: string) {
+    async switchOn(scope: RemoteScope) {
       const fresh = await getRemoteAccessProfile();
-      const saved = await configureRemoteAccess(space, fresh?.revision);
+      const saved = await configureRemoteAccess(scope, fresh?.revision);
       cache.setQueryData(REMOTE_STATUS, await toggleRemoteAccess(true, saved.revision));
     },
     async stop() {

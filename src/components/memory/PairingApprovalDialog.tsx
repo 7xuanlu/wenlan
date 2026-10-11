@@ -12,8 +12,10 @@ import {
 import { classifyPairingCode } from "../../lib/pairingCode";
 import { clientIdentity } from "../../lib/remoteClient";
 import { describeRemoteError } from "../../lib/remoteErrors";
-import { Button, Field, Select } from "./settings/primitives";
+import { Button } from "./settings/primitives";
 import { RemoteErrorMessage } from "./remoteAccessParts";
+import { RemoteScopeChooser } from "./RemoteScopeChooser";
+import { WHOLE_LIBRARY, type RemoteScope } from "./remoteScope";
 import { REMOTE_GRANTS, useRemoteAccess } from "./useRemoteAccess";
 import "./pairingApproval.css";
 
@@ -46,8 +48,6 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const bodyId = useId();
-  const spaceId = useId();
-  const [chosen, setChosen] = useState<string | null>(null);
   const [step, setStep] = useState<Step>({ kind: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [turningOn, setTurningOn] = useState(false);
@@ -55,7 +55,6 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
   // Once a decision is on its way, a refreshed profile must not start over.
   const decided = useRef(false);
 
-  const space = chosen ?? remote.defaultSpace;
   const revision = profile?.revision;
   const canLookUp = connected && Boolean(profile?.enabled) && !remote.pendingDisconnect && parsed.kind !== "invalid";
 
@@ -138,11 +137,11 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     }
   };
 
-  const turnOn = async () => {
+  const turnOn = async (scope: RemoteScope) => {
     setTurningOn(true);
     setTurnOnError(null);
     try {
-      await remote.switchOn(space);
+      await remote.switchOn(scope);
     } catch (error) {
       setTurnOnError(error);
     } finally {
@@ -186,20 +185,12 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     body = <>
       <p className="pairing-approval-body">{t("remoteAccess.offBody")}</p>
       <div className="pairing-approval-field">
-        {remote.spaces.length === 0
-          ? <p className="text-sm text-[var(--mem-text-secondary)]">{t("remoteAccess.noSpaces")}</p>
-          : <Field label={t("remoteAccess.spaceToShare")} htmlFor={spaceId}>
-              <Select value={space} disabled={turningOn} onChange={(event) => setChosen(event.target.value)}>
-                {remote.spaces.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
-              </Select>
-            </Field>}
+        <RemoteScopeChooser spaces={remote.spaces} defaultSpace={remote.defaultSpace} busy={turningOn}
+          disabled={!remote.ready} size="md" onChoose={(scope) => { void turnOn(scope); }} />
       </div>
       {turnOnError !== null && <div className="pairing-approval-error"><RemoteErrorMessage error={turnOnError} /></div>}
     </>;
-    actions = <>
-      <Button variant="secondary" disabled={turningOn} onClick={close}>{t("remoteAccess.cancel")}</Button>
-      <Button variant="primary" loading={turningOn} disabled={!space} onClick={() => { void turnOn(); }}>{t("remoteAccess.turnOn")}</Button>
-    </>;
+    actions = <Button variant="secondary" disabled={turningOn} onClick={close}>{t("remoteAccess.cancel")}</Button>;
   } else if (!connected) {
     title = t("remoteAccess.title");
     body = status?.status === "error"
@@ -230,7 +221,11 @@ function ApprovalDialog({ code, currentSpace }: { code: string; currentSpace?: s
     const unknown = identity?.kind === "unknown";
     title = t("remoteAccess.approveTitle", { name });
     body = <>
-      <p className="pairing-approval-body">{t("remoteAccess.approveBody", { space: profile?.space ?? "" })}</p>
+      <p className="pairing-approval-body">
+        {profile?.space === WHOLE_LIBRARY
+          ? t("remoteAccess.approveBodyWholeLibrary")
+          : t("remoteAccess.approveBody", { space: profile?.space ?? "" })}
+      </p>
       {host && <p className="pairing-approval-sends">{t("remoteAccess.sendsTo", { host })}</p>}
       {unknown && <p role="note" className="pairing-approval-warning">{t("remoteAccess.unknownWarning")}</p>}
     </>;

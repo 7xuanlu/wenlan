@@ -64,7 +64,7 @@ error. `status`, `background`, and `restart` skip autostart; set
 
 ### `wenlan status`
 
-Show background runtime, model, and API key state.
+Answers whether Wenlan is running: the background service, its health, and the Steep state. `wenlan doctor` has the full diagnosis (models, API keys, providers).
 
 ```bash
 wenlan status
@@ -100,22 +100,22 @@ Restart the Wenlan background process. Required after an update.
 wenlan restart
 ```
 
-### `wenlan enrichment <status|configure|disable>`
+### `wenlan steep <status|configure|disable>`
 
 Models and provider keys are capability only; they do not authorize automatic
 model calls. Inspect the two job groups, confirm exact hard-pinned sources, or
 turn model-backed background work off while keeping providers installed:
 
 ```bash
-wenlan enrichment status
-wenlan enrichment configure --everyday on-device --synthesis on-device
-wenlan enrichment disable
+wenlan steep status
+wenlan steep configure --everyday on-device --synthesis on-device
+wenlan steep disable
 ```
 
 `configure` shows what each job does and discloses cloud cost/data transfer or
 on-device CPU/GPU/RAM use before confirmation. An unavailable hard pin pauses;
 Wenlan never substitutes another provider. Deterministic storage, indexing, and
-sync continue when enrichment is off.
+sync continue when Steep is off. `wenlan enrichment` still works as a hidden alias and goes away next release.
 
 ### `wenlan doctor`
 
@@ -166,23 +166,14 @@ Use `--dry-run` to preview JSON config edits before writing them:
 wenlan connect cursor --dry-run
 ```
 
-### `wenlan search <query>`
-
-Search memories (vector + FTS hybrid).
-
-```bash
-wenlan search "embedding model"
-wenlan search "rust" --limit 5
-wenlan search "rust" --format json | jq '.results[].score'
-```
-
 ### `wenlan recall <query>`
 
-Search memories and return a ranked list plus optional supplemental pages (`POST /api/memory/search`).
+Search memories (vector + FTS hybrid) and return a ranked list plus optional supplemental pages (`POST /api/memory/search`). Results include compiled pages, and `--limit` caps the count.
 
 ```bash
 wenlan recall "what we agreed on for the API"
-wenlan recall "memory layer" --format json
+wenlan recall "embedding model" --limit 5
+wenlan recall "memory layer" --format json | jq '.results[].score'
 ```
 
 ### `wenlan brief`

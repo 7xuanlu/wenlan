@@ -13,7 +13,7 @@ beforeEach(() => {
 describe("remote reconnect fixture contract", () => {
   it("preserves the profile revision and grants with no off event", async () => {
     const { invokeRemoteFixture: invoke } = await import("./remote-access");
-    const configured = await invoke("configure_remote_access", { space: "Review workspace" }) as { revision: string };
+    const configured = await invoke("configure_remote_access", { scope: { kind: "space", name: "Review workspace" } }) as { revision: string };
     await invoke("toggle_remote_access", { enabled: true, expectedRevision: configured.revision });
     const before = await invoke("get_remote_access_profile") as { revision: string };
     await invoke("approve_remote_pairing", { expectedRevision: before.revision });
@@ -32,11 +32,33 @@ describe("remote reconnect fixture contract", () => {
   });
 });
 
+describe("whole-library fixture contract", () => {
+  it("saves the whole library as its own choice and refuses a Space named like it", async () => {
+    const { invokeRemoteFixture: invoke } = await import("./remote-access");
+    await expect(invoke("configure_remote_access", { scope: { kind: "space", name: "*" } })).rejects.toThrow("Unknown Space");
+    const configured = await invoke("configure_remote_access", { scope: { kind: "wholeLibrary" } }) as { revision: string; space: string };
+    expect(configured.space).toBe("*");
+    await invoke("toggle_remote_access", { enabled: true, expectedRevision: configured.revision });
+    const on = await invoke("get_remote_access_profile") as { revision: string };
+    await expect(invoke("reconnect_remote_access", { expectedRevision: on.revision })).resolves.toMatchObject({ status: "connected" });
+  });
+
+  it("seeds a whole-library scenario and a library with no Spaces", async () => {
+    window.history.replaceState({}, "", "/?remoteScenario=apps&remoteScope=whole");
+    let fixture = await import("./remote-access");
+    expect(await fixture.invokeRemoteFixture("get_remote_access_profile")).toMatchObject({ space: "*" });
+    vi.resetModules();
+    window.history.replaceState({}, "", "/?remoteSpaces=none");
+    fixture = await import("./remote-access");
+    expect(await fixture.invokeRemoteFixture("list_spaces")).toEqual([]);
+  });
+});
+
 describe("pairing request fixture contract", () => {
   async function turnedOn(search = "") {
     window.history.replaceState({}, "", search ? `/?${search}` : "/");
     const { invokeRemoteFixture: invoke } = await import("./remote-access");
-    const configured = await invoke("configure_remote_access", { space: "Review workspace" }) as { revision: string };
+    const configured = await invoke("configure_remote_access", { scope: { kind: "space", name: "Review workspace" } }) as { revision: string };
     await invoke("toggle_remote_access", { enabled: true, expectedRevision: configured.revision });
     const current = await invoke("get_remote_access_profile") as { revision: string };
     return { invoke, revision: current.revision };

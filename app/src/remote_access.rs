@@ -292,6 +292,22 @@ fn validate_reconnect_profile(
 
 /// A reconnect ticket binds transport cleanup and restart to the same saved intent.
 /// It never enables, rotates, or revokes the persisted profile.
+/// Whether a saved scope can be shared now. The whole library names no Space,
+/// so it never asks the daemon; one Space must still exist.
+pub(crate) async fn confirm_saved_scope(
+    client: &crate::api::WenlanClient,
+    saved_space: &str,
+) -> Result<(), String> {
+    if saved_space == crate::remote_relay::WHOLE_LIBRARY_SPACE {
+        return Ok(());
+    }
+    let spaces: Vec<wenlan_types::Space> = client.get_json("/api/spaces").await?;
+    if !spaces.iter().any(|space| space.name == saved_space) {
+        return Err("The selected Space no longer exists".into());
+    }
+    Ok(())
+}
+
 pub(crate) async fn prepare_reconnect(
     app_handle: &tauri::AppHandle,
     expected_revision: String,
@@ -303,10 +319,7 @@ pub(crate) async fn prepare_reconnect(
         relay_runtime::storage(|store| store.load()).await?,
         &expected_revision,
     )?;
-    let spaces: Vec<wenlan_types::Space> = client.get_json("/api/spaces").await?;
-    if !spaces.iter().any(|space| space.name == profile.space()) {
-        return Err("The selected Space no longer exists".into());
-    }
+    confirm_saved_scope(&client, profile.space()).await?;
     // Space lookup may race with Stop or a profile edit. Reject before touching
     // transport, and retain the generation guard through cleanup and restart.
     validate_reconnect_profile(
@@ -1225,9 +1238,9 @@ async fn spawn_mcp(
                     .shell()
                     .sidecar(MCP_SIDECAR_NAME)
                     .map_err(|e| format!("{} sidecar not found: {}", MCP_SIDECAR_NAME, e))?
-                    .args(relay_runtime::mcp_args(&origin_url, port))
+                    .args(relay_runtime::mcp_args(&origin_url, port, profile))
                     .env(relay_runtime::TOKEN_ENV, profile.backend_token())
-                    .env("WENLAN_SPACE", profile.space())
+                    .envs(relay_runtime::mcp_scope_env(profile))
                     .env("WENLAN_NO_AUTOSTART", "1")
                     .spawn()
                     .map_err(|e| format!("Failed to spawn {} serve: {}", MCP_SIDECAR_NAME, e))?;
@@ -1684,6 +1697,54 @@ mod tests {
             }),
         }))
         .unwrap()
+    }
+
+    /// Serves `/api/spaces` with one Space named `work` and counts requests.
+    async fn serve_one_space() -> (
+        crate::api::WenlanClient,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        let body = serde_json::json!([{
+            "id": "s1", "name": "work", "description": null, "suggested": false,
+            "starred": false, "sort_order": 0, "memory_count": 0, "entity_count": 0,
+            "created_at": 0.0, "updated_at": 0.0,
+        }])
+        .to_string();
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut buf = [0_u8; 2048];
+                let _ = stream.read(&mut buf).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        (
+            crate::api::WenlanClient::with_base_url(format!("http://{addr}")),
+            hits,
+        )
+    }
+
+    #[tokio::test]
+    async fn saved_scope_checks_one_space_and_never_asks_about_the_whole_library() {
+        let (client, hits) = serve_one_space().await;
+        assert_eq!(confirm_saved_scope(&client, "*").await, Ok(()));
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(confirm_saved_scope(&client, "work").await, Ok(()));
+        assert_eq!(
+            confirm_saved_scope(&client, "gone").await,
+            Err("The selected Space no longer exists".to_string())
+        );
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]

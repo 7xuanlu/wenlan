@@ -108,9 +108,9 @@ PAGES_SHARED_GUARDRAILS = [
     'Resolve the page ID first with `wenlan pages "<query-or-filename>" --resolve-id`.',
 ]
 ENRICHMENT_CONSENT_GUARDRAILS = [
-    "wenlan enrichment status",
-    "wenlan enrichment configure --everyday <source> --synthesis <source>",
-    "wenlan enrichment disable",
+    "wenlan steep status",
+    "wenlan steep configure --everyday <source> --synthesis <source>",
+    "wenlan steep disable",
 ]
 
 

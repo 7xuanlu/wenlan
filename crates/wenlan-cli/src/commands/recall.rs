@@ -7,32 +7,30 @@ use wenlan_types::responses::SearchMemoryResponse;
 use crate::client::WenlanClient;
 use crate::output::{print_json, ResolvedFormat};
 
-const DEFAULT_RECALL_LIMIT: usize = 20;
-
 pub async fn run(
     client: &WenlanClient,
     format: ResolvedFormat,
     quiet: bool,
     query: String,
+    limit: usize,
 ) -> Result<()> {
-    let response = client.recall(query, DEFAULT_RECALL_LIMIT).await?;
+    let response = client.recall(query, limit).await?;
     if quiet {
         return Ok(());
     }
     match format {
         ResolvedFormat::Json => print_json(&response)?,
-        ResolvedFormat::Table => print_table(&response),
+        ResolvedFormat::Table => print!("{}", format_table(&response)),
     }
     Ok(())
 }
 
-fn print_table(response: &SearchMemoryResponse) {
+fn format_table(response: &SearchMemoryResponse) -> String {
     if response.results.is_empty() {
-        println!("(no recalled memories)");
-        return;
+        return "(no recalled memories)\n".to_string();
     }
-    println!(
-        "{} recalled memor{} in {:.0}ms",
+    let mut output = format!(
+        "{} recalled memor{} in {:.0}ms\n",
         response.results.len(),
         if response.results.len() == 1 {
             "y"
@@ -41,7 +39,7 @@ fn print_table(response: &SearchMemoryResponse) {
         },
         response.took_ms
     );
-    for result in response.results.iter().take(10) {
+    for result in &response.results {
         let title = if result.title.is_empty() {
             result.content.lines().next().unwrap_or("(no title)")
         } else {
@@ -52,6 +50,13 @@ fn print_table(response: &SearchMemoryResponse) {
         } else {
             title.to_string()
         };
-        println!("  [{:.3}] {} ({})", result.score, title, result.source_id);
+        output.push_str(&format!(
+            "  [{:.3}] {} ({})\n",
+            result.score, title, result.source_id
+        ));
     }
+    output.push_str(&super::format_supplemental_pages(
+        response.supplemental_pages.as_deref(),
+    ));
+    output
 }

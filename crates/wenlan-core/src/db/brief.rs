@@ -358,6 +358,9 @@ impl MemoryDB {
             if let Some(id) = existing {
                 id
             } else {
+                // A Brief update creates its Space on first use; apply the same
+                // reserved names `create_space` rejects.
+                super::reject_reserved_space_name(&request.space)?;
                 let id = uuid::Uuid::new_v4().to_string();
                 tx.execute(
                     "INSERT INTO spaces

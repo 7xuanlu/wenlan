@@ -143,6 +143,23 @@ async fn brief_read_without_stored_brief_is_write_free() {
 }
 
 #[tokio::test]
+async fn brief_update_cannot_create_the_whole_library_scope_as_a_space() {
+    let (db, _temp) = test_db().await;
+    let error = db
+        .apply_brief_update(&update_request(
+            " * ",
+            "reserved",
+            vec![add("ship the release", BriefItemState::Active)],
+        ))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, crate::error::WenlanError::Validation(_)));
+    assert!(db.get_space("*").await.unwrap().is_none());
+    assert!(brief_space_id(&db).await.is_none());
+}
+
+#[tokio::test]
 async fn brief_first_update_creates_brief_and_stable_item_id() {
     let (db, _temp) = test_db().await;
     let receipt = db

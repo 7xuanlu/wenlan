@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8a2a6a1713d374177d0d70418acfc3793d2a31bab4dd18308765e7d86907a0a7 -->
+<!-- README_SYNC: source=README.md sha256=1516bfcedcc15ee5fdfb0e9baaecc62912d08a21225ce651560e1a92367f2192 -->
 
 <p align="center">
   <picture>
@@ -202,7 +202,7 @@ Wenlan 把整理成页、跟踪来源变化、更新相关内容和保留修订�
 - **[原词与语义搜索](docs/technical-foundations.md#retrieval-pipeline)：** 结合精确匹配与本地语义搜索，图谱关系可补充相关背景。
 - **[需要时，搜索得更细](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选择搜索页面与更细致的记忆，并重新排序结果。
 - **[不同项目，分开管理](https://wenlan.app/docs/spaces)：** 用空间选择 AI 这次要搜索的工作、个人、客户或代码库知识。
-- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你授权的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
+- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你的整个资料库，或你选择的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
 - **接入自己的工具：** 通过本地 HTTP API 传入准备好的文本、网页内容或记忆；它接收内容，不会代为抓取网址。
 
 ### 持续更新与维护

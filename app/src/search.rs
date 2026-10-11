@@ -521,13 +521,11 @@ pub async fn get_remote_access_profile(
 pub async fn configure_remote_access(
     state: tauri::State<'_, State>,
     expected_revision: Option<String>,
-    space: String,
+    scope: crate::remote_relay::ScopeChoice,
 ) -> Result<crate::remote_relay::store::ProfileView, String> {
+    let space = scope.saved_space()?.to_string();
     let client = daemon_client(&state).await;
-    let spaces: Vec<Space> = client.get_json("/api/spaces").await?;
-    if !spaces.iter().any(|existing| existing.name == space) {
-        return Err("The selected Space no longer exists".into());
-    }
+    crate::remote_access::confirm_saved_scope(&client, &space).await?;
     crate::remote_relay::runtime::storage(move |store| {
         store
             .configure(expected_revision.as_deref(), &space)

@@ -1495,6 +1495,28 @@ pub(crate) fn entity_establish_min_memories() -> usize {
 /// this exact string as a user-supplied name, keeping the reservation closed.
 pub(crate) const UNFILED_SPACE_ID: &str = "00000000-0000-4000-8000-000000000001";
 
+/// Scope value that means "the whole library" when Web access carries a Space
+/// string (app profile, relay grant, `/connector-info`). It is never a legal
+/// Space name, so a one-Space grant can never be read as the whole library.
+pub(crate) const WHOLE_LIBRARY_SCOPE: &str = "*";
+
+/// Rejects the names a user may not give a Space: the uncategorized sentinel
+/// and the whole-library scope value.
+fn reject_reserved_space_name(name: &str) -> Result<(), WenlanError> {
+    let name = name.trim();
+    if name == UNFILED_SPACE_ID {
+        return Err(WenlanError::Validation(format!(
+            "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
+        )));
+    }
+    if name == WHOLE_LIBRARY_SCOPE {
+        return Err(WenlanError::Validation(format!(
+            "space name {WHOLE_LIBRARY_SCOPE:?} is reserved for whole-library web access"
+        )));
+    }
+    Ok(())
+}
+
 /// The row-level fences a machine writer snapshots BEFORE reading evidence,
 /// read in one statement so they describe the same row state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24636,12 +24658,9 @@ impl MemoryDB {
         // The reserved sentinel id is not a legal user space name -- allowing it
         // would let a user re-open the exact collision M1 closed (a real space
         // whose name equals the stored uncategorized token). The word "unfiled"
-        // stays fully legal; only this UUID string is reserved.
-        if name.trim() == UNFILED_SPACE_ID {
-            return Err(WenlanError::Validation(format!(
-                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
-            )));
-        }
+        // stays fully legal; only this UUID string is reserved. `*` is reserved
+        // for whole-library web access.
+        reject_reserved_space_name(name)?;
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp() as f64;
@@ -24692,13 +24711,9 @@ impl MemoryDB {
     ) -> Result<Space, WenlanError> {
         let _space_write_guard = self.space_write_lock.lock().await;
         // Renaming a space TO the reserved sentinel id would re-open the M1
-        // collision (see `create_space`); reject it. The word "unfiled" stays a
-        // legal rename target.
-        if new_name.trim() == UNFILED_SPACE_ID {
-            return Err(WenlanError::Validation(format!(
-                "space name {UNFILED_SPACE_ID:?} is reserved for the uncategorized sentinel"
-            )));
-        }
+        // collision (see `create_space`); reject it, and `*`. The word "unfiled"
+        // stays a legal rename target.
+        reject_reserved_space_name(new_name)?;
         let conn = self.conn.lock().await;
         let now_ts = chrono::Utc::now().timestamp();
         let now = now_ts as f64;
