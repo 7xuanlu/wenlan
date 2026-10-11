@@ -2383,7 +2383,7 @@ jobs:
   # with no matching diff must be skipped.
   conclusion:
     name: conclusion
-    needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, relay-check, runtime-image, app-check]
+    needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, relay-check, runtime-image, app-check, app-e2e]
     if: always() && !cancelled()
     runs-on: ubuntu-24.04
     steps:
@@ -2437,6 +2437,7 @@ jobs:
           expect_job relay-check '${{ needs.detect-changes.outputs.relay == 'true' || github.event_name == 'workflow_dispatch' }}' '${{ needs.relay-check.result }}'
           expect_job runtime-image '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.runtime-image == 'true' }}' '${{ needs.runtime-image.result }}'
           expect_job app-check '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true' }}' '${{ needs.app-check.result }}'
+          expect_job app-e2e '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true' }}' '${{ needs.app-e2e.result }}'
 
   plugin:
     needs: detect-changes
@@ -2581,20 +2582,47 @@ jobs:
         run: pnpm review:build && pnpm review:verify
       - name: Install Playwright Chromium
         run: pnpm exec playwright install chromium
+      - name: Review e2e
+        run: pnpm test:e2e:review
+
+  # Frontend e2e, split out of app-check. It needs only Node, pnpm and Chromium
+  # (Vite serves the app), so it starts beside app-check instead of after its
+  # Rust and unit steps, and the suite is sharded across runners. Each shard
+  # keeps playwright.config.ts's single worker, so no two specs ever share a
+  # runner. macos-14 because the approved screenshots are macOS renders. Same
+  # gate as app-check.
+  app-e2e:
+    name: app-e2e (shard ${{ matrix.shard }}/4)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true'
+    runs-on: macos-14
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: pnpm
+      - name: Install frontend dependencies
+        run: pnpm install
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install chromium
       - name: Frontend e2e
-        run: pnpm test:e2e
+        run: pnpm test:e2e --shard=${{ matrix.shard }}/4
       # Keep rendered proof as a run artifact, never as new screenshots in Git.
-      # Upload before Review e2e resets Playwright's output directory.
       - name: Desktop UI evidence
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
-          name: desktop-ui-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: desktop-ui-evidence-${{ github.run_id }}-${{ github.run_attempt }}-shard-${{ matrix.shard }}
           path: test-results/
           if-no-files-found: ignore
           retention-days: 14
-      - name: Review e2e
-        run: pnpm test:e2e:review
 
   # Manual-only. Proves the desktop app builds and bundles on Windows and hands
   # back an installer you can actually run, without cutting a release. The
