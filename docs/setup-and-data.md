@@ -89,6 +89,8 @@ Your pages and session notes are Markdown files; memories and the graph live in 
 
 Quit the app and stop the background service before copying these folders. Include any custom page or data folders you configured. A wiki export is not a full database backup.
 
+Wenlan does not put `~/.wenlan` under version control. Page history lives in Wenlan's own revisions (`wenlan pages "<query>" --print` shows a page with its sources). If you also want a git history of the Markdown files, run `git init` in `~/.wenlan/pages` yourself and commit when you like; Wenlan never touches that repository.
+
 If you upgraded from Origin, also check `~/.origin/` and the sibling `origin` platform data folder for older copies. Include those when backing up old material, or remove them only if you intend to delete it.
 
 ### Uninstalling
