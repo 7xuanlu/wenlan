@@ -275,7 +275,7 @@ def validate_pages_skill() -> None:
     text = path.read_text(encoding="utf-8")
     required = [
         "wenlan pages",
-        "Never read a page body",
+        "Do not read a page body unless the user asks to see it here",
         "Do not use a picker",
         "If several pages match, print the CLI output",
         "If `wenlan` is not found, tell the user to run `/setup`",
