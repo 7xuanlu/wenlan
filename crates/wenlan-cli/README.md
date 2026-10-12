@@ -127,7 +127,7 @@ wenlan curate
 
 **`wenlan lint`**
 
-Check memory, Pages, runtime, and operation health through the daemon.
+Check the health of memories, pages, and the running Wenlan; report, then resolve findings safely.
 
 ```bash
 wenlan lint
@@ -192,7 +192,7 @@ wenlan steep disable
 `configure` shows what each job does and discloses cloud cost/data transfer or
 on-device CPU/GPU/RAM use before confirmation. An unavailable hard pin pauses;
 Wenlan never substitutes another provider. Deterministic storage, indexing, and
-sync continue when Steep is off. `wenlan enrichment` still works as a hidden alias and goes away next release.
+sync continue when Steep is off. `wenlan enrichment` still works as a hidden alias; its removal, together with the hidden `search` subcommand, is tracked in [wenlan-app/wenlan#859](https://github.com/wenlan-app/wenlan/issues/859).
 
 **`wenlan doctor`**
 
@@ -250,7 +250,7 @@ wenlan sources add ~/Notes/project.md
 
 **`wenlan outbox <status|drain>`**
 
-Inspect or drain writes queued while the daemon was unreachable.
+Inspect or sync notes saved locally while Wenlan was not running.
 
 ```bash
 wenlan outbox status
@@ -417,7 +417,7 @@ Arguments:
 
 ### `wenlan lint`
 
-Check memory, Pages, runtime, and operation health through the daemon.
+Check the health of memories, pages, and the running Wenlan; report, then resolve findings safely.
 
 ```text
 wenlan lint [OPTIONS]
@@ -432,7 +432,7 @@ Options:
 
 ### `wenlan spaces`
 
-Manage memory spaces (list, add, default, move, show).
+Manage Spaces, the separate wikis Wenlan keeps (list, add, default, move, show).
 
 ```text
 wenlan spaces [OPTIONS] <COMMAND>
@@ -507,7 +507,7 @@ Arguments:
 
 ### `wenlan setup`
 
-Guided setup for local memory, a local model, or an Anthropic key.
+Guided setup: get Wenlan running, optionally with a local model or an Anthropic key.
 
 ```text
 wenlan setup [OPTIONS]
@@ -746,7 +746,7 @@ Options:
 
 ### `wenlan outbox`
 
-Inspect or drain writes queued while the daemon was unreachable.
+Inspect or sync notes saved locally while Wenlan was not running.
 
 ```text
 wenlan outbox [OPTIONS] <COMMAND>

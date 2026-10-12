@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=55ee0cc34f8a5afcb717e482783438113936d5f7d20f54c77f0f42bc60559663 -->
+<!-- README_SYNC: source=README.md sha256=86e64fb75b1e9024388a083fb96fdd6c33f0aa31522955381306ce2c44bee1da -->
 
 <p align="center">
   <picture>
@@ -218,13 +218,13 @@ La organización y las actualizaciones de Páginas en segundo plano son opcional
 - **[Organiza el conocimiento guardado](docs/technical-foundations.md#typed-memory-schema):** Un modelo configurado puede añadir tipos, detalles estructurados, fechas relevantes, etiquetas, pistas de búsqueda y enlaces del grafo a las Memorias.
 - **Actualizaciones respaldadas por citas:** La actualización automática rechaza borradores con citas insuficientes. Las Páginas generadas por IA pueden actualizarse; los cambios en las que has editado se proponen para revisión.
 - **[Revisa cuando hace falta criterio](https://wenlan.app/docs/review-and-trust):** Revisa conflictos protegidos, cambios de Páginas, fusiones de entidades y vocabulario nuevo.
-- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, el enriquecimiento y las actualizaciones de Páginas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
+- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, Steep (el enriquecimiento en segundo plano) y las actualizaciones de Páginas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
 
 ### Conserva tus datos y el control
 
 - **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Páginas Markdown, citas, revisiones, historial de git y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
 - **Llévate tu wiki:** Exporta las Páginas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
-- **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. El enriquecimiento y la síntesis opcionales pueden usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
+- **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. Steep, el enriquecimiento y la síntesis opcionales en segundo plano, puede usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
 - **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
 
 **Empieza con una nota que quieras conservar.** [Primeros pasos](#start-in-30-seconds). Si prefieres probarlo más adelante, guarda este repositorio con una estrella.

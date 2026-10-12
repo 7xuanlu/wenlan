@@ -6070,6 +6070,64 @@ mod tests {
         );
     }
 
+    /// The README's Tools section is prose, not generated, so pin the two
+    /// facts in it that can drift: every backticked tool name in the table
+    /// must be a registered tool, and the "locked at exactly N tools" count
+    /// must equal what the router registers.
+    #[test]
+    fn readme_tool_table_names_registered_tools() {
+        let readme = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md"),
+        )
+        .expect("crates/wenlan-mcp/README.md is readable");
+        let registered: std::collections::BTreeSet<String> = WenlanMcpServer::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+
+        let tools_section = readme
+            .split("\n## Tools\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .expect("README has a `## Tools` section");
+
+        let table_names: Vec<&str> = tools_section
+            .lines()
+            .filter(|line| line.starts_with("| `"))
+            .map(|line| {
+                line.trim_start_matches("| `")
+                    .split('`')
+                    .next()
+                    .unwrap_or("")
+            })
+            .collect();
+        assert!(
+            table_names.len() >= 10,
+            "expected the README tool table, found {} rows",
+            table_names.len()
+        );
+        for name in &table_names {
+            assert!(
+                registered.contains(*name),
+                "README tool table lists `{name}`, which is not a registered tool"
+            );
+        }
+
+        let locked_at = tools_section
+            .split("locked at exactly ")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .and_then(|digits| digits.parse::<usize>().ok())
+            .expect("README states `locked at exactly N tools`");
+        assert_eq!(
+            locked_at,
+            registered.len(),
+            "README says the surface is locked at {locked_at} tools but the router registers {}",
+            registered.len()
+        );
+    }
+
     #[test]
     fn instructions_mention_cumulative_knowledge() {
         assert!(

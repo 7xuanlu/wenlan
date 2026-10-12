@@ -59,6 +59,8 @@ Memories and the graph live in a local database; location in docs/setup-and-data
 
 View it without a GUI:
 
+  wenlan pages                     list recent pages
+  wenlan pages "<query>" --print   read one page and its sources in the terminal
   open ~/.wenlan/                  browse in Finder
   code ~/.wenlan/                  open in VS Code
   ln -s ~/.wenlan/pages ~/Vault/wenlan   # symlink into Obsidian for graph view

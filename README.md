@@ -213,13 +213,13 @@ Optional background organization and Page updates need a [configured model](#mod
 - **[Organize saved knowledge](docs/technical-foundations.md#typed-memory-schema):** A configured model can add types, structured details, relevant dates, tags, search cues, and graph links to Memories.
 - **Updates backed by sources:** Automatic refresh rejects drafts with insufficient citations. AI-generated Pages can update; changes to Pages you have edited become review proposals.
 - **[Review where judgment matters](https://wenlan.app/docs/review-and-trust):** Review protected conflicts, Page revisions, entity merges, and new vocabulary.
-- **See what is happening:** Check progress and blockers in Activity. Configured sync, enrichment, and eligible Page updates can continue after the app window closes while the local service runs.
+- **See what is happening:** Check progress and blockers in Activity. Configured sync, Steep (background enrichment), and eligible Page updates can continue after the app window closes while the local service runs.
 
 ### Keep ownership and control
 
 - **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Pages, citations, revisions, git history, and Obsidian exports; Memories and graph data live in local libSQL.
 - **Take your wiki with you:** Export eligible Pages across Spaces as an OKF v0.2 wiki from Settings or the CLI. This is a wiki export, not a full database backup.
-- **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Optional enrichment and synthesis can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
+- **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Steep, the optional background enrichment and synthesis, can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.
 
 **Start with a note you want to keep.** [Get started](#start-in-30-seconds). Star this repo if you'd like to come back and try it later.
