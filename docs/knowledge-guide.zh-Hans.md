@@ -105,13 +105,11 @@ Capture 与明确的 supersession 属于核心流程。模型支持的阶段只�
 长期知识保留为普通文件，不被锁在专有编辑器格式里：
 
 - **纯文本文件：** 页面与 session notes 都以 Markdown 保存在 `~/.wenlan/`。
-- **可检查的历史：** Distill 与 handoff 可以把逻辑上属于同一批的文件提交到本地 git repository。
+- **可检查的历史：** 每一页都保留修订记录（app 里可看，MCP 有 `get_page_revisions`）；而且全部都是纯文本文件，想要的话可以自己把 `~/.wenlan` 纳入版本控制。
 - **与 Obsidian 共存：** Wenlan 把现有 vault 当作来源读取。你可以把 `~/.wenlan/pages/` symlink 到 vault，或从桌面 app 导出页面；你的编辑仍由你拥有，之后的机器更新会成为可审核的修订建议。
 
-本地历史可以直接检查：
+不开 app 也能读页面：
 
 ```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
+$ wenlan pages "embedding work" --print
 ```

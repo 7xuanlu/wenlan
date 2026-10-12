@@ -5,7 +5,7 @@
     "url": "https://github.com/7xuanlu"
   },
   "metadata": {
-    "description": "Wenlan: a local-first memory layer for Claude Code. Source-cited wiki pages your agents build and refresh between sessions."
+    "description": "Wenlan: a living knowledge base your agents build as they work. Source-cited wiki pages that refresh between sessions."
   },
   "plugins": [
     {

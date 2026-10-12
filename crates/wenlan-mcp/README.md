@@ -13,7 +13,7 @@ wenlan connect codex              # or: claude-code, cursor, claude-desktop, vsc
 wenlan connect cursor --dry-run   # preview before editing JSON config
 ```
 
-MCP-only setup gives agents tools for capture, recall, a Space-owned Brief, and page distillation. It does not install Claude Code slash skills like `/brief`, `/handoff`, `/distill`, or `/setup`; use the Wenlan plugin for that workflow.
+MCP-only setup gives agents the whole tool surface: capture and recall, reading and writing wiki pages, the Space-owned Brief with `update_brief` for handoff, and page distillation. It does not install the Claude Code slash skills (`/brief`, `/handoff`, `/distill`, `/setup`), which wrap those same tools in a guided flow; install the Wenlan plugin if you want them.
 
 If you only need the raw MCP connector config, add this to your MCP client:
 
@@ -73,7 +73,7 @@ queue.
 | `capture` | Save one durable memory and return its explicit `source_memory_id`. |
 | `recall` | Search memories and pages by natural-language query. |
 | `distill` | Trigger page distillation for new clusters or a specific `page_id`. |
-| `list_pending` | List unconfirmed memories waiting for review. |
+| `list_pending` | List pending captures waiting for review. |
 | `confirm_memory` | Confirm a pending memory by `source_id`. |
 | `forget` | Delete a memory by ID. Destructive. |
 | `list_refinements` | Explicitly inspect the daemon's unique proposal queue, including `vocab_promote`; never polled ambiently. |
@@ -157,24 +157,15 @@ authentication implementation, or approval to upload or submit the draft.
 
 ## Setup Modes
 
-Wenlan works immediately in **local memory** mode: storage, search, recall, and MCP memory are available without a local model or API key.
+Wenlan works immediately: storage, search, recall, pages your agent writes, and every MCP tool need no local model or API key.
 
-Users can opt into more expensive distill cycles:
-
-- **On-device model:** private extraction and distillation after `wenlan models install`.
-- **Anthropic key:** richer extraction and page synthesis after `wenlan keys set anthropic`.
+Steep, the optional background upkeep (automatic extraction and page refresh), stays off until you turn it on with `wenlan steep configure`. It needs a model to run: `wenlan models install` provides an on-device one and `wenlan keys set anthropic` an API-backed one, but installing either does not turn Steep on.
 
 ## Agent Guidance
 
-The Standard profile ships tool instructions that tell agents to capture durable state proactively:
+The server instructions tell agents to work wiki-first: read the Brief and the relevant pages before answering, write what they learn back, and hand off through `update_brief`. The capture policy (one idea per capture; include the why; name people, projects, and tools; omit `memory_type` unless certain; never store tool output, logs, or filler) lives in the `capture` tool description, so every client sees it at the point of use.
 
-- One idea per capture.
-- Include the why, not just the what.
-- Name people, projects, and tools explicitly.
-- Omit `memory_type` unless the agent is certain.
-- Do not store tool output, command logs, filler, or transient task state.
-
-See [`src/tools.rs`](src/tools.rs) for the full instructions.
+See [`src/tools.rs`](src/tools.rs) for the exact text.
 
 ## Links
 

@@ -199,6 +199,5 @@ action, or genuine durability ambiguity.
 
 Report capture counts (stored vs queued), session-log path,
 applied/conflicted/queued Brief deltas, Brief version or outbox path, and
-projection path or warning. When anything queued, add: `N handoff write(s)
-queued in the outbox — they apply when the daemon is back (`wenlan outbox
-status`).`
+projection path or warning. When anything queued, add: `N handoff note(s)
+saved locally — they sync when Wenlan starts (`wenlan outbox status`).`

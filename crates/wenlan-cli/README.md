@@ -1,6 +1,6 @@
 # wenlan-cli
 
-Wenlan's product CLI. Use it to set up the local runtime, control background mode, search and recall memory, capture new memories, configure models/API keys, and run doctor checks.
+Wenlan's command line. Wenlan is a personal wiki your AI tools keep up to date; the CLI is how you capture, recall, hand off, and keep the pages healthy from a terminal, plus set up and check the local runtime.
 
 License: Apache-2.0.
 

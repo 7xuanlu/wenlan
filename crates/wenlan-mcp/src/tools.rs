@@ -3000,7 +3000,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "List unconfirmed memories pending review. Use when the user wants to audit what got captured before it becomes authoritative — typical phrases: 'review pending', 'show unconfirmed', 'what got captured'. Pair with `confirm_memory` to accept and `forget` to reject.",
+        description = "List pending captures: memories waiting for review before they count. Use when the user wants to audit what got captured — typical phrases: 'review pending', 'pending captures', 'what got captured'. Pair with `confirm_memory` to accept and `forget` to reject.",
         annotations(
             title = "List pending",
             read_only_hint = true,
