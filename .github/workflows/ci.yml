@@ -2424,7 +2424,7 @@ jobs:
   # watch between stages; `conclusion` appearing is the only end-of-run signal.
   merge-group-fail-fast:
     name: merge-group-fail-fast
-    if: github.event_name == 'merge_group' || github.head_ref == 'ci/fail-fast-proof'
+    if: github.event_name == 'merge_group'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -2476,7 +2476,7 @@ jobs:
     name: conclusion
     needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, relay-check, runtime-image, app-check, app-e2e]
     # merge_group: still run after fail-fast cancels the run so the queue gets the failure; a PR run superseded by a newer push stays cancelled.
-    if: always() && (github.event_name == 'merge_group' || github.head_ref == 'ci/fail-fast-proof' || !cancelled())
+    if: always() && (github.event_name == 'merge_group' || !cancelled())
     runs-on: ubuntu-24.04
     steps:
       - name: Aggregate expected CI results
@@ -2540,11 +2540,9 @@ jobs:
 
   plugin:
     needs: detect-changes
-    if: github.head_ref == 'ci/fail-fast-proof' || (needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.plugin == 'true')
+    if: needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.plugin == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - name: TEMP forced failure for the fail-fast proof
-        run: exit 1
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - name: Validate plugin.json schema
         run: |
