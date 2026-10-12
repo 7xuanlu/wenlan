@@ -373,6 +373,10 @@
 }
 
 @media (max-width: 599px) {
+  .spaces-overview-header .spaces-header-actions {
+    gap: 4px;
+  }
+
   .spaces-overview-header {
     gap: 12px;
     padding-bottom: 18px;

@@ -65,6 +65,9 @@ async function rejectedCommands(page: Page): Promise<string[]> {
 test("keeps every enabled primary destination inside the Review command contract", async ({
   page,
 }) => {
+  // This route-contract pass spans the whole navigation rail. Its first Vite
+  // cold load can consume most of the default timeout before any route opens.
+  test.setTimeout(60_000);
   const browserErrors = collectBrowserErrors(page);
   await installRejectedCommandAudit(page);
   await page.goto("/");
@@ -88,12 +91,18 @@ test("keeps every enabled primary destination inside the Review command contract
   // Keep the same fixture row even if a mutation changes list ordering.
   const firstMemory = page.getByRole("article", { name: "Fixture architecture", exact: true });
   const memoryActions = firstMemory.getByRole("button", { name: "Memory actions", exact: true });
-  await memoryActions.click();
+  // The reading row reveals this control when it receives keyboard focus.
+  // Focusing it first makes the interaction match the accessible user path.
+  await memoryActions.focus();
+  await expect(memoryActions).toBeFocused();
+  await page.keyboard.press("Enter");
   await firstMemory.getByRole("menuitem", { name: "Unpin memory", exact: true }).click();
-  await memoryActions.click();
+  await memoryActions.focus();
+  await page.keyboard.press("Enter");
   await expect(firstMemory.getByRole("menuitem", { name: "Pin memory", exact: true })).toBeVisible();
   await firstMemory.getByRole("menuitem", { name: "Unconfirm memory", exact: true }).click();
-  await memoryActions.click();
+  await memoryActions.focus();
+  await page.keyboard.press("Enter");
   await expect(firstMemory.getByRole("menuitem", { name: "Confirm memory", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(memoryActions).toBeFocused();
@@ -231,9 +240,10 @@ test("marks a stored page reviewed through the Review presence contract", async 
   await expect(editor).toBeVisible();
   const reviewedSource = `${initialPage!.content}\n\nEdited in the Review editor before marking reviewed.`;
   await editor.fill(reviewedSource);
-  const actions = page.getByRole("button", { name: "Page actions", exact: true });
-  await actions.click();
-  const review = page.getByRole("menuitem", { name: "Mark page reviewed", exact: true });
+  // The Info action lives in the note sidebar, opened from the toolbar.
+  await page.getByRole("button", { name: "Open note sidebar", exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Info", exact: true })).toBeVisible();
+  const review = page.getByRole("button", { name: "Mark page reviewed", exact: true });
   await expect(review).toBeEnabled();
   await review.click();
 
@@ -272,7 +282,9 @@ test("creates a Space and navigates to its rendered detail", async ({ page }) =>
   await expect(
     page.getByRole("heading", { level: 1, name: "Review Lane" }),
   ).toBeVisible();
-  await expect(page.getByText("Created by the Review-flavor Playwright lane.")).toBeVisible();
+  await expect(
+    page.getByRole("textbox", { name: "Edit description", exact: true }),
+  ).toHaveValue("Created by the Review-flavor Playwright lane.");
 
   expect(browserErrors.pageErrors).toEqual([]);
   expect(browserErrors.consoleErrors).toEqual([]);

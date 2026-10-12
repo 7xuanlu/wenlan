@@ -34442,27 +34442,41 @@ impl MemoryDB {
 
         let mutation_result: Result<(), WenlanError> = async {
             if let (Some(expected), Some(_)) = (expected_content, new_content) {
+                // The editor baseline is the full visible body from
+                // `get_memory_detail`; keep the separate head check because
+                // `head.content` also feeds derived-child preparation and
+                // protects the metadata snapshot read above.
                 let mut rows = conn
                     .query(
-                        "SELECT content FROM memories
-                         WHERE source_id = ?1 AND source != 'episode' AND chunk_index = 0
-                         LIMIT 1",
+                        "SELECT
+                            (SELECT GROUP_CONCAT(content, '\n')
+                             FROM memories
+                             WHERE pending_revision = 0
+                               AND source != 'episode'
+                               AND source_id = ?1),
+                            (SELECT content FROM memories
+                             WHERE source_id = ?1
+                               AND source != 'episode'
+                               AND chunk_index = 0
+                             LIMIT 1)",
                         libsql::params![source_id],
                     )
                     .await
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("update_memory expected-content read: {e}"))
                     })?;
-                let current_content = rows
-                    .next()
-                    .await
-                    .map_err(|e| {
-                        WenlanError::VectorDb(format!("update_memory expected-content row: {e}"))
-                    })?
-                    .and_then(|row| row.get::<String>(0).ok());
+                let row = rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("update_memory expected-content row: {e}"))
+                })?;
+                let current_displayed_content = row
+                    .as_ref()
+                    .and_then(|row| row.get::<Option<String>>(0).ok().flatten());
+                let current_head_content = row
+                    .as_ref()
+                    .and_then(|row| row.get::<Option<String>>(1).ok().flatten());
                 drop(rows);
-                if current_content.as_deref() != Some(expected)
-                    || current_content.as_deref() != Some(head.content.as_str())
+                if current_displayed_content.as_deref() != Some(expected)
+                    || current_head_content.as_deref() != Some(head.content.as_str())
                 {
                     return Err(WenlanError::Conflict(format!(
                         "memory {source_id} changed before update"

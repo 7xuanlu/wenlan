@@ -28015,6 +28015,161 @@ async fn apply_memory_update_rejects_stale_expected_content_without_partial_muta
 }
 
 #[tokio::test]
+async fn apply_memory_update_accepts_displayed_multichunk_body_and_collapses_chunks() {
+    let (db, _dir) = test_db().await;
+    let original = format!(
+        "{}\n{}",
+        "First memory section. ".repeat(100),
+        "Second section. ".repeat(100)
+    );
+    db.upsert_documents(vec![make_memory_doc(
+        "mem_expected_content_multichunk",
+        &original,
+        "fact",
+        "engineering",
+        "test",
+    )])
+    .await
+    .unwrap();
+
+    let baseline = db
+        .get_memory_detail("mem_expected_content_multichunk")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        baseline.chunk_count > 1,
+        "fixture must exercise multiple chunks"
+    );
+
+    let replacement = format!(
+        "{}\n{}",
+        "Edited first section. ".repeat(110),
+        "Edited second section. ".repeat(110)
+    );
+    db.apply_memory_update_with_expected_content(
+        "mem_expected_content_multichunk",
+        super::MemoryContentUpdate {
+            new_content: Some(&replacement),
+            expected_content: Some(&baseline.content),
+        },
+        None,
+        false,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let after = db
+        .get_memory_detail("mem_expected_content_multichunk")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.content, replacement);
+    assert_eq!(after.chunk_count, 1);
+}
+
+#[tokio::test]
+async fn apply_memory_update_rejects_stale_multichunk_body_without_partial_mutation() {
+    let (db, _dir) = test_db().await;
+    let original = format!(
+        "{}\n{}",
+        "Stable head section. ".repeat(100),
+        "Original tail section. ".repeat(100)
+    );
+    db.upsert_documents(vec![make_memory_doc(
+        "mem_expected_content_stale_tail",
+        &original,
+        "fact",
+        "engineering",
+        "test",
+    )])
+    .await
+    .unwrap();
+    let baseline = db
+        .get_memory_detail("mem_expected_content_stale_tail")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        baseline.chunk_count > 1,
+        "fixture must exercise multiple chunks"
+    );
+
+    {
+        let conn = db.conn.lock().await;
+        let changed = conn
+            .execute(
+                "UPDATE memories SET content = 'A concurrent tail edit.'
+                 WHERE source_id = ?1 AND source != 'episode' AND chunk_index = 1",
+                libsql::params!["mem_expected_content_stale_tail"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            changed, 1,
+            "tail chunk should be changed without touching chunk 0"
+        );
+    }
+    let stale_body = db
+        .get_memory_detail("mem_expected_content_stale_tail")
+        .await
+        .unwrap()
+        .unwrap()
+        .content;
+    let origin_count_before = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM enrichment_origin WHERE source_id = ?1",
+                libsql::params!["mem_expected_content_stale_tail"],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+
+    let error = db
+        .apply_memory_update_with_expected_content(
+            "mem_expected_content_stale_tail",
+            super::MemoryContentUpdate {
+                new_content: Some("This stale editor draft must not replace the concurrent body."),
+                expected_content: Some(&baseline.content),
+            },
+            Some(Some("another-space")),
+            true,
+            Some("decision"),
+            Some("{\"status\":\"stale\"}"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WenlanError::Conflict(_)));
+
+    let after = db
+        .get_memory_detail("mem_expected_content_stale_tail")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.content, stale_body);
+    assert_eq!(after.memory_type.as_deref(), Some("fact"));
+    assert_eq!(after.space.as_deref(), Some("engineering"));
+    assert!(!after.confirmed);
+    let origin_count_after = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM enrichment_origin WHERE source_id = ?1",
+                libsql::params!["mem_expected_content_stale_tail"],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+    assert_eq!(origin_count_after, origin_count_before);
+}
+
+#[tokio::test]
 async fn update_memory_invalidates_source_owned_kg_and_requeues_entity_enrichment() {
     let (db, _dir) = test_db().await;
     db.upsert_documents(vec![make_memory_doc(
