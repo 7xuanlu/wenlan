@@ -45,7 +45,7 @@ struct Cli {
 enum Commands {
     /// Check whether Wenlan is running.
     Status,
-    /// Guided setup for local memory, a local model, or an Anthropic key.
+    /// Guided setup: get Wenlan running, optionally with a local model or an Anthropic key.
     Setup {
         /// Set up without a model or API key.
         #[arg(long)]
@@ -69,7 +69,7 @@ enum Commands {
     Restart,
     /// Diagnose runtime, model, and API key setup.
     Doctor,
-    /// Check memory, Pages, runtime, and operation health through the daemon.
+    /// Check the health of memories, pages, and the running Wenlan; report, then resolve findings safely.
     Lint {
         #[arg(long)]
         profile: Option<LintProfile>,
@@ -174,12 +174,12 @@ enum Commands {
         #[command(subcommand)]
         cmd: commands::agents::AgentsCmd,
     },
-    /// Manage memory spaces (list, add, default, move, show).
+    /// Manage Spaces, the separate wikis Wenlan keeps (list, add, default, move, show).
     Spaces {
         #[command(subcommand)]
         cmd: commands::space::SpaceCmd,
     },
-    /// Inspect or drain writes queued while the daemon was unreachable.
+    /// Inspect or sync notes saved locally while Wenlan was not running.
     Outbox {
         #[command(subcommand)]
         command: commands::outbox::OutboxCommand,

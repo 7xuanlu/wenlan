@@ -4,7 +4,7 @@ description: >
   List or open distilled pages by delegating to the local `wenlan pages` CLI.
   `/pages <query>` opens the page when one matches, or prints the matches when
   several do. `/pages` lists recent pages. Invoked as `/pages [query]`.
-argument-hint: "[query]"
+argument-hint: "[query] [--print]"
 allowed-tools: ["Bash", "mcp__wenlan__get_page_revisions"]
 user-invocable: true
 ---
@@ -15,9 +15,10 @@ Open a distilled page fast. The **`wenlan pages`** CLI does the open (one local
 command on your PATH — nothing to register, source, or install). This skill is
 only the slash workflow wrapper.
 
-**Never read a page body. Never render a metadata card.** Resolve by title /
-filename only — the file opens in your editor, which renders and searches it
-better than chat. Keeping bodies out is what keeps this cheap.
+**Do not read a page body unless the user asks to see it here. Never render a
+metadata card.** By default resolve by title / filename only — the file opens in
+your editor, which renders and searches it better than chat. Keeping bodies out
+is what keeps this cheap. The one exception is `--print` below.
 
 Resolve the binary once (the agent shell's PATH may omit `~/.wenlan/bin`):
 
@@ -45,6 +46,21 @@ Act on its output — do NOT re-fetch, list again, or read bodies:
   the filename is the real handle).
 
 Do not use a picker. Do not re-fetch, list again, or read any page file.
+
+## `/pages <query> --print` — read it here
+
+When the user passes `--print`, or asks to see the page in chat because there is
+no editor or GUI at hand, print instead of opening. Sandbox can stay on; nothing
+launches:
+
+```bash
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
+"$W" pages "<query>" --print
+```
+
+It prints the matched page's text followed by its sources. Show that output.
+The `N matches` and `no page matches` cases work exactly as above; once one
+filename is chosen, rerun with it and `--print`.
 
 ## `/pages` — list recent
 

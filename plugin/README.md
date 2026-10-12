@@ -35,7 +35,7 @@ Everything the plugin does is listed here so you can decide whether to install i
 | `SessionStart` hook | One health probe of the local daemon, plus the local outbox and version checks above | `127.0.0.1:7878` only |
 | Local daemon, first start | Downloads the search embedding model (about 210 MB, `Qdrant/bge-base-en-v1.5-onnx-Q`) once | `huggingface.co`. No memory content is sent. If a Hugging Face token is already saved on the machine, the download library attaches it |
 
-No memory content, prompts, or file contents leave your machine through this plugin. The daemon's full privacy notes are in [docs/PRIVACY.md](../docs/PRIVACY.md). Model-backed enrichment (classification, entity extraction, page synthesis, reranking) is opt-in and configured in the daemon, not in the plugin.
+No memory content, prompts, or file contents leave your machine through this plugin. The daemon's full privacy notes are in [docs/PRIVACY.md](../docs/PRIVACY.md). Steep, the model-backed background enrichment (classification, entity extraction, page synthesis, reranking), is opt-in and configured in the daemon with `wenlan steep configure`, not in the plugin.
 
 The MCP runner picks a binary in this order: the `WENLAN_MCP_DEV_BIN` environment variable, a local override file next to the script, the installed `~/.wenlan/bin/wenlan-mcp`, then the pinned npm package. The runner reads `$HOME` to find the installed binary, which is why a reviewer may hold the local MCP command for a manual look.
 

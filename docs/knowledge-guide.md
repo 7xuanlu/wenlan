@@ -105,13 +105,11 @@ For example, import a design document and capture a debugging decision in Codex.
 Your durable synthesis remains ordinary files rather than a proprietary editor format:
 
 - **Plain files:** Pages and session notes stay as Markdown under `~/.wenlan/`.
-- **Inspectable history:** Distill and handoff workflows can commit logical file batches to a local git repository.
+- **Inspectable history:** every page keeps its revisions (shown in the app, or via `get_page_revisions` over MCP), and because everything is plain files you can put `~/.wenlan` under your own version control.
 - **Obsidian coexistence:** Wenlan reads an existing vault as a source. Symlink `~/.wenlan/pages/` into the vault or export a Page from the desktop app; your edits remain human-owned, and later machine refreshes become reviewable revisions.
 
-The local history is directly inspectable:
+Pages are readable without the app:
 
 ```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
+$ wenlan pages "embedding work" --print
 ```

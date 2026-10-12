@@ -1,11 +1,12 @@
 ---
 name: pages
 description: >
-  Browse or open distilled pages, reusing the `wenlan pages` CLI for the actual
-  open (one implementation on your PATH, no setup). `/pages <query>` opens the
-  page when one matches, or shows a small native picker when 2-4 match. `/pages`
-  lists recent pages. Invoked as `/pages [query]`.
-argument-hint: "[query]"
+  Browse, open, or print distilled pages, reusing the `wenlan pages` CLI for the
+  actual open (one implementation on your PATH, no setup). `/pages <query>` opens
+  the page when one matches, or shows a small native picker when 2-4 match.
+  `/pages <query> --print` reads the page here instead of opening an editor.
+  `/pages` lists recent pages. Invoked as `/pages [query] [--print]`.
+argument-hint: "[query] [--print]"
 allowed-tools: ["Bash", "AskUserQuestion", "mcp__plugin_wenlan_wenlan__get_page_revisions"]
 ---
 
@@ -15,9 +16,10 @@ Open a distilled page fast. The **`wenlan pages`** CLI does the open (one local
 command on your PATH — nothing to register, source, or install). This skill only
 adds a small native picker for the ambiguous case.
 
-**Never read a page body. Never render a metadata card.** Resolve by title /
-filename only — the file opens in your editor, which renders and searches it
-better than chat. Keeping bodies out is what keeps this cheap.
+**Do not read a page body unless the user asks to see it here. Never render a
+metadata card.** By default resolve by title / filename only — the file opens in
+your editor, which renders and searches it better than chat. Keeping bodies out
+is what keeps this cheap. The one exception is `--print` below.
 
 Resolve the binary once (the agent shell's PATH may omit `~/.wenlan/bin`):
 
@@ -54,6 +56,21 @@ Act on its output — do NOT re-fetch, list again, or read bodies:
 
 The picker stays small by construction: ≤4 short options, no page bodies, and
 the open is a single CLI call that prints one line.
+
+## `/pages <query> --print` — read it here
+
+When the user passes `--print`, or asks to see the page in chat because there is
+no editor or GUI at hand, print instead of opening. Sandbox can stay on; nothing
+launches:
+
+```bash
+W="$(command -v wenlan || echo "$HOME/.wenlan/bin/wenlan")"
+"$W" pages "<query>" --print
+```
+
+It prints the matched page's text followed by its sources. Show that output.
+The `N matches` and `no page matches` cases work exactly as above; once one
+filename is chosen, rerun with it and `--print`.
 
 ## `/pages` — list recent
 

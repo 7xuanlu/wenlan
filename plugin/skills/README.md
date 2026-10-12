@@ -60,6 +60,7 @@ client's proposed context.
 ## Links
 
 - [wenlan.app](https://wenlan.app) — project home
-- [wenlan.app/docs/commands](https://wenlan.app/docs/commands) — full Claude Code commands and MCP tools reference
+- [crates/wenlan-mcp/README.md](../../crates/wenlan-mcp/README.md) — MCP tools reference
+- [crates/wenlan-cli/README.md](../../crates/wenlan-cli/README.md) — CLI subcommand reference, generated from the clap definitions
 - [wenlan.app/docs/daily-workflow](https://wenlan.app/docs/daily-workflow) — brief/capture/recall/handoff loop
 - [wenlan.app/learn/claude-code-memory](https://wenlan.app/learn/claude-code-memory) — Claude Code memory concept article

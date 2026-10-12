@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=55ee0cc34f8a5afcb717e482783438113936d5f7d20f54c77f0f42bc60559663 -->
+<!-- README_SYNC: source=README.md sha256=86e64fb75b1e9024388a083fb96fdd6c33f0aa31522955381306ce2c44bee1da -->
 
 <p align="center">
   <picture>
@@ -217,13 +217,13 @@ Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂�
 - **[整理已存的知識](docs/technical-foundations.md#typed-memory-schema)：** 設定模型後，可協助補上類型、欄位、相關日期、標籤、搜尋提示與圖譜連結。
 - **有引用才更新：** 自動更新會拒絕引用不足的草稿。AI 產生的頁面可以更新；你編輯過的頁面則先提出修訂。
 - **[需要判斷才審核](https://wenlan.app/docs/review-and-trust)：** 審核受保護的衝突、頁面修訂、實體合併與新詞彙。
-- **進度看得見：** 在 Activity 查看進度與卡住的原因。本地服務運作時，關閉 app 視窗後仍可繼續執行已設定的同步、補全與符合條件的頁面更新。
+- **進度看得見：** 在 Activity 查看進度與卡住的原因。本地服務運作時，關閉 app 視窗後仍可繼續執行已設定的同步、Steep（背景補全）與符合條件的頁面更新。
 
 ### 保有資料與控制權
 
 - **[資料在本地，也能檢查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 頁面、引用、修訂、git 歷史與 Obsidian 匯出；記憶與圖譜存於本地 libSQL。
 - **把 wiki 帶走：** 從設定或 CLI，把各空間符合條件的頁面匯出成 OKF v0.2 wiki。這是 wiki 匯出，不是完整資料庫備份。
-- **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的補全與頁面合成能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
+- **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的 Steep（背景補全與頁面合成）能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
 - **檢查問題，確認後修復：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 與 [lint](plugin/skills/lint/SKILL.md) 只回報問題，不改寫知識。支援的修復可在 app 預覽，確認後套用並驗證。
 
 **先從一則想留下的筆記開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。

@@ -105,13 +105,11 @@ Por ejemplo, importa un documento de diseño y guarda en Codex una decisión de 
 Tu síntesis duradera permanece en archivos ordinarios en lugar de un formato de editor propietario:
 
 - **Archivos planos:** Las Páginas y notas de sesión permanecen como Markdown en `~/.wenlan/`.
-- **Historial inspeccionable:** Los flujos de destilación y entrega pueden registrar lotes lógicos de archivos mediante commits en un repositorio git local.
+- **Historial inspeccionable:** cada Página conserva sus revisiones (visibles en la aplicación o con `get_page_revisions` por MCP); como todo son archivos planos, puedes poner `~/.wenlan` bajo tu propio control de versiones.
 - **Coexistencia con Obsidian:** Wenlan lee un vault existente como una fuente. Crea un enlace simbólico de `~/.wenlan/pages/` hacia el vault o exporta una Página desde la aplicación de escritorio; tus ediciones siguen siendo propiedad humana, y las actualizaciones posteriores de la máquina se convierten en revisiones revisables.
 
-El historial local es directamente inspeccionable:
+Las Páginas se leen sin la aplicación:
 
 ```text
-$ git -C ~/.wenlan log --oneline
-a1b2c3d distill: 4 pages
-9f8e7d6 session: embedding-work
+$ wenlan pages "embedding work" --print
 ```

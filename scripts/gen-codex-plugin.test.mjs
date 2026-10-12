@@ -278,7 +278,7 @@ test("real tree: generated skills carry the pins the validators and Rust tests r
   assert.match(codex("setup"), /curl -fsSL https:\/\/raw\.githubusercontent\.com\/wenlan-app\/wenlan\/v\$\{RELEASE_VER\}\/install\.sh \| bash/);
   assert.ok(!codex("setup").includes("npx -y wenlan@"), "Codex setup must not inherit the npm installer");
   assert.ok(claudeSkill("setup").includes("npx -y wenlan@"), "Claude setup keeps the npm installer");
-  for (const needle of ["Do not use a picker", "If several pages match, print the CLI output", "Never read a page body"]) {
+  for (const needle of ["Do not use a picker", "If several pages match, print the CLI output", "Do not read a page body unless the user asks to see it here"]) {
     assert.ok(codex("pages").includes(needle), `pages: ${needle}`);
   }
   for (const needle of ["Perform no mutation until the user replies", "Ambiguous replies do not mutate", "revision_source_id"]) {
