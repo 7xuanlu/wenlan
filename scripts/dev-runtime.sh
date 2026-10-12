@@ -113,6 +113,17 @@ emit_result() {
 on_runtime_exit() {
   local status=$?
   local signal="${1:-}"
+  # ONLY THE SHELL THE SIGNAL WAS SENT TO REPORTS. A signal this shell has
+  # caught but not yet handled is pending, and a `$(...)` forked in that window
+  # inherits it along with its own copy of the two guards below, both still 0.
+  # The fork then ran this handler too: a second marker, and a lock release if
+  # `RUNTIME_LOCK_HELD` was set, while the shell that owns the lock was still
+  # running. `BASH_SUBSHELL` and not `BASHPID`, which bash 3.2 does not have.
+  # `return`, not `exit`: the signal was not the fork's, so the fork carries on
+  # and this shell runs its own trap afterwards.
+  if (( BASH_SUBSHELL > 0 )); then
+    return 0
+  fi
   # `$?` INSIDE A SIGNAL TRAP IS THE PREVIOUS COMMAND'S STATUS, not `128+n`.
   # One trap on `EXIT HUP INT TERM` therefore reported, for an interrupted run,
   # whatever the last command before the signal happened to return -- so a

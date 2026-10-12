@@ -2132,6 +2132,36 @@ describe("dev runtime lock release and recovery", () => {
     }
   });
 
+  // A signal held as pending when the shell forks a `$(...)` can run the trap in
+  // the fork too, where both once-only guards are still 0. That race cannot be
+  // arranged on demand, so the handler is called from a subshell, which is the
+  // state the fork ends up in: it must neither print a marker nor release the
+  // lock the parent still holds, and the parent's own exit then reports once.
+  it("does not report or release from a forked subshell", () => {
+    const saved = process.env.WENLAN_TEST_FIXTURE;
+    process.env.WENLAN_TEST_FIXTURE = FIXTURE_OWNED;
+    try {
+      const run = drive(
+        [
+          'eval "$WENLAN_TEST_FIXTURE"',
+          "trap on_runtime_exit EXIT",
+          "RUNTIME_LOCK_HELD=1",
+          "( on_runtime_exit TERM )",
+          '[[ -d "$LOCK_DIR" ]] || echo "the fork released the lock" >&2',
+          "exit 0",
+        ].join("\n"),
+        releaseFns,
+      );
+      expect(run.stderr, run.stderr).not.toContain("the fork released the lock");
+      expect(run.stderr.match(/DEV_RUNTIME_RESULT:/g) ?? [], run.stderr).toHaveLength(1);
+      expect(lastLine(run.stderr), run.stderr).toBe("DEV_RUNTIME_RESULT: ok");
+      expect(run.status).toBe(0);
+    } finally {
+      if (saved === undefined) delete process.env.WENLAN_TEST_FIXTURE;
+      else process.env.WENLAN_TEST_FIXTURE = saved;
+    }
+  });
+
   // --- DEFECT 3: a loop that measured nothing -------------------------------
 
   // `wait_for_owned_exit` polled `for _ in $(seq 1 50)`. A `seq` that cannot
