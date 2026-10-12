@@ -16,10 +16,13 @@ export async function openTopicMenu(page: Page, locale: SpaceEntityLocale = "en"
   return menu;
 }
 
-/** Context is requested explicitly; ordinary topic reading stays uncluttered. */
+/** Ensure Info is open, including wide views where it opens by default. */
 export async function openTopicContext(page: Page, locale: SpaceEntityLocale = "en"): Promise<Locator> {
   const copy = labels[locale];
-  await page.getByRole("button", { name: copy.context, exact: true }).click();
+  const toggle = page.getByRole("button", { name: copy.context, exact: true });
+  if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+    await toggle.click();
+  }
   const pane = page.getByRole((page.viewportSize()?.width ?? 0) >= 1100 ? "complementary" : "dialog", {
     name: labels[locale].context,
     exact: true,

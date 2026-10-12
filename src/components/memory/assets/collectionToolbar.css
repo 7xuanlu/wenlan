@@ -28,6 +28,11 @@
   border-color: var(--mem-text-secondary);
 }
 
+.collection-search:has(.collection-search-input:focus-visible) {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 2px;
+}
+
 .collection-search-input {
   background: transparent;
   border: 0;

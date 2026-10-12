@@ -5,6 +5,10 @@ import { createSpaceProjectFixture } from "./fixtures/spaceProject";
 import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { resources } from "../src/i18n/resources";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 for (const cfg of [
   { locale: "en", theme: "light", width: 1440, sidebar: true },
   { locale: "zh-Hant", theme: "light", width: 1280, sidebar: false },
@@ -78,7 +82,11 @@ for (const cfg of [
         expect(annotationCalls.every(args => args.space === "讀書會" && args.sourceId === file.file.source_id)).toBe(true);
       } else {
         await expect(page.locator("main .source-document-body")).toContainText("這份文件只屬於讀書會");
-        expect(controller.calls().filter(call => call.command === "get_chunks" && call.args.sourceId === file.file.source_id).every(call => call.args.space === "讀書會")).toBe(true);
+        const sourceChunkCalls = controller.calls().filter(call =>
+          call.command === "get_chunks" && isRecord(call.args) && call.args.sourceId === file.file.source_id,
+        );
+        expect(sourceChunkCalls.length).toBeGreaterThan(0);
+        expect(sourceChunkCalls.every(call => isRecord(call.args) && call.args.space === "讀書會")).toBe(true);
       }
       if (cfg.width >= 1100) await expect(page.getByRole("navigation").getByRole("button", { name: t.sidebar.sources, exact: true })).toHaveAttribute("aria-current", "page");
       await capture(`${file.file.source}-destination.png`);

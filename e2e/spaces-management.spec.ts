@@ -13,7 +13,9 @@ function confirmedSpaceRow(page: Page, id: string) {
 }
 
 async function openMenu(page: Page, id: string, name: string): Promise<void> {
-  await confirmedSpaceRow(page, id).getByRole("button", { name: `Actions for ${name}` }).click();
+  const row = confirmedSpaceRow(page, id);
+  await row.hover();
+  await row.getByRole("button", { name: `Actions for ${name}` }).click();
 }
 
 test("manages Spaces, cleans MRU, and preserves data after a rejected mutation", async ({ page }) => {

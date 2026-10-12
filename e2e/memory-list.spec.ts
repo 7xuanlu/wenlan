@@ -131,9 +131,14 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   await expect(page.getByRole("button", { name: "Info", exact: true })).toHaveCount(1);
   await page.getByRole("button", { name: "Info", exact: true }).click();
   const context = page.getByRole("dialog", { name: "Info" });
-  await context.locator("summary").filter({ hasText: /^Source$/ }).click();
+  const sourceDetails = context.locator(".memory-detail-source");
+  await expect(sourceDetails).toHaveAttribute("open", "");
   await expect(context.getByText(memoryFixtures[0].source_text!)).toBeVisible();
-  await expect(context.getByRole("button", { name: /decision/ })).toBeVisible();
+  await sourceDetails.locator("summary").click();
+  await expect(context.getByText(memoryFixtures[0].source_text!)).toBeHidden();
+  await sourceDetails.locator("summary").click();
+  await expect(context.getByText(memoryFixtures[0].source_text!)).toBeVisible();
+  await expect(context.getByRole("button", { name: /decision/i })).toBeVisible();
   await context.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("button", { name: "Info", exact: true })).toBeFocused();
   const bodyParagraph = detail.locator(".memory-document-editor .cm-content");

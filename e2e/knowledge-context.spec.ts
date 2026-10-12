@@ -4,7 +4,7 @@ import { installTauriMock, collectBrowserErrors } from "./tauriMock";
 import { openWikiNote } from "./helpers/wikiWorkspace";
 import { openMemoryContext, openPageTool } from "./helpers/pageTools";
 const copies = [
-  {locale:"en",actions:"Page actions",memoryActions:"Memory actions",open:"Open Fixture architecture",info:"Page info",pane:"Note views",graph:"Connections",sources:"Source memories",context:"Memory context",used:"Used as a source in",recent:"Recent memories",close:"Close"},
+  {locale:"en",actions:"Page actions",open:"Open Fixture architecture",info:"Page info",pane:"Note views",graph:"Connections",sources:"Source memories",context:"Info",used:"Used as a source in",recent:"Recent memories",close:"Close"},
 ] as const;
 for (const copy of copies) for (const width of [1280,375]) {
   test(`context roundtrip ${copy.locale} ${width}`,async({page},testInfo)=>{
@@ -17,9 +17,11 @@ for (const copy of copies) for (const width of [1280,375]) {
     await expect(page.locator(".memory-detail-reading")).toContainText("Typed fixtures");
     await expect(page.locator(".memory-detail-reading summary")).toHaveCount(0);
     await expect(page.getByRole("button",{name:copy.recent,exact:true})).toBeVisible();
-    await expect(page.getByRole("button",{name:copy.context,exact:true})).toHaveCount(0);
-    await openMemoryContext(page,copy.context,copy.memoryActions);
     const memoryRole = width>=1100 ? "complementary" : "dialog";
+    const memoryPanel=page.getByRole(memoryRole,{name:copy.context,exact:true});
+    if(width>=1100) await expect(memoryPanel).toBeVisible();
+    else await expect(memoryPanel).toHaveCount(0);
+    await openMemoryContext(page,copy.context);
     const memory=page.getByRole(memoryRole,{name:copy.context});
     await expect(memory.getByRole("region",{name:copy.used})).toBeVisible();
     await page.screenshot({path:testInfo.outputPath("memory-context.png")});
@@ -30,24 +32,45 @@ for (const copy of copies) for (const width of [1280,375]) {
     expect(errors.pageErrors).toEqual([]);
   });
 }
-test("memory inventory switching protects an unfinished edit and discards only by choice",async({page})=>{
-  await page.setViewportSize({width:1280,height:900});await installTauriMock(page,{locale:"en",rawActions:[]});await page.goto("/");
+test("memory inventory navigation waits for autosave and refuses to leave when saving fails",async({page})=>{
+  await page.setViewportSize({width:1280,height:900});
+  const runtime=await installTauriMock(page,{locale:"en",rawActions:[]});
+  await page.goto("/");
   await openWikiNote(page, "Fixture architecture");
   await openPageTool(page,"Page info");
   await page.locator(".note-info-source-list").getByRole("button",{name:/Fixture architecture$/}).click();
-  await page.getByRole("button",{name:"Edit memory",exact:true}).click();
-  await page.locator(".memory-detail-editor").fill("Unfinished memory draft");
-  await page.getByRole("button",{name:"Recent memories",exact:true}).click();
-  const other=page.locator("#workspace-context-browser").getByRole("region",{name:"Recent memories",exact:true}).getByRole("button",{name:"Open memory: Fixture memory 1",exact:true});
-  await Promise.all([page.waitForEvent("dialog").then(dialog=>dialog.dismiss()),other.press("Enter")]);
-  await expect(page.locator(".memory-detail-editor")).toHaveValue("Unfinished memory draft");
-  await page.getByRole("button",{name:"Recent memories",exact:true}).click();
-  await Promise.all([page.waitForEvent("dialog").then(dialog=>dialog.accept()),other.press("Enter")]);
-  await expect(page.locator(".memory-detail-editor")).toHaveCount(0);
-  await page.getByRole("button",{name:"Recent memories",exact:true}).click();
-  await expect(other).toHaveAttribute("aria-current","page");
-  await expect(page.locator(".memory-detail-editor")).toHaveCount(0);
-  await expect(page.locator(".memory-detail-reading")).not.toContainText("Unfinished memory draft");
+  const editor=page.getByRole("textbox",{name:"Memory reading",exact:true});
+  const draft="Unfinished memory draft that must survive a failed save.";
+  runtime.failNext("update_memory_cmd","synthetic autosave failure");
+  await editor.fill(draft);
+
+  const recent=page.getByRole("button",{name:"Recent memories",exact:true});
+  await recent.click();
+  const inventory=page.locator("#workspace-context-browser").getByRole("region",{name:"Recent memories",exact:true});
+  const other=inventory.getByRole("button",{name:"Open memory: Fixture memory 1",exact:true});
+  await other.press("Enter");
+
+  await expect(editor).toHaveText(draft);
+  await expect(page.getByRole("alert")).toContainText("Changes could not be saved. Your draft is still here.");
+  expect(runtime.calls().filter(call=>call.command==="update_memory_cmd")).toHaveLength(1);
+  await expect(page.getByRole("main",{name:"Memory dossier",exact:true})).toBeVisible();
+  await recent.click();
+  await expect(page.locator("#workspace-context-browser").getByRole("region",{name:"Recent memories",exact:true})
+    .getByRole("button",{name:"Open memory: Fixture architecture",exact:true})).toHaveAttribute("aria-current","page");
+  await recent.click();
+
+  await page.getByRole("button",{name:"Retry saving",exact:true}).click();
+  await expect.poll(()=>runtime.calls().filter(call=>call.command==="update_memory_cmd")).toHaveLength(2);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  await recent.click();
+  const reopenedInventory=page.locator("#workspace-context-browser").getByRole("region",{name:"Recent memories",exact:true});
+  const savedTarget=reopenedInventory.getByRole("button",{name:"Open memory: Fixture memory 1",exact:true});
+  await savedTarget.press("Enter");
+  await recent.click();
+  await expect(page.locator("#workspace-context-browser").getByRole("region",{name:"Recent memories",exact:true})
+    .getByRole("button",{name:"Open memory: Fixture memory 1",exact:true})).toHaveAttribute("aria-current","page");
+  expect(runtime.calls().filter(call=>call.command==="update_memory_cmd")).toHaveLength(2);
 });
 
 

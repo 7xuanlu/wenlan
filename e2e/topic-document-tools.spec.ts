@@ -6,8 +6,28 @@ import { openPrimaryDestination } from "./helpers/primaryNavigation";
 import { openTopicContext } from "./helpers/topicTools";
 
 const copies = [
-  { locale: "en", more: "More", topics: "Topics", actions: "Topic actions", context: "Topic context", close: "Close", expand: "Full screen", edit: "Edit note", confirm: "Confirm topic" },
+  { locale: "en", more: "More", topics: "Topics", actions: "Topic actions", close: "Close", expand: "Full screen", edit: "Edit information", confirm: "Confirm topic" },
 ] as const;
+
+async function ensureTopicContext(page: import("@playwright/test").Page) {
+  const paneRole = (page.viewportSize()?.width ?? 0) >= 1100 ? "complementary" : "dialog";
+  const pane = page.getByRole(paneRole, { name: "Info", exact: true });
+  if (await pane.count()) {
+    await expect(pane).toBeVisible();
+    // Desktop topics open their Info inspector by default. Reopen it through
+    // its own control so Escape has the same real trigger to restore focus to
+    // as the narrow-window flow.
+    if ((page.viewportSize()?.width ?? 0) >= 1100) {
+      const toggle = page.getByRole("button", { name: "Info", exact: true });
+      await toggle.click();
+      await expect(pane).toHaveCount(0);
+      await toggle.click();
+      await expect(pane).toBeVisible();
+    }
+    return pane;
+  }
+  return openTopicContext(page);
+}
 
 for (const copy of copies) for (const width of [1280, 375]) {
   test(`topic document tools preserve reading and nested context: ${copy.locale} ${width}`, async ({ page }) => {
@@ -27,16 +47,17 @@ for (const copy of copies) for (const width of [1280, 375]) {
     const actionBox = (await actions.boundingBox())!;
     expect(Math.abs(titleBox.y + titleBox.height / 2 - actionBox.y - actionBox.height / 2)).toBeLessThanOrEqual(4);
     await expect(page.locator(".entity-dossier-seal, .entity-dossier-dateline")).toHaveCount(0);
-    await expect(page.locator(".entity-topic-context")).toHaveCount(0);
+    if (width >= 1100) await expect(page.locator(".entity-topic-context")).toBeVisible();
+    else await expect(page.locator(".entity-topic-context")).toHaveCount(0);
     await expect(page.getByRole("button", { name: copy.confirm, exact: true })).toHaveCount(0);
-    const note = page.getByRole("button", { name: "Wrote the first published algorithm", exact: true });
+    const note = page.getByRole("button", { name: /Edit information — Wrote the first published algorithm/ });
     await expect(note).toBeVisible();
     await actions.press("ArrowDown");
-    await expect(page.getByRole("menuitem", { name: copy.context, exact: true })).toBeFocused();
+    await expect(page.getByRole("menuitem", { name: "Archive", exact: true })).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(actions).toBeFocused();
 
-    const pane = await openTopicContext(page, copy.locale);
+    const pane = await ensureTopicContext(page);
     const graph = pane.getByRole("button", { name: copy.expand, exact: true });
     await graph.click();
     const overlay = page.getByRole("dialog", { name: copy.expand, exact: true });
@@ -48,7 +69,8 @@ for (const copy of copies) for (const width of [1280, 375]) {
     await expect(graph).toBeFocused();
     await page.keyboard.press("Escape");
     await expect(pane).toHaveCount(0);
-    await expect(actions).toBeFocused();
+    // Info is opened by its own toolbar toggle, so Escape returns focus there.
+    await expect(page.getByRole("button", { name: "Info", exact: true })).toBeFocused();
     await expect(title).toBeVisible();
     expect(controller.calls().filter(call => /^(confirm_entity|archive_entities|restore_entities)_cmd$/.test(call.command))).toEqual([]);
 
@@ -56,9 +78,9 @@ for (const copy of copies) for (const width of [1280, 375]) {
     await note.click();
     const editor = page.getByRole("textbox", { name: copy.edit, exact: true });
     await editor.fill("Topic note saved before opening context.");
-    await openTopicContext(page, copy.locale);
+    await ensureTopicContext(page);
     await pane.getByRole("button", { name: copy.close, exact: true }).click();
-    await expect(page.getByRole("button", { name: "Topic note saved before opening context.", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Edit information — Topic note saved before opening context\./ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
     expect(errors.pageErrors).toEqual([]);
     expect(errors.consoleErrors).toEqual([]);
@@ -70,9 +92,9 @@ for (const width of [1280, 375]) test(`nested Atlas filters remain visible and k
   const errors = collectBrowserErrors(page);
   await installTauriMock(page, { fixture: createSpacesNavigationFixture(), locale: "en", rawActions: [] });
   await page.goto("/");
-  await openPrimaryDestination(page, "Topics");
+  await openPrimaryDestination(page, "Topics", "More");
   await page.getByRole("button", { name: "Ada Lovelace", exact: true }).click();
-  const context = await openTopicContext(page);
+  const context = await ensureTopicContext(page);
   await context.getByRole("button", { name: "Full screen", exact: true }).click();
   const graph = page.getByRole("dialog", { name: "Full screen", exact: true });
   await graph.getByRole("group", { name: "Graph view", exact: true }).getByRole("button", { name: "Atlas", exact: true }).click();
@@ -107,7 +129,7 @@ for (const width of [1280, 375]) test(`nested Atlas filters remain visible and k
   await expect(context.getByRole("button", { name: "Full screen", exact: true })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(context).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeFocused();
+  await expect(page.getByRole("button", { name: "Info", exact: true })).toBeFocused();
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);
 });

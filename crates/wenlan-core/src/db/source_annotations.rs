@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Durable user annotations independent of source-ingest chunk lifetimes.
 
-use super::MemoryDB;
+use super::{commit_or_rollback, MemoryDB};
 use crate::WenlanError;
 use wenlan_types::source_annotations::SourceAnnotation;
 
@@ -379,7 +379,7 @@ impl MemoryDB {
 
         match result {
             Ok(SourceAnnotationWrite::Saved(annotation)) => {
-                conn.execute("COMMIT", ())
+                commit_or_rollback(&conn)
                     .await
                     .map_err(|e| WenlanError::VectorDb(format!("source annotation commit: {e}")))?;
                 Ok(SourceAnnotationWrite::Saved(annotation))

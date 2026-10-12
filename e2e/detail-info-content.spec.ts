@@ -115,6 +115,7 @@ for (const scenario of [
   const pane=page.locator('.page-info-drawer:visible');
   const measure=async(label:string)=>{
    await page.evaluate(()=>document.fonts.ready);
+   const main=(await page.locator('main.memory-detail-dossier').boundingBox())!;
    await expect(async()=>{
     const body=(await page.locator('.memory-detail-reading').boundingBox())!;
     const frame=page.locator('.memory-document-frame');

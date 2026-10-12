@@ -167,7 +167,7 @@ test("an import hands background work to Activity after returning to the workspa
   await page.getByRole("button", { name: /account menu/i }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Sources", exact: true }).click();
-  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await page.getByRole("button", { name: "Paste or import", exact: true }).click();
 
   await page
     .getByPlaceholder(/paste your memories/i)
@@ -216,10 +216,10 @@ test("an import hands background work to Activity after returning to the workspa
     .getByRole("button", { name: "Back", exact: true });
   await historyBack.click();
   const settingsHeading = page.getByRole("heading", { level: 1, name: "Sources", exact: true });
-  await expect(settingsHeading).toHaveClass(/sr-only/);
+  await expect(settingsHeading).toBeVisible();
   await expect(page.getByRole("heading", { name: "Import Memories", exact: true })).toBeVisible();
   await historyBack.click();
-  await expect(page.getByRole("heading", { level: 1, name: "General", exact: true })).toHaveClass(/sr-only/);
+  await expect(page.getByRole("heading", { level: 1, name: "General", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "App", exact: true })).toBeVisible();
   await historyBack.click();
   await expect(page.getByRole("navigation", { name: "Primary navigation" })).toBeVisible();

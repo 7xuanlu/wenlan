@@ -12,12 +12,11 @@ export async function openPageTool(page: Page, tool: string, actions = "Page act
   await page.getByRole("tab", {name: info ? (hant ? "資訊" : hans ? "信息" : "Info") : tool, exact: true}).click();
 }
 
-/** Memory context belongs to the dossier's action menu. */
+/** Open the memory dossier's Info inspector (where its knowledge context lives). */
 export async function openMemoryContext(
   page: Page,
-  context = "Memory context",
-  actions = "Memory actions",
+  info = "Info",
 ): Promise<void> {
-  await page.getByRole("button", { name: actions, exact: true }).click();
-  await page.getByRole("menuitem", { name: context, exact: true }).click();
+  const toggle = page.getByRole("button", { name: info, exact: true });
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
 }

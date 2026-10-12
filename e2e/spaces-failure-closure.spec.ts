@@ -101,7 +101,9 @@ test("turns a non-Error Spaces rejection into a recoverable inline failure", asy
     };
   });
 
-  await page.getByRole("button", { name: "Actions for Archive" }).click();
+  const archiveRow = page.getByTestId("space-row-space-archive");
+  await archiveRow.hover();
+  await archiveRow.getByRole("button", { name: "Actions for Archive" }).click();
   await page.getByRole("menuitem", { name: "Rename" }).click();
   await page.getByRole("textbox", { name: "Name", exact: true }).fill("Archive Retry");
   await page.getByRole("textbox", { name: "Name", exact: true }).press("Enter");
@@ -126,14 +128,18 @@ test("retries Topic load, retains a failed observation draft, and retries two-st
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Wrote the first published algorithm" }).click();
-  const observation = page.getByRole("textbox", { name: "Edit note" });
-  await observation.fill("Observation draft survives");
+  await page.getByRole("button", { name: "Edit information — Wrote the first published algorithm", exact: true }).click();
+  const observation = page.getByRole("textbox", { name: "Edit information" });
   controller.failNext("update_observation_cmd", "observation write failed");
-  await observation.press("Enter");
+  await observation.fill("Observation draft survives");
   await expect(page.getByRole("alert")).toContainText("Couldn't save. Try again.");
-  await expect(page.getByRole("textbox", { name: "Edit note" })).toHaveValue("Observation draft survives");
-  await page.getByRole("textbox", { name: "Edit note" }).press("Escape");
+  await expect(observation).toHaveValue("Observation draft survives");
+  await page.getByRole("button", { name: "Retry save", exact: true }).click();
+  await expect(observation).toHaveValue("Observation draft survives");
+  await observation.press("Escape");
+  await expect(observation).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Edit information — Observation draft survives", exact: true })).toBeVisible();
+  expect(controller.calls().filter(({ command }) => command === "update_observation_cmd")).toHaveLength(2);
 
   controller.failNext("delete_entity_cmd", "delete failed");
   const topicMenu = await openTopicMenu(page);
@@ -145,7 +151,7 @@ test("retries Topic load, retains a failed observation draft, and retries two-st
   await expect(page.getByRole("heading", { level: 1, name: "Topics" })).toBeVisible();
 
   expect(controller.calls().filter(({ command }) => command === "get_entity_detail_cmd").length).toBeGreaterThanOrEqual(2);
-  expect(controller.calls().filter(({ command }) => command === "update_observation_cmd")).toHaveLength(1);
+  expect(controller.calls().filter(({ command }) => command === "update_observation_cmd")).toHaveLength(2);
   expect(controller.calls().filter(({ command }) => command === "delete_entity_cmd")).toHaveLength(2);
   expect(errors.pageErrors).toEqual([]);
   expect(errors.consoleErrors).toEqual([]);

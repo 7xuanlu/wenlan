@@ -16,7 +16,7 @@ for (const cfg of [
     const t = resources.en.translation;
     const errors = collectBrowserErrors(page);
     const base = createSpacesNavigationFixture();
-    await installTauriMock(page, { fixture: { ...base, documents: [{ file: {
+    await installTauriMock(page, { locale: "en", fixture: { ...base, documents: [{ file: {
       source: "file", source_id: "/demo/reading.md", title: "Reading notes", chunk_count: 1, last_modified: 1,
     }, content: "# Reading notes\n\nA familiar reading lane keeps text comfortable when supplementary information is open.\n\n## Context\n\nKeep the original source and the next step clear." }] }, rawActions: [], localStorage: {
       "wenlan-theme": cfg.theme,

@@ -70,7 +70,7 @@ test('memory click and keyboard preview return use the shared navigation without
   await expect(page.locator('[data-reference-preview]')).toHaveCount(0);
   await expect(memoryLink).toBeFocused();
   await page.keyboard.press('Enter');
-  await expect(page.locator('.memory-detail-body-text')).toContainText('Keep the original evidence');
+  await expect(page.locator('.memory-detail-reading')).toContainText('Keep the original evidence');
   expect(controller.calls().filter(call => call.command === 'update_page')).toEqual([]);
 });
 
@@ -78,7 +78,7 @@ test('a direct memory link flushes the dirty page through the existing save guar
   const { controller, editor } = await openReferences(page);
   await page.keyboard.insertText('Pending text.');
   await editor.getByRole('link', { name: '討論記憶', exact: true }).click();
-  await expect(page.locator('.memory-detail-body-text')).toContainText('Keep the original evidence');
+  await expect(page.locator('.memory-detail-reading')).toContainText('Keep the original evidence');
   const writes = controller.calls().filter(call => call.command === 'update_page');
   expect(writes).toHaveLength(1);
   expect(writes[0].args).toMatchObject({ id: 'three-references', content: `${body}Pending text.`, expectedVersion: 1 });
@@ -98,7 +98,9 @@ test('links inside an imported source use the same preview and guarded in-app na
   await page.goto('/');
   await openPrimaryDestination(page, 'Sources');
   await page.locator('.source-library').getByRole('button', { name: /Reference source/ }).click();
-  const source = page.getByRole('dialog', { name: 'Reference source', exact: true });
+  // Imported sources now open as a full reading page from the library.
+  const source = page.locator('.source-document-page');
+  await expect(source.getByRole('heading', { name: 'Reference source', exact: true })).toBeVisible();
   await expect(source.locator('img')).toHaveCount(0);
   const link = source.getByRole('link', { name: 'Linked memory', exact: true });
   await link.focus();
@@ -109,7 +111,7 @@ test('links inside an imported source use the same preview and guarded in-app na
   await expect(source).toBeVisible();
   await expect(link).toBeFocused();
   await link.click();
-  await expect(page.locator('.memory-detail-body-text')).toContainText('Typed fixtures keep rendered');
+  await expect(page.locator('.memory-detail-reading')).toContainText('Typed fixtures keep rendered');
   expect(controller.calls().filter(call => call.command === 'update_chunk')).toEqual([]);
   expect(external).toEqual([]);
 });
@@ -124,7 +126,7 @@ test.describe('touch reference opening', () => {
     await expect(preview).toContainText('Keep the original evidence');
     await expect(editor).toBeVisible();
     await preview.getByRole('button', { name: 'Open 討論記憶', exact: true }).tap();
-    await expect(page.locator('.memory-detail-body-text')).toContainText('Keep the original evidence');
+    await expect(page.locator('.memory-detail-reading')).toContainText('Keep the original evidence');
   });
   test('touch in a source body previews before opening the linked memory', async ({ page }) => {
     const fixture = createSpacesNavigationFixture();
@@ -135,13 +137,14 @@ test.describe('touch reference opening', () => {
     await page.goto('/');
     await openPrimaryDestination(page, 'Sources');
     await page.locator('.source-library').getByRole('button', { name: /Touch source/ }).click();
-    const source = page.getByRole('dialog', { name: 'Touch source', exact: true });
+    const source = page.locator('.source-document-page');
+    await expect(source.getByRole('heading', { name: 'Touch source', exact: true })).toBeVisible();
     await source.getByRole('link', { name: 'Linked memory', exact: true }).tap();
     const preview = page.locator('[data-reference-preview]');
     await expect(preview).toContainText('Typed fixtures keep rendered');
     await expect(source).toBeVisible();
     await preview.getByRole('button').last().tap();
-    await expect(page.locator('.memory-detail-body-text')).toContainText('Typed fixtures keep rendered');
+    await expect(page.locator('.memory-detail-reading')).toContainText('Typed fixtures keep rendered');
   });
 
 });

@@ -7,7 +7,11 @@ for (const locale of ["en", "zh-Hant", "zh-Hans"]) {
     page.on("pageerror", error => errors.push(error.message));
     await page.setViewportSize({width: 1000, height: 850});
     await page.goto(`/preview/telemetry.html?locale=${locale}`);
-    const toggle = page.getByRole("button", {name: /usage stats|使用統計|使用统计/i});
+    // The General section includes a separate help button whose accessible
+    // name also contains the setting label. The persisted consent control is
+    // distinguished from its help entry by the toggle state.
+    const toggle = page.getByRole('button', { name: /usage stats|使用統計|使用统计/i }).and(page.locator('[aria-pressed]'));
+    await expect(toggle).toHaveCount(1);
     await expect(toggle).toBeEnabled();
     await expect(toggle).toHaveAttribute("aria-pressed", "false");
     await page.evaluate(() => document.fonts.ready);
@@ -22,13 +26,14 @@ for (const locale of ["en", "zh-Hant", "zh-Hans"]) {
 }
 test("known consent can be revoked even when collection is unavailable", async ({page}) => {
   await page.goto("/preview/telemetry.html?state=unavailable-on");
-  const toggle = page.getByRole("button", {name: /usage stats/i});
+  const toggle = page.getByRole('button', { name: /usage stats|使用統計|使用统计/i }).and(page.locator('[aria-pressed]'));
+  await expect(toggle).toHaveCount(1);
   await expect(toggle).toBeEnabled();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await toggle.click();
-  const status = page.getByRole("status", {name: /usage stats/i});
+  const status = page.getByRole("status", { name: /usage stats/i });
   await expect(status).toBeVisible();
   await expect(status).toHaveAttribute("data-state", "unavailable");
-  await expect(page.getByRole("button", {name: /usage stats/i})).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /usage stats|使用統計|使用统计/i }).and(page.locator('[aria-pressed]'))).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as {__telemetryFixtureCalls: string[]}).__telemetryFixtureCalls.filter(c => c === "set_telemetry_enabled").length)).toBe(1);
 });

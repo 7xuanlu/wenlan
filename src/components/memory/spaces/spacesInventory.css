@@ -344,6 +344,10 @@
 }
 
 @media (max-width: 699px) {
+  .spaces-overview .spaces-row:not(.spaces-row-suggested) .spaces-row-pages {
+    display: none;
+  }
+
   .spaces-overview-header .spaces-filter {
     flex-basis: 100%;
     max-width: none;

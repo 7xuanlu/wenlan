@@ -124,7 +124,7 @@ test("modal shows loading and failure states plus typed groups and source naviga
 test("Settings keeps keyboard search and slash stays inside the note editor",async({page})=>{
  await start(page);await page.locator(".identity-menu-trigger").click();
  await page.getByRole("menuitem",{name:"Settings",exact:true}).click();
- const settings=page.locator(".settings-sidebar"),trigger=settings.getByRole("button",{name:"Home",exact:true});
+ const settings=page.locator(".settings-sidebar"),trigger=settings.getByRole("button",{name:"Back to home",exact:true});
  await expect(trigger).toBeVisible();await trigger.focus();await emitSearch(page);await expect(input(page)).toBeFocused();
  await page.keyboard.press("Escape");await expect(trigger).toBeFocused();await expect(page.locator(".memory-workspace-header input")).toHaveCount(0);
  await page.locator(".workspace-history-navigation").getByRole("button",{name:"Back",exact:true}).click();

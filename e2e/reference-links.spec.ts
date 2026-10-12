@@ -42,7 +42,8 @@ test("canonical page and memory references preview automatically and navigate th
   await row.getByRole("button", { name: "Open memory", exact: true }).click();
   const pageLink = page.getByRole("link", { name: "Fixture architecture", exact: true });
   await expect(pageLink).toHaveAttribute("href", `#concept:${PAGE_ID}`);
-  await expect(pageLink.locator("svg")).toHaveAttribute("aria-hidden", "true");
+  await expect(pageLink).toHaveClass(/reference-link--page/);
+  await expect(pageLink).toHaveAttribute("data-reference-resource-icon", "page");
   await pageLink.hover();
   const pagePreview = page.getByRole("dialog", { name: "Fixture architecture" });
   await expect(pagePreview).toBeVisible();

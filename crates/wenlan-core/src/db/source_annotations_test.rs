@@ -584,3 +584,60 @@ async fn keep_then_recreate_rehomes_annotations_without_reusing_space_id() {
         SourceAnnotationWrite::VersionConflict { current_version: 3 }
     );
 }
+
+#[tokio::test]
+async fn failed_annotation_commit_rolls_back_and_allows_the_next_write() {
+    let (db, _temp) = test_db().await;
+    {
+        let conn = db.conn.lock().await;
+        for sql in [
+            "CREATE TABLE annotation_fault_parent (id INTEGER PRIMARY KEY)",
+            "CREATE TABLE annotation_fault_child (parent_id INTEGER REFERENCES annotation_fault_parent(id) DEFERRABLE INITIALLY DEFERRED)",
+            "CREATE TRIGGER annotation_commit_fault AFTER INSERT ON source_annotations BEGIN INSERT INTO annotation_fault_child VALUES (404); END",
+        ] {
+            conn.execute(sql, ()).await.unwrap();
+        }
+    }
+    let error = db
+        .write_source_annotation(
+            "webpage",
+            "synthetic-source",
+            "global",
+            0,
+            Some("must roll back"),
+            None,
+        )
+        .await
+        .expect_err("deferred constraint must fail at COMMIT");
+    assert!(
+        error.to_string().contains("source annotation commit"),
+        "{error}"
+    );
+    assert!(db
+        .get_source_annotation("webpage", "synthetic-source", "global")
+        .await
+        .unwrap()
+        .is_none());
+    {
+        let conn = db.conn.lock().await;
+        assert!(
+            conn.is_autocommit(),
+            "failed COMMIT must release the writer transaction"
+        );
+        conn.execute("DROP TRIGGER annotation_commit_fault", ())
+            .await
+            .unwrap();
+    }
+    let saved = db
+        .write_source_annotation(
+            "webpage",
+            "synthetic-source",
+            "global",
+            0,
+            Some("next write succeeds"),
+            None,
+        )
+        .await
+        .expect("the failed commit must not wedge later writes");
+    assert!(matches!(saved, SourceAnnotationWrite::Saved(_)));
+}

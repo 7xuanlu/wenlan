@@ -58,6 +58,7 @@ test("opens Spaces by stable id, prunes missing history, and preserves selection
   await expect(page.locator(".spaces-overview-header")).toBeVisible();
   await openSpaces(page);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
+  await wenlanRow.hover();
   await wenlanRow.getByRole("button", { name: "Actions for Wenlan" }).click();
   await page.getByRole("menuitem", { name: "Rename" }).click();
   const rename = wenlanRow.getByRole("textbox", { name: "Name", exact: true });
@@ -76,57 +77,45 @@ test("opens Spaces by stable id, prunes missing history, and preserves selection
   expect(errors.consoleErrors).toEqual([]);
 });
 
-test("keeps keyboard editor drafts after failure and keeps standalone memories absent and preserves delete cancellation", async ({ page }) => {
+test("keeps inline Space edits after failure and keeps standalone memories absent and preserves delete cancellation", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpace(page);
 
-  const editSpace = page.getByRole("button", { name: "Edit space" });
-  await editSpace.focus();
-  await editSpace.press("Enter");
-  const titleEditor = page.getByRole("textbox", { name: "Wenlan" });
+  const titleEditor = page.getByRole("textbox", { name: "Name", exact: true });
   const descriptionEditor = page.getByRole("textbox", { name: "Edit description" });
-  await expect(titleEditor).toBeFocused();
-  await titleEditor.fill("Cancelled title");
-  await descriptionEditor.fill("Cancelled description");
-  await descriptionEditor.press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
-  await expect(page.getByText("Editorial memory system", { exact: true })).toBeVisible();
-  await expect(titleEditor).toHaveCount(0);
-  await expect(descriptionEditor).toHaveCount(0);
-
-  await editSpace.focus();
-  await editSpace.press("Space");
-  const failedTitle = page.getByRole("textbox", { name: "Wenlan" });
-  const failedDescription = page.getByRole("textbox", { name: "Edit description" });
-  await failedTitle.fill("Failed title draft");
-  await failedDescription.fill("Failed description draft");
+  await expect(titleEditor).toHaveValue("Wenlan");
+  await expect(descriptionEditor).toHaveValue("Editorial memory system");
+  await descriptionEditor.fill("Failed description draft");
   const updatesBefore = controller.calls().filter(({ command }) => command === "update_space").length;
   controller.failNext("update_space", "identity write failed");
-  await failedDescription.press("Meta+Enter");
+  await descriptionEditor.press("Tab");
   await expect(page.getByRole("alert")).toContainText("Could not save this change");
-  await expect(page.getByRole("textbox", { name: "Wenlan" })).toHaveValue("Failed title draft");
-  await expect(page.getByRole("textbox", { name: "Edit description" })).toHaveValue("Failed description draft");
+  await expect(descriptionEditor).toHaveValue("Failed description draft");
   const failedUpdates = controller.calls().filter(({ command }) => command === "update_space");
   expect(failedUpdates).toHaveLength(updatesBefore + 1);
   expect(failedUpdates.at(-1)?.args).toEqual({
     description: "Failed description draft",
     name: "Wenlan",
-    newName: "Failed title draft",
+    newName: "Wenlan",
   });
-  await page.getByRole("textbox", { name: "Wenlan" }).press("Escape");
-  await expect(page.getByRole("heading", { level: 1, name: "Wenlan" })).toBeVisible();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(descriptionEditor).toHaveValue("Failed description draft");
+  await titleEditor.fill("Keyboard title");
+  await titleEditor.press("Enter");
+  await expect(page.getByRole("heading", { level: 1, name: "Keyboard title" })).toBeVisible();
 
   await page.reload();
-  await openSpace(page);
+  await openSpace(page, "Keyboard title");
 
-  await expect(page.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Pages" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "Sources" })).toBeVisible();
   await expect(page.locator(".space-dossier-archive, .space-dossier-entities, .space-dossier-review")).toHaveCount(0);
 
   const deleteCallsBefore = controller.calls().filter(({ command }) => command === "delete_space").length;
-  await page.getByRole("button", { name: "Actions for Wenlan" }).click();
+  await page.getByRole("button", { name: "Actions for Keyboard title" }).click();
   await page.getByRole("menuitem", { name: "Delete space" }).click();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("button", { name: "Confirm delete space" })).toHaveCount(0);
@@ -169,31 +158,24 @@ test("keeps and discards suggested Spaces through their dossier controls", async
   expect(errors.consoleErrors).toEqual([]);
 });
 
-test("saves Space title and description through one keyboard-only dossier mutation", async ({ page }) => {
+test("saves Space title through its keyboard-editable inline field", async ({ page }) => {
   const errors = collectBrowserErrors(page);
   const controller = await installTauriMock(page, { locale: "en", localStorage: { "wenlan-spaces-view-mode": "rows" }, rawActions: [] });
   await page.goto("/");
   await openSpace(page);
 
-  await page.getByRole("button", { name: "Edit space" }).press("Enter");
-  const titleEditor = page.getByRole("textbox", { name: "Wenlan" });
-  const descriptionEditor = page.getByRole("textbox", { name: "Edit description" });
+  const titleEditor = page.getByRole("textbox", { name: "Name", exact: true });
+  await titleEditor.focus();
   await expect(titleEditor).toBeFocused();
   await titleEditor.fill("Wenlan Detail");
-  await descriptionEditor.fill("Updated through keyboard");
-  await descriptionEditor.press("Meta+Enter");
-  await expect(page.getByRole("heading", { level: 1, name: "Spaces" })).toHaveClass(/sr-only/);
-  await expect(page.locator(".spaces-overview-header")).toBeVisible();
-  await page
-    .getByTestId("space-row-space-wenlan")
-    .getByRole("button", { name: "Wenlan Detail", exact: true })
-    .click();
+  await titleEditor.press("Enter");
   await expect(page.getByRole("heading", { level: 1, name: "Wenlan Detail" })).toBeVisible();
-  await expect(page.getByText("Updated through keyboard", { exact: true })).toBeVisible();
+  await expect(titleEditor).toHaveValue("Wenlan Detail");
+  await expect.poll(() => controller.calls().filter(({ command }) => command === "update_space").length).toBe(1);
   const updates = controller.calls().filter(({ command }) => command === "update_space");
   expect(updates).toHaveLength(1);
   expect(updates[0]?.args).toEqual({
-    description: "Updated through keyboard",
+    description: "Editorial memory system",
     name: "Wenlan",
     newName: "Wenlan Detail",
   });
