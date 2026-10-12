@@ -2414,6 +2414,56 @@ jobs:
       - name: Test the runtime image contracts
         run: python3 scripts/verify-release-runtime-image.test.py
 
+  # Merge-queue fail-fast. `conclusion` is the only required check and it waits
+  # for every job it needs, so a queue entry whose early job failed was only
+  # dropped once the slowest job finished. On merge_group runs this watches the
+  # run's jobs and cancels the run at the first failure; `conclusion` still runs
+  # (see its `if:`) and reports the failure. Not in `conclusion.needs`, which
+  # would make the aggregate wait on its own watcher. Jobs blocked by `needs`
+  # are not listed until they exist, so "every listed job is done" would end the
+  # watch between stages; `conclusion` appearing is the only end-of-run signal.
+  merge-group-fail-fast:
+    name: merge-group-fail-fast
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the run at the first failed job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: |
+          # GitHub's bash runs with -e: a transient API error (a 502) must retry
+          # on the next tick, not turn this job red.
+          while true; do
+            rows="$(gh api "repos/$REPO/actions/runs/$RUN/jobs?per_page=100&filter=latest" --paginate \
+              --jq '.jobs[] | [.name, (.conclusion // "")] | @tsv')" || { sleep 20; continue; }
+            failed=""
+            conclusion_started=0
+            while IFS=$'\t' read -r name result; do
+              case "$name" in
+                merge-group-fail-fast) ;;
+                conclusion) conclusion_started=1 ;;
+                *) case "$result" in failure|timed_out) failed="$failed$name"$'\n' ;; esac ;;
+              esac
+            done <<<"$rows"
+            # `conclusion` only starts once every needed job is done; cancelling
+            # now would kill the very job that reports the result.
+            if [ "$conclusion_started" = 1 ]; then
+              exit 0
+            fi
+            if [ -n "$failed" ]; then
+              printf 'failed, cancelling run %s:\n%s' "$RUN" "$failed"
+              if gh api -X POST "repos/$REPO/actions/runs/$RUN/cancel"; then
+                exit 0
+              fi
+            fi
+            sleep 20
+          done
+
   # Aggregate gate for branch protection. `if: always()` lets docs-only PRs
   # (where the test matrix skips via detect-changes) report success instead
   # of stalling forever on a never-run required check.
@@ -2425,11 +2475,15 @@ jobs:
   conclusion:
     name: conclusion
     needs: [detect-changes, release-base-proof, fmt, lint, linux-nextest-build, linux-nextest, macos-nextest-build, macos-nextest, test, mcp-platform, canonical-acceptance, contract-integration, release-preflight, docs, windows-release-contract, plugin, plugin-rust-contract, npm, relay-check, runtime-image, app-check, app-e2e]
-    if: always() && !cancelled()
+    # merge_group: still run after fail-fast cancels the run so the queue gets the failure; a PR run superseded by a newer push stays cancelled.
+    if: always() && (github.event_name == 'merge_group' || !cancelled())
     runs-on: ubuntu-24.04
     steps:
       - name: Aggregate expected CI results
         run: |
+          # Report every mismatch, then fail once: after a fail-fast cancel the
+          # first mismatch is usually a cancelled job, not the one that failed.
+          failed=0
           expect_job() {
             name="$1"
             expected="$2"
@@ -2437,11 +2491,11 @@ jobs:
             if [ "$expected" = "true" ]; then
               if [ "$actual" != "success" ]; then
                 echo "$name was required but result was $actual"
-                exit 1
+                failed=1
               fi
             elif [ "$actual" != "skipped" ]; then
               echo "$name was not required but result was $actual"
-              exit 1
+              failed=1
             fi
           }
 
@@ -2479,6 +2533,10 @@ jobs:
           expect_job runtime-image '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.runtime-image == 'true' }}' '${{ needs.runtime-image.result }}'
           expect_job app-check '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true' }}' '${{ needs.app-check.result }}'
           expect_job app-e2e '${{ needs.detect-changes.outputs.verified-release-merge != 'true' && needs.detect-changes.outputs.trusted-release-candidate != 'true' && needs.detect-changes.outputs.app == 'true' }}' '${{ needs.app-e2e.result }}'
+
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
 
   plugin:
     needs: detect-changes
