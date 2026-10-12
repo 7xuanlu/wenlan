@@ -248,6 +248,10 @@ jobs:
               # makes README-only PRs match this filter.
               - 'scripts/first-run/linux-install.sh'
               - 'crates/**/*.rs'
+              # The CLI README carries the generated reference that the
+              # `wenlan` bin's cli_reference test compares against clap, so a
+              # README-only edit must still compile and run that test.
+              - 'crates/wenlan-cli/README.md'
               # Required integration tests consume non-Rust fixtures here
               # (PDF, Markdown, and text), so fixture-only PRs must not skip.
               - 'crates/**/tests/**'

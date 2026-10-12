@@ -9526,6 +9526,7 @@ const FLAG_ALLOWLIST: &[&str] = &[
     "WENLAN_TEST_STARTUP_SIGNAL_BARRIER", // test-only startup signal synchronization
     "WENLAN_RB01_PROFILE",                // test-only target-Mac profiler opt-in
     "WENLAN_RB01_LANE",                   // test-only target-Mac profiler lane
+    "WENLAN_UPDATE_CLI_REFERENCE",        // test-only CLI README regeneration opt-in
     "WENLAN_BATCH_LOG",                   // debug logging
     "WENLAN_CHATGPT_ZIP",                 // import path
 ];
