@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=86e64fb75b1e9024388a083fb96fdd6c33f0aa31522955381306ce2c44bee1da -->
+<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
 
 <p align="center">
   <picture>
@@ -221,7 +221,7 @@ Wenlan 把整理成页、跟踪来源变化、更新相关内容和保留修订�
 
 ### 保有数据与控制权
 
-- **[数据在本地，也能检查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 页面、引用、修订、git 历史与 Obsidian 导出；记忆与图谱存于本地 libSQL。
+- **[数据在本地，也能检查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 页面、引用、修订与 Obsidian 导出；记忆与图谱存于本地 libSQL。
 - **把 wiki 带走：** 从设置或 CLI，把各空间符合条件的页面导出成 OKF v0.2 wiki。这是 wiki 导出，不是完整数据库备份。
 - **[模型自己选](docs/technical-foundations.md#model-roles)：** 基础检索留在本机。可选的 Steep（后台补全与页面合成）能用设备端 Qwen、本地接口或云端模型；远程服务会收到该任务所需的内容。
 - **检查问题，确认后修复：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 与 [lint](plugin/skills/lint/SKILL.md) 只报告问题，不改写知识。支持的修复可在 app 预览，确认后应用并验证。

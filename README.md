@@ -217,7 +217,7 @@ Optional background organization and Page updates need a [configured model](#mod
 
 ### Keep ownership and control
 
-- **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Pages, citations, revisions, git history, and Obsidian exports; Memories and graph data live in local libSQL.
+- **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Pages, citations, revisions, and Obsidian exports; Memories and graph data live in local libSQL.
 - **Take your wiki with you:** Export eligible Pages across Spaces as an OKF v0.2 wiki from Settings or the CLI. This is a wiki export, not a full database backup.
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Steep, the optional background enrichment and synthesis, can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.

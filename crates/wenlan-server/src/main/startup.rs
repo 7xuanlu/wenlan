@@ -285,67 +285,6 @@ pub(super) async fn prepare_startup_state(
                     tracing::info!("[migrate] copied {} md files from legacy path", copied);
                 }
             }
-
-            // Initialize ~/.wenlan/ as a git repo so users get version history
-            // of pages + sessions for free. Defensive — silent skip if git is
-            // missing or any step fails. Skills (/handoff, /distill, /forget)
-            // commit per logical batch; daemon only does the initial bring-up
-            // here.
-            let dot_git = wenlan_dot.join(".git");
-            let git_available = std::process::Command::new("git")
-                .arg("--version")
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false);
-            if !dot_git.exists() && git_available {
-                let gitignore = wenlan_dot.join(".gitignore");
-                if !gitignore.exists() {
-                    // No trailing slash on `db` / `bin` — those entries are
-                    // symlinks in the consolidated layout, and pattern `db/`
-                    // would only match real directories.
-                    let _ = std::fs::write(
-                        &gitignore,
-                        "db\nbin\nlogs/\nsessions/_status/handoff-*.json\n",
-                    );
-                }
-                let run = |args: &[&str]| {
-                    std::process::Command::new("git")
-                        .args(args)
-                        .current_dir(&wenlan_dot)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status()
-                        .ok()
-                        .filter(|s| s.success())
-                };
-                if run(&["init", "--quiet"]).is_some() {
-                    let _ = run(&[
-                        "-c",
-                        "user.name=Wenlan",
-                        "-c",
-                        "user.email=daemon@origin.local",
-                        "commit",
-                        "--allow-empty",
-                        "--quiet",
-                        "-m",
-                        "Wenlan initialized",
-                    ]);
-                    let _ = run(&["add", "-A"]);
-                    let _ = run(&[
-                        "-c",
-                        "user.name=Wenlan",
-                        "-c",
-                        "user.email=daemon@origin.local",
-                        "commit",
-                        "--quiet",
-                        "-m",
-                        "backfill: initial pages from DB",
-                    ]);
-                    tracing::info!("[wenlan-dir] git init complete at {}", wenlan_dot.display());
-                }
-            }
         }
     }
 

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=86e64fb75b1e9024388a083fb96fdd6c33f0aa31522955381306ce2c44bee1da -->
+<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
 
 <p align="center">
   <picture>
@@ -222,7 +222,7 @@ La organización y las actualizaciones de Páginas en segundo plano son opcional
 
 ### Conserva tus datos y el control
 
-- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Páginas Markdown, citas, revisiones, historial de git y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
+- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Páginas Markdown, citas, revisiones y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
 - **Llévate tu wiki:** Exporta las Páginas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
 - **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. Steep, el enriquecimiento y la síntesis opcionales en segundo plano, puede usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
 - **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
