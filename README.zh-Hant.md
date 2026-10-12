@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
+<!-- README_SYNC: source=README.md sha256=c047c5ec9b089bff5b99e06150477645275e1f38b5a221dc57d90c73741786ad -->
 
 <p align="center">
   <picture>
@@ -27,14 +27,27 @@ Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連
   <a href="#what-can-it-do">能&#8288;力</a> ·
   <a href="#how-does-it-work">日&#8288;常&#8288;流&#8288;程</a> ·
   <a href="#evaluation">評&#8288;估</a> ·
-  <a href="#learn-more">進&#8288;一&#8288;步&#8288;了&#8288;解</a>
+  <a href="#learn-more">進&#8288;一&#8288;步&#8288;了&#8288;解</a> ·
+  <a href="https://discord.gg/fECqAHfb">Discord</a>
 </p>
+
+<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-wiki.png" alt="閱讀與編輯你的維基" width="100%">
+  <br><sub>Wenlan 實際程式介面的瀏覽器截圖，使用虛構讀書會資料，畫面為英文介面，並非設計示意圖。</sub>
+</p>
+
+<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
+<details>
+<summary>先前版本的操作影片</summary>
 
 https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 
 <p align="center">
   <sub>開場為組合示意，並非 app 的原生三欄介面；後續為 app 實際操作錄影，展示頁面與來源引用。</sub>
 </p>
+
+</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -99,9 +112,22 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 背景整理與自動更新是可選功能，需要[設定模型](#models-and-privacy)。終端機安裝、其他平台與更新方式，請見[設定指南](docs/setup-and-data.zh-Hant.md#installation)。
 
-遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。Issue 是公開的；分享任何內容（包括紀錄）前，請先遮蔽密鑰、憑證、存取權杖、識別碼，以及私人或個人內容。
+遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。歡迎加入 [Discord 社群](https://discord.gg/fECqAHfb)，交流使用方式和工作流程並分享回饋。Issue 是公開的；分享任何內容（包括紀錄）前，請先遮蔽密鑰、憑證、存取權杖、識別碼，以及私人或個人內容。
 
 
+
+## 看看一個 Space 裡有什麼
+
+Pages 放整理好的想法，Sources 保留原始資料。在同一個 Space 就能切換瀏覽。
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-space.png" alt="讀書會 Space 裡的頁面" width="100%">
+</p>
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-sources.png" alt="同一個 Space 裡的 Markdown、PDF 與網頁來源" width="100%">
+  <br><sub>Wenlan 實際程式介面的瀏覽器截圖，使用虛構讀書會資料，畫面為英文介面，並非設計示意圖。</sub>
+</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

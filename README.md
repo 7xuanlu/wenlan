@@ -25,14 +25,27 @@ As sources change, you can ask AI to update the pages or enable background updat
   <a href="#what-can-it-do">Capabilities</a> ·
   <a href="#how-does-it-work">Daily&nbsp;workflow</a> ·
   <a href="#evaluation">Evaluation</a> ·
-  <a href="#learn-more">Learn&nbsp;more</a>
+  <a href="#learn-more">Learn&nbsp;more</a> ·
+  <a href="https://discord.gg/fECqAHfb">Discord</a>
 </p>
+
+<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-wiki.png" alt="Read and edit your wiki" width="100%">
+  <br><sub>Wenlan’s app interface, captured in a browser with fictional reading-club data. The UI is rendered by the app; these are not design mockups.</sub>
+</p>
+
+<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
+<details>
+<summary>Earlier walkthrough</summary>
 
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including pages and source citations.</sub>
 </p>
+
+</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -97,8 +110,21 @@ When it's ready, open the new page in Wenlan, click a citation to check its sour
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
-Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues) · [Join the Discord community](https://discord.gg/fECqAHfb) to discuss workflows and share feedback. Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
 
+
+## Explore one Space
+
+Pages collect the ideas you want to keep; Sources keep the original material nearby. Switch between them within the same Space.
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-space.png" alt="Pages in a reading-club Space" width="100%">
+</p>
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-sources.png" alt="Markdown, PDF, and webpage sources in the same Space" width="100%">
+  <br><sub>Wenlan’s app interface, captured in a browser with fictional reading-club data. The UI is rendered by the app; these are not design mockups.</sub>
+</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

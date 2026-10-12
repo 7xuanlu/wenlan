@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
+<!-- README_SYNC: source=README.md sha256=c047c5ec9b089bff5b99e06150477645275e1f38b5a221dc57d90c73741786ad -->
 
 <p align="center">
   <picture>
@@ -27,14 +27,27 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
   <a href="#what-can-it-do">Capacidades</a> ·
   <a href="#how-does-it-work">Flujo&nbsp;diario</a> ·
   <a href="#evaluation">Evaluación</a> ·
-  <a href="#learn-more">Leer&nbsp;más</a>
+  <a href="#learn-more">Leer&nbsp;más</a> ·
+  <a href="https://discord.gg/fECqAHfb">Discord</a>
 </p>
+
+<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-wiki.png" alt="Lee y edita tu wiki" width="100%">
+  <br><sub>Interfaz real de Wenlan, capturada en un navegador con datos ficticios de un club de lectura. La interfaz está en inglés; no son maquetas de diseño.</sub>
+</p>
+
+<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
+<details>
+<summary>Demostración anterior</summary>
 
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con páginas y citas a sus fuentes.</sub>
 </p>
+
+</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -100,9 +113,22 @@ Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consult
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Únete a la [comunidad de Discord](https://discord.gg/fECqAHfb) para hablar sobre flujos de trabajo y compartir comentarios. Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
 
 
+
+## Explora un Space
+
+Pages reúne las ideas que quieres conservar; Sources mantiene cerca el material original. Alterna entre ambas vistas dentro del mismo Space.
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-space.png" alt="Páginas de un Space de club de lectura" width="100%">
+</p>
+
+<p align="center">
+  <img src="./docs/assets/screenshots/v019-sources.png" alt="Fuentes Markdown, PDF y páginas web del mismo Space" width="100%">
+  <br><sub>Interfaz real de Wenlan, capturada en un navegador con datos ficticios de un club de lectura. La interfaz está en inglés; no son maquetas de diseño.</sub>
+</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
