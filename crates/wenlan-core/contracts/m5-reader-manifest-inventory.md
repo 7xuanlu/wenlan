@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 193 registered `(method, path, handler)` triples
+## HTTP — all 195 registered `(method, path, handler)` triples
 
-71 page-bearing, 122 not.
+73 page-bearing, 122 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -714,6 +714,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/snapshots/{id}/captures` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/snapshots/{id}/captures-with-content` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `POST` | `/api/snapshots/{id}/delete` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/source-annotations` | main | yes | automatic | `none` | `handle_get_source_annotation` | SourceAnnotation.pages includes only active scoped Pages visible under the request grant |
+| `POST` | `/api/source-annotations` | main | yes | automatic | `none` | `handle_update_source_annotation` | SourceAnnotation.pages includes only active scoped Pages visible under the request grant |
 | `GET` | `/api/sources` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/sources` | main | no | not_applicable | `none` | — | no prose fields |
 | `DELETE` | `/api/sources/{id}` | main | no | not_applicable | `none` | — | no prose fields |
