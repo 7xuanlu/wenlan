@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c047c5ec9b089bff5b99e06150477645275e1f38b5a221dc57d90c73741786ad -->
+<!-- README_SYNC: source=README.md sha256=1d02eda9ee8288b3538726421777ae62444a67cc9bec20233f47c04df72dae74 -->
 
 <p align="center">
   <picture>
@@ -28,7 +28,7 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
   <a href="#how-does-it-work">Flujo&nbsp;diario</a> ·
   <a href="#evaluation">Evaluación</a> ·
   <a href="#learn-more">Leer&nbsp;más</a> ·
-  <a href="https://discord.gg/fECqAHfb">Discord</a>
+  <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
 <!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
@@ -113,7 +113,7 @@ Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consult
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Únete a la [comunidad de Discord](https://discord.gg/fECqAHfb) para hablar sobre flujos de trabajo y compartir comentarios. Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Únete a la [comunidad de Discord](https://discord.gg/nmzVTTU3HG) para hablar sobre flujos de trabajo y compartir comentarios. Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
 
 
 

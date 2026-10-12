@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c047c5ec9b089bff5b99e06150477645275e1f38b5a221dc57d90c73741786ad -->
+<!-- README_SYNC: source=README.md sha256=1d02eda9ee8288b3538726421777ae62444a67cc9bec20233f47c04df72dae74 -->
 
 <p align="center">
   <picture>
@@ -28,7 +28,7 @@ Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链
   <a href="#how-does-it-work">日&#8288;常&#8288;流&#8288;程</a> ·
   <a href="#evaluation">评&#8288;估</a> ·
   <a href="#learn-more">进&#8288;一&#8288;步&#8288;了&#8288;解</a> ·
-  <a href="https://discord.gg/fECqAHfb">Discord</a>
+  <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
 <!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
@@ -112,7 +112,7 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 后台整理与自动更新是可选功能，需要[设置模型](#models-and-privacy)。终端安装、其他平台与更新方式，请见[设置指南](docs/setup-and-data.zh-Hans.md#installation)。
 
-遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/wenlan-app/wenlan/issues)。欢迎加入 [Discord 社区](https://discord.gg/fECqAHfb)，交流使用方式和工作流程并分享反馈。Issue 是公开的；分享任何内容（包括日志）前，请先遮盖密钥、凭据、访问令牌、标识符以及私人或个人内容。
+遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/wenlan-app/wenlan/issues)。欢迎加入 [Discord 社区](https://discord.gg/nmzVTTU3HG)，交流使用方式和工作流程并分享反馈。Issue 是公开的；分享任何内容（包括日志）前，请先遮盖密钥、凭据、访问令牌、标识符以及私人或个人内容。
 
 
 

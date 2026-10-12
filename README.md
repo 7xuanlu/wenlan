@@ -26,7 +26,7 @@ As sources change, you can ask AI to update the pages or enable background updat
   <a href="#how-does-it-work">Daily&nbsp;workflow</a> ·
   <a href="#evaluation">Evaluation</a> ·
   <a href="#learn-more">Learn&nbsp;more</a> ·
-  <a href="https://discord.gg/fECqAHfb">Discord</a>
+  <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
 <!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
@@ -110,7 +110,7 @@ When it's ready, open the new page in Wenlan, click a citation to check its sour
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
-Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues) · [Join the Discord community](https://discord.gg/fECqAHfb) to discuss workflows and share feedback. Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues) · [Join the Discord community](https://discord.gg/nmzVTTU3HG) to discuss workflows and share feedback. Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
 
 
 ## Explore one Space
