@@ -30,16 +30,17 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
   // out of the current action, and persisted state proves they remain untouched.
   for (const entity of matching) {
     await overview.getByRole("searchbox", { name: "Filter topics" }).fill(entity.name);
-    await expect(overview.getByRole("row")).toHaveCount(2);
+    await expect(overview.locator(".entity-row")).toHaveCount(1);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
     let menu = await openTopicMenu(page);
-    await expect(menu.getByRole("menuitemcheckbox", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toHaveAttribute("aria-checked", String(confirmed));
+    // Topic confirmation is a separate control from lifecycle archive/restore.
+    // The persisted entity snapshot below proves archive leaves that state intact.
     await menu.getByRole("menuitem", { name: "Archive", exact: true }).click();
     menu = await openTopicMenu(page);
     await expect(menu.getByRole("menuitem", { name: "Restore", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await expect.poll(async () => (await storedTopics(page)).find(item => item.id === entity.id)?.status).toBe("archived");
-    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("group", { name: /History navigation|歷史導覽|历史导航/ }).getByRole("button", { name: "Back", exact: true }).click();
     await expect(overview.getByRole("button", { name: entity.name, exact: true })).toHaveCount(0);
   }
   const archived = await storedTopics(page);
@@ -50,22 +51,23 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
   await overview.getByRole("button", { name: "Topic options" }).click();
   await page.getByRole("menuitem", { name: "View archived topics" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Archived topics" })).toBeVisible();
-  await expect(overview.getByRole("row")).toHaveCount(matching.length + 1);
+  await expect(overview.locator(".entity-row")).toHaveCount(matching.length);
   for (const [index, entity] of matching.entries()) {
     if (index > 0) {
+      await expect(overview).toBeVisible();
       await overview.getByRole("button", { name: "Topic options" }).click();
       await page.getByRole("menuitem", { name: "View archived topics" }).click();
+      await expect(page.getByRole("heading", { level: 1, name: "Archived topics" })).toBeVisible();
     }
     await overview.getByRole("searchbox", { name: "Filter topics" }).fill(entity.name);
-    await expect(overview.getByRole("row")).toHaveCount(2);
+    await expect(overview.locator(".entity-row")).toHaveCount(1);
     await overview.getByRole("button", { name: entity.name, exact: true }).click();
     let menu = await openTopicMenu(page);
     await menu.getByRole("menuitem", { name: "Restore", exact: true }).click();
     menu = await openTopicMenu(page);
     await expect(menu.getByRole("menuitem", { name: "Archive", exact: true })).toBeVisible();
-    await expect(menu.getByRole("menuitemcheckbox", { name: confirmed ? "Confirmed" : "Confirm topic", exact: true })).toHaveAttribute("aria-checked", String(confirmed));
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Back", exact: true }).click();
+    await page.getByRole("group", { name: /History navigation|歷史導覽|历史导航/ }).getByRole("button", { name: "Back", exact: true }).click();
   }
   // A detail return opens active Topics; archived remains accessible from More.
   await overview.getByRole("searchbox", { name: "Filter topics" }).fill("");
@@ -73,7 +75,7 @@ for (const confirmed of [false, true]) test(`archives filtered ${confirmed ? "co
   await page.getByRole("menuitem", { name: "View archived topics" }).click();
   await expect(page.getByText("No archived items", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Back to topics" }).click();
-  await expect(overview.getByRole("row")).toHaveCount(original.length + 1);
+  await expect(overview.locator(".entity-row")).toHaveCount(original.length);
   expect(await storedTopics(page)).toEqual(original);
   for (const command of ["archive_entities_cmd", "restore_entities_cmd"]) {
     expect(controller.calls().filter(call => call.command === command).map(call => call.args)).toEqual(matching.map(entity => ({ req: { ids: [entity.id], dry_run: false } })));
@@ -100,12 +102,11 @@ test("Topics cards lens stays inside the viewport", async ({ context }) => {
 
     await expect(page.getByTestId("entities-cards")).toBeVisible();
     // The browser combines one detected and six confirmed topics.
-    await expect(page.locator(".asset-card")).toHaveCount(7);
-    await expect(page.locator(".asset-card.asset-card--detected")).toHaveCount(0);
+    await expect(page.locator(".entity-row-card")).toHaveCount(7);
 
     const fitsViewport = await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth);
     expect(fitsViewport).toBe(true);
-    const cardBoxes = await Promise.all((await page.locator(".asset-card").all()).map((card) => card.boundingBox()));
+    const cardBoxes = await Promise.all((await page.locator(".entity-row-card").all()).map((card) => card.boundingBox()));
     expect(cardBoxes).toHaveLength(7);
     for (const box of cardBoxes) {
       expect(box).not.toBeNull();

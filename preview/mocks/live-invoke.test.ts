@@ -95,6 +95,17 @@ describe("liveInvoke knowledge folders and Page moves", () => {
     vi.restoreAllMocks();
   });
 
+  it("reads the actual page storage path instead of a preview placeholder", async () => {
+    const path = "/isolated/wenlan/pages";
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ path }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(liveInvoke("get_knowledge_path")).resolves.toBe(path);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/knowledge/path",
+      expect.objectContaining({ method: "GET", body: undefined }),
+    );
+  });
+
   it("returns the daemon folder listing unchanged", async () => {
     const response = {
       folders: [{ path: "研究/知識庫", parent_path: "研究", name: "知識庫" }],
@@ -202,6 +213,89 @@ describe("liveInvoke knowledge folders and Page moves", () => {
       operationId: "move-local",
     })).rejects.toThrow("preview cannot move its local file");
     expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("liveInvoke source annotations and entity type changes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reads a source annotation with the exact source identity and Space selector", async () => {
+    const response = {
+      source: "webpage",
+      source_id: "https://例.com/a?q=1&k=二#frag",
+      notes: "Keep this source description.",
+      page_ids: [],
+      version: 3,
+      updated_at: 1_791_680_000,
+      pages: [],
+    };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(response), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("get_source_annotation", {
+      source: "webpage",
+      sourceId: response.source_id,
+      space: "專案 & R+D",
+    })).resolves.toEqual(response);
+
+    expect(fetch).toHaveBeenCalledWith(
+      `/daemon/api/source-annotations?source=webpage&source_id=${encodeURIComponent(response.source_id)}&space=${encodeURIComponent("專案 & R+D")}`,
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("writes the typed annotation request and preserves daemon version conflicts", async () => {
+    const req = {
+      source: "webpage",
+      source_id: "https://example.test/article",
+      space: "Research",
+      expected_version: 4,
+      notes: "A useful source.",
+      page_ids: ["page-1"],
+    };
+    const saved = {
+      source: req.source,
+      source_id: req.source_id,
+      notes: req.notes,
+      page_ids: req.page_ids,
+      version: 5,
+      updated_at: 1_791_680_000,
+      pages: [{ id: "page-1", title: "Research note" }],
+    };
+    const fetch = vi.fn(async () => new Response(JSON.stringify(saved), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("update_source_annotation", { req })).resolves.toEqual(saved);
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/source-annotations",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(req) }),
+    );
+
+    const conflictBody = JSON.stringify({ error: "source annotation version conflict; current version is 5" });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(conflictBody, { status: 409 })));
+    await expect(liveInvoke("update_source_annotation", { req })).rejects.toMatchObject({
+      status: 409,
+      body: conflictBody,
+    });
+  });
+
+  it("changes an entity type using the scoped daemon route and success response", async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+
+    await expect(liveInvoke("change_entity_type_cmd", {
+      entityId: "entity/with space",
+      entityType: "organization",
+    })).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "/daemon/api/memory/entities/entity%2Fwith%20space/type",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ entity_type: "organization" }),
+      }),
+    );
   });
 });
 

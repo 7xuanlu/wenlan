@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n";
 import type { EntityDetail as EntityDetailRecord, SearchResult } from "../../lib/tauri";
 import EntityDetail from "./EntityDetail";
@@ -11,7 +11,7 @@ vi.mock("../../lib/tauri", () => ({
   getEntityDetail: vi.fn(),
   updateObservation: vi.fn().mockResolvedValue(undefined),
   deleteObservation: vi.fn().mockResolvedValue(undefined),
-  addObservation: vi.fn().mockResolvedValue(undefined),
+  addObservation: vi.fn().mockResolvedValue("obs-new"),
   confirmObservation: vi.fn().mockResolvedValue(undefined),
   confirmEntity: vi.fn().mockResolvedValue(undefined),
   deleteEntity: vi.fn().mockResolvedValue(undefined),
@@ -53,8 +53,8 @@ vi.mock("./AtlasView", () => ({
 
 import {
   addObservation,
-  confirmEntity,
   confirmObservation,
+  confirmEntity,
   deleteEntity,
   deleteObservation,
   getEntityDetail,
@@ -133,6 +133,7 @@ const defaultProps = {
   onBack: vi.fn(),
   onEntityClick: vi.fn(),
   onMemoryClick: vi.fn(),
+  onRegisterFlush: undefined as ((flush: (() => Promise<boolean>) | null) => void) | undefined,
 };
 
 function renderEntity(props = defaultProps) {
@@ -153,7 +154,13 @@ function renderEntity(props = defaultProps) {
 }
 
 describe("EntityDetail characterization", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(async () => {
+    // jsdom has no layout. Represent the visible controls in these focus tests;
+    // real hidden/visible geometry is covered by the browser regressions.
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(
+      () => [new DOMRect(0, 0, 100, 30)] as unknown as DOMRectList,
+    );
     vi.clearAllMocks();
     await i18n.changeLanguage("en");
     vi.mocked(getEntityDetail).mockResolvedValue(detail);
@@ -165,9 +172,8 @@ describe("EntityDetail characterization", () => {
 
     expect(await screen.findByRole("heading", { name: "Ada Lovelace" })).toBeInTheDocument();
     expect(getEntityDetail).toHaveBeenCalledWith("entity-ada");
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
-    expect(screen.getAllByText("person").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByRole("combobox", { name: "Type" })).toHaveValue("person");
     expect(screen.getAllByText("History of Computing").length).toBeGreaterThan(0);
     expect(screen.getByText("research-agent")).toBeInTheDocument();
     expect(screen.getByText("0.87")).toBeInTheDocument();
@@ -193,57 +199,271 @@ describe("EntityDetail characterization", () => {
     expect(getEntityDetail).toHaveBeenCalledTimes(2);
   });
 
-  it("confirms the entity and an observation", async () => {
+  it("opens and focuses an entry directly without a global edit mode", async () => {
+    const { user } = renderEntity();
+    const content = await screen.findByRole("button", { name: "Edit information — Wrote the first published algorithm" });
+    const entry = content.closest("li")!;
+    expect(entry).toBeInTheDocument();
+    await user.click(content);
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    expect(input).toHaveValue("Wrote the first published algorithm");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(updateObservation).not.toHaveBeenCalled();
+  });
+
+  it("keeps topic retention in Info and does not mutate metadata when opening it", async () => {
     const { user } = renderEntity();
 
     await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Confirm topic" }));
-    await user.click(screen.getByRole("button", { name: "Mark note confirmed" }));
-
-    await waitFor(() => {
-      expect(confirmEntity).toHaveBeenCalledWith("entity-ada", true);
-      expect(confirmObservation).toHaveBeenCalledWith("obs-1", true);
-    });
+    expect(screen.queryByRole("menuitem", { name: "Info" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep topic" })).toBeEnabled();
+    expect(confirmEntity).not.toHaveBeenCalled();
+    expect(confirmObservation).not.toHaveBeenCalled();
+    expect(deleteObservation).not.toHaveBeenCalled();
   });
 
-  it("adds, edits, cancels, and deletes observations without leaking Escape to back", async () => {
+  it("autosaves an existing observation after the pause and keeps its editor open", async () => {
+    const { user } = renderEntity();
+    await screen.findByRole("heading", { name: "Ada Lovelace" });
+    await user.click(await screen.findByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const editInput = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(editInput);
+    await user.type(editInput, "Edited observation");
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-1", "Edited observation"), { timeout: 1500 });
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Edited observation");
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveFocus();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+  });
+
+  it("serializes a latest draft typed while an earlier write is in flight", async () => {
+    let resolveFirst: (() => void) | undefined;
+    vi.mocked(updateObservation).mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = resolve; }));
+    let registeredFlush: (() => Promise<boolean>) | null = null;
+    const onRegisterFlush = vi.fn((flush: (() => Promise<boolean>) | null) => { registeredFlush = flush; });
+    const { user } = renderEntity({ ...defaultProps, onRegisterFlush });
+    await user.click(await screen.findByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(input);
+    await user.type(input, "First value");
+    const pendingFlush = registeredFlush!();
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-1", "First value"));
+    await user.type(input, " then latest");
+    resolveFirst?.();
+    expect(await pendingFlush).toBe(true);
+    expect(updateObservation).toHaveBeenCalledTimes(2);
+    expect(updateObservation).toHaveBeenLastCalledWith("obs-1", "First value then latest");
+    expect(input).toHaveValue("First value then latest");
+  });
+
+  it("waits for IME composition to end before autosaving", async () => {
+    const { user } = renderEntity();
+    await user.click(await screen.findByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    fireEvent.compositionStart(input);
+    fireEvent.change(input, { target: { value: "組み立て中" } });
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    expect(updateObservation).not.toHaveBeenCalled();
+    fireEvent.compositionEnd(input);
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-1", "組み立て中"), { timeout: 1500 });
+  });
+
+  it("flushes the current draft before Back and registers a flush only while mounted", async () => {
+    const props = { ...defaultProps, onBack: vi.fn() };
+    let registeredFlush: (() => Promise<boolean>) | null = null;
+    const onRegisterFlush = vi.fn((flush: (() => Promise<boolean>) | null) => { registeredFlush = flush; });
+    const { user, unmount } = renderEntity({ ...props, onRegisterFlush });
+    await screen.findByRole("heading", { name: "Ada Lovelace" });
+
+    await user.click(screen.getByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(input);
+    await user.type(input, "Saved while leaving the entry");
+    expect(registeredFlush).toBeTypeOf("function");
+    expect(await registeredFlush!()).toBe(true);
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Edit information — Saved while leaving the entry" }));
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Saved while leaving the entry");
+
+    await user.click(screen.getByRole("button", { name: "Back" }));
+
+    expect(updateObservation).toHaveBeenCalledExactlyOnceWith(
+      "obs-1",
+      "Saved while leaving the entry",
+    );
+    expect(props.onBack).toHaveBeenCalledOnce();
+    unmount();
+    expect(onRegisterFlush).toHaveBeenLastCalledWith(null);
+  });
+
+  it("inserts a newline on Enter and flushes on Escape without reverting", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Add note" }));
-    const addInput = screen.getByRole("textbox", { name: "Add note" });
-    await user.type(addInput, "A precise new observation{Enter}");
-    await waitFor(() => {
-      expect(addObservation).toHaveBeenCalledWith(
-        "entity-ada",
-        "A precise new observation",
-        "human",
-        1,
-      );
-    });
+    await user.click(screen.getByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(input);
+    await user.type(input, "Line one");
+    await user.keyboard("{End}{Enter}Line two");
+    expect(input).toHaveValue("Line one\nLine two");
+    expect(updateObservation).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-1", "Line one\nLine two"));
+    expect(screen.queryByRole("textbox", { name: "Edit information" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit information — Line one\nLine two" })).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: /Wrote the first published algorithm/ }));
-    const editInput = screen.getByRole("textbox", { name: "Edit note" });
-    await user.clear(editInput);
-    await user.type(editInput, "Edited observation{Enter}");
-    await waitFor(() => {
-      expect(updateObservation).toHaveBeenCalledWith("obs-1", "Edited observation");
+  it("saves the active entry before switching and keeps its draft after a failed switch save", async () => {
+    vi.mocked(getEntityDetail).mockResolvedValue({
+      ...detail,
+      observations: [
+        detail.observations[0],
+        { ...detail.observations[0], id: "obs-2", content: "Second observation" },
+      ],
     });
+    vi.mocked(updateObservation)
+      .mockRejectedValueOnce(new Error("write failed"))
+      .mockResolvedValueOnce(undefined);
+    const { user } = renderEntity();
+    const first = await screen.findByRole("button", { name: "Edit information — Wrote the first published algorithm" });
+    await user.click(first);
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(input);
+    await user.type(input, "Keep this draft");
 
-    await user.click(screen.getByRole("button", { name: /Wrote the first published algorithm/ }));
-    await user.type(screen.getByRole("textbox", { name: "Edit note" }), " ignored{Escape}");
+    await user.click(screen.getByRole("button", { name: "Edit information — Second observation" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Keep this draft");
+    expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-1", "Keep this draft");
+
+    await user.click(screen.getByRole("button", { name: "Edit information — Second observation" }));
+    expect(updateObservation).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Keep this draft");
+
+    await user.click(screen.getByRole("button", { name: "Retry save" }));
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Keep this draft");
+
+    await user.click(screen.getByRole("button", { name: "Edit information — Second observation" }));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("Second observation"));
+  });
+
+  it("preserves duplicate entries, hides legacy blank rows, and offers an empty add entry", async () => {
+    vi.mocked(getEntityDetail).mockResolvedValue({
+      ...detail,
+      observations: [
+        detail.observations[0],
+        {
+          ...detail.observations[0],
+          id: "obs-2",
+          content: detail.observations[0].content,
+        },
+        { ...detail.observations[0], id: "obs-3", content: "" },
+      ],
+    });
+    const { user } = renderEntity();
+    await screen.findByRole("heading", { name: "Ada Lovelace" });
+    expect(screen.getAllByRole("button", { name: "Edit information — Wrote the first published algorithm" })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "Edit information — Add information about Ada Lovelace…" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Add information" }));
+    expect(screen.getByRole("textbox", { name: "Add information" })).toHaveValue("");
+    expect(confirmObservation).not.toHaveBeenCalled();
+  });
+
+  it("deletes the selected observation with one hover-revealed trash activation", async () => {
+    vi.mocked(getEntityDetail).mockResolvedValue({
+      ...detail,
+      observations: [
+        detail.observations[0],
+        { ...detail.observations[0], id: "obs-2", content: "Keep this separate entry" },
+      ],
+    });
+    const { user } = renderEntity();
+    const selected = await screen.findByRole("button", {
+      name: "Edit information — Wrote the first published algorithm",
+    });
+    const selectedRow = selected.closest("li")!;
+    await user.hover(selectedRow);
+    const remove = within(selectedRow).getByRole("button", {
+      name: "Delete information — Wrote the first published algorithm",
+    });
+    await user.click(remove);
+
+    await waitFor(() => expect(deleteObservation).toHaveBeenCalledExactlyOnceWith("obs-1"));
+    expect(screen.queryByRole("button", {
+      name: "Edit information — Wrote the first published algorithm",
+    })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit information — Keep this separate entry" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("deletes an entry when its cleared editor is left", async () => {
+    const { user } = renderEntity();
+    await user.click(await screen.findByRole("button", {
+      name: "Edit information — Wrote the first published algorithm",
+    }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.clear(input);
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(deleteObservation).toHaveBeenCalledExactlyOnceWith("obs-1"));
+    expect(updateObservation).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "Edit information" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", {
+      name: "Edit information — Wrote the first published algorithm",
+    })).not.toBeInTheDocument();
     expect(defaultProps.onBack).not.toHaveBeenCalled();
+  });
 
-    await user.click(screen.getByRole("button", { name: "Delete note" }));
-    await waitFor(() => expect(deleteObservation).toHaveBeenCalledWith("obs-1"));
+  it("adds one new observation then updates that returned canonical ID", async () => {
+    let registeredFlush: (() => Promise<boolean>) | null = null;
+    const onRegisterFlush = vi.fn((flush: (() => Promise<boolean>) | null) => { registeredFlush = flush; });
+    const { user } = renderEntity({ ...defaultProps, onRegisterFlush });
+    await screen.findByRole("heading", { name: "Ada Lovelace" });
+    await user.click(screen.getByRole("button", { name: "Add information" }));
+    const input = screen.getByRole("textbox", { name: "Add information" });
+    await user.type(input, "新しい情報");
+    expect(await registeredFlush!()).toBe(true);
+    expect(addObservation).toHaveBeenCalledExactlyOnceWith("entity-ada", "新しい情報", "human", 1);
+    await user.type(screen.getByRole("textbox", { name: "Add information" }), " updated");
+    expect(await registeredFlush!()).toBe(true);
+    expect(addObservation).toHaveBeenCalledTimes(1);
+    expect(updateObservation).toHaveBeenCalledExactlyOnceWith("obs-new", "新しい情報 updated");
+    await user.keyboard("{Escape}");
+    const persisted = screen.getByRole("button", { name: "Edit information — 新しい情報 updated" });
+    await user.click(persisted);
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toHaveValue("新しい情報 updated");
+    expect(addObservation).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes an empty new draft without creating a row and blocks short additions", async () => {
+    let registeredFlush: (() => Promise<boolean>) | null = null;
+    const onRegisterFlush = vi.fn((flush: (() => Promise<boolean>) | null) => { registeredFlush = flush; });
+    const { user } = renderEntity({ ...defaultProps, onRegisterFlush });
+    await user.click(await screen.findByRole("button", { name: "Add information" }));
+    let input = screen.getByRole("textbox", { name: "Add information" });
+    await user.type(input, "   ");
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Add information" })).not.toBeInTheDocument();
+    expect(addObservation).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Add information" }));
+    input = screen.getByRole("textbox", { name: "Add information" });
+    await user.type(input, "四字內容");
+    expect(await registeredFlush!()).toBe(false);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Write at least 5 characters");
+    expect(addObservation).not.toHaveBeenCalled();
   });
 
   it("routes graph, ledger, and linked-memory controls through their existing callbacks", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     const charlesControls = screen.getAllByRole("button", { name: /Charles Babbage/ });
     expect(charlesControls).toHaveLength(2);
     await user.click(charlesControls[0]);
@@ -263,8 +483,7 @@ describe("EntityDetail characterization", () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
 
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
 
     expect(screen.getByRole("dialog", { name: "Full screen" })).toBeInTheDocument();
@@ -280,7 +499,7 @@ describe("EntityDetail characterization", () => {
 
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog", { name: "Full screen" })).not.toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Topic context" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Full screen" })).toHaveFocus();
     expect(defaultProps.onBack).not.toHaveBeenCalled();
   });
@@ -288,8 +507,7 @@ describe("EntityDetail characterization", () => {
   it("switches the overlay to Atlas with the current entity focused", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
     const dialog = screen.getByRole("dialog", { name: "Full screen" });
 
@@ -307,8 +525,7 @@ describe("EntityDetail characterization", () => {
   it("routes a memory node in the Atlas overlay to the memory, closing the overlay", async () => {
     const { user } = renderEntity();
     await screen.findByRole("heading", { name: "Ada Lovelace" });
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
     const dialog = screen.getByRole("dialog", { name: "Full screen" });
     await user.click(within(dialog).getByRole("button", { name: "Atlas" }));

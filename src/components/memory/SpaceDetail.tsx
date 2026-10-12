@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   confirmSpace,
@@ -8,6 +8,7 @@ import {
   listPages,
   updateSpace,
   type Space,
+  type IndexedFileInfo,
 } from "../../lib/tauri";
 import { SpaceProjectContent } from "./space-detail/SpaceProjectContent";
 import { SpaceDossierHeader } from "./space-detail/SpaceDossierHeader";
@@ -15,6 +16,7 @@ import { SPACE_DETAIL_KEY_COPY, type SpaceDetailCopy } from "./space-detail/copy
 import {
   PAGE_FETCH_LIMIT,
 } from "./space-detail/model";
+import { useUnobstructedContentWidth } from "./useUnobstructedContentWidth";
 import "./space-detail/space-detail-header.css";
 import "./space-detail/space-detail.css";
 import "./pages/pageActions.css";
@@ -28,8 +30,15 @@ export type SpaceDetailProps = {
   readonly onReviewAll?: () => void;
   readonly onCreatePage?: (space: string) => void;
   readonly onSelectPage: (pageId: string) => void;
+  readonly onOpenSource?: (file: IndexedFileInfo) => void;
+  readonly onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
   readonly spaceName: string;
 };
+
+function SpaceDossierFrame({ children }: { readonly children: ReactNode }) {
+  const frameRef = useUnobstructedContentWidth<HTMLElement>("--space-unobstructed-width", true);
+  return <article ref={frameRef} className="space-dossier">{children}</article>;
+}
 
 export default function SpaceDetail({
   copy = SPACE_DETAIL_KEY_COPY,
@@ -40,6 +49,8 @@ export default function SpaceDetail({
   onReviewAll,
   onCreatePage,
   onSelectPage,
+  onOpenSource,
+  onRegisterFlush,
   spaceName,
 }: SpaceDetailProps) {
   const queryClient = useQueryClient();
@@ -54,6 +65,20 @@ export default function SpaceDetail({
     refetchInterval: 10_000,
   });
   const reportedSpaceIdRef = useRef<string | null>(null);
+  const identityFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const previewFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerIdentityFlush = useCallback((flush: (() => Promise<boolean>) | null) => { identityFlushRef.current = flush; }, []);
+  const registerPreviewFlush = useCallback((flush: (() => Promise<boolean>) | null) => { previewFlushRef.current = flush; }, []);
+  const flushSpace = useCallback(async () => {
+    if (identityFlushRef.current && !await identityFlushRef.current()) return false;
+    if (previewFlushRef.current && !await previewFlushRef.current()) return false;
+    return true;
+  }, []);
+
+  useEffect(() => {
+    onRegisterFlush?.(flushSpace);
+    return () => onRegisterFlush?.(null);
+  }, [flushSpace, onRegisterFlush]);
 
   useEffect(() => {
     const space = spaceQuery.data;
@@ -75,10 +100,13 @@ export default function SpaceDetail({
     mutationFn: ({ newName, description }: { readonly newName: string; readonly description?: string }) =>
       updateSpace(spaceName, newName, description),
     onSuccess: (updatedSpace, variables) => {
+      // Seed the renamed route before it renders, keeping the inline draft mounted.
+      queryClient.setQueryData(["space", spaceName], updatedSpace);
+      queryClient.setQueryData(["space", updatedSpace.name], updatedSpace);
       invalidateSpaceQueries();
       if (variables.newName !== spaceName) {
         onSpaceRenamed?.({ id: updatedSpace.id, name: updatedSpace.name });
-        onBack();
+        if (!onSpaceRenamed) onBack();
       }
     },
   });
@@ -86,7 +114,12 @@ export default function SpaceDetail({
     mutationFn: () => deleteSpace(spaceName),
     onSuccess: () => {
       invalidateSpaceQueries();
-      if (spaceQuery.data) onSpaceDeleted?.(spaceQuery.data.id);
+      if (spaceQuery.data && onSpaceDeleted) {
+        // The owner replaces the deleted route directly. Running the ordinary
+        // back flush afterward would target a Space that no longer exists.
+        onSpaceDeleted(spaceQuery.data.id);
+        return;
+      }
       onBack();
     },
   });
@@ -110,19 +143,30 @@ export default function SpaceDetail({
   const mutationError = renameMutation.isError || deleteMutation.isError || confirmMutation.isError;
 
   return (
-    <article className="space-dossier">
+    <SpaceDossierFrame>
       <SpaceDossierHeader
         key={space.id}
+        onRegisterFlush={registerIdentityFlush}
         actions={{
           onBack,
-          onDelete: () => deleteMutation.mutate(),
+          onDelete: async () => {
+            const flushPreview = previewFlushRef.current;
+            try {
+              if (flushPreview && !await flushPreview()) return;
+            } catch {
+              return;
+            }
+            deleteMutation.mutate();
+          },
           onKeep: () => confirmMutation.mutate(),
           onReviewAll,
           onCreatePage: () => onCreatePage?.(space.name),
-          onSaveIdentity: ({ name, description }) => renameMutation.mutate({
-            newName: name,
-            description,
-          }),
+          onSaveIdentity: async ({ name, description }) => {
+            if (name !== space.name && previewFlushRef.current && !await previewFlushRef.current()) {
+              throw new Error("The source description could not be saved.");
+            }
+            await renameMutation.mutateAsync({ newName: name, description });
+          },
         }}
         copy={copy}
         mutationError={mutationError}
@@ -139,7 +183,9 @@ export default function SpaceDetail({
         pagesError={pagesQuery.isError}
         onRetryPages={() => void pagesQuery.refetch()}
         onSelectPage={onSelectPage}
+        onOpenSource={onOpenSource}
+        onRegisterPreviewFlush={registerPreviewFlush}
       />
-    </article>
+    </SpaceDossierFrame>
   );
 }

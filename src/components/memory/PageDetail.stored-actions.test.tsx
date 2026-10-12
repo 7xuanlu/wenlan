@@ -99,16 +99,20 @@ describe("PageDetail stored actions in seamless editing", () => {
   await user.click(screen.getByRole('button',{name:i18n.t('pageDetail.actions')}));
   return screen.getByRole('menuitem',{name:label});
  }
+ async function reviewAction(user:ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button',{name:i18n.t('pageInspector.open')}));
+  return screen.getByRole('button',{name:i18n.t('pageDetail.markPageReviewed')});
+ }
  it('exposes existing commands without leaving seamless editing',async()=>{
   const {user}=await start();
   await expect(action(user,'Re-distill page')).resolves.toBeEnabled();
-  expect(screen.getByRole('menuitem',{name:'Mark page reviewed'})).toBeEnabled();
-  expect(screen.getByRole('menuitem',{name:'Delete page'})).toBeEnabled();
+  expect(await reviewAction(user)).toBeEnabled();
+  expect(await action(user,'Delete page')).toBeEnabled();
  });
  it('flushes edits then reviews exactly the saved body without closing the editor',async()=>{
   const {user,editor}=await start();
   act(()=>replaceDocument(editorViewFromTextbox(editor),'New human content'));
-  await user.click(await action(user,'Mark page reviewed'));
+  await user.click(await reviewAction(user));
   await waitFor(()=>expect(tauriMocks.reviewPage).toHaveBeenCalledWith('page-1','New human content'));
   expect(tauriMocks.updatePage.mock.invocationCallOrder[0]).toBeLessThan(tauriMocks.reviewPage.mock.invocationCallOrder[0]);
   expect(screen.getByRole('textbox',{name:'Page editor'})).toBeVisible();
@@ -116,7 +120,7 @@ describe("PageDetail stored actions in seamless editing", () => {
  it('keeps the draft and does not review when saving fails',async()=>{
   tauriMocks.updatePage.mockRejectedValue(new Error('offline'));
   const {user,editor}=await start();act(()=>replaceDocument(editorViewFromTextbox(editor),'Unsaved human content'));
-  await user.click(await action(user,'Mark page reviewed'));
+  await user.click(await reviewAction(user));
   await waitFor(()=>expect(tauriMocks.updatePage).toHaveBeenCalled());
   expect(tauriMocks.reviewPage).not.toHaveBeenCalled();
   expect(editorViewFromTextbox(screen.getByRole('textbox',{name:'Page editor'})).state.doc.toString()).toBe('Unsaved human content');
@@ -140,7 +144,7 @@ describe("PageDetail stored actions in seamless editing", () => {
   current.user_edited=true;
   tauriMocks.redistillPage.mockImplementation(async()=>{current={...current,content:'Fresh rebuilt content',version:2};return{status:'ok',updated:true};});
   const {user}=await start();
-  await user.click(await action(user,'Mark page reviewed'));
+  await user.click(await reviewAction(user));
   await screen.findByText(i18n.t('pageDetail.reviewApplied'));
   await user.click(await action(user,'Re-distill page'));
   expect(screen.queryByText(i18n.t('pageDetail.reviewApplied'))).not.toBeInTheDocument();
@@ -152,7 +156,7 @@ describe("PageDetail stored actions in seamless editing", () => {
   let release!:()=>void;tauriMocks.reviewPage.mockImplementation(()=>new Promise(resolve=>{release=()=>resolve({kind:'applied'});}));
   let flush:(()=>Promise<boolean>)|null=null;
   const {user}=await start({onRegisterFlush:fn=>{flush=fn;}});
-  await user.click(await action(user,'Mark page reviewed'));
+  await user.click(await reviewAction(user));
   await waitFor(()=>expect(tauriMocks.reviewPage).toHaveBeenCalledOnce());
   expect(await flush!()).toBe(false);
   await act(async()=>release());

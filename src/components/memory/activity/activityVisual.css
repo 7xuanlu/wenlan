@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
 button.mem-activity-review-link {
   min-height: 52px;
-  margin-top: -10px;
+  margin-top: 0;
   border: 1px solid color-mix(in srgb, var(--mem-accent-indigo) 35%, var(--mem-border));
   background: color-mix(in srgb, var(--mem-accent-indigo) 8%, var(--mem-bg));
   color: var(--mem-text);
@@ -75,3 +75,27 @@ button.mem-activity-review-link:hover {
   .mem-activity-step-track { width: min(100%, 88px); }
   .mem-activity-asset-row { padding: 10px; }
 }
+
+/* The page uses one reading column and the same two entry points in every state. */
+.mem-activity-page { min-width: 0; container-type: inline-size; }
+.mem-activity-page-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; margin-bottom: 32px; }
+.mem-activity-page-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.mem-activity-page .mem-activity-page-actions > button { display: inline-flex; align-items: center; gap: 8px; width: auto; min-height: 38px; margin: 0; padding: 8px 12px; border-radius: 7px; font: 500 13px/1.4 var(--mem-font-body); }
+.mem-activity-page-actions > button > svg { flex: none; }
+.mem-activity-page-actions .mem-activity-knowledge-link { border-color: transparent; background: transparent; }
+.mem-activity-page-actions .mem-activity-knowledge-link:hover { background: var(--mem-hover); }
+.mem-activity-page .mem-activity-background { display: grid; gap: 32px; margin-bottom: 32px; }
+.mem-activity-page .mem-activity-recent-title { padding-top: 28px; border-top: 1px solid var(--mem-border); }
+.mem-activity-empty-history { padding-block: 0 16px; }
+@container (max-width: 540px) {
+  .mem-activity-page-header { align-items: flex-start; gap: 14px; margin-bottom: 28px; }
+  .mem-activity-page-actions { width: 100%; gap: 6px; }
+  .mem-activity-page .mem-activity-page-actions > button { padding-inline: 8px; }
+  .mem-activity-step { grid-template-columns: minmax(0, 1fr) max-content; gap: 4px 12px; padding-block: 3px; font-size: 13px; }
+  .mem-activity-step-label { grid-column: 1; grid-row: 1; }
+  .mem-activity-step-state { grid-column: 2; grid-row: 1; white-space: nowrap; }
+  .mem-activity-step-progress { grid-column: 1; grid-row: 2; justify-content: flex-start; }
+  .mem-activity-step-count { grid-column: 2; grid-row: 2; }
+}
+
+.mem-activity-page .mem-activity-now-surface { border: 0; border-radius: 0; background: transparent; padding: 0; font: 14px/1.65 var(--mem-font-body); }

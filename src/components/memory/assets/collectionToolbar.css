@@ -28,6 +28,11 @@
   border-color: var(--mem-text-secondary);
 }
 
+.collection-search:has(.collection-search-input:focus-visible) {
+  outline: 2px solid var(--mem-accent-indigo);
+  outline-offset: 2px;
+}
+
 .collection-search-input {
   background: transparent;
   border: 0;
@@ -86,22 +91,6 @@
   box-sizing: border-box;
 }
 
-.collection-toolbar .asset-lens-toggle {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 8px;
-  display: inline-flex;
-  gap: 4px;
-  overflow: visible;
-}
-
-.collection-toolbar .asset-lens-button {
-  border-radius: 8px;
-  height: 36px;
-  width: 36px;
-}
-
 .collection-toolbar button:focus-visible,
 .collection-filter-row button:focus-visible {
   outline: 2px solid var(--mem-accent-indigo);
@@ -113,20 +102,14 @@
   .collection-search,
   .collection-control,
   .collection-toolbar .collection-toolbar-actions .collection-control,
-  .collection-filter-row .collection-control,
-  .collection-toolbar .asset-lens-button {
+  .collection-filter-row .collection-control {
     min-height: 44px;
   }
 
   .collection-toolbar .collection-toolbar-actions .collection-control { min-width: 44px; }
 
-  .collection-search,
-  .collection-toolbar .asset-lens-button {
+  .collection-search {
     height: 44px;
-  }
-
-  .collection-toolbar .asset-lens-button {
-    width: 44px;
   }
 }
 

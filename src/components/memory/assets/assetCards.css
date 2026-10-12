@@ -142,51 +142,7 @@
   white-space: nowrap;
 }
 
-/* Icon-only lens toggle: two buttons in one bordered group. */
-.asset-lens-toggle {
-  border: 1px solid var(--mem-border);
-  border-radius: var(--mem-radius-md);
-  display: inline-flex;
-  overflow: hidden;
-}
-
-.asset-lens-button {
-  align-items: center;
-  background: transparent;
-  border: 0;
-  color: var(--mem-text-tertiary);
-  cursor: pointer;
-  display: inline-flex;
-  height: 32px;
-  justify-content: center;
-  padding: 0;
-  width: 34px;
-}
-
-.asset-lens-button svg {
-  height: var(--mem-icon-glyph-size);
-  width: var(--mem-icon-glyph-size);
-}
-
-.asset-lens-button[aria-pressed="true"] {
-  background: var(--mem-surface);
-  color: var(--mem-text);
-}
-
-@media (forced-colors: active) {
-  .asset-lens-button[aria-pressed="true"] {
-    outline: 1px solid ButtonText;
-    outline-offset: -1px;
-  }
-}
-
-.asset-lens-button:focus-visible {
-  outline: 2px solid var(--mem-accent-page);
-  outline-offset: -2px;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .asset-lens-button,
   .asset-card,
   .asset-card-open {
     transition: none;

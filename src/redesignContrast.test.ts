@@ -17,6 +17,7 @@ const spacesBaseCss = readFileSync(resolve(sourceDirectory, "components/memory/s
 const spaceDetailCss = readFileSync(resolve(sourceDirectory, "components/memory/space-detail/space-detail.css"), "utf8");
 const spaceHeaderCss = readFileSync(resolve(sourceDirectory, "components/memory/space-detail/space-detail-header.css"), "utf8");
 const entityCss = readFileSync(resolve(sourceDirectory, "components/memory/entity-detail/EntityDetail.css"), "utf8");
+const entityObservationsCss = readFileSync(resolve(sourceDirectory, "components/memory/entity-detail/EntityObservations.css"), "utf8");
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -184,7 +185,7 @@ describe("Spaces navigation redesign contrast", () => {
         { label: `${theme} control on raised`, foreground: control, background: raised },
         { label: `${theme} entity seal`, foreground: resolveDeclarationColor(theme, ruleDeclaration(indexCss, ".entity-detail-seal", "border")), background: canvas },
         { label: `${theme} relationship edge`, foreground: resolveDeclarationColor(theme, ruleDeclaration(indexCss, ".entity-graph-edges line", "stroke")), background: surface },
-        { label: `${theme} observation editor`, foreground: resolveDeclarationColor(theme, ruleDeclaration(indexCss, ".entity-obs-input", "border-bottom")), background: surface },
+        { label: `${theme} observation editor focus`, foreground: resolveDeclarationColor(theme, ruleDeclaration(entityObservationsCss, ".entity-about .entity-obs-input:focus-visible", "outline")), background: composite(parseColor(themeToken(theme, "--mem-hover")), surface) },
       ], 3);
     }
   });
@@ -229,13 +230,25 @@ describe("Spaces navigation redesign contrast", () => {
     );
     for (const [source, selector, property] of [
       [spacesCss, ".spaces-field input", "border"],
-      [spaceHeaderCss, ".space-dossier-title-input", "border-bottom"],
-      [spaceHeaderCss, ".space-dossier-description-editor", "border"],
     ] as const) {
       expect(ruleDeclaration(source, selector, property), selector).toContain("var(--mem-control-border)");
     }
     expect(ruleDeclaration(spacesCss, ".spaces-menu", "border")).toContain(
       "var(--mem-popover-border)",
     );
+    for (const theme of ["dark", "light"] as const) {
+      const spaceFocusOutline = ruleDeclaration(spaceDetailCss, ".space-dossier button:focus-visible", "outline");
+      expect(spaceFocusOutline).toMatch(/^2px solid /);
+      expectContrast([{
+        label: `${theme} Space action keyboard focus`,
+        foreground: resolveDeclarationColor(theme, spaceFocusOutline),
+        background: parseColor(themeToken(theme, "--mem-popover")),
+      }], 3);
+      expectContrast([{
+        label: `${theme} Space menu action text`,
+        foreground: resolveDeclarationColor(theme, ruleDeclaration(spaceHeaderCss, ".space-dossier-menu button", "color")),
+        background: parseColor(themeToken(theme, "--mem-popover")),
+      }], 4.5);
+    }
   });
 });

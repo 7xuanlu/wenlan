@@ -20,6 +20,7 @@ type EntityGraphProps = {
   readonly neighbors: readonly GraphNeighbor[];
   readonly hiddenCount: number;
   readonly onEntityClick: (entityId: string) => void;
+  readonly entityTypeLabels: Readonly<Record<string, string>>;
 };
 
 const GRAPH_NODE_CAP = 8;
@@ -36,7 +37,17 @@ function compactGraphSnapshot(): boolean {
   return typeof window.matchMedia === "function" && window.matchMedia(COMPACT_GRAPH_QUERY).matches;
 }
 
-function EntityGraph({ name, neighbors, hiddenCount, onEntityClick }: EntityGraphProps) {
+function displayRelationType(value: string): string {
+  return value.replace(/_/gu, " ");
+}
+
+function displayEntityType(value: string, labels: Readonly<Record<string, string>>): string {
+  const normalized = value.trim().toLowerCase();
+  if (labels[normalized]) return labels[normalized];
+  return value.trim().replace(/[_-]+/gu, " ").replace(/(^|\s)\p{L}/gu, (character) => character.toLocaleUpperCase());
+}
+
+function EntityGraph({ name, neighbors, hiddenCount, onEntityClick, entityTypeLabels }: EntityGraphProps) {
   const { t } = useTranslation();
   const compact = useSyncExternalStore(subscribeToCompactGraph, compactGraphSnapshot, () => false);
   const incoming = neighbors.filter((neighbor) => neighbor.direction === "incoming");
@@ -91,7 +102,7 @@ function EntityGraph({ name, neighbors, hiddenCount, onEntityClick }: EntityGrap
           }}
           aria-hidden="true"
         >
-          {neighbor.verbs[0]}
+          {displayRelationType(neighbor.verbs[0])}
           {neighbor.verbs.length > 1 ? ` +${neighbor.verbs.length - 1}` : ""}
         </span>
       ))}
@@ -111,13 +122,13 @@ function EntityGraph({ name, neighbors, hiddenCount, onEntityClick }: EntityGrap
             className={`entity-graph-node ${isIncoming ? "is-left" : "is-right"}`}
             style={{ left: `${neighbor.x}%`, top: `${neighbor.y}%` }}
             onClick={() => onEntityClick(neighbor.entityId)}
-            title={`${neighbor.verbs.join(", ")} — ${neighbor.name}`}
-            aria-label={`${neighbor.name} (${neighbor.entityType}) · ${directionLabel} · ${neighbor.verbs.join(", ")}`}
+            title={`${neighbor.verbs.map(displayRelationType).join(", ")} — ${neighbor.name}`}
+            aria-label={`${neighbor.name} (${displayEntityType(neighbor.entityType, entityTypeLabels)}) · ${directionLabel} · ${neighbor.verbs.map(displayRelationType).join(", ")}`}
           >
             <span className="entity-graph-node-dot" aria-hidden="true" />
             <span className="entity-graph-node-text">
               <span className="entity-graph-node-name">{neighbor.name}</span>
-              <span className="entity-graph-node-type">{neighbor.entityType}</span>
+              <span className="entity-graph-node-type">{displayEntityType(neighbor.entityType, entityTypeLabels)}</span>
             </span>
           </button>
         );
@@ -138,6 +149,15 @@ export function EntityConnections({
   onExpand,
 }: EntityConnectionsProps) {
   const { t } = useTranslation();
+  const entityTypeLabels: Readonly<Record<string, string>> = {
+    project: String(t("atlas.entityType.project")),
+    technology: String(t("atlas.entityType.technology")),
+    organization: String(t("atlas.entityType.organization")),
+    person: String(t("atlas.entityType.person")),
+    concept: String(t("atlas.entityType.concept")),
+    place: String(t("atlas.entityType.place")),
+    event: String(t("atlas.entityType.event")),
+  };
   const neighbors = useMemo(() => {
     const byEntityAndDirection = new Map<string, GraphNeighbor>();
     for (const relation of relations) {
@@ -201,7 +221,12 @@ export function EntityConnections({
           {onExpand ? (
             <button
               type="button"
-              onClick={onExpand}
+              onClick={(event) => {
+                // WebKit does not focus pointer-clicked buttons. Give the
+                // overlay a stable origin to restore when it closes.
+                event.currentTarget.focus({ preventScroll: true });
+                onExpand();
+              }}
               className="memory-detail-icon-button"
               aria-label={t("entityDetail.expandGraph")}
               title={t("entityDetail.expandGraph")}
@@ -231,6 +256,7 @@ export function EntityConnections({
               neighbors={shownNeighbors}
               hiddenCount={hiddenCount}
               onEntityClick={onEntityClick}
+              entityTypeLabels={entityTypeLabels}
             />
             <div
               className="entity-relation-list"
@@ -243,21 +269,23 @@ export function EntityConnections({
                 const directionLabel = t(
                   direction === "incoming" ? "entityDetail.incoming" : "entityDetail.outgoing",
                 );
+                const entityTypeLabel = displayEntityType(relation.entity_type, entityTypeLabels);
+                const relationLabel = displayRelationType(relation.relation_type);
                 return (
                   <button
                     key={relation.id}
                     type="button"
                     className="entity-relation-row"
                     onClick={() => onEntityClick(relation.entity_id)}
-                    aria-label={`${relation.entity_name} (${relation.entity_type}) · ${directionLabel} · ${relation.relation_type}`}
+                    aria-label={`${relation.entity_name} (${entityTypeLabel}) · ${directionLabel} · ${relationLabel}`}
                   >
                     <span className="entity-relation-verb">
                       {direction === "incoming"
-                        ? `← ${relation.relation_type}`
-                        : `${relation.relation_type} →`}
+                        ? `← ${relationLabel}`
+                        : `${relationLabel} →`}
                     </span>
                     <span className="entity-relation-name">{relation.entity_name}</span>
-                    <span className="entity-relation-type">{relation.entity_type}</span>
+                    <span className="entity-relation-type">{entityTypeLabel}</span>
                   </button>
                 );
               })}

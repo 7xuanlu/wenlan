@@ -3,18 +3,16 @@ import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 type EntityTopicMenuProps = {
-  confirmed: boolean;
   archived: boolean;
   actionsPending: boolean;
-  onContext: () => void;
-  onConfirm: () => void;
   onArchive: () => void;
   onDelete: () => void;
 };
 
-export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext, onConfirm, onArchive, onDelete }: EntityTopicMenuProps) {
+export function EntityTopicMenu({ archived, actionsPending, onArchive, onDelete }: EntityTopicMenuProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [keyboardNavigation, setKeyboardNavigation] = useState(false);
   const anchorRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -25,8 +23,12 @@ export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext
   useEffect(() => {
     if (!open) return;
     const controls = Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role^="menuitem"]:not(:disabled)') ?? []);
-    (initialFocusRef.current === "last" ? controls[controls.length - 1] : controls[0])?.focus();
-    const onPointerDown = (event: MouseEvent) => {
+    if (controls.length > 0) {
+      (initialFocusRef.current === "last" ? controls[controls.length - 1] : controls[0])?.focus();
+    } else {
+      menuRef.current?.focus();
+    }
+    const onPointerDown = (event: PointerEvent) => {
       if (!anchorRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onFocusIn = (event: FocusEvent) => {
@@ -38,11 +40,11 @@ export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext
       setOpen(false); triggerRef.current?.focus();
     };
     window.addEventListener("keydown", onEscape, true);
-    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("focusin", onFocusIn);
     return () => {
       window.removeEventListener("keydown", onEscape, true);
-      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("focusin", onFocusIn);
     };
   }, [open]);
@@ -51,6 +53,8 @@ export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext
       event.preventDefault(); event.stopPropagation(); close(); return;
     }
     const controls = items();
+    if (controls.length === 0) return;
+    setKeyboardNavigation(true);
     const index = controls.indexOf(document.activeElement as HTMLButtonElement);
     let next = index;
     if (event.key === "ArrowDown") next = (index + 1) % controls.length;
@@ -66,10 +70,15 @@ export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext
         ref={triggerRef} type="button" className="mem-icon-action page-detail-actions-menu-trigger"
         aria-label={t("entityDetail.actionsLabel")} title={t("entityDetail.actionsLabel")}
         aria-haspopup="menu" aria-expanded={open}
-        onClick={() => { initialFocusRef.current = "first"; setOpen((value) => !value); }}
+        onClick={(event) => {
+          setKeyboardNavigation(event.detail === 0);
+          initialFocusRef.current = "first";
+          setOpen((value) => !value);
+        }}
         onKeyDown={(event) => {
           if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
           event.preventDefault(); event.stopPropagation();
+          setKeyboardNavigation(true);
           initialFocusRef.current = event.key === "ArrowUp" ? "last" : "first";
           setOpen(true);
         }}
@@ -79,11 +88,7 @@ export function EntityTopicMenu({ confirmed, archived, actionsPending, onContext
         </svg>
       </button>
       {open ? (
-        <div className="mem-popover-surface page-detail-actions-menu" role="menu" aria-label={t("entityDetail.actionsLabel")} ref={menuRef} onKeyDown={handleKeyDown}>
-          <button type="button" role="menuitem" onClick={() => invoke(onContext)}>{t("entityDetail.contextTitle")}</button>
-          {!archived ? <button type="button" role="menuitemcheckbox" aria-checked={confirmed} disabled={actionsPending} onClick={() => invoke(onConfirm)} title={t(confirmed ? "entityDetail.markUnconfirmed" : "entityDetail.confirmEntity")}>
-            {t(confirmed ? "entityDetail.confirmed" : "entityDetail.confirmEntity")}
-          </button> : null}
+        <div className="mem-popover-surface page-detail-actions-menu entity-topic-actions-menu" data-keyboard-navigation={keyboardNavigation ? "true" : "false"} role="menu" aria-label={t("entityDetail.actionsLabel")} ref={menuRef} tabIndex={-1} onKeyDown={handleKeyDown}>
           <button type="button" role="menuitem" disabled={actionsPending} onClick={() => invoke(onArchive)}>{t(archived ? "entities.actions.restore" : "entities.actions.archive")}</button>
           <button type="button" role="menuitem" className="page-detail-menu-danger" disabled={actionsPending} onClick={() => invoke(onDelete)}>{t("entityDetail.deleteEntity")}</button>
         </div>

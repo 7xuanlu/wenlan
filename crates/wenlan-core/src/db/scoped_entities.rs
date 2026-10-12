@@ -9,6 +9,76 @@ use crate::WenlanError;
 use std::collections::{HashMap, HashSet};
 
 impl MemoryDB {
+    /// Correct an entity's type after confirming it is live and visible in
+    /// `scope`. Only canonical types already present in the entity vocabulary
+    /// are accepted; this write never creates a vocabulary entry.
+    pub async fn change_entity_type_in_scope(
+        &self,
+        scope: &ReadScope,
+        entity_id: &str,
+        entity_type: &str,
+    ) -> Result<(), WenlanError> {
+        const BUILT_IN_ENTITY_TYPES: [&str; 6] = [
+            "concept",
+            "person",
+            "organization",
+            "place",
+            "project",
+            "technology",
+        ];
+        let canonicals = self.entity_canonicals().await?;
+        let normalized = crate::vocab::entity_type::normalize(entity_type, &canonicals);
+        if normalized.unrecognized
+            || !BUILT_IN_ENTITY_TYPES.contains(&normalized.canonical.as_str())
+        {
+            return Err(WenlanError::Validation(
+                "unknown entity type; choose one of the existing canonical types".to_string(),
+            ));
+        }
+        let canonical = normalized.canonical;
+
+        let conn = self.conn.lock().await;
+        conn.execute("BEGIN", ())
+            .await
+            .map_err(|error| WenlanError::VectorDb(format!("change_entity_type begin: {error}")))?;
+        let result: Result<(), WenlanError> = async {
+            if !Self::entity_in_scope(&conn, entity_id, scope).await? {
+                return Err(WenlanError::NotFound("entity not found".to_string()));
+            }
+
+            let now = chrono::Utc::now().to_rfc3339();
+            let affected = conn
+                .execute(
+                    "UPDATE pages SET entity_type = ?1, last_modified = ?2
+                     WHERE kind = 'entity' AND status = 'active'
+                       AND id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?3)",
+                    libsql::params![canonical, now, entity_id],
+                )
+                .await
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("change_entity_type update: {error}"))
+                })?;
+            if affected != 1 {
+                return Err(WenlanError::NotFound("entity not found".to_string()));
+            }
+            Ok(())
+        }
+        .await;
+
+        match result {
+            Ok(()) => super::commit_or_rollback(&conn)
+                .await
+                .map(|_| ())
+                .map_err(|error| {
+                    WenlanError::VectorDb(format!("change_entity_type commit: {error}"))
+                }),
+            Err(error) => {
+                let _ = conn.execute("ROLLBACK", ()).await;
+                Err(error)
+            }
+        }
+    }
+
     pub async fn list_entities_scoped(
         &self,
         entity_type: Option<&str>,

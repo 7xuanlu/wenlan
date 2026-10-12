@@ -8,6 +8,7 @@ import SourcesSection from "./settings/sections/SourcesSection";
 import AgentsSection from "./settings/sections/AgentsSection";
 import IntelligenceSection from "./settings/sections/IntelligenceSection";
 import DiagnosticsSection from "./settings/sections/DiagnosticsSection";
+import { SettingsView } from "./settings/SettingsView";
 import "./settings/settingsControls.css";
 
 interface SettingsPageProps {
@@ -15,6 +16,9 @@ interface SettingsPageProps {
   section?: SettingsSection;
   onBack: () => void;
   onSetupAgent?: () => void;
+  onOpenConnections?: () => void;
+  onOpenIntelligence?: () => void;
+  onOpenActivity?: () => void;
   currentSpace?: string;
   /** Required: SourcesSection's only affordance is the import button, so a
    *  caller that omits this would render a card whose entire purpose is a
@@ -27,43 +31,43 @@ export default function SettingsPage({
   section = "general",
   onBack,
   onSetupAgent,
+  onOpenConnections,
+  onOpenIntelligence,
+  onOpenActivity,
   onImport,
   currentSpace,
 }: SettingsPageProps) {
   const { t } = useTranslation();
 
   const activeGroup = SETTINGS_GROUPS.find((g) => g.id === section);
-
-  return (
-    <div className="settings-page flex flex-col gap-6 w-full min-w-0 max-w-2xl mx-auto py-4" style={{ containerType: "inline-size" }}>
-      {/* The sidebar names the category; the content starts with its first setting group. */}
-      <WorkspaceBackButton onClick={onBack} aria-label={t("main.back")} title={t("main.back")} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0, marginBottom: "12px" }}>
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
-      </WorkspaceBackButton>
-      <h1 className="sr-only" style={{ fontFamily: "var(--mem-font-heading)", fontSize: "var(--mem-text-2xl)", fontWeight: 500, lineHeight: 1.2, color: "var(--mem-text)" }}>
-        {activeGroup ? t(activeGroup.labelKey) : t("settings.title")}
-      </h1>
-
+  const content = (
+    <>
       {section === "general" && <GeneralSection />}
       {section === "sources" && <SourcesSection onImport={onImport} />}
       {section === "agents" && <AgentsSection onSetupAgent={onSetupAgent} currentSpace={currentSpace} />}
       {section === "intelligence" && <IntelligenceSection delay={0} />}
-      {section === "diagnostics" && <DiagnosticsSection onSetupAgent={onSetupAgent} />}
+      {section === "diagnostics" && (
+        <DiagnosticsSection
+          onSetupAgent={onSetupAgent}
+          onOpenConnections={onOpenConnections}
+          onOpenIntelligence={onOpenIntelligence}
+          onOpenActivity={onOpenActivity}
+        />
+      )}
+    </>
+  );
+  const backButton = (
+    <WorkspaceBackButton onClick={onBack} aria-label={t("main.back")} title={t("main.back")} className="p-1.5 -ml-1.5 rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]" style={{ color: "var(--mem-text-tertiary)", background: "none", border: "none", cursor: "pointer", lineHeight: 0 }}>
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
+    </WorkspaceBackButton>
+  );
 
-      {/* ── Privacy note — persistent footer on all groups. This is the only
-          place this claim appears in the UI; keep it truthful and singular. */}
-      <div
-        className="flex items-start gap-2.5 px-2 pt-2 mem-fade-up"
-        style={{ animationDelay: "120ms" }}
-      >
-        <svg aria-hidden="true" className="w-3.5 h-3.5 shrink-0 mt-0.5" style={{ color: "var(--mem-text-tertiary)" }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", lineHeight: "1.5" }}>
-          {t("settings.footer")}
-        </p>
-      </div>
-
-    </div>
+  return (
+    <SettingsView
+      title={activeGroup ? t(activeGroup.labelKey) : t("settings.title")}
+      backButton={backButton}
+    >
+      {content}
+    </SettingsView>
   );
 }

@@ -1,8 +1,8 @@
 .space-dossier {
   --mem-text-tertiary: var(--mem-text-meta-aa);
-  width: 100%;
-  max-width: 840px;
-  margin: 0 auto;
+  --space-leading-gutter: max(0px, calc((var(--space-unobstructed-width, 100%) - 840px) / 2));
+  width: min(840px, calc(100% - var(--space-leading-gutter)));
+  margin-inline: var(--space-leading-gutter) auto;
   padding: 4px 0 48px;
   color: var(--mem-text);
   font-family: var(--mem-font-body);
@@ -10,10 +10,8 @@
 }
 
 .space-dossier-parent,
-.space-dossier-title-edit,
 .space-dossier-overflow-trigger,
 .space-dossier-menu button,
-.space-dossier-identity-editor button,
 .space-dossier-text-action,
 .space-dossier-archive-trigger {
   border: 0;
@@ -32,9 +30,7 @@
 }
 
 .space-dossier-parent svg,
-.space-dossier-title-edit svg,
 .space-dossier-actions svg,
-.space-dossier-page-list svg,
 .space-dossier-review-list svg {
   width: 16px;
   height: 16px;
@@ -46,11 +42,6 @@
 .space-dossier-suggested,
 .space-dossier-delete-confirmation {
   border: 1px solid var(--mem-border);
-  background: var(--mem-detail-surface-raised);
-}
-
-.space-dossier-identity-editor {
-  border: 1px solid var(--mem-control-border);
   background: var(--mem-detail-surface-raised);
 }
 
@@ -79,7 +70,6 @@
 }
 
 .space-dossier-suggested button,
-.space-dossier-identity-editor button,
 .space-dossier-delete-confirmation button {
   border: 1px solid var(--mem-border);
   background: var(--mem-surface);
@@ -88,7 +78,6 @@
   cursor: pointer;
 }
 
-.space-dossier-identity-editor button,
 .space-dossier-delete-confirmation button {
   min-height: var(--mem-control-height);
   border-radius: var(--mem-control-radius);
@@ -133,68 +122,31 @@
 
 .space-dossier-title-block {
   min-width: 0;
+  flex: 1;
 }
 
-.space-dossier-identity-editor {
-  display: grid;
-  width: min(100%, 760px);
-  gap: 14px;
-  padding: 14px;
-}
-
-.space-dossier-title-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.space-dossier-title-block h1,
-.space-dossier-title-input {
+.space-dossier-title-block h1 {
   margin: 0;
   font-family: var(--mem-font-heading);
-  font-size: clamp(24px, 1.6vw + 14px, 30px);
+  font-size: var(--reading-title-size, clamp(24px, 2.2vw, 30px));
   font-weight: 500;
-  line-height: 1.12;
+  line-height: 1.22;
   letter-spacing: -0.02em;
   color: var(--mem-text);
-}
-
-.space-dossier-title-edit {
-  display: grid;
-  flex: 0 0 32px;
-  width: var(--mem-icon-action-size);
-  height: var(--mem-icon-action-size);
-  place-items: center;
-  border: 0;
-  background: none;
-  color: var(--mem-text-secondary);
-  cursor: pointer;
-}
-
-.space-dossier-title-edit:hover {
-  color: var(--mem-text);
-  background: var(--mem-hover);
-}
-
-.space-dossier-title-input {
-  width: min(100%, 720px);
-  border: 0;
-  border-bottom: 1px solid var(--mem-control-border);
-  background: transparent;
-  outline: 0;
 }
 
 .space-dossier-description {
   max-width: 720px;
   margin: 14px 0 0;
   color: var(--mem-text-secondary);
-  font-size: 15px;
-  line-height: 1.65;
+  font-size: var(--reading-font-size, 15px);
+  line-height: var(--reading-line-height, 1.75);
 }
 
 .space-dossier-actions {
   position: relative;
-  padding-top: 10px;
+  flex-shrink: 0;
+  padding-top: 2px;
 }
 
 .space-dossier-overflow-trigger {
@@ -209,39 +161,6 @@
 .space-dossier-parent:hover {
   color: var(--mem-text);
   background: var(--mem-hover);
-}
-
-.space-dossier-description-editor {
-  width: 100%;
-  min-height: 88px;
-  resize: vertical;
-  border: 1px solid var(--mem-control-border);
-  border-radius: var(--mem-control-radius);
-  background: transparent;
-  color: var(--mem-text);
-  font: 14px/1.65 var(--mem-font-body);
-  outline: 0;
-  padding: 9px 10px;
-}
-
-.space-dossier-description-editor:focus-visible {
-  border-color: var(--mem-accent-page);
-  outline: 2px solid var(--mem-accent-page);
-  outline-offset: 2px;
-}
-
-.space-dossier-identity-editor-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--mem-border);
-}
-
-.space-dossier-identity-editor-actions span {
-  margin-left: auto;
-  color: var(--mem-text-tertiary);
-  font: 10px var(--mem-font-mono);
 }
 
 .space-dossier-menu {
@@ -298,3 +217,5 @@
   .space-dossier-actions { width: 100%; justify-content: flex-end; }
   .space-dossier-menu { left: auto; right: 0; max-width: calc(100vw - 48px); }
 }
+
+.space-dossier-error { display: flex; align-items: center; gap: 12px; font-size: 13px; }

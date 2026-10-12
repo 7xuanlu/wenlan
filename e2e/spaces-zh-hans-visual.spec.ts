@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { homedir } from "node:os";
 import { expect, test } from "@playwright/test";
 import { openSpaceEntity } from "./helpers/spaceEntity";
 import { openTopicContext } from "./helpers/topicTools";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
-const evidenceDir = path.join(
-  process.cwd(),
-  ".omo/evidence/task-7-spaces-navigation-redesign/accessibility",
+const evidenceRoot = process.env.WENLAN_UI_EVIDENCE_DIR || path.join(
+  process.env.REPO_DATA_ROOT || path.join(homedir(), ".local", "share", "repo-data"),
+  "wenlan", "ui", "spaces-navigation",
 );
+const evidenceDir = path.join(evidenceRoot, "accessibility");
 
 test("captures Simplified Chinese Space and Entity dossiers at physical DPR2", async ({ browser }) => {
   const context = await browser.newContext({
@@ -27,7 +29,7 @@ test("captures Simplified Chinese Space and Entity dossiers at physical DPR2", a
     .getByRole("button", { name: "空间", exact: true })
     .click();
   await page.getByRole("button", { name: "Wenlan", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "笔记" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "页面" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "来源" })).toBeVisible();
   await expect(page.locator(".space-dossier-archive,.space-dossier-entities")).toHaveCount(0);
   await expect(page.locator("aside.memory-sidebar")).toHaveAttribute("aria-hidden", "true");

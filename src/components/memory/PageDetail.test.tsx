@@ -491,8 +491,8 @@ describe("PageDetail", () => {
     act(() => replaceDocument(editorViewFromTextbox(editor), "Pending map draft"));
     await selectInspectorTab(user, i18n.t("pageCanvas.tabCanvas"));
     const pendingMap = screen.getByRole("tab", { name: i18n.t("pageCanvas.tabCanvas") });
-    expect(pendingMap).toHaveAttribute("aria-disabled", "true");
-    expect(pendingMap).toHaveAttribute("aria-busy", "true");
+    expect(pendingMap).toBeDisabled();
+    expect(pendingMap).toHaveAttribute("aria-selected", "false");
     expect(pendingMap).toHaveFocus();
     expect(screen.queryByRole("region", { name: "Canvas for libSQL Architecture" })).toBeNull();
     expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
@@ -1528,8 +1528,8 @@ describe("PageDetail", () => {
   describe("marking a page reviewed", () => {
     async function openPageActions(user: ReturnType<typeof userEvent.setup>) {
       await screen.findByText("libSQL Architecture");
-      await user.click(screen.getByRole("button", { name: "Page actions" }));
-      return screen.getByRole("menuitem", { name: "Mark page reviewed" });
+      await openPageInfo(user);
+      return screen.getByRole("button", { name: "Mark page reviewed" });
     }
 
     it("stays disabled while the daemon cannot record reviews", async () => {

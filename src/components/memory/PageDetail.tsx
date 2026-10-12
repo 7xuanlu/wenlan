@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import SourceDocumentPreview from "./sources/SourceDocumentPreview";
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
 import { useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, useContext, useId } from "react";
 import { useQuery, useQueries, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ import {
   type Entity,
   type Page,
   type PageReviewOutcome,
+  type IndexedFileInfo,
   type UpdatePageFailureKind,
 } from "../../lib/tauri";
 // Imported from its own module, not the lib/tauri barrel: tests mock that
@@ -42,6 +44,8 @@ import ContentRenderer from "./ContentRenderer";
 import RelatedPages from "./page/RelatedPages";
 import PageInfo from "./page/PageInfo";
 import PageInfoDrawer from "./page/PageInfoDrawer";
+import { DetailInfoContent, DetailReadingFrame } from "./DetailLayout";
+import { InfoAction } from "./page/InfoAction";
 import "./page/pageDocumentTools.css";
 import KnowledgeContext from "./context/KnowledgeContext";
 import { pageReviewNotice, type PageReviewNotice } from "./page/pageReviewNotice";
@@ -254,6 +258,8 @@ export default function PageDetail({
   const [renameError, setRenameError] = useState(false);
   const [renameNeedsReview, setRenameNeedsReview] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
+  const [sourcePreview, setSourcePreview] = useState<IndexedFileInfo | null>(null);
+  useEffect(() => setSourcePreview(null), [pageId]);
   const [canvasWorkspaceExpanded, setCanvasWorkspaceExpanded] = useState(false);
   const [canvasWorkspaceHost, setCanvasWorkspaceHost] = useState<HTMLDivElement | null>(null);
   const [canvasWorkspaceSupported, setCanvasWorkspaceSupported] = useState(false);
@@ -507,6 +513,25 @@ export default function PageDetail({
     queryFn: () => getPageSources(pageId),
     enabled: !!pageId,
   });
+
+  // Imported source memories can be read alongside this note. Ordinary
+  // memories retain their existing detail navigation and editing behavior.
+  const openSourceMemory = (sourceId: string) => {
+    const memory = pageSources?.find((row) => row.source.memory_source_id === sourceId)?.memory;
+    if (memory && ["folder", "obsidian"].includes(memory.source_agent ?? "")) {
+      if (showCanvas) void requestToggleCanvas();
+      changeCanvasWorkspaceExpanded(false);
+      setSourcePreview({
+        source: "memory",
+        source_id: memory.source_id,
+        title: memory.title,
+        chunk_count: memory.chunk_count,
+        last_modified: memory.last_modified,
+      });
+    } else {
+      onMemoryClick(sourceId);
+    }
+  };
 
   const editorReferenceContext = useMemo(() => ({
     citations: page?.citations,
@@ -1208,6 +1233,11 @@ export default function PageDetail({
     }
   };
   const closeInspector = () => {
+    if (sourcePreview) {
+      setSourcePreview(null);
+      inspectorToggleRef.current?.focus({ preventScroll: true });
+      return;
+    }
     const returningToEditor = showCanvas && canvasReturnToEditorRef.current;
     changeCanvasWorkspaceExpanded(false);
     if (showCanvas) void requestToggleCanvas();
@@ -1636,7 +1666,7 @@ export default function PageDetail({
         citation={c}
         sourceMemory={sourceMemoryByLocator.get(c.locator) ?? null}
         sourcesLoading={pageSourcesLoading}
-        onOpenMemory={onMemoryClick}
+        onOpenMemory={openSourceMemory}
       />
     );
   };
@@ -1719,13 +1749,13 @@ export default function PageDetail({
     editing && editGate.kind === "editor" && editHasMatchingTitle;
 
   const inspectorToggle = <button ref={inspectorToggleRef} type="button" className="mem-icon-action workspace-panel-toggle note-inspector-toggle"
-    aria-label={t(infoOpen || showCanvas ? "pageInspector.close" : "pageInspector.open")}
-    title={t(infoOpen || showCanvas ? "pageInspector.close" : "pageInspector.open")}
-    aria-expanded={infoOpen || showCanvas} disabled={canvasSwitchPending}
+    aria-label={t(infoOpen || showCanvas || sourcePreview ? "pageInspector.close" : "pageInspector.open")}
+    title={t(infoOpen || showCanvas || sourcePreview ? "pageInspector.close" : "pageInspector.open")}
+    aria-expanded={infoOpen || showCanvas || !!sourcePreview} disabled={canvasSwitchPending}
     onClick={(event) => {
       // WebKit pointer clicks do not focus buttons; give the pane a stable return target.
       event.currentTarget.focus({ preventScroll: true });
-      if (infoOpen || showCanvas) closeInspector(); else void requestPageInfo();
+      if (infoOpen || showCanvas || sourcePreview) closeInspector(); else void requestPageInfo();
     }}>
     <SidebarSimple aria-hidden="true" size={18} style={{transform:"scaleX(-1)"}} />
   </button>;
@@ -1844,23 +1874,6 @@ export default function PageDetail({
                         </button>
                       ))
                     )}
-                    {/* Review the flushed source, including in seamless editing. */}
-                    <button
-                        disabled={storedActionBlocked || !reviewSupported || reviewMutation.isPending}
-                        onClick={() => {
-                          setActionMenuOpen(false);
-                          void requestStoredPageAction("review");
-                        }}
-                        role="menuitem"
-                        title={
-                          reviewSupported
-                            ? t("pageDetail.markPageReviewed")
-                            : reviewUnavailableReason
-                        }
-                        type="button"
-                      >
-                        {t("pageDetail.markPageReviewed")}
-                    </button>
                     <button
                       className="page-detail-menu-danger"
                       disabled={
@@ -1882,7 +1895,7 @@ export default function PageDetail({
   return (
     <div className={`page-detail document-context-host${infoOpen || showCanvas ? " document-context-open" : ""}${showCanvas ? " page-document-map-open" : ""}${canvasWorkspaceExpanded && (infoOpen || showCanvas) ? " page-detail--workspace-expanded" : ""}`} onKeyDown={handlePageDetailKeyDown} ref={setPageDetailRootRef}>
       {documentToolsHost && createPortal(inspectorToggle, documentToolsHost)}
-      <div className="page-detail-document">
+      <DetailReadingFrame className="page-detail-document">
         {!hideOuterTitleWhileEditing && (
           <div className="page-document-title-row">
             {renaming ? (
@@ -2344,7 +2357,7 @@ export default function PageDetail({
                   } : wikiLinkPreview}
                   onDismiss={dismissWikiLinkPreview}
                   onOpenPage={(targetId) => onPageClick?.(targetId)}
-                  onOpenMemory={onMemoryClick}
+                  onOpenMemory={openSourceMemory}
                   onPointerEnter={() => {
                     if (wikiLinkPreviewLeaveTimerRef.current !== null) window.clearTimeout(wikiLinkPreviewLeaveTimerRef.current);
                     wikiLinkPreviewLeaveTimerRef.current = null;
@@ -2357,7 +2370,7 @@ export default function PageDetail({
           )
         ) : (
           <div>
-            <ReferenceNavigationProvider onOpenPage={onPageClick} onOpenMemory={onMemoryClick}>
+            <ReferenceNavigationProvider onOpenPage={onPageClick} onOpenMemory={openSourceMemory}>
             <div className="page-detail-prose" data-testid="page-document-reading" onClickCapture={handleContentClick}>
               {ledeText && (
                 <div className="page-detail-lede">
@@ -2381,7 +2394,7 @@ export default function PageDetail({
             </ReferenceNavigationProvider>
           </div>
         )}
-      </div>
+      </DetailReadingFrame>
 
       <div aria-hidden={!canvasWorkspaceExpanded} className="page-detail-canvas-workspace-host" ref={setCanvasWorkspaceHost} />
 
@@ -2393,7 +2406,7 @@ export default function PageDetail({
         onExpandedChange={canvasWorkspaceSupported ? changeCanvasWorkspaceExpanded : undefined}
         expandLabel={t("pageCanvas.expandWorkspace")}
         restoreLabel={t("pageCanvas.restoreSidebar")}
-        open={infoOpen || showCanvas}
+        open={!sourcePreview && (infoOpen || showCanvas)}
         onClose={closeInspector}
         title={t("pageInspector.label")}
         closeLabel={t("common.close")}
@@ -2406,8 +2419,17 @@ export default function PageDetail({
           className={`note-inspector-panel${showCanvas ? " note-inspector-panel--canvas" : ""}`}>
           {showCanvas ? <PageCanvas key={pageId} pageId={pageId} pageTitle={page.title} labelOverrides={labelOverrides}
             onMemoryClick={onMemoryClick} onPageClick={onPageClick} onEntityClick={onEntityClick} />
-            : <div className="note-inspector-info">
+            : <DetailInfoContent className="note-inspector-info">
+          <InfoAction
+            label={t("pageDetail.markPageReviewed")}
+            description={reviewSupported ? t("infoActions.reviewPageHint") : reviewUnavailableReason}
+            active={cutoverLive && Boolean(page.truth?.human_reviewed)}
+            disabled={storedActionBlocked || !reviewSupported}
+            pending={reviewMutation.isPending}
+            onClick={() => { void requestStoredPageAction("review"); }}
+          />
           <div className="note-info-summary">
+          <h3 className="note-info-section-heading">{t("detailInfo.details")}</h3>
           <p className="document-kind-label">{t("knowledgeContext.noteKind")}</p>
             <div className="note-info-dateline">
               <span className="page-detail-dateline-item">
@@ -2475,13 +2497,19 @@ export default function PageDetail({
               onRetryRevisions={() => void refetchRevisions()}
               citations={page.citations}
               citationState={processed.state}
-              onMemoryClick={(id) => { setInfoOpen(false); onMemoryClick(id); }}
+              onMemoryClick={openSourceMemory}
               onPageClick={onPageClick}
             />
           </div>
-            </div>}
+            </DetailInfoContent>}
         </div>
       </PageInfoDrawer>
+      {sourcePreview && <SourceDocumentPreview
+        key={`${pageId}:${sourcePreview.source_id}`}
+        file={sourcePreview}
+        space={page.space ?? undefined}
+        onClose={() => setSourcePreview(null)}
+      />}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import MemoryDetail from "./MemoryDetail";
@@ -26,6 +26,26 @@ vi.mock("./context/KnowledgeContext", () => ({
   </section>,
 }));
 
+vi.mock("./editor/MarkdownEditor", async () => {
+  const React = await import("react");
+  return {
+    MarkdownEditor: (props: any) => {
+      const editor = React.useRef<HTMLDivElement>(null);
+      React.useEffect(() => { if (editor.current) editor.current.textContent = props.initialDocument; }, [props.sessionId, props.initialDocument]);
+      return <div ref={editor} role="textbox" aria-label={props.ariaLabel} aria-multiline="true"
+        aria-disabled={props.disabled} contentEditable={!props.disabled} suppressContentEditableWarning
+        onInput={event => {
+          const next = event.currentTarget.textContent ?? "";
+          props.onDocumentChange(next);
+        }}
+        onBlur={event => props.onSave(event.currentTarget.textContent ?? "")}
+        onKeyDown={event => { if (event.key === "Escape") props.onCancel(); }}>
+        {props.initialDocument}
+      </div>;
+    },
+  };
+});
+
 const memory: tauri.MemoryItem = {
   source_id: "mem-1",
   title: "Memory",
@@ -47,10 +67,32 @@ function wrapper({ children }: { children: React.ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-describe("MemoryDetail enrichment status", () => {
+async function openMemoryInfo(user = userEvent.setup()) {
+  await user.click(await screen.findByRole("button", { name: "Info" }));
+  return screen.getByRole("dialog", { name: "Info" });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
+describe("MemoryDetail Info and history", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    window.localStorage.clear();
+    vi.stubGlobal("matchMedia", vi.fn(() => ({
+      matches: false,
+      media: "(min-width: 1100px)",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList)));
     vi.mocked(tauri.getMemoryDetail).mockResolvedValue(memory);
     vi.mocked(tauri.listSpaces).mockResolvedValue([]);
     vi.mocked(tauri.listEntities).mockResolvedValue([]);
@@ -78,7 +120,7 @@ describe("MemoryDetail enrichment status", () => {
     });
   });
 
-  it("shows daemon enrichment status without blocking the memory body", async () => {
+  it("keeps internal enrichment diagnostics out of the memory Info reading surface", async () => {
     vi.mocked(tauri.getEnrichmentStatus).mockResolvedValue({
       source_id: "mem-1",
       summary: "complete",
@@ -97,12 +139,10 @@ describe("MemoryDetail enrichment status", () => {
 
     expect(await screen.findByText("A memory")).toBeInTheDocument();
     expect(screen.queryByText(/complete/i)).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
-    await waitFor(() => {
-      expect(screen.getByText(/enrichment/i)).toBeInTheDocument();
-      expect(screen.getByText(/complete/i)).toBeInTheDocument();
-    });
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeInTheDocument();
+    expect(tauri.getEnrichmentStatus).not.toHaveBeenCalled();
+    expect(screen.queryByText(/enrichment/i)).toBeNull();
   });
 
   it("keeps a navigable shell while memory detail is loading", () => {
@@ -212,7 +252,7 @@ describe("MemoryDetail enrichment status", () => {
     expect(backButton.textContent).toBe("");
     expect(backButton.querySelector("svg")).not.toBeNull();
     expect(within(reading).getByText("Primary reading content")).toBeVisible();
-    expect(within(dossier).getByRole("button", { name: /edit memory/i })).toBeInTheDocument();
+    expect(within(reading).getByRole("textbox", { name: "Memory reading" })).toBeInTheDocument();
     expect(within(reading).queryByText(/complete/i)).toBeNull();
     expect(within(reading).queryByText(/current dossier copy/i)).toBeNull();
     expect(within(reading).queryByText("Memory information")).toBeNull();
@@ -225,26 +265,124 @@ describe("MemoryDetail enrichment status", () => {
 
     await userEvent.click(within(dossier).getByRole("button", { name: /memory actions/i }));
     expect(within(dossier).getByRole("menuitemcheckbox", { name: /pinned yes/i })).toBeInTheDocument();
-    expect(within(dossier).getByRole("menuitemcheckbox", { name: /confirmed yes/i })).toBeInTheDocument();
-    await userEvent.click(within(dossier).getByRole("menuitem", { name: "Memory context" }));
-    const panel = screen.getByRole("dialog", { name: "Memory context" });
+    expect(within(dossier).queryByRole("menuitemcheckbox", { name: /confirmed/i })).toBeNull();
+    await userEvent.click(within(dossier).getByRole("button", { name: "Info" }));
+    const panel = screen.getByRole("dialog", { name: "Info" });
     expect(within(panel).getByRole("button", { name: /edit tags/i })).toBeInTheDocument();
-    expect(within(panel).getByText(/complete/i)).toBeVisible();
+    expect(within(panel).queryByText(/complete/i)).toBeNull();
     expect(within(panel).getByText(/current dossier copy/i)).toBeVisible();
     await userEvent.click(within(panel).getByRole("button", { name: "Linked topic" }));
     expect(onNavigateEntity).toHaveBeenCalledWith("linked-entity");
-    expect(screen.queryByRole("dialog")).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeVisible();
     await userEvent.click(screen.getByText("Similar memories", { selector: "summary" }));
     await userEvent.click(screen.getByRole("button", { name: /related context appears here/i }));
     expect(onNavigateMemory).toHaveBeenCalledWith("mem-2");
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeVisible();
+  });
+
+  it("orders Info content consistently and removes exact duplicates of the current memory", async () => {
+    vi.mocked(tauri.getMemoryDetail).mockResolvedValue({
+      ...memory,
+      content: "A memory",
+      structured_fields: JSON.stringify({
+        claim: " A\n   memory ",
+        project_focus: "Design review",
+      }),
+      source_text: "Original source excerpt",
+    });
+    vi.mocked(tauri.search).mockResolvedValue([{
+      id: "related-1",
+      source_id: "mem-2",
+      source: "memory",
+      title: "Related memory",
+      url: null,
+      content: "A separate related memory",
+      chunk_index: 0,
+      last_modified: 2,
+      score: 0.9,
+      memory_type: "fact",
+    }]);
+    vi.mocked(tauri.getMemoryRevisions).mockResolvedValue({
+      current_source_id: "mem-1",
+      chain_depth: 2,
+      entries: [
+        {
+          source_id: "mem-1",
+          depth: 0,
+          title: "Current memory",
+          content_preview: " A   memory ",
+          last_modified: 10,
+          delta_summary: "Refined from the source",
+        },
+        {
+          source_id: "mem-0",
+          depth: 1,
+          title: "Earlier memory",
+          content_preview: "Earlier distinct content",
+          last_modified: 5,
+        },
+      ],
+    });
+
+    render(
+      <MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />,
+      { wrapper },
+    );
+
+    expect(await screen.findByText("A memory")).toBeVisible();
+    const panel = await openMemoryInfo();
+    const confirmAction = within(panel).getByRole("button", { name: /confirm content/i });
+    const details = panel.querySelector(".memory-detail-information");
+    const additional = panel.querySelector(".memory-detail-structured");
+    const source = panel.querySelector(".memory-detail-source");
+    const connections = panel.querySelector(".memory-detail-connections");
+    const similar = within(panel).getByText("Similar memories", { selector: "summary" });
+    const history = within(panel).getByText(/revision history/i);
+    expect(details).not.toBeNull();
+    expect(additional).not.toBeNull();
+    expect(source).not.toBeNull();
+    expect(connections).not.toBeNull();
+    if (!details || !additional || !source || !connections) throw new Error("Expected ordered Info sections");
+    expect(confirmAction.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(details.compareDocumentPosition(additional) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(additional.compareDocumentPosition(source) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(source.compareDocumentPosition(connections) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(connections.compareDocumentPosition(similar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(similar.compareDocumentPosition(history) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).queryByText("A memory", { selector: ".memory-detail-field-value" })).toBeNull();
+    expect(within(panel).getByText("Design review")).toBeVisible();
+    expect(within(panel).getByText("Project focus")).toBeVisible();
+    expect(within(panel).queryByText(/depth 0/i)).toBeNull();
+    expect(within(panel).queryByText(" A   memory ")).toBeNull();
+    await userEvent.click(within(panel).getByRole("button", { name: /show all 2/i }));
+    expect(within(panel).getByText("Earlier distinct content")).toBeVisible();
+    expect(tauri.getEnrichmentStatus).not.toHaveBeenCalled();
+  });
+
+  it("opens the action menu at the matching keyboard edge and returns focus on Escape", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />,
+      { wrapper },
+    );
+    expect(await screen.findByText("A memory")).toBeVisible();
+    const trigger = screen.getByRole("button", { name: /memory actions/i });
+    trigger.focus();
+    await user.keyboard("{ArrowUp}");
+    const menu = screen.getByRole("menu", { name: /memory actions/i });
+    expect(menu).toHaveAttribute("data-keyboard-navigation", "true");
+    expect(screen.getByRole("menuitem", { name: /delete memory/i })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(trigger).toHaveFocus();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("saves edited memory content from the redesigned reading column", async () => {
     const user = userEvent.setup();
-    vi.mocked(tauri.updateMemory).mockResolvedValue();
+    vi.mocked(tauri.updateMemory).mockImplementation(async (_id, content) => {
+      vi.mocked(tauri.getMemoryDetail).mockResolvedValue({ ...memory, content: content ?? memory.content });
+    });
 
     render(
       <MemoryDetail
@@ -258,33 +396,29 @@ describe("MemoryDetail enrichment status", () => {
 
     expect(await screen.findByText("A memory")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /edit memory/i }));
-    const editor = screen.getByRole("textbox");
-    expect(screen.getByText("Editing")).toBeInTheDocument();
-    expect(editor.closest(".memory-detail-editing-surface")).not.toBeNull();
+    const editor = screen.getByRole("textbox", { name: "Memory reading" });
     await user.clear(editor);
     await user.type(editor, "Updated reading content");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.blur(editor);
 
     await waitFor(() => {
-      expect(tauri.updateMemory).toHaveBeenCalledWith("mem-1", "Updated reading content");
+      expect(tauri.updateMemory).toHaveBeenCalledWith("mem-1", "Updated reading content", undefined, undefined, undefined, "A memory");
     });
-    expect(screen.queryByText("Editing")).toBeNull();
+    expect(screen.getByRole("textbox", { name: "Memory reading" })).toHaveTextContent("Updated reading content");
   });
 
   it.each([
     ["Linked memory", "linked-memory", "onNavigateMemory"],
     ["Used in page", "linked-page", "onNavigatePage"],
     ["Linked topic", "linked-entity", "onNavigateEntity"],
-  ] as const)("closes the context panel before navigating through %s", async (label, id, callback) => {
+  ] as const)("keeps the context panel open through the %s navigation callback", async (label, id, callback) => {
     const callbacks = { onNavigateMemory: vi.fn(), onNavigatePage: vi.fn(), onNavigateEntity: vi.fn() };
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} {...callbacks} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     await userEvent.click(screen.getByRole("button", { name: label }));
     expect(callbacks[callback]).toHaveBeenCalledWith(id);
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeVisible();
   });
 
   it("summarizes long related context until the user expands it", async () => {
@@ -335,14 +469,13 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Memory actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(await screen.findByText("Similar memories", { selector: "summary" }));
     expect(screen.queryByText("Entity 4")).toBeNull();
     expect(tauri.listEntities).not.toHaveBeenCalled();
 
-    const relatedMemoriesHeading = screen.getByRole("heading", { name: /similar memories/i });
-    const relatedMemoriesPanel = relatedMemoriesHeading.closest("section");
+    const relatedMemoriesSummary = screen.getByText("Similar memories", { selector: "summary" });
+    const relatedMemoriesPanel = relatedMemoriesSummary.closest("details");
     expect(relatedMemoriesPanel).not.toBeNull();
     if (!relatedMemoriesPanel) throw new Error("Missing related memories panel");
     expect(within(relatedMemoriesPanel).getByText("Related memory 3")).toBeInTheDocument();
@@ -402,8 +535,7 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     expect(await screen.findByText(/revision history/i)).toBeVisible();
     expect(screen.getByText(/clarified wording/i)).toBeInTheDocument();
   });
@@ -479,9 +611,7 @@ describe("MemoryDetail enrichment status", () => {
 
     expect(await screen.findByText("A memory")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Memory actions" }));
-
-    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByTitle("Edit tags"));
     await user.type(screen.getByPlaceholderText("Add a tag..."), "reviewed{enter}");
 
@@ -533,8 +663,7 @@ describe("MemoryDetail enrichment status", () => {
     );
 
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     expect(await screen.findByText(/revision history/i)).toBeVisible();
     expect(screen.getByText(/clarified wording/i)).toBeInTheDocument();
     await waitFor(() => {
@@ -552,38 +681,44 @@ describe("MemoryDetail enrichment status", () => {
 
     const content = await screen.findByText("A memory");
     expect(screen.queryByText("Source", { selector: "summary" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Memory actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
-    const panel = screen.getByRole("dialog", { name: "Memory context" });
+    await user.click(screen.getByRole("button", { name: "Info" }));
+    const panel = screen.getByRole("dialog", { name: "Info" });
     const sourceSummary = within(panel).getByText("Source", { selector: "summary" });
     const sourceDisclosure = sourceSummary.closest("details");
-    expect(sourceDisclosure).not.toHaveAttribute("open");
+    expect(sourceDisclosure).toHaveAttribute("open");
     expect(content).toBeVisible();
-    expect(screen.getByText(/Original captured source/)).not.toBeVisible();
-    expect(screen.getByRole("region", { name: "Memory reading" }).contains(sourceSummary)).toBe(false);
-    await user.click(sourceSummary);
     expect(screen.getByText(/Original captured source/)).toBeVisible();
+    const sourceQuote = within(panel).getByText(/Original captured source/);
+    expect(sourceQuote.textContent).toHaveLength(121);
+    expect(sourceQuote.textContent).toMatch(/…$/);
+    expect(screen.getByRole("region", { name: "Memory reading" }).contains(sourceSummary)).toBe(false);
+    expect(within(panel).queryByText("A piece of knowledge saved from a conversation, a source, or a capture.")).toBeNull();
+    const primaryContext = within(panel).getByRole("region", { name: "Knowledge context" });
+    const confirmAction = within(panel).getByRole("button", { name: "Confirm content" });
+    if (!sourceDisclosure) throw new Error("Expected source excerpt disclosure");
+    expect(confirmAction.compareDocumentPosition(sourceDisclosure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(sourceDisclosure.compareDocumentPosition(primaryContext) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     await user.click(screen.getByRole("button", { name: /show full source/i }));
     expect(screen.getByText(sourceText.trim())).toBeVisible();
+    expect(sourceQuote.textContent).toBe(sourceText.trim());
     await user.click(screen.getByRole("button", { name: /show less/i }));
     expect(screen.queryByText(sourceText.trim())).toBeNull();
+    expect(sourceQuote.textContent).toHaveLength(121);
   });
 
   it("omits enrichment when the daemon summary is empty", async () => {
     vi.mocked(tauri.getEnrichmentStatus).mockResolvedValue({ source_id: "mem-1", summary: "  ", steps: [] });
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     expect(screen.queryByText("Enrichment")).toBeNull();
   });
 
   it("preserves actual Markdown headings without turning prose into a hero", async () => {
     vi.mocked(tauri.getMemoryDetail).mockResolvedValue({ ...memory, content: "# Actual heading\n\nNormal reading paragraph.\n\n## A subsection\n\nMore context." });
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
-    expect(await screen.findByRole("heading", { level: 1, name: "Actual heading" })).toBeVisible();
-    expect(screen.getByRole("heading", { level: 2, name: "A subsection" })).toBeVisible();
-    expect(screen.getByText("Normal reading paragraph.").closest(".memory-detail-body-text")).not.toBeNull();
+    const editor = await screen.findByRole("textbox", { name: "Memory reading" });
+    expect(editor.textContent).toBe("# Actual heading\n\nNormal reading paragraph.\n\n## A subsection\n\nMore context.");
     expect(screen.getByRole("main").querySelector(".memory-detail-hero-text")).toBeNull();
   });
 
@@ -599,7 +734,7 @@ describe("MemoryDetail enrichment status", () => {
     await waitFor(() => expect(tauri.dismissPendingRevision).toHaveBeenCalledWith("mem-1"));
   });
 
-  it("preserves confirm, pin and guarded delete through the actions menu", async () => {
+  it("confirms content from Info and preserves pin and guarded delete in actions", async () => {
     const user = userEvent.setup();
     const onBack = vi.fn();
     vi.mocked(tauri.updateMemory).mockResolvedValue();
@@ -609,10 +744,10 @@ describe("MemoryDetail enrichment status", () => {
     render(<MemoryDetail sourceId="mem-1" onBack={onBack} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
     const trigger = screen.getByRole("button", { name: "Memory actions" });
-    await user.click(trigger);
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Confirmed No" }));
+    const info = await openMemoryInfo(user);
+    await user.click(within(info).getByRole("button", { name: "Confirm content" }));
     await waitFor(() => expect(tauri.updateMemory).toHaveBeenCalledWith("mem-1", undefined, undefined, true));
-    expect(trigger).toHaveFocus();
+    await user.click(within(info).getByRole("button", { name: "Close" }));
     await user.click(trigger);
     await user.click(screen.getByRole("menuitemcheckbox", { name: "Pinned No" }));
     await waitFor(() => expect(tauri.pinMemory).toHaveBeenCalledWith("mem-1"));
@@ -634,14 +769,12 @@ describe("MemoryDetail enrichment status", () => {
     const trigger = screen.getByRole("button", { name: "Memory actions" });
     trigger.focus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: "Memory context" })).toHaveFocus();
-    await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitemcheckbox", { name: "Confirmed No" })).toHaveFocus();
-    await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("menuitemcheckbox", { name: "Pinned No" })).toHaveFocus();
-    await user.keyboard("{End}");
+    await user.keyboard("{ArrowDown}");
     expect(screen.getByRole("menuitem", { name: "Delete memory" })).toHaveFocus();
-    await user.keyboard("{Home}{Escape}");
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("menuitemcheckbox", { name: "Pinned No" })).toHaveFocus();
+    await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();
     expect(screen.queryByRole("menu")).toBeNull();
     await user.click(trigger);
@@ -656,8 +789,7 @@ describe("MemoryDetail enrichment status", () => {
     vi.mocked(tauri.updateMemory).mockResolvedValue();
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Memory actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByRole("button", { name: /fact/i }));
     await user.click(screen.getByRole("button", { name: "Preference" }));
     await waitFor(() => expect(tauri.reclassifyMemory).toHaveBeenCalledWith("mem-1", "preference"));
@@ -667,26 +799,82 @@ describe("MemoryDetail enrichment status", () => {
   });
 
 
-  it("preserves unconfirm and unpin for an existing confirmed pinned memory", async () => {
+  it("keeps an already-confirmed memory disabled and preserves unpin", async () => {
     vi.mocked(tauri.getMemoryDetail).mockResolvedValue({ ...memory, confirmed: true, pinned: true });
     vi.mocked(tauri.updateMemory).mockResolvedValue();
     vi.mocked(tauri.unpinMemory).mockResolvedValue();
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Confirmed Yes" }));
-    await waitFor(() => expect(tauri.updateMemory).toHaveBeenCalledWith("mem-1", undefined, undefined, false));
+    const info = await openMemoryInfo();
+    const confirmed = within(info).getByRole("button", { name: "Content confirmed" });
+    expect(confirmed).toBeDisabled();
+    expect(confirmed).toHaveAttribute("data-active", "true");
+    expect(within(info).queryByText("You have confirmed this memory.")).toBeNull();
+    expect(tauri.updateMemory).not.toHaveBeenCalled();
+    await userEvent.click(within(info).getByRole("button", { name: "Close" }));
     await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
     await userEvent.click(screen.getByRole("menuitemcheckbox", { name: "Pinned Yes" }));
     await waitFor(() => expect(tauri.unpinMemory).toHaveBeenCalledWith("mem-1"));
   });
 
-  it("removes recap copy context from the compact header", async () => {
+  it("keeps confirmation pending once, leaves it unconfirmed on error, and allows retry", async () => {
+    const pending = deferred<void>();
+    vi.mocked(tauri.updateMemory)
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue();
+    render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
+    expect(await screen.findByText("A memory")).toBeVisible();
+
+    const info = await openMemoryInfo();
+    const confirm = within(info).getByRole("button", { name: "Confirm content" });
+    await userEvent.click(confirm);
+    expect(confirm).toBeDisabled();
+    expect(confirm).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(confirm);
+    expect(tauri.updateMemory).toHaveBeenCalledTimes(1);
+    expect(tauri.updateMemory).toHaveBeenCalledWith("mem-1", undefined, undefined, true);
+
+    await act(async () => {
+      pending.reject(new Error("disk unavailable"));
+      await pending.promise.catch(() => undefined);
+    });
+    expect(await screen.findByText("Couldn’t save this change. Try again.")).toBeVisible();
+    expect(confirm).toHaveAttribute("data-active", "false");
+    expect(tauri.updateMemory).not.toHaveBeenCalledWith("mem-1", undefined, undefined, false);
+
+    await userEvent.click(confirm);
+    await waitFor(() => expect(tauri.updateMemory).toHaveBeenCalledTimes(2));
+    expect(tauri.updateMemory).toHaveBeenLastCalledWith("mem-1", undefined, undefined, true);
+  });
+
+  it("preserves an unsaved draft and blocks confirmation until it is saved", async () => {
+    const user = userEvent.setup();
+    vi.mocked(tauri.updateMemory).mockRejectedValueOnce(new Error("offline"));
+    render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
+    expect(await screen.findByText("A memory")).toBeVisible();
+
+    const editor = screen.getByRole("textbox", { name: "Memory reading" });
+    await user.clear(editor);
+    await user.type(editor, "Unsaved draft stays here");
+    fireEvent.blur(editor);
+    expect(await screen.findByRole("button", { name: "Retry saving" })).toBeVisible();
+
+    const info = await openMemoryInfo(user);
+    const confirm = within(info).getByRole("button", { name: "Confirm content" });
+    expect(confirm).toBeDisabled();
+    expect(confirm).toHaveAttribute("title", "Save your changes before confirming this memory.");
+    expect(editor).toHaveTextContent("Unsaved draft stays here");
+    expect(tauri.updateMemory).not.toHaveBeenCalledWith("mem-1", undefined, undefined, true);
+  });
+
+  it("keeps recaps readable without the retired copy-context action", async () => {
     vi.mocked(tauri.getMemoryDetail).mockResolvedValue({ ...memory, memory_type: "recap", is_recap: true, domain: "work", source_agent: "codex" });
+    vi.mocked(tauri.clipboardWrite).mockResolvedValue();
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={vi.fn()} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Edit memory" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Copy as context" })).toBeNull();
+    expect(tauri.clipboardWrite).not.toHaveBeenCalled();
   });
 
   it("keeps recap source memories separate from semantic similarity", async () => {
@@ -697,14 +885,13 @@ describe("MemoryDetail enrichment status", () => {
     } : { ...memory, source_id: id, content: "Exact recap source" });
     render(<MemoryDetail sourceId="mem-1" onBack={vi.fn()} onNavigateEntity={vi.fn()} onNavigateMemory={onNavigateMemory} />, { wrapper });
     expect(await screen.findByText("A memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     await userEvent.click(await screen.findByText("Source memories", { selector: "summary" }));
     expect(screen.queryByText("Similar memories")).toBeNull();
     expect(tauri.search).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /exact recap source/i }));
     expect(onNavigateMemory).toHaveBeenCalledWith("recap-source");
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Info" })).toBeVisible();
   });
 
   it("closes disclosures and source expansion when navigating to another memory", async () => {
@@ -714,18 +901,15 @@ describe("MemoryDetail enrichment status", () => {
     const props = { onBack: vi.fn(), onNavigateEntity: vi.fn(), onNavigateMemory: vi.fn() };
     const { rerender } = render(<QueryClientProvider client={queryClient}><MemoryDetail sourceId="mem-1" {...props} /></QueryClientProvider>);
     expect(await screen.findByText("First memory")).toBeVisible();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
     await userEvent.click(screen.getByText("Source", { selector: "summary" }));
     await userEvent.click(screen.getByRole("button", { name: "Show full source" }));
     rerender(<QueryClientProvider client={queryClient}><MemoryDetail sourceId="mem-2" {...props} /></QueryClientProvider>);
     expect(await screen.findByText("Second memory")).toBeVisible();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText("Source", { selector: "summary" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: "Memory actions" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Memory context" }));
-    expect(screen.getByText("Source", { selector: "summary" }).closest("details")).not.toHaveAttribute("open");
-    await userEvent.click(screen.getByText("Source", { selector: "summary" }));
+    await userEvent.click(screen.getByRole("button", { name: "Info" }));
+    expect(screen.getByText("Source", { selector: "summary" }).closest("details")).toHaveAttribute("open");
     expect(screen.getByRole("button", { name: "Show full source" })).toBeVisible();
   });
 

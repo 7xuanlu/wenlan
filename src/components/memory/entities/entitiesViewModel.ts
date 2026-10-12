@@ -5,9 +5,8 @@ import type { Entity, EntityStatus, ListEntitiesRequest } from "../../../lib/tau
 /** The three lifecycle tabs the view offers, one per {@link EntityStatus}. */
 export type EntityTab = "established" | "detected" | "archived";
 
-/** Type chip values. Fixed to the mock's four options; the daemon's vocabulary
- * has more canonical types, but the filter only exposes these. */
-export type EntityTypeFilter = "all" | "concept" | "person" | "organization" | "place";
+/** Canonical type chips supported by the topic list and type editor. */
+export type EntityTypeFilter = "all" | "concept" | "person" | "organization" | "place" | "project" | "technology";
 
 export type EntityMemoriesFilter = "any" | "none" | "some";
 

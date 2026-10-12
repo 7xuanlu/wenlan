@@ -35,8 +35,12 @@ describe("Wiki destination and Page/Space editorial title scale", () => {
 
   it("uses the Page and Entity detail scale for the Space title and its editor", () => {
     const source = stylesheet("space-detail/space-detail-header.css");
-    expect(declaration(source, ".space-dossier-title-block h1,\n.space-dossier-title-input", "font-size"))
-      .toBe("clamp(24px, 1.6vw + 14px, 30px)");
+    expect(declaration(source, ".space-dossier-title-block h1", "font-size"))
+      .toBe("var(--reading-title-size, clamp(24px, 2.2vw, 30px))");
+    expect(declaration(source, ".space-dossier-description", "font-size"))
+      .toBe("var(--reading-font-size, 15px)");
+    expect(declaration(source, ".space-dossier-description", "line-height"))
+      .toBe("var(--reading-line-height, 1.75)");
   });
 
   it("keeps Space section headings subordinate when the detail title reaches its minimum", () => {

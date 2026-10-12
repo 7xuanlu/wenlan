@@ -1384,6 +1384,7 @@ pub async fn handle_reclassify_memory(
         &source_id,
         wenlan_core::post_write::MemoryUpdate {
             content: None,
+            expected_content: None,
             space: None,
             confirm: false,
             memory_type: Some(&mt),
@@ -1641,6 +1642,7 @@ pub async fn handle_update_memory(
         &id,
         wenlan_core::post_write::MemoryUpdate {
             content: req.content.as_deref(),
+            expected_content: req.expected_content.as_deref(),
             space: req.space.as_deref().map(Some),
             confirm: req.confirmed == Some(true),
             memory_type: memory_type.as_deref(),
@@ -1762,6 +1764,109 @@ mod update_memory_endpoint_tests {
         assert_eq!(memory.content, "Original content must remain unchanged.");
         assert_eq!(memory.memory_type.as_deref(), Some("fact"));
         assert!(!memory.confirmed);
+    }
+
+    #[tokio::test]
+    async fn stale_expected_content_rejects_the_whole_update() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "stale-expected-content".to_string(),
+            title: "Original".to_string(),
+            content: "Current canonical content must remain authoritative.".to_string(),
+            memory_type: Some("fact".to_string()),
+            confirmed: Some(false),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/stale-expected-content/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({
+                            "content": "The stale editor draft must not persist.",
+                            "expected_content": "Old editor baseline.",
+                            "confirmed": true,
+                            "memory_type": "decision"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let memory = db
+            .get_memory_detail("stale-expected-content")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            memory.content,
+            "Current canonical content must remain authoritative."
+        );
+        assert_eq!(memory.memory_type.as_deref(), Some("fact"));
+        assert!(!memory.confirmed);
+    }
+
+    #[tokio::test]
+    async fn update_memory_without_expected_content_remains_compatible() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            wenlan_core::db::MemoryDB::new(tmp.path(), Arc::new(wenlan_core::events::NoopEmitter))
+                .await
+                .unwrap(),
+        );
+        db.upsert_documents(vec![RawDocument {
+            source: "memory".to_string(),
+            source_id: "legacy-update-memory".to_string(),
+            title: "Legacy update".to_string(),
+            content: "Original content from a legacy caller.".to_string(),
+            ..Default::default()
+        }])
+        .await
+        .unwrap();
+        let state = Arc::new(RwLock::new(ServerState {
+            db: Some(db.clone()),
+            ..Default::default()
+        }));
+
+        let response = crate::router::build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri("/api/memory/legacy-update-memory/update")
+                    .header("Content-Type", "application/json")
+                    .body(Body::from(r#"{"content":"Legacy edit still succeeds."}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            db.get_memory_detail("legacy-update-memory")
+                .await
+                .unwrap()
+                .unwrap()
+                .content,
+            "Legacy edit still succeeds."
+        );
     }
 
     #[tokio::test]

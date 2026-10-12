@@ -245,7 +245,8 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   letter-spacing: normal;
 }
 
-@container wiki-main (max-width: 700px) {
+/* Keep a useful reading lane beside Info before the directory squeezes it. */
+@container wiki-main (max-width: 900px) {
   .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
     box-sizing: border-box;
     padding-top: 52px;

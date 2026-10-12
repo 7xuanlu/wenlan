@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { i18n } from "../../i18n";
@@ -31,10 +31,15 @@ function renderList(
   qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } }),
   connectedFamilies?: Set<string>,
   seenFamilies?: Set<string>,
+  hideWhenComplete = false,
 ) {
   return render(
     <QueryClientProvider client={qc}>
-      <ClientSetupList connectedFamilies={connectedFamilies} seenFamilies={seenFamilies} />
+      <ClientSetupList
+        connectedFamilies={connectedFamilies}
+        seenFamilies={seenFamilies}
+        hideWhenComplete={hideWhenComplete}
+      />
     </QueryClientProvider>,
   );
 }
@@ -67,6 +72,39 @@ describe("ClientSetupList — one Set up button, two different jobs behind it", 
     expect(screen.queryByText("Show terminal commands")).not.toBeInTheDocument();
     expect(screen.queryByText("Advanced")).not.toBeInTheDocument();
     expect(screen.queryByText(/plugin marketplace add/)).not.toBeInTheDocument();
+  });
+
+  it("shows loading and retryable scan errors in the compact Settings section", async () => {
+    mocks.detectMcpClients.mockReturnValueOnce(new Promise(() => {}));
+    const loading = renderList(undefined, undefined, undefined, true);
+    expect(loading.container.querySelector("section")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading available tools");
+    loading.unmount();
+
+    mocks.detectMcpClients.mockRejectedValueOnce(new Error("catalog unavailable"));
+    const failed = renderList(undefined, undefined, undefined, true);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not load available tools");
+    expect(failed.container.querySelector("section")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Claude Code")).toBeInTheDocument();
+  });
+
+  it("reports a measured empty catalog without claiming a tool is connected", async () => {
+    mocks.detectMcpClients.mockResolvedValue([]);
+    renderList();
+
+    expect(await screen.findByText("No tools are available on this device.")).toBeInTheDocument();
+    expect(screen.queryByText("Every detected tool is already connected")).not.toBeInTheDocument();
+  });
+
+  it("hides the completed compact section after a nonempty catalog is measured", async () => {
+    mocks.detectMcpClients.mockResolvedValue([
+      { name: "Claude Code", client_type: "claude_code", config_path: "~/.claude.json", detected: YES, already_configured: YES, has_raw_entry: YES, has_raw_duplicate: NO, has_plugin: NO },
+    ]);
+    const { container } = renderList(undefined, undefined, undefined, true);
+
+    await waitFor(() => expect(container.querySelector("section")).not.toBeInTheDocument());
+    expect(screen.queryByText("Add a tool")).not.toBeInTheDocument();
   });
 
   // The invariant, from the Settings side. Claude Code's and Codex's Wenlan

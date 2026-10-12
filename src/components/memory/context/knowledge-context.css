@@ -35,12 +35,12 @@
 .page-detail-info-slot .page-detail-actions-menu { z-index: 40; }
 
 @media (min-width: 1100px) {
-  .document-context-host.document-context-open.memory-detail-content-first { padding-right: 384px; }
+  .document-context-host.document-context-open.memory-detail-content-first { padding-right: 360px; }
 }
 
 @media (min-width: 1100px) {
   .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open { padding-right: 0; }
-  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open.memory-detail-content-first { padding-right: 24px; }
+  .memory-shell:has(.page-info-drawer-hosted) .document-context-host.document-context-open.memory-detail-content-first { padding-right: 0; }
 }
 
 .knowledge-context-open-graph { display: inline-flex; align-items: center; justify-self: start; gap: 6px; min-height: 32px; max-width: 100%; margin-top: 8px; padding: 5px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--mem-text-secondary); font: 500 13px/1.5 var(--mem-font-body); text-align: left; cursor: pointer; }

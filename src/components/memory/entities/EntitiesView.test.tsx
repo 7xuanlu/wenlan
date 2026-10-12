@@ -118,7 +118,8 @@ describe("EntitiesView browse", () => {
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Confirm|Archive all|Restore|Delete/ })).not.toBeInTheDocument();
-    expect(screen.getAllByRole("columnheader").map(header => header.textContent)).toEqual(["Name", "Type"]);
+    expect(screen.queryByRole("columnheader")).not.toBeInTheDocument();
+    expect(within(screen.getByTestId("entities-list")).getByText("Person")).toBeInTheDocument();
     expect(screen.queryByText(/5 memories|Confirmed by|Detected in/)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Ada Lovelace" }));
     await user.click(screen.getByRole("button", { name: "Analytical Engine" }));
@@ -133,13 +134,14 @@ describe("EntitiesView browse", () => {
     const card = await screen.findByTestId("entity-card-ada");
     expect(within(card).getByText("Person")).toBeInTheDocument();
     expect(within(card).getByText("History")).toBeInTheDocument();
-    expect(within(card).getAllByRole("button")).toHaveLength(1);
-    const detectedOpen = within(card).getByRole("button", { name: "Ada Lovelace" });
+    expect(card).toHaveAccessibleName("Ada Lovelace");
+    expect(within(card).queryByRole("button")).not.toBeInTheDocument();
+    const detectedOpen = screen.getByRole("button", { name: "Ada Lovelace" });
     detectedOpen.focus();
     await user.keyboard("{Enter}");
-    await user.click(within(screen.getByTestId("entity-card-engine")).getByRole("button", { name: "Analytical Engine" }));
+    await user.click(screen.getByRole("button", { name: "Analytical Engine" }));
     await openArchived(user);
-    await user.click(within(await screen.findByTestId("entity-card-countess")).getByRole("button", { name: "Countess of Lovelace" }));
+    await user.click(screen.getByRole("button", { name: "Countess of Lovelace" }));
     expect(screen.getByTestId("asset-lens-cards")).toHaveAttribute("aria-pressed", "true");
     expect(onEntityClick.mock.calls).toEqual([["ada"], ["engine"], ["countess"]]);
     expectNoMutations();
@@ -185,6 +187,22 @@ describe("EntitiesView browse", () => {
     expect(queryEntities).toHaveBeenLastCalledWith({ status: "archived", limit: 100, offset: 0, entity_type: "concept" });
     await user.click(screen.getByRole("button", { name: "Person" }));
     await screen.findByText("Countess of Lovelace");
+  });
+
+  it("exposes every canonical editable topic type as a browse filter", async () => {
+    fixture = [
+      entity({ id: "technology", name: "TypeScript", entity_type: "technology", status: "established" }),
+      entity({ id: "project", name: "Wenlan", entity_type: "project", status: "established" }),
+    ];
+    const { user } = renderView();
+    await screen.findByRole("button", { name: "TypeScript" });
+
+    await user.click(screen.getByRole("button", { name: "Technology" }));
+
+    expect(await screen.findByRole("button", { name: "TypeScript" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Wenlan" })).not.toBeInTheDocument();
+    expect(loadActiveTopicsPage).toHaveBeenLastCalledWith({ query: "", type: "technology", memories: "any" }, undefined);
+    expect(screen.getByRole("button", { name: "Project" })).toBeInTheDocument();
   });
 
   it("debounces search and distinguishes a filtered no-match from an empty library", async () => {

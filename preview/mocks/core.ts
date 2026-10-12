@@ -25,9 +25,30 @@ import {
 import { TauriMockRuntime } from "../../e2e/tauriMock/runtime";
 import { createReviewDecisionFixture } from "../../e2e/fixtures/reviewDecisions";
 const folderRuntime = new TauriMockRuntime(createReviewDecisionFixture("wiki-folders"), [], [], { projectionPendingOnce: new URLSearchParams(window.location.search).get("pending") === "1" });
-import { createSpaceProjectFixture } from "../../e2e/fixtures/spaceProject";
+import {
+  createSpaceProjectFixture,
+  SPACE_PROJECT_SOURCE_FOLDER_ID,
+  SPACE_PROJECT_SOURCE_FOLDER_PATH,
+} from "../../e2e/fixtures/spaceProject";
 const projectState = new URLSearchParams(window.location.search).get("state");
 const projectRuntime = new TauriMockRuntime(createSpaceProjectFixture(projectState === "empty"), projectState === "error" ? [{ command: "list_indexed_files", message: "Fixture source read unavailable", times: 1 }] : [], [], {}, projectState === "loading" ? { list_indexed_files: 60_000 } : {});
+const projectSourceFolder = {
+  id: SPACE_PROJECT_SOURCE_FOLDER_ID,
+  source_type: "directory",
+  path: SPACE_PROJECT_SOURCE_FOLDER_PATH,
+  status: "Active",
+  last_sync: 1_783_728_000,
+  file_count: 2,
+  memory_count: 2,
+};
+const projectSourceFolderEntries = [
+  { name: "閱讀札記.txt", isDirectory: false },
+  { name: "每週摘錄.md", isDirectory: false },
+];
+const projectSourceText = new Map([
+  ["/preview/sources/讀書會資料/閱讀札記.txt", "讀書會・閱讀札記\n\n這是虛構的文字檔範例。每次討論後，記下最有啟發的一句話，以及它讓我們想到的問題。\n\n本週摘錄：先記錄自己的理解，再回頭核對原文。"],
+  ["/preview/sources/讀書會資料/每週摘錄.md", "# 每週摘錄\n\n## 本週問題\n哪一段內容改變了我們原先的想法？\n\n## 討論後記\n保留不同觀點，並連回各自引用的段落。"],
+]);
 import { liveInvoke } from "./live-invoke";
 import { invokeRemoteFixture } from "./remote-access";
 
@@ -53,7 +74,17 @@ export async function invoke(
   if (cmd === "rename_page") {
     throw new Error("Renaming is unavailable in this fixture");
   }
-  if (new URLSearchParams(window.location.search).get("mode") === "spaces") return projectRuntime.invoke(cmd, args);
+  if (new URLSearchParams(window.location.search).get("mode") === "spaces") {
+    if (cmd === "list_registered_sources") return projectState === "empty" ? [] : [projectSourceFolder];
+    if (cmd === "read_source_dir") {
+      return String(args?.path ?? "") === projectSourceFolder.path && projectState !== "empty" ? projectSourceFolderEntries : [];
+    }
+    if (cmd === "read_text_file") {
+      return projectSourceText.get(String(args?.path ?? "")) ?? "";
+    }
+    if (cmd === "open_file") return null;
+    return projectRuntime.invoke(cmd, args);
+  }
   if (new URLSearchParams(window.location.search).get("mode") === "folders") return folderRuntime.invoke(cmd, args);
   // Fixture previews must never toggle the maintainer's background service.
   if (cmd === "get_background_ai_enabled") return fixtureBackgroundAiEnabled;

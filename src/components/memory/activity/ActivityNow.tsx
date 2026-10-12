@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useTranslation } from "react-i18next";
-import { Brain, Shapes, FileText, Check, Clock, WarningCircle, CircleNotch } from "@phosphor-icons/react";
+import { Brain, Shapes, Check, Clock, WarningCircle, CircleNotch } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { Button } from "../settings/primitives";
 import {
   assetSentence,
@@ -11,8 +12,10 @@ import {
 } from "../../../lib/activitySentence";
 import { useActivity } from "../../../lib/useActivity";
 
+import { ACTIVITY_ASSET_ORDER } from "./activityPresentation";
+
 const ROUTES = ["everyday", "synthesis"] as const;
-const ASSET_ICONS = { memories: Brain, entities: Shapes, pages: FileText };
+const ASSET_ICONS = { memories: Brain, entities: Shapes, pages: PageIcon };
 const displayState = (state: string) =>
   state === "idle" || state === "running" || state === "blocked" ? state : "unknown";
 
@@ -22,7 +25,7 @@ export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenInt
 
   if (query.isPending && query.data === undefined) {
     return (
-      <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+      <section data-testid="activity-now" className="mem-activity-now-surface">
         <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
         <p>{t("activityStatus.nowLoading")}</p>
       </section>
@@ -31,7 +34,7 @@ export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenInt
 
   if (query.isError) {
     return (
-      <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+      <section data-testid="activity-now" className="mem-activity-now-surface">
         <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
         <p role="alert">{t("activityStatus.nowError")}</p>
         <button type="button" onClick={() => void query.refetch()}>
@@ -44,7 +47,11 @@ export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenInt
   const activity = query.data;
   if (activity === undefined) return null;
 
-  const assets = knownAssets(activity);
+  const byKind = new Map(knownAssets(activity).map(asset => [asset.kind, asset]));
+  const assets = ACTIVITY_ASSET_ORDER.flatMap(kind => {
+    const asset = byKind.get(kind);
+    return asset ? [asset] : [];
+  });
   const failed = assets.flatMap((asset) =>
     asset.steps
       .filter((step) => step.failed > 0)
@@ -87,12 +94,15 @@ export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenInt
     }
   }
 
+  const primaryCause = summary === "blocked" ? causes[0] : undefined;
+  const additionalCauses = primaryCause ? causes.slice(1) : causes;
+
   return (
-    <section data-testid="activity-now" className="mem-activity-now-surface" style={{ marginBottom: 20 }}>
+    <section data-testid="activity-now" className="mem-activity-now-surface">
         <h2 className="mem-activity-section-title">{t("activityStatus.nowTitle")}</h2>
       <div className="mem-activity-now-content">
         <p className="mem-activity-now-summary" data-testid={`activity-now-${summary}`}>
-          {t(({
+          {primaryCause ? t(primaryCause.key, primaryCause.params) : t(({
             unknown: "activityStatus.nowUnknown",
             off: "activityStatus.nowOff",
             waiting: "activityStatus.nowWaiting",
@@ -102,7 +112,7 @@ export default function ActivityNow({ onOpenIntelligence }: { readonly onOpenInt
           } as const)[summary])}
         </p>
 
-        {causes.map((cause, index) => (
+        {additionalCauses.map((cause, index) => (
           <p key={`${cause.key}-${index}`}>{t(cause.key, cause.params)}</p>
         ))}
         {summary === "blocked" && onOpenIntelligence && (

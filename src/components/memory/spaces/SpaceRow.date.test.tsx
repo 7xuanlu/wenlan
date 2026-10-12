@@ -43,8 +43,10 @@ describe("SpaceRow quiet metadata", () => {
 
   it.each([...invalidTimestamps, ["valid", 1_720_569_600]] as const)("retains only page counts with %s timestamp", (_name, updatedAt) => {
     const row = renderRow(updatedAt);
-    expect(within(row).getByTestId("space-pages")).toHaveTextContent("2");
-    expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent("2");
+    const pageCount = within(row).getByTestId("space-pages");
+    expect(pageCount).toHaveTextContent("2");
+    expect(pageCount).toBeVisible();
+    expect(within(row).queryByTestId("space-mobile-pages")).not.toBeInTheDocument();
     expect(within(row).queryByTestId("space-memories")).not.toBeInTheDocument();
     expect(within(row).queryByTestId("space-mobile-memories")).not.toBeInTheDocument();
     expect(row.querySelector("time")).toBeNull();

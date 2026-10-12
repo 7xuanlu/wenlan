@@ -1,5 +1,5 @@
 .spaces-overview {
-  max-width: 1130px;
+  max-width: var(--collection-reading-width, 960px);
   margin: 0 auto;
   color: var(--mem-text);
   font-family: var(--mem-font-body);
@@ -208,11 +208,6 @@
   user-select: none;
 }
 
-.spaces-drag-handle[aria-disabled="true"] {
-  opacity: 0.5;
-  cursor: default;
-}
-
 .spaces-row-dragging .spaces-drag-handle {
   cursor: grabbing;
 }
@@ -243,10 +238,35 @@
 
 .spaces-menu button:hover,
 .spaces-quiet-action:hover,
-.spaces-suggestion-action:hover,
-.spaces-menu-trigger:hover {
+.spaces-suggestion-action:hover {
   background: var(--mem-hover);
   color: var(--mem-text);
+}
+
+/* Row/card hover already identifies the surface; do not stack a second box. */
+.spaces-overview .spaces-menu-trigger,
+.spaces-overview .spaces-menu-trigger:hover,
+.spaces-overview .spaces-menu-trigger:active {
+  background: transparent;
+}
+
+.spaces-overview .spaces-menu-trigger:hover,
+.spaces-overview .spaces-menu-trigger[aria-expanded="true"] {
+  color: var(--mem-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .spaces-overview .spaces-menu-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .spaces-overview :is(.spaces-row, .asset-card):hover .spaces-menu-trigger,
+  .spaces-overview :is(.spaces-row, .asset-card):has(:focus-visible) .spaces-menu-trigger,
+  .spaces-overview .spaces-menu-trigger[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .spaces-suggestion-keep:hover {

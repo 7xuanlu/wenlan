@@ -1889,6 +1889,7 @@ pub async fn update_memory_cmd(
     state: tauri::State<'_, State>,
     source_id: String,
     content: Option<String>,
+    expected_content: Option<String>,
     domain: Option<String>,
     confirmed: Option<bool>,
     memory_type: Option<String>,
@@ -1896,6 +1897,7 @@ pub async fn update_memory_cmd(
     let client = daemon_client(&state).await;
     let req = requests::UpdateMemoryRequest {
         content,
+        expected_content,
         space: domain,
         confirmed,
         memory_type,
@@ -1953,6 +1955,35 @@ pub async fn get_chunks(
         .get_json_scoped(&chunks_request_path(&source, &source_id), space.as_deref())
         .await?;
     Ok(chunks)
+}
+
+#[tauri::command]
+pub async fn get_source_annotation(
+    state: tauri::State<'_, State>,
+    source: String,
+    source_id: String,
+    space: Option<String>,
+) -> Result<wenlan_types::source_annotations::SourceAnnotation, String> {
+    let client = daemon_client(&state).await;
+    client
+        .get_json_scoped_with_query(
+            "/api/source-annotations",
+            &[
+                ("source", source.as_str()),
+                ("source_id", source_id.as_str()),
+            ],
+            space.as_deref(),
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn update_source_annotation(
+    state: tauri::State<'_, State>,
+    req: wenlan_types::source_annotations::UpdateSourceAnnotationRequest,
+) -> Result<wenlan_types::source_annotations::SourceAnnotation, String> {
+    let client = daemon_client(&state).await;
+    client.post_json("/api/source-annotations", &req).await
 }
 
 fn chunks_request_path(source: &str, source_id: &str) -> String {
@@ -2492,6 +2523,26 @@ pub async fn confirm_entity_cmd(
         .put_json(
             &format!(
                 "/api/memory/entities/{}/confirm",
+                percent_encode_path_segment(&entity_id)
+            ),
+            &req,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn change_entity_type_cmd(
+    state: tauri::State<'_, State>,
+    entity_id: String,
+    entity_type: String,
+) -> Result<(), String> {
+    let client = daemon_client(&state).await;
+    let req = requests::ChangeEntityTypeRequest { entity_type };
+    let _resp: responses::SuccessResponse = client
+        .put_json(
+            &format!(
+                "/api/memory/entities/{}/type",
                 percent_encode_path_segment(&entity_id)
             ),
             &req,

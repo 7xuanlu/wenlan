@@ -82,6 +82,7 @@ pub use activity_counts::{
 };
 mod scoped_entities;
 mod scoped_pages;
+pub mod source_annotations;
 mod source_sync;
 mod space_context;
 mod space_rename;
@@ -183,6 +184,8 @@ mod scoped_entities_test;
 mod scoped_pages_test;
 #[cfg(test)]
 mod scoped_records_test;
+#[cfg(test)]
+mod source_annotations_test;
 #[cfg(test)]
 mod space_rename_test;
 #[cfg(test)]
@@ -820,6 +823,14 @@ pub struct VocabLedgerEntry {
     pub created_at: i64,
 }
 
+/// Paired content arguments for a memory update. The expected pre-image is
+/// checked against the current chunk-zero body in the same transaction as the
+/// update, while `new_content` is the body to apply when present.
+pub(crate) struct MemoryContentUpdate<'a> {
+    pub new_content: Option<&'a str>,
+    pub expected_content: Option<&'a str>,
+}
+
 impl MemoryDB {
     /// Record a vocab auto-heal's full pre-image so the mutation can be undone.
     /// Every affected row id already lives inside `pre_image_json`; the ledger
@@ -1436,6 +1447,8 @@ pub const EMBEDDING_DIM: usize = 768;
 /// history, backfilling only the exact snapshot matching a live page.
 /// Migration 134 extends Page Map nodes with independent, map-owned ideas and
 /// reconciles both schema-133 lineages.
+/// Migration 135 stores user-authored source annotations independently of
+/// source-ingest chunks and Page lifetimes.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1443,7 +1456,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 134;
+pub const SCHEMA_VERSION: u32 = 135;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10371,6 +10384,15 @@ impl MemoryDB {
             if version < 134 {
                 self.migrate_134_page_map_ideas().await?;
             }
+
+            // Migration 135 stores user-authored source annotations independently
+            // of source-ingest chunks and Page lifetimes.
+            if ceiling < 135 {
+                return Ok(());
+            }
+            if version < 135 {
+                self.migrate_135_source_annotations().await?;
+            }
         }
 
         // Private M4 builds could already have stamped user_version=95 before
@@ -17741,6 +17763,26 @@ impl MemoryDB {
         Ok(())
     }
 
+    async fn migrate_135_source_annotations(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS source_annotations (
+                 source TEXT NOT NULL,
+                 source_id TEXT NOT NULL,
+                 context_key TEXT NOT NULL,
+                 notes TEXT NOT NULL DEFAULT '',
+                 page_ids TEXT NOT NULL DEFAULT '[]',
+                 version INTEGER NOT NULL CHECK (version > 0),
+                 updated_at INTEGER NOT NULL,
+                 PRIMARY KEY (source, source_id, context_key)
+             );
+             PRAGMA user_version = 135;",
+        )
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("m135 source annotations: {e}")))?;
+        Ok(())
+    }
+
     async fn repair_community_cutover(&self) -> Result<(), WenlanError> {
         let conn = self.conn.lock().await;
         let tx = conn
@@ -24661,11 +24703,16 @@ impl MemoryDB {
         // stays fully legal; only this UUID string is reserved. `*` is reserved
         // for whole-library web access.
         reject_reserved_space_name(name)?;
+        let _space_write_guard = self.space_write_lock.lock().await;
         let conn = self.conn.lock().await;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("create_space begin: {e}")))?;
         let id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().timestamp() as f64;
         // New spaces go to the end
-        let mut rows = conn
+        let mut rows = tx
             .query("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM spaces", ())
             .await
             .map_err(|e| WenlanError::VectorDb(format!("max_sort_order: {}", e)))?;
@@ -24680,13 +24727,23 @@ impl MemoryDB {
         };
         drop(rows);
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO spaces (id, name, description, suggested, sort_order, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             libsql::params![id.clone(), name, description, suggested as i32, next_order, now, now],
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("create_space: {}", e)))?;
+
+        source_annotations::move_context_in_transaction(
+            &tx,
+            &source_annotations::orphaned_space_context_key(name),
+            &id,
+        )
+        .await?;
+        tx.commit()
+            .await
+            .map_err(|e| WenlanError::VectorDb(format!("create_space commit: {e}")))?;
 
         Ok(Space {
             id,
@@ -24809,28 +24866,43 @@ impl MemoryDB {
 
         let mut source_rows = tx
             .query(
-                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                "SELECT id FROM spaces WHERE name = ?1",
                 libsql::params![name],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("delete_space source lookup: {}", e)))?;
-        let source_count = if let Some(row) = source_rows
+        let source_id = if let Some(row) = source_rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<i64>(0).unwrap_or(0)
+            row.get::<String>(0).unwrap_or_default()
         } else {
-            0
+            String::new()
         };
         drop(source_rows);
-        if source_count == 0 {
+        if source_id.is_empty() {
             return Err(WenlanError::NotFound(format!("space '{name}' not found")));
         }
 
         match memory_action {
-            "keep" => { /* do nothing — orphan memories with space tag intact */ }
+            "keep" => {
+                source_annotations::move_context_in_transaction(
+                    &tx,
+                    &source_id,
+                    &source_annotations::orphaned_space_context_key(name),
+                )
+                .await?;
+            }
             "unassign" => {
+                if source_annotations::context_has_annotations_in_transaction(&tx, &source_id)
+                    .await?
+                {
+                    return Err(WenlanError::Conflict(
+                        "cannot unassign a Space while source annotations exist; move or clear the annotations first"
+                            .to_string(),
+                    ));
+                }
                 // memories.space is NOT NULL since migration 91 (DEFAULT is the
                 // reserved sentinel). Unassigning must fold to the sentinel, not
                 // NULL — a `SET space = NULL` here fails the NOT NULL constraint.
@@ -25047,28 +25119,31 @@ impl MemoryDB {
                 }
                 let mut rows = tx
                     .query(
-                        "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                        "SELECT id FROM spaces WHERE name = ?1",
                         libsql::params![target],
                     )
                     .await
                     .map_err(|e| {
                         WenlanError::VectorDb(format!("delete_space move target lookup: {}", e))
                     })?;
-                let target_count = if let Some(row) = rows
+                let target_id = if let Some(row) = rows
                     .next()
                     .await
                     .map_err(|e| WenlanError::VectorDb(e.to_string()))?
                 {
-                    row.get::<i64>(0).unwrap_or(0)
+                    row.get::<String>(0).unwrap_or_default()
                 } else {
-                    0
+                    String::new()
                 };
                 drop(rows);
-                if target_count == 0 {
+                if target_id.is_empty() {
                     return Err(WenlanError::VectorDb(format!(
                         "destination space not found: {target}"
                     )));
                 }
+
+                source_annotations::move_context_in_transaction(&tx, &source_id, &target_id)
+                    .await?;
 
                 tx.execute(
                     "UPDATE memories
@@ -25112,7 +25187,16 @@ impl MemoryDB {
                 ))
                 .await;
             }
-            _ => { /* unknown action — treat as keep */ }
+            _ => {
+                // Unknown actions retain the historical keep behavior, so
+                // preserve annotations under the same inaccessible orphan key.
+                source_annotations::move_context_in_transaction(
+                    &tx,
+                    &source_id,
+                    &source_annotations::orphaned_space_context_key(name),
+                )
+                .await?;
+            }
         }
 
         let deleted_spaces = tx
@@ -25154,49 +25238,48 @@ impl MemoryDB {
 
         let mut rows = tx
             .query(
-                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
+                "SELECT id FROM spaces WHERE name = ?1",
                 libsql::params![from],
             )
             .await
             .map_err(|e| WenlanError::VectorDb(format!("reassign source lookup: {}", e)))?;
-        let source_count = if let Some(row) = rows
+        let source_id = if let Some(row) = rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<i64>(0).unwrap_or(0)
+            row.get::<String>(0).unwrap_or_default()
         } else {
-            0
+            String::new()
         };
         drop(rows);
-        if source_count == 0 {
+        if source_id.is_empty() {
             return Err(WenlanError::VectorDb(format!(
                 "source space not found: {from}"
             )));
         }
 
         let mut rows = tx
-            .query(
-                "SELECT COUNT(*) FROM spaces WHERE name = ?1",
-                libsql::params![to],
-            )
+            .query("SELECT id FROM spaces WHERE name = ?1", libsql::params![to])
             .await
             .map_err(|e| WenlanError::VectorDb(format!("reassign target lookup: {}", e)))?;
-        let target_count = if let Some(row) = rows
+        let target_id = if let Some(row) = rows
             .next()
             .await
             .map_err(|e| WenlanError::VectorDb(e.to_string()))?
         {
-            row.get::<i64>(0).unwrap_or(0)
+            row.get::<String>(0).unwrap_or_default()
         } else {
-            0
+            String::new()
         };
         drop(rows);
-        if target_count == 0 {
+        if target_id.is_empty() {
             return Err(WenlanError::VectorDb(format!(
                 "destination space not found: {to}"
             )));
         }
+
+        source_annotations::move_context_in_transaction(&tx, &source_id, &target_id).await?;
 
         let updated = tx
             .execute(
@@ -34125,6 +34208,33 @@ impl MemoryDB {
         requested_memory_type: Option<&str>,
         requested_structured_fields: Option<&str>,
     ) -> Result<(), WenlanError> {
+        self.apply_memory_update_with_expected_content(
+            source_id,
+            MemoryContentUpdate {
+                new_content,
+                expected_content: None,
+            },
+            requested_space,
+            confirm,
+            requested_memory_type,
+            requested_structured_fields,
+        )
+        .await
+    }
+
+    pub(crate) async fn apply_memory_update_with_expected_content(
+        &self,
+        source_id: &str,
+        content: MemoryContentUpdate<'_>,
+        requested_space: Option<Option<&str>>,
+        confirm: bool,
+        requested_memory_type: Option<&str>,
+        requested_structured_fields: Option<&str>,
+    ) -> Result<(), WenlanError> {
+        let MemoryContentUpdate {
+            new_content,
+            expected_content,
+        } = content;
         if new_content.is_none()
             && requested_space.is_none()
             && !confirm
@@ -34331,6 +34441,48 @@ impl MemoryDB {
             .map_err(|e| WenlanError::VectorDb(format!("update_memory begin: {e}")))?;
 
         let mutation_result: Result<(), WenlanError> = async {
+            if let (Some(expected), Some(_)) = (expected_content, new_content) {
+                // The editor baseline is the full visible body from
+                // `get_memory_detail`; keep the separate head check because
+                // `head.content` also feeds derived-child preparation and
+                // protects the metadata snapshot read above.
+                let mut rows = conn
+                    .query(
+                        "SELECT
+                            (SELECT GROUP_CONCAT(content, '\n')
+                             FROM memories
+                             WHERE pending_revision = 0
+                               AND source != 'episode'
+                               AND source_id = ?1),
+                            (SELECT content FROM memories
+                             WHERE source_id = ?1
+                               AND source != 'episode'
+                               AND chunk_index = 0
+                             LIMIT 1)",
+                        libsql::params![source_id],
+                    )
+                    .await
+                    .map_err(|e| {
+                        WenlanError::VectorDb(format!("update_memory expected-content read: {e}"))
+                    })?;
+                let row = rows.next().await.map_err(|e| {
+                    WenlanError::VectorDb(format!("update_memory expected-content row: {e}"))
+                })?;
+                let current_displayed_content = row
+                    .as_ref()
+                    .and_then(|row| row.get::<Option<String>>(0).ok().flatten());
+                let current_head_content = row
+                    .as_ref()
+                    .and_then(|row| row.get::<Option<String>>(1).ok().flatten());
+                drop(rows);
+                if current_displayed_content.as_deref() != Some(expected)
+                    || current_head_content.as_deref() != Some(head.content.as_str())
+                {
+                    return Err(WenlanError::Conflict(format!(
+                        "memory {source_id} changed before update"
+                    )));
+                }
+            }
             conn.execute(
                 "INSERT INTO enrichment_origin
                      (source_id, memory_type_explicit,

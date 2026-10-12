@@ -17,7 +17,7 @@ const folder = (patch: Partial<RegisteredSource> = {}): RegisteredSource => ({
 });
 
 function renderLibrary(options: Partial<SourceLibraryProps> = {}) {
-  const props = { onAdd: vi.fn(), onBrowseFolder: vi.fn(), onOpenDocument: vi.fn(), ...options };
+  const props = { onAdd: vi.fn(), onOpenDocument: vi.fn(), ...options };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(<QueryClientProvider client={client}><SourceLibrary {...props} /></QueryClientProvider>);
   return props;
@@ -124,7 +124,7 @@ describe("SourceLibrary", () => {
     expect(screen.queryByText("Daily recap")).not.toBeInTheDocument();
   });
 
-  it("hides the managed uploads folder, searches paths and browses registered folders", async () => {
+  it("hides the managed uploads folder, searches paths and opens registered containers", async () => {
     vi.mocked(listRegisteredSources).mockResolvedValue([
       folder(), folder({ id: "managed", path: "/Users/me/.wenlan/sources/" }),
       folder({ id: "managed-win", path: "C:\\Users\\me\\.wenlan\\sources\\" }),
@@ -133,8 +133,11 @@ describe("SourceLibrary", () => {
     const research = await screen.findByRole("button", { name: /Research.*Folder/ });
     expect(screen.queryByText(/\.wenlan/)).not.toBeInTheDocument();
     fireEvent.change(screen.getByRole("searchbox"), { target: { value: "/notes/" } });
+    expect(research).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox"), { target: { value: "" } });
     fireEvent.click(research);
-    expect(props.onBrowseFolder).toHaveBeenCalledWith("folder-notes");
+    expect(await screen.findByRole("navigation")).toBeInTheDocument();
+    expect(screen.getByRole("navigation").querySelectorAll("button")[1]).toHaveTextContent("Research");
     fireEvent.click(screen.getByRole("button", { name: "New" }));
     expect(props.onAdd).toHaveBeenCalledOnce();
   });
@@ -150,7 +153,7 @@ describe("SourceLibrary", () => {
     renderLibrary();
     await screen.findByText("Reference guide");
     fireEvent.click(screen.getByRole("button", { name: "Links" }));
-    expect(screen.getByText("docs.example.com")).toBeInTheDocument();
+    expect(screen.getByText("Webpage · docs.example.com")).toBeInTheDocument();
     expect(screen.getByText("Saved article")).toBeInTheDocument();
     expect(screen.queryByText("Design study")).not.toBeInTheDocument();
     expect(screen.queryByText("Research")).not.toBeInTheDocument();

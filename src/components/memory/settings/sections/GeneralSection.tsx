@@ -14,6 +14,8 @@ import {
   getTelemetryStatus,
   setTelemetryEnabled,
   exportPagesAsOkf,
+  getKnowledgePath,
+  openFile,
   daemonErrorMessage,
   isOkfExportDaemonTooOld,
 } from "../../../../lib/tauri";
@@ -25,14 +27,13 @@ import {
 } from "../../../../i18n";
 import {
   Button,
-  Card,
   ConfirmActionButton,
   Input,
-  SectionHeader,
   SegmentedControl,
   Select,
   SettingRow,
 } from "../primitives";
+import { SettingsGroup } from "../SettingsView";
 import ProfileAvatar from "../../ProfileAvatar";
 
 type ThemeLabelKey =
@@ -133,10 +134,7 @@ function ProfileSettingsBlock() {
   if (!profile) return null;
 
   return (
-    <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-      {/* No icon: in settings the sidebar owns iconography; eyebrows are type-only. */}
-      <SectionHeader label={t("settings.profile.label")} />
-      <Card padding="rows">
+    <SettingsGroup heading={t("settings.profile.label")} className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <div className="settings-profile-row px-5 py-4">
           <div className="settings-profile-row-content flex items-start justify-between gap-4">
             <div className="min-w-0">
@@ -144,7 +142,7 @@ function ProfileSettingsBlock() {
                 {t("settings.profile.photo")}
               </div>
             </div>
-            <div className="settings-profile-controls mt-0.5 flex items-center gap-2">
+            <div className="settings-profile-controls flex items-center gap-2">
               <ProfileAvatar
                 avatarPath={profile.avatar_path}
                 displayName={displayName}
@@ -169,7 +167,7 @@ function ProfileSettingsBlock() {
                 {t("settings.profile.displayName")}
               </div>
             </div>
-            <div className="mt-0.5">
+            <div>
               <Input
                 aria-label={t("settings.profile.displayName")}
                 value={nameDraft}
@@ -182,14 +180,13 @@ function ProfileSettingsBlock() {
                     event.currentTarget.blur();
                   }
                 }}
-                className="settings-profile-input"
-                style={{ width: "200px" }}
+                size={Math.min(24, Math.max(6, nameDraft.length))}
+                className="settings-profile-input settings-profile-input-inline"
               />
             </div>
           </div>
         </div>
-      </Card>
-    </section>
+    </SettingsGroup>
   );
 }
 
@@ -306,13 +303,11 @@ export default function GeneralSection() {
   return (
     <>
       <ProfileSettingsBlock />
-      <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-        <SectionHeader label={t("settings.general.appSection")} />
-        <Card padding="rows">
+      <SettingsGroup heading={t("settings.general.appSection")} className="mem-fade-up" style={{ animationDelay: "0ms" }}>
           {/* Theme — folded into General; previously its own "Appearance" sidebar entry. */}
           <SettingRow
             title={t("settings.theme.label")}
-            description={t("settings.theme.description")}
+            description=""
             control={
               <SegmentedControl
                 aria-label={t("settings.theme.label")}
@@ -328,7 +323,7 @@ export default function GeneralSection() {
           />
           <SettingRow
             title={t("settings.language.label")}
-            description={t("settings.language.description")}
+            description=""
             control={
               <div className="w-fit shrink-0">
                 <Select
@@ -351,7 +346,8 @@ export default function GeneralSection() {
           />
           <SettingRow
             title={t("settings.general.runAtLoginTitle")}
-            description={t("settings.general.runAtLoginDescription")}
+            description=""
+            details={t("settings.general.runAtLoginDescription")}
             enabled={runAtLoginState ?? false}
             // Not measured is not `false`, and a value left over from a read
             // that has since FAILED is not measured either. Without this the
@@ -376,7 +372,9 @@ export default function GeneralSection() {
           />
           <SettingRow
             title={t("settings.general.telemetryTitle")}
-            description={t("settings.general.telemetryDescription")}
+            description=""
+            details={t("settings.general.telemetryDescription")}
+            detailsSummary={t("settings.general.telemetrySummary")}
             enabled={telemetryStatus?.enabled ?? false}
             valueUnknown={telemetryUnknown}
             unknownState={telemetryMutation.isPending
@@ -400,7 +398,8 @@ export default function GeneralSection() {
               confirm; data is preserved regardless. */}
           <SettingRow
             title={t("settings.general.rerunSetup")}
-            description={t("settings.general.rerunSetupConfirm")}
+            description=""
+            details={t("settings.general.rerunSetupConfirm")}
             control={
               <ConfirmActionButton
                 variant="secondary"
@@ -416,10 +415,62 @@ export default function GeneralSection() {
               </ConfirmActionButton>
             }
           />
-        </Card>
-      </section>
+      </SettingsGroup>
+      <LocalDataSettingsBlock />
       <ExportSettingsBlock />
     </>
+  );
+}
+
+function LocalDataSettingsBlock() {
+  const { t } = useTranslation();
+  const knowledgePathQuery = useQuery({
+    queryKey: ["knowledgePath"],
+    queryFn: getKnowledgePath,
+  });
+  const openFolderMutation = useMutation({ mutationFn: (path: string) => openFile(path) });
+  const knowledgePath = typeof knowledgePathQuery.data === "string" && knowledgePathQuery.data.trim()
+    ? knowledgePathQuery.data
+    : undefined;
+  const locationUnavailable = knowledgePathQuery.isError || (knowledgePathQuery.isSuccess && !knowledgePath);
+  const openError = openFolderMutation.isError
+    ? errorMessage(openFolderMutation.error) ?? t("settings.general.pageStorageOpenError")
+    : null;
+  const locationError = locationUnavailable
+    ? t("settings.general.pageStorageUnavailable")
+    : null;
+
+  return (
+    <SettingsGroup heading={t("settings.general.localData")} className="mem-fade-up" style={{ animationDelay: "0ms" }}>
+      <SettingRow
+        title={t("settings.general.pageStorageTitle")}
+        description={t("settings.general.pageStorageDescription")}
+        details={t("settings.general.pageStorageHelp")}
+        error={locationError ?? openError}
+        control={(
+          <div className="settings-page-local-data-control">
+            {knowledgePath ? (
+              <>
+                <span className="settings-page-local-data-path">{knowledgePath}</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={openFolderMutation.isPending}
+                  aria-busy={openFolderMutation.isPending}
+                  onClick={() => openFolderMutation.mutate(knowledgePath)}
+                >
+                  {t("settings.general.openFolder")}
+                </Button>
+              </>
+            ) : knowledgePathQuery.isPending ? (
+              <span role="status" aria-label={t("settings.general.pageStorageLoading")}>
+                {t("settings.general.pageStorageLoading")}
+              </span>
+            ) : null}
+          </div>
+        )}
+      />
+    </SettingsGroup>
   );
 }
 
@@ -478,12 +529,11 @@ function ExportSettingsBlock() {
       : [];
 
   return (
-    <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-      <SectionHeader label={t("settings.general.exportSection")} />
-      <Card padding="rows">
+    <SettingsGroup heading={t("settings.general.exportSection")} className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <SettingRow
           title={t("settings.general.exportOkfTitle")}
-          description={t("settings.general.exportOkfDescription")}
+          description=""
+          details={t("settings.general.exportOkfDescription")}
           control={
             <Button
               variant="secondary"
@@ -523,7 +573,6 @@ function ExportSettingsBlock() {
           }
           error={exportError}
         />
-      </Card>
-    </section>
+    </SettingsGroup>
   );
 }

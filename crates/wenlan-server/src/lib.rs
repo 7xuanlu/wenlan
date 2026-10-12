@@ -51,6 +51,7 @@ pub mod scheduler;
 pub mod security;
 pub mod sensitive_read_routes;
 pub mod snapshot_routes;
+pub mod source_annotation_routes;
 pub mod source_routes;
 pub mod space_header;
 pub mod spaces_routes;

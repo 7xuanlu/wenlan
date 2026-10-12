@@ -1,0 +1,145 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Shared document inspector tokens. Change these once for Memory, Topic and Wiki. */
+:root {
+  --detail-info-body-size: 13px;
+  --detail-info-line-height: 1.6;
+  --detail-info-title-size: 14px;
+  --detail-info-title-weight: 600;
+  --detail-info-heading-size: 15px;
+  --detail-info-section-gap: 24px;
+  --detail-info-header-height: 52px;
+  --detail-info-padding-inline: 24px;
+  --detail-info-padding-block-start: 16px;
+  --detail-info-padding-block-end: 32px;
+}
+
+/* Shared content rhythm inside document Info inspectors. */
+.page-info-drawer .detail-info-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: var(--detail-info-section-gap);
+  color: var(--mem-text);
+  font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body);
+}
+
+.page-info-drawer .detail-info-content > *,
+.page-info-drawer .detail-info-content .info-action,
+.page-info-drawer .detail-info-content .knowledge-context,
+.page-info-drawer .detail-info-content .memory-detail-information,
+.page-info-drawer .detail-info-content .memory-detail-disclosure {
+  margin: 0;
+}
+
+.page-info-drawer .detail-info-content .memory-detail-rail {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  position: static;
+  width: 100%;
+  gap: var(--detail-info-section-gap);
+  border: 0;
+  padding: 0;
+}
+
+.page-info-drawer .detail-info-content :is(.memory-detail-rail-title, .memory-detail-section-title, .memory-detail-subsection, .memory-detail-disclosure > summary, .knowledge-context-section h3, .knowledge-local-map summary, .note-info-section-heading) {
+  margin: 0 0 10px;
+  padding: 0;
+  border: 0;
+  color: var(--mem-text);
+  font: var(--detail-info-title-weight) var(--detail-info-heading-size)/1.5 var(--mem-font-body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.page-info-drawer .detail-info-content :is(.memory-detail-panel-heading, .memory-detail-card-header) {
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.page-info-drawer .detail-info-content :is(.memory-detail-card, .memory-detail-card-body, .memory-detail-rail-section, .memory-detail-secondary-panel, .memory-detail-provenance-group) {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.page-info-drawer .detail-info-content :is(.memory-detail-info-list, .memory-detail-metadata-list) { display: grid; gap: 10px; }
+.page-info-drawer .detail-info-content :is(.memory-detail-info-row, .memory-detail-metadata-row, .memory-detail-field-row) {
+  display: grid;
+  grid-template-columns: minmax(80px, .4fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  border: 0;
+  padding: 0;
+}
+.page-info-drawer .detail-info-content :is(.memory-detail-metadata-label, .memory-detail-info-label, .memory-detail-field-label, .memory-detail-strip-label) {
+  color: var(--mem-text-secondary);
+  font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.page-info-drawer .detail-info-content :is(.memory-detail-metadata-value, .memory-detail-info-value, .memory-detail-field-value, .entity-meta-mono) {
+  min-width: 0;
+  margin: 0;
+  color: var(--mem-text);
+  font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body);
+  overflow-wrap: anywhere;
+}
+.page-info-drawer .detail-info-content .memory-detail-field-list { display: grid; gap: 12px; border: 0; }
+.page-info-drawer .detail-info-content .memory-detail-structured { margin: 0; }
+.page-info-drawer .detail-info-content .memory-detail-tagline { margin-top: 16px; }
+
+.page-info-drawer .detail-info-content :is(.entity-relation-list, .entity-relation-row, .memory-detail-related-card, .memory-detail-context-row) { border: 0; }
+.page-info-drawer .detail-info-content :is(.entity-relation-list, .memory-detail-related-grid, .memory-detail-compact-list) { display: grid; gap: 4px; }
+.page-info-drawer .detail-info-content :is(.entity-relation-row, .memory-detail-related-card, .memory-detail-context-row) { padding-block: 8px; border-radius: 4px; }
+.page-info-drawer .detail-info-content :is(.entity-relation-row, .memory-detail-related-card, .memory-detail-context-row-button):hover { background: var(--mem-hover); }
+.page-info-drawer .detail-info-content .entity-relation-row { flex-wrap: wrap; gap: 4px 8px; }
+.page-info-drawer .detail-info-content :is(.entity-relation-verb, .entity-relation-name, .entity-relation-type, .entity-appears-hint, .memory-detail-related-meta, .memory-detail-context-row-meta-text, .memory-detail-context-row-agent, .memory-detail-context-row-badge, .memory-detail-version-index) {
+  min-width: 0;
+  font: 400 12px/1.6 var(--mem-font-body);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.page-info-drawer .detail-info-content .entity-relation-name { color: var(--mem-text); font-size: 13px; }
+.page-info-drawer .detail-info-content .entity-appears-hint { display: block; color: var(--mem-text-secondary); }
+.page-info-drawer .detail-info-content .memory-detail-secondary-panel > .memory-detail-panel-heading { flex-wrap: wrap; }
+.page-info-drawer .detail-info-content .memory-detail-secondary-panel .entity-appears-hint { flex-basis: 100%; margin-bottom: 8px; }
+.page-info-drawer .detail-info-content :is(.memory-detail-context-row-title, .memory-detail-related-copy, .memory-detail-context-row-summary, .memory-detail-context-row-preview) {
+  font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body);
+}
+.page-info-drawer .detail-info-content .memory-detail-context-row-title { font-weight: 500; }
+.page-info-drawer .detail-info-content .memory-detail-context-row-badge { color: var(--mem-text-secondary); background: transparent; padding: 0; }
+.page-info-drawer .detail-info-content .memory-detail-disclosure-body { padding-top: 10px; }
+.page-info-drawer .detail-info-content .memory-detail-information > .memory-detail-disclosure-body { padding-top: 0; }
+
+/* Same input modality rules for the document menus, including Memory. */
+.page-detail-actions-menu[data-keyboard-navigation="false"] button:focus { outline: none; }
+.page-detail-actions-menu[data-keyboard-navigation="true"] button:focus { outline: 2px solid var(--mem-accent-page); outline-offset: 2px; }
+.page-detail-actions-menu { max-width: calc(100vw - 32px); }
+.page-detail-actions-menu button[role="menuitemcheckbox"] { display: flex; align-items: center; gap: 8px; }
+
+.page-info-drawer .detail-info-content .note-info-sections { margin: 0; gap: var(--detail-info-section-gap); }
+
+.page-info-drawer .detail-info-content .memory-detail-disclosure-button { font: 400 13px/1.5 var(--mem-font-body); letter-spacing: 0; }
+.page-info-drawer .detail-info-content :is(.entity-graph-caption, .entity-graph-verb, .entity-graph-node-type, .entity-graph-more) { font: 400 11px/1.4 var(--mem-font-body); letter-spacing: 0; text-transform: none; }
+.page-info-drawer .detail-info-content .entity-count { font: 400 12px/1.5 var(--mem-font-body); }
+.page-info-drawer .detail-info-content .note-info-page-groups > .flex { gap: var(--detail-info-section-gap); }
+
+.page-info-drawer .detail-info-content :is(.memory-detail-panel-heading, .memory-detail-card-header) {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+.page-info-drawer .detail-info-content :is(.memory-detail-panel-heading, .memory-detail-card-header) > :is(h2, h3) { margin: 0; }
+.page-info-drawer .detail-info-content .memory-detail-card-header .memory-detail-actions { margin-left: auto; }
+
+.page-info-drawer .detail-info-content .memory-detail-metadata-panel { align-self: stretch; }
+.page-info-drawer .detail-info-content .knowledge-context.knowledge-context-section { display: block; }
+.page-info-drawer .detail-info-content :is(.knowledge-context-state, .entity-empty) { margin: 0; font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body); }
+.page-info-drawer .detail-info-content .note-info-summary > .document-kind-label,
+.page-info-drawer .detail-info-content .note-info-summary .page-detail-dateline-item { font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body); }

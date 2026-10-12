@@ -1,0 +1,167 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.source-annotations {
+  width: min(100%, var(--reading-measure));
+  margin-block-start: 1.75em;
+  color: var(--mem-text);
+  font: var(--reading-font-size)/var(--reading-line-height) var(--mem-font-body);
+}
+
+.source-annotations-heading-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-block: 0 0.55em;
+}
+
+.source-annotations h2,
+.source-annotations h3 {
+  margin: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.source-annotations h2 { font-size: var(--reading-section-size); }
+.source-annotations h3 { font-size: 15px; }
+
+.source-annotations-save-state,
+.source-annotations-muted {
+  color: var(--mem-text-secondary);
+  font-size: 13px;
+}
+
+.source-annotations-editor-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.source-annotations-editor-wrap:focus-within .source-annotations-placeholder {
+  display: none;
+}
+
+.source-annotations-placeholder {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  color: var(--mem-text-secondary);
+  opacity: 0.8;
+  pointer-events: none;
+}
+
+.source-annotations-editor-wrap > [data-markdown-editor-engine],
+.source-annotations-editor-wrap .cm-editor,
+.source-annotations-editor-wrap .page-editor-native-surface {
+  min-height: 1.75em !important;
+}
+
+.source-annotations-editor-wrap .cm-scroller,
+.source-annotations-editor-wrap .cm-content {
+  min-height: 1.75em !important;
+}
+
+.source-annotations-text-button,
+.source-annotations-page-list button,
+.source-annotations-conflict button {
+  border: 0;
+  padding: 0;
+  color: var(--mem-text-secondary);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.source-annotations-text-button:hover,
+.source-annotations-page-list button:hover,
+.source-annotations-conflict button:hover { color: var(--mem-text); }
+
+.source-annotations-text-button:focus-visible,
+.source-annotations-page-list button:focus-visible,
+.source-annotations-conflict button:focus-visible,
+.source-annotations-page-picker input:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 3px;
+}
+
+.source-annotations-conflict {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-block-start: 10px;
+  color: var(--mem-text-secondary);
+  font-size: 13px;
+}
+
+.source-annotations-pages {
+  margin: 0;
+  color: var(--mem-text);
+  font: 400 var(--detail-info-body-size)/var(--detail-info-line-height) var(--mem-font-body);
+}
+
+.source-annotations-pages .source-annotations-heading-row { margin-block-end: 10px; }
+.source-annotations-pages h3 {
+  margin: 0;
+  color: var(--mem-text);
+  font: var(--detail-info-title-weight) var(--detail-info-heading-size)/1.5 var(--mem-font-body);
+}
+
+.source-annotations-page-list,
+.source-annotations-page-picker ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.source-annotations-page-list li,
+.source-annotations-page-picker li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding-block: 4px;
+}
+
+.source-annotations-page-list li > button:first-child,
+.source-annotations-page-picker li label {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.source-annotations-page-list li > button:first-child span,
+.source-annotations-page-picker li label span { overflow-wrap: anywhere; }
+.source-annotations-page-list li > button:last-child { flex: 0 0 auto; font-size: 12px; }
+
+.source-annotations-page-picker {
+  margin-block-start: 8px;
+  padding-block: 10px;
+  border-block-start: 1px solid var(--mem-border);
+}
+
+.source-annotations-page-picker > label {
+  display: grid;
+  gap: 4px;
+  color: var(--mem-text-secondary);
+  font-size: 13px;
+}
+
+.source-annotations-page-picker input:not([type="checkbox"]) {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--mem-border);
+  border-radius: 6px;
+  color: var(--mem-text);
+  background: transparent;
+  font: inherit;
+}
+
+.source-annotations-page-picker ul { margin-block-start: 8px; }
+.source-annotations-page-picker p { margin: 8px 0 0; color: var(--mem-text-secondary); font-size: 13px; }
+.source-annotations-page-error { margin: 6px 0 0; color: var(--mem-text-secondary); font-size: 13px; }

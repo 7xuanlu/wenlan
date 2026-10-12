@@ -16,6 +16,7 @@ vi.mock("../../lib/tauri", () => ({
   deleteAgent: vi.fn(() => Promise.resolve()),
   detectMcpClients: vi.fn(() => Promise.resolve([])),
   getCaptureStats: vi.fn(() => Promise.resolve({ clipboard: 0, screen: 0 })),
+  getKnowledgePath: vi.fn(() => Promise.resolve("/Users/test/Wenlan/pages")),
   getProfile: vi.fn(() => Promise.resolve({
     id: "p1",
     name: "Lucian",

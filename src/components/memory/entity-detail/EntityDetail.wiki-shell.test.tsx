@@ -106,7 +106,13 @@ function renderEntity(record: EntityDetailRecord = detail) {
 
 describe("EntityDetail wiki shell", () => {
   afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(async () => {
+    // jsdom has no layout. Represent the visible controls in these focus tests;
+    // real hidden/visible geometry is covered by the browser regressions.
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(
+      () => [new DOMRect(0, 0, 100, 30)] as unknown as DOMRectList,
+    );
     vi.clearAllMocks();
     await i18n.changeLanguage("en");
   });
@@ -127,39 +133,47 @@ describe("EntityDetail wiki shell", () => {
     expect(screen.getByRole("heading", { name: "About" })).toBeInTheDocument();
   });
 
-  it("opens Connections followed by metadata in a closeable context pane", async () => {
+  it("opens metadata followed by Connections in a closeable context pane", async () => {
     renderEntity();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
-    const panel = screen.getByRole("dialog", { name: "Topic context" });
+    await user.click(await screen.findByRole("button", { name: "Info" }));
+    const panel = screen.getByRole("dialog", { name: "Info" });
     const connections = within(panel).getByRole("heading", { name: "Connections" });
     const details = within(panel).getByRole("heading", { name: "Details" });
-    expect(connections.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(details.compareDocumentPosition(connections) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(panel).getByRole("combobox", { name: "Type" })).toHaveValue("person");
     expect(within(panel).getByRole("group", { name: "Connection map for Ada Lovelace" })).toBeInTheDocument();
     const ledger = within(panel).getByRole("group", { name: "Connections" });
-    expect(within(ledger).getByRole("button", { name: /Charles Babbage/ })).toHaveAccessibleName("Charles Babbage (person) · outgoing · collaborated with");
+    expect(within(ledger).getByRole("button", { name: /Charles Babbage/ })).toHaveAccessibleName("Charles Babbage (Person) · outgoing · collaborated with");
     await user.click(within(panel).getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("dialog", { name: "Topic context" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Topic actions" })).toHaveFocus();
+    expect(screen.queryByRole("dialog", { name: "Info" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Info" })).toHaveFocus();
   });
 
   it("navigates the menu with Arrow, Home and End and returns focus on Escape", async () => {
     renderEntity();
     const user = userEvent.setup();
     const trigger = await screen.findByRole("button", { name: "Topic actions" });
+    await user.click(trigger);
+    const menu = screen.getByRole("menu", { name: "Topic actions" });
+    expect(menu).toHaveAttribute("data-keyboard-navigation", "false");
+    expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Archive", "Delete topic"]);
+    await user.keyboard("{Escape}");
+    expect(trigger).toHaveFocus();
     trigger.focus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: "Topic context" })).toHaveFocus();
-    await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitemcheckbox", { name: "Confirmed", checked: true })).toHaveFocus();
+    expect(screen.getByRole("menu")).toHaveAttribute("data-keyboard-navigation", "true");
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toHaveFocus();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
     await user.keyboard("{End}");
     expect(screen.getByRole("menuitem", { name: "Delete topic" })).toHaveFocus();
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByRole("menuitem", { name: "Topic context" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toHaveFocus();
     await user.keyboard("{ArrowUp}");
     expect(screen.getByRole("menuitem", { name: "Delete topic" })).toHaveFocus();
-    await user.keyboard("{Home}{Escape}");
+    await user.keyboard("{Home}");
+    expect(screen.getByRole("menuitem", { name: "Archive" })).toHaveFocus();
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
     await user.keyboard("{ArrowUp}");
@@ -173,16 +187,17 @@ describe("EntityDetail wiki shell", () => {
     })));
     renderEntity();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
-    const panel = screen.getByRole("complementary", { name: "Topic context" });
-    await user.click(screen.getByRole("button", { name: "Wrote the first published algorithm" }));
-    const input = screen.getByRole("textbox", { name: "Edit note" });
+    await screen.findByRole("heading", { level: 1, name: "Ada Lovelace" });
+    const existingPanel = screen.queryByRole("complementary", { name: "Info" });
+    if (!existingPanel) await user.click(await screen.findByRole("button", { name: "Info" }));
+    const panel = screen.getByRole("complementary", { name: "Info" });
+    await user.click(screen.getByRole("button", { name: "Edit information — Wrote the first published algorithm" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
     await user.type(input, " draft");
-    // Programmatic shell dismissal does not invoke the row's existing blur-save.
+    // Closing the side pane preserves the unsaved row draft.
     fireEvent.click(within(panel).getByRole("button", { name: "Close" }));
-    expect(screen.queryByRole("complementary", { name: "Topic context" })).not.toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Edit note" })).toBe(input);
+    expect(screen.queryByRole("complementary", { name: "Info" })).not.toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Edit information" })).toBe(input);
     expect(input).toHaveValue("Wrote the first published algorithm draft");
 
   });
@@ -194,9 +209,9 @@ describe("EntityDetail wiki shell", () => {
     })));
     renderEntity();
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
-    const context = screen.getByRole(wide ? "complementary" : "dialog", { name: "Topic context" });
+    await screen.findByRole("heading", { level: 1, name: "Ada Lovelace" });
+    if (!wide) await user.click(await screen.findByRole("button", { name: "Info" }));
+    const context = screen.getByRole(wide ? "complementary" : "dialog", { name: "Info" });
     const expand = screen.getByRole("button", { name: "Full screen" });
     await user.click(expand);
     const graph = screen.getByRole("dialog", { name: "Full screen" });
@@ -233,8 +248,7 @@ describe("EntityDetail wiki shell", () => {
       relations: [],
     });
     const user = userEvent.setup();
-    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(await screen.findByRole("button", { name: "Info" }));
     expect(await screen.findByText("No connections recorded yet.")).toBeInTheDocument();
     expect(screen.queryAllByText(/NaN|Infinity|Invalid Date/)).toHaveLength(0);
   });

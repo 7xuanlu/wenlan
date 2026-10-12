@@ -674,6 +674,12 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
     get(`/api/pages/recent-changes${qs({ limit: a?.limit })}`).then((r) => r.changes ?? r),
   get_page_sources: (a) => get(`/api/pages/${enc(a.pageId)}/sources`).then((r) => r?.sources ?? r),
   get_page_links: (a) => get(`/api/pages/${enc(a.pageId)}/links`),
+  get_source_annotation: (a) => get(`/api/source-annotations${qs({
+    source: a?.source,
+    source_id: a?.sourceId,
+    space: a?.space,
+  })}`),
+  update_source_annotation: (a) => post("/api/source-annotations", a?.req),
 
   // Page map (Canvas) — mirrors WenlanClient::page_map_call in app/src/api.rs.
   // The node DELETE carries a JSON body (base_revision), so it cannot use the
@@ -879,10 +885,15 @@ export const HANDLERS: Record<string, (a: any) => Promise<unknown>> = {
   search_entities_cmd: (a) =>
     post("/api/memory/entities/search", { query: a.query }).then((r) => r.entities ?? r),
   get_entity_detail_cmd: (a) => get(`/api/memory/entities/${enc(a.entityId)}`),
+  change_entity_type_cmd: (a) =>
+    put(`/api/memory/entities/${enc(a.entityId)}/type`, {
+      entity_type: a.entityType,
+    }).then(() => undefined),
   query_entities_cmd: (a) => post("/api/memory/entities/query", a.filter),
   archive_entities_cmd: (a) => post("/api/memory/entities/archive", a.req),
   restore_entities_cmd: (a) => post("/api/memory/entities/restore", a.req),
   get_knowledge_graph_cmd: () => get("/api/memory/graph"),
+  get_knowledge_path: () => get("/api/knowledge/path").then((r) => r.path),
   count_knowledge_files: () => get("/api/knowledge/count").then((r) => r.total ?? r.count ?? 0),
 
   // --- home / profile / spaces / misc ---
@@ -1181,7 +1192,6 @@ export const DEFAULTS: Record<string, unknown> = {
   },
   get_wenlan_mcp_entry: null,
   get_avatar_data_url: null,
-  get_knowledge_path: null,
   get_session_snapshots: [],
   get_skip_apps: [],
   get_skip_title_patterns: [],

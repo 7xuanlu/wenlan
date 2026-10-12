@@ -183,7 +183,7 @@ export default function CitationChip({
           gap: "2px",
         }}
       >
-        <ReferenceTypeIcon kind={citationReferenceKind(citation)} size={11} />
+        <ReferenceTypeIcon kind={citationReferenceKind(citation)} size={11} locator={citation.locator} />
         <span
           style={{
             display: "inline-block",

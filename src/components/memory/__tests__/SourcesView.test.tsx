@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { SourceFolderBrowser as SourcesView, sourceCaption, isManagedSourcePath } from "../SourcesView";
 import {
+  getChunks,
   listRegisteredSources,
   openFile,
   readSourceDir,
@@ -16,6 +17,7 @@ import {
 } from "../../../lib/tauri";
 
 vi.mock("../../../lib/tauri", () => ({
+  getChunks: vi.fn(),
   listRegisteredSources: vi.fn(),
   syncRegisteredSource: vi.fn(),
   openFile: vi.fn(),
@@ -38,6 +40,17 @@ function indexed(sourceId: string, absPath: string): IndexedFileInfo {
 }
 
 const MANAGED = "/Users/me/.wenlan/sources";
+const originalMatchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+
+function mockDesktopInfo() {
+  const matchMedia = vi.fn().mockReturnValue({
+    matches: true,
+    media: "(min-width: 1100px)",
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  });
+  Object.defineProperty(window, "matchMedia", { configurable: true, value: matchMedia });
+}
 
 // notes: directory folder-source; daemon file_count (5) deliberately disagrees
 // with the on-disk non-dir count (2) so the "on-disk count" test can tell them
@@ -88,6 +101,11 @@ beforeEach(() => {
     indexed("managed", `${MANAGED}/report.pdf`),
     indexed("notes", "/Users/me/notes/index.md"),
   ]);
+});
+
+afterEach(() => {
+  if (originalMatchMedia) Object.defineProperty(window, "matchMedia", originalMatchMedia);
+  else Reflect.deleteProperty(window, "matchMedia");
 });
 
 describe("Sources left tree", () => {
@@ -183,6 +201,57 @@ describe("detail pane", () => {
     expect(vi.mocked(readSourceText)).toHaveBeenCalledWith(`${MANAGED}/notes.md`);
   });
 
+  it("uses the shared reading frame, keeps metadata in Info, and omits a duplicate leading title", async () => {
+    vi.mocked(readSourceText).mockResolvedValue(
+      "# notes.md\n\nThe complete local file body.\n\n![remote art](https://example.com/art.png)",
+    );
+    vi.mocked(listIndexedFiles).mockResolvedValue([
+      {
+        ...indexed("managed", `${MANAGED}/notes.md`),
+        chunk_count: 2,
+        summary: "AI summary stays in Info.",
+        memory_type: "reference",
+        domain: "research",
+      },
+    ]);
+    mockDesktopInfo();
+    const user = userEvent.setup();
+    const view = renderView();
+
+    await user.click(await screen.findByText("notes.md"));
+
+    expect(await screen.findByText("The complete local file body.")).toBeInTheDocument();
+    const documentPage = view.container.querySelector(".source-document-page");
+    expect(documentPage).toHaveClass("document-context-host");
+    expect(documentPage?.querySelector(".reading-document-frame")).toBeInTheDocument();
+    expect(documentPage?.querySelectorAll(".source-document-body h1")).toHaveLength(0);
+    expect(documentPage?.querySelectorAll("h1")).toHaveLength(1);
+    const body = documentPage?.querySelector(".source-document-body");
+    const info = document.body.querySelector("[data-detail-info]");
+    expect(body).not.toHaveTextContent("AI summary stays in Info.");
+    expect(info).toHaveTextContent("AI summary stays in Info.");
+    expect(info).toHaveTextContent("In your library");
+    expect(info).toHaveTextContent("2 passages");
+    expect(info).toHaveTextContent("reference");
+    expect(info).toHaveTextContent("research");
+    expect(body?.querySelector("img")).toBeNull();
+    expect(body?.querySelector('[role="img"]')).toHaveAccessibleName("remote art");
+    expect(getChunks).not.toHaveBeenCalled();
+  });
+
+  it("opens the local file only when its path in Info is clicked", async () => {
+    mockDesktopInfo();
+    const user = userEvent.setup();
+    renderView();
+    await user.click(await screen.findByText("notes.md"));
+
+    const path = `${MANAGED}/notes.md`;
+    expect(await screen.findByRole("button", { name: "Open file" })).toHaveTextContent(path);
+    expect(openFile).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Open file" }));
+    await waitFor(() => expect(openFile).toHaveBeenCalledWith(path));
+  });
+
   it("does not read file contents for a PDF — Open handles it", async () => {
     const user = userEvent.setup();
     renderView();
@@ -195,6 +264,7 @@ describe("detail pane", () => {
   });
 
   it("marks a not-yet-indexed supported file as Indexing, never 'not indexed'", async () => {
+    mockDesktopInfo();
     const user = userEvent.setup();
     renderView();
 

@@ -9,7 +9,12 @@ import "./PageInfoDrawer.css";
 
 interface PageInfoDrawerProps {
   open: boolean;
+  /** Automatically visible docked context should leave focus in the reader. */
+  focusOnOpen?: boolean;
+  /** A surface can start compact while preserving an explicitly resized width. */
+  defaultWidth?: number;
   headerContent?: ReactNode;
+  headerActions?: ReactNode;
   inspector?: boolean;
   docked?: boolean;
   expanded?: boolean;
@@ -46,7 +51,7 @@ function focusableControls(panel: HTMLElement): HTMLElement[] {
   });
 }
 
-export default function PageInfoDrawer({ open, onClose, title, children, closeLabel, headerContent, inspector = false, docked = false, expanded = false, expandedHost, onExpandedChange, expandLabel, restoreLabel, variant = "info" }: PageInfoDrawerProps) {
+export default function PageInfoDrawer({ open, focusOnOpen = true, defaultWidth: preferredWidth, onClose, title, children, closeLabel, headerContent, headerActions, inspector = false, docked = false, expanded = false, expandedHost, onExpandedChange, expandLabel, restoreLabel, variant = "info" }: PageInfoDrawerProps) {
   const workspacePaneHost = useContext(WorkspacePaneHostContext);
   const noteGroup = useContext(WorkspaceNoteGroupContext);
   const [groupWidth, setGroupWidth] = useState(0);
@@ -125,9 +130,10 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
     setPreviewWidth(null);
   }, [groupScoped, noteGroup?.id]);
 
-  const defaultWidth = groupScoped ? 320 : variant === "canvas" || inspector
+  // Metadata stays secondary to the reading lane; maps can use a wider pane.
+  const defaultWidth = preferredWidth ?? (variant === "canvas"
     ? Math.max(360, Math.min(460, Math.round(window.innerWidth * 0.32)))
-    : 360;
+    : 320);
   const baseWidth = committedWidth ?? defaultWidth;
   const displayWidth = previewWidth === 0 ? 0 : clampRightSidebarWidth(previewWidth ?? baseWidth, maxWidth);
   const effectiveGroupWidth = groupWidth || noteGroup?.element?.getBoundingClientRect().width || 0;
@@ -230,7 +236,7 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
     if (!open) return;
     const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     triggerRef.current = trigger;
-    if (!groupScoped) closeRef.current?.focus();
+    if (!groupScoped && (!nonModal || focusOnOpen)) closeRef.current?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (groupScoped && !(event.target instanceof Node && noteGroup?.element?.contains(event.target))) return;
@@ -292,7 +298,7 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
       document.removeEventListener("focusin", containFocus);
       if (!groupScoped && trigger?.isConnected && (!nonModal || document.activeElement === document.body || panelRef.current?.contains(document.activeElement))) trigger.focus();
     };
-  }, [open, nonModal, inspector, groupScoped, noteGroup]);
+  }, [open, nonModal, inspector, groupScoped, noteGroup, focusOnOpen]);
 
   if (!open) return null;
 
@@ -341,8 +347,9 @@ export default function PageInfoDrawer({ open, onClose, title, children, closeLa
               {headerContent}
             </>
           ) : (
-            <h2 data-tauri-drag-region={hosted ? "" : undefined} id={titleId}>{title}</h2>
+            <h2 data-tauri-drag-region={hosted ? "" : undefined} id={titleId} title={title}>{title}</h2>
           )}
+          {headerActions}
           {canExpand && (groupScoped || wide) && (
             <button aria-label={expandedWorkspace ? restoreLabel : expandLabel}
               className="page-info-drawer-workspace-toggle" onClick={() => {

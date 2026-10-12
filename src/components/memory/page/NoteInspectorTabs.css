@@ -21,7 +21,7 @@
   background: transparent;
   color: var(--mem-text-secondary);
   cursor: pointer;
-  font: 13px/1.4 var(--mem-font-body);
+  font: var(--detail-info-title-size)/1.5 var(--mem-font-body);
 }
 
 .note-inspector-tabs > .note-tab[data-active="true"],
@@ -31,10 +31,10 @@
 
 .note-inspector-tabs > .note-tab[data-active="true"] {
   background: var(--workspace-document-background, var(--mem-bg));
-  font-weight: 500;
+  font-weight: var(--detail-info-title-weight);
 }
 
-.note-inspector-tabs > .note-tab[aria-disabled="true"] {
+.note-inspector-tabs > .note-tab:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }

@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 193 registered `(method, path, handler)` triples
+## HTTP — all 195 registered `(method, path, handler)` triples
 
-71 page-bearing, 122 not.
+73 page-bearing, 122 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -607,6 +607,7 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/memory/entities/{entity_id}/observations` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/memory/entities/{id}/aliases` | main | no | not_applicable | `none` | — | no prose fields |
 | `PUT` | `/api/memory/entities/{id}/confirm` | main | no | not_applicable | `none` | — | no prose fields |
+| `PUT` | `/api/memory/entities/{id}/type` | main | no | not_applicable | `none` | — | updates entity type metadata only |
 | `DELETE` | `/api/memory/entities/{id}/delete` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/memory/entities/{id}/merge` | main | no | not_applicable | `none` | — | no prose fields |
 | `GET` | `/api/memory/graph` | main | yes | automatic | `none` | `handle_get_knowledge_graph` | GraphPageNode.title, GraphMemoryNode.title via dismissed card |
@@ -713,6 +714,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `GET` | `/api/snapshots/{id}/captures` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `GET` | `/api/snapshots/{id}/captures-with-content` | main | no | not_applicable | `none` | — | DEMOTED — proof in the inventory doc |
 | `POST` | `/api/snapshots/{id}/delete` | main | no | not_applicable | `none` | — | no prose fields |
+| `GET` | `/api/source-annotations` | main | yes | automatic | `none` | `handle_get_source_annotation` | SourceAnnotation.pages includes only active scoped Pages visible under the request grant |
+| `POST` | `/api/source-annotations` | main | yes | automatic | `none` | `handle_update_source_annotation` | SourceAnnotation.pages includes only active scoped Pages visible under the request grant |
 | `GET` | `/api/sources` | main | no | not_applicable | `none` | — | no prose fields |
 | `POST` | `/api/sources` | main | no | not_applicable | `none` | — | no prose fields |
 | `DELETE` | `/api/sources/{id}` | main | no | not_applicable | `none` | — | no prose fields |
@@ -1318,7 +1321,7 @@ carrying the authority of agreement.
 | `core/db.rs::update_memory_entity_id` | `pub` | no | **yes** | `server/entity_graph_routes.rs::handle_link_entity` | `core/db.rs::maybe_establish_entity_in_transaction` |
 | `core/db/repair_memory_cas.rs::complete_entity_extraction_repair_cas_inner` | `private` | no | no | — | `core/db.rs::maybe_establish_entity_in_transaction` |
 | `core/db/repair_verification.rs::record_repair_verification_atomic` | `pub(crate)` | no | no | — | `core/repair.rs::projection_page_row_on_connection` |
-| `core/db/scoped_pages.rs::get_page_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_page`, `server/page_routes.rs::handle_move_page` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
+| `core/db/scoped_pages.rs::get_page_scoped` | `pub` | no | **yes** | `server/page_routes.rs::handle_export_page`, `server/page_routes.rs::handle_move_page`, `server/source_annotation_routes.rs::handle_update_source_annotation`, `server/source_annotation_routes.rs::hydrate_pages` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
 | `core/db/scoped_pages.rs::get_page_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_get_page`, `server/page_routes.rs::handle_get_page_revisions` | `core/db/scoped_pages.rs::get_page_scoped_inner` |
 | `core/db/scoped_pages.rs::list_pages_scoped` | `pub` | no | **yes** | `server/knowledge_routes.rs::handle_list_knowledge_folders`, `server/page_routes.rs::handle_export_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |
 | `core/db/scoped_pages.rs::list_pages_scoped_browse` | `pub` | no | **yes** | `server/page_routes.rs::handle_list_pages` | `core/db/scoped_pages.rs::list_pages_scoped_inner` |

@@ -1,0 +1,224 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.memory-main-content:has(> .settings-view) {
+  padding: 0;
+}
+
+.settings-view {
+  --collection-reading-width: 800px;
+  container-type: inline-size;
+}
+
+.settings-view-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.settings-view-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  padding-inline: 4px;
+}
+
+.settings-view-heading h1 {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-xl);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.settings-view-groups {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.settings-view-group {
+  min-width: 0;
+}
+
+.settings-view .settings-section-header {
+  margin-bottom: 10px;
+}
+
+.settings-view .settings-row,
+.settings-view .settings-profile-row {
+  min-height: 64px;
+  padding-inline: 20px;
+}
+
+.settings-view .settings-row-content,
+.settings-view.settings-page .settings-profile-row-content {
+  align-items: center;
+}
+
+.settings-view .settings-row-control {
+  margin-top: 0;
+}
+
+.settings-view .settings-profile-controls {
+  margin-top: 0;
+}
+
+.settings-view .settings-row-content-has-details .settings-row-title-line {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-view .settings-row-content-has-details .settings-row-title {
+  min-width: 0;
+}
+
+.settings-help-trigger {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+}
+
+.settings-help-anchor {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-help-trigger:hover {
+  background: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.settings-help-trigger:focus-visible {
+  outline: 2px solid var(--mem-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-view .settings-row-details-summary {
+  margin: 4px 0 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-sm);
+  line-height: 1.5;
+}
+
+.settings-help-popover {
+  position: fixed;
+  box-sizing: border-box;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  max-height: min(60vh, 480px);
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-lg);
+  background: var(--mem-surface);
+  box-shadow: var(--mem-shadow-raised);
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-sm);
+  line-height: 1.55;
+  white-space: pre-line;
+}
+
+.settings-view.settings-page .settings-row-content-has-details {
+  flex-direction: row;
+  align-items: center;
+}
+
+.settings-view.settings-page .settings-row-content-has-details .settings-row-copy {
+  flex: 1 1 auto;
+}
+
+.settings-view.settings-page .settings-row-content-has-details .settings-row-control-custom {
+  width: auto;
+  flex: 0 1 auto;
+}
+
+.settings-view .mem-fade-up {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+
+.settings-view.settings-page .settings-profile-input-inline {
+  width: auto;
+  padding-inline: 0;
+  min-width: 80px;
+  max-width: min(240px, 100%);
+  border-color: transparent;
+  background: transparent;
+  text-align: right;
+}
+
+.settings-view .settings-profile-input-inline:hover {
+  background: var(--mem-hover);
+}
+
+.settings-view .settings-profile-input-inline:focus-visible {
+  border-color: var(--mem-accent-indigo);
+  background: var(--mem-bg);
+}
+
+@container (max-width: 480px) {
+  .settings-view-heading {
+    align-items: flex-start;
+  }
+
+  .settings-view.settings-page .settings-profile-input-inline {
+    width: auto !important;
+  }
+
+  .settings-view .settings-row,
+  .settings-view .settings-profile-row {
+    padding-inline: 20px;
+  }
+
+  .settings-view.settings-page .settings-profile-row-content {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .settings-view.settings-page .settings-profile-row-content > :first-child {
+    width: auto;
+    flex: 1 1 8rem;
+  }
+
+  .settings-view.settings-page .settings-profile-controls {
+    width: auto;
+    flex: 0 1 auto;
+  }
+}
+
+@container (max-width: 319px) {
+  .settings-view.settings-page .settings-profile-row-content {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .settings-view.settings-page .settings-profile-row-content > :first-child,
+  .settings-view.settings-page .settings-profile-controls {
+    width: 100%;
+    flex-basis: auto;
+  }
+}

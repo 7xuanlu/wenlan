@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
@@ -80,14 +80,28 @@ function pickDefaultPresetId(list: ProviderPreset[]): string {
 export default function AnyProviderCard({
   groups,
   bare = false,
+  showTaskModels = true,
+  settingsPresentation = false,
 }: {
   groups?: PresetGroup[];
   /** Skip the <Card> wrapper and the title/description block — the host
    *  (a disclosure row) already supplies both. Default false keeps every
    *  existing call site (the wizard's cloud/local steps) unchanged. */
   bare?: boolean;
+  /** Settings selects native Anthropic models in AI tasks. Onboarding keeps
+   *  its existing embedded model choices. */
+  showTaskModels?: boolean;
+  /** Replace the onboarding preset pills with the compact labeled selector
+   *  used by Settings. */
+  settingsPresentation?: boolean;
 }) {
   const { t } = useTranslation();
+  const formId = useId();
+  const providerSelectId = `${formId}-provider`;
+  const endpointId = `${formId}-endpoint`;
+  const apiKeyId = `${formId}-api-key`;
+  const modelId = `${formId}-model`;
+  const modelsListId = `${formId}-models`;
   const { supportsHotSwap, supportsExternalKey } = useDaemonVersion();
   const anthropic = useApiKeyStatus();
   const queryClient = useQueryClient();
@@ -432,8 +446,19 @@ export default function AnyProviderCard({
   const discoveryUnauthorized =
     discoveryFailed && (isUnauthorized(discovery.error) || isUnauthorized(localQuery?.error));
 
+  const settingsFieldClassName = settingsPresentation ? "settings-intelligence-provider-field" : undefined;
+  const settingsFieldLabelStyle = settingsPresentation ? {
+    fontFamily: "var(--mem-font-body)",
+    fontSize: "14px",
+    lineHeight: 1.4,
+    letterSpacing: "normal",
+    color: "var(--mem-text)",
+    textTransform: "none" as const,
+    marginBottom: 0,
+  } : undefined;
+
   const body = (
-    <div className="flex flex-col" style={{ gap: "12px" }}>
+    <div className={`flex flex-col ${settingsPresentation ? "settings-intelligence-provider-settings" : ""}`} style={{ gap: "12px" }}>
         {!bare && (
           <div>
             <h3
@@ -458,7 +483,23 @@ export default function AnyProviderCard({
           </p>
         )}
 
-        <div className="flex flex-wrap gap-2" role="group" aria-label={t("externalProvider.presetLabel")}>
+        {settingsPresentation ? (
+          <div className="settings-intelligence-provider-row">
+            <label htmlFor={providerSelectId}>{t("externalProvider.presetLabel")}</label>
+            <div className="settings-intelligence-provider-control">
+              <Select
+                id={providerSelectId}
+                value={presetId}
+                onChange={(event) => selectPreset(event.target.value)}
+              >
+                {presets.map((p) => (
+                  <option key={p.id} value={p.id}>{localLabel(p.name)}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap gap-2" role="group" aria-label={t("externalProvider.presetLabel")}>
           {presets.map((p) => {
             const probe = probeFor(p.id);
             const status = !probe ? null : probe.isLoading ? "probing" : probe.isSuccess ? "connected" : "notDetected";
@@ -490,16 +531,17 @@ export default function AnyProviderCard({
               </button>
             );
           })}
-        </div>
+          </div>
+        )}
 
         {preset.native ? (
-          <AnthropicFields showNoKeyGuidance={!isCloudOnly} />
+          <AnthropicFields showNoKeyGuidance={!isCloudOnly} showModelChoice={showTaskModels} settingsPresentation={settingsPresentation} />
         ) : (
           <>
             {chipState && <StatusChip state={chipState} label={chipLabel} />}
 
             {!knownCloudEndpoint && (
-              <Field label={t("externalProvider.endpointLabel")} htmlFor="any-provider-endpoint">
+              <Field label={t("externalProvider.endpointLabel")} htmlFor={endpointId} className={settingsFieldClassName} labelStyle={settingsFieldLabelStyle}>
                 <Input mono value={endpoint} onChange={(e) => setEndpoint(e.target.value)} />
               </Field>
             )}
@@ -513,7 +555,18 @@ export default function AnyProviderCard({
             {(preset.keyRequired || optionalKeyField) && (
               <Field
                 label={preset.keyRequired ? t("externalProvider.apiKeyLabel") : t("externalProvider.apiKeyOptionalLabel")}
-                htmlFor="any-provider-key"
+                htmlFor={apiKeyId}
+                className={settingsFieldClassName}
+                labelStyle={settingsFieldLabelStyle}
+                labelAdornment={settingsPresentation && preset.keyRequired && preset.getKeyUrl ? (
+                  <button
+                    type="button"
+                    className="settings-intelligence-get-key-action"
+                    onClick={() => shellOpen(preset.getKeyUrl!)}
+                  >
+                    {t("externalProvider.getKeyLink")}
+                  </button>
+                ) : undefined}
                 description={
                   keyPrefixMismatch(preset, apiKey)
                     ? t("externalProvider.keyHint", { vendor: preset.name, prefix: (preset.keyPrefixes ?? []).join(" or ") })
@@ -531,7 +584,7 @@ export default function AnyProviderCard({
                 />
               </Field>
             )}
-            {preset.keyRequired && preset.getKeyUrl && (
+            {!settingsPresentation && preset.keyRequired && preset.getKeyUrl && (
               <Button variant="ghost" size="sm" onClick={() => shellOpen(preset.getKeyUrl!)} className="self-start">
                 {t("externalProvider.getKeyLink")}
               </Button>
@@ -539,13 +592,15 @@ export default function AnyProviderCard({
 
             <Field
               label={t("externalProvider.modelLabel")}
-              htmlFor="any-provider-model"
+              htmlFor={modelId}
+              className={settingsFieldClassName}
+              labelStyle={settingsFieldLabelStyle}
               description={
                 modelFieldMode === "storedKey" ? t("externalProvider.modelSelectStoredKeyHint") : undefined
               }
             >
               {modelFieldMode === "select" ? (
-                <Select mono value={model} onChange={(e) => setModel(e.target.value)}>
+                <Select mono={!bare} value={model} onChange={(e) => setModel(e.target.value)}>
                   <option value="">{t("externalProvider.modelSelectPlaceholder")}</option>
                   {/* A saved model that's no longer among the discovered ids
                       (e.g. removed from Ollama since it was saved) must still
@@ -560,7 +615,7 @@ export default function AnyProviderCard({
                 // Cloud vendor, no key yet: dropdown-only (user report) — no
                 // free-text input to type a model id into before there's a
                 // key to discover one with.
-                <Select mono disabled value="">
+                <Select mono={!bare} disabled value="">
                   <option value="">{t("externalProvider.modelSelectNeedsKey")}</option>
                 </Select>
               ) : modelFieldMode === "storedKey" ? (
@@ -571,11 +626,11 @@ export default function AnyProviderCard({
                 // a dropdown it can't populate. The Field description above
                 // (modelSelectStoredKeyHint) tells the user how to get an
                 // editable one back.
-                <Select mono disabled value={model}>
+                <Select mono={!bare} disabled value={model}>
                   <option value={model}>{model}</option>
                 </Select>
               ) : modelFieldMode === "loading" ? (
-                <Select mono disabled value="">
+                <Select mono={!bare} disabled value="">
                   <option value="">{t("externalProvider.modelSelectLoading")}</option>
                 </Select>
               ) : (
@@ -586,16 +641,16 @@ export default function AnyProviderCard({
                 // /models response shape drifts. Local/custom presets always
                 // land here too; they never get dropdown-only treatment.
                 <Input
-                  mono
+                  mono={!bare}
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder={preset.modelPlaceholder ?? t("externalProvider.modelPlaceholder")}
-                  list="any-provider-models"
+                  list={modelsListId}
                 />
               )}
             </Field>
             {modelFieldMode === "input" && (
-              <datalist id="any-provider-models">
+              <datalist id={modelsListId}>
                 {models.map((m) => (
                   <option key={m} value={m} />
                 ))}
@@ -611,7 +666,7 @@ export default function AnyProviderCard({
               </span>
             )}
 
-            <div className="flex items-center gap-2">
+            <div className="settings-intelligence-provider-actions flex items-center gap-2">
               <Button
                 variant="secondary"
                 size="sm"

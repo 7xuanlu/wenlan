@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { SearchModal } from "./SearchModal";
 import { RecentlyOpened, type RecentSearchItem } from "./RecentlyOpened";
-import { ArrowLeft, ArrowRight, House, X } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowRight, X } from "@phosphor-icons/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
@@ -50,6 +50,8 @@ import {
   type PageDraftEditorHandle,
 } from "./pages/PageDraftEditor";
 import SourcesView from "./SourcesView";
+import { SourceDocumentPage } from "./sources/SourceDocumentReader";
+import { WorkspaceReadingHostContext } from "./navigation/WorkspacePaneHost";
 import type { SourceLibraryState } from "./sources/SourceLibrary";
 import AboutWenlanDialog from "./AboutWenlanDialog";
 import PairingApprovalDialog from "./PairingApprovalDialog";
@@ -93,6 +95,8 @@ function scrollDestinationKey(view: View): string {
   switch (view.kind) {
     case "graph":
       return `graph:${view.focusPageId ?? "all"}`;
+    case "source-document":
+      return JSON.stringify(["source-document", view.file.source, view.file.source_id, view.file.space ?? null]);
     case "entity":
       return `entity:${view.entityId}`;
     case "memory":
@@ -123,6 +127,7 @@ function sameDestination(current: View, next: View): boolean {
     case "page": return next.kind === "page" && current.pageId === next.pageId
       && (current.mode ?? "edit") === (next.mode ?? "edit");
     case "graph": return next.kind === "graph" && current.focusPageId === next.focusPageId;
+    case "source-document": return next.kind === "source-document" && current.file.source === next.file.source && current.file.source_id === next.file.source_id && (current.file.space ?? null) === (next.file.space ?? null);
     case "memory": return next.kind === "memory" && current.sourceId === next.sourceId;
     case "entity": return next.kind === "entity" && current.entityId === next.entityId;
     case "settings": return next.kind === "settings"
@@ -217,6 +222,22 @@ export default function Main({
     inFlight: null,
   });
   const pageFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const memoryFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerMemoryFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    memoryFlushRef.current = flush;
+  }, []);
+  const topicFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerTopicFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    topicFlushRef.current = flush;
+  }, []);
+  const spaceIdentityFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSpaceIdentityFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    spaceIdentityFlushRef.current = flush;
+  }, []);
+  const sourceDescriptionFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerSourceDescriptionFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    sourceDescriptionFlushRef.current = flush;
+  }, []);
   const pageNavigationTokenRef = useRef<symbol | null>(null);
   const deletedPageIdsRef = useRef(new Set<string>());
   const registerPageFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
@@ -296,8 +317,13 @@ export default function Main({
       if (existing) next = existing.view;
       else updateNoteTabs(upsertNoteTab(noteTabsRef.current, next));
     }
+    const currentView = viewRef.current;
+    if (currentView.kind === "sources" || currentView.kind === "source-document") {
+      readingPositions.set(scrollDestinationKey(currentView), mainContentRef.current?.scrollTop ?? 0);
+    }
     viewRef.current = next;
     setView(next);
+    setReadySourceView(null);
     if (next.kind === "pages" || next.kind === "home") setActiveTab("pages");
     else if (next.kind === "activity") setActiveTab("activity");
   };
@@ -316,16 +342,13 @@ export default function Main({
   const pageSelectionsRef = useRef(new Map<string, MarkdownEditorSelection>());
   const readingPositions = noteReadingPositionsFor(pageSelectionsRef.current);
   const [readyEditorView, setReadyEditorView] = useState<View | null>(null);
+  const [readySourceView, setReadySourceView] = useState<View | null>(null);
   const [sourceLibraryState, setSourceLibraryState] = useState<SourceLibraryState>({ search: "", filter: "all" });
   const contextSpace = viewHistory.slice().reverse().find(
     (item): item is Extract<View, { kind: "space" }> => item.kind === "space",
   );
   const [activeTab, setActiveTab] = useState<"pages" | "activity">(view.kind === "activity" ? "activity" : "pages");
   const [aboutOpen, setAboutOpen] = useState(false);
-  const memoryNavigationGuardRef = useRef<(() => boolean) | null>(null);
-  const registerMemoryNavigationGuard = useCallback((guard: (() => boolean) | null) => {
-    memoryNavigationGuardRef.current = guard;
-  }, []);
   const [pageSavePending, setPageSavePending] = useState(false);
   const [pageEditDirty, setPageEditDirty] = useState(false);
   const reportPageDirty = useCallback((value: boolean) => { pageEditDirtyRef.current = value; setPageEditDirty(value); }, []);
@@ -344,7 +367,6 @@ export default function Main({
   pageEditDirtyRef.current = pageEditDirty;
 
   const canLeaveCurrentPage = () => {
-    if (viewRef.current.kind === "memory" && memoryNavigationGuardRef.current && !memoryNavigationGuardRef.current()) return false;
     if (pageSavePending) return false;
     if (
       view.kind === "page"
@@ -359,7 +381,18 @@ export default function Main({
 
   const prepareForQuit = useCallback(async (): Promise<boolean> => {
     if (movingNoteRef.current || (secondaryGroupRef.current && !await secondaryGroupRef.current.flush())) return false;
-    if (viewRef.current.kind === "memory" && memoryNavigationGuardRef.current) return memoryNavigationGuardRef.current();
+    if (viewRef.current.kind === "memory" && memoryFlushRef.current) {
+      try { return await memoryFlushRef.current(); } catch { return false; }
+    }
+    if (viewRef.current.kind === "entity" && topicFlushRef.current) {
+      try { return await topicFlushRef.current(); } catch { return false; }
+    }
+    if (viewRef.current.kind === "space" && spaceIdentityFlushRef.current) {
+      try { return await spaceIdentityFlushRef.current(); } catch { return false; }
+    }
+    if ((viewRef.current.kind === "source-document" || viewRef.current.kind === "sources") && sourceDescriptionFlushRef.current) {
+      try { return await sourceDescriptionFlushRef.current(); } catch { return false; }
+    }
     if (viewRef.current.kind === "page" && pageFlushRef.current) {
       try { return await pageFlushRef.current(); } catch { return false; }
     }
@@ -457,7 +490,11 @@ export default function Main({
     onRefused?: () => void,
   ): (() => void) => {
     const settlement = navigationSettlement(onRefused);
-    const flush = view.kind === "page" ? pageFlushRef.current : null;
+    const flush = view.kind === "page" ? pageFlushRef.current
+      : view.kind === "entity" ? topicFlushRef.current
+      : view.kind === "memory" ? memoryFlushRef.current
+      : view.kind === "space" ? spaceIdentityFlushRef.current
+      : view.kind === "source-document" || view.kind === "sources" ? sourceDescriptionFlushRef.current : null;
     if (flush) {
       const sourceView = view;
       const token = Symbol("page-navigation");
@@ -484,6 +521,10 @@ export default function Main({
       source => settlement.succeed(() => action(source)),
       settlement.refuse,
     );
+  };
+
+  const leaveSpaceToParent = () => {
+    afterPrimaryNavigationGuards(() => replaceView({ kind: "spaces" }));
   };
 
   const groupNavigationToken = useRef<symbol | null>(null);
@@ -541,7 +582,8 @@ export default function Main({
     }, settle);
     // An autosave changes pending state while this navigation waits. Do not
     // cancel the requested destination merely because that state changed.
-    return pageFlushRef.current ? undefined : cancel;
+    return pageFlushRef.current || topicFlushRef.current || memoryFlushRef.current
+      || spaceIdentityFlushRef.current || sourceDescriptionFlushRef.current ? undefined : cancel;
   }, [initialPageId, pageSavePending, movingNote]);
 
   useEffect(() => {
@@ -582,7 +624,8 @@ export default function Main({
           : { kind: activeTab },
       );
     }, settle);
-    return pageFlushRef.current ? undefined : cancel;
+    return pageFlushRef.current || topicFlushRef.current || memoryFlushRef.current
+      || spaceIdentityFlushRef.current || sourceDescriptionFlushRef.current ? undefined : cancel;
   }, [initialMemoryId, activeTab, pageSavePending, movingNote]);
 
   // New destinations branch from the current entry only after saving succeeds.
@@ -742,7 +785,7 @@ export default function Main({
 
   const externalDetailExit = view.kind === "memory" && !!initialMemoryId
     && !!onBackFromDetail && viewHistory.length === 0;
-  const fallbackView: View = view.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
+  const fallbackView: View = view.kind === "source-document" ? { kind: "sources" } : view.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
   const canNavigateBack = viewHistory.length > 0 || externalDetailExit || !sameDestination(view, fallbackView);
   const applyBackNavigation = (sourceView: View) => {
     const sourceStillExists = sourceView.kind !== "page" || !deletedPageIdsRef.current.has(sourceView.pageId);
@@ -752,7 +795,7 @@ export default function Main({
         onBackFromDetail();
         return;
       }
-      const fallback: View = sourceView.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
+      const fallback: View = sourceView.kind === "source-document" ? { kind: "sources" } : sourceView.kind === "space" ? { kind: "spaces" } : { kind: activeTab };
       if (sameDestination(sourceView, fallback)) return;
       updateHistory([], sourceStillExists ? [...viewForwardRef.current, sourceView] : viewForwardRef.current);
       showView(fallback);
@@ -799,10 +842,13 @@ export default function Main({
   const isWikiWorkspaceView = view.kind === "pages" || view.kind === "home" || view.kind === "page" || view.kind === "page-draft";
 
   useViewScroll(mainContentRef, viewScrollDestination,
-    view.kind !== "page" || view.mode === "read" || readyEditorView === view,
+    view.kind === "source-document" ? readySourceView === view : view.kind !== "page" || view.mode === "read" || readyEditorView === view,
     isWikiWorkspaceView ? ".wiki-workspace-content" : undefined, readingPositions);
   const handleSearchQueryChange = (nextQuery: string) => {
-    const needsFlush = view.kind === "page-draft" || (view.kind === "page" && !!pageFlushRef.current);
+    const needsFlush = view.kind === "page-draft" || (view.kind === "page" && !!pageFlushRef.current)
+      || (view.kind === "entity" && !!topicFlushRef.current) || (view.kind === "memory" && !!memoryFlushRef.current)
+      || (view.kind === "space" && !!spaceIdentityFlushRef.current)
+      || ((view.kind === "source-document" || view.kind === "sources") && !!sourceDescriptionFlushRef.current);
     if (!query && nextQuery && !needsFlush && !canLeaveCurrentPage()) return;
     if (!query && nextQuery && needsFlush) {
       pendingDraftSearchCancelRef.current?.();
@@ -1042,7 +1088,7 @@ export default function Main({
         } else if (view.kind === "page-draft") {
           // PageDraftEditor owns Escape so it can await the same flush gate as Back.
           return;
-        } else if (view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "page" || view.kind === "space" || view.kind === "distill-review") {
+        } else if (view.kind === "source-document" || view.kind === "entity" || view.kind === "memory" || view.kind === "settings" || view.kind === "import" || view.kind === "graph" || view.kind === "page" || view.kind === "space" || view.kind === "distill-review") {
           navigateBack();
         }
       }
@@ -1100,7 +1146,7 @@ export default function Main({
                 title={searchActionTitle}
                 type="button"
               >
-                {isSettingsView ? <House size={18} aria-hidden="true" /> : (
+                {isSettingsView ? <ArrowLeft size={18} aria-hidden="true" /> : (
                 <svg aria-hidden="true" fill="none" height="16" stroke="currentColor" viewBox="0 0 24 24" width="16">
                   <path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />
                 </svg>
@@ -1117,6 +1163,7 @@ export default function Main({
       onOpenMemory={(sourceId) => navigateTo({ kind: "memory", sourceId })}
     >
     <WorkspaceNavigationProvider>
+    <WorkspaceReadingHostContext.Provider value={mainContentRef}>
     <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
     <WorkspaceDocumentToolsHostContext.Provider value={documentToolsHost}>
     <div
@@ -1227,7 +1274,7 @@ export default function Main({
         )}
 
         {/* Main content */}
-        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" || view.kind === "connect-agent" ? "min-w-0 overflow-hidden p-0" : isWikiWorkspaceView ? "memory-main-content memory-main-content--wiki overflow-hidden" : `memory-main-content overflow-y-auto${view.kind === "memory" ? " memory-main-content--page" : ["spaces", "entities", "stream"].includes(view.kind) ? " memory-main-content--collection" : ""}`}`}>
+        <main ref={mainContentRef} className={`flex-1 ${view.kind === "graph" || view.kind === "sources" || view.kind === "connect-agent" ? "min-w-0 overflow-hidden p-0" : isWikiWorkspaceView ? "memory-main-content memory-main-content--wiki overflow-hidden" : `memory-main-content overflow-y-auto${view.kind === "memory" || view.kind === "source-document" || view.kind === "entity" ? " memory-main-content--page" : ["spaces", "entities", "stream"].includes(view.kind) ? " memory-main-content--collection" : ""}`}`}>
           {view.kind === "import" ? (
             <ImportView
               onBack={navigateBack}
@@ -1251,6 +1298,9 @@ export default function Main({
               section={view.section ?? "general"}
               onBack={navigateBack}
               onSetupAgent={() => navigateTo({ kind: "connect-agent" })}
+              onOpenConnections={() => navigateTo({ kind: "settings", section: "agents" })}
+              onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
+              onOpenActivity={() => navigateTo({ kind: "activity" })}
               onImport={() => navigateTo({ kind: "import" })}
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
@@ -1298,18 +1348,23 @@ export default function Main({
             <SpaceDetail
               copy={spaceDetailCopy}
               spaceName={view.spaceName}
-              onBack={() => replaceView({ kind: "spaces" })}
+              onBack={leaveSpaceToParent}
               onCreatePage={(space) => navigateTo({ kind: "page-draft", space })}
               onReviewAll={() => navigateTo({ kind: "distill-review" })}
               onSelectPage={(id) => navigateTo({ kind: "page", pageId: id })}
-              onSpaceDeleted={handleSpaceDeleted}
+              onOpenSource={(file) => navigateTo({ kind: "source-document", file })}
+              onSpaceDeleted={(spaceId) => {
+                handleSpaceDeleted(spaceId);
+                replaceView({ kind: "spaces" });
+              }}
               onSpaceLoaded={handleSpaceLoaded}
               onSpaceRenamed={handleSpaceRenamed}
+              onRegisterFlush={registerSpaceIdentityFlush}
             />
           ) : view.kind === "memory" ? (
             <MemoryDetail
               key={view.sourceId}
-              onRegisterNavigationGuard={registerMemoryNavigationGuard}
+              onRegisterFlush={registerMemoryFlush}
               sourceId={view.sourceId}
               onBack={navigateBack}
               onNavigateEntity={handleEntityClick}
@@ -1326,6 +1381,7 @@ export default function Main({
             <EntityDetail
               key={view.entityId}
               entityId={view.entityId}
+              onRegisterFlush={registerTopicFlush}
               onBack={navigateBack}
               onEntityClick={handleEntityClick}
               onMemoryClick={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
@@ -1456,10 +1512,14 @@ export default function Main({
               onNavigateMemory={(sid) => navigateTo({ kind: "memory", sourceId: sid })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
             />
+          ) : view.kind === "source-document" ? (
+            <SourceDocumentPage key={JSON.stringify([view.file.source, view.file.source_id, view.file.space ?? null])} file={view.file} onReady={() => setReadySourceView(view)} onRegisterFlush={registerSourceDescriptionFlush} />
           ) : view.kind === "sources" ? (
             <SourcesView
               libraryState={sourceLibraryState}
               onLibraryStateChange={setSourceLibraryState}
+              onOpenDocument={(file) => navigateTo({ kind: "source-document", file })}
+              onRegisterFlush={registerSourceDescriptionFlush}
               onManageSources={() => navigateTo({ kind: "settings", section: "sources" })}
             />
           ) : view.kind === "graph" ? (
@@ -1567,6 +1627,7 @@ export default function Main({
     </div>
     </WorkspaceDocumentToolsHostContext.Provider>
     </WorkspacePaneHostContext.Provider>
+    </WorkspaceReadingHostContext.Provider>
     </WorkspaceNavigationProvider>
     </ReferenceNavigationProvider>
   );

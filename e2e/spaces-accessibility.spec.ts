@@ -133,7 +133,11 @@ function spaceOverviewButton(page: Page, name = "Wenlan"): Locator {
 
 async function assertFocusOutline(page: Page): Promise<void> {
   const outline = await page.evaluate(() => {
-    const style = getComputedStyle(document.activeElement as Element);
+    const active = document.activeElement as HTMLElement;
+    const target = active instanceof HTMLInputElement
+      ? active.closest<HTMLElement>(".collection-search") ?? active
+      : active;
+    const style = getComputedStyle(target);
     return { style: style.outlineStyle, width: Number.parseFloat(style.outlineWidth) };
   });
   expect(outline.style).not.toBe("none");
@@ -144,7 +148,10 @@ async function focusedElementEvidence(page: Page, step: string) {
   const evidence = await page.evaluate((label) => {
     const node = document.activeElement as HTMLElement | null;
     if (!node) throw new Error(`No active element for ${label}`);
-    const style = getComputedStyle(node);
+    const focusRingNode = node instanceof HTMLInputElement
+      ? node.closest<HTMLElement>(".collection-search") ?? node
+      : node;
+    const style = getComputedStyle(focusRingNode);
     const labelledBy = node.getAttribute("aria-labelledby")
       ?.split(/\s+/)
       .map((id) => document.getElementById(id)?.textContent?.trim() ?? "")
@@ -207,10 +214,12 @@ test("has no page-level horizontal overflow across all responsive surfaces", asy
     await openSpaceEntity(page, "Ada Lovelace");
     await expect(page.locator(".entity-detail-dossier")).toBeVisible();
     await assertNoPageOverflow(page);
+    const infoToggle = page.getByRole("button", { name: "Info", exact: true });
+    if (await infoToggle.getAttribute("aria-expanded") === "true") await infoToggle.click();
     const topicContext = await openTopicContext(page);
     await assertNoPageOverflow(page);
     await topicContext.getByRole("button", { name: "Close", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeFocused();
+    await expect(page.getByRole("button", { name: "Info", exact: true })).toBeFocused();
   }
 
   expect(browserErrors.pageErrors).toEqual([]);
@@ -252,11 +261,11 @@ test("switches exactly at the management and dossier breakpoints", async ({ page
   // Re-collapse the disclosure so the popover cannot cover later targets.
   await suggestionsDisclosure.click();
   await expect(suggested).toBeHidden();
-  const mobileMetadata = page.getByTestId("space-row-space-wenlan").getByTestId("space-mobile-metadata");
-  await expect(mobileMetadata).toBeVisible();
-  await expect(mobileMetadata.getByTestId("space-mobile-pages")).toHaveText(/^\d+ notes?$/i);
-  await expect(mobileMetadata.getByText("Memories", { exact: true })).toHaveCount(0);
-  await expect(mobileMetadata.getByText("Updated", { exact: true })).toHaveCount(0);
+  const mobileRow = page.getByTestId("space-row-space-wenlan");
+  await expect(mobileRow.getByRole("button", { name: "Wenlan", exact: true })).toBeVisible();
+  await expect(mobileRow.locator(".spaces-row-description")).toBeVisible();
+  await expect(mobileRow).not.toContainText("Memories");
+  await expect(mobileRow).not.toContainText("Updated");
   await expect(page.locator("main")).toHaveCSS("padding-left", "24px");
   await page.setViewportSize({ width: 639, height: 900 });
   await expect(page.locator("main")).toHaveCSS("padding-left", "24px");
@@ -293,25 +302,24 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
     await openSpaces(page);
     await page.getByLabel("Filter spaces").focus();
     results.push(...await renderedContrast(page, [
-      { label: `${theme} spaces search focus`, selector: ".spaces-filter input", foregroundProperty: "outline-color", minimum: 3 },
+      { label: `${theme} spaces search focus`, selector: ".spaces-filter.collection-search", foregroundProperty: "outline-color", minimum: 3 },
     ]));
+    await page.getByTestId("space-row-space-wenlan").hover();
     await page.getByRole("button", { name: "Actions for Wenlan" }).click();
     results.push(...await renderedContrast(page, [
       { label: `${theme} spaces page count`, selector: ".spaces-row-pages", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} spaces search text`, selector: ".spaces-filter input", foregroundProperty: "color", minimum: 4.5 },
-      { label: `${theme} spaces menu boundary`, selector: ".spaces-menu", foregroundProperty: "border-top-color", minimum: 3 },
+      { label: `${theme} spaces menu item`, selector: ".spaces-menu [role=\"menuitem\"]", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} filled New Space text`, selector: ".spaces-new-action", foregroundProperty: "color", minimum: 4.5 },
     ]));
     await page.keyboard.press("Escape");
 
     await spaceOverviewButton(page).click();
-    await page.getByRole("button", { name: "Edit space" }).click();
     results.push(...await renderedContrast(page, [
-      { label: `${theme} space title editor boundary`, selector: ".space-dossier-title-input", foregroundProperty: "border-bottom-color", minimum: 3 },
-      { label: `${theme} description editor boundary`, selector: ".space-dossier-description-editor", foregroundProperty: "border-top-color", minimum: 3 },
-      { label: `${theme} selected note tab`, selector: ".space-project-tabs [aria-selected=\"true\"]", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} space title`, selector: ".space-dossier-title-input textarea", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} space description`, selector: ".space-dossier-description textarea", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} selected page tab`, selector: ".space-project-tabs [aria-selected=\"true\"]", foregroundProperty: "color", minimum: 4.5 },
     ]));
-    await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
     await openSpaceEntity(page, "Ada Lovelace");
     await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeVisible();
@@ -319,7 +327,7 @@ test("meets computed browser contrast on redesigned surfaces in both themes", as
     results.push(...await renderedContrast(page, [
       { label: `${theme} topic title`, selector: ".entity-detail-dossier .page-detail-title", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} topic actions`, selector: ".entity-detail-dossier .page-detail-actions-menu-trigger", foregroundProperty: "color", minimum: 4.5 },
-      { label: `${theme} topic panel metadata`, selector: ".entity-topic-context .entity-meta-mono", foregroundProperty: "color", minimum: 4.5 },
+      { label: `${theme} topic panel metadata`, selector: ".page-info-drawer .memory-detail-metadata-value", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} graph node text`, selector: ".entity-graph-node-name", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} relationship text`, selector: ".entity-relation-name", foregroundProperty: "color", minimum: 4.5 },
       { label: `${theme} relationship edge`, selector: ".entity-graph-edges line", backgroundSelector: ".entity-graph", foregroundProperty: "stroke", minimum: 3 },
@@ -403,7 +411,7 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await page.keyboard.press("Enter");
   await expect(page.locator(".space-dossier")).toBeVisible();
   const sourcesTab = page.getByRole("tab", { name: "Sources" });
-  const notesTab = page.getByRole("tab", { name: "Notes" });
+  const notesTab = page.getByRole("tab", { name: "Pages" });
   await tabTo(page, notesTab);
   await assertFocusOutline(page);
   await page.keyboard.press("ArrowRight");
@@ -421,10 +429,18 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await tabTo(page, topicActions);
   await assertFocusOutline(page);
   await page.keyboard.press("Enter");
-  const contextItem = page.getByRole("menuitem", { name: "Topic context", exact: true });
-  await tabTo(page, contextItem, 8);
+  await expect(page.getByRole("menuitem", { name: "Archive", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  const infoToggle = page.getByRole("button", { name: "Info", exact: true });
+  const topicContext = page.getByRole("complementary", { name: "Info", exact: true });
+  for (let i = 0; i < 12 && !await infoToggle.evaluate(node => node === document.activeElement); i++) {
+    await page.keyboard.press("Shift+Tab");
+  }
+  await expect(infoToggle).toBeFocused();
   await page.keyboard.press("Enter");
-  const topicContext = page.getByRole("complementary", { name: "Topic context", exact: true });
+  await expect(topicContext).toHaveCount(0);
+  await expect(infoToggle).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(topicContext).toBeVisible();
   const graphNode = page.locator(".entity-graph-node").first();
   await tabTo(page, graphNode);
@@ -435,16 +451,14 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   const contextClose = topicContext.getByRole("button", { name: "Close", exact: true });
   await tabTo(page, contextClose);
   await page.keyboard.press("Enter");
-  await expect(topicActions).toBeFocused();
-  const addNote = page.getByRole("button", { name: "Add note" });
+  await expect(infoToggle).toBeFocused();
+  const addNote = page.getByRole("button", { name: "Add information" });
   await tabTo(page, addNote, 24);
   await page.keyboard.press("Enter");
-  await expect(page.getByPlaceholder("New note about Ada Lovelace…")).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "Add information", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
-  await tabTo(page, topicActions);
-  await page.keyboard.press("Enter");
-  await tabTo(page, contextItem, 8);
+  await tabTo(page, infoToggle, 60);
   await page.keyboard.press("Enter");
   await expect(topicContext).toBeVisible();
   const linkedMemory = page.locator(".memory-detail-related-card").first();
@@ -452,7 +466,7 @@ test("reaches management, dossier, graph, ledger, observation, and linked-memory
   await assertFocusOutline(page);
   await tabTo(page, contextClose);
   await page.keyboard.press("Enter");
-  await expect(topicActions).toBeFocused();
+  await expect(infoToggle).toBeFocused();
   const back = page.getByRole("group", { name: "History navigation", exact: true }).getByRole("button", { name: "Back", exact: true });
   await tabTo(page, back);
   await page.keyboard.press("Enter");
@@ -673,5 +687,5 @@ test("removes non-essential transitions under reduced motion", async ({ page }) 
   await expect(newSpace).toHaveCSS("transition-duration", "0s");
   await spaceOverviewButton(page).click();
   await expect(page.locator(".space-dossier-archive-trigger")).toHaveCount(0);
-  await expect(page.getByRole("tab", { name: "Notes" })).toHaveCSS("transition-duration", "0s");
+  await expect(page.getByRole("tab", { name: "Pages" })).toHaveCSS("transition-duration", "0s");
 });

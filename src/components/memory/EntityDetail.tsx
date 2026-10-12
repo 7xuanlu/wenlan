@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { InfoToggle } from "./page/InfoToggle";
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useIsMutating, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   archiveEntities,
   confirmEntity,
+  changeEntityType,
   deleteEntity,
   getEntityDetail,
   restoreEntities,
@@ -19,6 +21,9 @@ import "./entity-detail/EntityDetail.css";
 import { formatRelativeEntityTime } from "./entity-detail/formatEntityMetadata";
 import { EntityTopicMenu } from "./entity-detail/EntityTopicMenu";
 import PageInfoDrawer from "./page/PageInfoDrawer";
+import { DetailInfoContent, DetailReadingFrame } from "./DetailLayout";
+import { useDetailInfoOpen } from "./useDetailInfoOpen";
+import { InfoAction } from "./page/InfoAction";
 import "./page/pageDocumentTools.css";
 import "./context/knowledge-context.css";
 import { EntityObservations } from "./entity-detail/EntityObservations";
@@ -32,11 +37,12 @@ interface EntityDetailProps {
   onEntityClick: (entityId: string) => void;
   onMemoryClick?: (sourceId: string) => void;
   onPageClick?: (pageId: string) => void;
+  onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
 }
 
 export default function EntityDetail(props: EntityDetailProps) {
-  // A topic switch must discard drafts, dialogs, and mutation errors, including
-  // switches from callers that do not already key this component.
+  // Navigation flushes the current topic before switching. Keep local editor,
+  // dialog, and error state scoped to the newly mounted topic.
   return <EntityDetailContent key={props.entityId} {...props} />;
 }
 
@@ -46,12 +52,36 @@ function EntityDetailContent({
   onEntityClick,
   onMemoryClick,
   onPageClick,
+  onRegisterFlush,
 }: EntityDetailProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [graphOpen, setGraphOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const { open: infoOpen, setOpen: setInfoOpen, toggle: toggleInfo } = useDetailInfoOpen(entityId);
+  const observationsFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const actionGuardRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const registerObservationsFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    observationsFlushRef.current = flush;
+    onRegisterFlush?.(flush);
+  }, [onRegisterFlush]);
+  const afterObservationsSaved = async (action: () => void | Promise<unknown>): Promise<boolean> => {
+    if (actionGuardRef.current) return false;
+    actionGuardRef.current = true;
+    try {
+      const saved = await observationsFlushRef.current?.() ?? true;
+      if (saved && mountedRef.current) {
+        await action();
+        return true;
+      }
+      return false;
+    } finally { actionGuardRef.current = false; }
+  };
   const notesPending = useIsMutating({ mutationKey: ["entity-observations", entityId] }) > 0;
   const locale = i18n.resolvedLanguage ?? i18n.language;
   const { data: detail, isError, refetch } = useQuery({
@@ -85,6 +115,14 @@ function EntityDetailContent({
     queryClient.invalidateQueries({ queryKey: ["entityDetail"] }),
     invalidateEntityIndexes(),
   ]);
+  const confirmMutation = useMutation({
+    mutationFn: (confirmed: boolean) => confirmEntity(entityId, confirmed),
+    onSuccess: invalidateEntityLifecycle,
+  });
+  const typeMutation = useMutation({
+    mutationFn: (entityType: string) => changeEntityType(entityId, entityType),
+    onSuccess: invalidateEntityLifecycle,
+  });
   const lifecycleMutation = useMutation({
     mutationFn: (archive: boolean) => (archive ? archiveEntities : restoreEntities)({
       ids: [entityId], dry_run: false,
@@ -93,10 +131,6 @@ function EntityDetailContent({
       setConfirmDelete(false);
       await invalidateEntityLifecycle();
     },
-  });
-  const confirmMutation = useMutation({
-    mutationFn: (confirmed: boolean) => confirmEntity(entityId, confirmed),
-    onSuccess: invalidateEntityLifecycle,
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteEntity(entityId),
@@ -112,8 +146,8 @@ function EntityDetailContent({
       onBack();
     },
   });
-  const actionsPending = notesPending || confirmMutation.isPending ||
-    deleteMutation.isPending || lifecycleMutation.isPending;
+  const actionsPending = notesPending ||
+    deleteMutation.isPending || lifecycleMutation.isPending || confirmMutation.isPending || typeMutation.isPending;
 
   if (!detail) {
     return (
@@ -148,30 +182,28 @@ function EntityDetailContent({
       className={`page-detail entity-detail-dossier document-context-host${infoOpen ? " document-context-open" : ""}`}
       aria-label={t("entityDetail.dossierLabel")}
     >
-      <div className="page-detail-document">
+      <DetailReadingFrame variant="compact" className="page-detail-document">
         <header className="page-document-title-row">
           <h1 className="page-detail-title">{entity.name}</h1>
           <div className="page-document-tools">
             <BackButton onBack={onBack} label={t("entityDetail.back")} />
+            <InfoToggle open={infoOpen} onClick={toggleInfo} />
             <EntityTopicMenu
-              confirmed={entity.confirmed}
               archived={archived}
               actionsPending={actionsPending}
-              onContext={() => setInfoOpen(true)}
-              onConfirm={() => confirmMutation.mutate(!entity.confirmed)}
-              onArchive={() => lifecycleMutation.mutate(!archived)}
-              onDelete={() => setConfirmDelete(true)}
+              onArchive={() => { void afterObservationsSaved(() => lifecycleMutation.mutate(!archived)); }}
+              onDelete={() => { void afterObservationsSaved(() => setConfirmDelete(true)); }}
             />
           </div>
         </header>
         {archived ? <p className="entity-archived-notice" role="status">{t("entityDetail.archived")}</p> : null}
-        {confirmMutation.isError || deleteMutation.isError || lifecycleMutation.isError ? (
+        {deleteMutation.isError || lifecycleMutation.isError ? (
           <p className="entity-error" role="alert">{t("entityDetail.saveError")}</p>
         ) : null}
         {confirmDelete ? (
           <div className="entity-delete-confirmation">
             <span className="entity-delete-question">{t("entityDetail.deleteQuestion")}</span>
-            <button type="button" disabled={actionsPending} onClick={() => deleteMutation.mutate()} className="entity-delete-confirm">
+            <button type="button" disabled={actionsPending} onClick={() => { void afterObservationsSaved(() => deleteMutation.mutate()); }} className="entity-delete-confirm">
               {t("entityDetail.delete")}
             </button>
             <button type="button" disabled={actionsPending} onClick={() => setConfirmDelete(false)} className="memory-detail-text-button">
@@ -186,19 +218,36 @@ function EntityDetailContent({
             entityName={entity.name}
             observations={observations}
             onInvalidate={invalidateEntityDetail}
-            readOnly={archived || actionsPending}
+            readOnly={archived}
+            blocked={deleteMutation.isPending || lifecycleMutation.isPending || confirmMutation.isPending || typeMutation.isPending}
+            onRegisterFlush={registerObservationsFlush}
           />
         </section>
-      </div>
-      <PageInfoDrawer docked open={infoOpen} onClose={() => setInfoOpen(false)} title={t("entityDetail.contextTitle")} closeLabel={t("common.close")}>
-        <div className="entity-topic-context">
-          <EntityConnections
-            name={entity.name}
-            relations={relations}
-            onEntityClick={onEntityClick}
-            onExpand={() => setGraphOpen(true)}
+      </DetailReadingFrame>
+      <PageInfoDrawer docked inspector focusOnOpen={false} open={infoOpen} onClose={() => setInfoOpen(false)} title={t("entityDetail.contextTitle")} closeLabel={t("common.close")}>
+        <DetailInfoContent className="entity-topic-context">
+          <InfoAction
+            label={t(entity.confirmed ? "infoActions.releaseTopic" : "infoActions.keepTopic")}
+            description={t(archived ? "infoActions.restoreTopicFirst" : entity.confirmed ? "infoActions.topicKeptHint" : "infoActions.keepTopicHint")}
+            active={entity.confirmed} pending={confirmMutation.isPending} disabled={archived || actionsPending}
+            error={confirmMutation.isError ? t("infoActions.saveError") : undefined}
+            onClick={() => { void afterObservationsSaved(() => confirmMutation.mutate(!entity.confirmed)); }}
           />
-          <EntityContextRail entity={entity} locale={locale} onMemoryClick={onMemoryClick} />
+          <EntityContextRail
+            entity={entity}
+            locale={locale}
+            onMemoryClick={onMemoryClick}
+            archived={archived}
+            typePending={typeMutation.isPending || actionsPending}
+            onTypeChange={(entityType) => afterObservationsSaved(() => typeMutation.mutateAsync(entityType))}
+          >
+            <EntityConnections
+              name={entity.name}
+              relations={relations}
+              onEntityClick={onEntityClick}
+              onExpand={() => setGraphOpen(true)}
+            />
+          </EntityContextRail>
           {graphOpen ? (
             <EntityGraphOverlay
               detail={detail}
@@ -210,7 +259,7 @@ function EntityDetailContent({
               onPageClick={onPageClick}
             />
           ) : null}
-        </div>
+        </DetailInfoContent>
       </PageInfoDrawer>
     </div>
   );
@@ -274,22 +323,24 @@ function EntityGraphOverlay({
         event.stopPropagation();
         onCloseRef.current();
       } else if (event.key === "Tab") {
-        // The graph owns this focus scope, including a popover focused at -1.
-        // Prevent the parent drawer from competing with normal internal Tab.
+        // Own every Tab step: Safari may otherwise skip buttons according to
+        // system keyboard settings and move focus out of this modal.
+        event.preventDefault();
         event.stopPropagation();
         const controls = Array.from(overlayRef.current?.querySelectorAll<HTMLElement>(
           'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
-        ) ?? []);
-        const first = controls[0];
-        const last = controls[controls.length - 1];
+        ) ?? []).filter((control) => control.tabIndex >= 0 && control.getClientRects().length > 0 && getComputedStyle(control).visibility !== "hidden");
         const active = document.activeElement;
-        if (event.shiftKey && (active === first || !overlayRef.current?.contains(active))) {
-          event.preventDefault();
-          last?.focus();
-        } else if (!event.shiftKey && (active === last || !overlayRef.current?.contains(active))) {
-          event.preventDefault();
-          first?.focus();
-        }
+        const index = controls.findIndex((control) => control === active);
+        const ordered = event.shiftKey ? [...controls].reverse() : controls;
+        const next = index >= 0
+          ? controls[(index + (event.shiftKey ? -1 : 1) + controls.length) % controls.length]
+          : ordered.find((control) => active && (
+            active.compareDocumentPosition(control) & (
+              event.shiftKey ? Node.DOCUMENT_POSITION_PRECEDING : Node.DOCUMENT_POSITION_FOLLOWING
+            )
+          )) ?? ordered[0];
+        next?.focus();
       }
     };
     // Inner Atlas popovers handle Escape at document capture first. The graph

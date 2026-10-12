@@ -33,6 +33,8 @@ async function setup(page: Page, empty = false, dark = false) {
   documents.set("guide.pdf", `${documents.get("guide.pdf")}\n\n![Reference diagram](https://tracker.invalid/pixel)`);
   const writes: unknown[] = [];
   const opens: unknown[] = [];
+  const annotations = new Map<string, { notes: string; page_ids: string[]; version: number }>();
+  const nativeDialogCalls: unknown[] = [];
   let unavailable = false;
   let concurrentCreate = false;
   await page.exposeBinding("__sourceFixtureInvoke", async (_source, command: string, args: Record<string, unknown> = {}) => {
@@ -42,6 +44,20 @@ async function setup(page: Page, empty = false, dark = false) {
       return files;
     }
     if (command === "get_chunks") return [{ id: "fixture-chunk", content: documents.get(String(args.sourceId)) ?? "", chunk_index: 0, chunk_type: null, language: null }];
+    if (command === "get_source_annotation") {
+      const sourceId = String(args.sourceId);
+      const annotation = annotations.get(sourceId) ?? { notes: "", page_ids: [], version: 0 };
+      return { source: "webpage", source_id: sourceId, ...annotation, updated_at: 1, pages: [] };
+    }
+    if (command === "update_source_annotation") {
+      const req = args.req as { source_id: string; notes?: string; page_ids?: string[]; expected_version: number };
+      const previous = annotations.get(req.source_id) ?? { notes: "", page_ids: [], version: 0 };
+      const next = { notes: req.notes ?? previous.notes, page_ids: req.page_ids ?? previous.page_ids, version: req.expected_version + 1 };
+      annotations.set(req.source_id, next);
+      return { source: "webpage", source_id: req.source_id, ...next, updated_at: 2, pages: [] };
+    }
+    if (command === "list_pages") return [];
+    if (command === "plugin:dialog|open") { nativeDialogCalls.push(args); return null; }
     if (command === "ingest_webpage") {
       const req = args.req as { url: string; title: string; content: string; create_only?: boolean };
       if (req.create_only && concurrentCreate) {
@@ -65,7 +81,7 @@ async function setup(page: Page, empty = false, dark = false) {
     const bridge = window.__TAURI_INTERNALS__!;
     const original = bridge.invoke;
     bridge.invoke = (command, args) => {
-      if (["list_registered_sources", "list_indexed_files", "get_chunks", "ingest_webpage", "open_search_result"].includes(command)) {
+      if (["list_registered_sources", "list_indexed_files", "get_chunks", "get_source_annotation", "update_source_annotation", "list_pages", "ingest_webpage", "open_search_result", "plugin:dialog|open"].includes(command)) {
         return (window as unknown as { __sourceFixtureInvoke: (name: string, args?: unknown) => Promise<unknown> }).__sourceFixtureInvoke(command, args) as ReturnType<typeof original>;
       }
       return original(command, args);
@@ -73,7 +89,7 @@ async function setup(page: Page, empty = false, dark = false) {
   });
   await openPrimaryDestination(page, "來源", "更多");
   await expect(page.getByRole("heading", { name: "來源", exact: true })).toBeVisible();
-  return { errors, writes, opens, fail: () => { unavailable = true; }, raceNextCreate: () => { concurrentCreate = true; }, savedText: (url: string) => documents.get(url) };
+  return { errors, writes, opens, nativeDialogCalls, fail: () => { unavailable = true; }, raceNextCreate: () => { concurrentCreate = true; }, savedText: (url: string) => documents.get(url) };
 }
 
 test("imported documents remain browsable without any registered folder", async ({ page }) => {
@@ -85,20 +101,24 @@ test("imported documents remain browsable without any registered folder", async 
   await expect(page.getByText("PRIVATE AGENT PREFERENCE")).toHaveCount(0);
   await capture(page, "sources-after-library-light.png");
   await library.getByRole("button", { name: /閱讀與研究指南/ }).click();
-  const preview = page.getByRole("dialog", { name: "閱讀與研究指南.pdf" });
-  await expect(preview.getByText("這是 閱讀與研究指南.pdf 的已保存內容。")).toBeVisible();
+  const preview = page.locator(".source-document-page");
+  await expect(preview.getByRole("heading", { name: "閱讀與研究指南.pdf", exact: true })).toBeVisible();
+  await expect(preview.locator(".source-document-body")).toContainText("這是 閱讀與研究指南.pdf 的已保存內容。");
   await expect(preview.locator("img")).toHaveCount(0);
   expect(remoteImages).toEqual([]);
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "來源", exact: true }).click();
   await expect(preview).toHaveCount(0);
   await expect(library.getByRole("button", { name: /閱讀與研究指南/ })).toBeFocused();
   await page.getByRole("button", { name: "連結", exact: true }).click();
   await expect(library.getByRole("button")).toHaveCount(1);
   await library.getByRole("button", { name: /知識如何累積/ }).click();
-  await expect(page.getByRole("dialog").getByText("這是 知識如何累積 的已保存內容。")).toBeVisible();
-  await page.getByRole("button", { name: "開啟原始網頁", exact: true }).click();
+  const webpage = page.locator(".source-document-page");
+  await expect(webpage.getByRole("heading", { name: "知識如何累積", exact: true })).toBeVisible();
+  await expect(webpage.locator(".source-document-reader-url")).toContainText("https://example.org/article");
+  await expect(webpage.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("link", { name: "開啟原始網頁", exact: true }).click();
   expect(state.opens).toEqual([{ url: "https://example.org/article" }]);
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "來源", exact: true }).click();
   await page.getByRole("searchbox", { name: "篩選來源", exact: true }).fill("找不到的項目");
   await expect(page.getByRole("heading", { name: "沒有符合的來源" })).toBeVisible();
   await page.getByRole("button", { name: "清除搜尋與篩選" }).click();
@@ -113,13 +133,13 @@ test("empty sources retains its library shell and offers clear localized add cho
   await capture(page, "sources-after-empty-light.png");
   await page.getByRole("button", { name: "新增", exact: true }).first().click();
   const menu = page.getByRole("dialog", { name: "加入來源", exact: true });
-  await expect(menu.getByRole("button", { name: /加入檔案/ })).toBeVisible();
-  await expect(menu.getByRole("button", { name: /連接資料夾/ })).toBeVisible();
+  await expect(menu.getByRole("button", { name: /Connect Obsidian Vault|連接 Obsidian/ })).toBeVisible();
+  await expect(menu.getByRole("button", { name: /Add files|加入檔案/ })).toBeVisible();
   await expect(menu.getByRole("button", { name: /加入網頁摘錄/ })).toBeVisible();
   await capture(page, "sources-after-add-light.png");
-  await menu.getByRole("button", { name: /連接資料夾/ }).click();
-  await expect(page.getByRole("dialog", { name: "連接資料夾", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "連接資料夾", exact: true })).toBeDisabled();
+  await menu.getByRole("button", { name: /Connect Obsidian Vault|連接 Obsidian/ }).click();
+  await expect.poll(() => state.nativeDialogCalls.length).toBe(1);
+  await expect(menu).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(state.errors.pageErrors).toEqual([]); expect(state.errors.consoleErrors).toEqual([]);
@@ -139,8 +159,12 @@ test("a web excerpt can be saved then reopened at 375px in dark mode", async ({ 
   await form.getByRole("button", { name: "保存摘錄", exact: true }).click();
   await expect(form).toHaveCount(0);
   await page.getByRole("list", { name: "來源庫" }).getByRole("button", { name: /書中的一段話/ }).click();
-  const saved = page.getByRole("dialog", { name: "書中的一段話" });
-  await expect(saved.getByText("知識需要被反覆閱讀，而不只是收藏。")).toBeVisible();
+  const saved = page.locator(".source-document-page");
+  await expect(saved.getByRole("heading", { name: "書中的一段話", exact: true })).toBeVisible();
+  await expect(saved.locator(".source-document-reader-url")).toContainText("https://example.org/book?chapter=2");
+  await expect(saved.getByRole("textbox", { name: "來源描述", exact: true })).toBeVisible();
+  await expect(saved.getByRole("alert")).toHaveCount(0);
+  expect(state.savedText("https://example.org/book?chapter=2")).toBe("# 摘錄\n\n知識需要被反覆閱讀，而不只是收藏。");
   expect(state.writes).toEqual([{ url: "https://example.org/book?chapter=2", title: "書中的一段話", content: "# 摘錄\n\n知識需要被反覆閱讀，而不只是收藏。", create_only: true }]);
   await capture(page, "sources-after-preview-dark-narrow.png");
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
@@ -162,7 +186,8 @@ test("another excerpt from the same URL requires explicit replacement", async ({
   await expect(dialog).toHaveCount(0);
   expect(state.writes).toHaveLength(1);
   await page.getByRole("list", { name: "來源庫" }).getByRole("button", { name: /新的摘錄/ }).click();
-  await expect(page.getByRole("dialog").getByText("保留新的這一段。")).toBeVisible();
+  await expect(page.locator(".source-document-page").getByRole("heading", { name: "新的摘錄", exact: true })).toBeVisible();
+  expect(state.savedText("https://example.org/article")).toBe("保留新的這一段。");
 });
 
 test("a concurrent first save preserves the winning excerpt until explicit replacement", async ({ page }) => {

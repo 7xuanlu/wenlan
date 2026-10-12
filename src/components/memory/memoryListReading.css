@@ -94,6 +94,29 @@
   color: var(--mem-text-tertiary);
 }
 
+@media (hover: hover) and (pointer: fine) {
+  .memory-list-reading-row .memory-list-reading-actions .memory-list-row-menu-trigger {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .memory-list-reading-row:hover .memory-list-reading-actions .memory-list-row-menu-trigger,
+  .memory-list-reading-row:has(:focus-visible) .memory-list-reading-actions .memory-list-row-menu-trigger,
+  .memory-list-reading-row .memory-list-reading-actions .memory-list-row-menu-trigger[aria-expanded="true"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+@media (pointer: coarse), (hover: none) {
+  .memory-list-reading-row .memory-list-reading-actions .memory-list-row-menu-trigger {
+    width: 44px;
+    height: 44px;
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .memory-list-reading-row .memory-list-reading-actions button:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--mem-accent-page) 45%, transparent);
   outline-offset: 2px;
@@ -130,6 +153,6 @@
 @media (max-width: 520px) {
   .memory-list-row.memory-list-reading-row {
     gap: 12px;
-    padding: 16px 10px;
+    padding: 16px 12px;
   }
 }

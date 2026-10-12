@@ -1,4 +1,4 @@
-import { FileText } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -40,7 +40,7 @@ export function PagesOverview({
     <section className="wiki-overview wiki-reading-start mx-auto w-full max-w-[1130px] pb-16">
       <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
       <div className="wiki-reading-start-panel">
-        <FileText aria-hidden="true" className="wiki-reading-start-icon" size={32} weight="regular" />
+        <PageIcon className="wiki-reading-start-icon" size={32} />
         <h1>{t("pages.overview.readingStartTitle")}</h1>
         <p>{t("pages.overview.readingStartDescription")}</p>
       </div>

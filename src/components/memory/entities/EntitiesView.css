@@ -2,7 +2,7 @@
 
 .entities-view {
   margin: 0 auto;
-  max-width: 1130px;
+  max-width: var(--collection-reading-width, 960px);
   padding: 0 0 64px;
   width: 100%;
 }
@@ -176,95 +176,90 @@
   margin: 0;
 }
 
-.entities-view .entities-table {
-  border-collapse: collapse;
-  font-family: var(--mem-font-body);
+.entities-view .entities-list {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.entities-view .entity-row {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--mem-text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 12px;
+  min-height: 52px;
+  min-width: 0;
+  padding: 8px;
+  text-align: left;
   width: 100%;
 }
 
-.entities-view .entities-table th {
-  color: var(--mem-text-tertiary);
-  font-size: var(--mem-text-xs);
-  font-weight: 500;
-  padding: 12px 10px;
-  text-align: left;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-}
-
-.entities-view .entities-table td {
-  color: var(--mem-text);
-  font-size: var(--mem-text-base);
-  padding: 14px 10px;
-  vertical-align: middle;
-}
-
-.entities-view .entities-table th:first-child {
-  width: 70%;
-}
-
-.entities-view .entities-table tbody tr:hover {
+.entities-view .entity-row:hover {
   background: var(--mem-hover);
 }
 
-.entities-view .entities-name-link {
-  background: none;
-  border: none;
-  color: var(--mem-text);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: inherit;
-  overflow-wrap: anywhere;
-  padding: 0;
-  text-align: left;
-}
-
-.entities-view .entities-name-link:hover {
-  text-decoration: underline;
-}
-
-.entities-view .entity-initials {
-  align-items: center;
-  background: var(--mem-surface);
-  border-radius: 50%;
+.entities-view .entity-row-icon {
+  align-self: flex-start;
   color: var(--mem-text-secondary);
-  display: inline-flex;
   flex: none;
-  font-family: var(--mem-font-body);
-  font-size: 12px;
-  font-weight: 600;
-  height: 28px;
-  justify-content: center;
-  width: 28px;
+  margin-top: 2px;
 }
 
-.entities-view .entity-card-type,
-.entities-view .entity-card-space {
-  color: var(--mem-text-secondary);
+.entities-view .entity-row-copy {
+  display: grid;
+  gap: 2px;
   min-width: 0;
-  overflow: hidden;
+}
+
+.entities-view .entity-row-name {
+  color: var(--mem-text);
+  font-family: var(--mem-font-heading);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 24px;
   overflow-wrap: anywhere;
-  text-overflow: ellipsis;
 }
 
-.entities-view .entity-card-space {
-  margin-left: auto;
+.entities-view .entity-row-type,
+.entities-view .entity-row-space {
+  color: var(--mem-text-secondary);
+  font-size: var(--mem-text-meta);
+  line-height: 1.4;
 }
 
-/* Topics keep the quiet surface without changing other asset views. */
-.entities-view .asset-card {
-  border: 0;
+.entities-view .entities-list-cards {
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--mem-space-3, 12px);
+}
+
+.entities-view .entity-row-card {
+  align-items: flex-start;
+  background: var(--mem-card-surface);
   border-radius: 10px;
-  padding: 20px;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 112px;
+  padding: 16px;
 }
 
-.entities-view .asset-lens-toggle {
-  border: 0;
-  gap: 4px;
+.entities-view .entity-row-card:hover {
+  background: var(--mem-card-hover);
 }
 
-.entities-view .asset-lens-button {
-  border-radius: 6px;
+.entities-view .entity-row-card .entity-row-icon {
+  align-self: auto;
+  margin: 0 0 4px;
+}
+
+.entities-view .entity-row-card .entity-row-name {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
 }
 
 .entities-view button:focus-visible,
@@ -275,5 +270,5 @@
 
 @media (max-width: 639px) {
   .entities-view .entities-chip-group { gap: 4px; }
-  .entities-view .asset-card { padding: 18px; }
+  .entities-view .entity-row-card { padding: 18px; }
 }

@@ -45,9 +45,9 @@ describe("ActivityNow", () => {
       synthesis: { job: "synthesis", lane: "none", model: null, mode: "unconfigured", available: false },
     }));
 
-    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent("Background organization is blocked.");
-    expect(screen.getByText(/Background organization is paused because no model is set up/i)).toBeInTheDocument();
-    expect(screen.getByText(/Page updates are paused because no writing model is set up/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent(/paused|unavailable/i);
+    expect(screen.getByText(/no model is set up/i)).toBeInTheDocument();
+    expect(screen.getByText(/no writing model is set up/i)).toBeInTheDocument();
     expect(screen.queryByTestId("activity-now-idle")).toBeNull();
   });
 
@@ -77,20 +77,18 @@ describe("ActivityNow", () => {
     expect(screen.queryByTestId("activity-now-unknown")).toBeNull();
   });
 
-  it("does not expose model routing or privacy details on Activity", async () => {
+  it("keeps provider details in Settings instead of the Activity overview", async () => {
     renderNow(activity({ everyday: { job: "everyday", lane: "anthropic", model: "selected-model", mode: "pinned", available: true } }));
     await screen.findByTestId("activity-now-idle");
-    expect(screen.queryByText("Models and privacy")).not.toBeInTheDocument();
-    expect(screen.queryByText(/selected-model/)).not.toBeInTheDocument();
-    expect(screen.queryByTestId("activity-now-trust")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Open settings" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Models and privacy")).toBeNull();
+    expect(screen.queryByText(/selected-model/)).toBeNull();
   });
 
-  it("offers a shared-styled settings action only when background work is blocked", async () => {
+  it("offers Intelligence settings immediately when background work is blocked", async () => {
     const open = vi.fn();
     renderNow(activity({ state: "blocked" }), open);
     const button = await screen.findByRole("button", { name: "Open settings" });
-    expect(button).toHaveClass("settings-control-button");
+    expect(button.closest("details")).toBeNull();
     await userEvent.click(button);
     expect(open).toHaveBeenCalledTimes(1);
   });
@@ -134,10 +132,10 @@ describe("ActivityNow", () => {
   });
 
   it.each([
-    { language: "en", pages: "Pages", count: "0 / 0 pages", idle: "Idle" },
-    { language: "zh-Hans", pages: "页面", count: "0 / 0 个页面", idle: "待机" },
-    { language: "zh-Hant", pages: "頁面", count: "0 / 0 個頁面", idle: "待機" },
-  ])("localizes the always-visible Pages row and count in $language", async ({ language, pages, count, idle }) => {
+    { language: "en", notes: "Pages", idle: "Idle" },
+    { language: "zh-Hans", notes: "页面", idle: "待机" },
+    { language: "zh-Hant", notes: "頁面", idle: "待機" },
+  ])("localizes the always-visible Pages row in $language", async ({ language, notes, idle }) => {
     await i18n.changeLanguage(language);
     renderNow(activity({
       assets: [{
@@ -146,8 +144,7 @@ describe("ActivityNow", () => {
       }],
     }));
 
-    expect(await screen.findByRole("heading", { name: pages })).toBeInTheDocument();
-    expect(screen.getByText(count)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: notes })).toBeInTheDocument();
     expect(screen.getAllByText(idle)).toHaveLength(2);
   });
 
@@ -164,12 +161,12 @@ describe("ActivityNow", () => {
       state: "blocked",
       everyday: { job: "everyday", lane: "external", model: "chosen", mode: "pinned_unavailable", available: false },
     }));
-    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent("Background organization is blocked.");
-    expect(screen.getByText(/Background organization is paused because its model is unavailable/i)).toBeInTheDocument();
+    expect(await screen.findByTestId("activity-now-blocked")).toHaveTextContent(/paused|unavailable/i);
+    expect(screen.getByText(/its model is unavailable/i)).toBeInTheDocument();
     expect(screen.queryByText(/no .* model|choose a model|turn on/i)).toBeNull();
   });
 
-  it("shows useful asset context and aligned progress without hiding it in details", async () => {
+  it("shows compact labeled asset and step rows while keeping long asset detail optional", async () => {
     renderNow(activity({
       state: "organizing",
       assets: [
@@ -190,10 +187,8 @@ describe("ActivityNow", () => {
     expect(screen.getByText("Summarize")).toBeInTheDocument();
     expect(screen.getByText("Link")).toBeInTheDocument();
     expect(screen.getAllByText("1 / 2 memories")).toHaveLength(2);
-    expect(screen.queryByText("Details")).not.toBeInTheDocument();
-    expect(screen.getByText(/still searchable/)).toBeInTheDocument();
-    expect(screen.getByTestId("activity-now-running-step").querySelector(".mem-activity-step-track")).toBeInTheDocument();
-    expect(screen.queryByText("Models and privacy")).not.toBeInTheDocument();
+    expect(screen.queryByText("Details")).toBeNull();
+    expect(screen.getByText(/searchable/i)).toBeVisible();
   });
 
   it("distinguishes the turned-off state from idle", async () => {

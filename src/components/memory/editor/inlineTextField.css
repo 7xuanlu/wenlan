@@ -1,0 +1,45 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.inline-text-field {
+  display: grid;
+  min-width: 0;
+  width: 100%;
+}
+
+.inline-text-field-measure,
+.inline-text-field textarea {
+  grid-area: 1 / 1;
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+  letter-spacing: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.inline-text-field-measure {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.inline-text-field textarea {
+  height: 100%;
+  overflow: hidden;
+  resize: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+  outline: none;
+}
+
+.inline-text-field textarea::placeholder {
+  color: var(--mem-text-secondary);
+  opacity: 1;
+}
+
+.inline-text-field textarea:focus-visible {
+  box-shadow: 0 1px var(--mem-accent-page);
+}

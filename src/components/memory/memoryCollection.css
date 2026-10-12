@@ -6,21 +6,32 @@
 
 .memory-collection-card {
   min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--mem-border);
+  overflow: visible;
+  border: 0;
   border-radius: 10px;
-  background: var(--mem-detail-surface);
-  transition: border-color 150ms ease, background-color 150ms ease;
+  background: var(--mem-card-surface);
+  transition: background-color 150ms ease;
 }
 
 .memory-collection-card:hover,
 .memory-collection-card:focus-within {
-  border-color: color-mix(in srgb, var(--mem-accent-page) 30%, var(--mem-border));
-  background: var(--mem-detail-surface-raised);
+  background: var(--mem-card-hover);
 }
 
 .memory-collection-card .memory-list-row.memory-list-reading-row {
   height: 100%;
+}
+
+.memory-collection-card .memory-list-row.memory-list-reading-row,
+.memory-collection-card .memory-list-row.memory-list-reading-row:hover,
+.memory-collection-card .memory-list-row.memory-list-reading-row:focus-within {
+  background: transparent;
+  border-radius: inherit;
+}
+
+.memory-collection-card:has(.memory-list-row-menu-trigger[aria-expanded="true"]) {
+  position: relative;
+  z-index: 3;
 }
 
 @media (max-width: 639px) {

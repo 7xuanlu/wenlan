@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n";
@@ -20,13 +20,13 @@ const space: Space = {
   updated_at: 2_000,
 };
 
-function renderHeader(mutationError = false) {
+function renderHeader(mutationError = false, onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void) {
   const actions = {
     onBack: vi.fn(),
     onCreatePage: vi.fn(),
     onDelete: vi.fn(),
     onKeep: vi.fn(),
-    onSaveIdentity: vi.fn(),
+    onSaveIdentity: vi.fn<(value: { name: string; description: string }) => Promise<void> | void>(),
   };
   const result = render(
     <SpaceDossierHeader
@@ -34,6 +34,7 @@ function renderHeader(mutationError = false) {
       copy={SPACE_DETAIL_TEST_COPY}
       mutationError={mutationError}
       space={space}
+      onRegisterFlush={onRegisterFlush}
     />,
   );
   return {
@@ -45,6 +46,7 @@ function renderHeader(mutationError = false) {
         copy={SPACE_DETAIL_TEST_COPY}
         mutationError={nextMutationError}
         space={space}
+        onRegisterFlush={onRegisterFlush}
       />,
     ),
   };
@@ -55,87 +57,161 @@ describe("SpaceDossierHeader identity editing", () => {
     await i18n.changeLanguage("en");
   });
 
-  it.each(["Enter", " "])("opens one name-and-description editor with %s", async (key) => {
-    // Given the single semantic identity edit control beside the H1
-    const user = userEvent.setup();
+  it("exposes the title and description directly without an edit mode", () => {
     renderHeader();
-    const editTitle = screen.getByRole("button", { name: "Edit space" });
-    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-
-    // When the focused control is activated from the keyboard
-    editTitle.focus();
-    await user.keyboard(key === " " ? "[Space]" : `{${key}}`);
-
-    // Then the one edit mode owns focus and contains both identity fields
-    expect(screen.getByRole("textbox", { name: "Wenlan" })).toHaveFocus();
+    expect(screen.getByRole("heading", { level: 1, name: "Wenlan" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("Wenlan");
     expect(screen.getByRole("textbox", { name: "Edit description" })).toHaveValue("Editorial memory");
-    expect(screen.queryByRole("button", { name: "Edit description" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit space" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
   });
 
-  it("contains identity-editor Escape before Main history navigation", async () => {
-    // Given the combined editor and Main's window-level Escape navigation
-    const user = userEvent.setup();
+  it("saves the combined draft after typing pauses and ignores unchanged blur", async () => {
+    vi.useFakeTimers();
+    try {
+      const { actions } = renderHeader();
+      const input = screen.getByRole("textbox", { name: "Name" });
+      fireEvent.blur(input);
+      expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+      fireEvent.change(input, { target: { value: " Wenlan research " } });
+      fireEvent.change(screen.getByRole("textbox", { name: "Edit description" }), {
+        target: { value: " A retained description " },
+      });
+      await act(() => vi.advanceTimersByTimeAsync(749));
+      expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(1));
+      expect(actions.onSaveIdentity).toHaveBeenCalledExactlyOnceWith({ name: "Wenlan research", description: "A retained description" });
+      expect(input).toHaveValue("Wenlan research");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("contains Escape before history navigation and flushes without discarding", async () => {
     const { actions } = renderHeader();
     const navigateBack = () => actions.onBack();
     window.addEventListener("keydown", navigateBack);
-    await user.click(screen.getByRole("button", { name: "Edit space" }));
-
-    // When Escape is dispatched from the title input
-    const accepted = fireEvent.keyDown(screen.getByRole("textbox", { name: "Wenlan" }), { key: "Escape" });
+    const input = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.change(input, { target: { value: "Wenlan research" } });
+    const accepted = fireEvent.keyDown(input, { key: "Escape" });
     window.removeEventListener("keydown", navigateBack);
-
-    // Then the whole editor cancels and the Space page remains
     expect(accepted).toBe(false);
     expect(actions.onBack).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading", { level: 1, name: "Wenlan" })).toBeInTheDocument();
+    await waitFor(() => expect(actions.onSaveIdentity).toHaveBeenCalledExactlyOnceWith({ name: "Wenlan research", description: "Editorial memory" }));
+    expect(input).toHaveValue("Wenlan research");
   });
 
-  it("saves name and description together through one identity action", async () => {
-    // Given the combined identity editor
-    const user = userEvent.setup();
+  it("preserves a failed draft and retries explicitly from the same surface", async () => {
     const { actions } = renderHeader();
-    await user.click(screen.getByRole("button", { name: "Edit space" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Wenlan" }), {
-      target: { value: " Wenlan research " },
-    });
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit description" }), {
-      target: { value: " A retained description " },
-    });
-
-    // When the combined editor is saved
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    // Then one mutation contract receives the normalized pair
-    expect(actions.onSaveIdentity).toHaveBeenCalledWith({
-      name: "Wenlan research",
-      description: "A retained description",
-    });
-    expect(actions.onSaveIdentity).toHaveBeenCalledTimes(1);
+    actions.onSaveIdentity.mockRejectedValueOnce(new Error("Unavailable"));
+    const input = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.change(input, { target: { value: " Wenlan research " } });
+    fireEvent.blur(input);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save this change.");
+    expect(input).toHaveValue(" Wenlan research ");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(actions.onSaveIdentity).toHaveBeenCalledTimes(2);
+    expect(input).toHaveValue("Wenlan research");
   });
 
-  it("retains a failed identity update in the combined editor", async () => {
-    // Given both fields submitted from the combined editor
-    const user = userEvent.setup();
-    const { actions, rerenderHeader } = renderHeader();
-    await user.click(screen.getByRole("button", { name: "Edit space" }));
-    const input = screen.getByRole("textbox", { name: "Wenlan" });
-    fireEvent.change(input, { target: { value: " Wenlan research " } });
-    fireEvent.change(screen.getByRole("textbox", { name: "Edit description" }), {
-      target: { value: " A retained description " },
-    });
-    await user.click(screen.getByRole("button", { name: "Save" }));
+  it("serializes saves and preserves text entered during an in-flight write", async () => {
+    const { actions } = renderHeader();
+    let finish!: () => void;
+    actions.onSaveIdentity.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const input = screen.getByRole("textbox", { name: "Name" });
+    const description = screen.getByRole("textbox", { name: "Edit description" });
+    fireEvent.change(input, { target: { value: "Wenlan research" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(description, { target: { value: "Newer typing" } });
+    fireEvent.blur(description);
+    expect(actions.onSaveIdentity).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    await waitFor(() => expect(actions.onSaveIdentity).toHaveBeenCalledTimes(2));
+    expect(actions.onSaveIdentity.mock.calls[1][0]).toEqual({ name: "Wenlan research", description: "Newer typing" });
+    expect(description).toHaveValue("Newer typing");
+  });
 
-    // When the parent reports the mutation failure
-    rerenderHeader(true);
+  it("does not submit an empty name or an IME confirmation key", async () => {
+    const { actions } = renderHeader();
+    const input = screen.getByRole("textbox", { name: "Name" });
+    fireEvent.change(input, { target: { value: "新的名稱" } });
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: " " } });
+    fireEvent.blur(input);
+    expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+  });
 
-    // Then both attempted values stay editable beside the existing alert
-    expect(actions.onSaveIdentity).toHaveBeenCalledWith({
-      name: "Wenlan research",
-      description: "A retained description",
-    });
-    expect(screen.getByRole("textbox", { name: "Wenlan" })).toHaveValue(" Wenlan research ");
-    expect(screen.getByRole("textbox", { name: "Edit description" })).toHaveValue(" A retained description ");
-    expect(screen.getByRole("alert")).toHaveTextContent("Could not save this change.");
+  it("keeps trailing spaces and the same input while an automatic save lands", async () => {
+    vi.useFakeTimers();
+    try {
+      const { actions } = renderHeader();
+      const input = screen.getByRole("textbox", { name: "Name" });
+      fireEvent.focus(input);
+      fireEvent.change(input, { target: { value: "Reading " } });
+      await act(() => vi.advanceTimersByTimeAsync(750));
+      expect(actions.onSaveIdentity).toHaveBeenCalledWith({ name: "Reading", description: "Editorial memory" });
+      expect(input).toHaveValue("Reading ");
+      fireEvent.change(input, { target: { value: "Reading club" } });
+      await act(() => vi.advanceTimersByTimeAsync(750));
+      expect(actions.onSaveIdentity).toHaveBeenLastCalledWith({ name: "Reading club", description: "Editorial memory" });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("waits until IME composition ends before autosaving", async () => {
+    vi.useFakeTimers();
+    try {
+      const { actions } = renderHeader();
+      const input = screen.getByRole("textbox", { name: "Name" });
+      fireEvent.compositionStart(input);
+      fireEvent.change(input, { target: { value: "閱讀計畫" } });
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+      fireEvent.compositionEnd(input);
+      await act(() => vi.advanceTimersByTimeAsync(750));
+      expect(actions.onSaveIdentity).toHaveBeenCalledExactlyOnceWith({ name: "閱讀計畫", description: "Editorial memory" });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("keeps a dirty draft across polling and unregisters without saving after unmount", async () => {
+    const onRegisterFlush = vi.fn();
+    const { actions, rerenderHeader, unmount } = renderHeader(false, onRegisterFlush);
+    fireEvent.change(screen.getByRole("textbox", { name: "Edit description" }), { target: { value: "Draft" } });
+    rerenderHeader(false);
+    expect(screen.getByRole("textbox", { name: "Edit description" })).toHaveValue("Draft");
+    unmount();
+    expect(actions.onSaveIdentity).not.toHaveBeenCalled();
+    expect(onRegisterFlush).toHaveBeenLastCalledWith(null);
+  });
+
+  it("flushes a pending identity edit and any newer typing before resolving", async () => {
+    let flush: (() => Promise<boolean>) | null = null;
+    const { actions } = renderHeader(false, (next) => { flush = next; });
+    let finishFirst!: () => void;
+    actions.onSaveIdentity.mockImplementationOnce(() => new Promise<void>((resolve) => { finishFirst = resolve; }));
+    const description = screen.getByRole("textbox", { name: "Edit description" });
+    fireEvent.change(description, { target: { value: "First draft" } });
+    const pending = flush!();
+    await waitFor(() => expect(actions.onSaveIdentity).toHaveBeenCalledTimes(1));
+    fireEvent.change(description, { target: { value: "Newer draft" } });
+    await act(async () => finishFirst());
+    await expect(pending).resolves.toBe(true);
+    expect(actions.onSaveIdentity).toHaveBeenCalledTimes(2);
+    expect(actions.onSaveIdentity.mock.calls[1]?.[0]).toEqual({ name: "Wenlan", description: "Newer draft" });
+    expect(description).toHaveValue("Newer draft");
+  });
+
+  it("returns false on a failed flush while keeping the draft editable", async () => {
+    let flush: (() => Promise<boolean>) | null = null;
+    const { actions } = renderHeader(false, (next) => { flush = next; });
+    actions.onSaveIdentity.mockRejectedValueOnce(new Error("offline"));
+    const description = screen.getByRole("textbox", { name: "Edit description" });
+    fireEvent.change(description, { target: { value: "Keep this draft" } });
+    let saved = true;
+    await act(async () => { saved = await flush!(); });
+    expect(saved).toBe(false);
+    expect(description).toHaveValue("Keep this draft");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not save this change.");
   });
 
   it("keeps Delete inside the overflow menu", async () => {
@@ -151,6 +227,14 @@ describe("SpaceDossierHeader identity editing", () => {
     // When Delete is chosen, the existing explicit confirmation still gates it
     await user.click(screen.getByRole("menuitem", { name: "Delete space" }));
     expect(screen.getByRole("button", { name: "Confirm delete space" })).toBeInTheDocument();
+  });
+
+  it("closes the overflow when clicking outside", async () => {
+    const user = userEvent.setup();
+    renderHeader();
+    await user.click(screen.getByRole("button", { name: "Actions for Wenlan" }));
+    await user.click(screen.getByRole("heading", { level: 1 }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
   it("moves focus into the overflow menu and contains its navigation keys", async () => {

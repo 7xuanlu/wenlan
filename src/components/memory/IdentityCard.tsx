@@ -65,8 +65,12 @@ export default function IdentityCard({ compact = true, onOpenDetail, onOpenSetti
         title={labelText}
         type="button"
       >
-        {displayName ? (
+        {displayName ? compact ? (
           <ProfileAvatar avatarPath={profile?.avatar_path} displayName={displayName} size={32} fontSize={13} tone="muted" />
+        ) : (
+          <span aria-hidden="true" className="notes-navigation-glyph identity-account-slot">
+            <ProfileAvatar avatarPath={profile?.avatar_path} displayName={displayName} size={24} fontSize={10} tone="muted" />
+          </span>
         ) : (
           <span aria-hidden="true" className="notes-navigation-glyph"><User /></span>
         )}

@@ -5,20 +5,12 @@ import {
   listRegisteredSources,
   syncRegisteredSource,
   removeSource,
-  getKnowledgePath,
-  countKnowledgeFiles,
   openFile,
   type RegisteredSource,
 } from "../../../lib/tauri";
 import { folderName } from "../../../lib/dateFormat";
 import AddSourceDialog from "./AddSourceDialog";
-import { Button, Card } from "../settings/primitives";
-
-function shortenPath(p: string): string {
-  const home = "~";
-  // Replace /Users/<user> prefix with ~
-  return p.replace(/^\/Users\/[^/]+/, home);
-}
+import { Button } from "../settings/primitives";
 
 function relativeTime(ts: number | null): string {
   if (!ts) return "Never synced";
@@ -42,16 +34,6 @@ export default function SourcesSection() {
     queryKey: ["registeredSources"],
     queryFn: listRegisteredSources,
     refetchInterval: 10_000,
-  });
-
-  const { data: knowledgePath } = useQuery({
-    queryKey: ["knowledgePath"],
-    queryFn: getKnowledgePath,
-  });
-
-  const { data: knowledgeCount } = useQuery({
-    queryKey: ["knowledgeCount"],
-    queryFn: countKnowledgeFiles,
   });
 
   const syncMutation = useMutation({
@@ -119,10 +101,10 @@ export default function SourcesSection() {
       {sources.length === 0 ? (
         <div className="rounded-[var(--mem-radius-lg)] border border-dashed border-[var(--mem-border)] p-8 text-center">
           <p className="text-sm text-[var(--mem-text-secondary)] mb-3">
-            No sources yet
+            {t("settings.sources.empty")}
           </p>
           <Button variant="primary" onClick={() => setDialogOpen(true)}>
-            Add your first source
+            {t("settings.sources.addFirst")}
           </Button>
         </div>
       ) : (
@@ -289,34 +271,6 @@ export default function SourcesSection() {
             </svg>
             {t("settings.sources.addSource")}
           </button>
-        </div>
-      )}
-
-      {/* Knowledge Directory block */}
-      {knowledgePath && (
-        <div className="mt-4">
-          <Card padding="none">
-            <div className="px-4 py-3">
-              <h4 className="text-xs font-medium text-[var(--mem-text-secondary)] mb-1">
-                Knowledge Directory
-              </h4>
-              <p className="text-sm text-[var(--mem-text)]">
-                {shortenPath(knowledgePath)}
-              </p>
-              <p className="text-xs text-[var(--mem-text-secondary)] mt-0.5">
-                {knowledgeCount !== undefined
-                  ? `${knowledgeCount} page files`
-                  : "Loading…"}{" "}
-                · updates automatically
-              </p>
-              <button
-                onClick={() => openFile(knowledgePath)}
-                className="mt-2 text-xs text-[var(--mem-accent-indigo)] hover:underline"
-              >
-                Reveal in Finder
-              </button>
-            </div>
-          </Card>
         </div>
       )}
 

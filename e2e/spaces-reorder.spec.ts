@@ -106,7 +106,10 @@ test('upward filtered dragging and reduced motion keep the same saving contract'
     await expect(row(page, 'bravo')).toHaveCount(0);
     const target = await box(row(page, 'alpha'));
     const p = await begin(page, 'charlie');
-    await page.mouse.move(p.x, target.y + target.height / 2, { steps: 12 });
+    const draggedRow = await box(row(page, 'charlie'));
+    const grabOffsetY = p.y - draggedRow.y;
+    const liftedRowCenterTarget = target.y + target.height / 2;
+    await page.mouse.move(p.x, liftedRowCenterTarget + grabOffsetY - draggedRow.height / 2, { steps: 12 });
     await page.mouse.up();
     await expect.poll(() => order(page)).toEqual(['space-row-charlie', 'space-row-alpha']);
     expect(controller.calls().filter(c => c.command === 'reorder_space')).toHaveLength(1);

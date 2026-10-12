@@ -7,10 +7,12 @@ export async function openPrimaryDestination(page: Page, name: string, moreLabel
   const navigation = page.getByRole("navigation", {
     name: /^(Primary navigation|主要導覽|主要导航|主导航)$/,
   });
+  const showSidebar = page.getByRole("button", {
+    name: /^(Show sidebar|顯示側邊欄|显示侧边栏)$/,
+  });
+  await expect.poll(async () => await navigation.isVisible() || await showSidebar.isVisible()).toBe(true);
   if (!await navigation.isVisible()) {
-    await page.getByRole("button", {
-      name: /^(Show sidebar|顯示側邊欄|显示侧边栏)$/,
-    }).click();
+    await showSidebar.click();
     await expect(navigation).toBeVisible();
   }
   const destination = navigation.getByRole("button", { name, exact: true });

@@ -3,13 +3,15 @@
 }
 
 .memory-shell {
+  --collection-reading-width: 960px;
+  --collection-gutter: 40px;
   --workspace-document-background: var(--mem-bg);
   --workspace-sidebar-width: 240px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: 52px minmax(0, 1fr);
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 html[data-theme="light"] .memory-shell {
@@ -136,10 +138,6 @@ html[data-theme="light"] .memory-shell {
   .notes-search-entry:hover .notes-search-entry-shortcut { opacity: 1; }
 }
 .notes-search-entry--compact { justify-content: center; padding: 0; width: 44px; }
-
-.settings-sidebar-search { padding: 10px 8px 6px; }
-.settings-sidebar-search .notes-search-entry { gap: 12px; }
-.settings-sidebar-search--icons { display: flex; justify-content: center; padding: 10px 5px 6px; }
 
 @media (min-width: 768px) and (pointer: fine) {
   .notes-sidebar-search .notes-search-entry:not(.notes-search-entry--compact) { min-height: 40px; }
@@ -820,12 +818,20 @@ html[data-theme="light"] .memory-shell {
 }
 
 /* Collection routes share an entry baseline; Wiki and detail layouts keep theirs. */
-.memory-main-content.memory-main-content--collection { padding: 24px 40px 28px; }
-.memory-main-content--collection > .memory-list-shell { max-width: 1130px; margin: 0 auto; }
+.memory-main-content.memory-main-content--collection {
+  padding: 24px var(--collection-gutter) 28px;
+  overflow-y: scroll;
+}
+.memory-main-content--collection > :is(.memory-list-shell, .spaces-overview, .entities-view) {
+  width: 100%;
+  max-width: var(--collection-reading-width);
+  min-width: 0;
+  margin-inline: auto;
+}
 .memory-collection-toolbar.collection-toolbar { margin-bottom: 8px; }
 .collection-toolbar-title { margin: 0; color: var(--mem-text-secondary); font: 500 14px/1.4 var(--mem-font-body); }
 @media (max-width: 700px) {
-  .memory-main-content.memory-main-content--collection { padding: 24px 24px 28px; }
+  .memory-shell { --collection-gutter: 24px; }
 }
 
 /* The note inspector is a flush workspace column, not a floating card. */

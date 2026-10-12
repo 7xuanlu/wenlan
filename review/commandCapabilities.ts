@@ -99,6 +99,10 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "delete_page_map_node",
     "put_page_map_layout",
   ],
+  sourceAnnotations: [
+    "get_source_annotation",
+    "update_source_annotation",
+  ],
   refinement: [
     "distill_review",
     "list_refinements",
@@ -145,6 +149,7 @@ export const REVIEW_COMMAND_CAPABILITIES = {
     "delete_observation_cmd",
     "confirm_observation_cmd",
     "confirm_entity_cmd",
+    "change_entity_type_cmd",
     "delete_entity_cmd",
   ],
   entitiesView: [

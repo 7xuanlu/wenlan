@@ -2,14 +2,15 @@
 import { useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { FileText, Globe, CaretRight } from "@phosphor-icons/react";
 import { listIndexedFiles, type IndexedFileInfo } from "../../../lib/tauri";
 import type { AssetLens } from "../../../lib/assetLens";
 import { isLibraryDocument } from "../sources/SourceLibrary";
 import SourceDocumentPreview from "../sources/SourceDocumentPreview";
+import { getSourcePresentation } from "../sources/sourcePresentation";
+import { SourceTypeIcon } from "../sources/SourceTypeIcon";
 import "../sources/SourceLibrary.css";
 
-export function SpaceSources({ spaceId, spaceName, lens }: { spaceId: string; spaceName: string; lens: AssetLens }) {
+export function SpaceSources({ spaceId, spaceName, lens, onOpenSource, onRegisterPreviewFlush }: { spaceId: string; spaceName: string; lens: AssetLens; onOpenSource?: (file: IndexedFileInfo) => void; onRegisterPreviewFlush?: (flush: (() => Promise<boolean>) | null) => void }) {
   const { t } = useTranslation();
   const [selected, setSelected] = useState<IndexedFileInfo | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -29,19 +30,17 @@ export function SpaceSources({ spaceId, spaceName, lens }: { spaceId: string; sp
   return <>
     {documents.length === 0 ? <p className="space-dossier-empty">{t("spaceDetail.noSources")}</p> : <ul className="source-library-list space-project-sources" data-lens={lens}>
       {documents.map(file => {
-        const link = file.source === "webpage";
         const name = file.source_id.split("::").pop()?.replace(/\\/g, "/").split("/").pop() ?? file.title;
-        let host = "";
-        if (link) { try { host = new URL(file.source_id).hostname; } catch { /* Legacy source without an address. */ } }
-        const extension = name.match(/\.([a-z0-9]+)$/i)?.[1]?.toUpperCase();
-        const metadata = link ? host || t("sourceLibrary.webExcerpt") : extension === "MD" ? "Markdown" : extension || t("sourceLibrary.document");
+        const presentation = getSourcePresentation(file, {
+          document: t("sourceLibrary.document"),
+          webExcerpt: t("sourceLibrary.webExcerpt"),
+        });
         return <li key={`${file.source}:${file.source_id}`}><button type="button" className="source-library-row" onClick={(event) => { triggerRef.current = event.currentTarget; setSelected(file); }}>
-          <span className={`source-library-icon${link ? " source-library-icon-link" : ""}`}>{link ? <Globe size={23} aria-hidden="true" /> : <FileText size={23} aria-hidden="true" />}</span>
-          <span className="source-library-row-content"><span className="source-library-row-title">{file.title || name}</span><span className="source-library-row-meta">{metadata}</span></span>
-          <CaretRight size={16} className="source-library-row-arrow" aria-hidden="true" />
+          <span className="source-library-icon"><SourceTypeIcon kind={presentation.kind} /></span>
+          <span className="source-library-row-content"><span className="source-library-row-title">{file.title || name}</span><span className="source-library-row-meta">{presentation.metadata}</span></span>
         </button></li>;
       })}
     </ul>}
-    {selected && <SourceDocumentPreview key={`${spaceId}:${spaceName}:${selected.source}:${selected.source_id}`} space={spaceName} file={selected} onClose={closePreview} />}
+    {selected && <SourceDocumentPreview key={`${spaceId}:${spaceName}:${selected.source}:${selected.source_id}`} space={spaceName} file={selected} onClose={closePreview} onRegisterFlush={onRegisterPreviewFlush} onOpenSource={onOpenSource ? () => onOpenSource({ ...selected, space: spaceName }) : undefined} />}
   </>;
 }

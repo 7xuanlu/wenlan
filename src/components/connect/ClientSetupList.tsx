@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
+import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -15,7 +16,7 @@ import { unreadPluginWriteRisk } from "./setupRisk";
 import ClientRow, { clientRowDescId } from "./ClientRow";
 import { familyOfClient, type ConnectionStatus } from "./connectionState";
 import { entryUnreadable, repairReasonOf } from "./clientHealth";
-import { Button } from "../memory/settings/primitives";
+import { Button, SectionHeader } from "../memory/settings/primitives";
 
 /** Apps & CLIs group. Every detected client has the same one-click "Set up" —
  *  what that button *does* differs by client, and `isPluginClient` is the only
@@ -38,9 +39,12 @@ import { Button } from "../memory/settings/primitives";
 export default function ClientSetupList({
   connectedFamilies,
   seenFamilies,
+  hideWhenComplete = false,
 }: {
   connectedFamilies?: Set<string>;
   seenFamilies?: Set<string>;
+  /** Hide a completed Add a tool section in compact Settings surfaces. */
+  hideWhenComplete?: boolean;
 } = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -62,7 +66,7 @@ export default function ClientSetupList({
   // render as a plain success.
   const [warnings, setWarnings] = useState<Record<string, string>>({});
 
-  const { data: clients } = useQuery({ queryKey: ["mcp-clients"], queryFn: detectMcpClients });
+  const { data: clients, isError, refetch } = useQuery({ queryKey: ["mcp-clients"], queryFn: detectMcpClients });
   // Hide a client that is already configured (nothing left to do) OR whose
   // tool family is already connected in the roster above.
   // `!readingIsYes`, not `!configured`: a client whose config could not be
@@ -86,6 +90,50 @@ export default function ClientSetupList({
       (!readingIsYes(client.already_configured) && !familyConnected)
     );
   });
+  const section = (content: ReactNode) => (
+    <section className="mem-fade-up" style={{ animationDelay: "30ms" }}>
+      {content}
+    </section>
+  );
+  const title = <SectionHeader label={t("connectMatrix.addToolTitle")} />;
+
+  if (clients === undefined && !isError) {
+    return section(
+      <>
+        {title}
+        <div role="status" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+          {t("connectMatrix.loadingTools")}
+        </div>
+      </>,
+    );
+  }
+
+  if (isError) {
+    return section(
+      <>
+        {title}
+        <div className="flex items-center gap-2 flex-wrap">
+          <p role="alert" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-status-danger-text)" }}>
+            {t("connectMatrix.loadToolsError")}
+          </p>
+          <Button type="button" variant="secondary" size="sm" onClick={() => void refetch()}>
+            {t("connectMatrix.retryTools")}
+          </Button>
+        </div>
+      </>,
+    );
+  }
+
+  if (clients?.length === 0) {
+    return section(
+      <>
+        {title}
+        <span role="status" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+          {t("connectMatrix.noToolsAvailable")}
+        </span>
+      </>,
+    );
+  }
 
   /** `repair` rewrites the entry the client already has through the same
    *  `write_mcp_config` Set up uses, for every client including the plugin
@@ -199,6 +247,7 @@ export default function ClientSetupList({
   };
 
   if (clients && actionable.length === 0) {
+    if (hideWhenComplete && clients.length > 0) return null;
     // A written config is not a live connection. Clients that are configured
     // but whose family never appeared in the roster are "added", not
     // "connected", so the note claims only what is measured. The restart
@@ -213,20 +262,31 @@ export default function ClientSetupList({
     );
     if (pendingRestart.length === 0) {
       return (
-        <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-          {t("connectMatrix.allConnected")}
-        </span>
+        section(
+          <>
+            {title}
+            <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+              {t("connectMatrix.allConnected")}
+            </span>
+          </>,
+        )
       );
     }
     return (
-      <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-        {t("connectMatrix.allAdded")}
-      </span>
+      section(
+        <>
+          {title}
+          <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+            {t("connectMatrix.allAdded")}
+          </span>
+        </>,
+      )
     );
   }
 
-  return (
+  return section(
     <div className="flex flex-col" style={{ gap: "8px" }}>
+      {title}
       {actionable.map((client) => {
         const duplicateRiskError = unreadPluginWriteRisk(client);
         const addedHere = added[client.client_type] === true;
@@ -282,6 +342,6 @@ export default function ClientSetupList({
           </ClientRow>
         );
       })}
-    </div>
+    </div>,
   );
 }

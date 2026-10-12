@@ -89,6 +89,28 @@ function GroupExpandableInspectorHarness() {
 }
 
 describe("PageInfoDrawer", () => {
+  it.each([true, false])("preserves reader focus only for automatic docked context (wide=%s)", (wide) => {
+    const original = window.matchMedia;
+    window.matchMedia = vi.fn().mockReturnValue({ matches: wide, addEventListener: vi.fn(), removeEventListener: vi.fn() });
+    const trigger = document.createElement("button");
+    document.body.append(trigger);
+    trigger.focus();
+    try {
+      const { unmount } = render(<PageInfoDrawer docked open focusOnOpen={false} onClose={() => {}} title="Info" closeLabel="Close info"><button>Source</button></PageInfoDrawer>);
+      if (wide) {
+        expect(screen.getByRole("complementary", { name: "Info" })).toBeInTheDocument();
+        expect(trigger).toHaveFocus();
+      } else {
+        expect(screen.getByRole("dialog", { name: "Info" })).toHaveAttribute("aria-modal", "true");
+        expect(screen.getByRole("button", { name: "Close info" })).toHaveFocus();
+      }
+      unmount();
+    } finally {
+      trigger.remove();
+      window.matchMedia = original;
+    }
+  });
+
   it("does not mount closed content and portals the labelled modal to body when opened", async () => {
     const user = userEvent.setup();
     const { container } = render(<Harness />);
@@ -306,10 +328,10 @@ it("keeps two group inspectors local, nonmodal, and isolated for Escape and focu
     const rightGroup = document.querySelector<HTMLElement>('[data-note-group-id="right"]')!;
     const leftInspector = within(leftGroup).getByRole("complementary", { name: "Left inspector" });
     const rightInspector = within(rightGroup).getByRole("complementary", { name: "Right inspector" });
-    expect(leftGroup).toContainElement(leftInspector);
-    expect(rightGroup).not.toContainElement(leftInspector);
-    expect(rightGroup).toContainElement(rightInspector);
+    expect(leftGroup.querySelector(".page-info-drawer-group-overlay-panel")).toBe(leftInspector);
+    expect(rightGroup.querySelector(".page-info-drawer-group-overlay-panel")).toBe(rightInspector);
     expect(leftGroup).not.toContainElement(rightInspector);
+    expect(rightGroup).not.toContainElement(leftInspector);
     expect(leftInspector).not.toHaveAttribute("aria-modal");
     expect(rightInspector).not.toHaveAttribute("aria-modal");
     expect(document.activeElement).toBe(document.body);
@@ -329,7 +351,7 @@ it("keeps two group inspectors local, nonmodal, and isolated for Escape and focu
   }
 });
 
-it("reserves matching header and content width within only its own group", () => {
+it("overlays a narrow inspector against only its own group edge", () => {
   const originalRect = HTMLElement.prototype.getBoundingClientRect;
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains("note-group-frame")) {
@@ -348,10 +370,7 @@ it("reserves matching header and content width within only its own group", () =>
     expect(overlay).toHaveClass("page-info-drawer-group-overlay-panel");
     expect(overlay).not.toHaveAttribute("aria-modal");
     expect(group).toContainElement(overlay.closest(".page-info-drawer-group-overlay"));
-    // jsdom cannot parse nested CSS min/max widths; the browser contract
-    // checks actual header/body geometry. Here assert ownership and cleanup.
-    expect(group.style.getPropertyValue("--note-group-inspector-header-width")).toContain("min(320px, 50%)");
-    expect(overlay.closest(".note-group-frame")).toBe(group);
+    expect(overlay).toHaveStyle({ width: "min(320px, max(0px, calc(100% - max(204px, min(320px, 50%)))))" });
   } finally {
     vi.restoreAllMocks();
   }

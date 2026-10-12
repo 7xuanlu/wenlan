@@ -1,0 +1,11 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.source-collection-list .source-library-row { text-decoration: none; }
+.source-collection-chevron { color: var(--mem-text-tertiary); flex: 0 0 auto; }
+.source-library-list[data-lens="cards"] .source-collection-chevron { margin-left: auto; }
+.source-library-icon-obsidian { color: var(--mem-accent-indigo); }
+.source-library-icon-obsidian [data-resource-icon="obsidian"] { color: var(--mem-accent-indigo); }
+.source-collection-breadcrumbs { align-items: center; color: var(--mem-text-secondary); display: flex; flex-wrap: wrap; gap: 7px; margin: 0 0 16px; min-height: 24px; }
+.source-collection-breadcrumbs button { background: transparent; border: 0; border-radius: 4px; color: inherit; cursor: pointer; font: 400 13px/1.5 var(--mem-font-body); padding: 2px 3px; }
+.source-collection-breadcrumbs button:hover { background: var(--mem-hover); color: var(--mem-text); }
+.source-collection-breadcrumbs [aria-current="page"] { color: var(--mem-text); font-weight: 500; }
+.source-collection-breadcrumbs button:focus-visible { outline: 2px solid var(--mem-accent-indigo); outline-offset: 2px; }

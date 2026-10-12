@@ -88,6 +88,22 @@ describe("AgentsSection", () => {
     for (const id of ["codex", "codex-mcp-client", "codex-ulw-loop"]) {
       expect(screen.getByRole("button", { name: id })).toBeInTheDocument();
     }
+    expect(screen.getAllByRole("combobox")).toHaveLength(4);
+    expect(screen.getAllByRole("combobox", { name: /^Trust levels: / })).toHaveLength(4);
+  });
+
+  it("keeps a single identity disclosure focused on its technical ID and delete action", async () => {
+    mocks.listAgents.mockResolvedValue([agent("codex", "mcp", { memory_count: 3, last_seen_at: 100 })]);
+    renderAgentsSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Show identities" }));
+
+    expect(screen.getByText("codex · mcp")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete Codex" })).toBeInTheDocument();
+    expect(screen.getAllByRole("combobox")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Codex" })).toHaveLength(1);
+    expect(screen.getAllByText("3 memories")).toHaveLength(1);
+    expect(screen.getAllByText(/Last seen/)).toHaveLength(1);
   });
 
   // The aggregate trust Select shows "Mixed" when identities disagree, and
@@ -126,17 +142,15 @@ describe("AgentsSection", () => {
     expect(mocks.deleteAgent.mock.calls[0][0]).toBe("codex");
   });
 
-  // S3: the trust legend renders each level as a `Tag` (tone="neutral", no
-  // accent border) — `Tag`'s signature `rounded-full` class proves the swap.
-  it("renders each trust level in the legend as a Tag, not the old accent badge", async () => {
+  it("shows trust level summaries in the SettingsHelp popover", async () => {
     renderAgentsSection();
 
     await screen.findByText("Codex");
-    const fullTags = Array.from(document.querySelectorAll<HTMLElement>(".rounded-full")).filter(
-      (el) => el.textContent === "Full",
+    await userEvent.click(screen.getByRole("button", { name: "Details: Trust levels" }));
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
+      "Full: Sees everything: identity, preferences, lessons, gotchas, decisions, pages, and search results.",
     );
-    expect(fullTags).toHaveLength(1);
-    expect(fullTags[0].style.border).toBe("");
+    expect(screen.getByRole("tooltip").textContent).toContain("\n");
   });
 
   const CODEX_CLI = {
@@ -198,17 +212,16 @@ describe("AgentsSection", () => {
     expect(screen.getByText("Added")).toBeInTheDocument();
   });
 
-  // An Added tool ("Restart Codex CLI to finish.") used to sit under a
-  // "Connected" heading, which contradicted its own chip. The list holds every
-  // tool in either state, so it is titled for what it is.
-  it("titles the list 'Your tools', never 'Connected', so an Added row does not contradict its heading", async () => {
+  // Added and live activity share this section without claiming the tool is
+  // already connected.
+  it("labels the activity section without implying an Added tool is connected", async () => {
     mocks.listAgents.mockResolvedValue([]);
     mocks.detectMcpClients.mockResolvedValue([CODEX_CLI]);
     renderAgentsSection();
 
     expect(await screen.findByText("Restart Codex CLI to finish.")).toBeInTheDocument();
     expect(screen.getByText("Added")).toBeInTheDocument();
-    expect(screen.getByText("Your tools")).toBeInTheDocument();
+    expect(screen.getByText("Tool activity")).toBeInTheDocument();
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();
   });
 

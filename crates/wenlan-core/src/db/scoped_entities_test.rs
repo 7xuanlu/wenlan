@@ -3,6 +3,7 @@
 use super::tests::test_db;
 use crate::read_scope::ReadScope;
 use crate::sources::RawDocument;
+use crate::WenlanError;
 use std::collections::HashMap;
 
 fn memory_doc(source_id: &str, space: &str) -> RawDocument {
@@ -808,6 +809,261 @@ async fn search_entities_by_vector_scoped_reads_shadow_page_directly() {
     assert_eq!(results[0].entity.entity_type, "organization");
     assert_eq!(results[0].entity.confidence, Some(0.75));
     assert!(results[0].entity.confirmed);
+}
+
+#[tokio::test]
+async fn change_entity_type_in_scope_updates_only_the_live_type_and_filter_projection() {
+    let (db, _tmp) = test_db().await;
+    let entity_id = db
+        .store_entity("Mira Chen", "concept", Some("work"), None, Some(0.8))
+        .await
+        .unwrap();
+    let peer_id = db
+        .store_entity("Design project", "project", Some("work"), None, Some(0.9))
+        .await
+        .unwrap();
+    db.add_observation(
+        &entity_id,
+        "Prefers concise design reviews",
+        None,
+        Some(0.9),
+    )
+    .await
+    .unwrap();
+    db.create_relation(&entity_id, &peer_id, "related_to", None, None, None, None)
+        .await
+        .unwrap();
+    db.upsert_documents(vec![memory_doc("type-change-memory", "work")])
+        .await
+        .unwrap();
+    db.link_memory_entities("type-change-memory", &[&entity_id])
+        .await
+        .unwrap();
+    db.confirm_entity(&entity_id, true).await.unwrap();
+
+    let scope = ReadScope::Space("work".to_string());
+    let before = db
+        .get_entity_detail_scoped(&entity_id, &scope)
+        .await
+        .unwrap();
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET last_modified = '2001-01-01T00:00:00Z'
+             WHERE id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+            libsql::params![entity_id.clone()],
+        )
+        .await
+        .unwrap();
+    }
+
+    db.change_entity_type_in_scope(&scope, &entity_id, "Person")
+        .await
+        .unwrap();
+
+    let after = db
+        .get_entity_detail_scoped(&entity_id, &scope)
+        .await
+        .unwrap();
+    assert_eq!(after.entity.entity_type, "person");
+    assert_eq!(after.entity.name, before.entity.name);
+    assert_eq!(after.entity.confirmed, before.entity.confirmed);
+    assert_eq!(after.entity.status, before.entity.status);
+    assert_eq!(after.entity.updated_at, before.entity.updated_at);
+    assert_eq!(after.observations.len(), before.observations.len());
+    assert_eq!(
+        after.observations[0].content,
+        before.observations[0].content
+    );
+    assert_eq!(after.relations.len(), before.relations.len());
+    assert_eq!(after.relations[0].entity_id, before.relations[0].entity_id);
+    assert_eq!(after.entity.memory_count, 1);
+
+    let old_type = db
+        .list_entities_scoped(Some("concept"), &scope)
+        .await
+        .unwrap();
+    assert!(!old_type.iter().any(|entity| entity.id == entity_id));
+    let new_type = db
+        .list_entities_scoped(Some("person"), &scope)
+        .await
+        .unwrap();
+    assert!(new_type.iter().any(|entity| entity.id == entity_id));
+
+    let conn = db.conn.lock().await;
+    let mut rows = conn
+        .query(
+            "SELECT last_modified FROM pages
+             WHERE id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+            libsql::params![entity_id],
+        )
+        .await
+        .unwrap();
+    let row = rows.next().await.unwrap().expect("entity shadow page");
+    assert_ne!(row.get::<String>(0).unwrap(), "2001-01-01T00:00:00Z");
+}
+
+#[tokio::test]
+async fn change_entity_type_in_scope_rejects_noncanonical_after_normalization() {
+    let (db, _tmp) = test_db().await;
+    let entity_id = db
+        .store_entity("Type candidate", "concept", Some("work"), None, Some(0.8))
+        .await
+        .unwrap();
+    let scope = ReadScope::Space("work".to_string());
+    let before = db
+        .get_entity_detail_scoped(&entity_id, &scope)
+        .await
+        .unwrap();
+
+    let normalized_legacy_alias = db
+        .change_entity_type_in_scope(&scope, &entity_id, "event")
+        .await;
+    assert!(normalized_legacy_alias.is_ok());
+    assert_eq!(
+        db.get_entity_detail_scoped(&entity_id, &scope)
+            .await
+            .unwrap()
+            .entity
+            .entity_type,
+        "concept",
+        "legacy event alias normalizes to its existing canonical type"
+    );
+
+    let before_invalid = db
+        .get_entity_detail_scoped(&entity_id, &scope)
+        .await
+        .unwrap();
+    let invalid = db
+        .change_entity_type_in_scope(&scope, &entity_id, "custom-unregistered-type")
+        .await;
+    assert!(matches!(invalid, Err(WenlanError::Validation(_))));
+    let after_invalid = db
+        .get_entity_detail_scoped(&entity_id, &scope)
+        .await
+        .unwrap();
+    assert_eq!(
+        after_invalid.entity.entity_type,
+        before_invalid.entity.entity_type
+    );
+    assert_eq!(after_invalid.entity.status, before.entity.status);
+
+    // A canonical promoted later by vocabulary review is still outside this
+    // control's fixed built-in options and must not become an editable type.
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "INSERT INTO entity_type_vocabulary (canonical, aliases, category, count)
+             VALUES ('custom-reviewed-type', '[]', 'general', 1)",
+            (),
+        )
+        .await
+        .unwrap();
+    }
+    let custom = db
+        .change_entity_type_in_scope(&scope, &entity_id, "custom-reviewed-type")
+        .await;
+    assert!(matches!(custom, Err(WenlanError::Validation(_))));
+    assert_eq!(
+        db.get_entity_detail_scoped(&entity_id, &scope)
+            .await
+            .unwrap()
+            .entity
+            .entity_type,
+        before_invalid.entity.entity_type
+    );
+}
+
+#[tokio::test]
+async fn change_entity_type_in_scope_rejects_missing_out_of_scope_and_archived_entities() {
+    let (db, _tmp) = test_db().await;
+    let work_id = db
+        .store_entity("Work topic", "concept", Some("work"), None, Some(0.8))
+        .await
+        .unwrap();
+    let personal_id = db
+        .store_entity(
+            "Personal topic",
+            "concept",
+            Some("personal"),
+            None,
+            Some(0.8),
+        )
+        .await
+        .unwrap();
+    let scope = ReadScope::Space("work".to_string());
+
+    assert!(matches!(
+        db.change_entity_type_in_scope(&scope, "missing-entity", "person")
+            .await,
+        Err(WenlanError::NotFound(_))
+    ));
+    assert!(matches!(
+        db.change_entity_type_in_scope(&scope, &personal_id, "person")
+            .await,
+        Err(WenlanError::NotFound(_))
+    ));
+
+    {
+        let conn = db.conn.lock().await;
+        conn.execute(
+            "UPDATE pages SET status = 'archived'
+             WHERE id = (SELECT page_id FROM entity_page_map WHERE entity_id = ?1)",
+            libsql::params![work_id.clone()],
+        )
+        .await
+        .unwrap();
+    }
+    assert!(matches!(
+        db.change_entity_type_in_scope(&scope, &work_id, "person")
+            .await,
+        Err(WenlanError::NotFound(_))
+    ));
+    let archived = db
+        .get_entity_detail(&work_id)
+        .await
+        .expect("archived entity remains readable for assertion");
+    assert_eq!(archived.entity.entity_type, "concept");
+    assert_eq!(archived.entity.status, wenlan_types::EntityStatus::Archived);
+}
+
+#[tokio::test]
+async fn change_entity_type_in_scope_rolls_back_a_failed_page_write() {
+    let (db, _tmp) = test_db().await;
+    let entity_id = db
+        .store_entity(
+            "Trigger protected",
+            "concept",
+            Some("work"),
+            None,
+            Some(0.8),
+        )
+        .await
+        .unwrap();
+    let scope = ReadScope::Space("work".to_string());
+    {
+        let conn = db.conn.lock().await;
+        conn.execute_batch(
+            "CREATE TRIGGER reject_entity_type_change
+             BEFORE UPDATE OF entity_type ON pages
+             WHEN OLD.kind = 'entity'
+             BEGIN SELECT RAISE(ABORT, 'rejected entity type'); END;",
+        )
+        .await
+        .unwrap();
+    }
+
+    assert!(db
+        .change_entity_type_in_scope(&scope, &entity_id, "person")
+        .await
+        .is_err());
+    let detail = db.get_entity_detail(&entity_id).await.unwrap();
+    assert_eq!(detail.entity.entity_type, "concept");
+    let conn = db.conn.lock().await;
+    assert!(
+        conn.is_autocommit(),
+        "a failed update must roll back its transaction"
+    );
 }
 
 /// The bulk Graph-view read: one request must return the scope's whole graph.

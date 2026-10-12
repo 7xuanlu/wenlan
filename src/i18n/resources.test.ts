@@ -35,6 +35,24 @@ describe("translation resources", () => {
     ]);
   });
 
+  it("localizes Settings disclosure labels and the compact telemetry summary", () => {
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.settings.detailsLabel)).toEqual([
+      "Details",
+      "详细说明",
+      "詳細說明",
+    ]);
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.settings.privacyLabel)).toEqual([
+      "Privacy",
+      "隐私",
+      "隱私",
+    ]);
+    expect(supportedAppLocales.map((locale) => resources[locale].translation.settings.general.telemetrySummary)).toEqual([
+      "Usage counts and app details only; never your content.",
+      "仅使用次数与应用信息，不含内容",
+      "僅使用次數與應用資訊，不含內容",
+    ]);
+  });
+
   it("keeps telemetry consent and conditional privacy copy explicit in every locale", () => {
     const telemetry = supportedAppLocales.map(
       (locale) => resources[locale].translation.settings.general,
@@ -366,8 +384,8 @@ describe("translation resources", () => {
 });
 
 // Standing rule: never announce that Wenlan itself is a plugin. The only
-// exceptions are real CLI commands/slash-commands and claude.ai's own menu
-// names, referenced verbatim while walking the user through its UI.
+// exceptions are real integration options, CLI commands/slash-commands, and
+// provider menu names. Wenlan itself remains an app, not a plugin.
 function flattenStringEntries(
   value: unknown,
   prefix = "",
@@ -381,6 +399,7 @@ function flattenStringEntries(
 }
 
 const PLUGIN_WORD_ALLOWLIST = new Set([
+  "intelligence.synthesisBetaHelp", // Wenlan's actual plugin/MCP integration, not the app's identity
   "connectMatrix.claudeCodeCommand1",
   "connectMatrix.claudeCodeCommand2",
   "connectMatrix.claudeCodeReload",

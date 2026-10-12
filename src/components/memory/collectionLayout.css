@@ -1,0 +1,16 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Shared browse geometry; article line lengths belong to the reading template. */
+.collection-frame {
+  --collection-frame-width: calc(var(--collection-reading-width, 960px) + 2 * var(--collection-gutter, 40px));
+  --collection-leading-gutter: max(0px, calc((var(--collection-unobstructed-width, 100%) - var(--collection-frame-width)) / 2));
+  box-sizing: border-box;
+  min-width: 0;
+  width: min(var(--collection-frame-width), calc(100% - var(--collection-leading-gutter)));
+  margin-inline: var(--collection-leading-gutter) auto;
+  padding: 24px var(--collection-gutter, 40px) 64px;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+}
+@media (max-width: 700px) {
+  .collection-frame { padding: 24px var(--collection-gutter, 24px) 48px; }
+}

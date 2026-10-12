@@ -73,17 +73,17 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(detail).toBeVisible();
     await expect(detail.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
     await expect(detail.locator(".entity-detail-seal, .page-detail-dateline")).toHaveCount(0);
-    const context = page.getByRole(viewport.width >= 1100 ? "complementary" : "dialog", { name: "Topic context", exact: true });
+    const context = page.getByRole(viewport.width >= 1100 ? "complementary" : "dialog", { name: "Info", exact: true });
     await expect(context).toBeVisible();
     const metadata = context.locator(".memory-detail-metadata-list");
-    await expect(metadata.getByText("person", { exact: true })).toBeVisible();
+    await expect(metadata.getByRole("combobox", { name: "Type", exact: true })).toHaveValue("person");
     await expect(metadata.getByText("Wenlan", { exact: true })).toBeVisible();
     await expect(metadata).toContainText("research-agent");
     await expect(detail.locator(".entity-obs-content")).toHaveText("Wrote the first published algorithm");
     await expect(context.locator(".entity-relation-row")).toHaveCount(2);
-    await expect(detail.getByRole("button", { name: "Add note", exact: true })).toBeVisible();
+    await expect(detail.getByRole("button", { name: "Add information", exact: true })).toBeVisible();
     await expect(context.getByRole("button", { name: "Full screen", exact: true })).toBeVisible();
-    const typography = await metadata.locator(".entity-meta-mono").first().evaluate((node) => ({
+    const typography = await metadata.locator(".memory-detail-metadata-value").first().evaluate((node) => ({
       fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
       width: node.getBoundingClientRect().width,
       scrollWidth: node.scrollWidth,
@@ -107,14 +107,14 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     const contrast = await renderedContrast(page, [
       { selector: ".entity-detail-dossier .page-detail-title", label: "Topic title", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".entity-detail-dossier .page-detail-actions-menu-trigger", label: "Topic actions", foregroundProperty: "color", minimum: 4.5 },
-      { selector: ".page-info-drawer .entity-meta-mono", label: "Topic panel metadata", foregroundProperty: "color", minimum: 4.5 },
+      { selector: ".page-info-drawer .memory-detail-metadata-value", label: "Topic panel metadata", foregroundProperty: "color", minimum: 4.5 },
       { selector: ".entity-detail-dossier .entity-obs-content", label: "Topic observation", foregroundProperty: "color", minimum: 4.5 },
     ]);
     for (const result of contrast) expect(result.ratio, result.label).toBeGreaterThanOrEqual(result.minimum);
   } else if (spaceDetail) {
     const dossier = page.locator(".space-dossier");
     await expect(dossier.getByRole("heading", { level: 1, name: "Wenlan", exact: true })).toBeVisible();
-    await expect(dossier.locator(".space-dossier-description")).toHaveText("Editorial memory system");
+    await expect(dossier.getByRole("textbox", { name: "Edit description" })).toHaveValue("Editorial memory system");
     await expect(dossier.locator(".space-dossier-metrics")).toHaveCount(0);
     const recent = dossier.getByRole("region", { name: "Pages", exact: true });
     await expect(recent.locator(".space-dossier-page-list > button")).toHaveCount(6);
@@ -123,7 +123,7 @@ async function assertRedesignedSurface(page: Page, name: string): Promise<boolea
     await expect(recent.locator(".space-dossier-page-meta, time")).toHaveCount(0);
     await expect(dossier.locator(".space-dossier-rail")).toHaveCount(0);
     await expect(dossier.locator(".space-dossier-disclosure,.space-dossier-archive,.space-dossier-entities,.space-dossier-review")).toHaveCount(0);
-    await expect(dossier.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+    await expect(dossier.getByRole("tab", { name: "Pages" })).toHaveAttribute("aria-selected", "true");
     await expect(dossier.getByRole("tab", { name: "Sources" })).toBeVisible();
     await dossier.getByRole("button", { name: "Actions for Wenlan" }).click();
     await expect(dossier.getByRole("menuitem", { name: "Review page changes" })).toBeVisible();
@@ -247,10 +247,10 @@ async function captureFourSurfaces(page: Page, label: string): Promise<void> {
   await expect(page.getByRole("heading", { level: 1, name: "Ada Lovelace" })).toBeVisible();
   const topicContext = await openTopicContext(page);
   await capture(page, `entity-${label}`);
-  // Narrow context is modal and must close before the next primary route.
-  await topicContext.getByRole("button", { name: "Close", exact: true }).click();
+  // Close the Info drawer before switching to the next primary route.
+  await topicContext.getByRole("button", { name: "Close", exact: true }).focus();
+  await page.keyboard.press("Enter");
   await expect(topicContext).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Topic actions", exact: true })).toBeFocused();
 }
 
 test("captures the complete responsive and native-reference matrix", async ({ page }) => {
@@ -278,11 +278,9 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
 
   await openSpaces(page);
   const wenlanRow = page.getByTestId("space-row-space-wenlan");
-  const mobileMetadata = wenlanRow.getByTestId("space-mobile-metadata");
-  const noteCount = wenlanRow.getByTestId("space-mobile-pages");
-  await expect(mobileMetadata).toBeVisible();
-  await expect(noteCount).toBeVisible();
-  await expect(noteCount).toHaveText("6 notes");
+  const pageCount = wenlanRow.getByTestId("space-pages");
+  await expect(pageCount).toHaveText("6 notes");
+  await expect(pageCount).toBeHidden();
   await page.getByLabel("Filter spaces").focus();
   // Follow the live tab order through the collection controls to the first Space.
   const wenlanControl = wenlanRow.getByRole("button", { name: "Wenlan", exact: true });
@@ -306,7 +304,7 @@ test("captures the complete responsive and native-reference matrix", async ({ pa
   });
   await writeFile(path.join(evidenceRoot, "mobile-inventory-focus.json"), `${JSON.stringify({
     focusOutline,
-    noteCount: await noteCount.innerText(),
+    noteCount: await pageCount.innerText(),
     screenshot: path.join(evidenceDir, targetedCapture),
     viewport: { height: 812, width: 375 },
   }, null, 2)}\n`);

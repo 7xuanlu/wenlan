@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { cloneElement, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { SettingsHelp } from "./SettingsHelp";
 
 export function Toggle({
   enabled,
@@ -9,6 +10,7 @@ export function Toggle({
   unknownState = "unavailable",
   "aria-label": ariaLabel,
   "aria-describedby": ariaDescribedby,
+  expandedHitArea = false,
 }: {
   enabled: boolean;
   onToggle: () => void;
@@ -19,6 +21,9 @@ export function Toggle({
   /** Callers pass the visible row or panel title as the status name. */
   "aria-label"?: string;
   "aria-describedby"?: string;
+  /** Preserve the compact visible track while giving a settings control a
+   *  36px vertical pointer target. */
+  expandedHitArea?: boolean;
 }) {
   const { t } = useTranslation();
   const saving = valueUnknown && unknownState === "saving";
@@ -43,12 +48,11 @@ export function Toggle({
       aria-busy={saving || undefined}
       aria-label={ariaLabel}
       aria-describedby={ariaDescribedby}
-      className={`relative w-11 h-[26px] rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2 ${saving ? "cursor-wait opacity-70" : ""} ${
-        enabled ? "bg-[var(--mem-accent-indigo)]" : "bg-[var(--mem-hover-strong)]"
-      }`}
+      data-enabled={enabled ? "true" : "false"}
+      className={`relative w-11 ${expandedHitArea ? "settings-toggle-expanded h-9 bg-transparent" : `h-[26px] ${enabled ? "bg-[var(--mem-accent-indigo)]" : "bg-[var(--mem-hover-strong)]"}`} rounded-full transition-colors shrink-0 focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2 ${saving ? "cursor-wait opacity-70" : ""}`}
     >
       <span
-        className={`absolute top-[3px] w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${
+        className={`absolute ${expandedHitArea ? "settings-toggle-thumb" : "top-[3px]"} w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${
           enabled ? "left-[22px]" : "left-[3px]"
         }`}
       />
@@ -88,9 +92,14 @@ export function WarningTriangleIcon({ className }: { className?: string }) {
 type SettingRowBaseProps = {
   title: string;
   description: string;
+  details?: string;
+  detailsSummary?: string;
+  /** Short values can stay beside their label at narrow widths. */
+  controlLayout?: "responsive" | "inline";
   statusLine?: React.ReactNode;
   warning?: string | null;
   error?: string | null;
+  toggleHitArea?: boolean;
 };
 
 type SettingRowProps = SettingRowBaseProps &
@@ -102,26 +111,44 @@ type SettingRowProps = SettingRowBaseProps &
   );
 
 export function SettingRow(props: SettingRowProps) {
-  const { title, description, statusLine, warning, error } = props;
+  const { title, description, details, detailsSummary, statusLine, warning, error } = props;
   const rowId = useId();
   const descriptionId = `${rowId}-description`;
+  const detailsId = `${rowId}-details`;
+  const detailsSummaryId = `${rowId}-details-summary`;
   const errorId = `${rowId}-error`;
   const warningId = `${rowId}-warning`;
+  const hasDescription = Boolean(description.trim());
+  const hasDetails = Boolean(details?.trim());
+  const inlineControl = props.controlLayout === "inline";
   const describedBy =
-    [descriptionId, error ? errorId : null, warning ? warningId : null].filter(Boolean).join(" ");
+    [hasDescription ? descriptionId : null, hasDetails ? detailsId : null, detailsSummary ? detailsSummaryId : null, error ? errorId : null, warning ? warningId : null]
+      .filter(Boolean)
+      .join(" ") || undefined;
 
   return (
     <div className="settings-row px-5 py-4">
-      <div className={`settings-row-content flex items-start justify-between gap-4 ${"control" in props ? "max-sm:flex-col max-sm:items-stretch" : ""}`}>
+      <div className={`settings-row-content flex items-start justify-between gap-4 ${hasDetails ? "settings-row-content-has-details" : ""} ${inlineControl ? "settings-row-content-inline" : ""} ${"control" in props && !hasDetails && !inlineControl ? "max-sm:flex-col max-sm:items-stretch" : ""}`}>
         <div className="settings-row-copy min-w-0">
-          <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
-            {title}
-          </div>
-          <p id={descriptionId} style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
-            {description}
-          </p>
+          {hasDetails ? (
+            <div className="settings-row-title-line">
+              <div className="settings-row-title" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
+                {title}
+              </div>
+              <SettingsHelp title={title} details={details!} id={detailsId} />
+            </div>
+          ) : (
+            <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
+              {title}
+            </div>
+          )}
+          {hasDescription && (
+            <p id={descriptionId} style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", marginTop: "2px", lineHeight: "1.5" }}>
+              {description}
+            </p>
+          )}
         </div>
-        <div className={`settings-row-control mt-0.5 ${"control" in props ? "settings-row-control-custom min-w-0 max-w-full max-sm:w-full" : "shrink-0"}`}>
+        <div className={`settings-row-control mt-0.5 ${"control" in props ? `settings-row-control-custom min-w-0 max-w-full ${inlineControl ? "shrink-0" : "max-sm:w-full"}` : "shrink-0"}`}>
           {"control" in props ? (
             props.control
           ) : (
@@ -130,12 +157,14 @@ export function SettingRow(props: SettingRowProps) {
               onToggle={props.onToggle}
               valueUnknown={props.valueUnknown}
               unknownState={props.unknownState}
+              expandedHitArea={props.toggleHitArea}
               aria-label={title}
               aria-describedby={describedBy}
             />
           )}
         </div>
       </div>
+      {detailsSummary && <p id={detailsSummaryId} className="settings-row-details-summary">{detailsSummary}</p>}
       {statusLine && <div className="mt-2">{statusLine}</div>}
       {error && (
         <p
@@ -163,10 +192,12 @@ export function SettingRow(props: SettingRowProps) {
 export function SectionHeader({
   icon,
   label,
+  help,
   action,
 }: {
   icon?: React.ReactNode;
   label: string;
+  help?: React.ReactNode; // explanatory help stays beside its heading
   action?: React.ReactNode; // right-aligned slot, e.g. Diagnostics' Refresh button
 }) {
   return (
@@ -191,6 +222,7 @@ export function SectionHeader({
         >
           {label}
         </h3>
+        {help}
       </div>
       {action}
     </div>
@@ -293,18 +325,29 @@ export function SegmentedControl<T extends string>({
   value,
   onChange,
   "aria-label": ariaLabel,
+  tabPanelId,
+  tabIdPrefix,
+  size = "sm",
 }: {
   options: SegmentedOption<T>[];
   value: T;
   onChange: (value: T) => void;
   /** Group name for screen readers — the visible segments only name the choices. */
   "aria-label": string;
+  /** Use tab semantics when the choices switch a visible settings panel. */
+  tabPanelId?: string;
+  tabIdPrefix?: string;
+  size?: "sm" | "md";
 }) {
   return (
     <div
-      role="group"
+      role={tabPanelId ? "tablist" : "group"}
       aria-label={ariaLabel}
-      className="flex max-w-full flex-wrap gap-0.5 p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)] w-fit"
+      className={[
+        "flex max-w-full flex-wrap w-fit p-0.5 rounded-[var(--mem-radius-md)] bg-[var(--mem-hover)]",
+        size === "sm" ? "gap-0.5" : "gap-1",
+        size === "md" ? "border border-[var(--mem-border)]" : "",
+      ].join(" ")}
     >
       {options.map((opt) => {
         const active = opt.value === value;
@@ -312,17 +355,37 @@ export function SegmentedControl<T extends string>({
           <button
             key={opt.value}
             type="button"
-            aria-pressed={active}
+            role={tabPanelId ? "tab" : undefined}
+            id={tabIdPrefix ? `${tabIdPrefix}-${opt.value}` : undefined}
+            aria-pressed={tabPanelId ? undefined : active}
+            aria-selected={tabPanelId ? active : undefined}
+            aria-controls={tabPanelId}
+            tabIndex={tabPanelId ? (active ? 0 : -1) : undefined}
             onClick={() => onChange(opt.value)}
+            onKeyDown={(event) => {
+              if (!tabPanelId) return;
+              const currentIndex = options.findIndex((option) => option.value === opt.value);
+              const nextIndex = event.key === "ArrowRight" || event.key === "ArrowDown"
+                ? (currentIndex + 1) % options.length
+                : event.key === "ArrowLeft" || event.key === "ArrowUp"
+                  ? (currentIndex - 1 + options.length) % options.length
+                  : event.key === "Home" ? 0 : event.key === "End" ? options.length - 1 : -1;
+              if (nextIndex < 0) return;
+              event.preventDefault();
+              onChange(options[nextIndex].value);
+              const tabs = event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
+              tabs?.[nextIndex]?.focus();
+            }}
             className={[
-              "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 h-[26px] rounded-[var(--mem-radius-sm)] border",
+              "flex shrink-0 items-center gap-1.5 whitespace-nowrap px-3 rounded-[var(--mem-radius-sm)] border",
+              size === "sm" ? "h-[26px]" : "py-1.5",
               "transition-[background-color,border-color,color,box-shadow] duration-[var(--mem-dur-fast)]",
               "focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-0",
               active
                 ? "bg-[var(--mem-surface)] border-[var(--mem-border)] text-[var(--mem-text)] shadow-[var(--mem-shadow-raised)]"
                 : "bg-transparent border-transparent text-[var(--mem-text-secondary)] hover:text-[var(--mem-text)]",
             ].join(" ")}
-            style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", fontWeight: 500 }}
+            style={{ fontFamily: "var(--mem-font-body)", fontSize: size === "sm" ? "var(--mem-text-xs)" : "var(--mem-text-sm)", fontWeight: 500 }}
           >
             {opt.icon}
             {opt.label}
@@ -468,21 +531,23 @@ export function Card({
 export interface FieldProps {
   label: string;
   htmlFor: string;
+  labelAdornment?: React.ReactNode;
+  className?: string;
+  labelStyle?: React.CSSProperties;
   description?: string; // static helper, id `${htmlFor}-desc`
   error?: string; // id `${htmlFor}-error`, wins over description
   children: React.ReactElement<{ id?: string; "aria-describedby"?: string }>; // input/select; cloned with id + aria-describedby
 }
 
-export function Field({ label, htmlFor, description, error, children }: FieldProps) {
+export function Field({ label, htmlFor, labelAdornment, className, labelStyle, description, error, children }: FieldProps) {
   const descId = `${htmlFor}-desc`;
   const errorId = `${htmlFor}-error`;
   const describedBy = error ? errorId : description ? descId : undefined;
 
-  return (
-    <div className="flex flex-col">
-      <label
-        htmlFor={htmlFor}
-        style={{
+  const fieldLabel = (
+    <label
+      htmlFor={htmlFor}
+      style={{
           fontFamily: "var(--mem-font-mono)",
           fontSize: "var(--mem-text-2xs)",
           fontWeight: 500,
@@ -491,10 +556,21 @@ export function Field({ label, htmlFor, description, error, children }: FieldPro
           color: "var(--mem-text-tertiary)",
           textTransform: "uppercase" as const,
           marginBottom: "6px",
-        }}
-      >
-        {label}
-      </label>
+          ...labelStyle,
+      }}
+    >
+      {label}
+    </label>
+  );
+
+  return (
+    <div className={`flex flex-col ${className ?? ""}`}>
+      {labelAdornment ? (
+        <div className="settings-field-label-row">
+          {fieldLabel}
+          {labelAdornment}
+        </div>
+      ) : fieldLabel}
       {cloneElement(children, { id: htmlFor, "aria-describedby": describedBy })}
       {error ? (
         <p

@@ -59,12 +59,6 @@ function pinnedRouting(over: {
 }
 
 describe("IntelligenceSection", () => {
-  // NOTE: reset runs in afterEach, not beforeEach — see
-  // src/hooks/useDaemonVersion.test.tsx for why. Resetting a vi.fn() in
-  // beforeEach immediately before it's reconfigured with a resolved value
-  // and consumed by a react-query queryFn deterministically triggers a
-  // false-positive "unhandled rejection" failure on this project's pinned
-  // vitest 4.1.5 + @tanstack/react-query 5.100.9 + React 19 combination.
   afterEach(() => {
     Object.values(mocks).forEach((m) => m.mockReset());
   });
@@ -104,13 +98,24 @@ describe("IntelligenceSection", () => {
     });
     renderSection();
 
-    const toggle = await screen.findByRole("checkbox", { name: "Background AI organization" });
+    const toggle = await screen.findByRole("button", { name: "Background AI organization" });
     await waitFor(() => expect(toggle).toBeEnabled());
-    expect(toggle).not.toBeChecked();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     await userEvent.click(toggle);
     expect(mocks.setBackgroundAiEnabled).toHaveBeenCalledWith(true);
-    await waitFor(() => expect(toggle).toBeChecked());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Background AI organization" })).toHaveAttribute("aria-pressed", "true"));
     expect(mocks.setSourcePin).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary Background AI readiness out of the settings copy", async () => {
+    mocks.getBackgroundAiEnabled.mockResolvedValue(true);
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting());
+    renderSection();
+
+    await screen.findByRole("button", { name: "Background AI organization" });
+    expect(screen.queryByText("AI available")).not.toBeInTheDocument();
+    expect(screen.queryByText("Background AI is off")).not.toBeInTheDocument();
+    expect(screen.queryByText("Some tasks still need an AI service.")).not.toBeInTheDocument();
   });
 
   it("fills unset jobs when AI is enabled after providers were set up while Off", async () => {
@@ -123,7 +128,7 @@ describe("IntelligenceSection", () => {
     });
     const qc = renderSection();
     const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
-    const toggle = await screen.findByRole("checkbox", { name: "Background AI organization" });
+    const toggle = await screen.findByRole("button", { name: "Background AI organization" });
     await waitFor(() => expect(toggle).toBeEnabled());
 
     await userEvent.click(toggle);
@@ -133,384 +138,282 @@ describe("IntelligenceSection", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["activity"] });
   });
 
-  it("shows the connection-only cloud row meta (provider + masked key), not per-job models", async () => {
-    mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
-    mocks.getModelChoice.mockResolvedValue(["claude-opus-4-6", "claude-haiku-4-5-20251001"]);
-    renderSection();
+  it("shows unavailable when the latest Background AI read fails", async () => {
+    mocks.getBackgroundAiEnabled
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error("settings unavailable"));
+    const qc = renderSection();
+    await screen.findByRole("button", { name: "Background AI organization" });
 
-    const cloudRow = (await screen.findByText("Cloud provider")).closest("button")!;
-    // Connection identity only — the per-job model names moved to the job rows.
-    expect(await within(cloudRow).findByText("Anthropic · sk-ant-***configured")).toBeInTheDocument();
-    expect(within(cloudRow).queryByText(/Everyday model:/)).not.toBeInTheDocument();
-    expect(within(cloudRow).queryByText(/Synthesis model:/)).not.toBeInTheDocument();
+    await qc.invalidateQueries({ queryKey: ["backgroundAiEnabled"] });
+
+    await waitFor(() => expect(screen.getByRole("status", { name: "Background AI organization" })).toHaveAttribute("data-state", "unavailable"));
+    expect(screen.queryByRole("button", { name: "Background AI organization" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Background AI organization" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Could not save this setting. Try again.")).toBeInTheDocument();
   });
 
-  it("attributes an Ollama endpoint to the Local server row, not the Cloud provider row", async () => {
-    mocks.getExternalLlm.mockResolvedValue(["http://localhost:11434/v1", "llama3.2:3b"]);
-    renderSection();
 
-    // The Synthesis job row also surfaces "Ollama (local) · llama3.2:3b"
-    // (mix-and-match), so scope to the Local server row itself.
-    const localRow = screen.getByText("Local server").closest("button")!;
-    expect(await within(localRow).findByText("Ollama (local) · llama3.2:3b")).toBeInTheDocument();
-    // Cloud row stays on its unconfigured hint — the same saved slot never
-    // shows up in both provider rows.
-    const cloudRow = screen.getByText("Cloud provider").closest("button")!;
-    expect(within(cloudRow).getByText(/Anthropic, OpenAI, Gemini, Groq, and more/)).toBeInTheDocument();
-  });
 
-  // Mutation-proof target: reintroducing the old `!isConfigured &&` gate
-  // around the on-device row must make this assertion fail.
-  it("keeps the on-device row present even while Anthropic is configured", async () => {
-    mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
-    renderSection();
 
-    // Wait for the cloud row to render its configured meta, proving
-    // isConfigured has resolved true, before checking the on-device row.
-    const cloudRow = (await screen.findByText("Cloud provider")).closest("button")!;
-    await within(cloudRow).findByText("Anthropic ·", { exact: false });
-    expect(screen.getByText("On-device model")).toBeInTheDocument();
-  });
 
-  it("hides the provider body until the cloud row is expanded, then reveals its preset chips", async () => {
-    renderSection();
-
-    // Wait for the cloud row's meta to settle before asserting absence —
-    // asserting before queries resolve would pass regardless of the bug.
-    const cloudRow = (await screen.findByText("Cloud provider")).closest("button")!;
-    await within(cloudRow).findByText(/Anthropic, OpenAI, Gemini, Groq, and more/);
-    expect(screen.queryByRole("group", { name: "Provider" })).not.toBeInTheDocument();
-
-    await userEvent.click(cloudRow);
-
-    expect(await screen.findByRole("group", { name: "Provider" })).toBeInTheDocument();
-  });
-
-  // Pins the mix-and-match display logic: the two job rows walk independent
-  // priority chains, so their rows can show different sources at once.
-  it("shows the Anthropic routine model in the Everyday row's meta when Anthropic is configured", async () => {
+  it("shows independent Anthropic models without a task disclosure or model summary", async () => {
     mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
     mocks.getModelChoice.mockResolvedValue(["claude-haiku-4-5-20251001", "claude-sonnet-4-6"]);
     renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    expect(await within(everydayRow).findByText("Anthropic · Haiku 4.5")).toBeInTheDocument();
+    const everyday = await screen.findByLabelText("Choose everyday model");
+    await waitFor(() => expect(everyday).toHaveValue("claude-haiku-4-5-20251001"));
+    expect(screen.getByLabelText("Choose synthesis model")).toHaveValue("claude-sonnet-4-6");
+    expect(screen.queryByRole("button", { name: "Everyday work" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Synthesis" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Anthropic · Haiku 4.5")).not.toBeInTheDocument();
   });
 
-  it("falls back the Synthesis row to the cloud-required hint, while the Everyday row still shows the on-device model", async () => {
-    mocks.getOnDeviceModel.mockResolvedValue({
-      loaded: "qwen3-4b-instruct-2507",
-      selected: "qwen3-4b-instruct-2507",
-      models: [{ id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B Instruct", cached: true }],
-    });
+  it("legacy mode shows a service, not a duplicate on-device model, and leaves synthesis off", async () => {
+    mocks.getOnDeviceModel.mockResolvedValue({ loaded: "qwen3-4b-instruct-2507", selected: "qwen3-4b-instruct-2507",
+      models: [{ id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B Instruct", cached: true }] });
     renderSection();
-
-    // Wait for the on-device query to settle via the Everyday row first —
-    // asserting on the Synthesis row before it resolves would pass on the
-    // still-loading placeholder regardless of the bug.
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    expect(await within(everydayRow).findByText("Qwen3 4B Instruct")).toBeInTheDocument();
-
-    const synthesisRow = screen.getByText("Synthesis model").closest("button")!;
-    expect(within(synthesisRow).getByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")).toBeInTheDocument();
+    const everyday = (await screen.findByText("Everyday work")).closest<HTMLElement>(".settings-task-row")!;
+    expect(await within(everyday).findByText("On-device")).toBeInTheDocument();
+    expect(within(everyday).queryByText("Qwen3 4B Instruct")).not.toBeInTheDocument();
+    const synthesis = screen.getByText("Synthesis").closest<HTMLElement>(".settings-task-row")!;
+    expect(within(synthesis).getByText("Off")).toBeInTheDocument();
+    expect(within(synthesis).getByRole("button", { name: "Set up" })).toBeInTheDocument();
   });
 
-  it("shows the On-device row's capability hint alongside its state-derived meta", async () => {
-    mocks.getOnDeviceModel.mockResolvedValue({
-      loaded: "qwen3-4b-instruct-2507",
-      selected: "qwen3-4b-instruct-2507",
-      models: [{ id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B Instruct", cached: true }],
-    });
-    renderSection();
-
-    const onDeviceRow = screen.getByText("On-device model").closest("button")!;
-    expect(
-      within(onDeviceRow).getByText("Runs entirely on this device. Larger cloud or server models usually give better synthesis quality.")
-    ).toBeInTheDocument();
-    expect(await within(onDeviceRow).findByText("Qwen3 4B Instruct · Running")).toBeInTheDocument();
-  });
-
-  // ── Headline (a): LEGACY mode — routing endpoint absent (null). The source
-  // is read-only with the updated-runtime hint, but the model select still
-  // works. Mutation proof: dropping the `isPinned ?` branch (rendering the
-  // interactive source select in legacy) makes the "Choose source" absence
-  // assertion fail; dropping the model select breaks the setModelChoice call.
-  it("legacy mode: source is read-only with a runtime hint, model select still functional", async () => {
+  it("legacy service is read-only but independent model changes stay functional", async () => {
     mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
     mocks.getModelChoice.mockResolvedValue(["claude-opus-4-6", null]);
-    // routing stays null (LEGACY) from beforeEach.
     renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    await within(everydayRow).findByText("Anthropic · Opus 4.6");
-    await userEvent.click(everydayRow);
-
-    // Read-only source line + the "needs the updated runtime" hint.
-    expect(await screen.findByText("Changing the source needs the updated Wenlan runtime.")).toBeInTheDocument();
-    // No interactive source picker in legacy mode.
-    expect(screen.queryByLabelText("Choose source")).not.toBeInTheDocument();
-
-    // The model select is live: switching off the current Opus value writes
-    // through setModelChoice (a different value, so onChange actually fires).
-    const modelSelect = screen.getByLabelText("Choose everyday model");
-    await userEvent.selectOptions(modelSelect, "claude-haiku-4-5-20251001");
+    const select = await screen.findByLabelText("Choose everyday model");
+    await waitFor(() => expect(select).toHaveValue("claude-opus-4-6"));
+    expect(screen.queryByLabelText("AI service for Everyday work")).not.toBeInTheDocument();
+    await userEvent.selectOptions(select, "claude-haiku-4-5-20251001");
     expect(mocks.setModelChoice).toHaveBeenCalledWith("claude-haiku-4-5-20251001", null);
-    // A source pin is never written at a legacy daemon.
     expect(mocks.setSourcePin).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Details: Everyday work" }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Changing the source needs the updated Wenlan runtime.");
   });
 
-  // ── Headline (b): PINNED mode — the row reflects the routing endpoint (not
-  // local derivation), and picking a source issues the pin write. Mutation
-  // proof: re-deriving the meta from modelChoice shows "Haiku 4.5" and fails
-  // the "Opus 4.6" assertion; a no-op source select never calls setSourcePin.
-  it("pinned mode: reflects endpoint routing and pins the picked source", async () => {
+  it("uses authoritative routing and changes the source directly, without expanding", async () => {
     mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
-    // Local knobs say Haiku; the endpoint says Opus. The row must show Opus.
-    mocks.getModelChoice.mockResolvedValue(["claude-haiku-4-5-20251001", "claude-sonnet-4-6"]);
-    mocks.getResolvedRouting.mockResolvedValue(
-      pinnedRouting({ everyday: { source: "anthropic", model: "claude-opus-4-6", mode: "pinned" } })
-    );
-    renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    // Reflected from routing, not re-derived from the Haiku modelChoice.
-    expect(await within(everydayRow).findByText("Anthropic · Opus 4.6")).toBeInTheDocument();
-    expect(within(everydayRow).queryByText("Anthropic · Haiku 4.5")).not.toBeInTheDocument();
-
-    await userEvent.click(everydayRow);
-    const sourceSelect = await screen.findByLabelText("Choose source");
-    await userEvent.selectOptions(sourceSelect, "external");
-    expect(mocks.setSourcePin).toHaveBeenCalledWith("external", null);
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting({
+      everyday: { source: "external", model: "gpt-5.2", mode: "pinned", pin: "external" },
+    }));
+    const qc = renderSection();
+    const invalidate = vi.spyOn(qc, "invalidateQueries");
+    const select = await screen.findByLabelText("AI service for Everyday work");
+    expect(select).toHaveValue("external");
+    const row = select.closest<HTMLElement>(".settings-task-row")!;
+    expect(within(row).queryByLabelText("Choose everyday model")).not.toBeInTheDocument();
+    expect(within(row).queryByText("gpt-5.2")).not.toBeInTheDocument();
+    await userEvent.selectOptions(select, "on_device");
+    expect(mocks.setSourcePin).toHaveBeenCalledWith("on_device", null);
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["activity"] }));
   });
 
-  // ── Headline (c): PINNED_UNAVAILABLE — the pinned source is unavailable, so the
-  // amber hint names it: "Pinned to X — using Y for now". Mutation proof:
-  // removing the `isPinned && degraded` branch drops the hint and fails this
-  // assertion.
-  it("pinned_unavailable mode: renders the amber hint naming the pinned source", async () => {
-    mocks.getResolvedRouting.mockResolvedValue(
-      pinnedRouting({
-        everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned" },
-        // Pinned to Anthropic, but the daemon resolved it as degraded, so the
-        // route fell back to the connected external provider (OpenAI). The
-        // component trusts the wire values as-is — see the next test for the
-        // no-pin (pre-#357 daemon) fallback case.
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
-      })
-    );
+  it("keeps the configured preference selected when it differs from the unavailable route", async () => {
+    const routing = pinnedRouting({
+      everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned", pin: "on_device" },
+      synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
+    });
+    routing.pool.anthropic.configured = false;
+    mocks.getResolvedRouting.mockResolvedValue(routing);
     renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    await userEvent.click(synthesisRow);
-
-    expect(await screen.findByText("Pinned to Anthropic, which is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    expect(select).toHaveValue("anthropic");
+    expect(within(select).getByRole("option", { name: "Anthropic" })).toBeDisabled();
+    const row = select.closest<HTMLElement>(".settings-task-row")!;
+    expect(within(row).getByRole("status")).toHaveTextContent("Anthropic is unavailable. This work is paused.");
+    expect(within(row).queryByText("OpenAI · gpt-5.2")).not.toBeInTheDocument();
+    await userEvent.selectOptions(select, "external");
+    expect(mocks.setSourcePin).toHaveBeenCalledWith(null, "external");
   });
 
-  // ── Copy truth: a pinned_unavailable route is configured but its model is
-  // not serving, so the COLLAPSED row chip says so instead of plain
-  // "Configured". Mutation proof: dropping the `view.degraded` chip branch
-  // renders "Configured" here and fails the degraded-text assertion.
-  it("pinned_unavailable job: the collapsed row shows the degraded chip, not plain Configured", async () => {
-    mocks.getResolvedRouting.mockResolvedValue(
-      pinnedRouting({
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: "anthropic" },
-      })
-    );
+  it("does not pretend an unloaded pinned model is enabled", async () => {
+    const routing = pinnedRouting({
+      synthesis: { source: "on_device", model: null, mode: "pinned_unavailable", pin: "on_device" },
+    });
+    routing.pool.on_device.loaded = false;
+    mocks.getResolvedRouting.mockResolvedValue(routing);
     renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    // Waiting on the routed meta settles the routing query first, so the chip
-    // assertion cannot false-green on the still-loading row. The chip is a
-    // sibling of the name button, so scope chip queries to the header parent.
-    await within(synthesisRow).findByText("OpenAI · gpt-5.2");
-    const synthesisHeader = synthesisRow.parentElement!;
-    expect(within(synthesisHeader).getByText("Configured, model unavailable")).toBeInTheDocument();
-    expect(within(synthesisHeader).queryByText("Running")).not.toBeInTheDocument();
-    // Degraded is not success: the chip wears the warning tone, never green.
-    const degradedChipClass = within(synthesisHeader).getByText("Configured, model unavailable").closest("span[aria-live]")?.getAttribute("class") ?? "";
-    expect(degradedChipClass).toContain("mem-status-warning");
-    expect(degradedChipClass).not.toContain("mem-status-success");
-
-    // The healthy job row keeps the plain Configured chip.
-    const everydayRow = screen.getByText("Everyday model").closest("button")!;
-    await within(everydayRow).findByText("Anthropic · Opus 4.6");
-    expect(within(everydayRow.parentElement!).getByText("Configured")).toBeInTheDocument();
-    const healthyChipClass = within(everydayRow.parentElement!).getByText("Configured").closest("span[aria-live]")?.getAttribute("class") ?? "";
-    expect(healthyChipClass).toContain("mem-status-success");
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    expect(select).toHaveValue("on_device");
+    const row = select.closest<HTMLElement>(".settings-task-row")!;
+    expect(within(row).getByRole("status")).toHaveTextContent("On-device is unavailable. This work is paused.");
+    expect(within(row).queryByText("Enabled")).not.toBeInTheDocument();
   });
 
-  // ── Headline (d): PINNED_UNAVAILABLE with no pin on the wire (a daemon that
-  // predates #357's pin field) — falls back to the generic, unnamed hint
-  // rather than rendering "Pinned to null". Mutation proof: forcing
-  // `pinnedDisplay` to always resolve from `pin` (dropping the `pin ?` guard)
-  // renders the named hint here and fails the generic-hint assertion.
-  it("pinned_unavailable mode with no pin on the wire: falls back to the generic hint", async () => {
-    mocks.getResolvedRouting.mockResolvedValue(
-      pinnedRouting({
-        everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned" },
-        synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: null },
-      })
-    );
+  it("shows an unavailable state when older routing omitted the pin", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting({
+      synthesis: { source: "external", model: "gpt-5.2", mode: "pinned_unavailable", pin: null },
+    }));
     renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    await userEvent.click(synthesisRow);
-
-    expect(await screen.findByText("The pinned source is currently unavailable. Using OpenAI for now.")).toBeInTheDocument();
-    expect(screen.queryByText(/Pinned to/)).not.toBeInTheDocument();
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    expect(select).toHaveValue("");
+    expect(within(select).getByRole("option", { selected: true })).toHaveTextContent("Unavailable");
+    expect(select.closest(".settings-task-row")).toHaveTextContent("The chosen AI is unavailable. This work is paused.");
   });
 
-  // ── Empty-state defect: nothing connected, Synthesis resolves to "none" in
-  // LEGACY mode. The expanded body must give an actionable next step, and the
-  // none-state meta string must appear EXACTLY ONCE (collapsed meta only) —
-  // never duplicated by a body branch. Mutation proof: restoring the old
-  // `source === "none"` body line that re-rendered the none-state meta
-  // (synthesisNoSourceHint) makes the count 2 and fails toHaveLength(1).
-  it("synthesis 'none' expanded: shows connect-provider guidance, none-state meta appears once", async () => {
-    // All beforeEach defaults: no key, no external, no on-device, routing null
-    // (LEGACY). Everyday resolves to "basic", Synthesis to "none".
-    renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    const rowRoot = synthesisRow.parentElement!;
-    await userEvent.click(synthesisRow);
-
-    // Waiting on the guidance settles the queries before the count assertion,
-    // so the count can't false-green on a still-loading row.
-    expect(
-      await screen.findByText("Connect a cloud provider or local server below to serve this job.")
-    ).toBeInTheDocument();
-    // The collapsed meta keeps the cloud-required string; the body no longer repeats it.
-    expect(
-      within(rowRoot).getAllByText("No model is assigned. Pages still update whenever your AI tools use Wenlan.")
-    ).toHaveLength(1);
+  it("no providers: Basic and Off each appear once, with a working setup link", async () => {
+    const scroll = vi.fn();
+    const previousScroll = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      renderSection();
+      const everyday = (await screen.findByText("Everyday work")).closest<HTMLElement>(".settings-task-row")!;
+      const synthesis = screen.getByText("Synthesis").closest<HTMLElement>(".settings-task-row")!;
+      await within(synthesis).findByText("Off");
+      expect(within(everyday).getAllByText("Basic")).toHaveLength(1);
+      expect(within(synthesis).getAllByText("Off")).toHaveLength(1);
+      await userEvent.click(within(everyday).getByRole("button", { name: "Set up" }));
+      expect(screen.getByRole("tab", { name: "On-device" })).toHaveAttribute("aria-selected", "true");
+      expect(scroll).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+      expect(mocks.setSourcePin).not.toHaveBeenCalled();
+    } finally { Element.prototype.scrollIntoView = previousScroll; }
   });
 
-  // ── Empty-state defect: PINNED mode with nothing configured must still show
-  // the source picker (a fresh user has to SEE what's choosable), with every
-  // option disabled. Mutation proof: re-gating the pinned select on
-  // isProviderSource drops it for a "none" source and fails findByLabelText.
-  it("pinned mode, nothing configured: the source select renders with every option disabled", async () => {
+  it("unconfigured source selections are visible with unavailable options disabled", async () => {
     mocks.getResolvedRouting.mockResolvedValue({
-      everyday: { source: "basic", model: null, mode: "auto", pin: null },
-      synthesis: { source: "none", model: null, mode: "auto", pin: null },
-      pool: {
-        anthropic: { configured: false, everyday_model: null, synthesis_model: null },
-        external: null,
-        on_device: null,
-      },
+      everyday: { source: "basic", model: null, mode: "unconfigured", pin: null },
+      synthesis: { source: "none", model: null, mode: "unconfigured", pin: null },
+      pool: { anthropic: { configured: false, everyday_model: null, synthesis_model: null }, external: null, on_device: null },
     });
     renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    await userEvent.click(synthesisRow);
-
-    const sourceSelect = await screen.findByLabelText("Choose source");
-    const options = within(sourceSelect).getAllByRole("option") as HTMLOptionElement[];
-    expect(options.length).toBeGreaterThan(0);
-    expect(options.filter((o) => !o.disabled)).toHaveLength(0);
-
-    // PINNED mode points at the select above (not the legacy connect-below-only
-    // wording — that renders in the "synthesis 'none' expanded" legacy test).
-    expect(
-      screen.getByText("Choose a source above, or connect a provider below to serve this job.")
-    ).toBeInTheDocument();
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    const options = within(select).getAllByRole("option") as HTMLOptionElement[];
+    expect(select).toHaveValue("");
+    expect(options.filter((option) => !option.disabled)).toHaveLength(0);
+    expect(within(select).getByRole("option", { selected: true })).toHaveTextContent("Off");
   });
 
-  // ── Synthesis can now use on-device (daemon #357 makes synthesis=on_device a
-  // valid pin). The Synthesis row must OFFER on-device as an enabled source
-  // when a model is loaded, and picking it must pin synthesis→on_device (the
-  // (everyday, synthesis) arg pair means null in the everyday slot). Mutation
-  // proof: dropping "on_device" from the synthesis branch of buildOptions'
-  // `order` removes the option and fails the getByRole("option", { name:
-  // "On-device" }) query.
-  it("synthesis offers an available On-device source and pins synthesis→on_device", async () => {
-    // pinnedRouting()'s pool has on_device configured, so the option is enabled.
+  it("synthesis can directly select On-device without opening an editing mode", async () => {
     mocks.getResolvedRouting.mockResolvedValue(pinnedRouting());
     renderSection();
-
-    const synthesisRow = (await screen.findByText("Synthesis model")).closest("button")!;
-    await userEvent.click(synthesisRow);
-
-    const sourceSelect = await screen.findByLabelText("Choose source");
-    const onDeviceOption = within(sourceSelect).getByRole("option", { name: "On-device" }) as HTMLOptionElement;
-    expect(onDeviceOption.disabled).toBe(false);
-
-    await userEvent.selectOptions(sourceSelect, "on_device");
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    expect(within(select).getByRole("option", { name: "On-device" })).toBeEnabled();
+    await userEvent.selectOptions(select, "on_device");
     expect(mocks.setSourcePin).toHaveBeenCalledWith(null, "on_device");
   });
 
-  // ── The on-device job row exposes a model dropdown (jobs choose — no "managed
-  // below" deflection). Cached models are selectable, uncached ones disabled
-  // with a pointer to the provider row, and switching reuses OnDeviceModelCard's
-  // exact mechanism: downloadOnDeviceModel(id) (loads if cached). Mutation proof:
-  // no-op'ing the `await downloadOnDeviceModel(e.target.value)` in
-  // OnDeviceJobModelSelect.onChange makes the switch write nothing and fails
-  // toHaveBeenCalledWith("qwen3-8b") — and only this test.
-  it("on-device job row: dropdown lists cached (enabled) + uncached (disabled), switching loads the picked model", async () => {
-    mocks.getResolvedRouting.mockResolvedValue(
-      pinnedRouting({ everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned" } })
-    );
-    mocks.getOnDeviceModel.mockResolvedValue({
-      loaded: "qwen3-4b-instruct-2507",
-      selected: "qwen3-4b-instruct-2507",
-      models: [
-        { id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B", param_count: "4B", ram_required_gb: 6, file_size_gb: 2.7, cached: true },
-        { id: "qwen3-8b", display_name: "Qwen3 8B", param_count: "8B", ram_required_gb: 10, file_size_gb: 5.2, cached: true },
-        { id: "qwen3-14b", display_name: "Qwen3 14B", param_count: "14B", ram_required_gb: 16, file_size_gb: 9.0, cached: false },
-      ],
+  it("shared model appears only in AI services and switching stays there", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting({
+      everyday: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned", pin: "on_device" },
+      synthesis: { source: "on_device", model: "qwen3-4b-instruct-2507", mode: "pinned", pin: "on_device" },
+    }));
+    mocks.getOnDeviceModel.mockResolvedValue({ loaded: "qwen3-4b-instruct-2507", selected: "qwen3-4b-instruct-2507", models: [
+      { id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B", param_count: "4B", ram_required_gb: 6, file_size_gb: 2.7, cached: true },
+      { id: "qwen3-8b", display_name: "Qwen3 8B", param_count: "8B", ram_required_gb: 10, file_size_gb: 5.2, cached: true },
+    ] });
+    renderSection();
+    await screen.findByLabelText("AI service for Everyday work");
+    const everyday = screen.getByText("Everyday work").closest<HTMLElement>(".settings-task-row")!;
+    const synthesis = screen.getByText("Synthesis").closest<HTMLElement>(".settings-task-row")!;
+    expect(within(everyday).queryByText(/Qwen/)).not.toBeInTheDocument();
+    expect(within(synthesis).queryByText(/Qwen/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Shared model")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Choose on-device model")).not.toBeInTheDocument();
+    expect(mocks.downloadOnDeviceModel).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("tab", { name: "On-device" }));
+    expect(screen.getAllByText("Qwen3 4B", { exact: true })).toHaveLength(1);
+    const enable = await within(screen.getByRole("tabpanel")).findByRole("button", { name: "Enable" });
+    await userEvent.click(enable);
+    await waitFor(() => expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-8b"));
+  });
+
+  it("a failed direct service change reports the error and keeps the saved selection", async () => {
+    mocks.getResolvedRouting.mockResolvedValue(pinnedRouting());
+    mocks.setSourcePin.mockRejectedValue(new Error("daemon offline"));
+    renderSection();
+    const select = await screen.findByLabelText("AI service for Everyday work");
+    await userEvent.selectOptions(select, "on_device");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not change the AI service. Try again.");
+    expect(select).toHaveValue("anthropic");
+    expect(select).toBeEnabled();
+  });
+
+
+  it("service tabs preserve drafts and do not change task assignments", async () => {
+    renderSection();
+    const panel = await screen.findByRole("tabpanel");
+    expect(await screen.findByRole("combobox", { name: "Provider" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Anthropic" })).not.toBeInTheDocument();
+    const input = within(panel).getByPlaceholderText("sk-ant-api03-...");
+    await userEvent.type(input, "unsaved-draft");
+    await userEvent.click(screen.getByRole("tab", { name: "Local server" }));
+    expect(screen.getByRole("tab", { name: "Local server" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(screen.getByRole("tab", { name: "Cloud" }));
+    expect(input).toHaveValue("unsaved-draft");
+    expect(mocks.setApiKey).not.toHaveBeenCalled();
+    expect(mocks.setExternalLlm).not.toHaveBeenCalled();
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
+  });
+
+  it("keyboard navigation switches service views without changing assignments", async () => {
+    renderSection();
+    const cloud = await screen.findByRole("tab", { name: "Cloud" });
+    cloud.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(screen.getByRole("tab", { name: "On-device" })).toHaveAttribute("aria-selected", "true");
+    await userEvent.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "Local server" })).toHaveAttribute("aria-selected", "true");
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
+  });
+
+  const deviceModels = [
+    { id: "qwen3-4b-instruct-2507", display_name: "Qwen3 4B", param_count: "4B", ram_required_gb: 6, file_size_gb: 2.7, cached: true },
+    { id: "qwen3.5-9b", display_name: "Qwen3.5 9B", param_count: "9B", ram_required_gb: 12, file_size_gb: 5.2, cached: true },
+    { id: "qwen3-14b", display_name: "Qwen3 14B", param_count: "14B", ram_required_gb: 20, file_size_gb: 9, cached: false },
+  ];
+
+  it("separates downloaded and enabled models, then refreshes actual activation state", async () => {
+    mocks.getApiKey.mockResolvedValue("configured");
+    mocks.getOnDeviceModel.mockResolvedValue({ loaded: "qwen3-4b-instruct-2507", selected: "qwen3-4b-instruct-2507", models: deviceModels });
+    mocks.downloadOnDeviceModel.mockImplementation(async (id: string) => {
+      mocks.getOnDeviceModel.mockResolvedValue({ loaded: id, selected: id, models: deviceModels });
     });
     renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    await userEvent.click(everydayRow);
-
-    const modelSelect = await screen.findByLabelText("Choose on-device model");
-    expect((within(modelSelect).getByRole("option", { name: "Qwen3 8B" }) as HTMLOptionElement).disabled).toBe(false);
-    expect((within(modelSelect).getByRole("option", { name: "Qwen3 14B" }) as HTMLOptionElement).disabled).toBe(true);
-    // The uncached entry surfaces the download pointer to the provider row.
-    expect(screen.getByText("Uncached models download from the On-device model row below.")).toBeInTheDocument();
-
-    await userEvent.selectOptions(modelSelect, "qwen3-8b");
-    expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-8b");
+    await userEvent.click(screen.getByRole("tab", { name: "On-device" }));
+    const panel = screen.getByRole("tabpanel");
+    const enable = await within(panel).findByRole("button", { name: "Enable" });
+    expect(within(panel).getByText("Enabled", { exact: true })).toBeVisible();
+    expect(within(panel).getByText("Downloaded", { exact: true })).toBeVisible();
+    expect(within(panel).getByRole("button", { name: "Download & enable" })).toBeDisabled();
+    await userEvent.click(enable);
+    await waitFor(() => expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3.5-9b"));
+    await waitFor(() => expect(within(panel).getByText("Qwen3.5 9B").closest(".settings-row")).toHaveTextContent("Enabled"));
+    expect(mocks.setSourcePin).not.toHaveBeenCalled();
   });
 
-  // ── Value disclosure (with a model): the everyday row leads with its "what you
-  // get" summary and the ⓘ carries the background-organization detail. Mutation
-  // proof: flipping jobRow's `hint={on ? summary : undefined}` to always-undefined
-  // drops the summary and fails the getByText; swapping the connected tip branch
-  // (using the no-model tip) changes the ⓘ's accessible name and fails getByRole.
-  it("everyday row with a model: shows the value summary and the with-model ⓘ tip", async () => {
-    mocks.getApiKey.mockResolvedValue("sk-ant-***configured");
-    mocks.getModelChoice.mockResolvedValue(["claude-haiku-4-5-20251001", "claude-sonnet-4-6"]);
+  it("reports a model activation error without showing it as enabled", async () => {
+    mocks.getOnDeviceModel.mockResolvedValue({ loaded: null, selected: null, models: [deviceModels[0]] });
+    mocks.downloadOnDeviceModel.mockRejectedValue(new Error("model load failed"));
     renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    // Model resolved → the meta names it and the summary sits above it.
-    await within(everydayRow).findByText("Anthropic · Haiku 4.5");
-    expect(within(everydayRow).getByText("Files and links new memories in the background")).toBeInTheDocument();
-    // The ⓘ is a sibling of the row button, so scope to the header row. Its
-    // accessible name is the with-model tip title, not the no-model one.
-    const header = everydayRow.parentElement!;
-    expect(within(header).getByRole("button", { name: "Background organization" })).toBeInTheDocument();
-    expect(within(header).queryByRole("button", { name: "What a model adds" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: "On-device" }));
+    const panel = screen.getByRole("tabpanel");
+    await userEvent.click(await within(panel).findByRole("button", { name: "Enable" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("model load failed");
+    expect(within(panel).queryByText("Enabled", { exact: true })).not.toBeInTheDocument();
   });
 
-  // ── Value disclosure (no model): the everyday row drops the summary (the meta
-  // already states the no-model reality) and the ⓘ flips to "what a model adds".
-  // Mutation proof: flipping `hint={on ? summary : undefined}` to always-`summary`
-  // renders the summary here and fails the queryByText absence; swapping the tip
-  // branch (using the with-model tip) changes the ⓘ name and fails getByRole.
-  it("everyday row without a model: drops the summary and the ⓘ becomes 'what a model adds'", async () => {
-    // All beforeEach defaults → everyday resolves to "basic" (no model serves it).
+  it("does not offer a downloaded but unloaded device model as an available AI service", async () => {
+    const routing = pinnedRouting();
+    routing.pool.on_device.loaded = false;
+    mocks.getResolvedRouting.mockResolvedValue(routing);
     renderSection();
-
-    const everydayRow = (await screen.findByText("Everyday model")).closest("button")!;
-    await within(everydayRow).findByText("No background model. Your wiki updates through your AI tools.");
-    // The with-model summary must NOT appear when nothing serves the job.
-    expect(within(everydayRow).queryByText("Files and links new memories in the background")).not.toBeInTheDocument();
-    const header = everydayRow.parentElement!;
-    expect(within(header).getByRole("button", { name: "What a model adds" })).toBeInTheDocument();
-    expect(within(header).queryByRole("button", { name: "Background organization" })).not.toBeInTheDocument();
+    const select = await screen.findByLabelText("AI service for Synthesis");
+    expect(within(select).getByRole("option", { name: "On-device (set up in AI services)" })).toBeDisabled();
   });
+
+  it("Synthesis Beta help explains plugin/MCP even without a model", async () => {
+    renderSection();
+    await userEvent.click(screen.getByRole("button", { name: "Details: Beta" }));
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip).toHaveTextContent("Background synthesis is in Beta");
+    expect(tooltip).toHaveTextContent("Wenlan's plugin or MCP with Claude or Codex");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Details: Beta" })).toHaveFocus();
+  });
+
 });

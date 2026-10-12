@@ -13,9 +13,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use wenlan_core::read_scope::ReadScope;
 use wenlan_types::requests::{
-    AddEntityAliasRequest, AddObservationRequest, ArchiveEntitiesRequest, CreateEntityRequest,
-    CreateRelationRequest, EntitySelection, ListEntitiesRequest, MergeEntityRequest,
-    RestoreEntitiesRequest,
+    AddEntityAliasRequest, AddObservationRequest, ArchiveEntitiesRequest, ChangeEntityTypeRequest,
+    CreateEntityRequest, CreateRelationRequest, EntitySelection, ListEntitiesRequest,
+    MergeEntityRequest, RestoreEntitiesRequest,
 };
 use wenlan_types::responses::{
     AddObservationResponse, CreateEntityResponse, CreateRelationResponse, EntityAliasesResponse,
@@ -64,6 +64,10 @@ pub(crate) fn register_crud(router: TrackedRouter<SharedState>) -> TrackedRouter
         .route(
             "/api/memory/entities/{id}/confirm",
             put(handle_confirm_entity),
+        )
+        .route(
+            "/api/memory/entities/{id}/type",
+            put(handle_change_entity_type),
         )
         .route(
             "/api/memory/entities/{id}/delete",
@@ -458,6 +462,24 @@ pub async fn handle_confirm_entity(
     };
     let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
     db.confirm_entity_in_scope(&scope, &id, req.confirmed)
+        .await?;
+    Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
+}
+
+/// PUT /api/memory/entities/{id}/type -- a human correction to the entity's
+/// type, scoped to the request Space like entity confirmation.
+pub async fn handle_change_entity_type(
+    State(state): State<Arc<RwLock<ServerState>>>,
+    crate::space_header::SpaceHeader(header_space): crate::space_header::SpaceHeader,
+    Path(id): Path<String>,
+    Json(req): Json<ChangeEntityTypeRequest>,
+) -> Result<Json<wenlan_types::responses::SuccessResponse>, ServerError> {
+    let db = {
+        let s = state.read().await;
+        s.db.clone().ok_or(ServerError::DbNotInitialized)?
+    };
+    let scope = crate::read_scope::effective_read_scope(&db, None, header_space.as_deref()).await?;
+    db.change_entity_type_in_scope(&scope, &id, &req.entity_type)
         .await?;
     Ok(Json(wenlan_types::responses::SuccessResponse { ok: true }))
 }

@@ -678,10 +678,30 @@ async fn migration_134_public_133_backfills_only_exact_snapshot_and_reopens_idem
     db.migrate_134_page_map_ideas().await.unwrap();
     assert_eq!(db_user_version(&db).await, 134);
 
+    let embedder = db.embedder.clone().expect("test database embedder");
     drop(db);
-    let reopened = MemoryDB::open_for_repair(dir.path()).await.unwrap();
+    let reopened = MemoryDB::new_with_shared_embedder(
+        dir.path(),
+        std::sync::Arc::new(crate::events::NoopEmitter),
+        embedder,
+    )
+    .await
+    .unwrap();
     reopened.migrate_134_page_map_ideas().await.unwrap();
-    assert_eq!(db_user_version(&reopened).await, 134);
+    assert_eq!(
+        db_user_version(&reopened).await,
+        i64::from(crate::db::SCHEMA_VERSION)
+    );
+    assert_eq!(
+        page_history_title(&reopened, "public-133-history", 1)
+            .await
+            .as_deref(),
+        Some("Known historic title")
+    );
+    assert_eq!(
+        page_history_title(&reopened, "public-133-history", 2).await,
+        None
+    );
     assert_eq!(
         page_history_title(&reopened, "public-133-history", 3)
             .await

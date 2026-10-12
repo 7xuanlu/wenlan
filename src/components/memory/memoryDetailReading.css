@@ -2,8 +2,8 @@
 .memory-detail-dossier.memory-detail-content-first {
   width: 100%;
   max-width: none;
-  padding: 4px 24px 48px;
-  gap: 24px;
+  padding: 0;
+  gap: 0;
   font-family: var(--mem-font-body);
 }
 
@@ -23,12 +23,20 @@
   margin-left: auto;
 }
 
-.memory-detail-context-content .memory-detail-information {
-  margin-top: 24px;
+.memory-detail-context-content > .memory-detail-source:first-child {
+  margin-top: 0;
 }
 
-.memory-detail-context-content .memory-detail-disclosure {
-  margin-top: 24px;
+.memory-detail-context-content .memory-detail-source-quote {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  font: 400 13px/1.6 var(--mem-font-body);
+}
+
+.memory-detail-context-content .memory-detail-source .memory-detail-disclosure-body {
+  padding-top: 8px;
 }
 
 .memory-detail-context-content .memory-detail-related-grid {
@@ -40,19 +48,11 @@
 }
 
 .memory-detail-content-first .memory-detail-reading {
-  width: min(100%, 800px);
-  max-width: 800px;
-  margin-inline: auto;
+  width: min(100%, var(--reading-measure));
+  max-width: var(--reading-measure);
 }
 
 .memory-detail-content-first .memory-detail-body-text {
-  --content-body-size: 16px;
-  --content-body-leading: 1.8;
-  --content-para-gap: 0.9em;
-  --content-h1-size: 25px;
-  --content-h2-size: 21px;
-  --content-h3-size: 18px;
-  --content-code-size: 14px;
   overflow-wrap: anywhere;
 }
 
@@ -106,8 +106,7 @@
   color: var(--mem-text);
 }
 
-.memory-detail-content-first .memory-detail-disclosure > summary:focus-visible,
-.memory-detail-content-first .memory-detail-action-menu button:focus-visible {
+.memory-detail-content-first .memory-detail-disclosure > summary:focus-visible {
   outline: 2px solid var(--mem-accent-indigo);
   outline-offset: 3px;
 }
@@ -138,50 +137,40 @@
   position: relative;
 }
 
-.memory-detail-content-first .memory-detail-action-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 100;
-  display: grid;
-  width: 190px;
-  max-width: calc(100vw - 32px);
-  gap: 2px;
-  padding: 6px;
-  border: 1px solid var(--mem-border);
-  border-radius: 8px;
-  background: var(--mem-surface);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
-}
-
-.memory-detail-content-first .memory-detail-action-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Keep the memory context inspector's metadata readable in a single column. */
+.memory-detail-context-content .memory-detail-rail {
+  grid-template-columns: minmax(0, 1fr);
   border: 0;
-  border-radius: 4px;
-  padding: 9px 8px;
+  padding-top: 0;
+}
+
+.memory-detail-context-content .memory-detail-rail > .memory-detail-rail-section {
+  grid-column: 1;
+  grid-row: auto;
+  min-width: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.memory-detail-info-value .memory-detail-facet-button,
+.memory-detail-info-value .memory-detail-eyebrow-button {
+  border: 0;
   background: transparent;
-  color: var(--mem-text-secondary);
-  font-size: 14px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.memory-detail-content-first .memory-detail-action-menu button:hover,
-.memory-detail-content-first .memory-detail-action-menu button:focus {
-  background: var(--mem-hover);
   color: var(--mem-text);
+  padding: 4px 6px;
+  margin: -4px -6px;
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
 }
-
-.memory-detail-content-first .memory-detail-action-menu .memory-detail-delete {
-  color: var(--mem-accent-red, #c44);
-}
+.memory-detail-info-value .memory-detail-facet-button:hover,
+.memory-detail-info-value .memory-detail-eyebrow-button:hover { background: var(--mem-hover); }
+.memory-detail-context-content .memory-detail-information > .memory-detail-disclosure-body { padding-top: 0; }
 
 @media (max-width: 640px) {
   .memory-detail-dossier.memory-detail-content-first {
-    padding-inline: 16px;
-    gap: 20px;
+    padding-inline: 0;
+    gap: 0;
   }
 
   .memory-detail-content-first .memory-detail-editor-actions {
@@ -189,4 +178,16 @@
     flex-wrap: wrap;
     align-items: center;
   }
+}
+
+.memory-detail-content-first .memory-detail-header { min-height: 32px; }
+.memory-detail-content-first .memory-detail-reading { margin-inline: 0; }
+.memory-document-editor { min-width: 0; }
+.memory-save-status { margin: 12px 0 0; font: 13px/1.6 var(--mem-font-body); color: var(--mem-text-secondary); }
+.memory-save-status button { border: 0; background: none; color: var(--mem-accent-page); cursor: pointer; margin-left: 8px; }
+.memory-save-conflict { margin-top: 12px; padding: 12px; border-left: 2px solid var(--mem-border); }
+.memory-save-conflict pre { white-space: pre-wrap; font: inherit; }
+
+.memory-document-editor .cm-editor[data-editor-presentation-mode=writing] .cm-content {
+  font-size: var(--reading-font-size); line-height: var(--reading-line-height);
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useState } from "react";
-import { FileText } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { useTranslation } from "react-i18next";
 import type {
   MemoryItem,
@@ -196,7 +196,7 @@ export default function PageInfo({
                 >
                   {embedded ? (
                     <span className="note-info-link-copy">
-                      <FileText size={16} weight="regular" aria-hidden="true" />
+                      <PageIcon />
                       <span className="note-info-link-label">{link.label}</span>
                     </span>
                   ) : link.label}
@@ -320,7 +320,7 @@ export default function PageInfo({
                         <span
                           className="truncate"
                           style={{
-                            fontFamily: "var(--mem-font-heading)",
+                            fontFamily: embedded ? "var(--mem-font-body)" : "var(--mem-font-heading)",
                             fontSize: "13px",
                             fontWeight: 500,
                             color: "var(--mem-text)",

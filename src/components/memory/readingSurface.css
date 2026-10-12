@@ -1,0 +1,114 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Shared reading origin, measure and rhythm for every document family. */
+:root {
+  --reading-measure: 730px;
+  --reading-font-size: 15px;
+  --reading-line-height: 1.75;
+  --reading-paragraph-gap: calc(var(--reading-font-size) * var(--reading-line-height));
+  --reading-title-size: clamp(24px, 2.2vw, 30px);
+  --reading-section-size: 18px;
+  --reading-frame-max-width: calc(var(--reading-measure) + 2 * var(--reading-frame-padding-inline));
+  --reading-frame-padding-block: 72px;
+  --reading-frame-padding-block-end: 40px;
+  --reading-compact-measure: 560px;
+  --reading-anchor-width: calc(var(--reading-compact-measure) + 2 * var(--reading-frame-padding-inline));
+  --reading-leading-ratio: 0.26;
+  --reading-frame-min-width: 460px;
+  --reading-info-width: 320px;
+  --reading-tools-clearance: calc(var(--mem-icon-action-size) + 12px);
+  --reading-frame-padding-inline: 32px;
+  --reading-frame-padding-block-narrow: 24px;
+  --reading-frame-padding-inline-narrow: 16px;
+}
+
+.reading-document-frame,
+.page-detail-document {
+  position: relative;
+  display: flex;
+  box-sizing: border-box;
+  /* Reserve a useful line length even with the folder list and Info open.
+     Both bounds use the unobstructed lane, so toggling Info cannot move it. */
+  --reading-leading-gutter: min(
+    max(0px, calc((var(--reading-unobstructed-width, 100%) - var(--reading-anchor-width)) * var(--reading-leading-ratio))),
+    max(0px, calc(var(--reading-unobstructed-width, 100%) - var(--reading-info-width) - var(--reading-frame-min-width)))
+  );
+  width: min(var(--reading-frame-max-width), calc(100% - var(--reading-leading-gutter)));
+  margin-inline: var(--reading-leading-gutter) auto;
+  padding: var(--reading-frame-padding-block) var(--reading-frame-padding-inline) var(--reading-frame-padding-block-end);
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* Back-to-folder navigation belongs above the document, without pushing its
+   title below the origin shared by the other readers. */
+.reading-document-breadcrumbs {
+  position: absolute;
+  inset-inline: var(--reading-frame-padding-inline);
+  top: calc(var(--reading-frame-padding-block) - 40px);
+}
+.reading-document-breadcrumbs > nav { margin: 0; }
+
+/* Memory's title is part of its editable Markdown, so its tools overlay the
+   first line. The origin and spacing still come from the shared frame. */
+.reading-document-frame.memory-document-frame > .memory-detail-header {
+  position: absolute;
+  top: var(--reading-frame-padding-block);
+  right: var(--reading-frame-padding-inline);
+  width: auto;
+  z-index: 2;
+}
+.memory-document-frame .memory-document-editor .cm-content > .cm-line:first-child {
+  padding-inline-end: var(--reading-tools-clearance);
+}
+
+.memory-main-content:has(.memory-detail-dossier),
+.memory-main-content:has(.entity-detail-dossier) {
+  background: var(--workspace-document-background, var(--mem-bg));
+}
+
+/* Short memory and topic documents share the same anchored reading lane.
+   Apply this to the frame so its title, prose and tools move together. */
+.reading-document-frame.reading-document-frame--compact {
+  --reading-measure: var(--reading-compact-measure);
+  --reading-frame-max-width: calc(var(--reading-measure) + 2 * var(--reading-frame-padding-inline));
+}
+
+.reading-surface,
+.page-detail-prose,
+.source-document-body {
+  min-width: 0;
+  max-width: var(--reading-measure);
+  --content-body-size: var(--reading-font-size);
+  --content-body-leading: var(--reading-line-height);
+  --content-code-size: 13px;
+  --content-para-gap: var(--reading-paragraph-gap);
+  --content-heading-gap: 1.6em;
+  --content-h1-size: 20px;
+  --content-h2-size: var(--reading-section-size);
+  --content-h3-size: 15.5px;
+  --content-h4-size: 14px;
+  --content-h5-size: 14px;
+  --content-h6-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .reading-document-frame,
+  .page-detail-document {
+    --reading-frame-padding-block: var(--reading-frame-padding-block-narrow);
+    --reading-frame-padding-inline: var(--reading-frame-padding-inline-narrow);
+    padding: var(--reading-frame-padding-block-narrow) var(--reading-frame-padding-inline-narrow);
+  }
+  .reading-document-breadcrumbs { position: static; }
+  .reading-document-frame.reading-document-frame--compact {
+    gap: 16px;
+    padding: var(--reading-frame-padding-block-narrow) var(--reading-frame-padding-inline-narrow);
+  }
+}
+
+/* The leading Markdown title has the same hierarchy as a Topic or Source title. */
+.reading-document-frame .page-detail-title,
+.page-document-editor--title .cm-content > .cm-writing-heading-1:first-child,
+.memory-document-editor .cm-content > .cm-writing-heading-1:first-child {
+  font: 500 var(--reading-title-size)/1.22 var(--mem-font-heading);
+  letter-spacing: -0.01em;
+}

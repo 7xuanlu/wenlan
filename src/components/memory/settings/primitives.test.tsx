@@ -333,6 +333,52 @@ describe("SettingRow", () => {
     expect(document.getElementById(status.getAttribute("aria-describedby")!)).toHaveTextContent("Start Wenlan on boot");
   });
 
+  it("opens Settings help without activating the switch and dismisses outside or with Escape", async () => {
+    const { container } = render(
+      <SettingRow
+        title="Telemetry"
+        description=""
+        details="Only aggregate counts and app version are sent."
+        statusLine={<p role="status">Pending count remains visible</p>}
+        warning="Usage stats are unavailable"
+        error="Could not save this setting"
+        enabled={false}
+        onToggle={() => {}}
+      />,
+    );
+    const toggle = screen.getByRole("button", { name: "Telemetry" });
+    const disclosure = screen.getByRole("button", { name: "Details: Telemetry" });
+    expect(disclosure.parentElement).toHaveClass("settings-help-anchor");
+    expect(disclosure.parentElement?.querySelector(".sr-only")).toHaveTextContent(
+      "Only aggregate counts and app version are sent.",
+    );
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-describedby", expect.stringContaining("details"));
+    const detailDescriptionId = toggle.getAttribute("aria-describedby")!.split(" ")[0];
+    expect(document.getElementById(detailDescriptionId!)).toHaveTextContent(
+      "Only aggregate counts and app version are sent.",
+    );
+    expect(container.querySelector("p:empty")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Pending count remains visible");
+    expect(screen.getByText("Usage stats are unavailable")).toBeVisible();
+    expect(screen.getByText("Could not save this setting")).toBeVisible();
+
+    await userEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Only aggregate counts and app version are sent.");
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(document.body);
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+    await userEvent.click(disclosure);
+    await userEvent.keyboard("{Escape}");
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    expect(disclosure).toHaveFocus();
+  });
+
   it("control arm: renders the given control instead of a Toggle", () => {
     render(
       <SettingRow

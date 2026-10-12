@@ -498,8 +498,38 @@ impl WenlanClient {
         path: &str,
         space: Option<&str>,
     ) -> Result<T, String> {
+        self.get_json_scoped_with_query(path, &[], space).await
+    }
+
+    /// Read with extra query parameters inside the daemon's existing Space
+    /// scope. `reqwest` encodes each query value once, so source IDs containing
+    /// Unicode, `?`, `&`, or `#` cannot alter the request target.
+    pub async fn get_json_scoped_with_query<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        query: &[(&str, &str)],
+        space: Option<&str>,
+    ) -> Result<T, String> {
         let Some(space) = space else {
-            return self.get_json(path).await;
+            if query.is_empty() {
+                return self.get_json(path).await;
+            }
+            let resp = self
+                .client
+                .get(self.url(path))
+                .query(query)
+                .send()
+                .await
+                .map_err(|e| format!("HTTP GET {}: {}", path, e))?;
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                return Err(format!("HTTP GET {} returned {}: {}", path, status, body));
+            }
+            return resp
+                .json()
+                .await
+                .map_err(|e| format!("Parse {}: {}", path, e));
         };
         let space = space.trim();
         if space.is_empty() {
@@ -508,6 +538,7 @@ impl WenlanClient {
         let resp = self
             .client
             .get(self.url(path))
+            .query(query)
             .query(&[("space", space)])
             .send()
             .await
@@ -2259,6 +2290,91 @@ mod tests {
             assert!(!headers.contains("x-wenlan-truth-contract:"), "{request}");
             assert!(!headers.contains("x-wenlan-reader-intent:"), "{request}");
         }
+    }
+
+    #[tokio::test]
+    async fn scoped_query_values_keep_full_source_urls_inside_the_query() {
+        let source_id = "https://例.com/path?q=one&other=二#fragment";
+        let space = "專案 & R+D";
+        let (base_url, request) =
+            serve_source_scope_once("{}", Some("%E5%B0%88%E6%A1%88%20%26%20R%2BD")).await;
+        let client = WenlanClient::with_base_url(base_url);
+
+        let _: serde_json::Value = client
+            .get_json_scoped_with_query(
+                "/api/source-annotations",
+                &[("source", "webpage"), ("source_id", source_id)],
+                Some(space),
+            )
+            .await
+            .unwrap();
+
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "GET /api/source-annotations?source=webpage&source_id=https%3A%2F%2F%E4%BE%8B.com%2Fpath%3Fq%3Done%26other%3D%E4%BA%8C%23fragment&space=%E5%B0%88%E6%A1%88+%26+R%2BD HTTP/1.1"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_annotation_post_serializes_typed_request_and_preserves_conflicts() {
+        use wenlan_types::source_annotations::{SourceAnnotation, UpdateSourceAnnotationRequest};
+
+        let req = UpdateSourceAnnotationRequest {
+            source: "webpage".into(),
+            source_id: "https://example.com/a?x=1#part".into(),
+            space: Some("Work".into()),
+            expected_version: 7,
+            notes: Some("Keep the caveat".into()),
+            page_ids: Some(vec!["page-1".into(), "page-2".into()]),
+        };
+        let (base_url, request) = serve_response_once(
+            "200 OK",
+            r#"{"source":"webpage","source_id":"https://example.com/a?x=1#part","notes":"Keep the caveat","page_ids":["page-1","page-2"],"version":8,"updated_at":123,"pages":[{"id":"page-1","title":"First"},{"id":"page-2","title":"Second"}]}"#,
+        )
+        .await;
+        let client = WenlanClient::with_base_url(base_url);
+        let response: SourceAnnotation = client
+            .post_json("/api/source-annotations", &req)
+            .await
+            .unwrap();
+        assert_eq!(response.version, 8);
+        let request = request.await.unwrap();
+        assert_eq!(
+            request.lines().next().unwrap(),
+            "POST /api/source-annotations HTTP/1.1"
+        );
+        assert_eq!(
+            request_body(&request),
+            serde_json::json!({
+                "source": "webpage",
+                "source_id": "https://example.com/a?x=1#part",
+                "space": "Work",
+                "expected_version": 7,
+                "notes": "Keep the caveat",
+                "page_ids": ["page-1", "page-2"]
+            })
+        );
+
+        let (base_url, request) = serve_response_once(
+            "409 Conflict",
+            r#"{"error":"source_annotation_version_conflict"}"#,
+        )
+        .await;
+        let client = WenlanClient::with_base_url(base_url);
+        let error = client
+            .post_json::<_, SourceAnnotation>("/api/source-annotations", &req)
+            .await
+            .unwrap_err();
+        assert!(
+            error.contains("HTTP POST /api/source-annotations returned 409 Conflict"),
+            "{error}"
+        );
+        assert!(
+            error.contains("source_annotation_version_conflict"),
+            "{error}"
+        );
+        request.await.unwrap();
     }
 
     #[tokio::test]

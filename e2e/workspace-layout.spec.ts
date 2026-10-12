@@ -37,16 +37,17 @@ for (const theme of ['light', 'dark']) {
     await expect(main).toHaveCSS('width', '375px');
     await toggle.press('Enter');
     await expect(sidebar).toBeVisible();
-    const home = sidebar.getByRole('button', { name: 'Home', exact: true });
+    const home = sidebar.getByRole('button', { name: 'Back to home', exact: true });
     const general = sidebar.getByRole('button', { name: 'General', exact: true });
-    const sources = sidebar.getByRole('button', { name: 'Sources', exact: true });
+    const privacy = sidebar.getByRole('link', { name: 'Privacy policy', exact: true });
     await expect(home).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(general).toBeFocused();
     await page.keyboard.press('Shift+Tab');
     await expect(home).toBeFocused();
     await page.keyboard.press('Shift+Tab');
-    await expect(sources).toBeFocused();
+    // The privacy link is the last focusable item inside the overlay trap.
+    await expect(privacy).toBeFocused();
     await page.keyboard.press('Tab');
     await expect(home).toBeFocused();
     await capture(page, `settings-drawer-${theme}`);
@@ -88,7 +89,7 @@ for (const theme of ['light', 'dark']) {
     expect(box!.y).toBe(0);expect(box!.height).toBe(900);expect(box!.x).toBe(host!.x);expect(box!.width).toBe(host!.width);
     expect(box!.x).toBeGreaterThanOrEqual(mainBox!.x+mainBox!.width-1);expect(box!.x+box!.width).toBe(1280);
     await expect(panel).toHaveCSS('background-color',theme==='light'?'rgb(252, 252, 251)':'rgb(25, 28, 36)');
-    await expect(panel).toHaveCSS('border-top-left-radius','0px');
+    await expect(panel).toHaveCSS('border-top-left-radius','12px');
     await capture(page,`atlas-pane-${theme}-1280`);
     await panel.getByRole('button',{name:'Return to full map',exact:true}).press('Escape');
     await expect(panel).toHaveCount(0);await expect(search).toBeFocused();

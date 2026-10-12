@@ -18,7 +18,6 @@ describe("SourcesSection", () => {
     vi.mocked(tauri.getKnowledgePath).mockResolvedValue(
       "/Users/test/Wenlan/knowledge",
     );
-    vi.mocked(tauri.countKnowledgeFiles).mockResolvedValue(12);
   });
 
   it("renders empty state when no obsidian sources", async () => {
@@ -88,14 +87,16 @@ describe("SourcesSection", () => {
     expect(screen.getByText(/Folder ·/)).toBeInTheDocument();
   });
 
-  it("renders knowledge directory block with path and count", async () => {
+  it("keeps page storage location out of the Sources list", async () => {
     vi.mocked(tauri.listRegisteredSources).mockResolvedValue([]);
 
     render(<SourcesSection />, { wrapper });
 
     await waitFor(() => {
-      expect(screen.getByText(/Wenlan\/knowledge/)).toBeInTheDocument();
+      expect(screen.getByText("No sources yet")).toBeInTheDocument();
     });
-    expect(screen.getByText(/12 page files/)).toBeInTheDocument();
+    expect(screen.queryByText("Knowledge Directory")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Wenlan\/knowledge/)).not.toBeInTheDocument();
+    expect(tauri.getKnowledgePath).not.toHaveBeenCalled();
   });
 });

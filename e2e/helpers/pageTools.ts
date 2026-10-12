@@ -8,16 +8,15 @@ export async function openPageTool(page: Page, tool: string, actions = "Page act
   const open = hant ? "開啟筆記側欄" : hans ? "打开笔记侧栏" : "Open note sidebar";
   const toggle = page.getByRole("button", {name: open, exact: true});
   if (await toggle.count()) await toggle.click();
-  const info = ["Page info", "頁面資訊", "页面信息"].includes(tool);
-  await page.getByRole("tab", {name: info ? (hant ? "資料" : hans ? "资料" : "Info") : tool, exact: true}).click();
+  const info = ["Page info", "頁面資訊", "页面信息", "資訊", "信息"].includes(tool);
+  await page.getByRole("tab", {name: info ? (hant ? "資訊" : hans ? "信息" : "Info") : tool, exact: true}).click();
 }
 
-/** Memory context belongs to the dossier's action menu. */
+/** Open the memory dossier's Info inspector (where its knowledge context lives). */
 export async function openMemoryContext(
   page: Page,
-  context = "Memory context",
-  actions = "Memory actions",
+  info = "Info",
 ): Promise<void> {
-  await page.getByRole("button", { name: actions, exact: true }).click();
-  await page.getByRole("menuitem", { name: context, exact: true }).click();
+  const toggle = page.getByRole("button", { name: info, exact: true });
+  if (await toggle.getAttribute("aria-expanded") !== "true") await toggle.click();
 }
