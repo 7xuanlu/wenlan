@@ -541,7 +541,7 @@ mod tests {
             "global",
             1,
             None,
-            Some(&[hidden_id.clone()]),
+            Some(std::slice::from_ref(&hidden_id)),
         )
         .await
         .unwrap();
