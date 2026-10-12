@@ -68,7 +68,7 @@ Hand-written notes and examples for the commands most people reach for. The comp
 
 **`wenlan recall <query>`**
 
-Search memories (vector + FTS hybrid) and return a ranked list plus the compiled pages that match (`POST /api/memory/search`). `--limit` caps the count.
+Search memories (vector + FTS hybrid) and return a ranked list plus the compiled pages that match (`POST /api/memory/search`). `--limit` caps the memory results; matching pages are listed separately and do not count against it.
 
 ```bash
 wenlan recall "what we agreed on for the API"
@@ -272,7 +272,7 @@ wenlan entities restore ent_123
 <!-- generated from the clap definitions in crates/wenlan-cli/src/main.rs by `WENLAN_UPDATE_CLI_REFERENCE=1 cargo test -p wenlan --bin wenlan cli_reference`; do not edit -->
 ## Subcommands
 
-This section is generated from the same definitions that produce `wenlan --help` and `wenlan <command> --help`. Hidden aliases are not listed. Every subcommand also accepts these global options:
+This section is generated from the same definitions that produce `wenlan --help` and `wenlan <command> --help`. Hidden aliases are not listed. These global options are parsed for every subcommand; commands that do not work on a Space reject `--space` and `--all-spaces` at runtime:
 
 - `--format <FORMAT>`: Output format. Auto-detects JSON when piped, table on TTY. Possible values: `auto` (Pick automatically based on stdout TTY: terminal → Table, pipe → Json), `json`, `table`. Default: `auto`.
 - `-q, --quiet`: Suppress all non-error output. Useful for scripts.
@@ -822,7 +822,7 @@ wenlan entities archive [OPTIONS] <IDS>...
 
 Arguments:
 
-- `<IDS>`: Entity ids to archive.
+- `<IDS>...`: Entity ids to archive.
 
 Options:
 
@@ -838,7 +838,7 @@ wenlan entities restore [OPTIONS] <IDS>...
 
 Arguments:
 
-- `<IDS>`: Entity ids to restore.
+- `<IDS>...`: Entity ids to restore.
 
 Options:
 

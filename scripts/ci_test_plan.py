@@ -1402,11 +1402,9 @@ def command_groups_for(
             if not isinstance(filterset, str) or not filterset:
                 raise PlanError("workspace filterset is empty")
             names = _validated_package_names(suite.get("packages"), packages)
-            return [
-                workspace_command(
-                    [*cargo, *_package_args(names), "--lib", "-E", filterset]
-                )
-            ]
+            command = [*cargo, *_package_args(names), "--lib", "-E", filterset]
+            command.extend(_bin_test_args(names))
+            return [workspace_command(command)]
         raise PlanError(f"unknown workspace-lib mode: {mode!r}")
 
     if suite_name == "cli-server-integration":

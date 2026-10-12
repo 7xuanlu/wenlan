@@ -1066,6 +1066,20 @@ class NonRustOwnerTests(unittest.TestCase):
             groups,
         )
 
+    def test_filterset_route_keeps_the_cli_bin_tests(self) -> None:
+        # A README edit beside an isolated core test takes the filterset route;
+        # the unarchived command must still run the `wenlan` bin drift test.
+        plan = plan_for(
+            "crates/wenlan-cli/README.md",
+            "crates/wenlan-core/src/lint/pages/security_test.rs",
+        )
+
+        self.assertEqual(plan["workspace_lib"]["mode"], "filterset")
+        groups = command_groups_for("workspace-lib", plan, cargo_metadata())
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0][-2:], ["--bin", "wenlan"])
+        self.assertNotIn("wenlan-server", groups[0])
+
     def test_other_crate_readmes_stay_on_the_docs_lane(self) -> None:
         for path in ("crates/wenlan-mcp/README.md", "crates/wenlan-server/README.md"):
             with self.subTest(path=path):

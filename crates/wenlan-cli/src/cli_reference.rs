@@ -37,8 +37,9 @@ fn render_body(root: &mut Command) -> String {
     out.push_str("## Subcommands\n\n");
     out.push_str(
         "This section is generated from the same definitions that produce `wenlan --help` and \
-`wenlan <command> --help`. Hidden aliases are not listed. Every subcommand also accepts \
-these global options:\n\n",
+`wenlan <command> --help`. Hidden aliases are not listed. These global options are parsed \
+for every subcommand; commands that do not work on a Space reject `--space` and \
+`--all-spaces` at runtime:\n\n",
     );
     for arg in root
         .get_arguments()
@@ -170,11 +171,18 @@ fn arg_signature(arg: &Arg) -> String {
             .unwrap_or_else(|| format!("<{}>", arg.get_id().as_str().to_uppercase()))
     };
     if arg.is_positional() {
-        let name = value_name();
-        if arg.is_required_set() {
-            return name;
+        let mut name = value_name();
+        let variadic = matches!(arg.get_action(), ArgAction::Append)
+            || arg
+                .get_num_args()
+                .is_some_and(|range| range.max_values() > 1);
+        if !arg.is_required_set() {
+            name = format!("[{}]", name.trim_start_matches('<').trim_end_matches('>'));
         }
-        return format!("[{}]", name.trim_start_matches('<').trim_end_matches('>'));
+        if variadic {
+            name.push_str("...");
+        }
+        return name;
     }
     let mut parts = Vec::new();
     if let Some(short) = arg.get_short() {
@@ -226,8 +234,11 @@ mod tests {
     #[test]
     fn cli_reference_matches_readme() {
         let path = readme_path();
+        // Compare with LF line endings so a CRLF checkout (Windows without
+        // `eol=lf`) does not fail on unchanged content; a rewrite emits LF.
         let readme = std::fs::read_to_string(&path)
-            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+            .replace("\r\n", "\n");
         let (start, end) = region_bounds(&readme);
         let expected = render_region(&mut super::super::Cli::command());
         let actual = &readme[start..end];
