@@ -20,10 +20,10 @@
   </g>
     <g data-fit-region="lifecycle-en-mobile-memory-object" data-fit-x="40" data-fit-y="286" data-fit-width="640" data-fit-height="546" data-check-overlap="false">
 
-      <text x="40" y="318" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">MEMORY LIFECYCLE</text>
-      <text x="40" y="362" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Superseded, not erased.</text>
+      <text x="40" y="318" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">EARLIER KNOWLEDGE</text>
+      <text x="40" y="362" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Updated, not erased.</text>
       <rect x="74" y="390" width="500" height="164" rx="8" fill="#F7F8FA" stroke="#E3E7EE"/>
-      <text x="104" y="428" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">EARLIER MEMORY</text>
+      <text x="104" y="428" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">EARLIER NOTE</text>
       <g>
       <rect x="426" y="408" width="112" height="38" rx="19" fill="#F7F8FA" stroke="#E3E7EE"/>
       <text x="482" y="433.84" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="500" fill="#586174" text-anchor="middle">BEFORE</text>
@@ -32,11 +32,11 @@
       <text x="104" y="506" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">I treated green tests</text>
 <text x="104" y="533" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">as the completion check.</text>
       <path d="M554 554 V592" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-mobile-arrow)"/>
-      <text x="532" y="582" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#5E58C8" text-anchor="end">REVISE</text>
+      <text x="532" y="582" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#5E58C8" text-anchor="end">UPDATE</text>
       <g filter="url(#lifecycle-en-mobile-card-shadow)">
         <rect x="126" y="602" width="540" height="224" rx="8" fill="#FFFFFF" stroke="#E3E7EE"/>
       </g>
-      <text x="158" y="640" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">REPLACEMENT MEMORY</text>
+      <text x="158" y="640" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">UPDATED NOTE</text>
       <g>
       <rect x="510" y="620" width="120" height="38" rx="19" fill="#F2F7F3" stroke="#C7DACB"/>
       <text x="570" y="645.84" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="500" fill="#4F7558" text-anchor="middle">AFTER</text>
@@ -44,13 +44,13 @@
       <text x="158" y="684" font-family="'Fraunces', Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="start">Tests + visual checks</text>
       <text x="158" y="716" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">Tests missed a covered label.</text>
 <text x="158" y="743" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">Inspect desktop and mobile views.</text>
-      <text x="158" y="780" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="500" fill="#5E58C8" text-anchor="start">SUPERSEDES</text>
+      <text x="158" y="780" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="500" fill="#5E58C8" text-anchor="start">LINKS TO</text>
       <path d="M276 774 H344" stroke="#5E58C8" stroke-width="1.6" marker-end="url(#lifecycle-en-mobile-arrow)"/>
       <g>
       <rect x="358" y="758" width="121" height="32" rx="16" fill="#F3F2FC" stroke="#D2CFF0"/>
       <text x="418.5" y="780.84" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#5E58C8" text-anchor="middle">Tests only</text>
     </g>
-      <text x="158" y="814" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#4F7558" text-anchor="start">Old claim remains linked</text>
+      <text x="158" y="814" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="20" font-weight="600" fill="#4F7558" text-anchor="start">Earlier knowledge stays traceable</text>
 
   </g>
     <g data-fit-region="lifecycle-en-mobile-refinery" data-fit-x="40" data-fit-y="850" data-fit-width="640" data-fit-height="450" data-check-overlap="false">
@@ -61,30 +61,26 @@
     <path d="M254 889v7h6"/>
     <path d="M247 902h9M247 907h9"/>
   </g>
-      <text x="282" y="894" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">SOURCE SUPPORT</text>
+      <text x="282" y="894" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">NEW EVIDENCE</text>
       <text x="282" y="928" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="25" font-weight="600" fill="#1A1A2E" text-anchor="start">UI review [2]</text>
       <path d="M360 946 V960" fill="none" stroke="#5E58C8" stroke-width="2" marker-end="url(#lifecycle-en-mobile-arrow)"/>
       <path d="M126 780 C66 834 116 1002 250 1064" fill="none" stroke="#5E58C8" stroke-width="1.8" marker-end="url(#lifecycle-en-mobile-arrow)"/>
       <g>
-    <rect x="56" y="956" width="176" height="31" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
-    <text x="144" y="980" font-family="'JetBrains Mono', monospace" font-size="19" font-weight="500" fill="#586174" text-anchor="middle">MEMORY SUPPORT</text>
+    <rect x="67.5" y="956" width="153" height="31" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="144" y="980" font-family="'JetBrains Mono', monospace" font-size="19" font-weight="500" fill="#586174" text-anchor="middle">EARLIER NOTE</text>
   </g>
       <circle cx="360" cy="1080" r="110" fill="#FFFFFF" stroke="#E3E7EE"/>
       <circle cx="360" cy="1080" r="90" fill="none" stroke="#5E58C8" stroke-width="3" stroke-dasharray="112 29"/>
-      <text x="360" y="1054" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#5E58C8" text-anchor="middle">REFINERY</text>
-      <text x="360" y="1088" font-family="'Fraunces', Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="middle">Rebuild</text>
-      <text x="360" y="1118" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">from current</text>
-<text x="360" y="1140" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">support</text>
-      <path d="M360 1190 V1208" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-mobile-warm-arrow)"/>
-      <rect x="170" y="1220" width="380" height="72" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
-      <text x="360" y="1248" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#9F5C32" text-anchor="middle">OPTIONAL CONFLICT REVIEW</text>
-      <text x="360" y="1280" font-family="'Fraunces', Georgia, serif" font-size="26" font-weight="600" fill="#1A1A2E" text-anchor="middle">Protected conflicts wait.</text>
+      <text x="360" y="1054" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#5E58C8" text-anchor="middle">UPDATE</text>
+      <text x="360" y="1088" font-family="'Fraunces', Georgia, serif" font-size="28" font-weight="600" fill="#1A1A2E" text-anchor="middle">Improve</text>
+      <text x="360" y="1118" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">with new</text>
+<text x="360" y="1140" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="18" font-weight="600" fill="#586174" text-anchor="middle">evidence</text>
 
   </g>
     <g data-fit-region="lifecycle-en-mobile-page-object" data-fit-x="40" data-fit-y="1308" data-fit-width="640" data-fit-height="620" data-check-overlap="false">
 
-      <text x="40" y="1338" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">PAGE LIFECYCLE</text>
-      <text x="40" y="1382" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">Rebuilt, changes recorded.</text>
+      <text x="40" y="1338" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">UPDATED NOTE</text>
+      <text x="40" y="1382" font-family="'Fraunces', Georgia, serif" font-size="34" font-weight="600" fill="#1A1A2E" text-anchor="start">New evidence improves the note.</text>
       <rect x="92" y="1470" width="520" height="344" rx="8" fill="#F7F8FA" stroke="#E3E7EE"/>
       <rect x="116" y="1446" width="520" height="344" rx="8" fill="#FAFAFA" stroke="#E3E7EE"/>
       <rect x="70" y="1540" width="58" height="106" rx="8" fill="#FBF6EA" stroke="#E5D3AA"/>
@@ -99,7 +95,7 @@
       <text x="572" y="1463.84" font-family="'JetBrains Mono', monospace" font-size="18" font-weight="500" fill="#4F7558" text-anchor="middle">CURRENT</text>
     </g>
       <text x="170" y="1518" font-family="'Fraunces', Georgia, serif" font-size="36" font-weight="600" fill="#1A1A2E" text-anchor="start">Agent Loop</text>
-      <text x="170" y="1552" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">Completion criteria · example</text>
+      <text x="170" y="1552" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">New evidence · example</text>
       <text x="170" y="1588" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="22" font-weight="400" fill="#1A1A2E" text-anchor="start">Repeated error? Investigate. [1]</text>
       <g>
       <rect x="170" y="1602" width="166" height="30" rx="15" fill="#F7F8FA" stroke="#E3E7EE"/>
@@ -108,25 +104,17 @@
       <rect x="158" y="1640" width="480" height="70" rx="8" fill="#F2F7F3" stroke="#C7DACB"/>
       <text x="182" y="1668" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#4F7558" text-anchor="start">ADDED FROM THE UI REVIEW</text>
       <text x="182" y="1698" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#4F7558" text-anchor="start">Check desktop + mobile views. [2]</text>
-      <text x="170" y="1746" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="600" fill="#4F7558" text-anchor="start">Recent changes remain inspectable</text>
+      <text x="170" y="1746" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="600" fill="#4F7558" text-anchor="start">Earlier knowledge stays traceable.</text>
       <path d="M398 1814 V1830" fill="none" stroke="#B46A3A" stroke-width="1.8" marker-end="url(#lifecycle-en-mobile-warm-arrow)"/>
       <rect x="90" y="1844" width="568" height="86" rx="8" fill="#FAF2ED" stroke="#E6C9B8"/>
-      <text x="116" y="1872" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#9F5C32" text-anchor="start">AUTOMATIC REFRESH · EDITED PAGE</text>
-      <text x="116" y="1902" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="600" fill="#586174" text-anchor="start">Proposed changes wait for your review.</text>
+      <text x="116" y="1872" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#9F5C32" text-anchor="start">YOUR EDITED PAGE</text>
+      <text x="116" y="1902" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="600" fill="#586174" text-anchor="start">AI changes to your edited page wait for review.</text>
 
   </g>
     <path d="M470 1080 C630 1080 650 1280 628 1410" fill="none" stroke="#6F8F76" stroke-width="2.4" marker-end="url(#lifecycle-en-mobile-sage-arrow)"/>
     <g>
-    <rect x="512" y="1153" width="136" height="32" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
-    <text x="580" y="1178" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#586174" text-anchor="middle">STALE PAGE</text>
-  </g>
-    <g data-fit-region="lifecycle-en-mobile-footer" data-fit-x="40" data-fit-y="1970" data-fit-width="640" data-fit-height="154" data-check-overlap="false">
-
-      <text x="40" y="1998" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#8B93A3" text-anchor="start">BACKGROUND UPKEEP</text>
-      <text x="40" y="2034" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">Model steps need a configured model.</text>
-<text x="40" y="2064" font-family="'Instrument Sans', -apple-system, sans-serif" font-size="24" font-weight="400" fill="#586174" text-anchor="start">Conflict reconciliation is off by default.</text>
-      <text x="680" y="2110" font-family="'Fraunces', Georgia, serif" font-size="24" font-weight="600" fill="#4F7558" text-anchor="end">Supersession keeps the earlier memory.</text>
-
+    <rect x="490" y="1153" width="180" height="32" rx="4" fill="#FCFCFB" fill-opacity="0.94"/>
+    <text x="580" y="1178" font-family="'JetBrains Mono', monospace" font-size="20" font-weight="500" fill="#586174" text-anchor="middle">NOTE TO UPDATE</text>
   </g>
 
     <defs>

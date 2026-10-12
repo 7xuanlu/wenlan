@@ -29,23 +29,12 @@ As sources change, you can ask AI to update the pages or enable background updat
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki.png" alt="Read and edit your wiki" width="100%">
-  <br><sub>Wenlan’s app interface, captured in a browser with fictional reading-club data. The UI is rendered by the app; these are not design mockups.</sub>
-</p>
-
-<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
-<details>
-<summary>Earlier walkthrough</summary>
-
+<!-- Replace this walkthrough when the separately produced release video is ready. -->
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including pages and source citations.</sub>
 </p>
-
-</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -110,21 +99,8 @@ When it's ready, open the new page in Wenlan, click a citation to check its sour
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
-Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues) · [Join the Discord community](https://discord.gg/nmzVTTU3HG) to discuss workflows and share feedback. Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
 
-
-## Explore one Space
-
-Pages collect the ideas you want to keep; Sources keep the original material nearby. Switch between them within the same Space.
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-space.png" alt="Pages in a reading-club Space" width="100%">
-</p>
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-sources.png" alt="Markdown, PDF, and webpage sources in the same Space" width="100%">
-  <br><sub>Wenlan’s app interface, captured in a browser with fictional reading-club data. The UI is rendered by the app; these are not design mockups.</sub>
-</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -140,27 +116,23 @@ Pages collect the ideas you want to keep; Sources keep the original material nea
 Your pages are local Markdown files you can read, edit, and take with you.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories feed an illustrative Agent Loop page. It combines retry guidance with a concrete lesson: tests passed, but a line still covered a mobile label. Desktop and mobile visual checks become part of the completion criteria for later work with Claude or Codex." width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="Read and edit your wiki, without leaving the page" width="100%">
+  <br><sub>Actual app interface, captured in a browser with fictional reading-club data.</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
 
-The illustration shows a reusable working rule, not customer results or an automated page-generation test. [How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages).
+[How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages).
 
 <a id="knowledge-graph"></a>
 
 ### Follow the connections behind a page
 
-The Agent Loop example connects a retry rule, a lesson from a UI review, and an acceptance checklist you can reuse.
+The graph connects the reading-club pages, so you can follow an idea into the next note.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Illustrative Agent Loop page citing an agent-design guide and UI-review note; named memories include retry guidance and a visual-check lesson, linked to a reusable acceptance checklist and related concepts and tools." width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-graph.png" alt="Reading-club pages connected in Wenlan’s graph" width="100%">
+  <br><sub>Actual app interface, captured in a browser with fictional reading-club data.</sub>
 </p>
 
 <a id="retrieval"></a>
@@ -375,6 +347,8 @@ More detailed documentation, concepts, and comparisons:
 
 
 ## Contributing
+
+Join our [Discord community](https://discord.gg/nmzVTTU3HG) to discuss how you use Wenlan, share feedback, and help improve it.
 
 Bug fixes, eval cases, docs, and features are welcome. Installing Wenlan does not require building from source. For local development, run these commands from this repository's root:
 

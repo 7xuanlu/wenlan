@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1d02eda9ee8288b3538726421777ae62444a67cc9bec20233f47c04df72dae74 -->
+<!-- README_SYNC: source=README.md sha256=599afbc3e001d920d62606d36601c43c9acc634bc003eae1b4be264bb5088a59 -->
 
 <p align="center">
   <picture>
@@ -31,23 +31,12 @@ Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki.png" alt="閱讀與編輯你的維基" width="100%">
-  <br><sub>Wenlan 實際程式介面的瀏覽器截圖，使用虛構讀書會資料，畫面為英文介面，並非設計示意圖。</sub>
-</p>
-
-<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
-<details>
-<summary>先前版本的操作影片</summary>
-
+<!-- Replace this walkthrough when the separately produced release video is ready. -->
 https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 
 <p align="center">
   <sub>開場為組合示意，並非 app 的原生三欄介面；後續為 app 實際操作錄影，展示頁面與來源引用。</sub>
 </p>
-
-</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -112,22 +101,8 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 背景整理與自動更新是可選功能，需要[設定模型](#models-and-privacy)。終端機安裝、其他平台與更新方式，請見[設定指南](docs/setup-and-data.zh-Hant.md#installation)。
 
-遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。歡迎加入 [Discord 社群](https://discord.gg/nmzVTTU3HG)，交流使用方式和工作流程並分享回饋。Issue 是公開的；分享任何內容（包括紀錄）前，請先遮蔽密鑰、憑證、存取權杖、識別碼，以及私人或個人內容。
+遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。Issue 是公開的；分享任何內容（包括紀錄）前，請先遮蔽密鑰、憑證、存取權杖、識別碼，以及私人或個人內容。
 
-
-
-## 看看一個 Space 裡有什麼
-
-Pages 放整理好的想法，Sources 保留原始資料。在同一個 Space 就能切換瀏覽。
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-space.png" alt="讀書會 Space 裡的頁面" width="100%">
-</p>
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-sources.png" alt="同一個 Space 裡的 Markdown、PDF 與網頁來源" width="100%">
-  <br><sub>Wenlan 實際程式介面的瀏覽器截圖，使用虛構讀書會資料，畫面為英文介面，並非設計示意圖。</sub>
-</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -143,27 +118,23 @@ Pages 放整理好的想法，Sources 保留原始資料。在同一個 Space �
 頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-system-zh-Hant.png" alt="來源與記憶整理成 Agent Loop 筆記示例：重試原則結合一次具體教訓，測試通過但手機標籤仍被連線遮住。因此把桌面與手機畫面檢查補進驗收條件，供後續使用 Claude 或 Codex 時沿用。" width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="直接閱讀與編輯你的維基" width="100%">
+  <br><sub>實際程式介面的瀏覽器截圖，使用虛構讀書會資料（英文介面）。</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
 
-圖中是可重用工作準則的整理示例，不代表使用者成效或自動產頁實測。[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
+[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
 
 <a id="knowledge-graph"></a>
 
 ### 從一頁，找到相關的知識
 
-Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗，以及可接著使用的驗收清單。
+圖譜把讀書會的頁面連起來，讓你沿著一個想法找到下一篇筆記。
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Agent Loop 頁面的示意圖，引用 Agent 設計指南與介面檢查筆記；具名記憶包括重試準則和視覺檢查經驗，並連結到可重用的驗收清單及相關概念與工具。" width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-graph.png" alt="Wenlan 圖譜中彼此連結的讀書會頁面" width="100%">
+  <br><sub>實際程式介面的瀏覽器截圖，使用虛構讀書會資料（英文介面）。</sub>
 </p>
 
 <a id="retrieval"></a>
@@ -379,6 +350,8 @@ AI 工具連接好後，可以直接這樣說：
 
 
 ## 貢獻
+
+歡迎加入 [Discord 社群](https://discord.gg/nmzVTTU3HG)，交流使用方式、分享回饋，一起改善 Wenlan。
 
 歡迎 bug fixes、eval cases、文件與功能。安裝 Wenlan 不需要從原始碼建置。本機開發時，請從本 repository 的根目錄執行以下命令：
 

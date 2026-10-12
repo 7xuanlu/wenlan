@@ -200,11 +200,11 @@ const LIFECYCLE_COPY = {
       "A UI lesson improves the completion rule.",
       "The earlier decision stays traceable.",
     ],
-    memoryLabel: "MEMORY LIFECYCLE",
-    memoryTitle: "Superseded, not erased.",
-    earlierMemory: "EARLIER MEMORY",
+    memoryLabel: "EARLIER KNOWLEDGE",
+    memoryTitle: "Updated, not erased.",
+    earlierMemory: "EARLIER NOTE",
     earlierState: "BEFORE",
-    correctedMemory: "REPLACEMENT MEMORY",
+    correctedMemory: "UPDATED NOTE",
     correctedState: "AFTER",
     earlierRule: "Tests passed",
     earlierLines: ["I treated green tests", "as the completion check."],
@@ -216,46 +216,36 @@ const LIFECYCLE_COPY = {
     pageLines: ["Repeated error? Investigate. [1]"],
     additionLines: ["Check desktop + mobile views. [2]"],
     beforeVersion: "BEFORE",
-    correct: "REVISE",
-    supersedes: "SUPERSEDES",
-    oldLinked: "Old claim remains linked",
-    enrich: "ENRICH",
-    enrichDetail: "facts / confidence",
-    connect: "CONNECT",
-    connectDetail: "entities / relations",
-    sourceChanged: "SOURCE SUPPORT",
-    memoryCorrected: "MEMORY SUPPORT",
-    refinery: "REFINERY",
-    maintain: ["Rebuild", "from current support"],
+    correct: "UPDATE",
+    supersedes: "LINKS TO",
+    oldLinked: "Earlier knowledge stays traceable",
+    sourceChanged: "NEW EVIDENCE",
+    memoryCorrected: "EARLIER NOTE",
+    refinery: "UPDATE",
+    maintain: ["Improve", "with new evidence"],
     ring: {
       understand: "UNDERSTAND",
       connect: "CONNECT",
       reconcile: "RECONCILE",
       verify: "VERIFY",
     },
-    contradiction: "OPTIONAL CONFLICT REVIEW",
-    wait: "Protected conflicts wait.",
-    affectedClaim: "STALE PAGE",
-    pageLabel: "PAGE LIFECYCLE",
-    pageTitle: "Rebuilt, changes recorded.",
+    affectedClaim: "NOTE TO UPDATE",
+    pageLabel: "UPDATED NOTE",
+    pageTitle: "New evidence improves the note.",
     pageVersion: "UPDATED NOTE",
     current: "CURRENT",
     maintainedPage: "Agent Loop",
-    pageMeta: "Completion criteria · example",
+    pageMeta: "New evidence · example",
     verified: "ADDED FROM THE UI REVIEW",
-    prior: "Recent changes remain inspectable",
+    prior: "Earlier knowledge stays traceable.",
     versions: "Before / After",
-    humanPage: "AUTOMATIC REFRESH · EDITED PAGE",
-    humanLead: "Proposed changes wait for your review.",
-    mobileHumanLead: ["Proposed changes wait for your review."],
-    background: "BACKGROUND UPKEEP",
-    modelNote: "Model steps need a configured model; conflict reconciliation is off by default.",
-    mobileModelNote: ["Model steps need a configured model.", "Conflict reconciliation is off by default."],
+    humanPage: "YOUR EDITED PAGE",
+    humanLead: "AI changes to your edited page wait for review.",
+    mobileHumanLead: ["AI changes to your edited page wait for review."],
     stale: "STALE",
     phases: ["Enrich", "Link", "Reconcile", "Verify"],
     runs: "RECONCILE",
     schedule: "Configured model / off by default / opt-in",
-    archive: "Supersession keeps the earlier memory.",
   },
   "zh-Hans": {
     eyebrow: "AGENT LOOP · 示例内容",
@@ -263,11 +253,11 @@ const LIFECYCLE_COPY = {
     mobileTitle: ["知识会改变，", "历史仍会保留。"],
     subtitle: "一次界面检查的经验补进完成条件；先前的判断仍可追溯。",
     mobileSubtitle: ["检查经验补进完成条件；", "先前的判断仍可追溯。"],
-    memoryLabel: "记忆生命周期",
-    memoryTitle: "被取代，但不会被删除。",
-    earlierMemory: "较早的记忆",
+    memoryLabel: "先前的知识",
+    memoryTitle: "更新内容，保留旧笔记。",
+    earlierMemory: "先前的笔记",
     earlierState: "先前",
-    correctedMemory: "取代它的新记忆",
+    correctedMemory: "更新后的笔记",
     correctedState: "后来",
     earlierRule: "测试通过就算完成",
     earlierLines: ["当时只用测试结果", "判断这次修改是否完成。"],
@@ -279,46 +269,36 @@ const LIFECYCLE_COPY = {
     pageLines: ["重复出错，先查原因。[1]"],
     additionLines: ["完成前，检查桌面与手机画面。[2]"],
     beforeVersion: "先前",
-    correct: "修订",
-    supersedes: "取代",
-    oldLinked: "旧说法仍保留关联",
-    enrich: "丰富",
-    enrichDetail: "事实 / 可信度",
-    connect: "连接",
-    connectDetail: "实体 / 关系",
-    sourceChanged: "来源依据",
-    memoryCorrected: "记忆依据",
-    refinery: "精炼",
-    maintain: ["依当前依据", "重新构建"],
+    correct: "更新",
+    supersedes: "連結至",
+    oldLinked: "先前的判断仍可追溯",
+    sourceChanged: "新证据",
+    memoryCorrected: "先前的笔记",
+    refinery: "更新",
+    maintain: ["改善笔记", "加入新证据"],
     ring: {
       understand: "理解",
       connect: "连接",
       reconcile: "校正",
       verify: "验证",
     },
-    contradiction: "可选冲突审核",
-    wait: "受保护内容等待判断",
-    affectedClaim: "待刷新的页面",
-    pageLabel: "页面生命周期",
-    pageTitle: "重新构建，变化留有记录。",
+    affectedClaim: "待更新的笔记",
+    pageLabel: "更新后的笔记",
+    pageTitle: "新证据让笔记更完整。",
     pageVersion: "更新后的笔记",
     current: "当前",
     maintainedPage: "Agent Loop",
-    pageMeta: "完成条件 · 示例内容",
+    pageMeta: "新证据 · 示例内容",
     verified: "从这次审查补上的规则",
-    prior: "近期变化仍可检查",
+    prior: "先前的判断仍可追溯。",
     versions: "修改前 / 修改后",
-    humanPage: "自动更新 · 你编辑过的页面",
-    humanLead: "修订提案等你审核后再应用。",
-    mobileHumanLead: ["修订提案等你审核后再应用。"],
-    background: "后台维护",
-    modelNote: "模型步骤需配置模型；冲突校正默认关闭。",
-    mobileModelNote: ["模型步骤需配置模型；", "冲突校正默认关闭。"],
+    humanPage: "你编辑过的页面",
+    humanLead: "AI 对你编辑过的页面所做的修改，会先等你审核。",
+    mobileHumanLead: ["AI 对你编辑过的页面所做的修改，会先等你审核。"],
     stale: "待更新",
     phases: ["丰富", "连接", "校正", "验证"],
     runs: "校正",
     schedule: "已配置模型 / 默认关闭 / 明确启用",
-    archive: "取代旧记忆时，保留前后关联。",
   },
   "zh-Hant": {
     eyebrow: "AGENT LOOP · 示例內容",
@@ -326,11 +306,11 @@ const LIFECYCLE_COPY = {
     mobileTitle: ["知識會改變，", "歷史仍會保留。"],
     subtitle: "一次介面檢查的經驗補進完成條件；先前的判斷仍可追溯。",
     mobileSubtitle: ["檢查經驗補進完成條件；", "先前的判斷仍可追溯。"],
-    memoryLabel: "記憶生命週期",
-    memoryTitle: "被取代，但不會被刪除。",
-    earlierMemory: "較早的記憶",
+    memoryLabel: "先前的知識",
+    memoryTitle: "更新內容，保留舊筆記。",
+    earlierMemory: "先前的筆記",
     earlierState: "先前",
-    correctedMemory: "取代它的新記憶",
+    correctedMemory: "更新後的筆記",
     correctedState: "後來",
     earlierRule: "測試通過就算完成",
     earlierLines: ["當時只用測試結果", "判斷這次修改是否完成。"],
@@ -342,46 +322,36 @@ const LIFECYCLE_COPY = {
     pageLines: ["重複出錯，先查原因。[1]"],
     additionLines: ["完成前，檢查桌面與手機畫面。[2]"],
     beforeVersion: "先前",
-    correct: "修訂",
-    supersedes: "取代",
-    oldLinked: "舊說法仍保留關聯",
-    enrich: "豐富",
-    enrichDetail: "事實 / 可信度",
-    connect: "連接",
-    connectDetail: "實體 / 關係",
-    sourceChanged: "來源依據",
-    memoryCorrected: "記憶依據",
-    refinery: "精煉",
-    maintain: ["依目前依據", "重新構建"],
+    correct: "更新",
+    supersedes: "連結至",
+    oldLinked: "先前的判斷仍可追溯",
+    sourceChanged: "新證據",
+    memoryCorrected: "先前的筆記",
+    refinery: "更新",
+    maintain: ["改善筆記", "加入新證據"],
     ring: {
       understand: "理解",
       connect: "連接",
       reconcile: "校正",
       verify: "驗證",
     },
-    contradiction: "可選衝突審核",
-    wait: "受保護內容等待判斷",
-    affectedClaim: "待刷新的頁面",
-    pageLabel: "頁面生命週期",
-    pageTitle: "重新構建，變化留有紀錄。",
+    affectedClaim: "待更新的筆記",
+    pageLabel: "更新後的筆記",
+    pageTitle: "新證據讓筆記更完整。",
     pageVersion: "更新後的筆記",
     current: "目前",
     maintainedPage: "Agent Loop",
-    pageMeta: "完成條件 · 示例內容",
+    pageMeta: "新證據 · 示例內容",
     verified: "從這次審查補上的規則",
-    prior: "近期變化仍可檢查",
+    prior: "先前的判斷仍可追溯。",
     versions: "修改前 / 修改後",
-    humanPage: "自動更新 · 你編輯過的頁面",
-    humanLead: "修訂提案等你審核後再套用。",
-    mobileHumanLead: ["修訂提案等你審核後再套用。"],
-    background: "背景維護",
-    modelNote: "模型步驟需設定模型；衝突校正預設關閉。",
-    mobileModelNote: ["模型步驟需設定模型；", "衝突校正預設關閉。"],
+    humanPage: "你編輯過的頁面",
+    humanLead: "AI 對你編輯過的頁面所做的修改，會先等你審核。",
+    mobileHumanLead: ["AI 對你編輯過的頁面所做的修改，會先等你審核。"],
     stale: "待更新",
     phases: ["豐富", "連接", "校正", "驗證"],
     runs: "校正",
     schedule: "已設定模型 / 預設關閉 / 明確啟用",
-    archive: "取代舊記憶時，保留前後關聯。",
   },
 };
 
@@ -1634,12 +1604,6 @@ function memoryObjectDesktop(c, locale, prefix) {
       <path d="M346 786 H420" stroke="${C.indigo}" stroke-width="1.6" marker-end="url(#${prefix}-arrow)"/>
       ${oldMemory}
       ${text({ locale, x: 250, y: 826, value: c.oldLinked, size: locale === "en" ? 14 : 15, weight: 600, fill: C.sageDark })}
-      <circle cx="102" cy="642" r="5" fill="${C.indigo}"/>
-      ${text({ locale, x: 88, y: 674, value: c.enrich, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 88, y: 696, value: c.enrichDetail, size: locale === "en" ? 14 : 15, weight: 600, fill: C.secondary })}
-      <circle cx="102" cy="728" r="5" fill="${C.indigo}"/>
-      ${text({ locale, x: 88, y: 760, value: c.connect, size: 11, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 88, y: 782, value: c.connectDetail, size: locale === "en" ? 14 : 15, weight: 600, fill: C.secondary })}
     `,
   });
 }
@@ -1670,10 +1634,6 @@ function refineryHubDesktop(c, locale, prefix) {
       <circle cx="782" cy="578" r="7" fill="${C.indigo}"/>
       <path d="M680 728 C728 728 744 660 780 622" fill="none" stroke="${C.indigo}" stroke-width="2" marker-end="url(#${prefix}-arrow)"/>
       ${text({ locale, x: 700, y: 758, value: c.memoryCorrected, size: 15, kind: "mono", weight: 500, fill: C.indigo })}
-      <path d="M878 692 V782" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
-      <rect x="730" y="798" width="296" height="64" rx="8" fill="${C.warmSoft}" stroke="#E6C9B8"/>
-      ${text({ locale, x: 878, y: 824, value: c.contradiction, size: 11, kind: "mono", weight: 500, fill: C.warmDark, anchor: "middle" })}
-      ${text({ locale, x: 878, y: 848, value: c.wait, size: locale === "en" ? 15 : 16, kind: "heading", weight: 600, anchor: "middle" })}
     `,
   });
 }
@@ -1717,22 +1677,6 @@ function pageObjectDesktop(c, locale, prefix) {
   });
 }
 
-function lifecycleFooterDesktop(c, locale, prefix) {
-  return region({
-    id: `${prefix}-footer`,
-    x: 74,
-    y: 966,
-    width: 1652,
-    height: 106,
-    checkOverlap: false,
-    content: `
-      ${text({ locale, x: 88, y: 1007, value: c.background, size: 13, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${text({ locale, x: 88, y: 1043, value: c.modelNote, size: locale === "en" ? 18 : 20, fill: C.secondary })}
-      ${text({ locale, x: 1698, y: 1043, value: c.archive, size: locale === "en" ? 17 : 18, kind: "heading", weight: 600, fill: C.sageDark, anchor: "end" })}
-    `,
-  });
-}
-
 function lifecycleDesktop(c, locale, prefix) {
   return `
     ${logo({ x: 68, y: 60, size: 58, prefix })}
@@ -1754,7 +1698,6 @@ function lifecycleDesktop(c, locale, prefix) {
     ${pageObjectDesktop(c, locale, prefix)}
     <path d="M992 578 C1076 578 1128 606 1198 614" fill="none" stroke="${C.sage}" stroke-width="2.5" marker-end="url(#${prefix}-sage-arrow)"/>
     ${text({ locale, x: 1066, y: 562, value: c.affectedClaim, size: 14, kind: "mono", weight: 500, fill: C.sageDark, anchor: "middle" })}
-    ${lifecycleFooterDesktop(c, locale, prefix)}
   `;
 }
 
@@ -1811,11 +1754,7 @@ function refineryHubMobile(c, locale, prefix) {
       <circle cx="360" cy="1080" r="90" fill="none" stroke="${C.indigo}" stroke-width="3" stroke-dasharray="112 29"/>
       ${text({ locale, x: 360, y: 1054, value: c.refinery, size: 20, kind: "mono", weight: 500, fill: C.indigo, anchor: "middle" })}
       ${text({ locale, x: 360, y: 1088, value: c.maintain[0], size: locale === "en" ? 28 : 30, kind: "heading", weight: 600, anchor: "middle" })}
-      ${lines({ locale, x: 360, y: 1118, values: locale === "en" ? ["from current", "support"] : [c.maintain[1]], size: locale === "en" ? 18 : 23, lineHeight: 22, weight: 600, fill: C.secondary, anchor: "middle" })}
-      <path d="M360 1190 V1208" fill="none" stroke="${C.warm}" stroke-width="1.8" marker-end="url(#${prefix}-warm-arrow)"/>
-      <rect x="170" y="1220" width="380" height="72" rx="8" fill="${C.warmSoft}" stroke="#E6C9B8"/>
-      ${text({ locale, x: 360, y: 1248, value: c.contradiction, size: 20, kind: "mono", weight: 500, fill: C.warmDark, anchor: "middle" })}
-      ${text({ locale, x: 360, y: 1280, value: c.wait, size: locale === "en" ? 26 : 27, kind: "heading", weight: 600, anchor: "middle" })}
+      ${lines({ locale, x: 360, y: 1118, values: locale === "en" ? ["with new", "evidence"] : [c.maintain[1]], size: locale === "en" ? 18 : 23, lineHeight: 22, weight: 600, fill: C.secondary, anchor: "middle" })}
     `,
   });
 }
@@ -1866,22 +1805,6 @@ function pageObjectMobile(c, locale, prefix) {
   });
 }
 
-function lifecycleFooterMobile(c, locale, prefix) {
-  return region({
-    id: `${prefix}-footer`,
-    x: 40,
-    y: 1970,
-    width: 640,
-    height: 154,
-    checkOverlap: false,
-    content: `
-      ${text({ locale, x: 40, y: 1998, value: c.background, size: 20, kind: "mono", weight: 500, fill: C.tertiary })}
-      ${lines({ locale, x: 40, y: 2034, values: c.mobileModelNote, size: locale === "en" ? 24 : 25, lineHeight: 30, fill: C.secondary })}
-      ${text({ locale, x: 680, y: 2110, value: c.archive, size: locale === "en" ? 24 : 25, kind: "heading", weight: 600, fill: C.sageDark, anchor: "end" })}
-    `,
-  });
-}
-
 function lifecycleMobile(c, locale, prefix) {
   return `
     ${logo({ x: 40, y: 48, size: 58, prefix })}
@@ -1903,7 +1826,6 @@ function lifecycleMobile(c, locale, prefix) {
     ${pageObjectMobile(c, locale, prefix)}
     <path d="M470 1080 C630 1080 650 1280 628 1410" fill="none" stroke="${C.sage}" stroke-width="2.4" marker-end="url(#${prefix}-sage-arrow)"/>
     ${networkEdgeLabel({ locale, x: 580, y: 1178, value: c.affectedClaim, size: 20 })}
-    ${lifecycleFooterMobile(c, locale, prefix)}
   `;
 }
 
@@ -1952,12 +1874,11 @@ function makeLifecycle(locale, viewport) {
       c.supersedes,
       c.sourceChanged,
       c.refinery,
-      c.contradiction,
+      c.oldLinked,
       c.pageLabel,
       c.verified,
       c.humanPage,
-      c.background,
-      c.archive,
+      c.humanLead,
     ],
     svg,
   };

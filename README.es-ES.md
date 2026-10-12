@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1d02eda9ee8288b3538726421777ae62444a67cc9bec20233f47c04df72dae74 -->
+<!-- README_SYNC: source=README.md sha256=599afbc3e001d920d62606d36601c43c9acc634bc003eae1b4be264bb5088a59 -->
 
 <p align="center">
   <picture>
@@ -31,23 +31,12 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Product screenshots: real app frontend with fictional data; see docs/assets/screenshots/README.md. -->
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki.png" alt="Lee y edita tu wiki" width="100%">
-  <br><sub>Interfaz real de Wenlan, capturada en un navegador con datos ficticios de un club de lectura. La interfaz está en inglés; no son maquetas de diseño.</sub>
-</p>
-
-<!-- Replace this earlier walkthrough when the separately produced release video is ready. -->
-<details>
-<summary>Demostración anterior</summary>
-
+<!-- Replace this walkthrough when the separately produced release video is ready. -->
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
   <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con páginas y citas a sus fuentes.</sub>
 </p>
-
-</details>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -113,22 +102,8 @@ Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consult
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Únete a la [comunidad de Discord](https://discord.gg/nmzVTTU3HG) para hablar sobre flujos de trabajo y compartir comentarios. Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
 
-
-
-## Explora un Space
-
-Pages reúne las ideas que quieres conservar; Sources mantiene cerca el material original. Alterna entre ambas vistas dentro del mismo Space.
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-space.png" alt="Páginas de un Space de club de lectura" width="100%">
-</p>
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-sources.png" alt="Fuentes Markdown, PDF y páginas web del mismo Space" width="100%">
-  <br><sub>Interfaz real de Wenlan, capturada en un navegador con datos ficticios de un club de lectura. La interfaz está en inglés; no son maquetas de diseño.</sub>
-</p>
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -144,27 +119,23 @@ Pages reúne las ideas que quieres conservar; Sources mantiene cerca el material
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Fuentes y memorias se reúnen en una nota de ejemplo sobre Agent Loop. Una lección concreta complementa las pautas de reintento: las pruebas pasaron, pero una línea aún tapaba una etiqueta en móvil. La revisión visual en escritorio y móvil pasa a formar parte de los criterios que Claude o Codex pueden reutilizar." width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="Lee y edita tu wiki directamente" width="100%">
+  <br><sub>Interfaz real capturada en un navegador con datos ficticios de un club de lectura (interfaz en inglés).</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
 
-La ilustración muestra una regla de trabajo reutilizable, no resultados de clientes ni una prueba de generación automática de páginas. [Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages).
+[Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages).
 
 <a id="knowledge-graph"></a>
 
 ### Sigue las conexiones que hay detrás de una página
 
-El ejemplo de Agent Loop conecta una pauta de reintentos, una lección de una revisión de interfaz y una lista de aceptación que puedes reutilizar.
+El grafo conecta las páginas del club de lectura para seguir una idea hasta la siguiente nota.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Página ilustrativa de Agent Loop que cita una guía de diseño de agentes y una nota de revisión de interfaz; las Memorias mencionadas incluyen pautas de reintento y una lección de comprobación visual, enlazadas a una lista de aceptación reutilizable y a conceptos y herramientas relacionados." width="100%">
-  </picture>
+  <img src="./docs/assets/screenshots/v019-graph.png" alt="Páginas del club de lectura conectadas en el grafo de Wenlan" width="100%">
+  <br><sub>Interfaz real capturada en un navegador con datos ficticios de un club de lectura (interfaz en inglés).</sub>
 </p>
 
 <a id="retrieval"></a>
@@ -380,6 +351,8 @@ Documentación más detallada, conceptos y comparaciones:
 
 
 ## Contribuir
+
+Únete a la [comunidad de Discord](https://discord.gg/nmzVTTU3HG) para compartir cómo usas Wenlan, dar tu opinión y ayudarnos a mejorarlo.
 
 Las correcciones de errores, casos de evaluación, documentación y funciones son bienvenidos. Instalar Wenlan no requiere compilar desde el código fuente. Para el desarrollo local, ejecuta estos comandos desde la raíz de este repositorio:
 
