@@ -10,15 +10,18 @@ const copies = [
 ] as const;
 
 async function ensureTopicContext(page: import("@playwright/test").Page) {
-  const paneRole = (page.viewportSize()?.width ?? 0) >= 1100 ? "complementary" : "dialog";
-  const pane = page.getByRole(paneRole, { name: "Info", exact: true });
-  if (await pane.count()) {
+  const wide = (page.viewportSize()?.width ?? 0) >= 1100;
+  const pane = page.getByRole(wide ? "complementary" : "dialog", { name: "Info", exact: true });
+  const toggle = page.getByRole("button", { name: "Info", exact: true });
+  // The toggle renders with the loaded topic, so reading its state waits for
+  // that load. A one-shot pane count can run first on a slow load and mistake
+  // the default-open pane for a closed one.
+  if ((await toggle.getAttribute("aria-expanded")) === "true") {
     await expect(pane).toBeVisible();
     // Desktop topics open their Info inspector by default. Reopen it through
     // its own control so Escape has the same real trigger to restore focus to
     // as the narrow-window flow.
-    if ((page.viewportSize()?.width ?? 0) >= 1100) {
-      const toggle = page.getByRole("button", { name: "Info", exact: true });
+    if (wide) {
       await toggle.click();
       await expect(pane).toHaveCount(0);
       await toggle.click();
