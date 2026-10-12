@@ -1240,6 +1240,35 @@ class ValidateReleaseCandidateTests(unittest.TestCase):
                 FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
             )
 
+    def test_codex_overlay_setup_pins_are_release_managed(self) -> None:
+        # bump-version.sh rewrites the two setup pins in the Codex overlay, so
+        # every Release PR changes it. Leaving it out of the path set failed the
+        # 0.19.0 candidate with "release PR paths mismatch".
+        overlay = "plugin-codex/overlay.json"
+        self.assertIn(overlay, VALIDATOR.REQUIRED_RELEASE_PATHS)
+        old, new = release_contents()
+        old[overlay] = json.dumps(
+            {
+                "from": ["npx -y wenlan@0.15.3 setup"],
+                "to": [
+                    "curl -fsSL https://raw.githubusercontent.com/wenlan-app/wenlan/"
+                    "v0.15.3/install.sh | bash"
+                ],
+            },
+            indent=2,
+        )
+        new[overlay] = old[overlay].replace("0.15.3", "0.15.4")
+        _, _, paths = VALIDATOR.validate_release_pr_content(
+            FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
+        )
+        self.assertIn(overlay, paths)
+
+        new[overlay] = new[overlay].replace("| bash", "| sudo bash")
+        with self.assertRaisesRegex(VALIDATOR.CandidateError, "exact version-only"):
+            VALIDATOR.validate_release_pr_content(
+                FakeContentApi(old, new), "wenlan-app/wenlan", candidate_pr()
+            )
+
     def test_exact_transform_rejects_new_version_camouflage(self) -> None:
         hostile_mutations = {
             "Cargo.toml": 'panic = "abort" # 0.15.4\n',
