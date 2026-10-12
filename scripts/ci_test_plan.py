@@ -133,6 +133,26 @@ DOCS_JOB_FILES = {
     "scripts/validate-versions.test.sh",
 }
 
+# Markdown that a Rust test owns. `crates/wenlan-cli/README.md` carries the
+# generated CLI reference that `cli_reference` in the `wenlan` bin compares
+# against clap, so a README-only edit must run that package's tests instead of
+# taking the docs lane. Exact paths only; never widen this to a glob.
+RUST_OWNED_MARKDOWN = {"crates/wenlan-cli/README.md"}
+
+# Packages whose bin target carries unit tests. `--lib` skips bin targets, so
+# every workspace-lib command adds `--bin <package>` for each selected one.
+# `wenlan` holds the clap catalog and CLI reference tests in main.rs.
+BIN_UNIT_TEST_PACKAGES = ("wenlan-server", "wenlan")
+
+
+def _bin_test_args(names) -> list[str]:
+    args: list[str] = []
+    for package in BIN_UNIT_TEST_PACKAGES:
+        if package in names:
+            args.extend(["--bin", package])
+    return args
+
+
 # The Tauri desktop app crate plus the root-level frontend dirs it shares a
 # release pipeline with. All of it runs under the separate app-check job
 # (macos-14), never the Rust workspace plan.
@@ -351,6 +371,8 @@ def _rust_fixture_owns(path: str) -> bool:
 
 
 def _docs_job_owns(path: str) -> bool:
+    if path in RUST_OWNED_MARKDOWN:
+        return False
     if path in DOCS_JOB_FILES:
         return True
     if any(
@@ -612,6 +634,13 @@ def _build_test_plan(
             return _full_plan(
                 f"integration target has no required-suite planner: {path}"
             )
+
+        if path in RUST_OWNED_MARKDOWN:
+            # The owning test lives in this package's own bin and no reverse
+            # dependency reads the file, so select the package alone.
+            broad_packages.add(package_name)
+            reasons.append(f"rust-owned markdown selects its package: {path}")
+            continue
 
         if parts and parts[0] == "src" and path.endswith(".rs"):
             closure = _closure(package_name, reverse)
@@ -1006,10 +1035,9 @@ def local_test_commands_for(plan: object, cargo_metadata: object) -> list[list[s
     if workspace_mode == "packages":
         names = _validated_package_names(workspace.get("packages"), packages)
         commands.append(["cargo", "test", *_package_args(names), "--lib"])
-        if "wenlan-server" in names:
-            commands.append(
-                ["cargo", "test", "-p", "wenlan-server", "--bin", "wenlan-server"]
-            )
+        for package in BIN_UNIT_TEST_PACKAGES:
+            if package in names:
+                commands.append(["cargo", "test", "-p", package, "--bin", package])
     elif workspace_mode == "filterset":
         names = set(_validated_package_names(workspace.get("packages"), packages))
         filterset = workspace.get("filterset")
@@ -1047,10 +1075,9 @@ def local_test_commands_for(plan: object, cargo_metadata: object) -> list[list[s
             commands.append(
                 ["cargo", "test", *_package_args(sorted(broad)), "--lib"]
             )
-            if "wenlan-server" in broad:
-                commands.append(
-                    ["cargo", "test", "-p", "wenlan-server", "--bin", "wenlan-server"]
-                )
+            for package in BIN_UNIT_TEST_PACKAGES:
+                if package in broad:
+                    commands.append(["cargo", "test", "-p", package, "--bin", package])
         for package, prefix in isolated:
             commands.append(
                 ["cargo", "test", "-p", package, "--lib", f"{prefix}::"]
@@ -1120,8 +1147,7 @@ def archive_command_for(
             "--exclude",
             "wenlan-app",
             "--lib",
-            "--bin",
-            "wenlan-server",
+            *_bin_test_args(BIN_UNIT_TEST_PACKAGES),
         ]
     if mode in {"packages", "filterset"}:
         if mode == "filterset":
@@ -1132,8 +1158,7 @@ def archive_command_for(
         # Filterset plans archive each selected package's complete lib test
         # binary. Test-name predicates are valid only when the archive runs.
         command = [*cargo, *_package_args(names), "--lib"]
-        if "wenlan-server" in names:
-            command.extend(["--bin", "wenlan-server"])
+        command.extend(_bin_test_args(names))
         return command
     raise PlanError(f"unknown workspace-lib mode: {mode!r}")
 
@@ -1363,27 +1388,23 @@ def command_groups_for(
                         "--exclude",
                         "wenlan-app",
                         "--lib",
-                        "--bin",
-                        "wenlan-server",
+                        *_bin_test_args(BIN_UNIT_TEST_PACKAGES),
                     ]
                 )
             ]
         if mode == "packages":
             names = _validated_package_names(suite.get("packages"), packages)
             command = [*cargo, *_package_args(names), "--lib"]
-            if "wenlan-server" in names:
-                command.extend(["--bin", "wenlan-server"])
+            command.extend(_bin_test_args(names))
             return [workspace_command(command)]
         if mode == "filterset":
             filterset = suite.get("filterset")
             if not isinstance(filterset, str) or not filterset:
                 raise PlanError("workspace filterset is empty")
             names = _validated_package_names(suite.get("packages"), packages)
-            return [
-                workspace_command(
-                    [*cargo, *_package_args(names), "--lib", "-E", filterset]
-                )
-            ]
+            command = [*cargo, *_package_args(names), "--lib", "-E", filterset]
+            command.extend(_bin_test_args(names))
+            return [workspace_command(command)]
         raise PlanError(f"unknown workspace-lib mode: {mode!r}")
 
     if suite_name == "cli-server-integration":
