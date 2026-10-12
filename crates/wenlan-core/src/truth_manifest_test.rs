@@ -218,7 +218,7 @@ fn manifest_counts_match_the_spec() {
     // The public webpage preview adds one main-only, non-page-bearing route.
     assert_eq!(
         HTTP_READERS.len(),
-        197,
+        200,
         "registered (method, path, handler) triples"
     );
     assert_eq!(MCP_READERS.len(), 30, "#[tool( declarations");
@@ -229,7 +229,7 @@ fn manifest_counts_match_the_spec() {
     let entries: Vec<_> = runtime_entries().collect();
     assert_eq!(
         entries.len(),
-        209,
+        212,
         "(builder, method, path) runtime entries"
     );
     assert_eq!(
@@ -237,7 +237,7 @@ fn manifest_counts_match_the_spec() {
             .iter()
             .filter(|(b, _, _)| *b == Builder::Main)
             .count(),
-        192,
+        195,
         "main builder entries"
     );
     assert_eq!(
@@ -253,7 +253,7 @@ fn manifest_counts_match_the_spec() {
         .iter()
         .filter(|r| r.page_bearing == PageBearing::Yes)
         .count();
-    assert_eq!(bearing, 74, "page-bearing HTTP routes");
+    assert_eq!(bearing, 76, "page-bearing HTTP routes");
 }
 
 #[test]
@@ -413,7 +413,7 @@ fn marker_shape_allowlist_is_fail_closed() {
             .iter()
             .filter(|r| r.marker_shape == MarkerShape::None)
             .count(),
-        190 // all remaining handlers carry no page markers
+        193 // all remaining handlers carry no page markers
     );
 }
 
@@ -576,4 +576,18 @@ fn http_reader_lookup_respects_builder() {
             "{builder:?} {method:?} {path} is a runtime entry but does not resolve"
         );
     }
+}
+
+#[test]
+fn entity_type_update_is_classified_as_non_page_prose() {
+    let row = http_reader(
+        Builder::Main,
+        ReaderMethod::Put,
+        "/api/memory/entities/{id}/type",
+    )
+    .expect("entity type update must be present in the truth manifest");
+    assert_eq!(row.page_bearing, PageBearing::No);
+    assert_eq!(row.class, TruthClass::NotApplicable);
+    assert_eq!(row.marker_shape, MarkerShape::None);
+    assert_eq!(row.evidence, "updates entity type metadata only");
 }

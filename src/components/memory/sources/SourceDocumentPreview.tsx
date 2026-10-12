@@ -1,23 +1,36 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
-import { getChunks, openSearchResult, type IndexedFileInfo } from "../../../lib/tauri";
-import ContentRenderer from "../ContentRenderer";
+import type { IndexedFileInfo } from "../../../lib/tauri";
 import PageInfoDrawer from "../page/PageInfoDrawer";
+import { SourceDocumentReader } from "./SourceDocumentReader";
 import "./source-access.css";
 
-export default function SourceDocumentPreview({file,onClose,space}:{file:IndexedFileInfo;onClose:()=>void;space?:string}) {
- const {t}=useTranslation();
- const source=['file','webpage'].includes(file.source)?file.source:'memory';
- const query=useQuery({queryKey:['sourceDocument',space ?? null,source,file.source_id],queryFn:()=>space === undefined ? getChunks(source,file.source_id) : getChunks(source,file.source_id,space),retry:false});
- let url:string|null=null;
- // A webpage's source identity is its saved address. Legacy inventories could
- // mix aggregate metadata across source kinds that share an ID.
- try{const parsed=new URL(file.source==='webpage'?file.source_id:(file.url??''));if(['http:','https:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password)url=parsed.href;}catch{/* Not a web address. */}
- const content=[...(query.data??[])].sort((a,b)=>a.chunk_index-b.chunk_index).map(chunk=>chunk.content).join('\n\n');
- return <PageInfoDrawer open docked={space !== undefined} title={file.title} closeLabel={t('sourceAccess.close')} onClose={onClose}>
-   {url&&<div className="source-preview-url"><p>{url}</p><button className="page-editor-action" type="button" onClick={()=>void openSearchResult(url!).catch(()=>toast(t('sourceAccess.openFailed')))}>{t('sourceAccess.openOriginal')}</button></div>}
-   {query.isPending?<p role="status" className="source-preview-note">{t('sourceAccess.previewLoading')}</p>:query.isError?<div role="alert"><p className="source-preview-note">{t('sourceAccess.previewFailed')}</p><button type="button" className="page-editor-action" onClick={()=>void query.refetch()}>{t('sourceAccess.retry')}</button></div>:content?<div className="source-preview-content"><ContentRenderer content={content} variant="detail" allowImages={false} /></div>:<p className="source-preview-note">{t('sourceAccess.noPreview')}</p>}
- </PageInfoDrawer>;
+export default function SourceDocumentPreview({ file, onClose, space, onOpenSource, onRegisterFlush }: {
+  file: IndexedFileInfo;
+  onClose: () => void;
+  space?: string;
+  onOpenSource?: () => void;
+  onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
+}) {
+  const { t } = useTranslation();
+  const flushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerFlush = useCallback((flush: (() => Promise<boolean>) | null) => {
+    flushRef.current = flush;
+    onRegisterFlush?.(flush);
+  }, [onRegisterFlush]);
+  const handleClose = async () => {
+    if (flushRef.current && !await flushRef.current()) return;
+    onClose();
+  };
+  const handleOpenSource = async () => {
+    if (flushRef.current && !await flushRef.current()) return;
+    onOpenSource?.();
+  };
+  return <PageInfoDrawer open docked inspector title={file.title} closeLabel={t("sourceAccess.close")} onClose={() => { void handleClose(); }}
+    headerActions={onOpenSource && <button type="button" className="page-editor-action source-preview-open" onClick={() => { void handleOpenSource(); }}>
+      {t("sourceAccess.goToSource")}
+    </button>}>
+    <div className="source-document-preview"><SourceDocumentReader file={file} space={space} onRegisterFlush={onRegisterFlush ? registerFlush : undefined} /></div>
+  </PageInfoDrawer>;
 }

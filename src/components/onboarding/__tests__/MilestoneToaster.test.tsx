@@ -145,7 +145,7 @@ describe("MilestoneToaster", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders static subtitle for intelligence-ready", async () => {
+  it("renders the full intelligence-ready milestone presentation", async () => {
     const ready: MilestoneRecord = {
       id: "intelligence-ready",
       first_triggered_at: Math.floor(Date.now() / 1000) - 5,
@@ -155,8 +155,9 @@ describe("MilestoneToaster", () => {
     mockList.mockResolvedValueOnce([ready]);
     render(<MilestoneToaster />, { wrapper });
     await waitFor(() =>
-      expect(screen.getByText(/on-device intelligence/i)).toBeInTheDocument(),
+      expect(screen.getByText("Intelligence ready", { exact: true })).toBeInTheDocument(),
     );
+    expect(screen.getByText(/on-device intelligence/i)).toBeInTheDocument();
     expect(screen.getByText(/run locally/i)).toBeInTheDocument();
   });
 

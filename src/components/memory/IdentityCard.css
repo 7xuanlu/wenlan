@@ -3,6 +3,11 @@
   position: relative;
 }
 
+.identity-account-slot {
+  flex: 0 0 22px;
+  overflow: visible;
+}
+
 .identity-menu-trigger[aria-expanded="true"] {
   background: var(--mem-hover);
 }

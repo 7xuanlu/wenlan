@@ -12,6 +12,10 @@ const flushHarness = vi.hoisted(() => ({
   flush: vi.fn<() => Promise<boolean>>(),
   draftIdentity: { draftId: null as string | null, version: null as number | null },
 }));
+const routeFlushHarness = vi.hoisted(() => ({
+  enabled: false,
+  flush: vi.fn<() => Promise<boolean>>(),
+}));
 
 const eventListeners = vi.hoisted(
   () => new Map<string, (payload?: unknown) => void>(),
@@ -199,8 +203,39 @@ vi.mock("./pages/PageDraftEditor", async () => {
 });
 vi.mock("./spaces", () => ({ SpacesOverview: () => <div /> }));
 vi.mock("./settings/SettingsSidebar", () => ({ default: () => <aside /> }));
-vi.mock("./SpaceDetail", () => ({ default: () => <div /> }));
-vi.mock("./SourcesView", () => ({ default: () => <div /> }));
+vi.mock("./SpaceDetail", async () => {
+  const { useEffect } = await import("react");
+  return { default: (props: { onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void; onBack?: () => void }) => {
+    useEffect(() => {
+      if (!routeFlushHarness.enabled) return;
+      props.onRegisterFlush?.(routeFlushHarness.flush);
+      return () => props.onRegisterFlush?.(null);
+    }, [props.onRegisterFlush]);
+    return <div data-testid="space-detail"><button type="button" onClick={props.onBack}>Space back</button></div>;
+  } };
+});
+vi.mock("./SourcesView", async () => {
+  const { useEffect } = await import("react");
+  return { default: (props: { onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void }) => {
+    useEffect(() => {
+      if (!routeFlushHarness.enabled) return;
+      props.onRegisterFlush?.(routeFlushHarness.flush);
+      return () => props.onRegisterFlush?.(null);
+    }, [props.onRegisterFlush]);
+    return <div data-testid="sources-view" />;
+  } };
+});
+vi.mock("./sources/SourceDocumentReader", async () => {
+  const { useEffect } = await import("react");
+  return { SourceDocumentPage: (props: { onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void }) => {
+    useEffect(() => {
+      if (!routeFlushHarness.enabled) return;
+      props.onRegisterFlush?.(routeFlushHarness.flush);
+      return () => props.onRegisterFlush?.(null);
+    }, [props.onRegisterFlush]);
+    return <div data-testid="source-document" />;
+  } };
+});
 vi.mock("./RecapsList", () => ({ RecapsList: () => <div /> }));
 vi.mock("./ImportView", () => ({
   ImportView: () => <div data-testid="import-view" />,
@@ -246,6 +281,8 @@ describe("Main published PageDetail navigation guards", () => {
     vi.clearAllMocks();
     flushHarness.enabled = false;
     flushHarness.flush.mockReset();
+    routeFlushHarness.enabled = false;
+    routeFlushHarness.flush.mockReset();
     flushHarness.draftIdentity = { draftId: null, version: null };
     eventListeners.clear();
   });
@@ -270,6 +307,36 @@ describe("Main published PageDetail navigation guards", () => {
     expect(within(right).getByRole("heading", { name: "Pending page" })).toBeInTheDocument();
     flushHarness.flush.mockResolvedValue(true);
     await act(async () => { await expect(quitGuard!()).resolves.toBe(true); });
+  });
+
+  it("waits for a source-description save before navigation and quit", async () => {
+    routeFlushHarness.enabled = true;
+    let settle!: (saved: boolean) => void;
+    const saving = new Promise<boolean>((resolve) => { settle = resolve; });
+    routeFlushHarness.flush.mockReturnValue(saving);
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const initialView = { kind: "source-document", file: { source: "webpage", source_id: "https://example.com", title: "Source", chunk_count: 0, last_modified: 0 } } as never;
+    const { user } = renderMain({ initialView, onRegisterQuitGuard: (guard) => { quitGuard = guard; } });
+    await screen.findByTestId("source-document");
+    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
+    expect(screen.getByTestId("source-document")).toBeInTheDocument();
+    expect(routeFlushHarness.flush).toHaveBeenCalledOnce();
+    const quitting = quitGuard!();
+    await act(async () => settle(true));
+    await expect(quitting).resolves.toBe(true);
+    expect(await screen.findByTestId("pages-overview")).toBeInTheDocument();
+  });
+
+  it("keeps a Space visible and prevents quit when its identity flush fails", async () => {
+    routeFlushHarness.enabled = true;
+    routeFlushHarness.flush.mockResolvedValue(false);
+    let quitGuard: (() => Promise<boolean>) | null = null;
+    const initialView = { kind: "space", spaceId: null, spaceName: "Reading" } as never;
+    const { user } = renderMain({ initialView, onRegisterQuitGuard: (guard) => { quitGuard = guard; } });
+    await screen.findByTestId("space-detail");
+    await user.click(screen.getByRole("button", { name: "Space back" }));
+    expect(screen.getByTestId("space-detail")).toBeInTheDocument();
+    await expect(quitGuard!()).resolves.toBe(false);
   });
 
   it("blocks Back, Escape, and tab close while a note move waits, then remains recoverable", async () => {

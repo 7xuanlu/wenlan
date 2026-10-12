@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { PushPin } from "@phosphor-icons/react";
+import { Files, PushPin, Stack } from "@phosphor-icons/react";
+import { TopicIcon } from "../entities/TopicIcon";
 import type { GlobalNavigation } from "./viewState";
 import { SpaceMark } from "./SpaceMark";
 import { NAVIGATION_DESTINATION_ORDER, readNavigationPreferences, REQUIRED_NAVIGATION_DESTINATIONS, sanitizeVisibleNavigation, writeNavigationPreferences } from "./navigationPreferences";
@@ -57,8 +58,8 @@ function NavButton({ active, compact = false, icon, label, moreItem = false, onC
 }
 
 const iconStyle = { color: "currentColor" } as const;
-const pageIcon = <svg aria-hidden="true" data-navigation-icon="wiki-page" height="16" style={iconStyle} viewBox="0 0 24 24" width="16"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" /></svg>;
-const entityIcon = <svg aria-hidden="true" data-navigation-icon="entities" height="16" style={iconStyle} viewBox="0 0 24 24" width="16"><path d="M5 9h14M4 15h14M10 4 8 20M16 4l-2 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" /></svg>;
+const pageIcon = <Stack aria-hidden="true" data-navigation-icon="wiki-stack" focusable="false" size={16} style={iconStyle} weight="regular" />;
+const entityIcon = <TopicIcon data-navigation-icon="entities" size={16} style={iconStyle} />;
 const graphIcon = <svg aria-hidden="true" data-navigation-icon="graph" height="16" style={iconStyle} viewBox="0 0 24 24" width="16"><circle cx="5" cy="6" fill="none" r="2" stroke="currentColor" strokeWidth="2" /><circle cx="19" cy="6" fill="none" r="2" stroke="currentColor" strokeWidth="2" /><circle cx="12" cy="18" fill="none" r="2" stroke="currentColor" strokeWidth="2" /><path d="M7 6h10M6 8l5 8M18 8l-5 8" fill="none" stroke="currentColor" strokeWidth="2" /></svg>;
 const memoryIcon = <svg aria-hidden="true" data-navigation-icon="brain" fill="none" height="16" style={iconStyle} viewBox="0 0 24 24" width="16">{[
   "M15.5 13a3.5 3.5 0 0 0 -3.5 3.5v1a3.5 3.5 0 0 0 7 0v-1.8",
@@ -68,7 +69,7 @@ const memoryIcon = <svg aria-hidden="true" data-navigation-icon="brain" fill="no
   "M6.5 16a3.5 3.5 0 0 1 0 -7h.5",
   "M5 9.3v-2.8a3.5 3.5 0 0 1 7 0v10",
 ].map((d) => <path d={d} key={d} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" />)}</svg>;
-const sourceIcon = <svg aria-hidden="true" data-navigation-icon="sources-intake-tray" height="16" style={iconStyle} viewBox="0 0 24 24" width="16"><path d="M7 4v6M12 4v6M17 4v6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.8" /><path d="M5 13l1.5 5h11l1.5-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" /></svg>;
+const sourceIcon = <Files aria-hidden="true" data-navigation-icon="sources-library" focusable="false" size={16} style={iconStyle} weight="regular" />;
 
 export function PrimaryNavigation({
   active,

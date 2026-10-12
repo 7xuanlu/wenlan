@@ -57,7 +57,7 @@ describe("Topic detail lifecycle", () => {
     vi.mocked(search).mockResolvedValue([]);
   });
 
-  it("opens detected topics without confirming and archives/restores the same detail", async () => {
+  it("archives and restores a detected topic without exposing confirmation controls", async () => {
     let current = topic;
     vi.mocked(getEntityDetail).mockImplementation(async () => current);
     vi.mocked(archiveEntities).mockImplementation(async () => {
@@ -79,21 +79,24 @@ describe("Topic detail lifecycle", () => {
     await waitFor(() => expect(restore).toBeEnabled());
     expect(archiveEntities).toHaveBeenCalledExactlyOnceWith({ ids: ["topic-a"], dry_run: false });
     expect(onBack).not.toHaveBeenCalled();
-    expect(screen.queryByRole("menuitemcheckbox", { name: "Confirm topic" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add note" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Original topic note" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Mark note confirmed" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Delete note" })).toBeDisabled();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add information" })).not.toBeInTheDocument();
+    expect(screen.getByText("Original topic note")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Edit information —/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Mark as confirmed/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete information —/ })).not.toBeInTheDocument();
     expect(screen.getByText("archived")).toHaveClass("entity-archived-notice");
     for (const key of ["entityDetail", "entities", "knowledge-graph", "pages", "recent-concepts", "searchEntities"]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: [key] });
     }
     await user.click(restore);
     await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: "Confirm topic" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Archive" })).toBeEnabled());
     expect(restoreEntities).toHaveBeenCalledExactlyOnceWith({ ids: ["topic-a"], dry_run: false });
-    expect(screen.getByRole("button", { name: "Add note" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Original topic note" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.getByText("Original topic note")).toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+    expect(confirmEntity).not.toHaveBeenCalled();
     expect(onBack).not.toHaveBeenCalled();
   });
 
@@ -108,9 +111,10 @@ describe("Topic detail lifecycle", () => {
     await waitFor(() => expect(archive).toBeDisabled());
     await user.click(archive);
     expect(archiveEntities).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("menuitemcheckbox", { name: "Confirm topic" })).toBeDisabled();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete topic" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Original topic note" })).toBeDisabled();
+    expect(screen.getByText("Original topic note")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit information" })).not.toBeInTheDocument();
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
     reject(new Error("offline"));
@@ -121,7 +125,7 @@ describe("Topic detail lifecycle", () => {
     expect(onBack).not.toHaveBeenCalled();
   });
 
-  it("renders an archived confirmed topic neutrally and preserves confirmation on restore", async () => {
+  it("restores an archived confirmed topic without exposing confirmation metadata", async () => {
     let current: Detail = { ...topic, entity: { ...topic.entity, confirmed: true, status: "archived" } };
     vi.mocked(getEntityDetail).mockImplementation(async () => current);
     vi.mocked(restoreEntities).mockImplementation(async () => {
@@ -132,10 +136,13 @@ describe("Topic detail lifecycle", () => {
     await user.click(await screen.findByRole("button", { name: "Topic actions" }));
     const restore = screen.getByRole("menuitem", { name: "Restore" });
     expect(screen.queryByText("Confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
     expect(screen.getByText("archived")).toHaveClass("entity-archived-notice");
     await user.click(restore);
     await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await waitFor(() => expect(screen.getByRole("menuitemcheckbox", { name: "Confirmed" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Archive" })).toBeEnabled());
+    expect(screen.queryByText("Confirmed")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
     expect(confirmEntity).not.toHaveBeenCalled();
   });
 
@@ -143,32 +150,73 @@ describe("Topic detail lifecycle", () => {
     let resolve: () => void = () => {};
     vi.mocked(updateObservation).mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));
     const { user } = renderTopic();
-    await user.click(await screen.findByRole("button", { name: "Original topic note" }));
-    const input = screen.getByRole("textbox", { name: "Edit note" });
-    await user.clear(input);
-    await user.type(input, "Edited topic note{Enter}");
+    await user.click(await screen.findByRole("button", { name: "Edit information — Original topic note" }));
+    const input = screen.getByRole("textbox", { name: "Edit information" });
+    await user.type(input, " updated");
+    await waitFor(() => expect(updateObservation).toHaveBeenCalledExactlyOnceWith("note-a", "Original topic note updated"));
     await user.click(screen.getByRole("button", { name: "Topic actions" }));
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Archive" })).toBeDisabled());
     resolve();
     await waitFor(() => expect(screen.getByRole("menuitem", { name: "Archive" })).toBeEnabled());
   });
 
-  it("blocks repeated topic confirmation and conflicting lifecycle actions while confirmation is pending", async () => {
+  it("shows restore failure, then retries while keeping topic confirmation absent", async () => {
+    const archived: Detail = { ...topic, entity: { ...topic.entity, confirmed: true, status: "archived" } };
+    let current = archived;
+    vi.mocked(getEntityDetail).mockImplementation(async () => current);
+    vi.mocked(restoreEntities)
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockImplementationOnce(async () => {
+        current = topic;
+        return { count: 1, entity_ids: ["topic-a"], dry_run: false };
+      });
+    const { user, queryClient } = renderTopic();
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    await user.click(await screen.findByRole("button", { name: "Topic actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Restore" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't save. Try again.");
+    expect(screen.getByText("archived")).toHaveClass("entity-archived-notice");
+    expect(confirmEntity).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    const retry = screen.getByRole("menuitem", { name: "Restore" });
+    expect(retry).toBeEnabled();
+    await user.click(retry);
+    await user.click(screen.getByRole("button", { name: "Topic actions" }));
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Archive" })).toBeEnabled());
+    expect(restoreEntities).toHaveBeenCalledTimes(2);
+    expect(confirmEntity).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["entities"] });
+  });
+
+  it("blocks repeated archive actions and conflicting deletion while archive is pending", async () => {
     let resolve: () => void = () => {};
-    vi.mocked(confirmEntity).mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));
+    let current = topic;
+    vi.mocked(getEntityDetail).mockImplementation(async () => current);
+    vi.mocked(archiveEntities).mockImplementationOnce(() => new Promise((done) => {
+      resolve = () => {
+        current = { ...topic, entity: { ...topic.entity, status: "archived" } };
+        done({ count: 1, entity_ids: ["topic-a"], dry_run: false });
+      };
+    }));
     const { user } = renderTopic();
     await user.click(await screen.findByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitemcheckbox", { name: "Confirm topic", checked: false }));
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("menuitem", { name: "Archive" }));
     await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    const confirm = screen.getByRole("menuitemcheckbox", { name: "Confirm topic" });
-    expect(confirm).toBeDisabled();
-    expect(screen.getByRole("menuitem", { name: "Archive" })).toBeDisabled();
+    const archive = screen.getByRole("menuitem", { name: "Archive" });
+    expect(archive).toBeDisabled();
     expect(screen.getByRole("menuitem", { name: "Delete topic" })).toBeDisabled();
-    await user.click(confirm);
-    expect(confirmEntity).toHaveBeenCalledExactlyOnceWith("topic-a", true);
+    const menu = screen.getByRole("menu", { name: "Topic actions" });
+    expect(menu).toHaveFocus();
+    await user.keyboard("{ArrowDown}{ArrowUp}");
+    expect(menu).toHaveFocus();
+    expect(archiveEntities).toHaveBeenCalledExactlyOnceWith({ ids: ["topic-a"], dry_run: false });
+    expect(screen.queryByRole("menuitemcheckbox")).not.toBeInTheDocument();
+    expect(confirmEntity).not.toHaveBeenCalled();
     resolve();
-    await waitFor(() => expect(confirm).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("menuitem", { name: "Restore" })).toBeEnabled());
   });
 
   it("resets delete intent, graph, note drafts and errors on an unkeyed topic switch", async () => {
@@ -179,17 +227,16 @@ describe("Topic detail lifecycle", () => {
     await user.click(await screen.findByRole("button", { name: "Topic actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Archive" }));
     await screen.findByRole("alert");
-    await user.click(screen.getByRole("button", { name: "Original topic note" }));
-    await user.type(screen.getByRole("textbox", { name: "Edit note" }), " discarded");
+    await user.click(screen.getByRole("button", { name: "Edit information — Original topic note" }));
+    await user.type(screen.getByRole("textbox", { name: "Edit information" }), " discarded");
     await user.click(screen.getByRole("button", { name: "Topic actions" }));
     await user.click(screen.getByRole("menuitem", { name: "Delete topic" }));
-    await user.click(screen.getByRole("button", { name: "Topic actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Topic context" }));
+    await user.click(screen.getByRole("button", { name: "Info" }));
     await user.click(screen.getByRole("button", { name: "Full screen" }));
     switchTopic("topic-b");
     await screen.findByRole("heading", { name: "Topic B" });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: "Edit note" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Edit information" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Delete$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Topic actions" }));

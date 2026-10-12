@@ -90,12 +90,12 @@ describe("EntityConnections graph layout", () => {
     const graph = screen.getByRole("group", { name: "Connection map for Ada Lovelace" });
     expect(
       within(graph).getByRole("button", {
-        name: "Grace Hopper (person) · incoming · inspired",
+        name: "Grace Hopper (Person) · incoming · inspired",
       }),
     ).toBeInTheDocument();
     expect(
       within(graph).getByRole("button", {
-        name: "Charles Babbage (person) · outgoing · collaborated with",
+        name: "Charles Babbage (Person) · outgoing · collaborated with",
       }),
     ).toBeInTheDocument();
 
@@ -133,9 +133,30 @@ describe("EntityConnections graph layout", () => {
       { left: 50, top: 33.5 },
       { left: 50, top: 66.5 },
     ]);
-    expect(nodes[0]).toHaveAccessibleName("Grace Hopper (person) · incoming · inspired");
+    expect(nodes[0]).toHaveAccessibleName("Grace Hopper (Person) · incoming · inspired");
     expect(nodes[1]).toHaveAccessibleName(
-      "Charles Babbage (person) · outgoing · collaborated with",
+      "Charles Babbage (Person) · outgoing · collaborated with",
     );
+  });
+
+  it("humanizes relation labels without changing incoming and outgoing arrows", async () => {
+    await i18n.changeLanguage("en");
+    const relation: RelationWithEntity = {
+      id: "relation-open-source",
+      relation_type: "works_with",
+      direction: "incoming",
+      entity_id: "entity-open-source",
+      entity_name: "Open Source Project",
+      entity_type: "open_source_project",
+      source_agent: "fixture",
+      created_at: 1_700_000_500,
+    };
+    render(<EntityConnections name="Ada Lovelace" relations={[relation]} onEntityClick={() => {}} />);
+
+    expect(screen.getAllByRole("button", {
+      name: "Open Source Project (Open Source Project) · incoming · works with",
+    })).toHaveLength(2);
+    expect(screen.getByText("← works with")).toBeInTheDocument();
+    expect(relation.relation_type).toBe("works_with");
   });
 });

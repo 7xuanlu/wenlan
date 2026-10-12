@@ -14,13 +14,14 @@ vi.mock("../../../lib/tauri", () => ({
 
 import * as tauri from "../../../lib/tauri";
 
-function renderIdentityCard() {
+function renderIdentityCard(compact = true) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const onOpenSettings = vi.fn();
   const onOpenAbout = vi.fn();
   return render(
     <QueryClientProvider client={qc}>
       <IdentityCard
+        compact={compact}
         onOpenDetail={() => {}}
         onOpenSettings={onOpenSettings}
         onOpenAbout={onOpenAbout}
@@ -76,6 +77,19 @@ describe("IdentityCard", () => {
     expect(screen.queryByText("Lucian")).not.toBeInTheDocument();
     expect(screen.queryByText(/senior engineer/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Set up your profile")).not.toBeInTheDocument();
+  });
+
+  it("aligns the expanded account avatar inside the shared navigation icon slot", async () => {
+    renderIdentityCard(false);
+
+    const trigger = await screen.findByRole("button", { name: /Lucian account menu/ });
+    const slot = trigger.querySelector(".identity-account-slot");
+    const avatar = slot?.querySelector("img");
+
+    expect(trigger).toHaveClass("notes-primary-link");
+    expect(slot).toHaveClass("notes-navigation-glyph");
+    expect(avatar).toHaveStyle({ width: "24px", height: "24px" });
+    expect(trigger).toHaveTextContent("Lucian");
   });
 
   it("opens a minimal avatar menu without profile-specific or tool-connection shortcuts", async () => {

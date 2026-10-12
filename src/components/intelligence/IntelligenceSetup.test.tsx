@@ -23,7 +23,12 @@ vi.mock("../../lib/tauri", async (importOriginal) => {
   return { ...actual, ...mocks };
 });
 
-import { AnthropicFields, OnDeviceModelCard } from "./IntelligenceSetup";
+import {
+  AnthropicFields,
+  OnDeviceModelCard,
+  RoutineModelSelect,
+  SynthesisModelSelect,
+} from "./IntelligenceSetup";
 
 function renderCard(qc: QueryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })) {
   render(
@@ -50,6 +55,23 @@ describe("AnthropicFields", () => {
     mocks.setApiKey.mockResolvedValue(undefined);
     mocks.getModelChoice.mockResolvedValue([null, null]);
     mocks.setModelChoice.mockResolvedValue(undefined);
+  });
+
+  it("keeps current Anthropic settings guidance on the help affordance and saves the entered key", async () => {
+    mocks.getApiKey.mockResolvedValue(null);
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <AnthropicFields settingsPresentation showModelChoice={false} />
+      </QueryClientProvider>,
+    );
+
+    const key = await screen.findByLabelText("API key");
+    expect(screen.getByRole("button", { name: "Details: API key" })).toBeInTheDocument();
+    expect(screen.queryByText("Not configured")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enables Claude Haiku/)).not.toBeInTheDocument();
+    await userEvent.type(key, "sk-ant-test");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setApiKey).toHaveBeenCalledWith("sk-ant-test"));
   });
 
   it("invalidates apiKey, external-llm, and external-llm-key-configured after saving a key (job rows re-read the routing)", async () => {
@@ -212,5 +234,77 @@ describe("OnDeviceModelCard", () => {
     expect(mocks.downloadOnDeviceModel).toHaveBeenCalledWith("qwen3-4b-instruct-2507");
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["activity"] });
+  });
+});
+
+describe("compact Anthropic task model selects", () => {
+  afterEach(() => {
+    mocks.getModelChoice.mockReset();
+    mocks.setModelChoice.mockReset();
+  });
+
+  beforeEach(() => {
+    mocks.getModelChoice.mockResolvedValue([
+      "claude-sonnet-4-6",
+      "claude-opus-4-6",
+    ]);
+    mocks.setModelChoice.mockResolvedValue(undefined);
+  });
+
+  it("keeps Everyday editable, shows concise model names, and preserves Synthesis when saving", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    render(
+      <QueryClientProvider client={qc}>
+        <RoutineModelSelect compact />
+      </QueryClientProvider>,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Choose everyday model" });
+    expect(screen.getByText("Model")).toBeInTheDocument();
+    expect(screen.queryByText("Files and links new memories in the background")).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Haiku 4.5" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Sonnet 4.6" })).toBeInTheDocument();
+    expect(select.closest(".settings-task-field")).not.toBeNull();
+    expect(select.closest(".settings-task-control")).not.toBeNull();
+
+    await userEvent.selectOptions(select, "claude-haiku-4-5-20251001");
+
+    await waitFor(() =>
+      expect(mocks.setModelChoice).toHaveBeenCalledWith(
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-6",
+      ),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["modelChoice"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
+  });
+
+  it("keeps Synthesis editable and preserves Everyday when saving", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    render(
+      <QueryClientProvider client={qc}>
+        <SynthesisModelSelect compact />
+      </QueryClientProvider>,
+    );
+
+    const select = await screen.findByRole("combobox", { name: "Choose synthesis model" });
+    expect(screen.getByText("Model")).toBeInTheDocument();
+    expect(screen.queryByText("Drafts and updates your wiki pages in the background")).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Opus 4.6" })).toBeInTheDocument();
+    expect(select.closest(".settings-task-field")).not.toBeNull();
+    expect(select.closest(".settings-task-control")).not.toBeNull();
+
+    await userEvent.selectOptions(select, "claude-haiku-4-5-20251001");
+
+    await waitFor(() =>
+      expect(mocks.setModelChoice).toHaveBeenCalledWith(
+        "claude-sonnet-4-6",
+        "claude-haiku-4-5-20251001",
+      ),
+    );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["modelChoice"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["resolvedRouting"] });
   });
 });

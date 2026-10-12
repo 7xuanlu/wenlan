@@ -7,7 +7,6 @@ import DiagnosticsSection from "./DiagnosticsSection";
 import {
   getActivity,
   getWireState,
-  clipboardWrite,
   removeLegacyMcpEntry,
   removeRawMcpEntry,
   setSetupCompleted,
@@ -25,21 +24,31 @@ import { NO, YES, unreadable } from "../../../../test/readings";
 vi.mock("../../../../lib/tauri", () => ({
   getActivity: vi.fn(),
   getWireState: vi.fn(),
-  clipboardWrite: vi.fn().mockResolvedValue(undefined),
   removeLegacyMcpEntry: vi.fn().mockResolvedValue(undefined),
   removeRawMcpEntry: vi.fn().mockResolvedValue(undefined),
   setSetupCompleted: vi.fn().mockResolvedValue(undefined),
   startDaemonSidecar: vi.fn(),
 }));
 
-function renderDiagnostics(onSetupAgent?: () => void) {
+function renderDiagnosticsOverview(props: {
+  onSetupAgent?: () => void;
+  onOpenConnections?: () => void;
+  onOpenIntelligence?: () => void;
+  onOpenActivity?: () => void;
+} = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   }
-  return render(<DiagnosticsSection onSetupAgent={onSetupAgent} />, { wrapper: Wrapper });
+  return render(<DiagnosticsSection {...props} />, { wrapper: Wrapper });
+}
+
+function renderDiagnostics(onSetupAgent?: () => void) {
+  const rendered = renderDiagnosticsOverview({ onSetupAgent });
+  fireEvent.click(screen.getByTestId("diagnostics-details-toggle"));
+  return rendered;
 }
 
 const wireFixture: WireState = {
@@ -146,88 +155,109 @@ describe("DiagnosticsSection", () => {
     vi.mocked(getActivity).mockResolvedValue(activity());
   });
 
-  describe("background work card", () => {
-    it("renders the state, every asset's steps and both model routes", async () => {
-      renderDiagnostics();
+  describe("compact overview", () => {
+    it("shows three concise checks without paths, versions, routine counts, or detail tables", async () => {
+      vi.mocked(getWireState).mockResolvedValue({
+        ...wireFixture,
+        clients: wireFixture.clients.map((client) => ({ ...client, has_raw_entry: NO })),
+      });
+      renderDiagnosticsOverview();
 
-      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
-      expect(screen.getByText("Background work")).toBeInTheDocument();
-      expect(screen.getByTestId("diagnostics-state")).toHaveTextContent("Steeping");
-      expect(screen.getByTestId("diagnostics-last-activity")).toHaveTextContent("Nothing has run yet");
-
-      const memories = screen.getByTestId("diagnostics-asset-memories");
-      expect(within(memories).getByText("Memories")).toBeInTheDocument();
-      const memorySteps = within(memories).getAllByTestId("diagnostics-step");
-      expect(memorySteps.map((row) => row.textContent)).toEqual([
-        "StoreIdle143 of 143 memories0 memories failed",
-        "SummarizeRunning140 of 143 memories3 memories failed",
-        "LinkIdle143 of 143 memories0 memories failed",
-      ]);
-
-      const pages = screen.getByTestId("diagnostics-asset-pages");
-      expect(within(pages).getByTestId("diagnostics-asset-count")).toHaveTextContent("12 pages");
-      expect(within(pages).getByText("12 of 12 pages")).toBeInTheDocument();
-
-      const everyday = screen.getByTestId("diagnostics-route-everyday");
-      expect(everyday).toHaveTextContent("Everyday work");
-      expect(everyday).toHaveTextContent("on this machine");
-      expect(everyday).toHaveTextContent("qwen3-8b");
-      expect(within(everyday).getByText("Available")).toBeInTheDocument();
-      const synthesis = screen.getByTestId("diagnostics-route-synthesis");
-      expect(synthesis).toHaveTextContent("Page writing");
-      expect(synthesis).toHaveTextContent("no model in use");
-      expect(synthesis).toHaveTextContent("No model");
-      expect(within(synthesis).getByText("Not available")).toBeInTheDocument();
+      const overview = await screen.findByTestId("diagnostics-overview");
+      expect(await within(overview).findByTestId("diagnostics-overview-service")).toHaveTextContent("Responding");
+      expect(within(overview).getByTestId("diagnostics-overview-integration")).toHaveTextContent("AI tool detected");
+      expect(within(overview).getByTestId("diagnostics-overview-background")).toHaveTextContent("Steeping");
+      expect(within(overview).queryByText(/\/Users\/x/)).not.toBeInTheDocument();
+      expect(within(overview).queryByText("0 memories")).not.toBeInTheDocument();
+      expect(within(overview).queryByTestId("diagnostics-asset-memories")).not.toBeInTheDocument();
+      expect(within(overview).queryByText("Version 0.12.3")).not.toBeInTheDocument();
+      expect(within(overview).queryByText("Action")).not.toBeInTheDocument();
     });
 
-    it("counts each asset in its own unit when memory and entity totals differ", async () => {
-      renderDiagnostics();
-
-      const memories = await screen.findByTestId("diagnostics-asset-memories");
-      expect(within(memories).getByTestId("diagnostics-asset-count")).toHaveTextContent("143 memories");
-      expect(within(memories).getByTestId("diagnostics-asset-blocked")).toHaveTextContent("0 memories blocked");
-
-      const entities = screen.getByTestId("diagnostics-asset-entities");
-      // The headline total (143) follows Detect; the asset's own count is the
-      // 21 entities Confirm counts.
-      expect(within(entities).getByTestId("diagnostics-asset-count")).toHaveTextContent("21 entities");
-      expect(entities).not.toHaveTextContent("143 entities");
-      // Blocked is memories not yet scanned, never entities.
-      expect(within(entities).getByTestId("diagnostics-asset-blocked")).toHaveTextContent("93 memories blocked");
-      expect(entities).not.toHaveTextContent("93 entities");
-
-      const [detect, confirm] = within(entities).getAllByTestId("diagnostics-step");
-      expect(detect).toHaveTextContent("Detect");
-      expect(detect).toHaveTextContent("50 of 143 memories");
-      expect(confirm).toHaveTextContent("Confirm");
-      expect(confirm).toHaveTextContent("9 of 21 entities");
-    });
-
-    it("lists a step or asset this build cannot name as unknown, with its counts and no unit", async () => {
-      const base = activity();
-      vi.mocked(getActivity).mockResolvedValue({
-        ...base,
-        assets: [
+    it("keeps binary-search and client-read uncertainty visible even when a candidate was found", async () => {
+      vi.mocked(getWireState).mockResolvedValue({
+        ...wireFixture,
+        mcp_binary: {
+          ...wireFixture.mcp_binary,
+          undetermined: [{ input: "the home directory", blocked: "installed", error: "permission denied" }],
+        },
+        clients: [
           {
-            ...base.assets[0],
-            steps: [...base.assets[0].steps, step("unknown", { state: "unknown", done: 4, total: 7, failed: 1 })],
+            ...wireFixture.clients[0],
+            detected: unreadable("Access is denied."),
           },
-          ...base.assets.slice(1),
-          asset("unknown", { done: 2, total: 5, blocked: 1, steps: [step("unknown", { done: 2, total: 5 })] }),
         ],
       });
+      vi.mocked(getActivity).mockResolvedValue(activity({ state: "unknown" }));
+      renderDiagnosticsOverview();
 
+      const integration = await screen.findByTestId("diagnostics-overview-integration");
+      await screen.findByText("Some possible binary locations could not be checked.");
+      expect(integration).toHaveTextContent("Some possible binary locations could not be checked.");
+      expect(integration).toHaveTextContent("Some client configuration checks could not be read.");
+      expect(integration).toHaveTextContent("Unknown");
+      expect(await screen.findByTestId("diagnostics-overview-background")).toHaveTextContent("Some background-work details could not be determined.");
+    });
+
+    it("places connections, activity, and intelligence navigation only when callbacks are supplied", async () => {
+      vi.mocked(getWireState).mockResolvedValue({
+        ...wireFixture,
+        clients: [
+          { ...wireFixture.clients[0], has_raw_entry: YES },
+        ],
+      });
+      vi.mocked(getActivity).mockResolvedValue(activity({
+        state: "blocked",
+        everyday: { ...activity().everyday, mode: "pinned_unavailable", available: false },
+      }));
+      const onOpenConnections = vi.fn();
+      const onOpenIntelligence = vi.fn();
+      const onOpenActivity = vi.fn();
+      renderDiagnosticsOverview({ onOpenConnections, onOpenIntelligence, onOpenActivity });
+
+      fireEvent.click(await screen.findByRole("button", { name: "Connections" }));
+      fireEvent.click(screen.getByRole("button", { name: "View Activity" }));
+      fireEvent.click(screen.getByRole("button", { name: "Intelligence settings" }));
+      expect(onOpenConnections).toHaveBeenCalledTimes(1);
+      expect(onOpenActivity).toHaveBeenCalledTimes(1);
+      expect(onOpenIntelligence).toHaveBeenCalledTimes(1);
+
+      const noCallbacks = renderDiagnosticsOverview();
+      expect(within(noCallbacks.container).queryByRole("button", { name: "Connections" })).not.toBeInTheDocument();
+      expect(within(noCallbacks.container).queryByRole("button", { name: "View Activity" })).not.toBeInTheDocument();
+      expect(within(noCallbacks.container).queryByRole("button", { name: "Intelligence settings" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("background work summary", () => {
+    it("summarizes failures and blocked work, then links to Activity", async () => {
+      const onOpenActivity = vi.fn();
+      renderDiagnosticsOverview({ onOpenActivity });
+      fireEvent.click(screen.getByTestId("diagnostics-details-toggle"));
+
+      const summary = await screen.findByTestId("diagnostics-activity-summary");
+      expect(summary).toHaveTextContent("Steeping");
+      expect(summary).toHaveTextContent("Nothing has run yet");
+      expect(summary).toHaveTextContent("Some background work failed.");
+      expect(summary).toHaveTextContent("Some background work is blocked.");
+      expect(summary).not.toHaveTextContent("Summarize");
+      expect(summary).not.toHaveTextContent("143 memories");
+      fireEvent.click(within(summary).getByRole("button", { name: "View Activity" }));
+      expect(onOpenActivity).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves unknown and unavailable-model warnings in the compact summary", async () => {
+      vi.mocked(getActivity).mockResolvedValue(activity({
+        state: "unknown",
+        assets: [asset("future_asset" as ActivityAssetKind, { state: "future_state" as ActivityAssetStatus["state"] })],
+        everyday: { ...activity().everyday, mode: "pinned_unavailable", available: false },
+      }));
       renderDiagnostics();
 
-      const memories = await screen.findByTestId("diagnostics-asset-memories");
-      const rows = within(memories).getAllByTestId("diagnostics-step");
-      expect(rows).toHaveLength(4);
-      expect(rows[3].textContent).toBe("UnknownUnknown4 of 71 failed");
-
-      const unknownAsset = screen.getByTestId("diagnostics-asset-unknown");
-      expect(within(unknownAsset).getByTestId("diagnostics-asset-count")).toHaveTextContent(/^2 of 5$/);
-      expect(within(unknownAsset).getByTestId("diagnostics-asset-blocked")).toHaveTextContent(/^1 blocked$/);
-      expect(unknownAsset.textContent).not.toMatch(/memor|entit|page/i);
+      const summary = await screen.findByTestId("diagnostics-activity-summary");
+      expect(summary).toHaveTextContent("Some background-work details could not be determined.");
+      expect(summary).toHaveTextContent("The pinned everyday model is unavailable.");
+      expect(summary).toHaveTextContent("Unknown");
     });
 
     it("keeps an unset model muted and a chosen model that cannot run red", async () => {
@@ -249,7 +279,7 @@ describe("DiagnosticsSection", () => {
       expect(broken?.className).toContain("text-[var(--mem-status-danger-text)]");
     });
 
-    it("lists open suggestions by verbatim action and status", async () => {
+    it("renders readable suggestion labels and preserves unknown identifiers", async () => {
       vi.mocked(getActivity).mockResolvedValue(
         activity({
           refinement: {
@@ -258,6 +288,7 @@ describe("DiagnosticsSection", () => {
             groups: [
               { action: "detect_contradiction", status: "awaiting_review", count: 2 },
               { action: "entity_merge", status: "pending", count: 5 },
+              { action: "future_action", status: "future_status", count: 1 },
             ],
           },
         }),
@@ -266,7 +297,7 @@ describe("DiagnosticsSection", () => {
       renderDiagnostics();
 
       const suggestions = await screen.findByTestId("diagnostics-suggestions");
-      expect(within(suggestions).getByText("Suggestions")).toBeInTheDocument();
+      expect(screen.getByText("Suggestions")).toBeInTheDocument();
       expect(within(suggestions).getByTestId("diagnostics-suggestions-ready")).toHaveTextContent("Ready for review2");
       expect(within(suggestions).getByTestId("diagnostics-suggestions-not-ready")).toHaveTextContent(
         "Not yet ready for review5",
@@ -276,8 +307,9 @@ describe("DiagnosticsSection", () => {
       expect(within(suggestions).getByRole("columnheader", { name: "Count" })).toBeInTheDocument();
       const groups = within(suggestions).getAllByTestId("diagnostics-suggestion-group");
       expect(groups.map((row) => row.textContent)).toEqual([
-        "detect_contradictionawaiting_review2",
-        "entity_mergepending5",
+        "Contradictionawaiting review2",
+        "Entity mergePending5",
+        "Other action: future_actionOther status: future_status1",
       ]);
       expect(within(suggestions).queryByText("No open suggestions.")).not.toBeInTheDocument();
     });
@@ -318,11 +350,27 @@ describe("DiagnosticsSection", () => {
     it("Refresh reads activity again", async () => {
       renderDiagnostics();
 
-      await screen.findByTestId("diagnostics-asset-memories");
+      await screen.findByTestId("diagnostics-activity-summary");
       const callsBefore = vi.mocked(getActivity).mock.calls.length;
-      fireEvent.click(screen.getByText("Refresh"));
+      fireEvent.click(screen.getByText("Refresh checks"));
 
       await waitFor(() => expect(vi.mocked(getActivity).mock.calls.length).toBeGreaterThan(callsBefore));
+    });
+
+    it("qualifies retained activity as the last available result after a failed refresh", async () => {
+      vi.mocked(getActivity)
+        .mockResolvedValueOnce(activity())
+        .mockRejectedValueOnce(new Error("IPC failed"));
+
+      renderDiagnostics();
+      await screen.findByTestId("diagnostics-state");
+
+      fireEvent.click(screen.getByText("Refresh checks"));
+
+      expect(
+        await screen.findByText("The latest check failed (IPC failed); showing the last available result."),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("diagnostics-state")).toHaveTextContent("Steeping");
     });
 
     it("does not expose the manual steep maintenance action", async () => {
@@ -338,12 +386,9 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      // "Background work" is the static SectionHeader label, present
-      // regardless of query state, so it proves nothing about data having
-      // loaded. Await an asset block instead: it only renders inside the
-      // resolved activity data branch.
-      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
-      expect(await screen.findByText("Wiring information unavailable")).toBeInTheDocument();
+      // Await the summary because the section heading exists before its query resolves.
+      expect(await screen.findByTestId("diagnostics-activity-summary")).toBeInTheDocument();
+      expect(await screen.findAllByText("Wiring information unavailable")).toHaveLength(3);
     });
 
     it("Start Wenlan respawns the daemon, then re-probes the wiring", async () => {
@@ -353,7 +398,7 @@ describe("DiagnosticsSection", () => {
       vi.mocked(startDaemonSidecar).mockResolvedValue({ status: "started" });
 
       renderDiagnostics();
-      await screen.findByText("Wiring information unavailable");
+      await screen.findAllByText("Wiring information unavailable");
       const callsBefore = vi.mocked(getWireState).mock.calls.length;
 
       fireEvent.click(screen.getByText("Start Wenlan"));
@@ -374,7 +419,7 @@ describe("DiagnosticsSection", () => {
       });
 
       renderDiagnostics();
-      await screen.findByText("Wiring information unavailable");
+      await screen.findAllByText("Wiring information unavailable");
       const callsBefore = vi.mocked(getWireState).mock.calls.length;
 
       fireEvent.click(screen.getByText("Start Wenlan"));
@@ -391,7 +436,7 @@ describe("DiagnosticsSection", () => {
     it("renders the daemon, MCP binary, and clients groups", async () => {
       renderDiagnostics();
 
-      expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
+      expect(await screen.findByText("Reachable")).toBeInTheDocument();
       expect(screen.getByText("Reachable")).toBeInTheDocument();
       expect(screen.getByText("http://127.0.0.1:7878")).toBeInTheDocument();
       expect(screen.getByText("Version 0.12.3")).toBeInTheDocument();
@@ -401,7 +446,7 @@ describe("DiagnosticsSection", () => {
       expect(screen.getByText("/Users/x/.wenlan/bin/wenlan-mcp")).toBeInTheDocument();
       expect(screen.getByText("/Users/x/Repos/wenlan/target/release/wenlan-mcp")).toBeInTheDocument();
 
-      expect(screen.getByText("Clients")).toBeInTheDocument();
+      expect(screen.getByText("AI-tool integration")).toBeInTheDocument();
       expect(screen.getByText("Claude Code")).toBeInTheDocument();
       expect(screen.getByText("Claude Desktop")).toBeInTheDocument();
     });
@@ -411,7 +456,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
+      expect(await screen.findByText("Reachable")).toBeInTheDocument();
       expect(screen.getByText("Reachable")).toBeInTheDocument();
       expect(await screen.findByText("Diagnostics unavailable")).toBeInTheDocument();
     });
@@ -429,10 +474,10 @@ describe("DiagnosticsSection", () => {
       expect(await screen.findByText("Loading wiring…")).toBeInTheDocument();
       // Background work card resolved already; wiring card is still loading independently.
       expect(await screen.findByText("Background work")).toBeInTheDocument();
-      expect(await screen.findByTestId("diagnostics-asset-memories")).toBeInTheDocument();
+      expect(await screen.findByTestId("diagnostics-activity-summary")).toBeInTheDocument();
 
       resolveWire(wireFixture);
-      expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
+      expect(await screen.findByText("Reachable")).toBeInTheDocument();
     });
 
     it("renders the empty clients state", async () => {
@@ -440,46 +485,10 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
+      expect(await screen.findByText("Reachable")).toBeInTheDocument();
       expect(screen.getByText("No MCP clients found.")).toBeInTheDocument();
     });
 
-    it("copies a plain-text wiring report to the clipboard", async () => {
-      renderDiagnostics();
-
-      const copyButton = await screen.findByText("Copy report");
-      fireEvent.click(copyButton);
-
-      await waitFor(() => expect(clipboardWrite).toHaveBeenCalledTimes(1));
-      const reportText = vi.mocked(clipboardWrite).mock.calls[0][0];
-      expect(reportText).toContain("Wenlan runtime: Reachable");
-      expect(reportText).toContain("http://127.0.0.1:7878");
-      expect(reportText).toContain("[Found] /Users/x/.wenlan/bin/wenlan-mcp (installed)");
-      expect(reportText).toContain("[Missing] /Users/x/Repos/wenlan/target/release/wenlan-mcp (cargo)");
-      expect(reportText).toContain("Claude Desktop");
-      expect(reportText).toContain("registered twice for Claude Desktop");
-
-      expect(await screen.findByText("Copied")).toBeInTheDocument();
-    });
-
-    it("does not offer the copy report action before wiring data has loaded", async () => {
-      let resolveWire!: (value: WireState) => void;
-      vi.mocked(getWireState).mockReturnValue(
-        new Promise((resolve) => {
-          resolveWire = resolve;
-        }),
-      );
-
-      renderDiagnostics();
-
-      await screen.findByText("Loading wiring…");
-      expect(screen.queryByText("Copy report")).not.toBeInTheDocument();
-
-      await act(async () => {
-        resolveWire(wireFixture);
-      });
-      expect(await screen.findByText("Copy report")).toBeInTheDocument();
-    });
   });
 
   describe("wiring loading state", () => {
@@ -497,14 +506,14 @@ describe("DiagnosticsSection", () => {
       // instant-resolve mock would skip straight past this, so the promise
       // is held open on purpose.
       await screen.findByText("Loading wiring…");
-      expect(screen.queryByText("Wenlan runtime")).not.toBeInTheDocument();
+      expect(screen.queryByText("Reachable")).not.toBeInTheDocument();
 
       await act(async () => {
         resolveWire(wireFixture);
       });
 
       // Resolved: the real rows render and the loading state is gone.
-      expect(await screen.findByText("Wenlan runtime")).toBeInTheDocument();
+      expect(await screen.findByText("Reachable")).toBeInTheDocument();
       expect(screen.queryByText("Loading wiring…")).not.toBeInTheDocument();
     });
   });
@@ -515,7 +524,7 @@ describe("DiagnosticsSection", () => {
     it("PROPERTY 1: a missing MCP binary candidate renders as missing, not found", async () => {
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(screen.getAllByText("Found")).toHaveLength(1);
       expect(screen.getAllByText("Missing")).toHaveLength(1);
     });
@@ -523,7 +532,7 @@ describe("DiagnosticsSection", () => {
     it("PROPERTY 2: double registration (plugin + raw entry) is flagged for the affected client only", async () => {
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(
         screen.getByText(
           "Wenlan is registered twice for Claude Desktop. Remove the manual MCP entry. Wenlan is already connected automatically.",
@@ -546,7 +555,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Unreachable");
       expect(screen.getByText("Unreachable")).toBeInTheDocument();
       expect(screen.queryByText("Reachable")).not.toBeInTheDocument();
       expect(screen.getByText("connection refused")).toBeInTheDocument();
@@ -572,7 +581,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(screen.getByText("Connects automatically")).toBeInTheDocument();
       expect(screen.getByText("Sets up an MCP entry")).toBeInTheDocument();
 
@@ -580,7 +589,7 @@ describe("DiagnosticsSection", () => {
       // guard only scans resources.ts, so it cannot catch a value rendered raw
       // from the backend — this is the only thing standing between that tag and
       // the screen.
-      const wiringCard = screen.getByText("Wiring").closest("section");
+      const wiringCard = screen.getByText("MCP server binary").closest("section");
       expect(wiringCard?.textContent).not.toMatch(/plugin/i);
     });
 
@@ -617,7 +626,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(
         screen.getByText(
           "Cursor's config lists Wenlan twice: as wenlan and under its old name origin. Cursor starts two copies until the old entry is removed.",
@@ -636,7 +645,7 @@ describe("DiagnosticsSection", () => {
     it("the double-registration fix removes the raw entry for that client and refreshes wiring", async () => {
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       const callsBefore = vi.mocked(getWireState).mock.calls.length;
 
       // Claude Desktop is the double-registered client in the fixture
@@ -669,7 +678,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       const callsBefore = vi.mocked(getWireState).mock.calls.length;
 
       fireEvent.click(screen.getByText("Remove the old entry"));
@@ -712,7 +721,7 @@ describe("DiagnosticsSection", () => {
 
       // Resolve the wiring rows first, then assert absence (an absence assertion
       // made before the rows render would pass vacuously).
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       await screen.findByText("MCP server binary");
       expect(screen.queryByRole("button", { name: "Open tool setup" })).not.toBeInTheDocument();
     });
@@ -803,6 +812,7 @@ describe("DiagnosticsSection", () => {
 
       expect(await screen.findByText("Unreadable")).toBeInTheDocument();
       expect(screen.getByText("Missing")).toBeInTheDocument();
+      expect(screen.getByText(/Unreadable: Access is denied\. \(os error 5\)/)).toBeInTheDocument();
       expect(
         screen.getByText("Could not determine the wenlan-mcp binary: nothing was written."),
       ).toBeInTheDocument();
@@ -838,7 +848,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics(vi.fn());
 
-      expect(await screen.findByText("Not checked")).toBeInTheDocument();
+      expect(await screen.findByText(/Not checked/)).toBeInTheDocument();
       expect(
         screen.getByText(/the home directory could not be determined/),
       ).toBeInTheDocument();
@@ -968,25 +978,15 @@ describe("DiagnosticsSection", () => {
 
       // The command is genuinely there — this is a successful resolution.
       expect(
-        await screen.findByText("/Users/x/.wenlan/bin/wenlan-mcp", { selector: "p" }),
+        await screen.findByTestId("diagnostics-selected-executable"),
       ).toBeInTheDocument();
+      expect(screen.getByTestId("diagnostics-selected-executable")).toHaveTextContent("/Users/x/.wenlan/bin/wenlan-mcp");
       // And the unread input is still reported, in the tone for "no reading",
       // never as a measured absence.
-      expect(screen.getByText("Not checked")).toBeInTheDocument();
+      expect(screen.getByText(/Not checked/)).toBeInTheDocument();
       expect(screen.getByText(/WENLAN_MCP_DEV_BIN could not be determined/)).toBeInTheDocument();
     });
 
-    it("carries it into the pasted report, which is all a bug filer sends", async () => {
-      vi.mocked(getWireState).mockResolvedValue(foundWithUndetermined);
-
-      renderDiagnostics();
-      fireEvent.click(await screen.findByText("Copy report"));
-
-      await waitFor(() => expect(clipboardWrite).toHaveBeenCalled());
-      const calls = vi.mocked(clipboardWrite).mock.calls;
-      const report = calls[calls.length - 1]?.[0] as string;
-      expect(report).toContain("WENLAN_MCP_DEV_BIN could not be determined");
-    });
   });
 
   // ── Round 5, defect 4: a client the app could not look at ─────────────
@@ -1018,10 +1018,16 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       // Regex: the chip appends the reason after the label — the half a
       // boolean could never carry.
-      expect(screen.getByText(/Could not check/)).toBeInTheDocument();
+      expect(screen.getAllByText(/Could not check/).length).toBeGreaterThan(0);
+      expect(
+        screen.getByText((_, element) =>
+          element?.tagName === "P" &&
+          element.textContent?.includes("has_raw_entry: could not check (Access is denied. (os error 5))") === true,
+        ),
+      ).toBeInTheDocument();
       expect(screen.queryByText("Not detected")).not.toBeInTheDocument();
       // And no instruction is derived from it: `route: unknown` renders as
       // "could not tell", not as one of the three real routes.
@@ -1034,8 +1040,10 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
-      const chip = screen.getByText(/Could not check/).closest("span.inline-flex");
+      await screen.findByText("Reachable");
+      const chip = screen.getAllByText(/Could not check/)[0].closest("span.inline-flex");
+      expect(chip).toHaveTextContent("Could not check");
+      expect(chip).not.toHaveTextContent("Access is denied");
       // The warning tokens, which the "idle"/"down" chips never use. Reading
       // this off the class list is deliberate: it is the only way to prove the
       // two states are visually distinguishable, not merely differently worded.
@@ -1048,7 +1056,7 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(
         screen.getByText("config location could not be determined"),
       ).toBeInTheDocument();
@@ -1078,26 +1086,13 @@ describe("DiagnosticsSection", () => {
 
       renderDiagnostics();
 
-      await screen.findByText("Wenlan runtime");
+      await screen.findByText("Reachable");
       expect(screen.queryByText(/Cursor's config lists Wenlan twice/)).not.toBeInTheDocument();
       expect(screen.queryByText("Remove the old entry")).not.toBeInTheDocument();
       // Nor the plugin+raw box, whose premise is equally unmeasured.
       expect(screen.queryByText("Remove duplicate entry")).not.toBeInTheDocument();
     });
 
-    it("carries the reason into the pasted report, which is all a bug filer sends", async () => {
-      vi.mocked(getWireState).mockResolvedValue(unreadableClient);
-
-      renderDiagnostics();
-      fireEvent.click(await screen.findByText("Copy report"));
-
-      await waitFor(() => expect(clipboardWrite).toHaveBeenCalled());
-      const calls = vi.mocked(clipboardWrite).mock.calls;
-      const report = calls[calls.length - 1]?.[0] as string;
-      expect(report).toContain("Could not check");
-      expect(report).toContain("Access is denied. (os error 5)");
-      expect(report).not.toContain("Not detected");
-    });
   });
 
   describe("i18n", () => {
@@ -1117,7 +1112,7 @@ describe("DiagnosticsSection", () => {
       await i18n.changeLanguage("zh-Hans");
       renderDiagnostics();
 
-      expect(await screen.findByText("连接状态")).toBeInTheDocument();
+      expect(await screen.findByText("AI 工具集成")).toBeInTheDocument();
       expect(screen.queryByText("Wiring")).not.toBeInTheDocument();
     });
   });

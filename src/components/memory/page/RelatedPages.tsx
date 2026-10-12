@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import type { PageLinkOutbound } from "../../../lib/tauri";
-import { FileText } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { useTranslation } from "react-i18next";
 import "./NoteInfo.css";
 
@@ -24,7 +24,7 @@ export default function RelatedPages({ outbound, onPageClick }: RelatedPagesProp
           const key = `${link.label}-${link.target_page_id ?? idx}`;
           const inner = (
             <span className="note-info-link-copy">
-              <FileText size={16} weight="regular" aria-hidden="true" />
+              <PageIcon />
               <span className="note-info-link-label">{link.target_page_id ? link.target_title || link.label : link.label}</span>
             </span>
           );

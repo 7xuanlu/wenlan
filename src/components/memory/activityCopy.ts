@@ -58,6 +58,12 @@ export const enActivityStatus = {
     entities: "Entities",
     pages: "Pages",
   },
+  summary: {
+    pagesCurrent: "All pages are current.",
+    memoriesWaiting: "{{count}} awaiting summaries · searchable now",
+    entitiesWaiting_one: "{{count}} memory awaiting a scan",
+    entitiesWaiting_other: "{{count}} memories awaiting a scan",
+  },
   rowAsset: { memories: "Memories", entities: "Entities", pages: "Pages" },
   assetOff: {
     memories: "Your notes remain available.",
@@ -286,6 +292,12 @@ export const hansActivityStatus = {
     entities: "实体",
     pages: "页面",
   },
+  summary: {
+    pagesCurrent: "所有页面均已更新。",
+    memoriesWaiting: "{{count}} 条待摘要，可直接搜索",
+    entitiesWaiting_one: "{{count}} 条记忆待识别主题",
+    entitiesWaiting_other: "{{count}} 条记忆待识别主题",
+  },
   rowAsset: { memories: "记忆", entities: "实体", pages: "页面" },
   assetOff: {
     memories: "笔记仍可正常使用。",
@@ -479,6 +491,12 @@ export const hantActivityStatus = {
     memories: "記憶",
     entities: "實體",
     pages: "頁面",
+  },
+  summary: {
+    pagesCurrent: "所有頁面均已更新。",
+    memoriesWaiting: "{{count}} 筆待摘要，可直接搜尋",
+    entitiesWaiting_one: "{{count}} 筆記憶待辨識主題",
+    entitiesWaiting_other: "{{count}} 筆記憶待辨識主題",
   },
   rowAsset: { memories: "記憶", entities: "實體", pages: "頁面" },
   assetOff: {

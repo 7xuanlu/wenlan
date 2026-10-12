@@ -13,9 +13,10 @@ use wenlan_server::{router::build_router, state::ServerState};
 use wenlan_types::entities::EntityDetail;
 use wenlan_types::requests::{
     AddEntityAliasRequest, AddEntityObservationRequest, AddObservationRequest,
-    ArchiveEntitiesRequest, ConfirmEntityRequest, ConfirmObservationRequest, CreateEntityRequest,
-    CreateRelationRequest, EntitySelection, LinkEntityRequest, ListEntitiesRequest,
-    MergeEntityRequest, RestoreEntitiesRequest, UpdateObservationRequest,
+    ArchiveEntitiesRequest, ChangeEntityTypeRequest, ConfirmEntityRequest,
+    ConfirmObservationRequest, CreateEntityRequest, CreateRelationRequest, EntitySelection,
+    LinkEntityRequest, ListEntitiesRequest, MergeEntityRequest, RestoreEntitiesRequest,
+    UpdateObservationRequest,
 };
 use wenlan_types::responses::{
     AddObservationResponse, CreateEntityResponse, CreateRelationResponse, EntityAliasesResponse,
@@ -1087,7 +1088,7 @@ async fn add_entity_alias_conflict_with_live_namesake_points_at_merge() {
     );
 }
 
-/// #576: each of the five id-addressed entity write routes honors
+/// #576: each of the six id-addressed entity write routes honors
 /// `X-Wenlan-Space` -- a request carrying the entity's own space succeeds
 /// exactly as the header-less path did before scoping landed. Pins the
 /// header name itself, not just the underlying scope behavior (covered by
@@ -1109,6 +1110,57 @@ async fn entity_write_routes_succeed_with_matching_space_header() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(confirmed.ok);
+
+    let type_target =
+        create_test_entity_in_space(&router, "Header Scope Type", "concept", "work").await;
+    let (status, changed): (StatusCode, SuccessResponse) = request_typed_with_space(
+        &router,
+        Method::PUT,
+        &format!("/api/memory/entities/{}/type", type_target.id),
+        "work",
+        json_body(&ChangeEntityTypeRequest {
+            entity_type: "person".to_string(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changed.ok);
+    assert_eq!(
+        db.get_entity_detail_scoped(
+            &type_target.id,
+            &wenlan_core::read_scope::ReadScope::Space("work".to_string()),
+        )
+        .await
+        .unwrap()
+        .entity
+        .entity_type,
+        "person"
+    );
+    db.create_space("home", None, false).await.unwrap();
+    let (status, error): (StatusCode, ErrorEnvelope) = request_typed_with_space(
+        &router,
+        Method::PUT,
+        &format!("/api/memory/entities/{}/type", type_target.id),
+        "home",
+        json_body(&ChangeEntityTypeRequest {
+            entity_type: "place".to_string(),
+        }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a different Space cannot edit this entity"
+    );
+    assert!(!error.error.is_empty());
+    let after_out_of_scope = db
+        .get_entity_detail_scoped(
+            &type_target.id,
+            &wenlan_core::read_scope::ReadScope::Space("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_out_of_scope.entity.entity_type, "person");
 
     let observation_target =
         create_test_entity_in_space(&router, "Header Scope Observation", "org", "work").await;

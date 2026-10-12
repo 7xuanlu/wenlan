@@ -1,0 +1,22 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.source-container-workspace { background: var(--mem-bg); color: var(--mem-text); display: flex; height: 100%; min-height: 0; overflow: hidden; position: relative; }
+.source-container-main { box-sizing: border-box; display: flex; flex: 1 1 auto; font-family: var(--mem-font-body); min-height: 0; min-width: 0; overflow-x: hidden; overflow-y: scroll; width: 100%; }
+.source-container-collection .source-collection-breadcrumbs { margin-bottom: 20px; }
+.source-container-main .source-library-list { margin-top: 0; }
+.source-container-crumb { align-items: center; display: inline-flex; gap: 7px; }
+.source-container-notices p, .source-container-notices [role="alert"] { color: var(--mem-text-secondary); font-size: 13px; line-height: 1.6; margin: 12px 0; }
+.source-container-notices [role="alert"] { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
+.source-container-notices button { background: transparent; border: 0; color: var(--mem-accent-indigo); cursor: pointer; padding: 3px 0; text-decoration: underline; }
+.source-container-empty { align-items: center; color: var(--mem-text-secondary); display: flex; flex-direction: column; gap: 12px; justify-content: center; min-height: 220px; text-align: center; }
+.source-container-empty p { margin: 0; }
+.source-container-info { padding-bottom: 24px; }
+.source-container-info > p { color: var(--mem-text-secondary); font-size: 12px; line-height: 1.6; margin: 18px 0; }
+.source-container-info .source-info-metadata dd, .source-container-path { overflow-wrap: anywhere; }
+.source-container-refresh { min-height: 36px; }
+.source-container-refresh:disabled { cursor: wait; opacity: .65; }
+.source-container-reader { align-items: stretch; flex-direction: column; overflow: hidden; padding: 0; }
+.source-container-back { align-items: center; display: inline-flex; gap: 7px; }
+.source-container-reader .source-document-page { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.source-container-file-content { width: 100%; }
+.source-container-file-content [role="alert"] { color: var(--mem-text-secondary); }
+.source-container-file-content button { cursor: pointer; }

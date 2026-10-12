@@ -2,15 +2,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Funnel } from "@phosphor-icons/react";
+import { TopicIcon } from "./TopicIcon";
 import { toast } from "sonner";
 import { queryEntities, type Entity } from "../../../lib/tauri";
 import { readAssetLens, writeAssetLens, type AssetLens } from "../../../lib/assetLens";
-import { AssetCard } from "../assets/AssetCard";
 import { AssetLensToggle } from "../assets/AssetLensToggle";
 import "../assets/assetCards.css";
 import {
   DEFAULT_FILTERS,
-  entityInitials,
   entityListRequest,
   filtersActive,
   type EntityFilters,
@@ -24,7 +23,7 @@ interface EntitiesViewProps {
   readonly onEntityClick: (entityId: string) => void;
 }
 
-const TYPE_CHIPS: EntityTypeFilter[] = ["all", "concept", "person", "organization", "place"];
+const TYPE_CHIPS: EntityTypeFilter[] = ["all", "concept", "person", "organization", "place", "project", "technology"];
 
 export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
   const { t } = useTranslation();
@@ -237,46 +236,35 @@ export function EntitiesView({ onEntityClick }: EntitiesViewProps) {
           <p>{t(emptyBody)}</p>
         </div>
       ) : lens === "cards" ? (
-        <div className="asset-cards" data-testid="entities-cards">
+        <div className="entities-list entities-list-cards" data-testid="entities-cards">
           {entities.map((entity) => (
-            <AssetCard
-              footer={<>
-                <span className="entity-card-type">
-                  {t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type })}
-                </span>
-                {entity.space && <span className="entity-card-space">{entity.space}</span>}
-              </>}
+            <button
+              aria-label={entity.name}
+              className="entity-row entity-row-card"
               key={entity.id}
-              onOpen={() => onEntityClick(entity.id)}
-              openLabel={entity.name}
-              testId={`entity-card-${entity.id}`}
-              title={entity.name}
+              onClick={() => onEntityClick(entity.id)}
+              data-testid={`entity-card-${entity.id}`}
+              type="button"
             >
-              <span aria-hidden="true" className="entity-initials">{entityInitials(entity.name)}</span>
-            </AssetCard>
+              <TopicIcon entityType={entity.entity_type} className="entity-row-icon" size={20} />
+              <span className="entity-row-name">{entity.name}</span>
+              <span className="entity-row-type">{t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type })}</span>
+              {entity.space && <span className="entity-row-space">{entity.space}</span>}
+            </button>
           ))}
         </div>
       ) : (
-        <table className="entities-table">
-          <thead>
-            <tr>
-              <th scope="col">{t("entities.columns.entity")}</th>
-              <th scope="col">{t("entities.columns.type")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entities.map((entity) => (
-              <tr key={entity.id}>
-                <td>
-                  <button className="entities-name-link" onClick={() => onEntityClick(entity.id)} type="button">
-                    {entity.name}
-                  </button>
-                </td>
-                <td>{t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type })}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="entities-list" data-testid="entities-list">
+          {entities.map((entity) => (
+            <button aria-label={entity.name} className="entity-row" key={entity.id} onClick={() => onEntityClick(entity.id)} type="button">
+              <TopicIcon entityType={entity.entity_type} className="entity-row-icon" size={20} />
+              <span className="entity-row-copy">
+                <span className="entity-row-name">{entity.name}</span>
+                <span className="entity-row-type">{t(`entities.filters.type_${entity.entity_type}`, { defaultValue: entity.entity_type })}</span>
+              </span>
+            </button>
+          ))}
+        </div>
       )}
       {!loading && !loadError && hasMore && (
         <button

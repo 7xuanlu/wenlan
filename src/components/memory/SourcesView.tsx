@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { Folder } from "@phosphor-icons/react";
+import { SourceTypeIcon } from "./sources/SourceTypeIcon";
+import { getSourceKind } from "./sources/sourcePresentation";
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -16,11 +19,12 @@ import {
 } from "../../lib/tauri";
 import { folderName } from "../../lib/dateFormat";
 import AddSourceMenu from "./sources/AddSourceMenu";
-import ContentRenderer from "./ContentRenderer";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import SourceLibrary, { type SourceLibraryState } from "./sources/SourceLibrary";
 import SourceDocumentPreview from "./sources/SourceDocumentPreview";
+import SourceDocumentContent from "./sources/SourceDocumentContent";
+import { SourceDocumentLayout } from "./sources/SourceDocumentReader";
 import "./sources/source-access.css";
 
 // The daemon's directory-ingest filter (wenlan-core sources/directory.rs).
@@ -92,23 +96,17 @@ interface SourcesViewProps {
   onManageSources: () => void;
   libraryState?: SourceLibraryState;
   onLibraryStateChange?: (state: SourceLibraryState) => void;
+  onOpenDocument?: (file: IndexedFileInfo) => void;
+  onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
 }
 
-export default function SourcesView({ onManageSources, libraryState, onLibraryStateChange }: SourcesViewProps) {
-  const { t } = useTranslation();
+export default function SourcesView({ libraryState, onLibraryStateChange, onOpenDocument, onRegisterFlush }: SourcesViewProps) {
   const [adding, setAdding] = useState(false);
-  const [folder, setFolder] = useState<string | null>(null);
   const [document, setDocument] = useState<IndexedFileInfo | null>(null);
   return <>
-    <div hidden={folder !== null} style={{ height: "100%" }}>
-      <SourceLibrary onAdd={() => setAdding(true)} onBrowseFolder={setFolder} onOpenDocument={setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
-    </div>
-    {folder !== null && <div className="source-folder-workspace">
-      <button type="button" className="page-editor-action source-folder-back" onClick={() => setFolder(null)}>{t("sourceAccess.back")}</button>
-      <SourceFolderBrowser onManageSources={onManageSources} initialSourceId={folder} />
-    </div>}
+    <SourceLibrary onAdd={() => setAdding(true)} onOpenDocument={onOpenDocument ?? setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
     {adding && <AddSourceMenu onClose={() => setAdding(false)} />}
-    {document && <SourceDocumentPreview key={`${document.source}:${document.source_id}`} file={document} onClose={() => setDocument(null)} />}
+    {document && <SourceDocumentPreview key={`${document.source}:${document.source_id}`} file={document} onClose={() => setDocument(null)} onRegisterFlush={onRegisterFlush} />}
   </>;
 }
 
@@ -490,7 +488,7 @@ function FileRow({ node, depth, selectedPath, onSelect, isIndexed, indexReady }:
         if (!active) e.currentTarget.style.background = "transparent";
       }}
     >
-      <FileGlyph isDir={false} supported={supported} />
+      <FileGlyph isDir={false} supported={supported} path={node.path} />
       <span
         className="flex-1 min-w-0 truncate"
         style={{
@@ -555,6 +553,7 @@ function FileDetail({
   indexReady: boolean;
   indexedFiles?: IndexedFileInfo[];
 }) {
+  const { t } = useTranslation();
   const e = ext(node.name);
   const supported = SUPPORTED_EXTENSIONS.includes(e);
   const indexed = indexReady && isIndexed(node.source, node.path);
@@ -566,6 +565,7 @@ function FileDetail({
     data: fileText,
     isLoading: textLoading,
     isError: textError,
+    refetch: refetchText,
   } = useQuery({
     queryKey: ["fileText", node.path],
     queryFn: () => readSourceText(node.path),
@@ -578,6 +578,68 @@ function FileDetail({
   if (!supported) statusText = "Unsupported type";
   else if (indexReady && indexed) statusText = "In your library";
   else statusText = "Indexing…";
+
+  if (isText) {
+    const textStatus = indexReady && indexed ? t("sourceAccess.inLibrary") : t("sourceAccess.indexing");
+    const documentFile: IndexedFileInfo = info ?? {
+      source: "memory",
+      source_agent: "folder",
+      source_id: `${node.source.id}::${node.path}`,
+      title: node.name,
+      chunk_count: 0,
+      last_modified: 0,
+    };
+
+    return <section className="source-folder-document-pane">
+      <div className="source-folder-document-scroll">
+        <SourceDocumentLayout
+          file={documentFile}
+          content={
+            <div className="source-folder-document-content">
+              {textLoading && <p role="status">{t("sourceAccess.previewLoading")}</p>}
+              {textError && <div role="alert">
+                <p>{t("sourceAccess.previewFailed")}</p>
+                <button type="button" className="page-editor-action" onClick={() => void refetchText()}>
+                  {t("sourceAccess.retry")}
+                </button>
+              </div>}
+              {!textLoading && !textError && fileText?.trim()
+                ? <SourceDocumentContent content={fileText} title={documentFile.title} />
+                : !textLoading && !textError && <p>{t("sourceAccess.noPreview")}</p>}
+            </div>
+          }
+          infoContent={<>
+            <section>
+              <h3 className="note-info-section-heading">{t("sourceAccess.index")}</h3>
+              <dl className="source-info-metadata">
+                <div><dt>{t("sourceAccess.status")}</dt><dd>{textStatus}</dd></div>
+                {info && <div><dt>{t("sourceAccess.indexedAs")}</dt><dd>
+                  {t(info.chunk_count === 1 ? "sourceAccess.onePassage" : "sourceAccess.passages", { count: info.chunk_count })}
+                </dd></div>}
+                {info?.memory_type && <div><dt>{t("sourceAccess.memoryType")}</dt><dd>{info.memory_type}</dd></div>}
+                {info?.domain && <div><dt>{t("sourceAccess.domain")}</dt><dd>{info.domain}</dd></div>}
+              </dl>
+            </section>
+            {info?.summary && <section>
+              <h3 className="note-info-section-heading">{t("sourceAccess.summary")}</h3>
+              <p className="source-folder-document-summary">{info.summary}</p>
+            </section>}
+            <section>
+              <h3 className="note-info-section-heading">{t("sourceAccess.localFile")}</h3>
+              <button
+                type="button"
+                className="source-folder-file-path"
+                aria-label={t("sourceAccess.openFile")}
+                onClick={() => openFile(node.path).catch((err) => toast(t("sourceAccess.openFileFailed"), { description: String(err) }))}
+              >
+                {node.path}
+              </button>
+            </section>
+          </>}
+        />
+      </div>
+    </section>;
+  }
 
   return (
     <section className="flex-1 flex flex-col overflow-hidden">
@@ -706,34 +768,6 @@ function FileDetail({
           >
             {info.summary}
           </p>
-        )}
-
-        {isText && textLoading && (
-          <div
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Loading…
-          </div>
-        )}
-        {isText && textError && (
-          <div
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "11px",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            Couldn't read this file.
-          </div>
-        )}
-        {isText && !textLoading && !textError && fileText && (
-          <div style={{ maxWidth: 680 }}>
-            <ContentRenderer content={fileText} variant="detail" />
-          </div>
         )}
       </div>
     </section>
@@ -922,19 +956,11 @@ function FolderDetail({ node }: { node: Extract<SourcesNode, { kind: "folder" }>
   );
 }
 
-function FileGlyph({ isDir, supported }: { isDir: boolean; supported: boolean }) {
-  if (isDir) {
-    return (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--mem-accent-indigo)", opacity: 0.8 }}>
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-      </svg>
-    );
-  }
+function FileGlyph({ isDir, supported, path = "" }: { isDir: boolean; supported: boolean; path?: string }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" style={{ color: supported ? "var(--mem-text-secondary)" : "var(--mem-text-tertiary)", opacity: supported ? 0.85 : 0.5 }}>
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-    </svg>
+    <span className="inline-flex shrink-0" style={{ color: "var(--mem-text-secondary)", opacity: isDir || supported ? 1 : 0.5 }}>
+      {isDir ? <Folder size={20} weight="regular" aria-hidden="true" focusable="false" /> : <SourceTypeIcon kind={getSourceKind({ source: "file", source_id: path, title: "" })} />}
+    </span>
   );
 }
 

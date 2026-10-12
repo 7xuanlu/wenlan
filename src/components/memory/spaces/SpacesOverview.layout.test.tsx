@@ -17,9 +17,9 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../../../lib/tauri", () => api);
 
-const confirmed = makeSpace({ id: "work", name: "Work" });
+const confirmed = makeSpace({ id: "work", name: "Work", description: "A longer description remains visible in the compact list row." });
 const suggested = makeSpace({ id: "suggested", name: "Suggested", suggested: true });
-const desktopColumns = ["drag", "name", "pages", "menu"];
+const desktopColumns = ["name", "menu"];
 
 function directColumnNames(element: HTMLElement): string[] {
   return Array.from(element.children)
@@ -44,13 +44,27 @@ describe("SpacesOverview layout contract", () => {
     expect(directColumnNames(row)).toEqual(desktopColumns);
     expect(row.querySelector('[data-space-column="updated"]')).toBeNull();
     expect(row.querySelector('[data-space-column="menu"]')).not.toBeNull();
-    expect(within(row).getByTestId("space-pages")).toHaveTextContent(/\d+ notes?/i);
-    expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(/\d+ notes?/i);
+    expect(row.querySelector('[data-space-column="drag"]')).toBeNull();
+    expect(within(row).getByText(confirmed.description!)).toBeInTheDocument();
+    const pageCount = within(row).getByTestId("space-pages");
+    expect(pageCount).toHaveTextContent(/\d+ notes?/i);
+    expect(row.querySelector('[data-space-column="pages"]')).toBeNull();
+    expect(row.querySelector(".spaces-row-name")?.contains(pageCount)).toBe(true);
+    expect(pageCount).not.toHaveAttribute("aria-hidden", "true");
+    expect(pageCount).toBeVisible();
+    expect(within(row).getByRole("button", { name: labels.dragSpace("Work") })).not.toHaveAttribute("title");
 
     const css = readFileSync(resolve("src/components/memory/spaces/spacesInventory.css"), "utf8");
+    const baseCss = readFileSync(resolve("src/components/memory/spaces/spaces.css"), "utf8");
+    expect(baseCss).toMatch(/\.spaces-overview\s*\{[^}]*max-width:\s*var\(--collection-reading-width,\s*960px\);/s);
     expect(css).not.toMatch(/spaces-table-head/);
     expect(css).toMatch(/white-space:\s*nowrap/);
-    expect(css).toMatch(/grid-template-columns:\s*var\(--spaces-desktop-columns\)/);
+    expect(css).toMatch(/grid-template-columns:\s*minmax\(0,\s*1fr\) 36px/);
+    expect(css).toMatch(/\.spaces-drag-handle\s*\{[^}]*position:\s*absolute/);
+    expect(css).toMatch(/\.spaces-drag-handle:hover,[\s\S]*?background:\s*transparent/);
+    expect(css).toMatch(/\.spaces-row-main\s*\{[^}]*grid-template-columns:\s*20px minmax\(0,\s*1fr\)/);
+    expect(css).toMatch(/min-height:\s*52px/);
+    expect(css).toMatch(/@media \(pointer:\s*coarse\),\s*\(hover:\s*none\)[\s\S]*?spaces-drag-handle[^}]*width:\s*44px/);
   });
 
   it("keeps New space as the filled create action while Suggested decisions stay compact, tonal, and marker-free", async () => {
@@ -81,16 +95,13 @@ describe("SpacesOverview layout contract", () => {
     expect(baseCss).toMatch(/\.spaces-suggestion-keep:hover\s*\{[^}]*background:\s*var\(--mem-indigo-bg\)/s);
   });
 
-  it("keeps mobile row controls beside the Space identity instead of stacking them as loose rows", () => {
+  it("keeps mobile row controls and the page count on one compact line", () => {
     const css = readFileSync(resolve("src/components/memory/spaces/spacesInventory.css"), "utf8");
 
-    expect(css).toMatch(
-      /@media \(max-width: 699px\) \{[\s\S]*?\.spaces-overview \.spaces-row:not\(\.spaces-row-suggested\):not\(\.spaces-row-edit\)\s*\{[^}]*grid-template-columns:\s*28px minmax\(0, 1fr\) 36px;/,
-    );
-    expect(css).toMatch(/\.spaces-row:not\(\.spaces-row-suggested\) \.spaces-drag-handle\s*\{[^}]*grid-column:\s*1;[^}]*grid-row:\s*1;/s);
-    expect(css).toMatch(/\.spaces-row:not\(\.spaces-row-suggested\) \.spaces-row-main\s*\{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/s);
-    expect(css).toMatch(/\.spaces-row:not\(\.spaces-row-suggested\) \.spaces-menu-anchor\s*\{[^}]*grid-column:\s*3;[^}]*grid-row:\s*1;/s);
-    expect(css).toMatch(/\.spaces-row:not\(\.spaces-row-suggested\) \.spaces-mobile-metadata\s*\{[^}]*grid-column:\s*2 \/ 4;[^}]*grid-row:\s*2;/s);
+    expect(css).toMatch(/\.spaces-overview \.spaces-row:not\(\.spaces-row-suggested\):not\(\.spaces-row-edit\)\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\) 36px/);
+    expect(css).toMatch(/\.spaces-overview \.spaces-row:not\(\.spaces-row-suggested\) \.spaces-row-pages\s*\{[^}]*display:\s*inline-block/);
+    expect(css).toMatch(/@media \(pointer:\s*coarse\),\s*\(hover:\s*none\)[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) 44px/);
+    expect(css).toMatch(/\.spaces-overview \.spaces-row:not\(\.spaces-row-suggested\) \.spaces-menu-trigger\s*\{[^}]*width:\s*44px;[^}]*height:\s*44px/s);
   });
 
   it("compacts only sub-600 Suggested rows so owned Spaces enter the initial phone viewport", () => {

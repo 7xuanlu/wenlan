@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "./components/memory/readingSurface.css";
+@import "./components/memory/page/detailInfo.css";
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
@@ -2193,22 +2195,6 @@ html[data-theme="light"] {
   flex-direction: column;
 }
 
-.page-detail-document {
-  display: flex;
-  box-sizing: border-box;
-  width: min(100%, 1130px);
-  margin-inline: auto;
-  padding: 40px 32px 40px;
-  flex-direction: column;
-  gap: 22px;
-}
-
-@media (max-width: 640px) {
-  .page-detail-document {
-    padding: 24px 16px 40px;
-  }
-}
-
 .page-detail-heading-block--writing {
   position: absolute;
 }
@@ -2730,16 +2716,9 @@ html[data-theme="light"] {
 /* Reading column: capped measure + roomier type via ContentRenderer vars.
    Type and width scale together — the measure (chars/line) stays constant. */
 .page-detail-prose {
-  min-width: 0;
+  /* Fallback matches --reading-measure for browsers without custom properties. */
   max-width: 730px;
-  --content-body-size: 15px;
-  --content-body-leading: 1.75;
-  --content-code-size: 13px;
-  --content-para-gap: 1em;
-  --content-heading-gap: 1.6em;
-  --content-h1-size: 20px;
-  --content-h2-size: 18px;
-  --content-h3-size: 15.5px;
+  max-width: var(--reading-measure);
 }
 
 .page-detail-lede {
@@ -2847,119 +2826,6 @@ html[data-theme="light"] {
   font-family: var(--mem-font-mono);
   font-size: var(--mem-text-meta);
   font-variant-numeric: tabular-nums;
-}
-
-/* Observations */
-.entity-obs-list {
-  display: grid;
-}
-
-.entity-obs-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  border-top: 1px solid var(--mem-detail-divider);
-  padding: 9px 0 8px;
-}
-
-.entity-obs-row:first-child {
-  border-top: 0;
-  padding-top: 0;
-}
-
-.entity-obs-state {
-  flex: 0 0 auto;
-  margin-top: 3px;
-}
-
-.entity-obs-content {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: var(--mem-text);
-  cursor: text;
-  font-family: var(--mem-font-body);
-  font-size: var(--mem-text-description);
-  line-height: 1.55;
-  overflow-wrap: anywhere;
-  padding: 0;
-  text-align: left;
-}
-
-.entity-obs-content.is-unconfirmed {
-  color: var(--mem-text-secondary);
-}
-
-.entity-obs-input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  border-bottom: 1px solid var(--mem-accent-warm);
-  background: transparent;
-  color: var(--mem-text);
-  font-family: var(--mem-font-body);
-  font-size: var(--mem-text-control);
-  line-height: 1.55;
-  outline: none;
-  padding: 0 0 1px;
-}
-
-.entity-obs-input:focus-visible {
-  outline: 2px solid var(--mem-accent-page);
-  outline-offset: 2px;
-}
-
-.entity-obs-confidence {
-  flex: 0 0 auto;
-  margin-top: 2px;
-  color: var(--mem-text-tertiary);
-  font-family: var(--mem-font-mono);
-  font-size: var(--mem-text-meta);
-  font-variant-numeric: tabular-nums;
-}
-
-.entity-obs-delete {
-  display: inline-flex;
-  flex: 0 0 auto;
-  width: 22px;
-  height: 22px;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--mem-text-tertiary);
-  cursor: pointer;
-  opacity: 0;
-}
-
-.entity-obs-row:hover .entity-obs-delete,
-.entity-obs-delete:focus-visible {
-  opacity: 1;
-}
-
-/* No hover on touch — keep the delete target visible */
-@media (pointer: coarse) {
-  .entity-obs-delete {
-    opacity: 1;
-  }
-}
-
-.entity-obs-delete:hover {
-  background: var(--mem-hover);
-  color: var(--mem-status-warning-text);
-}
-
-.entity-obs-add {
-  display: flex;
-  border-top: 1px solid var(--mem-detail-divider);
-  padding-top: 9px;
-}
-
-.entity-obs-add:first-child {
-  border-top: 0;
-  padding-top: 0;
 }
 
 /* Connection map */
@@ -3210,9 +3076,6 @@ p.entity-error {
 }
 
 /* Focus rings match the dossier system */
-.entity-obs-state:focus-visible,
-.entity-obs-content:focus-visible,
-.entity-obs-delete:focus-visible,
 .entity-graph-node:focus-visible,
 .entity-relation-row:focus-visible,
 .entity-status-chip:focus-visible,

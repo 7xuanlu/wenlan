@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { WorkspaceBackButton } from "../navigation/WorkspaceNavigation";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { Space } from "../../../lib/tauri";
 import type { SpaceDetailCopy } from "./copy";
+import { InlineTextField } from "../editor/InlineTextField";
+import { useSpaceIdentityAutosave } from "./useSpaceIdentityAutosave";
 
 type SpaceIdentityActions = {
   readonly onBack: () => void;
@@ -12,7 +14,7 @@ type SpaceIdentityActions = {
   readonly onDelete: () => void;
   readonly onKeep: () => void;
   readonly onReviewAll?: () => void;
-  readonly onSaveIdentity: (value: SpaceIdentityValue) => void;
+  readonly onSaveIdentity: (value: SpaceIdentityValue) => Promise<void> | void;
 };
 
 export type SpaceIdentityValue = {
@@ -25,13 +27,7 @@ type SpaceDossierHeaderProps = {
   readonly copy: SpaceDetailCopy;
   readonly mutationError: boolean;
   readonly space: Space;
-};
-
-type SubmittedIdentity = {
-  readonly inputDescription: string;
-  readonly inputName: string;
-  readonly submittedDescription: string;
-  readonly submittedName: string;
+  readonly onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
 };
 
 export function SpaceDossierHeader({
@@ -39,34 +35,23 @@ export function SpaceDossierHeader({
   copy,
   mutationError,
   space,
+  onRegisterFlush,
 }: SpaceDossierHeaderProps) {
   const { t } = useTranslation();
-  const [editingIdentity, setEditingIdentity] = useState(false);
-  const [nameValue, setNameValue] = useState(space.name);
-  const [descriptionValue, setDescriptionValue] = useState(space.description ?? "");
+  const { draft, status, change, flush, focus, blur, compositionStart, compositionEnd } = useSpaceIdentityAutosave(
+    { name: space.name, description: space.description ?? "" }, actions.onSaveIdentity,
+  );
+  const registeredFlush = useCallback(() => flush(), [flush]);
+  useEffect(() => {
+    onRegisterFlush?.(registeredFlush);
+    return () => onRegisterFlush?.(null);
+  }, [onRegisterFlush, registeredFlush]);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuTriggerRef = useRef<HTMLButtonElement>(null);
   const menuInitialFocusRef = useRef<"first" | "last">("first");
-  const submittedIdentity = useRef<SubmittedIdentity | null>(null);
-
-  useEffect(() => {
-    const submitted = submittedIdentity.current;
-    if (submitted === null) return;
-    const updateLanded = space.name === submitted.submittedName
-      && (space.description ?? "") === submitted.submittedDescription;
-    if (updateLanded) {
-      submittedIdentity.current = null;
-      return;
-    }
-    if (!mutationError) return;
-    setNameValue(submitted.inputName);
-    setDescriptionValue(submitted.inputDescription);
-    setEditingIdentity(true);
-    submittedIdentity.current = null;
-  }, [mutationError, space.description, space.name]);
-
   useEffect(() => {
     if (!menuOpen) return;
     const items = Array.from(
@@ -76,49 +61,22 @@ export function SpaceDossierHeader({
     items[menuInitialFocusRef.current === "first" ? 0 : items.length - 1]?.focus();
   }, [menuOpen]);
 
-  const beginIdentityEdit = () => {
-    submittedIdentity.current = null;
-    setNameValue(space.name);
-    setDescriptionValue(space.description ?? "");
-    setMenuOpen(false);
-    setEditingIdentity(true);
-  };
-
-  const cancelIdentityEdit = () => {
-    submittedIdentity.current = null;
-    setNameValue(space.name);
-    setDescriptionValue(space.description ?? "");
-    setEditingIdentity(false);
-  };
-
-  const saveIdentity = () => {
-    const name = nameValue.trim();
-    const description = descriptionValue.trim();
-    if (name.length === 0) return;
-    if (name === space.name && description === (space.description ?? "")) {
-      setEditingIdentity(false);
-      return;
-    }
-    submittedIdentity.current = {
-      inputDescription: descriptionValue,
-      inputName: nameValue,
-      submittedDescription: description,
-      submittedName: name,
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) setMenuOpen(false);
     };
-    actions.onSaveIdentity({ description, name });
-    setEditingIdentity(false);
-  };
+    document.addEventListener("pointerdown", closeOutside);
+    return () => document.removeEventListener("pointerdown", closeOutside);
+  }, [menuOpen]);
 
-  const handleEditorKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    if (event.key === "Escape") {
+  const handleEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>, title = false) => {
+    if (event.nativeEvent.isComposing) return;
+    if (event.key === "Escape" || (event.key === "Enter" && (title || event.metaKey || event.ctrlKey))) {
       event.preventDefault();
       event.stopPropagation();
-      cancelIdentityEdit();
-      return;
-    }
-    if (event.key === "Enter" && (event.currentTarget instanceof HTMLInputElement || event.metaKey)) {
-      event.preventDefault();
-      saveIdentity();
+      void flush();
+      if (event.key === "Escape") event.currentTarget.blur();
     }
   };
 
@@ -181,104 +139,88 @@ export function SpaceDossierHeader({
 
       <header className="space-dossier-header">
         <div className="space-dossier-title-row">
-          {editingIdentity ? (
-            <div className="space-dossier-identity-editor">
-              <input
-                aria-label={space.name}
-                autoFocus
+          <div className="space-dossier-title-block">
+            <h1 aria-label={draft.name}>
+              <InlineTextField
+                aria-label={t("spaces.overview.nameLabel")}
                 className="space-dossier-title-input"
-                onChange={(event) => setNameValue(event.target.value)}
-                onKeyDown={handleEditorKeyDown}
-                value={nameValue}
+                value={draft.name}
+                onChange={(event) => change({ ...draft, name: event.target.value })}
+                onCompositionStart={compositionStart}
+                onCompositionEnd={compositionEnd}
+                onFocus={focus}
+                onBlur={blur}
+                onKeyDown={(event) => handleEditorKeyDown(event, true)}
               />
-              <textarea
-                aria-label={copy.editDescription}
-                className="space-dossier-description-editor"
-                onChange={(event) => setDescriptionValue(event.target.value)}
-                onKeyDown={handleEditorKeyDown}
-                placeholder={copy.descriptionPlaceholder}
-                value={descriptionValue}
-              />
-              <div className="space-dossier-identity-editor-actions">
-                <button onClick={saveIdentity} type="button">{copy.save}</button>
-                <button onClick={cancelIdentityEdit} type="button">{copy.cancel}</button>
-                <span>{copy.saveShortcut}</span>
-              </div>
-            </div>
-          ) : (
-            <>
-              <div className="space-dossier-title-block">
-                <div className="space-dossier-title-heading">
-                  <h1>{space.name}</h1>
-                  <button
-                    aria-label={t("spaces.overview.editSpace")}
-                    className="mem-icon-action space-dossier-title-edit"
-                    onClick={beginIdentityEdit}
-                    title={t("spaces.overview.editSpace")}
-                    type="button"
-                  >
-                    <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" /></svg>
-                  </button>
-                </div>
-                {space.description && <p className="space-dossier-description">{space.description}</p>}
-              </div>
+            </h1>
+            <InlineTextField
+              aria-label={copy.editDescription}
+              className="space-dossier-description"
+              value={draft.description}
+              placeholder={copy.descriptionPlaceholder}
+              onChange={(event) => change({ ...draft, description: event.target.value })}
+              onCompositionStart={compositionStart}
+              onCompositionEnd={compositionEnd}
+              onFocus={focus}
+              onBlur={blur}
+              onKeyDown={handleEditorKeyDown}
+            />
+          </div>
 
-              {!space.suggested && (
-                <div className="space-dossier-actions">
-                  <button
-                    className="page-create-action space-dossier-new-page"
-                    onClick={actions.onCreatePage}
-                    type="button"
-                  >
-                    {t("pages.overview.newPage")}
-                  </button>
-                  <button
-                    ref={menuTriggerRef}
-                    aria-expanded={menuOpen}
-                    aria-haspopup="menu"
-                    aria-label={t("spaces.overview.actionsFor", { name: space.name })}
-                    className="mem-icon-action space-dossier-overflow-trigger"
-                    onClick={() => {
-                      if (menuOpen) {
-                        setMenuOpen(false);
-                      } else {
-                        openMenu("first");
-                      }
-                    }}
-                    onKeyDown={handleMenuTriggerKeyDown}
-                    type="button"
-                  >
-                    <svg aria-hidden="true" className="space-dossier-overflow-icon" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
-                  </button>
-                  {menuOpen && (
-                    <div
-                      ref={menuRef}
-                      className="mem-popover-surface space-dossier-menu"
-                      onKeyDown={handleMenuKeyDown}
-                      role="menu"
-                    >
-                      {actions.onReviewAll && (
-                        <button role="menuitem" type="button" onClick={() => {
-                          setMenuOpen(false);
-                          actions.onReviewAll?.();
-                        }}>{t("home.reviewPageChanges")}</button>
-                      )}
-                      <button
-                        className="space-dossier-menu-danger"
-                        onClick={() => {
-                          setConfirmingDelete(true);
-                          setMenuOpen(false);
-                        }}
-                        role="menuitem"
-                        type="button"
-                      >
-                        {copy.deleteSpace}
-                      </button>
-                    </div>
+          {!space.suggested && (
+            <div ref={actionsRef} className="space-dossier-actions">
+              <button
+                className="page-create-action space-dossier-new-page"
+                onClick={actions.onCreatePage}
+                type="button"
+              >
+                {t("pages.overview.newPage")}
+              </button>
+              <button
+                ref={menuTriggerRef}
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label={t("spaces.overview.actionsFor", { name: space.name })}
+                className="mem-icon-action space-dossier-overflow-trigger"
+                onClick={() => {
+                  if (menuOpen) {
+                    setMenuOpen(false);
+                  } else {
+                    openMenu("first");
+                  }
+                }}
+                onKeyDown={handleMenuTriggerKeyDown}
+                type="button"
+              >
+                <svg aria-hidden="true" className="space-dossier-overflow-icon" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.4" /><circle cx="12" cy="12" r="1.4" /><circle cx="19" cy="12" r="1.4" /></svg>
+              </button>
+              {menuOpen && (
+                <div
+                  ref={menuRef}
+                  className="mem-popover-surface space-dossier-menu"
+                  onKeyDown={handleMenuKeyDown}
+                  role="menu"
+                >
+                  {actions.onReviewAll && (
+                    <button role="menuitem" type="button" onClick={() => {
+                      setMenuOpen(false);
+                      actions.onReviewAll?.();
+                    }}>{t("home.reviewPageChanges")}</button>
                   )}
+                  <button
+                    className="space-dossier-menu-danger"
+                    onClick={() => {
+                      setConfirmingDelete(true);
+                      setMenuOpen(false);
+                    }}
+                    role="menuitem"
+                    type="button"
+                  >
+                    {copy.deleteSpace}
+                  </button>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
 
@@ -290,7 +232,11 @@ export function SpaceDossierHeader({
           </div>
         )}
 
-        {mutationError && <p className="space-dossier-error" role="alert">{copy.mutationError}</p>}
+        {status === "saving" && <span className="sr-only" role="status">{t("pages.editor.saving")}</span>}
+        {(mutationError || status === "error") && <div className="space-dossier-error" role="alert">
+          <span>{copy.mutationError}</span>
+          {status === "error" && <button className="space-dossier-text-action" type="button" onClick={() => void flush(true)}>{t("spaces.overview.retry")}</button>}
+        </div>}
 
       </header>
     </>

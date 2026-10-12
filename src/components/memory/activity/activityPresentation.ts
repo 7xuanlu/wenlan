@@ -3,7 +3,7 @@ import type { KnownActivityAssetKind } from "../../../lib/activitySentence";
 
 /** Stable ordering for background activity rows. */
 export const ACTIVITY_ASSET_ORDER: readonly KnownActivityAssetKind[] = [
+  "pages",
   "memories",
   "entities",
-  "pages",
 ];

@@ -8,7 +8,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { useTranslation } from "react-i18next";
-import { House } from "@phosphor-icons/react";
+import { ArrowLeft, ArrowSquareOut, ShieldCheck } from "@phosphor-icons/react";
+import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { ICONS_SIDEBAR_WIDTH, type SidebarMode } from "../navigation/navigationPreferences";
 
 export type SettingsSection =
@@ -134,6 +135,7 @@ export default function SettingsSidebar({
 }: SettingsSidebarProps) {
   const { t } = useTranslation();
   const [appVersion, setAppVersion] = useState<string>("");
+  const [linkFailed, setLinkFailed] = useState(false);
   const asideRef = useRef<HTMLElement>(null);
   const overlay = presentation === "overlay";
   const compact = !overlay && mode === "icons";
@@ -209,7 +211,7 @@ export default function SettingsSidebar({
           pointerEvents: contentInert ? "none" : "auto",
         }}
       >
-        <div className={`settings-sidebar-search${compact ? " settings-sidebar-search--icons" : ""}`}>
+        <div className={`notes-sidebar-search${compact ? " notes-sidebar-search--compact" : ""}`}>
           <button
             aria-label={t("settings.home")}
             className={`notes-search-entry${compact ? " notes-search-entry--compact" : ""}`}
@@ -218,80 +220,59 @@ export default function SettingsSidebar({
             title={compact ? t("settings.home") : undefined}
             type="button"
           >
-            <House aria-hidden="true" size={22} weight="regular" />
+            <ArrowLeft aria-hidden="true" size={22} weight="regular" />
             {!compact && <span className="notes-search-entry-label">{t("settings.home")}</span>}
           </button>
         </div>
-        {/* Section caption */}
-        <div className="settings-sidebar-heading px-4 pt-4 pb-2">
-          <span
-            style={{
-              fontFamily: "var(--mem-font-mono)",
-              fontSize: "var(--mem-text-2xs)",
-              fontWeight: 600,
-              letterSpacing: "0.08em",
-              textTransform: "uppercase",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            {t("settings.title")}
-          </span>
-        </div>
 
         {/* Group list */}
-        <nav className="flex flex-col gap-0.5 px-2 pb-4 flex-1 overflow-y-auto">
-          {SETTINGS_GROUPS.map((group) => {
-            const isActive = group.id === active;
-            return (
-              <button
-                key={group.id}
-                aria-label={t(group.labelKey)}
-                title={compact ? t(group.labelKey) : undefined}
-                onClick={() => onSelect(group.id)}
-                className={`settings-sidebar-group group relative flex items-center gap-3 px-3 py-2 rounded-md transition-colors duration-150 text-left ${
-                  isActive ? "" : "bg-transparent mem-row-hover"
-                }`}
-                style={{
-                  backgroundColor: isActive ? "var(--mem-hover-strong)" : undefined,
-                  color: isActive ? "var(--mem-text)" : "var(--mem-text-secondary)",
-                  cursor: "pointer",
-                  border: "none",
-                }}
-              >
-                <span
-                  className="settings-sidebar-group-icon"
-                  style={{
-                    color: isActive
-                      ? "var(--mem-accent-indigo)"
-                      : "var(--mem-text-tertiary)",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
+        <div className="notes-icon-rail">
+          <nav aria-label={t("settings.title")} className={`notes-rail-nav${compact ? " notes-rail-nav--icons" : " notes-rail-nav--labels"}`}>
+            {SETTINGS_GROUPS.map((group) => {
+              const isActive = group.id === active;
+              return (
+                <button
+                  key={group.id}
+                  aria-label={t(group.labelKey)}
+                  title={compact ? t(group.labelKey) : undefined}
+                  onClick={() => onSelect(group.id)}
+                  className="notes-primary-link settings-sidebar-group"
+                  data-active={isActive ? "true" : undefined}
+                  type="button"
                 >
-                  {group.icon}
-                </span>
-                <span
-                  className="settings-sidebar-group-label"
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "var(--mem-text-base)",
-                    fontWeight: isActive ? 500 : 400,
-                  }}
-                >
-                  {t(group.labelKey)}
-                </span>
-              </button>
-            );
-          })}
-        </nav>
+                  <span className="notes-navigation-glyph settings-sidebar-group-icon">
+                    {group.icon}
+                  </span>
+                  <span className="settings-sidebar-group-label">
+                    {t(group.labelKey)}
+                  </span>
+                </button>
+              );
+            })}
+          </nav>
+        </div>
 
-        {/* Bottom brand strip — pinned. Mirrors main Sidebar pattern. The
-            privacy note used to live here too, but it duplicated (and was
-            worded more loosely than) the per-section footer in
-            SettingsPage.tsx, so the claim now appears in exactly one place. */}
+        <div className="settings-sidebar-policy">
+          {linkFailed && <div className="settings-sidebar-link-error" role="alert">{t("aboutWenlan.linkError")}</div>}
+          <a
+            aria-label={t("settings.privacyPolicyLabel")}
+            className={`settings-sidebar-privacy${compact ? " settings-sidebar-privacy--compact" : ""}`}
+            href="https://github.com/wenlan-app/wenlan/blob/main/docs/PRIVACY.md"
+            onClick={(event) => {
+              event.preventDefault();
+              setLinkFailed(false);
+              void openExternal(event.currentTarget.href).catch(() => setLinkFailed(true));
+            }}
+            title={compact ? t("settings.privacyPolicyLabel") : undefined}
+          >
+            {compact ? <ShieldCheck aria-hidden="true" size={22} weight="regular" /> : <span>{t("settings.privacyPolicyLabel")}</span>}
+            {!compact && <ArrowSquareOut aria-hidden="true" className="settings-sidebar-privacy-external" size={13} weight="regular" />}
+          </a>
+        </div>
+        {/* Bottom brand strip — pinned. Mirrors main Sidebar pattern. */}
         <div className="settings-sidebar-footer px-4 pt-3 pb-4 flex-shrink-0">
-          <div className="flex items-center justify-between gap-2">
-            <span
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="settings-sidebar-brand"
               style={{
                 color: "var(--mem-text-tertiary)",
                 fontFamily: "var(--mem-font-body)",
@@ -303,7 +284,7 @@ export default function SettingsSidebar({
               Wenlan
             </span>
             {appVersion && (
-              <span
+              <span className="settings-sidebar-version"
                 style={{
                   fontFamily: "var(--mem-font-mono)",
                   fontSize: "var(--mem-text-2xs)",

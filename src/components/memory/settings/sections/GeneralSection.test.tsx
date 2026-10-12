@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import GeneralSection from "./GeneralSection";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   exportPagesAsOkf,
+  getKnowledgePath,
   getTelemetryStatus,
   isRunAtLoginEnabled,
+  openFile,
   setRunAtLogin,
   setTelemetryEnabled,
 } from "../../../../lib/tauri";
@@ -21,6 +23,8 @@ vi.mock("../../../../lib/tauri", async () => {
   daemonErrorMessage: actual.daemonErrorMessage,
   isOkfExportDaemonTooOld: actual.isOkfExportDaemonTooOld,
   exportPagesAsOkf: vi.fn(),
+  getKnowledgePath: vi.fn(),
+  openFile: vi.fn(),
   getProfile: vi.fn(() =>
     Promise.resolve({
       id: "p1",
@@ -66,6 +70,57 @@ function renderGeneralSection() {
     queryClient,
   };
 }
+
+beforeEach(() => {
+  vi.mocked(getKnowledgePath).mockResolvedValue("/Users/test/Wenlan/pages");
+  vi.mocked(openFile).mockResolvedValue(undefined);
+});
+
+describe("GeneralSection page storage location", () => {
+  it("shows the Pages-only location and opens its folder", async () => {
+    renderGeneralSection();
+
+    expect(await screen.findByText("/Users/test/Wenlan/pages")).toBeInTheDocument();
+    expect(screen.getByText("Page storage location")).toBeInTheDocument();
+    expect(screen.getByText("Wenlan pages are stored here as Markdown files.")).toBeInTheDocument();
+    expect(screen.queryByText(/page files/)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+    await waitFor(() => expect(openFile).toHaveBeenCalledWith("/Users/test/Wenlan/pages"));
+  });
+
+  it("shows a loading status and does not offer an empty-path action", async () => {
+    let resolvePath!: (path: string) => void;
+    vi.mocked(getKnowledgePath).mockReturnValue(new Promise((resolve) => { resolvePath = resolve; }));
+
+    renderGeneralSection();
+    expect(screen.getByRole("status", { name: "Loading page storage location" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open folder" })).not.toBeInTheDocument();
+    resolvePath("/Users/test/Wenlan/pages");
+    expect(await screen.findByRole("button", { name: "Open folder" })).toBeInTheDocument();
+  });
+
+  it("treats a blank returned path as unavailable", async () => {
+    vi.mocked(getKnowledgePath).mockResolvedValueOnce("   ");
+    renderGeneralSection();
+    expect(await screen.findByText("Could not read the page storage location.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open folder" })).not.toBeInTheDocument();
+  });
+
+  it("states when the location could not be read and reports open failures", async () => {
+    vi.mocked(getKnowledgePath).mockRejectedValueOnce(new Error("permission denied"));
+    renderGeneralSection();
+    expect(await screen.findByText("Could not read the page storage location.")).toBeInTheDocument();
+
+    vi.mocked(getKnowledgePath).mockResolvedValueOnce("/Users/test/Wenlan/pages");
+    vi.mocked(openFile).mockRejectedValueOnce(new Error("Finder unavailable"));
+    const { unmount } = renderGeneralSection();
+    expect(await screen.findByRole("button", { name: "Open folder" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+    expect(await screen.findByText("Finder unavailable")).toBeInTheDocument();
+    unmount();
+  });
+});
 
 /**
  * Wait for the run-at-login state to actually be MEASURED, then click.

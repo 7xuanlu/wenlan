@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1203f0a3d78403e962c19860a87bec858b6bb01c699dea3f22047cc33e45ae20 -->
+<!-- README_SYNC: source=README.md sha256=55ee0cc34f8a5afcb717e482783438113936d5f7d20f54c77f0f42bc60559663 -->
 
 <p align="center">
   <picture>
@@ -62,11 +62,17 @@ https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### 2. 讓常用 AI 共用你的維基
+### 2. 先寫下自己的筆記
 
-在 Wenlan 的設定導引中，連接 Claude Code、Codex 等工具，讓它們使用同一份知識。
+選擇「開啟筆記」進入 Wenlan，接著建立自己的頁面。歡迎畫面也提供範例，可以先看看。開始寫筆記不必先匯入資料、連接 AI 工具或設定 AI 模型。
 
-直接請已連接的 AI 撰寫頁面，不必另外安裝本地語言模型。
+### 3. 想帶入來源時再匯入
+
+準備好時，可以[匯入筆記或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)。匯入是選用功能；你可以先寫自己的頁面。
+
+### 4. 想使用 AI 時再連接工具
+
+需要 AI 使用同一份知識時，再連接 Claude Code、Codex 等支援的工具。連接後的 AI 可以撰寫頁面，不必另外安裝本地語言模型。
 
 <details>
 <summary>連接時需要幫忙？讓 AI 協助設定</summary>
@@ -83,19 +89,17 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 </details>
 
-### 3. 建立你的第一頁維基
-
-在已連接的 AI 工具中，打開一段值得保留的工作對話，選定要整理的主題：
+想用已連接的 AI 整理主題時，打開一段值得保留的工作對話，然後提出：
 
 > 把這段對話中［主題］的結論與理由，整理成附來源引用的 Wenlan 頁面。
 
-也可以先[匯入筆記或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)，再請 AI 把其中一個主題整理成頁面。
+也可以請 AI 把已匯入資料中的主題整理成頁面。
 
 完成後，在 Wenlan 打開新頁面，點開引用查來源，也能補上自己的想法。下次做相關工作時，請 AI 先讀這一頁再繼續。
 
 背景整理與自動更新是可選功能，需要[設定模型](#models-and-privacy)。終端機安裝、其他平台與更新方式，請見[設定指南](docs/setup-and-data.zh-Hant.md#installation)。
 
-遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。Issue 是公開的，請勿附上私人筆記、存取憑證、遠端存取識別碼或未遮蔽的紀錄。
+遇到問題？[設定指南](docs/setup-with-ai.md) · [回報問題](https://github.com/wenlan-app/wenlan/issues)。Issue 是公開的；分享任何內容（包括紀錄）前，請先遮蔽密鑰、憑證、存取權杖、識別碼，以及私人或個人內容。
 
 
 
@@ -222,7 +226,7 @@ Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂�
 - **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的補全與頁面合成能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
 - **檢查問題，確認後修復：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 與 [lint](plugin/skills/lint/SKILL.md) 只回報問題，不改寫知識。支援的修復可在 app 預覽，確認後套用並驗證。
 
-**從一段值得留下的對話開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。
+**先從一則想留下的筆記開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。
 
 
 <a id="how-wenlan-works"></a>

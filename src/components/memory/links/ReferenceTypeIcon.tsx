@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { Brain, FileText, Globe, Notebook } from "@phosphor-icons/react";
+import { Brain } from "@phosphor-icons/react";
 import type { PageCitation } from "../../../lib/tauri";
+import { PageIcon } from "../assets/PageIcon";
+import { SourceTypeIcon } from "../sources/SourceTypeIcon";
+import { getSourceKind } from "../sources/sourcePresentation";
 
 export type ReferenceKind = "page" | "memory" | "file" | "url" | "authored";
 
@@ -13,7 +16,9 @@ export function citationReferenceKind(citation: PageCitation): ReferenceKind {
   }
 }
 
-export function ReferenceTypeIcon({ kind, size = 13 }: { kind: ReferenceKind; size?: number }) {
-  const Icon = kind === "memory" ? Brain : kind === "url" ? Globe : kind === "page" || kind === "authored" ? Notebook : FileText;
-  return <Icon size={size} weight="regular" aria-hidden="true" focusable="false" />;
+export function ReferenceTypeIcon({ kind, size = 13, locator }: { kind: ReferenceKind; size?: number; locator?: string }) {
+  if (kind === "memory") return <Brain size={size} weight="regular" aria-hidden="true" focusable="false" />;
+  if (kind === "page" || kind === "authored") return <PageIcon size={size} />;
+  const sourceKind = getSourceKind({ source: kind === "url" ? "webpage" : "file", source_id: locator ?? "", title: "" });
+  return <SourceTypeIcon kind={sourceKind} size={size} />;
 }

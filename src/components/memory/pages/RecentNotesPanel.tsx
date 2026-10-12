@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { DotsSixVertical, FileText } from "@phosphor-icons/react";
+import { DotsSixVertical } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { useTranslation } from "react-i18next";
 import { readRecentPageHistory } from "../../../lib/recentPages";
 import { orderWikiRecentEntries, readWikiCustomOrder, writeWikiCustomOrder } from "../../../lib/wikiNotesPreferences";
@@ -16,8 +17,8 @@ export interface RecentNotesPanelProps {
 
 export function RecentNotesPanel({ currentPageId = null, revision = 0, mode = "recent", onOpenPage }: RecentNotesPanelProps) {
   const { t } = useTranslation();
-  const reorderHintId = useId();
   const isManualOrder = mode === "custom";
+  const reorderHintId = useId();
   const entries = useMemo(() => readRecentPageHistory().entries, [revision, currentPageId]);
   const [customOrder, setCustomOrder] = useState<readonly string[]>(() => readWikiCustomOrder());
   const orderedEntries = useMemo(() => mode === "custom" ? orderWikiRecentEntries(entries, customOrder) : entries, [entries, mode, customOrder]);
@@ -40,7 +41,7 @@ export function RecentNotesPanel({ currentPageId = null, revision = 0, mode = "r
 
   return (
     <section className="wiki-recent-notes" aria-label={isManualOrder ? t("pages.recent.custom") : t("pages.recent.title")}>
-      {mode === "custom" && <span id={reorderHintId} className="wiki-recent-sr-only">{t("pages.recent.reorderHint", { defaultValue: "Use arrow keys to reorder." })}</span>}
+      {mode === "custom" && <span id={reorderHintId} className="wiki-recent-sr-only">{t("pages.recent.reorderHint")}</span>}
       {orderedEntries.length === 0 ? (
         <p className="wiki-recent-notes-empty">{t("pages.recent.empty")}</p>
       ) : (
@@ -74,7 +75,7 @@ export function RecentNotesPanel({ currentPageId = null, revision = 0, mode = "r
                 onClick={() => onOpenPage?.(entry.id)}
                 disabled={!onOpenPage}
               >
-                <FileText aria-hidden="true" size={14} />
+                <PageIcon size={16} />
                 <span>{entry.title}</span>
               </button>
             </li>

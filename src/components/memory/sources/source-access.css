@@ -17,4 +17,27 @@
 .source-preview-content pre { max-width:100%; overflow:auto; }
 .source-folder-workspace { display:flex; flex-direction:column; min-width:0; height:100%; }
 .source-folder-back { padding:12px 20px; align-self:flex-start; }
+.source-folder-document-pane { display:flex; flex:1; min-width:0; min-height:0; overflow:hidden; }
+.source-folder-document-scroll { flex:1; min-width:0; min-height:0; overflow-y:auto; scrollbar-gutter:stable; }
+.source-folder-document-scroll .source-document-page { width:100%; min-height:100%; }
+.source-folder-document-content { min-width:0; }
+.source-folder-document-summary { margin:0; color:var(--mem-text-secondary); overflow-wrap:anywhere; }
+.source-folder-file-path { display:block; max-width:100%; padding:0; border:0; background:none; color:var(--mem-text-secondary); font:inherit; text-align:left; overflow-wrap:anywhere; cursor:pointer; }
+.source-folder-file-path:hover { color:var(--mem-text); text-decoration:underline; text-underline-offset:2px; }
+.source-folder-file-path:focus-visible { outline:2px solid var(--mem-accent-page); outline-offset:3px; }
 @media(max-width:600px) { .source-folder-workspace > .flex > aside { width:150px !important; } .source-folder-workspace section .px-8 { padding-left:16px; padding-right:16px; } }
+
+/* The source reader uses the same connected pane as other collection details. */
+.workspace-pane-host:has(.source-document-preview) { padding: 0; }
+.page-info-drawer:has(.source-document-preview) .page-info-drawer-content { scrollbar-gutter: stable; }
+.source-document-preview .source-preview-url { margin-top: 0; }
+.source-document-preview .source-preview-url p { margin: 0 0 8px; }
+
+.source-preview-open { flex:0 0 auto; white-space:nowrap; margin-left:auto; }
+
+.source-dialog .source-add-option { flex-direction:row; align-items:center; gap:12px; }
+.source-add-option > [data-resource-icon] { flex:0 0 20px; color:var(--mem-text-secondary); }
+.source-add-option-copy { display:flex; flex-direction:column; gap:4px; min-width:0; }
+.source-add-option-copy strong { font-size:14px; font-weight:500; color:var(--mem-text); }
+.source-add-option--vault { background:var(--mem-indigo-bg); margin-bottom:8px; }
+.source-add-option:disabled { cursor:wait; opacity:.6; }

@@ -14,9 +14,11 @@ import type {
   PageReviewOutcome,
   RefinementProposalSummary,
   RestoreEntitiesRequest,
+  SourceAnnotation,
   Space,
   UpdatePageInput,
   UpdatePageOutcome,
+  UpdateSourceAnnotationRequest,
 } from "../../src/lib/tauri";
 import { daemonMeetsFloor } from "../../src/lib/daemonVersion";
 import type { SpacesNavigationFixture } from "../fixtures/spacesNavigation";
@@ -120,7 +122,10 @@ export class TauriMockRuntime {
   private folders: KnowledgeFolder[];
   private readonly folderMoveReceipts = new Map<string, {id:string;expectedStoragePath:string;folderPath:string;storage_path:string}>();
   private pages: KnowledgePage[];
+  private readonly sourceAnnotations = new Map<string, SourceAnnotation>();
   private entityDetails: EntityDetail[];
+  private observationSequence = 0;
+  private readonly observationIds = new Set<string>();
   private memories: MemoryItem[];
   private readonly webpages = new Map<string, IngestWebpageRequest>();
   private readonly distillReview: DistillReviewResponse;
@@ -155,6 +160,9 @@ export class TauriMockRuntime {
       observations: detail.observations.map((observation) => ({ ...observation })),
       relations: detail.relations.map((relation) => ({ ...relation })),
     }));
+    for (const detail of this.entityDetails) {
+      for (const observation of detail.observations) this.observationIds.add(observation.id);
+    }
     this.memories = fixture.memories.map((memory) => ({ ...memory }));
     this.distillReview = structuredClone(fixture.distillReview);
     this.refinements = structuredClone([...fixture.refinements]);
@@ -281,6 +289,8 @@ export class TauriMockRuntime {
           memory: this.memories.find((memory) => memory.source_id === id) ?? null,
         }));
       }
+      case "get_source_annotation": return this.getSourceAnnotation(args);
+      case "update_source_annotation": return this.updateSourceAnnotation(args);
       case "get_page": return this.getPageResponse(command, args);
       // Explicit-browse variants attach a human-intent header at the HTTP
       // layer; this fixture has no HTTP layer, so they resolve identically
@@ -324,6 +334,7 @@ export class TauriMockRuntime {
       case "delete_observation_cmd": return this.deleteObservation(args);
       case "confirm_observation_cmd": return this.confirmObservation(args);
       case "confirm_entity_cmd": return this.confirmEntity(args);
+      case "change_entity_type_cmd": return this.changeEntityType(args);
       case "delete_entity_cmd": return this.deleteEntity(args);
       case "query_entities_cmd": return this.queryEntities(args);
       case "archive_entities_cmd": return this.archiveEntities(args);
@@ -1052,18 +1063,133 @@ export class TauriMockRuntime {
     return detail;
   }
 
+  private sourceAnnotationScope(
+    command: string,
+    source: unknown,
+    sourceIdValue: unknown,
+    spaceValue: unknown,
+  ): { sourceId: string; space: string | null } {
+    const sourceKind = requiredString(command, { source }, "source");
+    const sourceId = requiredString(command, { sourceId: sourceIdValue }, "sourceId");
+    if (sourceKind !== "webpage") throw new Error("unsupported source kind; expected webpage");
+    if (sourceId !== sourceId.trim()) {
+      throw new Error("source_id must preserve the exact source identity without surrounding whitespace");
+    }
+    if (spaceValue !== undefined && spaceValue !== null && typeof spaceValue !== "string") {
+      throw new TauriMockArgumentError(command, "space");
+    }
+    const space = typeof spaceValue === "string" ? spaceValue : null;
+    if (space !== null) {
+      if (!space.trim()) throw new Error("Space must not be blank");
+      if (!this.spaces.some((candidate) => candidate.name === space)) {
+        throw new Error(`Unknown Space: ${space}`);
+      }
+    }
+    const visible = this.fixture.documents?.some(({ file }) =>
+      file.source === "webpage"
+      && file.source_id === sourceId
+      && (space === null || file.space === space || file.domain === space),
+    ) ?? false;
+    const ingested = space === null && this.webpages.has(sourceId);
+    if (!visible && !ingested) throw new Error("source not found");
+    return { sourceId, space };
+  }
+
+  private sourceAnnotationPages(pageIds: readonly string[], space: string | null): SourceAnnotation["pages"] {
+    return pageIds.flatMap((id) => {
+      const page = this.pages.find((candidate) =>
+        candidate.id === id
+        && candidate.status === "active"
+        && (space === null || candidate.space === space || candidate.domain === space),
+      );
+      return page ? [{ id: page.id, title: page.title }] : [];
+    });
+  }
+
+  private getSourceAnnotation(args: unknown): SourceAnnotation {
+    const { sourceId, space } = this.sourceAnnotationScope(
+      "get_source_annotation",
+      optionalValue(args, "source"),
+      optionalValue(args, "sourceId"),
+      optionalValue(args, "space"),
+    );
+    const key = `${sourceId}\u0000${space ?? ""}`;
+    const saved = this.sourceAnnotations.get(key);
+    if (!saved) {
+      return { source: "webpage", source_id: sourceId, notes: "", page_ids: [], version: 0, updated_at: 0, pages: [] };
+    }
+    const pages = this.sourceAnnotationPages(saved.page_ids, space);
+    const pageIds = pages.map((page) => page.id);
+    return { ...saved, page_ids: pageIds, pages };
+  }
+
+  private updateSourceAnnotation(args: unknown): SourceAnnotation {
+    const command = "update_source_annotation";
+    const request = optionalValue(args, "req") as UpdateSourceAnnotationRequest | undefined;
+    if (!request || typeof request !== "object") throw new TauriMockArgumentError(command, "req");
+    const { sourceId, space } = this.sourceAnnotationScope(
+      command,
+      request.source,
+      request.source_id,
+      request.space,
+    );
+    if (!Number.isSafeInteger(request.expected_version) || request.expected_version < 0) {
+      throw new TauriMockArgumentError(command, "req.expected_version");
+    }
+    if (request.notes !== undefined && typeof request.notes !== "string") {
+      throw new TauriMockArgumentError(command, "req.notes");
+    }
+    if (request.notes !== undefined && new TextEncoder().encode(request.notes).length > 65_536) {
+      throw new Error("notes exceed 65536 UTF-8 bytes");
+    }
+    if (request.page_ids !== undefined && !Array.isArray(request.page_ids)) {
+      throw new TauriMockArgumentError(command, "req.page_ids");
+    }
+    const requestedPageIds = request.page_ids ?? [];
+    if (requestedPageIds.length > 100) throw new Error("page_ids exceed 100 entries");
+    if (requestedPageIds.some((id) => typeof id !== "string" || !id.trim())
+      || new Set(requestedPageIds).size !== requestedPageIds.length) {
+      throw new Error("page_ids must be nonblank and unique");
+    }
+    const key = `${sourceId}\u0000${space ?? ""}`;
+    const current = this.sourceAnnotations.get(key)
+      ?? { source: "webpage", source_id: sourceId, notes: "", page_ids: [], version: 0, updated_at: 0, pages: [] };
+    if (current.version !== request.expected_version) {
+      throw new Error(`409 Conflict: source annotation version conflict; current version is ${current.version}`);
+    }
+    const pageIds = request.page_ids === undefined ? [...current.page_ids] : [...requestedPageIds];
+    const pages = this.sourceAnnotationPages(pageIds, space);
+    if (request.page_ids !== undefined && pages.length !== pageIds.length) {
+      throw new Error("page_ids must reference active Pages visible in this scope");
+    }
+    const saved: SourceAnnotation = {
+      source: "webpage",
+      source_id: sourceId,
+      notes: request.notes ?? current.notes,
+      page_ids: pageIds,
+      version: current.version + 1,
+      updated_at: Math.floor(Date.now() / 1000),
+      pages,
+    };
+    this.sourceAnnotations.set(key, saved);
+    const visiblePages = this.sourceAnnotationPages(saved.page_ids, space);
+    return { ...structuredClone(saved), page_ids: visiblePages.map((page) => page.id), pages: visiblePages };
+  }
+
   private addObservation(args: unknown): string {
     const entityId = requiredString("add_observation_cmd", args, "entityId");
     const detail = this.entityDetails.find((candidate) => candidate.entity.id === entityId);
     if (!detail) throw new TauriMockArgumentError("add_observation_cmd", "entityId");
-    const id = `obs-${detail.observations.length + 1}`;
+    let id: string;
+    do { id = `obs-${++this.observationSequence}`; } while (this.observationIds.has(id));
+    this.observationIds.add(id);
     detail.observations.push({ id, entity_id: entityId, content: requiredString("add_observation_cmd", args, "content"), source_agent: optionalString(args, "sourceAgent"), confidence: null, confirmed: false, created_at: 1_783_728_000 });
     return id;
   }
 
   private updateObservation(args: unknown): null {
     const observationId = requiredString("update_observation_cmd", args, "observationId");
-    const content = requiredString("update_observation_cmd", args, "content");
+    const content = stringValue("update_observation_cmd", args, "content");
     for (const detail of this.entityDetails) detail.observations = detail.observations.map((item) => item.id === observationId ? { ...item, content } : item);
     return null;
   }
@@ -1085,6 +1211,15 @@ export class TauriMockRuntime {
     const entityId = requiredString("confirm_entity_cmd", args, "entityId");
     const confirmed = requiredBoolean("confirm_entity_cmd", args, "confirmed");
     this.entityDetails = this.entityDetails.map((detail) => detail.entity.id === entityId ? { ...detail, entity: { ...detail.entity, confirmed } } : detail);
+    return null;
+  }
+
+  private changeEntityType(args: unknown): null {
+    const entityId = requiredString("change_entity_type_cmd", args, "entityId");
+    const entityType = requiredString("change_entity_type_cmd", args, "entityType");
+    this.entityDetails = this.entityDetails.map((detail) => detail.entity.id === entityId
+      ? { ...detail, entity: { ...detail.entity, entity_type: entityType } }
+      : detail);
     return null;
   }
 

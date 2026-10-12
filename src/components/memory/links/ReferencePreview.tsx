@@ -206,7 +206,7 @@ export function ReferencePreview({
       }}
     >
       <div className="flex items-center gap-1.5" style={{ color: "var(--mem-text-tertiary)", fontSize: "var(--mem-text-xs)" }}>
-        <ReferenceTypeIcon kind={kind} size={12} />
+        <ReferenceTypeIcon kind={kind} size={12} locator={citation?.locator} />
         <span>{typeLabel}</span>
       </div>
       <strong style={{ fontSize: "var(--mem-text-sm)", overflowWrap: "anywhere" }}>{title}</strong>

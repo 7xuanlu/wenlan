@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { Space } from "../../../lib/tauri";
+import { SpaceMark } from "../navigation/SpaceMark";
 import { SpaceActionsMenu } from "./SpaceActionsMenu";
 import { SpaceEditor } from "./SpaceEditor";
 import type { SpacesOverviewLabels, SpaceEditorValue } from "./spacesTypes";
@@ -27,9 +28,10 @@ type SpaceRowProps = {
 
 export function SpaceRow(props: SpaceRowProps) {
   const { t } = useTranslation();
+  const rowContentId = useId();
   const [renaming, setRenaming] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const dragUnavailable = props.dragDisabled === true;
+  const description = props.space.description?.trim();
 
   if (renaming) {
     return (
@@ -56,15 +58,12 @@ export function SpaceRow(props: SpaceRowProps) {
       <button
         type="button"
         className="mem-icon-action spaces-drag-handle"
-        data-space-column="drag"
         aria-label={props.labels.dragSpace(props.space.name)}
-        title={props.labels.dragSpace(props.space.name)}
-        aria-disabled={dragUnavailable}
+        disabled={props.dragDisabled === true}
         onPointerDown={(event) => {
-          if (!dragUnavailable) props.onDragStart(event);
+          props.onDragStart(event);
         }}
         onKeyDown={(event) => {
-          if (dragUnavailable) return;
           if (event.key === "ArrowUp" && props.canMoveUp) { event.preventDefault(); props.onMoveUp(props.space); }
           if (event.key === "ArrowDown" && props.canMoveDown) { event.preventDefault(); props.onMoveDown(props.space); }
         }}
@@ -75,23 +74,27 @@ export function SpaceRow(props: SpaceRowProps) {
           <circle cx="2" cy="12" r="1" /><circle cx="6" cy="12" r="1" />
         </svg>
       </button>
-      <button
-        className="spaces-row-main"
-        data-space-column="name"
-        aria-label={props.space.name}
-        onClick={() => props.onSelect(props.space.name)}
-      >
-        <span className="spaces-row-name">
-          {props.space.starred ? <span className="spaces-star" aria-hidden="true">★</span> : null}
-          {props.space.name}
-        </span>
-        {props.space.description === null ? null : <span className="spaces-row-description">{props.space.description}</span>}
-      </button>
-      <span className="spaces-row-pages" data-space-column="pages" data-testid="space-pages">{t("spaces.overview.card.pages", { count: props.pageCount })}</span>
-      <div className="spaces-mobile-metadata" data-testid="space-mobile-metadata">
-        <div data-testid="space-mobile-pages">
-          <span>{t("spaces.overview.card.pages", { count: props.pageCount })}</span>
-        </div>
+      <div className="spaces-row-content" data-space-column="name">
+        <button
+          className="spaces-row-main"
+          aria-label={props.space.name}
+          aria-describedby={description ? `space-pages-${rowContentId} space-description-${rowContentId}` : `space-pages-${rowContentId}`}
+          onClick={() => props.onSelect(props.space.name)}
+        >
+          <span className="spaces-row-mark" aria-hidden="true">
+            <SpaceMark active={props.space.starred} />
+          </span>
+          <span className="spaces-row-copy">
+            <span className="spaces-row-name">
+              <span className="spaces-row-label">{props.space.name}</span>
+              {props.space.starred ? <span className="spaces-star" aria-hidden="true">★</span> : null}
+              <span id={`space-pages-${rowContentId}`} className="spaces-row-pages" data-testid="space-pages">
+                {t("spaces.overview.card.pages", { count: props.pageCount })}
+              </span>
+            </span>
+            {description ? <span id={`space-description-${rowContentId}`} className="spaces-row-description">{description}</span> : null}
+          </span>
+        </button>
       </div>
       <div className="spaces-menu-anchor" data-space-column="menu">
         <SpaceActionsMenu

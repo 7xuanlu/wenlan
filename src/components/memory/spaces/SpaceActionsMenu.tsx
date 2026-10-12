@@ -1,5 +1,4 @@
-import { useRef, useState } from "react";
-import type { KeyboardEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Space } from "../../../lib/tauri";
 import type { SpacesOverviewLabels } from "./spacesTypes";
 
@@ -26,13 +25,42 @@ type SpaceActionsMenuProps = {
 export function SpaceActionsMenu(props: SpaceActionsMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const closeMenuOnEscape = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape") return;
-    event.preventDefault();
-    setMenuOpen(false);
-    triggerRef.current?.focus();
-  };
+  useEffect(() => {
+    if (!menuOpen) return;
+    let pointerInside = false;
+    const isInside = (target: EventTarget | null) => target instanceof Node
+      && (triggerRef.current?.contains(target) || menuRef.current?.contains(target));
+    const closeOutside = (event: Event) => {
+      if (event.type === "pointerdown") pointerInside = Boolean(isInside(event.target));
+      if (!isInside(event.target)) setMenuOpen(false);
+    };
+    const closeOnFocusOut = (event: FocusEvent) => {
+      // WebKit can send focus to browser chrome, with no subsequent focusin.
+      // Its pointer clicks can also blur a button before the menu action fires.
+      if (!pointerInside && isInside(event.target) && !isInside(event.relatedTarget)) setMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      pointerInside = false;
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      triggerRef.current?.focus();
+    };
+    // Capture outside presses even when another control stops propagation.
+    document.addEventListener("pointerdown", closeOutside, true);
+    document.addEventListener("focusin", closeOutside);
+    document.addEventListener("focusout", closeOnFocusOut);
+    document.addEventListener("keydown", closeOnEscape, true);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside, true);
+      document.removeEventListener("focusin", closeOutside);
+      document.removeEventListener("focusout", closeOnFocusOut);
+      document.removeEventListener("keydown", closeOnEscape, true);
+    };
+  }, [menuOpen]);
 
   return (
     <>
@@ -51,7 +79,7 @@ export function SpaceActionsMenu(props: SpaceActionsMenuProps) {
         </svg>
       </button>
       {menuOpen ? (
-        <div className="mem-popover-surface spaces-menu" role="menu" onKeyDown={closeMenuOnEscape}>
+        <div ref={menuRef} className="mem-popover-surface spaces-menu" role="menu">
           <button type="button" role="menuitem" onClick={() => { props.onStar(props.space); setMenuOpen(false); }}>
             {props.space.starred ? props.labels.unstar : props.labels.star}
           </button>

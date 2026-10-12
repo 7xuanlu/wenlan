@@ -728,6 +728,14 @@ pub struct ConfirmEntityRequest {
     pub confirmed: bool,
 }
 
+/// `PUT /api/memory/entities/{id}/type` — explicitly correct an entity's
+/// canonical type. The server validates the value against its built-in
+/// vocabulary; this request never creates vocabulary entries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangeEntityTypeRequest {
+    pub entity_type: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AddEntityObservationRequest {
     pub content: String,
@@ -776,6 +784,10 @@ pub struct SetDocumentTagsRequest {
 pub struct UpdateMemoryRequest {
     #[serde(default)]
     pub content: Option<String>,
+    /// Refuse a content edit unless the current chunk-zero body still matches
+    /// the editor's loaded baseline. Omitted for legacy update callers.
+    #[serde(default)]
+    pub expected_content: Option<String>,
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
     #[serde(default)]

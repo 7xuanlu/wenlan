@@ -42,18 +42,29 @@ body:
       placeholder: "0.1.0"
     validations:
       required: true
-  - type: input
-    id: macos
+  - type: dropdown
+    id: platform
     attributes:
-      label: macOS version
-      placeholder: "15.3 (Sequoia)"
+      label: Platform
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os_version
+    attributes:
+      label: OS version
+      placeholder: "macOS 15.3 (Sequoia), Windows 11 24H2, Ubuntu 24.04"
     validations:
       required: true
   - type: textarea
     id: logs
     attributes:
       label: Logs
-      description: Paste relevant logs from the terminal or Console.app.
+      description: "Paste relevant logs from the terminal or system log. Before sharing, redact secrets, credentials, access tokens, identifiers, and private or personal content."
       render: shell
     validations:
       required: false

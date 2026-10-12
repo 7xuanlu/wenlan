@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PrimaryNavigation } from "./PrimaryNavigation";
+import { PageIcon } from "../assets/PageIcon";
 import { NAVIGATION_DESTINATION_ORDER, NAVIGATION_PREFERENCE_KEY, writeNavigationPreferences } from "./navigationPreferences";
 import type { GlobalNavigation } from "./viewState";
 
@@ -63,7 +64,10 @@ describe("PrimaryNavigation", () => {
     expect(railLabels()).toEqual(["Wiki", "Spaces", "Graph", "Sources", "More"]);
     const wiki = screen.getByRole("button", { name: "Wiki", current: "page" });
     expect(wiki).toHaveAttribute("title", "Wiki");
-    expect(wiki.querySelector('[data-navigation-icon="wiki-page"]')).toHaveAttribute("aria-hidden", "true");
+    expect(wiki.querySelector('[data-navigation-icon="wiki-stack"]')).toHaveAttribute("aria-hidden", "true");
+    const pageIcon = render(<PageIcon />).container.querySelector('[data-resource-icon="page"]');
+    expect(pageIcon).toBeInTheDocument();
+    expect(pageIcon).not.toHaveAttribute("data-navigation-icon");
     await user.click(wiki);
     await user.click(screen.getByRole("button", { name: "Spaces" }));
     await user.click(screen.getByRole("button", { name: "Graph" }));
@@ -72,6 +76,9 @@ describe("PrimaryNavigation", () => {
     expect(callbacks.graph).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Sources" }));
     expect(callbacks.sources).toHaveBeenCalledOnce();
+    const sources = screen.getByRole("button", { name: "Sources" });
+    expect(sources.querySelector('[data-navigation-icon="sources-library"]')).toHaveAttribute("aria-hidden", "true");
+    expect(sources.querySelector('[data-navigation-icon="sources-library"]')).not.toBe(wiki.querySelector('[data-navigation-icon="wiki-stack"]'));
   });
 
   it("lists only optional destinations in More and navigates from each stable row", async () => {

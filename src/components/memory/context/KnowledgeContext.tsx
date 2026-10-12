@@ -2,7 +2,9 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { FileText, Circle, Hash, ArrowSquareOut } from "@phosphor-icons/react";
+import { Circle, ArrowSquareOut } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
+import { TopicIcon } from "../entities/TopicIcon";
 import { getKnowledgeGraph, type GraphRef } from "../../../lib/tauri";
 import { knowledgeContextLinks, type ContextLink, type ContextGroup } from "./knowledgeContextModel";
 import "./knowledge-context.css";
@@ -10,10 +12,12 @@ import "./knowledge-context.css";
 type Props = { standaloneGraph?: boolean; diagramOnly?: boolean; kind: "page" | "memory"; id: string; title: string;
   onOpenGraph?: () => void;
   onNavigatePage?: (id: string) => void; onNavigateMemory?: (id: string) => void; onNavigateEntity?: (id: string) => void };
-const GROUPS: ContextGroup[] = ["usedIn", "sources", "topics", "linkedPages", "linkedFrom"];
+const PAGE_GROUPS: ContextGroup[] = ["usedIn", "sources", "topics", "linkedPages", "linkedFrom"];
+const MEMORY_GROUPS: ContextGroup[] = ["usedIn", "linkedPages", "linkedFrom", "sources", "topics"];
 function KindIcon({kind}: {kind: GraphRef["kind"]}) {
-  const Icon = kind === "page" ? FileText : kind === "memory" ? Circle : Hash;
-  return <Icon aria-hidden="true" size={14} />;
+  if (kind === "entity") return <TopicIcon size={14} />;
+  if (kind === "page") return <PageIcon size={14} />;
+  return <Circle aria-hidden="true" size={14} />;
 }
 
 export default function KnowledgeContext({kind,id,title,onOpenGraph,onNavigatePage,onNavigateMemory,onNavigateEntity,standaloneGraph=false,diagramOnly=false}: Props) {
@@ -32,11 +36,19 @@ export default function KnowledgeContext({kind,id,title,onOpenGraph,onNavigatePa
   if (graph.isPending) return <p className="knowledge-context-state" role="status">{t("knowledgeContext.loadingLinks")}</p>;
   if (graph.isError) return <div className="knowledge-context-state" role="alert"><p>{t("knowledgeContext.linksError")}</p><button onClick={() => void graph.refetch()} type="button">{t("pageDetail.retry")}</button></div>;
   const graphAction = onOpenGraph && <button type="button" className="knowledge-context-open-graph" onClick={onOpenGraph}><ArrowSquareOut size={16} aria-hidden="true"/>{t("knowledgeContext.openInGraph")}</button>;
-  if (!links.length) return <div className="knowledge-context"><p className="knowledge-context-state">{t("knowledgeContext.noLinks")}</p>{graphAction}</div>;
-  const GraphContainer = standaloneGraph ? "section" : "details";
-  return <div className="knowledge-context">
-    <GraphContainer className="knowledge-local-map" {...(!standaloneGraph ? {open:true} : {})}>
-      {!standaloneGraph && <summary>{t("knowledgeContext.localGraph")}</summary>}
+  if (!links.length) return <div className="knowledge-context knowledge-context-section">{kind === "memory" && <h3>{t("knowledgeContext.localGraph")}</h3>}<p className="knowledge-context-state">{t("knowledgeContext.noLinks")}</p>{graphAction}</div>;
+  const groups = kind === "memory" ? MEMORY_GROUPS : PAGE_GROUPS;
+  const sections = !diagramOnly && groups.map(group => {
+    const matching = links.filter(node=>node.group===group); if (!matching.length) return null;
+    return <section className="knowledge-context-section" key={group} aria-label={t(`knowledgeContext.${group}`)}>
+      <h3>{t(`knowledgeContext.${group}`)}</h3>
+      <ul>{(expanded ? matching : matching.slice(0,5)).map(node => <li key={`${node.kind}:${node.id}`}>
+        <button type="button" disabled={!canOpen(node)} onClick={() => open(node)}><KindIcon kind={node.kind}/><span>{label(node)}</span></button>
+      </li>)}</ul>
+      {!expanded && matching.length>5 && <button type="button" className="knowledge-context-show-all" onClick={()=>setExpanded(true)}>{t("knowledgeContext.showAll")}</button>}
+    </section>;
+  });
+  const graphContent = <>
       <div className="knowledge-local-map-diagram" role="group" aria-label={t("knowledgeContext.localGraph")}>
         <svg viewBox="0 0 300 220" preserveAspectRatio="none" aria-hidden="true">
           {neighbours.map((node,index) => {
@@ -56,16 +68,14 @@ export default function KnowledgeContext({kind,id,title,onOpenGraph,onNavigatePa
       </div>
       <p className="knowledge-context-hint">{t("knowledgeContext.graphHint")}</p>
       {graphAction}
-    </GraphContainer>
-    {!diagramOnly && GROUPS.map(group => {
-      const matching = links.filter(node=>node.group===group); if (!matching.length) return null;
-      return <section className="knowledge-context-section" key={group} aria-label={t(`knowledgeContext.${group}`)}>
-        <h3>{t(`knowledgeContext.${group}`)}</h3>
-        <ul>{(expanded ? matching : matching.slice(0,5)).map(node => <li key={`${node.kind}:${node.id}`}>
-          <button type="button" disabled={!canOpen(node)} onClick={() => open(node)}><KindIcon kind={node.kind}/><span>{label(node)}</span></button>
-        </li>)}</ul>
-        {!expanded && matching.length>5 && <button type="button" className="knowledge-context-show-all" onClick={()=>setExpanded(true)}>{t("knowledgeContext.showAll")}</button>}
-      </section>;
-    })}
+  </>;
+  const graphView = standaloneGraph
+    ? <section className="knowledge-local-map">{graphContent}</section>
+    : <details className="knowledge-local-map" open={kind !== "memory"}>
+      <summary>{t("knowledgeContext.localGraph")}</summary>
+      {graphContent}
+    </details>;
+  return <div className="knowledge-context">
+    {kind === "memory" ? <>{sections}{graphView}</> : <>{graphView}{sections}</>}
   </div>;
 }

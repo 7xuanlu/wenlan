@@ -103,6 +103,7 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   await expect(row.getByText(memoryFixtures[0].source_text!)).toHaveCount(0);
   await expect(row.locator("dl")).toHaveCount(0);
   await expect(row.getByRole("button", { name: "Delete memory", exact: true })).toHaveCount(0);
+  await row.hover();
   await row.getByRole("button", { name: "Memory actions", exact: true }).click();
   await expect(page.getByRole("menuitem", { name: "Unpin memory", exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
@@ -127,18 +128,17 @@ test("opens a memory from the parent list and returns with Escape", async ({ pag
   const detail = page.getByRole("main", { name: "Memory dossier" });
   await expect(detail.getByText(memoryFixtures[0].content)).toBeVisible();
   await expect(detail.getByText(memoryFixtures[0].source_text!)).not.toBeVisible();
-  await expect(page.getByRole("button", { name: "Memory context", exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "Memory actions", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Memory context", exact: true }).click();
-  const context = page.getByRole("dialog", { name: "Memory context" });
+  await expect(page.getByRole("button", { name: "Info", exact: true })).toHaveCount(1);
+  await page.getByRole("button", { name: "Info", exact: true }).click();
+  const context = page.getByRole("dialog", { name: "Info" });
   await context.locator("summary").filter({ hasText: /^Source$/ }).click();
   await expect(context.getByText(memoryFixtures[0].source_text!)).toBeVisible();
   await expect(context.getByRole("button", { name: /decision/ })).toBeVisible();
   await context.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Memory actions", exact: true })).toBeFocused();
-  const bodyParagraph = detail.locator(".content-renderer p").first();
+  await expect(page.getByRole("button", { name: "Info", exact: true })).toBeFocused();
+  const bodyParagraph = detail.locator(".memory-document-editor .cm-content");
   // Short memories use reading type, not a length-dependent display headline.
-  await expect(bodyParagraph).toHaveCSS("font-size", "16px");
+  await expect(bodyParagraph).toHaveCSS("font-size", "15px");
   await capture(page, "memory-detail-clickthrough");
 
   await page.setViewportSize({ width: 1280, height: 900 });

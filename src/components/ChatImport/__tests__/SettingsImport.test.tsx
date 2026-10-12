@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import "../../../i18n";
+import SourcesSection from "../../memory/settings/sections/SourcesSection";
+
+vi.mock("../../memory/sources/SourcesSection", () => ({ default: () => <div /> }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
@@ -35,5 +39,16 @@ describe("Settings page chat import section", () => {
     expect(
       screen.getByText(/drop export zip here/i),
     ).toBeInTheDocument();
+  });
+
+  it("distinguishes short-memory entry from chat-history imports and shows provider export paths", () => {
+    render(<SourcesSection onImport={() => {}} />);
+
+    expect(screen.getByText("Add short memory entries: paste text or select text files, with one memory per line.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Paste or import" })).toBeInTheDocument();
+    expect(screen.getByText(/Import conversations from a ChatGPT or Claude export ZIP/)).toBeInTheDocument();
+    expect(screen.getByText("How to export")).toBeInTheDocument();
+    expect(screen.getByText("Settings → Data controls → Export data")).toBeInTheDocument();
+    expect(screen.getByText("Settings → Privacy → Export data")).toBeInTheDocument();
   });
 });

@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: AGPL-3.0-only */
+.memory-shell main:has(.source-library) { overflow-y: scroll; }
 .source-library {
   width: 100%;
-  max-width: 1210px;
+  max-width: calc(var(--collection-reading-width, 960px) + 2 * var(--collection-gutter, 40px));
   min-width: 0;
   margin: 0 auto;
-  padding: 24px 40px 64px;
+  padding: 24px var(--collection-gutter, 40px) 64px;
   color: var(--mem-text);
   font-family: var(--mem-font-body);
 }
@@ -32,23 +33,25 @@
 .source-library-list[data-lens="cards"] li { min-width: 0; }
 .source-library-list[data-lens="cards"] .source-library-row {
   align-items: flex-start;
+  flex-direction: column;
   height: 100%;
   min-height: 112px;
   padding: 16px;
-  border: 1px solid var(--mem-border);
+  border: 0;
   border-radius: 10px;
-  background: var(--mem-surface);
+  background: var(--mem-card-surface);
 }
-.source-library-list[data-lens="cards"] .source-library-row:hover { background: var(--mem-hover); }
-.source-library-row { display: flex; align-items: center; gap: 16px; width: 100%; min-width: 0; padding: 19px 8px; border: none; border-radius: 5px; background: transparent; text-align: left; color: var(--mem-text); }
-.source-library-row:hover { background: var(--mem-surface); }
-.source-library-icon { display: flex; flex: 0 0 40px; justify-content: center; align-items: center; height: 42px; color: var(--mem-text-secondary); background: var(--mem-surface); border: 1px solid var(--mem-border); border-radius: 7px; }
-.source-library-icon-folder { color: var(--mem-accent-amber); }
-.source-library-icon-link { color: var(--mem-accent-indigo); }
-.source-library-row-content { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1; }
-.source-library-row-title { font-size: 14px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; }
+.source-library-list[data-lens="cards"] .source-library-row:hover { background: var(--mem-card-hover); }
+.source-library-row { display: flex; align-items: center; gap: 12px; width: 100%; min-width: 0; min-height: 52px; padding: 12px 8px; border: none; border-radius: 8px; background: transparent; text-align: left; color: var(--mem-text); }
+.source-library-row:hover { background: var(--mem-hover); }
+.source-library-icon { display: inline-flex; flex: 0 0 20px; justify-content: center; align-items: center; height: 20px; color: var(--mem-text-secondary); }
+.source-library-list:not([data-lens="cards"]) .source-library-icon { align-self: flex-start; margin-top: 2px; }
+.source-library-list[data-lens="cards"] .source-library-icon { align-self: auto; flex-basis: 20px; margin: 0 0 4px; }
+.source-library-row-content { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.source-library-list[data-lens="cards"] .source-library-row-content { flex: 0 1 auto; }
+.source-library-row-title { font-family: var(--mem-font-heading); font-size: 15px; font-weight: 500; line-height: 24px; overflow-wrap: anywhere; }
+.source-library-list[data-lens="cards"] .source-library-row-title { font-size: 16px; font-weight: 600; line-height: 1.25; }
 .source-library-row-meta { font-size: 12px; line-height: 1.5; color: var(--mem-text-secondary); overflow-wrap: anywhere; }
-.source-library-row-arrow { color: var(--mem-text-tertiary); flex-shrink: 0; }
 .source-library-empty { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 76px 16px; color: var(--mem-text-secondary); }
 .source-library-empty > svg { margin-bottom: 20px; color: var(--mem-text-tertiary); }
 .source-library-empty h2 { margin: 0; color: var(--mem-text); font: 500 23px/1.3 var(--mem-font-heading); }
@@ -56,11 +59,11 @@
 .source-library-empty .source-library-support { font-size: 12px; margin-top: 8px; }
 .source-library-empty button { margin-top: 22px; }
 @media (max-width: 700px) {
-  .source-library { padding: 24px 24px 48px; }
+  .source-library { padding: 24px var(--collection-gutter, 24px) 48px; }
   .source-library-actions { flex-direction: row; }
   .source-library .collection-toolbar-actions { margin-left: auto; }
   .source-library-filters { flex-wrap: wrap; }
-  .source-library-row { gap: 12px; padding: 16px 0; }
+  .source-library-row { gap: 12px; padding: 12px 8px; }
   .source-library-empty { padding: 54px 4px; }
 }
 

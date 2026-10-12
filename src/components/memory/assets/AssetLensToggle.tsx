@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useTranslation } from "react-i18next";
 import type { AssetLens } from "../../../lib/assetLens";
+import "./AssetLensToggle.css";
 
 interface AssetLensToggleProps {
   readonly value: AssetLens;

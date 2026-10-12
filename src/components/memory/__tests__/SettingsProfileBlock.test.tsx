@@ -27,6 +27,7 @@ vi.mock("../../../lib/tauri", () => ({
   setAvatar: vi.fn().mockResolvedValue(null),
   removeAvatar: vi.fn().mockResolvedValue(null),
   getCaptureStats: vi.fn().mockResolvedValue({ clipboard: 0, screen: 0 }),
+  getKnowledgePath: vi.fn().mockResolvedValue("/Users/test/Wenlan/pages"),
   listAgents: vi.fn().mockResolvedValue([]),
   updateAgent: vi.fn().mockResolvedValue(null),
   deleteAgent: vi.fn().mockResolvedValue(null),

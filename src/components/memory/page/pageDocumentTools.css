@@ -14,8 +14,8 @@
 .page-document-editor--title > .page-document-tools { position: absolute; top: 0; right: 0; z-index: 20; }
 /* Only the first title line reserves space: the rest of the note retains its
    full width, and the markdown title remains part of the editor's document. */
-.page-detail .page-document-editor--title .cm-content > .cm-line:first-child { padding-right: calc(2 * var(--mem-icon-action-size) + 12px); }
-.page-detail .page-document-editor--title textarea { padding-right: calc(2 * var(--mem-icon-action-size) + 12px); }
+.page-detail .page-document-editor--title .cm-content > .cm-line:first-child { padding-inline-end: var(--reading-tools-clearance); }
+.page-detail .page-document-editor--title textarea { padding-inline-end: var(--reading-tools-clearance); }
 @media (min-width: 1100px) {
   .page-detail.document-context-host.page-document-map-open { padding-right: 520px; }
   .memory-shell:has(.page-info-drawer-hosted) .page-detail.document-context-host.page-document-map-open { padding-right: 0; }

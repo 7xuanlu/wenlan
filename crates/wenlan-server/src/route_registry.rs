@@ -391,10 +391,10 @@ const NON_SENSITIVE_PATHS: &[&str] = &[
     "/api/refinery/queue/{id}/reject", "/api/refinery/queue/{id}/accept", "/api/sources/{id}", "/api/sources/{id}/sync",
     "/api/config", "/api/config/routing", "/api/setup/status", "/api/setup/anthropic-key", "/api/on-device-model",
     "/api/on-device-model/download", "/api/outbox/drain", "/api/outbox/status", "/api/chunks/{id}/update", "/api/chunks/time-range", "/api/chunks/delete-bulk",
-    // These five id-addressed entity writes stay here (not GET/POST reads):
+    // These six id-addressed entity writes stay here (not GET/POST reads):
     // request-space scoping is enforced inside the core write itself (#576),
     // not by this catalog.
-    "/api/memory/entities/{id}/confirm", "/api/memory/entities/{id}/delete", "/api/memory/entities/{entity_id}/observations",
+    "/api/memory/entities/{id}/confirm", "/api/memory/entities/{id}/type", "/api/memory/entities/{id}/delete", "/api/memory/entities/{entity_id}/observations",
     "/api/memory/entities/{id}/merge", "/api/memory/entities/{id}/aliases",
     // Bulk archive/restore (#708) join them: the selection they act on is
     // resolved with the request scope folded into its SQL, so the scope fence

@@ -278,6 +278,12 @@ export default function MemoryStream({
         </label>
       )}
       <div className={isCollection ? "collection-toolbar-actions" : "flex items-center gap-2"}>
+        {isCollection && (
+          <AssetLensToggle
+            value={viewMode === "list" ? "rows" : "cards"}
+            onChange={handleCollectionLensChange}
+          />
+        )}
         {/* Sort dropdown */}
         {onSortChange && memories.length > 0 && (
           <div style={{ position: "relative" }}>
@@ -322,12 +328,6 @@ export default function MemoryStream({
           </div>
         )}
         {toolbarActions}
-        {isCollection && (
-          <AssetLensToggle
-            value={viewMode === "list" ? "rows" : "cards"}
-            onChange={handleCollectionLensChange}
-          />
-        )}
         {/* View toggle */}
         {presentation !== "parent-list" && (
           <button

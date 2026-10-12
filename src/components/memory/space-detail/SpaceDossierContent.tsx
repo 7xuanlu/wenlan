@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { PageIcon } from "../assets/PageIcon";
 import type { Page } from "../../../lib/tauri";
 import type { AssetLens } from "../../../lib/assetLens";
 import type { SpaceDetailCopy } from "./copy";
@@ -22,16 +23,9 @@ type SpaceDossierContentProps = {
   readonly lens: AssetLens;
 };
 
-function PageIcon() {
-  return (
-    <svg aria-hidden="true" viewBox="0 0 24 24">
-      <path d="M12 2 2 7l10 5 10-5-10-5ZM2 12l10 5 10-5M2 17l10 5 10-5" />
-    </svg>
-  );
-}
-
 export function SpaceDossierContent({ copy, navigation, pages, lens }: SpaceDossierContentProps) {
   const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   const [visiblePageCount, setVisiblePageCount] = useState(PAGE_DISPLAY_STEP);
   const sortedPages = useMemo(() => sortedSpacePages(pages), [pages]);
   const visiblePages = sortedPages.slice(0, visiblePageCount);
@@ -61,7 +55,7 @@ export function SpaceDossierContent({ copy, navigation, pages, lens }: SpaceDoss
         )}
         {pages.length >= PAGE_FETCH_LIMIT && (
           <p className="space-dossier-empty" role="status">
-            {t("spaceDetail.pageLimit", { count: pageCountLabel(pages.length, i18n.language), limit: new Intl.NumberFormat(i18n.language).format(PAGE_FETCH_LIMIT) })}
+            {t("spaceDetail.pageLimit", { count: pageCountLabel(pages.length, locale), limit: PAGE_FETCH_LIMIT.toLocaleString(locale) })}
           </p>
         )}
       </section>

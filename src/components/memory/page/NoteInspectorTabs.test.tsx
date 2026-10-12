@@ -77,29 +77,15 @@ describe("NoteInspectorTabs", () => {
     expect(screen.getByRole("button", { name: "Close inspector" })).toHaveFocus();
   });
 
-  it("retains the initiating tab focus while pending and rejects duplicate pointer and keyboard selection", async () => {
+  it("disables all tabs without firing selection", async () => {
     const user = userEvent.setup();
     const onSelect = vi.fn();
-    const { rerender } = render(<NoteInspectorTabs active="info" idPrefix="pending-view" onSelect={onSelect} />);
-    const canvas = screen.getByRole("tab", { name: "Mind map" });
-    canvas.focus();
-    await user.keyboard("{Enter}");
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith("canvas");
-    rerender(<NoteInspectorTabs active="info" disabled idPrefix="pending-view" onSelect={onSelect} />);
-    expect(canvas).toHaveFocus();
-    for (const tab of screen.getAllByRole("tab")) {
-      expect(tab).toHaveAttribute("aria-disabled", "true");
-      expect(tab).toHaveAttribute("aria-busy", "true");
-      expect(tab).not.toBeDisabled();
-    }
-    await user.keyboard("{Enter} {ArrowLeft}");
-    expect(canvas).toHaveFocus();
-    await user.click(canvas);
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    rerender(<NoteInspectorTabs active="canvas" idPrefix="pending-view" onSelect={onSelect} />);
-    expect(canvas).toHaveFocus();
-    expect(canvas).toHaveAttribute("aria-selected", "true");
-    expect(canvas).toHaveAttribute("tabindex", "0");
-    expect(canvas).not.toHaveAttribute("aria-busy");
+    render(<NoteInspectorTabs active="info" disabled idPrefix="disabled-view" onSelect={onSelect} />);
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(2);
+    for (const tab of tabs) expect(tab).toBeDisabled();
+    await user.click(screen.getByRole("tab", { name: "Info" }));
+    expect(onSelect).not.toHaveBeenCalled();
   });
 });

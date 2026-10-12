@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { SourceImportProgress } from "./SourceImportProgress";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { FileText, Folder, Globe, Funnel, Plus, CaretRight } from "@phosphor-icons/react";
+import { Funnel, Plus } from "@phosphor-icons/react";
 import { listIndexedFiles, listRegisteredSources, type IndexedFileInfo } from "../../../lib/tauri";
 import type { AssetLens } from "../../../lib/assetLens";
-import { AssetLensToggle } from "../assets/AssetLensToggle";
+import { getSourcePresentation } from "./sourcePresentation";
+import { SourceTypeIcon } from "./SourceTypeIcon";
+import { SourceCollection, SourceCollectionToolbar, type SourceCollectionItem } from "./SourceCollection";
+import SourceContainer, { type SourceContainerLocation } from "./SourceContainer";
 import "../assets/assetCards.css";
 import "../assets/collectionToolbar.css";
 import "./SourceLibrary.css";
@@ -16,18 +19,18 @@ export type SourceLibraryFilter = "all" | "files" | "links" | "folders";
 export interface SourceLibraryState {
   search: string;
   filter: SourceLibraryFilter;
+  lens?: AssetLens;
+  focusedDocument?: string;
+  container?: SourceContainerLocation | null;
 }
 
 export interface SourceLibraryProps {
   onAdd: () => void;
-  onBrowseFolder: (sourceId: string) => void;
   onOpenDocument: (file: IndexedFileInfo) => void;
   /** Provide both props to retain search and filter in the owning route. */
   state?: SourceLibraryState;
   onStateChange?: (state: SourceLibraryState) => void;
 }
-
-const FILTERS: SourceLibraryFilter[] = ["all", "files", "links", "folders"];
 
 function normalizedPath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
@@ -60,18 +63,21 @@ function documentUrl(file: IndexedFileInfo): URL | null {
   return null;
 }
 
-function documentFormat(file: IndexedFileInfo): string | null {
-  const name = pathName(documentPath(file));
-  const match = /\.([a-z0-9]+)$/i.exec(name) ?? /\.([a-z0-9]+)$/i.exec(file.title);
-  if (!match) return null;
-  return ["md", "markdown", "mdx"].includes(match[1].toLowerCase()) ? "Markdown" : match[1].toUpperCase();
-}
-
-export default function SourceLibrary({ onAdd, onBrowseFolder, onOpenDocument, state, onStateChange }: SourceLibraryProps) {
+export default function SourceLibrary({ onAdd, onOpenDocument, state, onStateChange }: SourceLibraryProps) {
   const { t } = useTranslation();
+  const libraryRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const button = [...(libraryRef.current?.querySelectorAll<HTMLButtonElement>("[data-source-key]") ?? [])]
+        .find(element => element.dataset.sourceKey === state?.focusedDocument);
+      button?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
   const [localState, setLocalState] = useState<SourceLibraryState>({ search: "", filter: "all" });
-  const [lens, setLens] = useState<AssetLens>("rows");
-  const { search, filter } = state ?? localState;
+  const currentState = state ?? localState;
+  const lens = currentState.lens ?? "rows";
+  const { search, filter } = currentState;
   const foldersQuery = useQuery({ queryKey: ["registeredSources"], queryFn: listRegisteredSources });
   const filesQuery = useQuery({ queryKey: ["indexedFiles"], queryFn: () => listIndexedFiles(), refetchInterval: 5000 });
 
@@ -83,40 +89,75 @@ export default function SourceLibrary({ onAdd, onBrowseFolder, onOpenDocument, s
   const needle = search.trim().toLocaleLowerCase();
   const visibleFolders = filter === "files" || filter === "links" ? [] : folders.filter((source) =>
     `${pathName(source.path)} ${source.path}`.toLocaleLowerCase().includes(needle));
+  const coveredDocuments = useMemo(() => new Set(documents.filter((file) => folders.some((source) => {
+    const path = normalizedPath(documentPath(file));
+    const root = normalizedPath(source.path);
+    return file.source_id.toLocaleLowerCase().startsWith(`${source.id}::`.toLocaleLowerCase()) && path.toLocaleLowerCase().startsWith(`${root.toLocaleLowerCase()}/`);
+  })).map((file) => `${file.source}:${file.source_id}`)), [documents, folders]);
   const visibleDocuments = filter === "folders" ? [] : documents.filter((file) => {
     const link = file.source === "webpage" || documentUrl(file) !== null;
-    return (filter === "all" || (filter === "links" ? link : !link)) &&
+    const visibleType = filter === "all" ? (!!needle || !coveredDocuments.has(`${file.source}:${file.source_id}`)) : filter === "links" ? link : !link;
+    return visibleType &&
       `${file.title} ${documentPath(file)} ${file.url ?? ""}`.toLocaleLowerCase().includes(needle);
   });
   const bothLoaded = foldersQuery.isSuccess && filesQuery.isSuccess;
   const realEmpty = bothLoaded && folders.length === 0 && documents.length === 0;
   const filteredEmpty = bothLoaded && !realEmpty && visibleFolders.length === 0 && visibleDocuments.length === 0;
 
-  function updateState(next: SourceLibraryState) {
-    if (state === undefined) setLocalState(next);
-    onStateChange?.(next);
+  function updateState(next: Partial<SourceLibraryState>) {
+    const updated = { ...(state ?? localState), ...next };
+    if (state === undefined) setLocalState(updated);
+    onStateChange?.(updated);
   }
 
   function clearFilters() { updateState({ search: "", filter: "all" }); }
 
+  if (currentState.container) return <SourceContainer
+    location={currentState.container}
+    search={search}
+    filter={filter}
+    lens={lens}
+    onSearchChange={(value) => updateState({ search: value })}
+    onFilterChange={(value) => updateState({ filter: value })}
+    onLensChange={(value) => updateState({ lens: value })}
+    onClearFilters={clearFilters}
+    onNavigate={(container) => updateState({ container, search: "", filter: "all" })}
+    onAdd={onAdd}
+    onOpenDocument={onOpenDocument}
+  />;
+
+  const collectionItems: SourceCollectionItem[] = [
+    ...visibleFolders.map((source) => ({
+      id: `container:${source.id}`,
+      title: pathName(source.path),
+      metadata: `${source.source_type === "obsidian" ? t("sourceContainer.obsidianVault") : t("sourceLibrary.folder")} · ${source.path}`,
+      kind: source.source_type === "obsidian" ? "obsidian" as const : "folder" as const,
+      onSelect: () => updateState({ search: "", filter: "all", container: { sourceId: source.id, path: source.path } }),
+    })),
+    ...visibleDocuments.map((file) => {
+      const path = normalizedPath(documentPath(file));
+      const presentation = getSourcePresentation(file, { document: t("sourceLibrary.document"), webExcerpt: t("sourceLibrary.webExcerpt") });
+      return {
+        id: `${file.source}:${file.source_id}`,
+        title: file.title || pathName(path),
+        metadata: presentation.metadata,
+        kind: presentation.kind,
+        onSelect: () => {
+          updateState({ focusedDocument: `${file.source}:${file.source_id}` });
+          onOpenDocument(file);
+        },
+      };
+    }),
+  ];
+
   return (
-    <section className="source-library" aria-labelledby="source-library-title">
+    <section ref={libraryRef} className="source-library" aria-labelledby="source-library-title">
       <h1 className="sr-only" id="source-library-title">{t("sourceLibrary.title")}</h1>
 
-      <div className="source-library-toolbar collection-toolbar">
-        <label className="source-library-search collection-search">
-          <Funnel size={18} aria-hidden="true" />
-          <input className="collection-search-input" type="search" value={search} onChange={(event) => updateState({ search: event.target.value, filter })} placeholder={t("sourceLibrary.search")} aria-label={t("sourceLibrary.search")} />
-        </label>
-        <div className="source-library-actions collection-toolbar-actions">
-          <AssetLensToggle value={lens} onChange={setLens} />
-          <button className="source-library-add collection-control collection-control--primary" onClick={onAdd} type="button"><Plus size={16} aria-hidden="true" />{t("sourceLibrary.add")}</button>
-        </div>
-      </div>
-
-      <div className="source-library-filters collection-filter-row" role="group" aria-label={t("sourceLibrary.filterLabel")}>
-        {FILTERS.map((value) => <button className="collection-control" key={value} aria-pressed={filter === value} onClick={() => updateState({ search, filter: value })}>{t(`sourceLibrary.filters.${value}`)}</button>)}
-      </div>
+      <SourceCollectionToolbar search={search} filter={filter} lens={lens}
+        onSearchChange={(value) => updateState({ search: value })}
+        onFilterChange={(value) => updateState({ filter: value })}
+        onLensChange={(value) => updateState({ lens: value })} onAdd={onAdd} />
 
       <SourceImportProgress />
 
@@ -127,36 +168,9 @@ export default function SourceLibrary({ onAdd, onBrowseFolder, onOpenDocument, s
         {filesQuery.isError && <div role="alert"><span>{t("sourceLibrary.documentError")}</span><button onClick={() => void filesQuery.refetch()}>{t("sourceLibrary.retryDocuments")}</button></div>}
       </div>
 
-      {(visibleFolders.length > 0 || visibleDocuments.length > 0) && <ul className="source-library-list" data-lens={lens} aria-label={t("sourceLibrary.listLabel")}>
-        {visibleFolders.map((source) => <li key={`folder:${source.id}`}>
-          <button className="source-library-row" onClick={() => onBrowseFolder(source.id)}>
-            <span className="source-library-icon source-library-icon-folder"><Folder size={23} aria-hidden="true" /></span>
-            <span className="source-library-row-content"><span className="source-library-row-title">{pathName(source.path)}</span><span className="source-library-row-meta">{t(source.source_type === "obsidian" ? "sourceLibrary.obsidian" : "sourceLibrary.folder")}<span aria-hidden="true"> · </span>{source.path}</span></span>
-            <CaretRight className="source-library-row-arrow" size={16} aria-hidden="true" />
-          </button>
-        </li>)}
-        {visibleDocuments.map((file) => {
-          const url = documentUrl(file);
-          const link = file.source === "webpage" || url !== null;
-          const path = normalizedPath(documentPath(file));
-          const parent = path.includes("/") ? pathName(path.slice(0, path.lastIndexOf("/"))) : "";
-          const metadata = link ? url?.hostname ?? t("sourceLibrary.webExcerpt") : [documentFormat(file) ?? t("sourceLibrary.document"), parent].filter(Boolean).join(" · ");
-          return <li key={`${file.source}:${file.source_id}`}>
-            <button className="source-library-row" onClick={(event) => {
-              // WebKit does not always focus a pointer-activated button. Give
-              // the preview a stable trigger to restore when it closes.
-              event.currentTarget.focus({ preventScroll: true });
-              onOpenDocument(file);
-            }}>
-              <span className={`source-library-icon${link ? " source-library-icon-link" : ""}`}>{link ? <Globe size={23} aria-hidden="true" /> : <FileText size={23} aria-hidden="true" />}</span>
-              <span className="source-library-row-content"><span className="source-library-row-title">{file.title || pathName(path)}</span><span className="source-library-row-meta">{metadata}</span></span>
-              <CaretRight className="source-library-row-arrow" size={16} aria-hidden="true" />
-            </button>
-          </li>;
-        })}
-      </ul>}
+      {collectionItems.length > 0 && <SourceCollection items={collectionItems} lens={lens} label={t("sourceLibrary.listLabel")} />}
 
-      {realEmpty && <div className="source-library-empty"><FileText size={32} aria-hidden="true" /><h2>{t("sourceLibrary.emptyTitle")}</h2><p>{t("sourceLibrary.emptyBody")}</p><p className="source-library-support">{t("sourceLibrary.supportedFiles")}</p><button className="source-library-add" onClick={onAdd}><Plus size={16} aria-hidden="true" />{t("sourceLibrary.add")}</button></div>}
+      {realEmpty && <div className="source-library-empty"><SourceTypeIcon kind="file" size={32} /><h2>{t("sourceLibrary.emptyTitle")}</h2><p>{t("sourceLibrary.emptyBody")}</p><p className="source-library-support">{t("sourceLibrary.supportedFiles")}</p><button className="source-library-add" onClick={onAdd}><Plus size={16} aria-hidden="true" />{t("sourceLibrary.add")}</button></div>}
       {filteredEmpty && <div className="source-library-empty"><Funnel size={28} aria-hidden="true" /><h2>{t("sourceLibrary.noMatches")}</h2><p>{t("sourceLibrary.noMatchesBody")}</p><button className="source-library-manage" onClick={clearFilters}>{t("sourceLibrary.clearFilters")}</button></div>}
     </section>
   );

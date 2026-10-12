@@ -18,6 +18,7 @@ import {
   TRUST_LEVELS,
 } from "../../../../lib/agents";
 import { RemoteAccessPanel } from "../../RemoteAccessPanel";
+import { SettingsHelp } from "../SettingsHelp";
 import { Button, Card, ConfirmActionButton, SectionHeader, Select, Tag, Toggle } from "../primitives";
 import ClientSetupList from "../../../connect/ClientSetupList";
 import { repairReasonOf } from "../../../connect/clientHealth";
@@ -144,12 +145,23 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
     .sort((a, b) => (b.latestLastSeen ?? 0) - (a.latestLastSeen ?? 0));
 
   const isEmpty = familyRows.length === 0 && pendingClients.length === 0;
+  const trustLevelDetails = (Object.keys(TRUST_LEVELS) as Array<keyof typeof TRUST_LEVELS>)
+    .map((level) => `${t(`settings.agents.trust.${level}`)}: ${t(`settings.agents.trustSummary.${level}`)}`)
+    .join("\n");
 
   return (
     <>
-      {/* ── Connected Agents ─────────────────────────────────────── */}
+      {/* ── Recorded tool activity ────────────────────────────────── */}
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-        <SectionHeader label={t("settings.agents.yourTools")} />
+        <SectionHeader
+          label={t("settings.agents.connectedAgents")}
+          help={(
+            <SettingsHelp
+              title={t("settings.agents.trustLevels")}
+              details={trustLevelDetails}
+            />
+          )}
+        />
         <Card padding={isEmpty ? "none" : "rows"}>
           {isEmpty ? (
             <div className="px-5 py-6 text-center space-y-3">
@@ -208,55 +220,10 @@ export default function AgentsSection({ onSetupAgent, currentSpace }: { onSetupA
             </>
           )}
         </Card>
-        {/* Trust legend — collapsed by default; native <details> keeps the
-            keyboard/screen-reader contract for free. */}
-        <details className="group px-1 pt-2">
-          <summary
-            className="inline-flex cursor-pointer list-none items-center gap-1.5 rounded-[var(--mem-radius-sm)] px-1 py-0.5 [&::-webkit-details-marker]:hidden focus-visible:outline-2 focus-visible:outline-[var(--mem-focus-ring)] focus-visible:outline-offset-2"
-            style={{
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "var(--mem-text-xs)",
-              color: "var(--mem-text-tertiary)",
-            }}
-          >
-            <svg
-              aria-hidden="true"
-              className="h-3 w-3 shrink-0 transition-transform duration-[var(--mem-dur-fast)] group-open:rotate-90"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-            </svg>
-            {t("settings.agents.trustLevels")}
-          </summary>
-          <div className="flex flex-col gap-1.5 px-1 pt-2">
-            {(Object.keys(TRUST_LEVELS) as Array<keyof typeof TRUST_LEVELS>).map((level) => (
-              <div key={level} className="flex items-start gap-2">
-                <span className="shrink-0">
-                  <Tag tone="neutral">{t(`settings.agents.trust.${level}`)}</Tag>
-                </span>
-                <span
-                  style={{
-                    fontFamily: "var(--mem-font-body)",
-                    fontSize: "var(--mem-text-sm)",
-                    color: "var(--mem-text-secondary)",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  {t(`settings.agents.trustSummary.${level}`)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </details>
       </section>
 
       {/* ── Add a tool ────────────────────────────────────────────── */}
-      <section className="mem-fade-up" style={{ animationDelay: "30ms" }}>
-        <SectionHeader label={t("connectMatrix.addToolTitle")} />
-        <ClientSetupList connectedFamilies={connectedFamilies} seenFamilies={seenFamilies} />
-      </section>
+      <ClientSetupList connectedFamilies={connectedFamilies} seenFamilies={seenFamilies} hideWhenComplete />
 
       {/* ── Web access ────────────────────────────────────────────── */}
       <section className="mem-fade-up" style={{ animationDelay: "60ms" }}>
@@ -365,6 +332,7 @@ function ToolFamilyRow({
                 <Select
                   size="sm"
                   value={uniformTrust ?? ""}
+                  aria-label={`${t("settings.agents.trustLevels")}: ${displayName}`}
                   onChange={(e) => {
                     if (e.target.value) updateAll(identities, { trustLevel: e.target.value });
                   }}
@@ -414,6 +382,7 @@ function ToolFamilyRow({
               key={agent.id}
               agent={agent}
               agents={agents}
+              compact={!isProbe && identities.length === 1}
               updateOne={updateOne}
               onDelete={onDelete}
             />
@@ -429,11 +398,13 @@ function ToolFamilyRow({
 function IdentityRow({
   agent,
   agents,
+  compact,
   updateOne,
   onDelete,
 }: {
   agent: AgentConnection;
   agents: AgentConnection[];
+  compact: boolean;
   updateOne: (name: string, updates: AgentUpdate) => void;
   onDelete: (name: string) => void;
 }) {
@@ -456,36 +427,43 @@ function IdentityRow({
         >
           {agent.name} · {agent.agent_type}
         </span>
-        <div className="flex items-center gap-3 mt-1 flex-wrap">
-          <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-            {t("settings.agents.memories", { count: agent.memory_count })}
-          </span>
-          {agent.last_seen_at && (
+        {!compact && (
+          <div className="flex items-center gap-3 mt-1 flex-wrap">
             <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-              {t("settings.agents.lastSeen", {
-                date: new Date(agent.last_seen_at * 1000).toLocaleDateString(),
-              })}
+              {t("settings.agents.memories", { count: agent.memory_count })}
             </span>
-          )}
-        </div>
+            {agent.last_seen_at && (
+              <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+                {t("settings.agents.lastSeen", {
+                  date: new Date(agent.last_seen_at * 1000).toLocaleDateString(),
+                })}
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <div className="w-fit shrink-0" title={t(`settings.agents.trustSummary.${trustLevel}`)}>
-          <Select
-            size="sm"
-            value={agent.trust_level}
-            onChange={(e) => updateOne(agent.name, { trustLevel: e.target.value })}
-          >
-            <option value="full">{t("settings.agents.trust.full")}</option>
-            <option value="review">{t("settings.agents.trust.review")}</option>
-            <option value="unknown">{t("settings.agents.trust.unknown")}</option>
-          </Select>
-        </div>
-        <Toggle
-          enabled={agent.enabled}
-          onToggle={() => updateOne(agent.name, { enabled: !agent.enabled })}
-          aria-label={agent.name}
-        />
+        {!compact && (
+          <>
+            <div className="w-fit shrink-0" title={t(`settings.agents.trustSummary.${trustLevel}`)}>
+              <Select
+                size="sm"
+                value={agent.trust_level}
+                aria-label={`${t("settings.agents.trustLevels")}: ${resolveAgentDisplayName(agent.name, agents)}`}
+                onChange={(e) => updateOne(agent.name, { trustLevel: e.target.value })}
+              >
+                <option value="full">{t("settings.agents.trust.full")}</option>
+                <option value="review">{t("settings.agents.trust.review")}</option>
+                <option value="unknown">{t("settings.agents.trust.unknown")}</option>
+              </Select>
+            </div>
+            <Toggle
+              enabled={agent.enabled}
+              onToggle={() => updateOne(agent.name, { enabled: !agent.enabled })}
+              aria-label={agent.name}
+            />
+          </>
+        )}
         <ConfirmActionButton
           variant="ghost"
           size="sm"

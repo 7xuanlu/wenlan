@@ -62,6 +62,7 @@ describe("SpaceDetail editorial dossier", () => {
     vi.mocked(listSpaces).mockResolvedValue([baseSpace]);
   });
 
+
   it("opens a Page editor for the current Space before the overflow action", async () => {
     const onCreatePage = vi.fn();
     renderDetail({ onCreatePage });
@@ -139,6 +140,7 @@ describe("SpaceDetail editorial dossier", () => {
 
     const region = await screen.findByRole("region", { name: "Pages" });
     const rows = within(region).getAllByRole("button");
+    expect(rows[0].querySelector("svg")).toHaveAttribute("width", "20");
     expect(rows.map((row) => row.textContent)).toEqual([
       expect.stringContaining("Alpha"), expect.stringContaining("Beta"),
       expect.stringContaining("Charlie"), expect.stringContaining("Delta"),
@@ -155,7 +157,7 @@ describe("SpaceDetail editorial dossier", () => {
   it("keeps review in overflow and does not read standalone memories or topics", async () => {
     const onReviewAll = vi.fn();
     renderDetail({ onReviewAll });
-    await screen.findByRole("tab", { name: "Notes" });
+    await screen.findByRole("tab", { name: "Pages" });
     expect(screen.queryByRole("region", { name: "Key entities" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Raw memories" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Needs review" })).not.toBeInTheDocument();

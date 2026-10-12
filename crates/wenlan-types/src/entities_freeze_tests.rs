@@ -38,8 +38,8 @@ use crate::repair::{
     RepairTarget,
 };
 use crate::requests::{
-    AddEntityObservationRequest, ConfirmEntityRequest, CreateEntityRequest, LinkEntityRequest,
-    StoreMemoryRequest,
+    AddEntityObservationRequest, ChangeEntityTypeRequest, ConfirmEntityRequest,
+    CreateEntityRequest, LinkEntityRequest, StoreMemoryRequest,
 };
 use crate::responses::{
     CreateEntityResponse, ListEntitiesResponse, ProposalAction, RefinementPayload,
@@ -432,6 +432,17 @@ fn confirm_and_observation_request_freeze() {
     assert_eq!(serde_json::to_value(&confirm).unwrap(), confirm_json);
     let back: ConfirmEntityRequest = serde_json::from_value(confirm_json.clone()).unwrap();
     assert_eq!(serde_json::to_value(&back).unwrap(), confirm_json);
+
+    let change_type = ChangeEntityTypeRequest {
+        entity_type: "person".into(),
+    };
+    let change_type_json = json!({ "entity_type": "person" });
+    assert_eq!(
+        serde_json::to_value(&change_type).unwrap(),
+        change_type_json
+    );
+    let back: ChangeEntityTypeRequest = serde_json::from_value(change_type_json.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&back).unwrap(), change_type_json);
 
     let obs = AddEntityObservationRequest {
         content: "likes tea".into(),

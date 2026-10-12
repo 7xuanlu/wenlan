@@ -155,6 +155,7 @@ main|put|/api/chunks/{id}/update|wenlan_server::indexed_files_routes::handle_upd
 main|put|/api/config|wenlan_server::config_routes::handle_update_config
 main|put|/api/documents/{source_id}/tags|wenlan_server::activity_tag_routes::handle_set_document_tags
 main|put|/api/memory/entities/{id}/confirm|wenlan_server::entity_graph_routes::handle_confirm_entity
+main|put|/api/memory/entities/{id}/type|wenlan_server::entity_graph_routes::handle_change_entity_type
 main|put|/api/memory/observations/{id}|wenlan_server::entity_graph_routes::handle_update_observation
 main|put|/api/memory/observations/{id}/confirm|wenlan_server::entity_graph_routes::handle_confirm_observation
 main|put|/api/memory/{id}/stability|wenlan_server::memory_routes::handle_set_stability
@@ -208,3 +209,5 @@ repair|post|/api/repairs/prepare-operation/cancel|wenlan_server::repair_prepare_
 main|get|/api/knowledge/folders|wenlan_server::knowledge_routes::handle_list_knowledge_folders
 main|post|/api/knowledge/folders|wenlan_server::knowledge_routes::handle_create_knowledge_folder
 main|post|/api/pages/{id}/move|wenlan_server::page_routes::handle_move_page
+main|get|/api/source-annotations|wenlan_server::source_annotation_routes::handle_get_source_annotation
+main|post|/api/source-annotations|wenlan_server::source_annotation_routes::handle_update_source_annotation

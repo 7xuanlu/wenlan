@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { WorkspaceBackButton } from "./navigation/WorkspaceNavigation";
-import { useState, useRef, useEffect, useId } from "react";
+import { useState, useRef, useEffect, useId, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   getMemoryDetail,
-  getEnrichmentStatus,
   getMemoryRevisions,
   getVersionChain,
   listAllTags,
@@ -26,15 +25,21 @@ import {
   type MemoryType,
   type PendingRevision,
 } from "../../lib/tauri";
+import { MemoryDocumentEditor } from "./editor/MemoryDocumentEditor";
+import { InfoToggle } from "./page/InfoToggle";
 import TagEditor from "../TagEditor";
 import PageInfoDrawer from "./page/PageInfoDrawer";
+import { DetailInfoContent, DetailReadingFrame } from "./DetailLayout";
+import { InfoAction } from "./page/InfoAction";
+import { useDetailInfoOpen } from "./useDetailInfoOpen";
 import KnowledgeContext from "./context/KnowledgeContext";
 import ContentRenderer from "./ContentRenderer";
 import { DisclosureButton, PinIcon, RailPanelTitle } from "./MemoryDetailPrimitives";
+import { formatRelativeEntityTime } from "./entity-detail/formatEntityMetadata";
 import "./memoryDetailReading.css";
 
 interface MemoryDetailProps {
-  onRegisterNavigationGuard?: (guard: (() => boolean) | null) => void;
+  onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
   sourceId: string;
   onBack: () => void;
   onNavigateEntity: (entityId: string) => void;
@@ -72,19 +77,13 @@ function MemoryDetailStatus({ ariaLabel, body, onBack, title, backLabel }: Memor
   );
 }
 
-function timeAgo(ts: number, locale: string): string {
-  const now = Date.now() / 1000;
-  const diff = now - ts;
-  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
-  if (diff < 60) return formatter.format(0, "second");
-  if (diff < 3600) return formatter.format(-Math.floor(diff / 60), "minute");
-  if (diff < 86400) return formatter.format(-Math.floor(diff / 3600), "hour");
-  if (diff < 604800) return formatter.format(-Math.floor(diff / 86400), "day");
-  return new Date(ts * 1000).toLocaleDateString(locale);
+function normalizedMemoryText(value: string): string {
+  return value.replace(/\s+/gu, " ").trim();
 }
 
-function absoluteDate(ts: number): string {
-  return new Date(ts * 1000).toLocaleString();
+function structuredFieldLabel(key: string, locale: string): string {
+  const words = key.replace(/_/gu, " ").trim().toLocaleLowerCase(locale);
+  return words.replace(/^\p{L}/u, (first) => first.toLocaleUpperCase(locale));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -126,7 +125,7 @@ function displayTitle(content: string, title: string | null | undefined, fallbac
 }
 
 export default function MemoryDetail({
-  onRegisterNavigationGuard,
+  onRegisterFlush,
   sourceId,
   onBack,
   onNavigateEntity,
@@ -135,8 +134,16 @@ export default function MemoryDetail({
 }: MemoryDetailProps) {
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [editContent, setEditContent] = useState("");
+  const [contentBusy, setContentBusy] = useState(false);
+  const [revisionPending, setRevisionPending] = useState(false);
+  const [revisionError, setRevisionError] = useState(false);
+  const contentFlushRef = useRef<(() => Promise<boolean>) | null>(null);
+  const deletedRef = useRef(false);
+  const registerContentFlush = useCallback((flush: (() => Promise<boolean>) | null) => { contentFlushRef.current = flush; }, []);
+  useEffect(() => {
+    onRegisterFlush?.(async () => deletedRef.current || (contentFlushRef.current ? contentFlushRef.current() : !revisionPending));
+    return () => onRegisterFlush?.(null);
+  }, [onRegisterFlush, revisionPending]);
   const [reclassifyOpen, setReclassifyOpen] = useState(false);
   const [spacePickerOpen, setSpacePickerOpen] = useState(false);
   const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
@@ -147,11 +154,12 @@ export default function MemoryDetail({
   const [versionHistoryExpanded, setVersionHistoryExpanded] = useState(false);
   const [relatedMemoriesExpanded, setRelatedMemoriesExpanded] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(false);
+  const [keyboardNavigation, setKeyboardNavigation] = useState(false);
+  const { open: infoOpen, setOpen: setInfoOpen, toggle: toggleInfo } = useDetailInfoOpen(sourceId);
   const actionsId = useId();
   const actionsRef = useRef<HTMLDivElement>(null);
   const actionsTriggerRef = useRef<HTMLButtonElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const initialActionFocusRef = useRef<"first" | "last">("first");
   const dropdownRef = useRef<HTMLDivElement>(null);
   const spaceDropdownRef = useRef<HTMLDivElement>(null);
 
@@ -161,7 +169,7 @@ export default function MemoryDetail({
   });
 
   const {
-    data: memory,
+    data: fetchedMemory,
     isError: memoryLoadFailed,
     isPending: memoryPending,
   } = useQuery({
@@ -170,13 +178,9 @@ export default function MemoryDetail({
     refetchInterval: 5000,
   });
 
-  const { data: enrichmentStatus } = useQuery({
-    queryKey: ["enrichment-status", sourceId],
-    queryFn: () => getEnrichmentStatus(sourceId),
-    enabled: !!sourceId,
-    staleTime: 30000,
-    retry: false,
-  });
+  const lastMemory = useRef(fetchedMemory);
+  if (fetchedMemory) lastMemory.current = fetchedMemory;
+  const memory = fetchedMemory ?? (lastMemory.current?.source_id === sourceId ? lastMemory.current : null);
 
   const { data: versionChain = [] } = useQuery({
     queryKey: ["version-chain", sourceId],
@@ -234,22 +238,13 @@ export default function MemoryDetail({
     queryClient.invalidateQueries({ queryKey: ["memoryStats"] });
   };
 
-  const updateMutation = useMutation({
-    mutationFn: (content: string) => updateMemory(sourceId, content),
-    onSuccess: invalidate,
-  });
-
-  useEffect(() => {
-    onRegisterNavigationGuard?.(() => {
-      if (updateMutation.isPending) return false;
-      return !editing || editContent === memory?.content || confirm(t("pageDetail.editor.discardConfirm"));
-    });
-    return () => onRegisterNavigationGuard?.(null);
-  }, [onRegisterNavigationGuard, sourceId, editing, editContent, memory?.content, updateMutation.isPending, t]);
-
   const confirmMutation = useMutation({
-    mutationFn: (confirmed: boolean) => updateMemory(sourceId, undefined, undefined, confirmed),
-    onSuccess: invalidate,
+    mutationFn: ({ id, confirmed }: { id: string; confirmed: boolean }) => updateMemory(id, undefined, undefined, confirmed),
+    onSuccess: async (_result, { id }) => {
+      await Promise.all([
+        ["memoryDetail", id], ["memory-revisions", id], ["memories"], ["knowledge-graph"], ["memoryStats"],
+      ].map((queryKey) => queryClient.invalidateQueries({ queryKey })));
+    },
   });
 
   const reclassifyMutation = useMutation({
@@ -268,6 +263,7 @@ export default function MemoryDetail({
   const deleteMutation = useMutation({
     mutationFn: () => deleteFileChunks("memory", sourceId),
     onSuccess: () => {
+      deletedRef.current = true;
       queryClient.invalidateQueries({ queryKey: ["memories"] });
       queryClient.invalidateQueries({ queryKey: ["knowledge-graph"] });
       queryClient.invalidateQueries({ queryKey: ["memoryStats"] });
@@ -293,7 +289,6 @@ export default function MemoryDetail({
     setSourceExpanded(false);
     setRevisionHistoryExpanded(false);
     setVersionHistoryExpanded(false);
-    setInfoOpen(false);
     setEditingTags(false);
     setRelatedMemoriesExpanded(false);
     setExpandedVersion(null);
@@ -303,12 +298,24 @@ export default function MemoryDetail({
 
   useEffect(() => {
     if (!actionsOpen) return;
-    actionsRef.current?.querySelector<HTMLButtonElement>("[role^='menuitem']")?.focus();
-    const closeOutside = (event: MouseEvent) => {
+    const items = Array.from(actionsRef.current?.querySelectorAll<HTMLButtonElement>("[role^='menuitem']:not(:disabled)") ?? []);
+    if (items.length > 0) {
+      (initialActionFocusRef.current === "last" ? items[items.length - 1] : items[0])?.focus();
+    } else {
+      actionsRef.current?.querySelector<HTMLElement>("[role='menu']")?.focus();
+    }
+    const closeOutside = (event: PointerEvent) => {
       if (!actionsRef.current?.contains(event.target as Node)) setActionsOpen(false);
     };
-    document.addEventListener("mousedown", closeOutside);
-    return () => document.removeEventListener("mousedown", closeOutside);
+    const closeOnFocusOutside = (event: FocusEvent) => {
+      if (!actionsRef.current?.contains(event.target as Node)) setActionsOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("focusin", closeOnFocusOutside);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("focusin", closeOnFocusOutside);
+    };
   }, [actionsOpen]);
 
   const closeActions = () => {
@@ -323,7 +330,7 @@ export default function MemoryDetail({
       closeActions();
       return;
     }
-    const items = Array.from(actionsRef.current?.querySelectorAll<HTMLButtonElement>("[role^='menuitem']") ?? []);
+    const items = Array.from(actionsRef.current?.querySelectorAll<HTMLButtonElement>("[role^='menuitem']:not(:disabled)") ?? []);
     const index = items.indexOf(document.activeElement as HTMLButtonElement);
     let next = index;
     if (event.key === "ArrowDown") next = (index + 1) % items.length;
@@ -332,16 +339,9 @@ export default function MemoryDetail({
     else if (event.key === "End") next = items.length - 1;
     else return;
     event.preventDefault();
+    setKeyboardNavigation(true);
     items[next]?.focus();
   };
-
-  // Focus textarea on edit
-  useEffect(() => {
-    if (editing && textareaRef.current) {
-      textareaRef.current.focus();
-      textareaRef.current.selectionStart = textareaRef.current.value.length;
-    }
-  }, [editing]);
 
   // Close reclassify dropdown on click outside
   useEffect(() => {
@@ -378,10 +378,17 @@ export default function MemoryDetail({
   }, [memory]);
 
   const handleAcceptRevision = async () => {
-    if (!pendingRevision) return;
-    await acceptPendingRevision(sourceId);
-    setPendingRevision(null);
-    invalidate();
+    if (!pendingRevision || revisionPending) return;
+    setRevisionError(false);
+    setRevisionPending(true);
+    try {
+      if (contentFlushRef.current && !await contentFlushRef.current()) return;
+      await acceptPendingRevision(sourceId);
+      setPendingRevision(null);
+      await queryClient.invalidateQueries({ queryKey: ["memoryDetail", sourceId] });
+      invalidate();
+    } catch { setRevisionError(true); }
+    finally { setRevisionPending(false); }
   };
 
   const handleDismissRevision = async () => {
@@ -390,25 +397,7 @@ export default function MemoryDetail({
     setPendingRevision(null);
   };
 
-  const handleSave = () => {
-    if (editContent.trim() && editContent !== memory?.content) {
-      updateMutation.mutate(editContent.trim());
-    }
-    setEditing(false);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && e.metaKey) {
-      e.preventDefault();
-      handleSave();
-    }
-    if (e.key === "Escape") {
-      setEditContent(memory?.content ?? "");
-      setEditing(false);
-    }
-  };
-
-  if (!memory) {
+  if (!memory || (fetchedMemory === null && !contentBusy)) {
     const titleKey = memoryLoadFailed
       ? "memoryDetail.loadFailedTitle"
       : memoryPending
@@ -432,8 +421,11 @@ export default function MemoryDetail({
   }
 
   const facetType = isMemoryType(memory.memory_type) ? memory.memory_type : "fact";
+  const facetLabel = t(`importView.typeLabels.${facetType}`);
   const isConfirmed = memory.confirmed;
-  const formatTimeAgo = (ts: number) => timeAgo(ts, i18n.resolvedLanguage ?? i18n.language);
+  const locale = i18n.resolvedLanguage ?? i18n.language;
+  const formatTimeAgo = (ts: number) => formatRelativeEntityTime(ts, locale) ?? "";
+  const formatAbsoluteTime = (ts: number) => new Date(ts * 1000).toLocaleString(locale);
   const relatedMemories = relatedSearchResults.slice(0, 5);
   const revisionEntries = memoryRevisions?.entries ?? [];
   const visibleRevisionEntries = revisionHistoryExpanded ? revisionEntries : revisionEntries.slice(0, 1);
@@ -441,19 +433,23 @@ export default function MemoryDetail({
   const visibleRelatedMemories = relatedMemoriesExpanded ? relatedMemories : relatedMemories.slice(0, 3);
   const hasDaemonRevisionHistory = revisionEntries.length > 0;
   const title = displayTitle(memory.content, memory.title, t("memoryDetail.untitledMemory"));
-  const structuredEntries = parseStructuredEntries(memory.structured_fields);
+  const structuredEntries = parseStructuredEntries(memory.structured_fields).filter(([, value]) =>
+    normalizedMemoryText(value) !== normalizedMemoryText(memory.content),
+  );
   const hasLegacyVersionHistory = !hasDaemonRevisionHistory && Boolean(memory.supersedes) && versionChain.length > 0;
   const sourceText = memory.source_text?.trim() ?? "";
   const hasSourceExcerpt = sourceText.length > 0 && sourceText !== memory.content.trim();
-  const sourceClipped = sourceText.length > 360;
-  const visibleSourceText = sourceExpanded || !sourceClipped ? sourceText : `${sourceText.slice(0, 360)}…`;
-  const hasConnections = relatedMemories.length > 0;
-  const navigateMemory = (id: string) => { setInfoOpen(false); onNavigateMemory(id); };
-  const navigateEntity = (id: string) => { setInfoOpen(false); onNavigateEntity(id); };
-  const navigatePage = onNavigatePage ? (id: string) => { setInfoOpen(false); onNavigatePage(id); } : undefined;
+  const sourcePreviewLength = 120;
+  const sourceClipped = sourceText.length > sourcePreviewLength;
+  const visibleSourceText = sourceExpanded || !sourceClipped ? sourceText : `${sourceText.slice(0, sourcePreviewLength)}…`;
+  const hasSimilarMemories = relatedMemories.length > 0;
+  const navigateMemory = (id: string) => onNavigateMemory(id);
+  const navigateEntity = (id: string) => onNavigateEntity(id);
+  const navigatePage = onNavigatePage ? (id: string) => onNavigatePage(id) : undefined;
 
   return (
     <main className={`memory-detail-dossier memory-detail-content-first document-context-host${infoOpen ? " document-context-open" : ""}`} aria-label={t("memoryDetail.dossierLabel")}>
+      <DetailReadingFrame variant="compact" className="memory-document-frame">
       <header className="memory-detail-header">
         <WorkspaceBackButton
           type="button"
@@ -464,38 +460,32 @@ export default function MemoryDetail({
         >
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg>
         </WorkspaceBackButton>
-        <span className="memory-detail-kind" title={t("knowledgeContext.memoryHint")}>{t("knowledgeContext.memoryKind")}</span>
-        <div className="memory-detail-actions">
-          {/* Edit */}
-          {!editing && memory.memory_type !== "recap" && (
-            <button
-              onClick={() => { setEditContent(memory.content); setEditing(true); }}
-              className="memory-detail-text-button"
-              aria-label={t("memoryDetail.editMemory")}
-            >
-              {t("memoryDetail.edit")}
-            </button>
-          )}
+        {fetchedMemory !== null && <div className="memory-detail-actions">
+          <InfoToggle open={infoOpen} onClick={toggleInfo} />
 
           <div
-            className="memory-detail-action-menu-anchor"
+            className="page-detail-actions-anchor"
             ref={actionsRef}
-            onBlur={(event) => {
-              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setActionsOpen(false);
-            }}
           >
             <button
               ref={actionsTriggerRef}
               type="button"
-              className="memory-detail-icon-button"
+              className="mem-icon-action page-detail-actions-menu-trigger"
               aria-label={t("memoryDetail.actions")}
               aria-haspopup="menu"
               aria-controls={actionsOpen ? actionsId : undefined}
               aria-expanded={actionsOpen}
-              onClick={() => setActionsOpen(!actionsOpen)}
+              onClick={(event) => {
+                setKeyboardNavigation(event.detail === 0);
+                initialActionFocusRef.current = "first";
+                setActionsOpen((open) => !open);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                   event.preventDefault();
+                  event.stopPropagation();
+                  setKeyboardNavigation(true);
+                  initialActionFocusRef.current = event.key === "ArrowUp" ? "last" : "first";
                   setActionsOpen(true);
                 }
               }}
@@ -505,26 +495,7 @@ export default function MemoryDetail({
               </svg>
             </button>
             {actionsOpen && (
-              <div id={actionsId} className="memory-detail-action-menu" role="menu" aria-label={t("memoryDetail.actions")} onKeyDown={handleActionsKeyDown}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  tabIndex={-1}
-                  onClick={() => { closeActions(); setInfoOpen(true); }}
-                >
-                  {t("knowledgeContext.memoryPanel")}
-                </button>
-                <button
-                  type="button"
-                  role="menuitemcheckbox"
-                  tabIndex={-1}
-                  aria-checked={isConfirmed}
-                  aria-label={t("memoryDetail.confirmedState", { state: isConfirmed ? t("memoryDetail.yes") : t("memoryDetail.no") })}
-                  onClick={() => { confirmMutation.mutate(!isConfirmed); closeActions(); }}
-                >
-                  <span className={`memory-detail-state-dot ${isConfirmed ? "is-on" : ""}`} />
-                  {t("memoryDetail.confirmed")}
-                </button>
+              <div id={actionsId} className="mem-popover-surface page-detail-actions-menu" data-keyboard-navigation={keyboardNavigation ? "true" : "false"} role="menu" aria-label={t("memoryDetail.actions")} tabIndex={-1} onKeyDown={handleActionsKeyDown}>
                 <button
                   type="button"
                   role="menuitemcheckbox"
@@ -532,6 +503,7 @@ export default function MemoryDetail({
                   aria-checked={memory.pinned}
                   aria-label={t("memoryDetail.pinnedState", { state: memory.pinned ? t("memoryDetail.yes") : t("memoryDetail.no") })}
                   title={memory.pinned ? t("memoryDetail.unpin") : t("memoryDetail.pin")}
+                  disabled={pinMutation.isPending || deleteMutation.isPending}
                   onClick={() => { pinMutation.mutate(); closeActions(); }}
                 >
                   <PinIcon filled={memory.pinned} size={12} />
@@ -541,11 +513,14 @@ export default function MemoryDetail({
                   type="button"
                   role="menuitem"
                   tabIndex={-1}
-                  className="memory-detail-delete"
+                  className="page-detail-menu-danger"
                   aria-label={t("memoryDetail.deleteMemory")}
+                  disabled={pinMutation.isPending || deleteMutation.isPending}
                   onClick={() => {
                     closeActions();
-                    if (window.confirm(t("memoryDetail.deleteConfirm"))) deleteMutation.mutate();
+                    if (window.confirm(t("memoryDetail.deleteConfirm"))) {
+                      void (contentFlushRef.current?.() ?? Promise.resolve(true)).then(saved => { if (saved) deleteMutation.mutate(); });
+                    }
                   }}
                 >
                   {t("memoryDetail.deleteMemory")}
@@ -553,53 +528,20 @@ export default function MemoryDetail({
               </div>
             )}
           </div>
-        </div>
+        </div>}
       </header>
 
-      <section className="memory-detail-reading" aria-label={t("memoryDetail.readingLabel")}>
+      <section className="memory-detail-reading reading-surface" aria-label={t("memoryDetail.readingLabel")}>
         <h2 className="sr-only">{title}</h2>
 
-        {/* The captured content is the primary reading surface. */}
-        {editing ? (
-          <div className="memory-detail-editing-surface">
-            <span className="memory-detail-editing-label">
-              {t("memoryDetail.editing")}
-            </span>
-            <textarea
-              ref={textareaRef}
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              onKeyDown={handleKeyDown}
-              className="memory-detail-editor"
-              rows={Math.max(3, editContent.split("\n").length)}
-            />
-            <div className="memory-detail-editor-actions">
-              <button
-                onClick={handleSave}
-                className="memory-detail-text-button primary"
-              >
-                {t("memoryDetail.save")}
-              </button>
-              <button
-                onClick={() => { setEditContent(memory.content); setEditing(false); }}
-                className="memory-detail-text-button"
-              >
-                {t("memoryDetail.cancel")}
-              </button>
-              <span className="memory-detail-shortcut">
-                {t("memoryDetail.saveShortcut")}
-              </span>
-            </div>
-          </div>
+        {memory.memory_type === "recap" ? (
+          <div className="memory-detail-body-text"><ContentRenderer content={memory.content} structuredFields={memory.structured_fields} variant="detail" /></div>
         ) : (
-          <div className="memory-detail-body-text">
-            <ContentRenderer
-              content={memory.content}
-              structuredFields={memory.structured_fields}
-              variant="detail"
-            />
-          </div>
+          <MemoryDocumentEditor key={sourceId} memory={memory} canonical={fetchedMemory}
+            disabled={revisionPending || deleteMutation.isPending || confirmMutation.isPending}
+            onBusyChange={setContentBusy} onRegisterFlush={registerContentFlush} />
         )}
+        {revisionError ? <p role="alert">{t("infoActions.saveError")}</p> : null}
 
       {memory.quality === "low" && (
         <div className="memory-detail-quality-warning">
@@ -608,7 +550,7 @@ export default function MemoryDetail({
       )}
 
       {/* Pending revision */}
-      {pendingRevision && (
+      {pendingRevision && fetchedMemory !== null && (
         <div className="memory-detail-pending">
           <div className="memory-detail-pending-title">
             {pendingRevision.source_agent
@@ -621,6 +563,7 @@ export default function MemoryDetail({
           <div className="flex gap-2">
             <button
               onClick={handleAcceptRevision}
+              disabled={contentBusy || revisionPending}
               className="memory-detail-text-button primary"
             >
               {t("memoryDetail.accept")}
@@ -636,426 +579,357 @@ export default function MemoryDetail({
       )}
 
       </section>
+      </DetailReadingFrame>
 
-      <PageInfoDrawer docked open={infoOpen} onClose={() => setInfoOpen(false)} title={t("knowledgeContext.memoryPanel")} closeLabel={t("common.close")}>
-        <div className="memory-detail-content-first memory-detail-context-content">
-          <p className="knowledge-context-hint">{t("knowledgeContext.memoryHint")}</p>
-          <KnowledgeContext key={sourceId} kind="memory" id={sourceId} title={title} onNavigateMemory={navigateMemory} onNavigatePage={navigatePage} onNavigateEntity={navigateEntity} />
+      <PageInfoDrawer docked inspector focusOnOpen={false} open={infoOpen && fetchedMemory !== null} onClose={() => setInfoOpen(false)} title={t("knowledgeContext.memoryPanel")} closeLabel={t("common.close")}>
+        <DetailInfoContent className="memory-detail-context-content">
+          <InfoAction
+            label={t(isConfirmed ? "infoActions.contentConfirmed" : "infoActions.confirmContent")}
+            description={t(contentBusy ? "infoActions.saveMemoryFirst" : isConfirmed ? "infoActions.contentConfirmedHint" : "infoActions.confirmContentHint")}
+            showDescription={!isConfirmed}
+            active={isConfirmed}
+            pending={confirmMutation.isPending}
+            disabled={isConfirmed || contentBusy || revisionPending || deleteMutation.isPending}
+            error={confirmMutation.isError && confirmMutation.variables?.id === sourceId ? t("infoActions.saveError") : undefined}
+            onClick={() => { void (contentFlushRef.current?.() ?? Promise.resolve(true)).then(saved => { if (saved) confirmMutation.mutate({ id: sourceId, confirmed: true }); }); }}
+          />
 
-      {/* Source excerpt: the captured text behind this memory */}
-      {hasSourceExcerpt && (
-        <details key={`source-${sourceId}`} className="memory-detail-disclosure memory-detail-source">
-          <summary>{t("memoryDetail.sourceTitle")}</summary>
-          <div className="memory-detail-disclosure-body">
-          <blockquote className="memory-detail-source-quote">
-            {visibleSourceText}
-          </blockquote>
-          {sourceClipped && (
-            <DisclosureButton
-              ariaLabel={sourceExpanded ? t("memoryDetail.showLess") : t("memoryDetail.showFullSource")}
-              onClick={() => setSourceExpanded(!sourceExpanded)}
-            >
-              {sourceExpanded ? t("memoryDetail.showLessCompact") : t("memoryDetail.showFullSource")}
-            </DisclosureButton>
-          )}
-          </div>
-        </details>
-      )}
-
-      {/* Exact recap sources and semantic similarity are distinct from explicit relations. */}
-      {hasConnections && (
-        <details key={`connections-${sourceId}`} className="memory-detail-disclosure memory-detail-connections">
-          <summary>{memory.is_recap ? t("memoryDetail.sourceMemories") : t("knowledgeContext.similarMemories")}</summary>
-          <div className="memory-detail-disclosure-body">
-
-          {/* Related / Source memories */}
-          {relatedMemories.length > 0 && (
-            <section className="memory-detail-rail-section">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>
-                  {memory.is_recap ? t("memoryDetail.sourceMemories") : t("knowledgeContext.similarMemories")}
-                </RailPanelTitle>
-                {relatedMemories.length > visibleRelatedMemories.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: relatedMemories.length })}
-                    count={relatedMemories.length}
-                    onClick={() => setRelatedMemoriesExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {relatedMemoriesExpanded && relatedMemories.length > 3 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setRelatedMemoriesExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-related-grid">
-                {visibleRelatedMemories.map((r) => {
-                  const rFacet = r.memory_type ?? null;
-                  const rColor = rFacet ? FACET_COLORS[rFacet] : null;
-                  return (
+          <section className="memory-detail-information">
+            <h3 className="memory-detail-subsection">{t("detailInfo.details")}</h3>
+            <dl className="memory-detail-info-list">
+              <div className="memory-detail-info-row">
+                <dt className="memory-detail-info-label">{t("memoryList.type")}</dt>
+                <dd className="memory-detail-info-value">
+                  <div className="relative" ref={dropdownRef}>
                     <button
-                      key={'id' in r ? r.id : r.source_id}
-                      onClick={() => navigateMemory(r.source_id)}
-                      className="memory-detail-related-card"
+                      onClick={() => setReclassifyOpen(!reclassifyOpen)}
+                      className={`memory-detail-facet-button ${FACET_COLORS[facetType]}`}
                     >
-                      <div className="flex-1 min-w-0">
-                        <p className="memory-detail-related-copy line-clamp-2">
-                          {r.content.length > 160 ? r.content.substring(0, 160) + "\u2026" : r.content}
-                        </p>
-                        <div className="memory-detail-related-meta">
-                          {rFacet && rColor && (
-                            <span className={`memory-detail-related-facet ${rColor}`}>
-                              {rFacet}
-                            </span>
-                          )}
-                          <span>{formatTimeAgo(r.last_modified)}</span>
-                        </div>
-                      </div>
+                      {facetLabel}
+                      <span className="ml-1 opacity-50">&#x25BE;</span>
                     </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          </div>
-        </details>
-      )}
-      <section className="memory-detail-information">
-        <h3 className="memory-detail-subsection">{t("memoryDetail.information")}</h3>
-        <div className="memory-detail-disclosure-body">
-        <div className="memory-detail-eyebrow">
-          <div className="relative" ref={dropdownRef}>
-            <button
-              onClick={() => setReclassifyOpen(!reclassifyOpen)}
-              className={`memory-detail-facet-button ${FACET_COLORS[facetType]}`}
-            >
-              {facetType}
-              <span className="ml-1 opacity-50">&#x25BE;</span>
-            </button>
-            {reclassifyOpen && (
-              <div
-                className="absolute left-0 top-7 z-50 rounded-lg shadow-xl py-1 min-w-[140px]"
-                style={{
-                  backgroundColor: "var(--mem-surface)",
-                  border: "1px solid var(--mem-border)",
-                }}
-              >
-                {MEMORY_FACETS.map((facet) => (
-                  <button
-                    key={facet.type}
-                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-[var(--mem-hover)]"
-                    style={{
-                      fontFamily: "var(--mem-font-body)",
-                      color: facetType === facet.type ? "var(--mem-text)" : "var(--mem-text-secondary)",
-                    }}
-                    onClick={() => reclassifyMutation.mutate(facet.type)}
-                  >
-                    <span className={`memory-detail-facet-dot ${FACET_COLORS[facet.type].split(" ")[0]}`} />
-                    {facet.label}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="relative" ref={spaceDropdownRef}>
-            <button
-              onClick={() => setSpacePickerOpen(!spacePickerOpen)}
-              className={`memory-detail-eyebrow-button ${memory.domain ? "" : "is-empty"}`}
-            >
-              {memory.domain ?? t("memoryDetail.assignSpace")}
-            </button>
-            {spacePickerOpen && (
-              <div
-                className="absolute left-0 top-8 z-50 rounded-lg shadow-xl py-1 min-w-[140px]"
-                style={{
-                  backgroundColor: "var(--mem-surface)",
-                  border: "1px solid var(--mem-border)",
-                }}
-              >
-                {memory.domain && (
-                  <>
-                    <button
-                      onClick={() => changeSpaceMutation.mutate(undefined)}
-                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-[var(--mem-hover)]"
-                      style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text-tertiary)" }}
-                    >
-                      {t("memoryDetail.removeFromSpace")}
-                    </button>
-                    <div style={{ height: "1px", backgroundColor: "var(--mem-border)", margin: "2px 0" }} />
-                  </>
-                )}
-                {spaces.filter((s) => s.name !== memory.domain).map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => changeSpaceMutation.mutate(s.name)}
-                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-[var(--mem-hover)]"
-                    style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text-secondary)" }}
-                  >
-                    <span className="capitalize">{s.name}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {memory.source_agent && (
-            <>
-              <span className="memory-detail-eyebrow-sep">·</span>
-              <span>{agentDisplayName(memory.source_agent)}</span>
-            </>
-          )}
-
-          <span className="memory-detail-eyebrow-sep">·</span>
-          <time title={absoluteDate(memory.last_modified)}>
-            {formatTimeAgo(memory.last_modified)}
-          </time>
-        </div>
-        {/* Linked topic and enrichment diagnostics stay with record information. */}
-        {(memory.entity_id || !!enrichmentStatus?.summary.trim()) && (
-        <div className="memory-detail-strip">
-          {memory.entity_id && (
-            <span className="memory-detail-strip-item">
-              <span className="memory-detail-strip-label">{t("memoryDetail.entity")}</span>
-              <button
-                onClick={() => {
-                  if (memory.entity_id) navigateEntity(memory.entity_id);
-                }}
-                className="memory-detail-link-button"
-              >
-                {t("memoryDetail.linked")}
-              </button>
-            </span>
-          )}
-
-          {enrichmentStatus?.summary.trim() && (
-            <span className="memory-detail-strip-item">
-              <span className="memory-detail-strip-label">{t("memoryDetail.enrichment")}</span>
-              <span
-                className="memory-chip indigo"
-                title={enrichmentStatus.steps.map((s) => `${s.step}: ${s.status}`).join("\n")}
-              >
-                {enrichmentStatus.summary}
-              </span>
-            </span>
-          )}
-        </div>
-        )}
-
-        {/* Tags: own wrapping line, "+" anchored */}
-        <div className="memory-detail-tagline">
-          <span className="memory-detail-strip-label">{t("memoryDetail.tags")}</span>
-          {currentTags.map((tag) => (
-            <span key={tag} className="memory-chip indigo">
-              {tag}
-            </span>
-          ))}
-          <div className="relative">
-            <button
-              onClick={() => setEditingTags(!editingTags)}
-              className="memory-detail-tag-edit"
-              aria-label={t("memoryDetail.editTags")}
-              title={t("memoryDetail.editTags")}
-            >
-              {editingTags ? t("memoryDetail.done") : "+"}
-            </button>
-            {editingTags && (
-              <TagEditor
-                source="memory"
-                sourceId={sourceId}
-                lastModified={memory.last_modified}
-                currentTags={currentTags}
-                allTags={allTags}
-                onClose={() => setEditingTags(false)}
-                onTagsChanged={() => queryClient.invalidateQueries({ queryKey: ["tags"] })}
-              />
-            )}
-          </div>
-        </div>
-      {structuredEntries.length > 0 && (
-        <section className="memory-detail-structured">
-          <h3 className="memory-detail-subsection">{t("memoryDetail.details")}</h3>
-          <div className="memory-detail-field-list">
-            {structuredEntries.map(([key, val]) => (
-              <div key={key} className="memory-detail-field-row">
-                <span className="memory-detail-field-label">{key.replace(/_/g, " ")}</span>
-                <span className="memory-detail-field-value">{val}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Provenance: revision + legacy version history, quiet at the bottom */}
-      {(hasDaemonRevisionHistory || hasLegacyVersionHistory) && (
-        <div className="memory-detail-provenance-group">
-          {/* Revision history from daemon supersession chain */}
-          {hasDaemonRevisionHistory && (
-            <section className="memory-detail-rail-panel memory-detail-secondary-panel">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>{t("memoryDetail.revisionHistory")}</RailPanelTitle>
-                {revisionEntries.length > visibleRevisionEntries.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: revisionEntries.length })}
-                    count={revisionEntries.length}
-                    onClick={() => setRevisionHistoryExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {revisionHistoryExpanded && revisionEntries.length > 1 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setRevisionHistoryExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-compact-list">
-                {visibleRevisionEntries.map((entry) => {
-                  const isCurrent = entry.source_id === memoryRevisions?.current_source_id;
-                  const body = (
-                    <div className="memory-detail-context-row-body">
-                      <div className="memory-detail-context-row-meta">
-                        <span className="memory-detail-context-row-title truncate">
-                          {entry.title || t("memoryDetail.untitledMemory")}
-                        </span>
-                        {isCurrent && (
-                          <span className="memory-detail-context-row-badge">
-                            {t("memoryDetail.current")}
-                          </span>
-                        )}
-                        <span className="memory-detail-context-row-meta-text">
-                          {t("memoryDetail.depth", { depth: entry.depth })}
-                        </span>
-                        <span className="memory-detail-context-row-meta-text">
-                          {formatTimeAgo(entry.last_modified)}
-                        </span>
-                      </div>
-                      {entry.delta_summary && (
-                        <p className="memory-detail-context-row-summary">
-                          {entry.delta_summary}
-                        </p>
-                      )}
-                      <p className="memory-detail-context-row-preview line-clamp-2">
-                        {entry.content_preview}
-                      </p>
-                      {entry.source_agent && (
-                        <p className="memory-detail-context-row-agent">
-                          {entry.source_agent}
-                        </p>
-                      )}
-                    </div>
-                  );
-                  if (isCurrent) {
-                    return (
+                    {reclassifyOpen && (
                       <div
-                        key={entry.source_id}
-                        className="memory-detail-context-row is-current"
+                        className="absolute left-0 top-7 z-50 rounded-lg shadow-xl py-1 min-w-[140px]"
+                        style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
                       >
-                        {body}
-                      </div>
-                    );
-                  }
-                  return (
-                    <button
-                      key={entry.source_id}
-                      onClick={() => navigateMemory(entry.source_id)}
-                      className="memory-detail-context-row memory-detail-context-row-button"
-                    >
-                      {body}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Version history */}
-          {hasLegacyVersionHistory && (
-            <section className="memory-detail-rail-panel memory-detail-secondary-panel">
-              <div className="memory-detail-panel-heading">
-                <RailPanelTitle>{t("memoryDetail.versionHistory")}</RailPanelTitle>
-                {versionChain.length > visibleVersionChain.length && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showAll", { count: versionChain.length })}
-                    count={versionChain.length}
-                    onClick={() => setVersionHistoryExpanded(true)}
-                  >
-                    {t("memoryDetail.showAllCompact")}
-                  </DisclosureButton>
-                )}
-                {versionHistoryExpanded && versionChain.length > 3 && (
-                  <DisclosureButton
-                    ariaLabel={t("memoryDetail.showLess")}
-                    onClick={() => setVersionHistoryExpanded(false)}
-                  >
-                    {t("memoryDetail.showLessCompact")}
-                  </DisclosureButton>
-                )}
-              </div>
-              <div className="memory-detail-compact-list">
-                {visibleVersionChain.map((v, i) => (
-                  <div key={v.source_id}>
-                    <button
-                      onClick={() => setExpandedVersion(expandedVersion === v.source_id ? null : v.source_id)}
-                      className="memory-detail-context-row memory-detail-context-row-button"
-                    >
-                      <span className="memory-detail-version-index">
-                        v{i + 1}
-                      </span>
-                      <span
-                        className={`memory-detail-version-title ${v.source_id === sourceId ? "is-current" : ""} truncate`}
-                      >
-                        {v.title}
-                      </span>
-                      {v.confirmed && (
-                        <span className="memory-detail-context-row-meta-text is-warm">
-                          {t("memoryDetail.confirmedStatus")}
-                        </span>
-                      )}
-                      <span className="memory-detail-context-row-meta-text">
-                        {formatTimeAgo(v.last_modified)}
-                      </span>
-                      <svg
-                        width="12" height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className="memory-detail-version-chevron"
-                        style={{
-                          transform: expandedVersion === v.source_id ? "rotate(90deg)" : "rotate(0deg)",
-                        }}
-                      >
-                        <path d="M9 18l6-6-6-6" />
-                      </svg>
-                    </button>
-                    {expandedVersion === v.source_id && (
-                      <div
-                        className="memory-detail-version-preview"
-                      >
-                        {v.content}
+                        {MEMORY_FACETS.map((facet) => (
+                          <button
+                            key={facet.type}
+                            className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 hover:bg-[var(--mem-hover)]"
+                            style={{
+                              fontFamily: "var(--mem-font-body)",
+                              color: facetType === facet.type ? "var(--mem-text)" : "var(--mem-text-secondary)",
+                            }}
+                            onClick={() => reclassifyMutation.mutate(facet.type)}
+                          >
+                            <span className={`memory-detail-facet-dot ${FACET_COLORS[facet.type].split(" ")[0]}`} />
+                            {facet.label}
+                          </button>
+                        ))}
                       </div>
                     )}
+                  </div>
+                </dd>
+              </div>
+              <div className="memory-detail-info-row">
+                <dt className="memory-detail-info-label">{t("memoryList.space")}</dt>
+                <dd className="memory-detail-info-value">
+                  <div className="relative" ref={spaceDropdownRef}>
+                    <button
+                      onClick={() => setSpacePickerOpen(!spacePickerOpen)}
+                      className={`memory-detail-eyebrow-button ${memory.domain ? "" : "is-empty"}`}
+                    >
+                      {memory.domain ?? t("memoryDetail.assignSpace")}
+                    </button>
+                    {spacePickerOpen && (
+                      <div
+                        className="absolute left-0 top-8 z-50 rounded-lg shadow-xl py-1 min-w-[140px]"
+                        style={{ backgroundColor: "var(--mem-surface)", border: "1px solid var(--mem-border)" }}
+                      >
+                        {memory.domain && (
+                          <>
+                            <button
+                              onClick={() => changeSpaceMutation.mutate(undefined)}
+                              className="w-full text-left px-3 py-1.5 text-xs hover:bg-[var(--mem-hover)]"
+                              style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text-tertiary)" }}
+                            >
+                              {t("memoryDetail.removeFromSpace")}
+                            </button>
+                            <div style={{ height: "1px", backgroundColor: "var(--mem-border)", margin: "2px 0" }} />
+                          </>
+                        )}
+                        {spaces.filter((space) => space.name !== memory.domain).map((space) => (
+                          <button
+                            key={space.id}
+                            onClick={() => changeSpaceMutation.mutate(space.name)}
+                            className="w-full text-left px-3 py-1.5 text-xs hover:bg-[var(--mem-hover)]"
+                            style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text-secondary)" }}
+                          >
+                            <span className="capitalize">{space.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </dd>
+              </div>
+              {memory.source_agent && (
+                <div className="memory-detail-info-row">
+                  <dt className="memory-detail-info-label">{t("memoryList.agent")}</dt>
+                  <dd className="memory-detail-info-value">{agentDisplayName(memory.source_agent)}</dd>
+                </div>
+              )}
+              <div className="memory-detail-info-row">
+                <dt className="memory-detail-info-label">{t("memoryList.updated")}</dt>
+                <dd className="memory-detail-info-value">
+                  <time title={formatAbsoluteTime(memory.last_modified)}>{formatTimeAgo(memory.last_modified)}</time>
+                </dd>
+              </div>
+            </dl>
+            <div className="memory-detail-tagline">
+              <span className="memory-detail-strip-label">{t("memoryDetail.tags")}</span>
+              {currentTags.map((tag) => <span key={tag} className="memory-chip indigo">{tag}</span>)}
+              <div className="relative">
+                <button
+                  onClick={() => setEditingTags(!editingTags)}
+                  className="memory-detail-tag-edit"
+                  aria-label={t("memoryDetail.editTags")}
+                  title={t("memoryDetail.editTags")}
+                >
+                  {editingTags ? t("memoryDetail.done") : "+"}
+                </button>
+                {editingTags && (
+                  <TagEditor
+                    source="memory"
+                    sourceId={sourceId}
+                    lastModified={memory.last_modified}
+                    currentTags={currentTags}
+                    allTags={allTags}
+                    onClose={() => setEditingTags(false)}
+                    onTagsChanged={() => queryClient.invalidateQueries({ queryKey: ["tags"] })}
+                  />
+                )}
+              </div>
+            </div>
+          </section>
+
+          {structuredEntries.length > 0 && (
+            <section className="memory-detail-structured">
+              <h3 className="memory-detail-subsection">{t("detailInfo.additional")}</h3>
+              <div className="memory-detail-field-list">
+                {structuredEntries.map(([key, value]) => (
+                  <div key={key} className="memory-detail-field-row">
+                    <span className="memory-detail-field-label">{structuredFieldLabel(key, locale)}</span>
+                    <span className="memory-detail-field-value">{value}</span>
                   </div>
                 ))}
               </div>
             </section>
           )}
 
-        </div>
-      )}
-        </div>
-      </section>
-        </div>
+          {hasSourceExcerpt && (
+            <details key={`source-${sourceId}`} className="memory-detail-disclosure memory-detail-source" open>
+              <summary>{t("memoryDetail.sourceTitle")}</summary>
+              <div className="memory-detail-disclosure-body">
+                <blockquote className="memory-detail-source-quote">{visibleSourceText}</blockquote>
+                {sourceClipped && (
+                  <DisclosureButton
+                    ariaLabel={sourceExpanded ? t("memoryDetail.showLess") : t("memoryDetail.showFullSource")}
+                    onClick={() => setSourceExpanded(!sourceExpanded)}
+                  >
+                    {sourceExpanded ? t("memoryDetail.showLessCompact") : t("memoryDetail.showFullSource")}
+                  </DisclosureButton>
+                )}
+              </div>
+            </details>
+          )}
+
+          <section className="memory-detail-connections" aria-label={t("knowledgeContext.localGraph")}>
+            {memory.entity_id && (
+              <button
+                onClick={() => navigateEntity(memory.entity_id!)}
+                className="memory-detail-link-button"
+              >
+                {t("memoryDetail.entity")}: {t("memoryDetail.linked")}
+              </button>
+            )}
+            <KnowledgeContext
+              key={sourceId}
+              kind="memory"
+              id={sourceId}
+              title={title}
+              onNavigateMemory={navigateMemory}
+              onNavigatePage={navigatePage}
+              onNavigateEntity={navigateEntity}
+            />
+          </section>
+
+          {hasSimilarMemories && (
+            <details key={`similar-${sourceId}`} className="memory-detail-disclosure memory-detail-connections">
+              <summary>{memory.is_recap ? t("memoryDetail.sourceMemories") : t("knowledgeContext.similarMemories")}</summary>
+              <div className="memory-detail-disclosure-body">
+                <section className="memory-detail-rail-section">
+                  <div className="memory-detail-panel-heading">
+                    {relatedMemories.length > visibleRelatedMemories.length && (
+                      <DisclosureButton
+                        ariaLabel={t("memoryDetail.showAll", { count: relatedMemories.length })}
+                        count={relatedMemories.length}
+                        onClick={() => setRelatedMemoriesExpanded(true)}
+                      >
+                        {t("memoryDetail.showAllCompact")}
+                      </DisclosureButton>
+                    )}
+                    {relatedMemoriesExpanded && relatedMemories.length > 3 && (
+                      <DisclosureButton ariaLabel={t("memoryDetail.showLess")} onClick={() => setRelatedMemoriesExpanded(false)}>
+                        {t("memoryDetail.showLessCompact")}
+                      </DisclosureButton>
+                    )}
+                  </div>
+                  <div className="memory-detail-related-grid">
+                    {visibleRelatedMemories.map((related) => {
+                      const relatedFacet = related.memory_type ?? null;
+                      const relatedColor = relatedFacet ? FACET_COLORS[relatedFacet] : null;
+                      return (
+                        <button
+                          key={'id' in related ? related.id : related.source_id}
+                          onClick={() => navigateMemory(related.source_id)}
+                          className="memory-detail-related-card"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <p className="memory-detail-related-copy line-clamp-2">
+                              {related.content.length > 160 ? `${related.content.substring(0, 160)}…` : related.content}
+                            </p>
+                            <div className="memory-detail-related-meta">
+                              {relatedFacet && relatedColor && (
+                                <span className={`memory-detail-related-facet ${relatedColor}`}>
+                                  {t(`importView.typeLabels.${relatedFacet as MemoryType}`)}
+                                </span>
+                              )}
+                              <span>{formatTimeAgo(related.last_modified)}</span>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </section>
+              </div>
+            </details>
+          )}
+
+          {(hasDaemonRevisionHistory || hasLegacyVersionHistory) && (
+            <div className="memory-detail-provenance-group">
+              {hasDaemonRevisionHistory && (
+                <section className="memory-detail-rail-panel memory-detail-secondary-panel">
+                  <div className="memory-detail-panel-heading">
+                    <RailPanelTitle>{t("memoryDetail.revisionHistory")}</RailPanelTitle>
+                    {revisionEntries.length > visibleRevisionEntries.length && (
+                      <DisclosureButton
+                        ariaLabel={t("memoryDetail.showAll", { count: revisionEntries.length })}
+                        count={revisionEntries.length}
+                        onClick={() => setRevisionHistoryExpanded(true)}
+                      >
+                        {t("memoryDetail.showAllCompact")}
+                      </DisclosureButton>
+                    )}
+                    {revisionHistoryExpanded && revisionEntries.length > 1 && (
+                      <DisclosureButton ariaLabel={t("memoryDetail.showLess")} onClick={() => setRevisionHistoryExpanded(false)}>
+                        {t("memoryDetail.showLessCompact")}
+                      </DisclosureButton>
+                    )}
+                  </div>
+                  <div className="memory-detail-compact-list">
+                    {visibleRevisionEntries.map((entry) => {
+                      const isCurrent = entry.source_id === memoryRevisions?.current_source_id;
+                      return (
+                        <div key={entry.source_id}>
+                          {isCurrent ? (
+                            <div className="memory-detail-context-row is-current">
+                              <div className="memory-detail-context-row-body">
+                                <div className="memory-detail-context-row-meta">
+                                  <span className="memory-detail-context-row-title truncate">{entry.title || t("memoryDetail.untitledMemory")}</span>
+                                  <span className="memory-detail-context-row-badge">{t("memoryDetail.current")}</span>
+                                  <span className="memory-detail-context-row-meta-text">{formatTimeAgo(entry.last_modified)}</span>
+                                </div>
+                                {entry.delta_summary && <p className="memory-detail-context-row-summary">{entry.delta_summary}</p>}
+                                {entry.source_agent && <p className="memory-detail-context-row-agent">{agentDisplayName(entry.source_agent)}</p>}
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => navigateMemory(entry.source_id)}
+                              className="memory-detail-context-row memory-detail-context-row-button"
+                            >
+                              <div className="memory-detail-context-row-body">
+                                <div className="memory-detail-context-row-meta">
+                                  <span className="memory-detail-context-row-title truncate">{entry.title || t("memoryDetail.untitledMemory")}</span>
+                                  <span className="memory-detail-context-row-meta-text">{formatTimeAgo(entry.last_modified)}</span>
+                                </div>
+                                {entry.delta_summary && <p className="memory-detail-context-row-summary">{entry.delta_summary}</p>}
+                                <p className="memory-detail-context-row-preview line-clamp-2">{entry.content_preview}</p>
+                                {entry.source_agent && <p className="memory-detail-context-row-agent">{agentDisplayName(entry.source_agent)}</p>}
+                              </div>
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
+
+              {hasLegacyVersionHistory && (
+                <section className="memory-detail-rail-panel memory-detail-secondary-panel">
+                  <div className="memory-detail-panel-heading">
+                    <RailPanelTitle>{t("memoryDetail.versionHistory")}</RailPanelTitle>
+                    {versionChain.length > visibleVersionChain.length && (
+                      <DisclosureButton
+                        ariaLabel={t("memoryDetail.showAll", { count: versionChain.length })}
+                        count={versionChain.length}
+                        onClick={() => setVersionHistoryExpanded(true)}
+                      >
+                        {t("memoryDetail.showAllCompact")}
+                      </DisclosureButton>
+                    )}
+                    {versionHistoryExpanded && versionChain.length > 3 && (
+                      <DisclosureButton ariaLabel={t("memoryDetail.showLess")} onClick={() => setVersionHistoryExpanded(false)}>
+                        {t("memoryDetail.showLessCompact")}
+                      </DisclosureButton>
+                    )}
+                  </div>
+                  <div className="memory-detail-compact-list">
+                    {visibleVersionChain.map((version, index) => (
+                      <div key={version.source_id}>
+                        <button
+                          onClick={() => setExpandedVersion(expandedVersion === version.source_id ? null : version.source_id)}
+                          className="memory-detail-context-row memory-detail-context-row-button"
+                        >
+                          <span className="memory-detail-version-index">v{index + 1}</span>
+                          <span className={`memory-detail-version-title ${version.source_id === sourceId ? "is-current" : ""} truncate`}>
+                            {version.title}
+                          </span>
+                          {version.confirmed && <span className="memory-detail-context-row-meta-text is-warm">{t("memoryDetail.confirmedStatus")}</span>}
+                          <span className="memory-detail-context-row-meta-text">{formatTimeAgo(version.last_modified)}</span>
+                          <svg
+                            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+                            className="memory-detail-version-chevron"
+                            style={{ transform: expandedVersion === version.source_id ? "rotate(90deg)" : "rotate(0deg)" }}
+                          >
+                            <path d="M9 18l6-6-6-6" />
+                          </svg>
+                        </button>
+                        {expandedVersion === version.source_id && version.source_id !== sourceId && (
+                          <div className="memory-detail-version-preview">{version.content}</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+            </div>
+          )}
+        </DetailInfoContent>
       </PageInfoDrawer>
     </main>
   );

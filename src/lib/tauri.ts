@@ -331,6 +331,48 @@ export async function listIndexedFiles(space?: string): Promise<IndexedFileInfo[
   return withDomainArray(files);
 }
 
+export interface SourceAnnotationPage {
+  id: string;
+  title: string;
+}
+
+export interface SourceAnnotation {
+  source: string;
+  source_id: string;
+  notes: string;
+  page_ids: string[];
+  version: number;
+  updated_at: number;
+  pages: SourceAnnotationPage[];
+}
+
+export interface UpdateSourceAnnotationRequest {
+  source: string;
+  source_id: string;
+  space?: string;
+  expected_version: number;
+  notes?: string;
+  page_ids?: string[];
+}
+
+export async function getSourceAnnotation(
+  source: string,
+  sourceId: string,
+  space?: string,
+): Promise<SourceAnnotation> {
+  return invoke<SourceAnnotation>("get_source_annotation", {
+    source,
+    sourceId,
+    ...(space === undefined ? {} : { space }),
+  });
+}
+
+export async function updateSourceAnnotation(
+  req: UpdateSourceAnnotationRequest,
+): Promise<SourceAnnotation> {
+  return invoke<SourceAnnotation>("update_source_annotation", { req });
+}
+
 export async function deleteFileChunks(source: string, sourceId: string): Promise<void> {
   return invoke("delete_file_chunks", { source, sourceId });
 }
@@ -1797,6 +1839,11 @@ export async function confirmEntity(entityId: string, confirmed: boolean): Promi
   return invoke("confirm_entity_cmd", { entityId, confirmed });
 }
 
+/** Changes a topic's canonical entity type and refreshes its contextual identity. */
+export async function changeEntityType(entityId: string, entityType: string): Promise<void> {
+  return invoke("change_entity_type_cmd", { entityId, entityType });
+}
+
 /** Filtered, paged entity list backing the Entities view (tabs, search, type
  * and memory-count chips). */
 export async function queryEntities(
@@ -1949,6 +1996,7 @@ export async function updateMemory(
   domain?: string,
   confirmed?: boolean,
   memoryType?: MemoryType,
+  expectedContent?: string,
 ): Promise<void> {
   return invoke("update_memory_cmd", {
     sourceId,
@@ -1956,6 +2004,7 @@ export async function updateMemory(
     domain: domain ?? null,
     confirmed: confirmed ?? null,
     memoryType: memoryType ?? null,
+    ...(expectedContent === undefined ? {} : { expectedContent }),
   });
 }
 

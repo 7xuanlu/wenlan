@@ -14,6 +14,7 @@ import {
 import { fillUnsetPinsAfterSave } from "../../lib/routingPins";
 import { ACTIVITY_QUERY_KEY } from "../../lib/useActivity";
 import { Card, Field, Input, Button, Select, StatusChip } from "../memory/settings/primitives";
+import { SettingsHelp } from "../memory/settings/SettingsHelp";
 
 type AnthropicModelDescriptionKey =
   | "intelligence.modelDescriptions.fastAffordable"
@@ -54,9 +55,11 @@ export function useApiKeyStatus() {
 export function AnthropicFields({
   showModelChoice = true,
   showNoKeyGuidance = true,
+  settingsPresentation = false,
 }: {
   showModelChoice?: boolean;
   showNoKeyGuidance?: boolean;
+  settingsPresentation?: boolean;
 }) {
   const { t } = useTranslation();
   const [keyInput, setKeyInput] = useState("");
@@ -64,6 +67,9 @@ export function AnthropicFields({
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { maskedKey, isConfigured } = useApiKeyStatus();
+  const helpDetails = settingsPresentation
+    ? t("intelligence.settingsApiKeyHelp")
+    : t("intelligence.apiKeyDescription");
 
   // A save/clear here changes what the daemon is actually serving (the
   // Anthropic key is hot-loaded even on 0.12), so the routing queries the
@@ -105,18 +111,62 @@ export function AnthropicFields({
   };
 
   return (
-    <div className="flex flex-col" style={{ gap: "10px" }}>
-      <div className="flex items-center justify-end">
-        <StatusChip
-          state={isConfigured ? { kind: "up" } : { kind: "idle" }}
-          label={isConfigured ? t("intelligence.connected") : t("intelligence.notConfigured")}
-        />
-      </div>
-      <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
-        {t("intelligence.apiKeyDescription")}
-      </p>
+    <div className={`flex flex-col ${settingsPresentation ? "settings-anthropic-fields" : ""}`} style={{ gap: "10px" }}>
+      {!settingsPresentation && <>
+        <div className="flex items-center justify-end">
+          <StatusChip
+            state={isConfigured ? { kind: "up" } : { kind: "idle" }}
+            label={isConfigured ? t("intelligence.connected") : t("intelligence.notConfigured")}
+          />
+        </div>
+        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+          {t("intelligence.apiKeyDescription")}
+        </p>
+      </>}
 
-      {isConfigured ? (
+      {settingsPresentation ? (
+        <div className="settings-anthropic-key-section">
+          <div className="settings-anthropic-key-row">
+            <div className="settings-anthropic-key-label">
+              <label htmlFor="anthropic-api-key">{t("externalProvider.apiKeyLabel")}</label>
+              <SettingsHelp title={t("externalProvider.apiKeyLabel")} details={helpDetails} />
+              {!isConfigured && (
+                <button
+                  type="button"
+                  className="settings-intelligence-get-key-action"
+                  onClick={() => shellOpen("https://console.anthropic.com/settings/keys")}
+                >
+                  {t("externalProvider.getKeyLink")}
+                </button>
+              )}
+            </div>
+            <div className="settings-anthropic-key-control">
+              {isConfigured ? (
+                <span className="settings-anthropic-key-value" aria-label={t("externalProvider.apiKeyLabel")}>{maskedKey}</span>
+              ) : (
+                <Input
+                  id="anthropic-api-key"
+                  type="password"
+                  mono
+                  value={keyInput}
+                  onChange={(e) => setKeyInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && keyInput) handleSave(); }}
+                  placeholder={t("intelligence.apiKeyPlaceholder")}
+                />
+              )}
+              {isConfigured ? (
+                <Button variant="ghost" size="sm" onClick={handleClear} disabled={saving}>
+                  {t("intelligence.clear")}
+                </Button>
+              ) : (
+                <Button variant="primary" size="sm" onClick={handleSave} disabled={saving || !keyInput} loading={saving}>
+                  {t("intelligence.save")}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : isConfigured ? (
         <div className="flex items-center gap-2">
           <span
             className="flex-1 px-3 py-1.5 rounded-md"
@@ -153,7 +203,7 @@ export function AnthropicFields({
         </div>
       )}
 
-      {!isConfigured && (
+      {!settingsPresentation && !isConfigured && (
         <Button variant="ghost" size="sm" onClick={() => shellOpen("https://console.anthropic.com/settings/keys")} className="self-start">
           {t("externalProvider.getKeyLink")}
         </Button>
@@ -189,11 +239,9 @@ export function AnthropicFields({
   );
 }
 
-/** Just the routine-model half of the picker — extracted so the Intelligence
- *  section's Everyday-model job row can embed exactly this Select in its
- *  disclosure body, without forking the markup ModelChoiceSection also
- *  renders below the Anthropic key form. */
-export function RoutineModelSelect() {
+/** Routine-model half of the picker — the task row uses its compact form while
+ *  ModelChoiceSection also renders the full form below the Anthropic key form. */
+export function RoutineModelSelect({ compact = false }: { compact?: boolean } = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data: modelChoice } = useQuery({
@@ -203,15 +251,16 @@ export function RoutineModelSelect() {
   const [routineModel, synthesisModel] = modelChoice ?? [null, null];
 
   return (
-    <div className="flex items-center justify-between">
+    <div className="settings-task-field flex items-center justify-between">
       <div>
-        <div style={{ fontSize: "var(--mem-text-base)", fontWeight: 500, color: "var(--mem-text)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.routineModel")}</div>
-        <div style={{ fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.routineModelDescription")}</div>
+        <div style={{ fontSize: "var(--mem-text-base)", fontWeight: 500, color: "var(--mem-text)", fontFamily: "var(--mem-font-body)" }}>
+          {compact ? t("intelligence.modelLabel") : t("intelligence.routineModel")}
+        </div>
+        {!compact && <div style={{ fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.routineModelDescription")}</div>}
       </div>
-      <div className="shrink-0 w-fit">
+      <div className="settings-task-control shrink-0 w-fit">
         <Select
           size="sm"
-          mono
           aria-label={t("intelligence.chooseRoutineModel")}
           value={routineModel ?? "claude-haiku-4-5-20251001"}
           onChange={async (e) => {
@@ -221,7 +270,7 @@ export function RoutineModelSelect() {
           }}
         >
           {ANTHROPIC_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>{m.label} - {t(m.descKey)}</option>
+            <option key={m.id} value={m.id}>{compact ? m.label : `${m.label} - ${t(m.descKey)}`}</option>
           ))}
         </Select>
       </div>
@@ -230,7 +279,7 @@ export function RoutineModelSelect() {
 }
 
 /** Synthesis-model half — see RoutineModelSelect's doc comment. */
-export function SynthesisModelSelect() {
+export function SynthesisModelSelect({ compact = false }: { compact?: boolean } = {}) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const { data: modelChoice } = useQuery({
@@ -240,15 +289,16 @@ export function SynthesisModelSelect() {
   const [routineModel, synthesisModel] = modelChoice ?? [null, null];
 
   return (
-    <div className="flex items-center justify-between">
+    <div className="settings-task-field flex items-center justify-between">
       <div>
-        <div style={{ fontSize: "var(--mem-text-base)", fontWeight: 500, color: "var(--mem-text)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.synthesisModel")}</div>
-        <div style={{ fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.synthesisModelDescription")}</div>
+        <div style={{ fontSize: "var(--mem-text-base)", fontWeight: 500, color: "var(--mem-text)", fontFamily: "var(--mem-font-body)" }}>
+          {compact ? t("intelligence.modelLabel") : t("intelligence.synthesisModel")}
+        </div>
+        {!compact && <div style={{ fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)", fontFamily: "var(--mem-font-body)" }}>{t("intelligence.synthesisModelDescription")}</div>}
       </div>
-      <div className="shrink-0 w-fit">
+      <div className="settings-task-control shrink-0 w-fit">
         <Select
           size="sm"
-          mono
           aria-label={t("intelligence.chooseSynthesisModel")}
           value={synthesisModel ?? "claude-sonnet-4-6"}
           onChange={async (e) => {
@@ -258,7 +308,7 @@ export function SynthesisModelSelect() {
           }}
         >
           {ANTHROPIC_MODELS.map((m) => (
-            <option key={m.id} value={m.id}>{m.label} - {t(m.descKey)}</option>
+            <option key={m.id} value={m.id}>{compact ? m.label : `${m.label} - ${t(m.descKey)}`}</option>
           ))}
         </Select>
       </div>
@@ -499,4 +549,129 @@ export function OnDeviceModelCard({
   );
 
   return bare ? body : <Card padding="card">{body}</Card>;
+}
+
+/** Settings-only manager for the installed on-device model catalog. Several
+ *  models may remain downloaded, while the daemon has one active model slot.
+ *  The wizard keeps using OnDeviceModelCard and its existing single-pick flow. */
+export function OnDeviceModelManager() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const modelQuery = useQuery({
+    queryKey: ["onDeviceModel"],
+    queryFn: getOnDeviceModel,
+  });
+  const { data: systemInfo } = useQuery({
+    queryKey: ["systemInfo"],
+    queryFn: getSystemInfo,
+  });
+  const models = modelQuery.data?.models ?? [];
+  const loadedId = modelQuery.data?.loaded ?? null;
+
+  const activate = async (modelId: string) => {
+    const model = models.find((item) => item.id === modelId);
+    if (!model || activatingId) return;
+    setActivatingId(modelId);
+    setError(null);
+    try {
+      // The daemon operation downloads uncached models and activates cached
+      // ones. It retains cached files when switching the single active slot.
+      await downloadOnDeviceModel(modelId);
+      await fillUnsetPinsAfterSave();
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["onDeviceModel"] }),
+        queryClient.invalidateQueries({ queryKey: ["resolvedRouting"] }),
+        queryClient.invalidateQueries({ queryKey: ACTIVITY_QUERY_KEY }),
+      ]);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setActivatingId(null);
+    }
+  };
+
+  if (models.length === 0) {
+    return (
+      <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
+        {modelQuery.isPending ? t("intelligence.loading") : t("intelligence.modelCatalogUnavailable")}
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {models.map((model) => {
+        const enabled = loadedId === model.id;
+        const ramOk = !systemInfo || systemInfo.total_ram_gb + 0.5 >= model.ram_required_gb;
+        const busy = activatingId !== null;
+        return (
+          <div key={model.id} className="settings-row flex flex-wrap items-center justify-between gap-4 border-b last:border-b-0 border-[var(--mem-border)] py-4" style={{ paddingInline: 0 }}>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
+                  {model.display_name}
+                </span>
+                <SettingsHelp
+                  title={model.display_name}
+                  details={t("intelligence.modelDetails", {
+                    params: model.param_count,
+                    downloadSize: model.file_size_gb.toFixed(1),
+                    ram: model.ram_required_gb.toFixed(0),
+                  })}
+                />
+              </div>
+              {!ramOk && (
+                <p className="mt-1" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-status-warning-text)" }}>
+                  {t("intelligence.ramWarning", {
+                    model: model.display_name,
+                    required: model.ram_required_gb.toFixed(0),
+                    available: systemInfo?.total_ram_gb.toFixed(0),
+                  })}
+                </p>
+              )}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <StatusChip
+                state={enabled ? { kind: "up" } : { kind: "idle" }}
+                label={
+                  activatingId === model.id
+                    ? t(model.cached ? "intelligence.loading" : "intelligence.downloading")
+                    : enabled
+                      ? t("intelligence.enabled")
+                      : model.cached
+                        ? t("intelligence.downloaded")
+                        : t("intelligence.notDownloadedStatus")
+                }
+              />
+              {!enabled && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  disabled={busy || !ramOk}
+                  loading={activatingId === model.id}
+                  onClick={() => activate(model.id)}
+                  className="whitespace-nowrap"
+                  title={!ramOk ? t("intelligence.notEnoughRamTitle") : undefined}
+                >
+                  {model.cached ? t("intelligence.enable") : t("intelligence.downloadAndEnable")}
+                </Button>
+              )}
+            </div>
+            {activatingId === model.id && !model.cached && (
+              <p className="basis-full" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-text-tertiary)" }}>
+                {t("intelligence.downloadMayTake", { size: model.file_size_gb.toFixed(1) })}
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {error && (
+        <p role="alert" className="px-5 pb-4" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-xs)", color: "var(--mem-status-danger-text)" }}>
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }

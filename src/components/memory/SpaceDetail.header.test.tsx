@@ -134,14 +134,14 @@ describe("SpaceDetail context header", () => {
       />,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Edit space" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Origin" }), {
+    await screen.findByRole("heading", { name: "Origin" });
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
       target: { value: "Origin research" },
     });
     fireEvent.change(screen.getByRole("textbox", { name: "Edit description" }), {
       target: { value: "Unified context" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Edit description" }), { key: "Enter", ctrlKey: true });
 
     await waitFor(() => expect(mockUpdateSpace).toHaveBeenCalledWith(
       "Origin",

@@ -472,7 +472,7 @@ export default function ActivityFeed({
         fontFamily: "var(--mem-font-body)",
         fontSize: "24px",
         fontWeight: 600,
-        margin: "0 0 20px",
+        margin: 0,
       }}
     >
       {t("activityStatus.title")}
@@ -492,8 +492,9 @@ export default function ActivityFeed({
       <ArrowRight aria-hidden="true" size={16} />
     </button>
   );
+  const pageHeader = <header className="mem-activity-page-header">{pageTitle}<div className="mem-activity-page-actions">{pageReview}{knowledgeEntry}</div></header>;
   const background = <div className="mem-activity-background"><ActivityNow onOpenIntelligence={onOpenIntelligence} /><ActivityDiscoveries /></div>;
-  const recentTitle = <h2 className="mem-activity-section-title">{t("activityDiscoveries.recent")}</h2>;
+  const recentTitle = <h2 className="mem-activity-section-title mem-activity-recent-title">{t("activityDiscoveries.recent")}</h2>;
   const eventsError = activityQuery.isError ? (
     <div role="alert" className="flex flex-col items-start gap-3">
       <p>{t("activityStatus.eventsError")}</p>
@@ -516,10 +517,8 @@ export default function ActivityFeed({
 
   if (activityQuery.isLoading && activityQuery.data === undefined) {
     return (
-      <div className="flex flex-col">
-        {pageTitle}
-        {pageReview}
-        {knowledgeEntry}
+      <div className="mem-activity-page flex flex-col">
+        {pageHeader}
         {background}
         {recentTitle}
         <p role="status">{t("activityStatus.eventsLoading")}</p>
@@ -529,10 +528,8 @@ export default function ActivityFeed({
 
   if (activityQuery.isError && activityQuery.data === undefined) {
     return (
-      <div className="flex flex-col">
-        {pageTitle}
-        {pageReview}
-        {knowledgeEntry}
+      <div className="mem-activity-page flex flex-col">
+        {pageHeader}
         {background}
         {recentTitle}
         {eventsError}
@@ -546,24 +543,20 @@ export default function ActivityFeed({
   // section exactly when it was the only thing worth reading.
   if (activities.length === 0) {
     return (
-      <div className="flex flex-col">
-        {pageTitle}
-        {pageReview}
-        {knowledgeEntry}
+      <div className="mem-activity-page flex flex-col">
+        {pageHeader}
         {background}
         {recentTitle}
         {eventsError}
         <div
-          className="flex flex-col items-center justify-center h-full"
-          style={{ minHeight: 300 }}
+          className="mem-activity-empty-history"
         >
           <p
             style={{
               fontFamily: "var(--mem-font-body)",
               fontSize: "14px",
               color: "var(--mem-text-tertiary)",
-              textAlign: "center",
-              maxWidth: 320,
+              textAlign: "start",
               lineHeight: 1.6,
             }}
           >
@@ -696,10 +689,8 @@ export default function ActivityFeed({
   );
 
   return (
-    <div className="flex flex-col">
-      {pageTitle}
-      {pageReview}
-        {knowledgeEntry}
+    <div className="mem-activity-page flex flex-col">
+      {pageHeader}
       {background}
         {recentTitle}
       {eventsError}

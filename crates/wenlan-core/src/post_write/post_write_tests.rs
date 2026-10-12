@@ -5432,6 +5432,7 @@ async fn accepting_an_edited_page_card_writes_the_edit_not_the_staged_body() {
         card_id,
         MemoryUpdate {
             content: Some(&edited_content),
+            expected_content: None,
             space: None,
             confirm: false,
             memory_type: None,
@@ -5546,6 +5547,7 @@ async fn a_recovered_body_grounds_against_the_staging_date_not_a_later_edit() {
             card_id,
             MemoryUpdate {
                 content: None,
+                expected_content: None,
                 space: None,
                 confirm: true,
                 memory_type: None,

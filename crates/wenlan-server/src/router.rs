@@ -12,7 +12,8 @@ use crate::{
     memory_revision_routes, memory_routes, onboarding_routes, outbox_routes, page_map_routes,
     page_routes, pinned_memory_routes, profile_agents_routes, profile_narrative_routes,
     refinery_routes, repair_read_routes, repair_routes, routes, security, snapshot_routes,
-    source_routes, spaces_routes, telemetry_routes, truth_guard, websocket,
+    source_annotation_routes, source_routes, spaces_routes, telemetry_routes, truth_guard,
+    websocket,
 };
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use wenlan_core::truth_manifest::Builder;
@@ -71,6 +72,7 @@ pub fn build_router_with_shutdown(state: SharedState, shutdown: ShutdownHandle) 
     let router = memory_revision_routes::register_history(router);
     let router = refinery_routes::register(router);
     let router = source_routes::register(router);
+    let router = source_annotation_routes::register(router);
     let router = config_routes::register(router);
     let router = indexed_files_routes::register(router);
     let router = entity_graph_routes::register_crud(router);

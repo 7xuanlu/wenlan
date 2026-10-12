@@ -5,6 +5,7 @@ import { Decoration, type DecorationSet, EditorView, ViewPlugin, type ViewUpdate
 import { processCitations } from "../../../lib/pageCitations";
 import type { MemoryItem, PageCitation } from "../../../lib/tauri";
 import { referenceTargetFromHref, type ReferenceTarget } from "../links/referenceTypes";
+import { getSourceKind } from "../sources/sourcePresentation";
 import { setWritingCompositionActive } from "./writingPresentation";
 
 export interface ParsedWikiLink {
@@ -297,6 +298,9 @@ export function createWikiLinkEditing(
             "aria-label": unverified ? `${range.displayText}, ${typeLabel}, ${currentContext.labels?.unverified ?? "Unverified"}` : range.displayText,
             "title": unverified ? `${typeLabel} · ${currentContext.labels?.unverified ?? "Unverified"}` : typeLabel,
             "data-inline-reference-key": range.key,
+            "data-reference-resource-icon": target.kind === "citation" && target.citation.source_kind !== "memory"
+              ? getSourceKind({ source: target.citation.source_kind === "external_url" ? "webpage" : "file", source_id: target.citation.locator, title: "" })
+              : kind,
             ...(target.kind === "page" ? { "data-wiki-page-id": target.id } : {}),
             "data-wiki-target-label": range.targetLabel,
           },

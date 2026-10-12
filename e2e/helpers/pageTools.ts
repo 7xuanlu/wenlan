@@ -8,8 +8,8 @@ export async function openPageTool(page: Page, tool: string, actions = "Page act
   const open = hant ? "開啟筆記側欄" : hans ? "打开笔记侧栏" : "Open note sidebar";
   const toggle = page.getByRole("button", {name: open, exact: true});
   if (await toggle.count()) await toggle.click();
-  const info = ["Page info", "頁面資訊", "页面信息"].includes(tool);
-  await page.getByRole("tab", {name: info ? (hant ? "資料" : hans ? "资料" : "Info") : tool, exact: true}).click();
+  const info = ["Page info", "頁面資訊", "页面信息", "資訊", "信息"].includes(tool);
+  await page.getByRole("tab", {name: info ? (hant ? "資訊" : hans ? "信息" : "Info") : tool, exact: true}).click();
 }
 
 /** Memory context belongs to the dossier's action menu. */

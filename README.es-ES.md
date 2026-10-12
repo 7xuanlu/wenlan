@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=1203f0a3d78403e962c19860a87bec858b6bb01c699dea3f22047cc33e45ae20 -->
+<!-- README_SYNC: source=README.md sha256=55ee0cc34f8a5afcb717e482783438113936d5f7d20f54c77f0f42bc60559663 -->
 
 <p align="center">
   <picture>
@@ -62,11 +62,17 @@ Al iniciar por primera vez, Wenlan descarga un modelo para la búsqueda local. M
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### 2. Conecta tus IA a la misma wiki
+### 2. Empieza con tus propias notas
 
-En la configuración de Wenlan, conecta Claude Code, Codex u otras herramientas de IA compatibles para que usen el mismo conocimiento.
+Abre Wenlan y empieza con una página propia. La pantalla de bienvenida también ofrece un ejemplo que puedes explorar primero. Puedes empezar a escribir sin importar material, conectar una herramienta de IA ni configurar un modelo de IA.
 
-Tu IA conectada puede redactar las páginas. No necesitas instalar un modelo de lenguaje local adicional.
+### 3. Importa fuentes cuando quieras
+
+Cuando te venga bien, puedes [importar notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in). Es opcional: puedes empezar con una página propia.
+
+### 4. Conecta herramientas de IA cuando quieras ayuda
+
+Conecta Claude Code, Codex u otras herramientas de IA compatibles cuando quieras que usen el mismo conocimiento. Una IA conectada puede redactar páginas sin instalar otro modelo de lenguaje local.
 
 <details>
 <summary>¿Necesitas ayuda? Pídesela a tu IA</summary>
@@ -84,19 +90,17 @@ una memoria de prueba.
 
 </details>
 
-### 3. Crea tu primera página de wiki
-
-En tu herramienta de IA conectada, abre una conversación de trabajo que merezca la pena conservar y elige un tema:
+Para organizar un tema con una IA conectada, abre una conversación de trabajo que merezca la pena conservar y pídele:
 
 > Organiza las conclusiones, los motivos y las fuentes sobre [tema] de esta conversación en una página de Wenlan con citas a las fuentes.
 
-También puedes [importar notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in) y pedirle a tu IA que organice uno de sus temas en una página.
+También puedes pedirle que organice en una página un tema del material que hayas importado.
 
 Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consultar su fuente y añade tus propias ideas. La próxima vez que trabajes en ese tema, pídele a tu IA que lea esta página antes de continuar.
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: no incluyas notas privadas, credenciales, identificadores de Acceso remoto ni registros sin anonimizar.
+¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
 
 
 
@@ -223,7 +227,7 @@ La organización y las actualizaciones de Páginas en segundo plano son opcional
 - **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. El enriquecimiento y la síntesis opcionales pueden usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
 - **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
 
-**Empieza con una conversación que merezca conservarse.** [Primeros pasos](#start-in-30-seconds). Si prefieres probarlo más adelante, guarda este repositorio con una estrella.
+**Empieza con una nota que quieras conservar.** [Primeros pasos](#start-in-30-seconds). Si prefieres probarlo más adelante, guarda este repositorio con una estrella.
 
 
 <a id="how-wenlan-works"></a>

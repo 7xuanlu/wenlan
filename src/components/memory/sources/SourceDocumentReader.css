@@ -1,0 +1,96 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+.source-document-reader {
+  min-width: 0;
+  color: var(--mem-text);
+  overflow-wrap: anywhere;
+}
+
+.source-document-preview .reading-document-frame {
+  padding-block-start: 0;
+}
+
+.source-document-reader-url {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 calc(var(--reading-font-size) * var(--reading-line-height) * 1.35);
+  color: var(--mem-text-secondary);
+  font-size: var(--reading-font-size);
+  line-height: var(--reading-line-height);
+}
+
+.source-document-reader-url a {
+  display: inline-flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-width: 0;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+
+.source-document-reader-url a span { min-width: 0; }
+
+.source-document-reader-url a:hover {
+  color: var(--mem-text);
+  text-decoration-color: currentColor;
+}
+
+.source-document-reader-url a:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.source-document-reader-url svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.25;
+}
+
+.source-document-reader-note {
+  margin: 0;
+  color: var(--mem-text-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.source-document-reader-error .source-document-reader-note {
+  margin-bottom: 8px;
+}
+
+.source-document-reader button:focus-visible {
+  outline: 2px solid var(--mem-accent-page);
+  outline-offset: 2px;
+}
+
+.source-document-page {
+  min-height: 100%;
+  color: var(--mem-text);
+}
+
+.source-document-page-header {
+  margin: 0;
+}
+
+@media (max-width: 480px) {
+  .source-document-reader-url {
+    align-items: flex-start;
+  }
+}
+
+
+.source-info-metadata { display: grid; gap: 10px; margin: 0; }
+.source-info-metadata > div { display: grid; grid-template-columns: minmax(80px, .4fr) minmax(0, 1fr); gap: 12px; align-items: baseline; }
+.source-info-metadata dt { color: var(--mem-text-secondary); }
+.source-info-metadata dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }

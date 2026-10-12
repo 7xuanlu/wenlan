@@ -77,6 +77,21 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
     mocks.setModelChoice.mockResolvedValue(undefined);
   });
 
+  it("uses a labeled provider select for the Settings presentation while onboarding retains provider pills", async () => {
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <AnyProviderCard bare groups={CLOUD_GROUPS} settingsPresentation showTaskModels={false} />
+      </QueryClientProvider>,
+    );
+
+    const provider = await screen.findByRole("combobox", { name: "Provider" });
+    expect(provider).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Anthropic" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Anthropic" })).toBeInTheDocument();
+    expect(screen.queryByText("Not configured")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Enables Claude Haiku/)).not.toBeInTheDocument();
+  });
+
   // Defect 1 (spec §5.2/§5.2a): the 7 keyed cloud vendors the daemon cannot
   // actually authenticate must not exist anywhere in this card's UI, and the
   // key Field must not render — not "disabled with an explanation", gone.
@@ -298,8 +313,10 @@ describe("AnyProviderCard — the Local-server card (spec §5.2)", () => {
     // so free-text entry is never left without autocomplete.
     const modelField = screen.getByLabelText("Model");
     expect(modelField.tagName).toBe("INPUT");
+    const modelListId = modelField.getAttribute("list");
+    expect(modelListId).toBeTruthy();
     expect(
-      document.getElementById("any-provider-models")?.querySelector('option[value="custom-model-x"]'),
+      document.getElementById(modelListId!)?.querySelector('option[value="custom-model-x"]'),
     ).toBeTruthy();
   });
 

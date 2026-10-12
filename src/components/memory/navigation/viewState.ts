@@ -1,4 +1,5 @@
 import type { WikiInventoryScope, PageProjectionIssue } from "../pages/pageInventory";
+import type { IndexedFileInfo } from "../../../lib/tauri";
 import type { SettingsSection } from "../settings/SettingsSidebar";
 
 export type View =
@@ -26,6 +27,7 @@ export type View =
   | { readonly kind: "recaps" }
   | { readonly kind: "settings"; readonly section?: SettingsSection }
   | { readonly kind: "sources" }
+  | { readonly kind: "source-document"; readonly file: IndexedFileInfo }
   | { readonly kind: "space"; readonly spaceId: string | null; readonly spaceName: string }
   | { readonly kind: "spaces"; readonly create?: boolean }
   | { readonly kind: "stream" };
@@ -62,6 +64,7 @@ export function activeNavigationForView(view: View): GlobalNavigation | null {
       return "graph";
     case "import":
     case "sources":
+    case "source-document":
       return "sources";
     case "connect-agent":
     case "settings":

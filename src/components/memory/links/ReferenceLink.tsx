@@ -21,7 +21,7 @@ export function ReferenceLink({ href, children, className, onClick, ...props }: 
 }
 
 function CanonicalReferenceLink({
-  href, referenceTarget, children, className, onClick, ...props
+  href, referenceTarget, children, className, onClick, "aria-label": ariaLabel, ...props
 }: ReferenceLinkProps & { referenceTarget: NonNullable<ReturnType<typeof referenceTargetFromHref>> }) {
   const { t } = useTranslation();
   const navigation = useReferenceNavigation();
@@ -62,6 +62,7 @@ function CanonicalReferenceLink({
         data-reference-id={referenceTarget.id}
         data-reference-navigation="true"
         data-reference-link="true"
+        aria-label={ariaLabel}
         title={`${typeLabel}: ${label ?? referenceTarget.id}`}
         style={{ color: "var(--mem-accent-indigo)", textDecoration: "underline", textUnderlineOffset: "2px", ...props.style }}
         onPointerDown={(event) => {

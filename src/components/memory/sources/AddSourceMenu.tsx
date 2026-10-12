@@ -8,64 +8,90 @@ import {
   getDaemonVersion,
   daemonMeetsFloor,
   openFile,
+  addSource,
+  syncRegisteredSource,
 } from "../../../lib/tauri";
-import AddSourceDialog from "./AddSourceDialog";
+import { detectVault } from "../../../lib/vaultDetection";
 import AddWebSourceDialog from "./AddWebSourceDialog";
 import SourceDialog from "./SourceDialog";
+import { SourceTypeIcon } from "./SourceTypeIcon";
 import { useTranslation } from "react-i18next";
 
 export default function AddSourceMenu({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const qc = useQueryClient();
-  const [showFolder, setShowFolder] = useState(false);
   const [showWeb, setShowWeb] = useState(false);
-
   const { data: version } = useQuery({ queryKey: ["daemonVersion"], queryFn: getDaemonVersion });
-  // Optimistic until the version is known, so the menu never flickers a warning.
   const ready = version === undefined ? true : daemonMeetsFloor(version);
+
+  function refreshSources() {
+    void qc.invalidateQueries({ queryKey: ["registeredSources"] });
+    void qc.invalidateQueries({ queryKey: ["sourceDir"] });
+    void qc.invalidateQueries({ queryKey: ["indexedFiles"] });
+  }
 
   const upload = useMutation({
     mutationFn: async () => {
       const picked = await openDialog({
-        directory: false,
-        multiple: false,
+        title: t("sourceAccess.files"), directory: false, multiple: false,
         filters: [{ name: "Documents", extensions: ["pdf", "md", "txt"] }],
       });
       if (!picked || typeof picked !== "string") return null;
-      const name = picked.split("/").pop() ?? "file";
       await uploadSourceFile(picked);
-      // Toast idiom: eyebrow (title) / heading + body (description).
-      toast(t("sourceAccess.added"), { description: t("sourceAccess.addedBody", { name }) });
-      return name;
+      return picked.replace(/\\/g, "/").split("/").pop() ?? picked;
     },
     onSuccess: (name) => {
       if (!name) return;
-      qc.invalidateQueries({ queryKey: ["registeredSources"] });
-      // The uploaded file lands in the managed dir; refresh its on-disk listing
-      // and the index cross-ref so the new file appears immediately instead of
-      // waiting for a window-focus refetch.
-      qc.invalidateQueries({ queryKey: ["sourceDir"] });
-      qc.invalidateQueries({ queryKey: ["indexedFiles"] });
+      refreshSources();
+      toast(t("sourceAccess.added"), { description: t("sourceAccess.addedBody", { name }) });
       onClose();
     },
-    onError: (e) => {
-      // Without this the button silently reverts to "Add files" and the user
-      // never learns the upload failed (daemon down / IO error / bad file).
-      toast(t("sourceAccess.addFailed"), { description: String(e) });
-    },
+    onError: (error) => toast(t("sourceAccess.addFailed"), { description: String(error) }),
   });
 
-  if (showFolder) {
-    return <AddSourceDialog onClose={onClose} onSuccess={onClose} />;
-  }
+  const connect = useMutation({
+    mutationFn: async (kind: "obsidian" | "folder") => {
+      const picked = await openDialog({
+        title: t(kind === "obsidian" ? "sourceAccess.obsidian" : "sourceAccess.folder"),
+        directory: true, multiple: false,
+      });
+      if (!picked || typeof picked !== "string") return null;
+      const detection = await detectVault(picked);
+      if (kind === "obsidian" && detection.unreadable) throw new Error(t("sourceAccess.folderPickFailed"));
+      if (kind === "obsidian" && !detection.isVault) throw new Error(t("sourceAccess.notVault"));
+      return addSource(detection.sourceType, picked);
+    },
+    onSuccess: (source) => {
+      if (!source) return;
+      refreshSources();
+      toast(t("sourceAccess.connected"), { description: source.path });
+      // Start the first index for either connector. Later Directory checks are
+      // automatic; Obsidian checks remain manual until the backend supports them.
+      void syncRegisteredSource(source.id).then(refreshSources).catch((error) => {
+        toast(t("sourceAccess.connectedUpdateFailed"), { description: String(error) });
+        refreshSources();
+      });
+      onClose();
+    },
+    onError: (error) => toast(t("sourceAccess.addFailed"), { description: String(error) }),
+  });
 
+  const busy = upload.isPending || connect.isPending;
   if (showWeb) return <AddWebSourceDialog onClose={onClose} />;
   return <SourceDialog title={t("sourceAccess.addTitle")} onClose={onClose}>
     {!ready && <div role="status"><p>{t("sourceAccess.upgrade")}</p><button className="page-editor-action" type="button" onClick={() => openFile("https://wenlan.app")}>{t("sourceAccess.update")}</button></div>}
-    <button type="button" className="source-add-option" disabled={upload.isPending} onClick={() => upload.mutate()}>
-      <strong>{t(upload.isPending ? "sourceAccess.adding" : "sourceAccess.files")}</strong><span>{t("sourceAccess.filesHint")}</span>
+    <button type="button" className="source-add-option source-add-option--vault" disabled={busy} onClick={() => connect.mutate("obsidian")}>
+      <SourceTypeIcon kind="obsidian" /><span className="source-add-option-copy"><strong>{t("sourceAccess.obsidian")}</strong><span>{t("sourceAccess.obsidianHint")}</span></span>
     </button>
-    <button type="button" className="source-add-option" onClick={() => setShowFolder(true)}><strong>{t("sourceAccess.folder")}</strong><span>{t("sourceAccess.folderHint")}</span></button>
-    <button type="button" className="source-add-option" onClick={() => setShowWeb(true)}><strong>{t("sourceAccess.web")}</strong><span>{t("sourceAccess.webHint")}</span></button>
+    <button type="button" className="source-add-option" disabled={busy} onClick={() => upload.mutate()}>
+      <SourceTypeIcon kind="file" /><span className="source-add-option-copy"><strong>{t(upload.isPending ? "sourceAccess.adding" : "sourceAccess.files")}</strong><span>{t("sourceAccess.filesHint")}</span></span>
+    </button>
+    <button type="button" className="source-add-option" disabled={busy} onClick={() => setShowWeb(true)}>
+      <SourceTypeIcon kind="webpage" /><span className="source-add-option-copy"><strong>{t("sourceAccess.web")}</strong><span>{t("sourceAccess.webHint")}</span></span>
+    </button>
+    <button type="button" className="source-add-option" disabled={busy} onClick={() => connect.mutate("folder")}>
+      <SourceTypeIcon kind="folder" /><span className="source-add-option-copy"><strong>{t("sourceAccess.folder")}</strong><span>{t("sourceAccess.folderHint")}</span></span>
+    </button>
+    {connect.isPending && <p role="status">{t("sourceAccess.connecting")}</p>}
   </SourceDialog>;
 }

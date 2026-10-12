@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { CaretRight, FileText, Folder, FolderPlus, MagnifyingGlass, Plus, Stack } from "@phosphor-icons/react";
+import { CaretRight, Folder, FolderPlus, MagnifyingGlass, Plus, Stack } from "@phosphor-icons/react";
+import { PageIcon } from "../assets/PageIcon";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -169,7 +170,7 @@ export function PageInventoryPanel({ currentPageId = null, currentFolderPath, fi
   const renderPage = (page: Page) => {
     const draft = page.status === "draft";
     const title = draft && !page.title.trim() ? t("pages.overview.untitledDraft") : page.title;
-    return <li key={page.id} data-folder-path={pageFolderPath(page) ?? ""}><button type="button" className="notes-page-button notes-inventory-page" aria-label={t("pages.overview.openPage", { title })} aria-current={currentPageId === page.id ? "page" : undefined} data-active={currentPageId === page.id ? "true" : undefined} title={title} disabled={draft ? !onOpenDraft : !onOpenPage} onClick={() => draft ? onOpenDraft?.(page.id, pageSpaceContext(page) ?? null) : onOpenPage?.(page)}><FileText aria-hidden="true" size={14}/><span className="notes-page-title">{title}</span></button></li>;
+    return <li key={page.id} data-folder-path={pageFolderPath(page) ?? ""}><button type="button" className="notes-page-button notes-inventory-page" aria-label={t("pages.overview.openPage", { title })} aria-current={currentPageId === page.id ? "page" : undefined} data-active={currentPageId === page.id ? "true" : undefined} title={title} disabled={draft ? !onOpenDraft : !onOpenPage} onClick={() => draft ? onOpenDraft?.(page.id, pageSpaceContext(page) ?? null) : onOpenPage?.(page)}><PageIcon size={16}/><span className="notes-page-title">{title}</span></button></li>;
   };
   const renderFolder = (folder: KnowledgeFolder, depth: number): React.ReactNode => {
     const children = (folders.data?.folders ?? []).filter(item => item.path !== folder.path && item.parent_path === folder.path);

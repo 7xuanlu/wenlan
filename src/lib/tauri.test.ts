@@ -796,6 +796,11 @@ describe('entity operations', () => {
     expect(mockInvoke).toHaveBeenCalledWith('confirm_entity_cmd', { entityId: 'e1', confirmed: true });
   });
 
+  it('changeEntityType passes the selected canonical type', async () => {
+    await tauri.changeEntityType('e1', 'person');
+    expect(mockInvoke).toHaveBeenCalledWith('change_entity_type_cmd', { entityId: 'e1', entityType: 'person' });
+  });
+
   it('getKnowledgeGraph reads the whole graph in one call and back-fills entity domain', async () => {
     mockInvoke.mockResolvedValue({
       entities: [{ id: 'e1', name: 'Alice', space: 'Work' }],

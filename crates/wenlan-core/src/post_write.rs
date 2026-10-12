@@ -109,6 +109,7 @@ pub enum WriteOutcome {
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryUpdate<'a> {
     pub content: Option<&'a str>,
+    pub expected_content: Option<&'a str>,
     pub space: Option<Option<&'a str>>,
     pub confirm: bool,
     pub memory_type: Option<&'a str>,
@@ -324,9 +325,12 @@ pub async fn update_memory(
         .map_err(WenlanError::Validation)?;
     let normalized_memory_type = parsed_memory_type.map(|memory_type| memory_type.to_string());
 
-    db.apply_memory_update(
+    db.apply_memory_update_with_expected_content(
         source_id,
-        update.content,
+        crate::db::MemoryContentUpdate {
+            new_content: update.content,
+            expected_content: update.expected_content,
+        },
         registered_space
             .as_ref()
             .map(|space| space.as_ref().map(String::as_str)),

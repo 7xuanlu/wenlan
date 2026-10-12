@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { FACET_COLORS, search, type Entity } from "../../../lib/tauri";
+import { search, type Entity } from "../../../lib/tauri";
 import { MetadataRow, RailPanelTitle } from "../MemoryDetailPrimitives";
+import { EntityTypeControl } from "./EntityTypeControl";
 import {
   formatAbsoluteTimestamp,
-  formatCalendarDate,
   formatConfidence,
   formatRelativeEntityTime,
 } from "./formatEntityMetadata";
@@ -14,16 +15,20 @@ type EntityContextRailProps = {
   readonly entity: Entity;
   readonly locale: string;
   readonly onMemoryClick?: (sourceId: string) => void;
+  readonly archived: boolean;
+  readonly typePending: boolean;
+  readonly onTypeChange: (entityType: string) => Promise<boolean>;
+  readonly children?: ReactNode;
 };
 
-export function EntityContextRail({ entity, locale, onMemoryClick }: EntityContextRailProps) {
+export function EntityContextRail({ entity, locale, onMemoryClick, archived, typePending, onTypeChange, children }: EntityContextRailProps) {
   const { t } = useTranslation();
   const space = entity.space ?? entity.domain;
   const confidence = formatConfidence(entity.confidence, 2);
-  const createdDate = formatCalendarDate(entity.created_at, locale);
-  const createdAbsolute = formatAbsoluteTimestamp(entity.created_at);
+  const createdRelative = formatRelativeEntityTime(entity.created_at, locale);
+  const createdAbsolute = formatAbsoluteTimestamp(entity.created_at, locale);
   const updatedRelative = formatRelativeEntityTime(entity.updated_at, locale);
-  const updatedAbsolute = formatAbsoluteTimestamp(entity.updated_at);
+  const updatedAbsolute = formatAbsoluteTimestamp(entity.updated_at, locale);
   const { data: linkedMemories = [] } = useQuery({
     queryKey: ["entity-linked-memories", entity.id, entity.name],
     queryFn: async () => {
@@ -43,57 +48,56 @@ export function EntityContextRail({ entity, locale, onMemoryClick }: EntityConte
       aria-label={t("entityDetail.contextLabel")}
     >
       <section className="memory-detail-rail-section memory-detail-metadata-panel">
-        <RailPanelTitle>{t("entityDetail.detailsTitle")}</RailPanelTitle>
+        <RailPanelTitle>{t("detailInfo.details")}</RailPanelTitle>
         <div className="memory-detail-metadata-list">
           <MetadataRow label={t("entityDetail.typeLabel")}>
-            <span className="entity-meta-mono">{entity.entity_type}</span>
+            <EntityTypeControl
+              value={entity.entity_type}
+              archived={archived}
+              pending={typePending}
+              onChange={onTypeChange}
+            />
           </MetadataRow>
           {space ? (
             <MetadataRow label={t("entityDetail.spaceLabel")}>
-              <span className="entity-meta-mono">{space}</span>
+              <span>{space}</span>
             </MetadataRow>
           ) : null}
-          <MetadataRow label={t("entityDetail.statusLabel")}>
-            <span className={`memory-detail-chip ${entity.status === "archived" ? "entity-status-archived" : entity.confirmed ? "success" : "warning"}`}>
-              {entity.status === "archived" ? t("entityDetail.archived") : entity.confirmed ? t("entityDetail.confirmed") : t("entityDetail.unconfirmed")}
-            </span>
-          </MetadataRow>
           {confidence ? (
             <MetadataRow label={t("entityDetail.confidenceLabel")}>
-              <span className="entity-meta-mono">{confidence}</span>
+              <span>{confidence}</span>
             </MetadataRow>
           ) : null}
           {entity.source_agent ? (
             <MetadataRow label={t("entityDetail.sourceLabel")}>
-              <span className="entity-meta-mono">{entity.source_agent}</span>
+              <span>{entity.source_agent}</span>
             </MetadataRow>
           ) : null}
-          {createdDate ? (
+          {createdRelative ? (
             <MetadataRow label={t("entityDetail.firstSeen")}>
-              <span className="entity-meta-mono" title={createdAbsolute ?? undefined}>
-                {createdDate}
+              <span title={createdAbsolute ?? undefined}>
+                {createdRelative}
               </span>
             </MetadataRow>
           ) : null}
           {updatedRelative ? (
             <MetadataRow label={t("entityDetail.updatedLabel")}>
-              <span className="entity-meta-mono" title={updatedAbsolute ?? undefined}>
+              <span title={updatedAbsolute ?? undefined}>
                 {updatedRelative}
               </span>
             </MetadataRow>
           ) : null}
         </div>
       </section>
+      {children}
       {linkedMemories.length > 0 ? (
         <section className="memory-detail-rail-section memory-detail-secondary-panel">
           <div className="memory-detail-panel-heading">
-            <RailPanelTitle>{t("entityDetail.appearsTitle")}</RailPanelTitle>
-            <span className="entity-appears-hint">{t("entityDetail.appearsHint")}</span>
+            <RailPanelTitle>{t("detailInfo.relatedMemories")}</RailPanelTitle>
+            <span className="entity-appears-hint">{t("detailInfo.relatedMemoriesHint")}</span>
           </div>
           <div className="memory-detail-related-grid">
             {linkedMemories.map((memory) => {
-              const facet = memory.memory_type ?? null;
-              const facetClass = facet ? FACET_COLORS[facet] : null;
               return (
                 <button
                   key={memory.id}
@@ -105,27 +109,10 @@ export function EntityContextRail({ entity, locale, onMemoryClick }: EntityConte
                     <span className="memory-detail-related-copy line-clamp-2">
                       {memory.content}
                     </span>
-                    <span className="memory-detail-related-meta">
-                      {facet && facetClass ? (
-                        <span className={`memory-detail-related-facet border ${facetClass}`}>
-                          {facet}
-                        </span>
-                      ) : null}
-                      {memory.is_archived ? <span>{t("entityDetail.archived")}</span> : null}
-                    </span>
+                    {memory.is_archived ? (
+                      <span className="memory-detail-related-meta">{t("entityDetail.archived")}</span>
+                    ) : null}
                   </span>
-                  <svg
-                    className="memory-detail-related-chevron"
-                    aria-hidden="true"
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  >
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
                 </button>
               );
             })}

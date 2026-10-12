@@ -60,11 +60,17 @@ First launch downloads a model for local search, so keep an internet connection 
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### 2. Connect your AI tools to one wiki
+### 2. Start with your own note
 
-In Wenlan's setup, connect Claude Code, Codex, or other supported AI tools so they can use the same knowledge.
+Choose **Open notes** to enter Wenlan, then create a page of your own. The welcome screen also offers a sample to explore first. You can start writing without importing material, connecting an AI tool, or setting up an AI model.
 
-Your connected AI can write the pages. You do not need to install an additional local language model.
+### 3. Bring in sources when you want
+
+You can [import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in) whenever you are ready. Import is optional; you can begin with a page of your own.
+
+### 4. Connect AI tools when you want AI help
+
+Connect Claude Code, Codex, or other supported AI tools when you want them to use the same knowledge. A connected AI can write pages without an additional local language model.
 
 <details>
 <summary>Need help connecting? Ask your AI</summary>
@@ -81,19 +87,17 @@ Set up only this AI tool, then check that it can save and find a test memory.
 
 </details>
 
-### 3. Create your first wiki page
-
-In your connected AI tool, open a work conversation worth keeping and choose a topic:
+To organize a topic with a connected AI, open a work conversation worth keeping and ask:
 
 > Turn the conclusions, reasoning, and sources about [topic] in this conversation into a Wenlan page with source citations.
 
-Or [import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in), then ask your AI to organize a topic from that material into a page.
+You can also ask your AI to organize a topic from material you imported into a page.
 
 When it's ready, open the new page in Wenlan, click a citation to check its source, and add your own thoughts. Next time you work on that topic, ask your AI to read this page before continuing.
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
-Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: do not include private notes, access credentials, Remote Access identifiers, or unredacted logs.
+Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
 
 
 <a id="what-does-wenlan-build"></a>
@@ -218,7 +222,7 @@ Optional background organization and Page updates need a [configured model](#mod
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Optional enrichment and synthesis can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.
 
-**Try it with one conversation worth keeping.** [Get started](#start-in-30-seconds). Star this repo if you'd like to come back and try it later.
+**Start with a note you want to keep.** [Get started](#start-in-30-seconds). Star this repo if you'd like to come back and try it later.
 
 
 <a id="how-wenlan-works"></a>

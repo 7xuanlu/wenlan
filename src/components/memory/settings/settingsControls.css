@@ -147,13 +147,13 @@
 }
 
 @container (max-width: 480px) {
-  .settings-page .settings-row-content:has(.settings-row-control-custom) {
+  .settings-page .settings-row-content:not(.settings-row-content-inline):has(.settings-row-control-custom) {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .settings-page .settings-row-content:has(.settings-row-control-custom) .settings-row-copy,
-  .settings-page .settings-row-content:has(.settings-row-control-custom) .settings-row-control {
+  .settings-page .settings-row-content:not(.settings-row-content-inline):has(.settings-row-control-custom) .settings-row-copy,
+  .settings-page .settings-row-content:not(.settings-row-content-inline):has(.settings-row-control-custom) .settings-row-control {
     width: 100%;
     flex-basis: auto;
   }
@@ -190,23 +190,444 @@
   }
 }
 
+.settings-page .settings-page-local-data-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: min(560px, 100%);
+}
+
+.settings-page .settings-page-local-data-path {
+  min-width: 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: right;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.settings-page .settings-page-local-data-control [role="status"] {
+  grid-column: 1 / -1;
+  color: var(--mem-text-tertiary);
+  font: var(--mem-text-sm) / 1.45 var(--mem-font-body);
+}
+
+.settings-page .settings-chat-import-description {
+  margin: 0 0 6px;
+  color: var(--mem-text-secondary);
+  font: var(--mem-text-sm) / 1.5 var(--mem-font-body);
+}
+
+.settings-page .settings-chat-export-guide {
+  margin: 8px 0 14px;
+}
+
+.settings-page .settings-chat-export-guide .settings-section-header {
+  margin-bottom: 4px;
+  padding: 0;
+}
+
+.settings-page .settings-chat-export-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.settings-page .settings-chat-export-row {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 8px 14px;
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--mem-text-secondary);
+  font: var(--mem-text-sm) / 1.45 var(--mem-font-body);
+}
+
+.settings-page .settings-chat-export-provider {
+  color: var(--mem-text);
+  font-weight: 500;
+}
+
+.settings-page .settings-chat-export-steps {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-chat-export-link {
+  color: var(--mem-accent-indigo);
+  font: var(--mem-text-sm) / 1.45 var(--mem-font-body);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
+.settings-page .settings-chat-export-link:focus-visible {
+  outline: 2px solid var(--mem-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-page .settings-chat-export-error {
+  margin: 8px 0 0;
+  color: var(--mem-status-danger-text);
+  font: var(--mem-text-sm) / 1.45 var(--mem-font-body);
+}
+
+@container (max-width: 480px) {
+  .settings-page .settings-page-local-data-control {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: none;
+  }
+
+  .settings-page .settings-page-local-data-path {
+    text-align: left;
+  }
+
+  .settings-page .settings-chat-export-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 3px 12px;
+  }
+
+  .settings-page .settings-chat-export-provider {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .settings-page .settings-chat-export-steps {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .settings-page .settings-chat-export-link {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    white-space: normal;
+    text-align: right;
+  }
+}
+
 .settings-page .settings-import-row > :first-child { min-width: 0; }
 @container (max-width: 480px) {
   .settings-page .settings-import-row { flex-direction: column; align-items: flex-start; }
 }
 
-.settings-page .settings-provider-row > button { overflow-wrap: anywhere; }
-.settings-page [data-testid="diagnostics-step"],
-.settings-page [data-testid^="diagnostics-route-"] {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+/* Direct task settings use the same label/control column as their independent
+   model picker. Shared model information stays in AI services. */
+
+.settings-page .settings-intelligence .settings-task-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 180px);
+  align-items: center;
+  gap: 16px;
 }
-.settings-page [data-testid="diagnostics-step"] > *,
-.settings-page [data-testid^="diagnostics-route-"] > * { min-width: 0; overflow-wrap: anywhere; }
+
+.settings-page .settings-intelligence .settings-task-field > :first-child {
+  min-width: 0;
+}
+
+.settings-page .settings-intelligence .settings-task-control {
+  width: 180px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.settings-page .settings-intelligence .settings-task-model {
+  margin-top: 12px;
+}
+
+.settings-page .settings-intelligence .settings-task-message {
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-intelligence .settings-task-setup {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.settings-page .settings-intelligence .settings-task-value {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  padding-inline: 12px;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: var(--mem-text-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 @container (max-width: 480px) {
-  .settings-page .settings-provider-row { flex-direction: column; align-items: stretch; gap: 10px; }
-  .settings-page .settings-provider-state { justify-content: flex-end; }
-  .settings-page [data-testid="diagnostics-step"],
-  .settings-page [data-testid^="diagnostics-route-"] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 12px; margin-bottom: 12px; }
-  .settings-page [data-testid^="diagnostics-route-"] > :first-child { grid-column: 1 / -1; }
-  .settings-page [data-testid^="diagnostics-route-"] > :last-child { grid-column: 1 / -1; justify-self: start; }
+  .settings-page .settings-intelligence .settings-task-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .settings-page .settings-intelligence .settings-task-control {
+    justify-self: end;
+  }
+}
+
+/* Intelligence-specific controls follow the Settings row grid while keeping
+   every other settings and onboarding surface on its existing dimensions. */
+.settings-page .settings-intelligence .settings-control-input,
+.settings-page .settings-intelligence .settings-control-select,
+.settings-page .settings-intelligence .settings-control-button {
+  height: 36px;
+  min-height: 36px;
+}
+
+.settings-page .settings-intelligence .settings-control-select {
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+}
+
+.settings-page .settings-intelligence .settings-toggle-expanded {
+  height: 36px;
+  background: transparent;
+}
+
+.settings-page .settings-intelligence .settings-toggle-expanded::before {
+  position: absolute;
+  inset: 5px 0 auto;
+  height: 26px;
+  border-radius: 9999px;
+  background: var(--mem-hover-strong);
+  content: "";
+}
+
+.settings-page .settings-intelligence .settings-toggle-expanded[data-enabled="true"]::before {
+  background: var(--mem-accent-indigo);
+}
+
+.settings-page .settings-intelligence .settings-toggle-thumb {
+  top: 8px;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-row,
+.settings-page .settings-intelligence .settings-anthropic-key-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-row > label,
+.settings-page .settings-intelligence .settings-anthropic-key-label > label {
+  min-width: 0;
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-control {
+  width: 180px;
+  min-width: 0;
+  max-width: 100%;
+  justify-self: end;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-control .settings-control-select {
+  width: 180px;
+  max-width: 100%;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-settings label {
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-settings > [aria-live="polite"] {
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-field {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-field > label,
+.settings-page .settings-intelligence .settings-intelligence-provider-field > .settings-field-label-row {
+  min-width: 0;
+  grid-column: 1;
+  margin: 0;
+}
+
+.settings-page .settings-intelligence .settings-field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-page .settings-intelligence .settings-field-label-row > label {
+  margin: 0;
+}
+
+.settings-page .settings-intelligence-get-key-action {
+  display: inline-flex;
+  min-width: max-content;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  padding: 2px 0;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.4;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-page .settings-intelligence-get-key-action:hover {
+  color: var(--mem-accent-indigo);
+}
+
+.settings-page .settings-intelligence-get-key-action:focus-visible {
+  outline: 2px solid var(--mem-focus-ring);
+  outline-offset: 2px;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-field > .settings-control-select-wrap,
+.settings-page .settings-intelligence .settings-intelligence-provider-field > .settings-control-input {
+  grid-column: 2;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  justify-self: end;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-field > p {
+  grid-column: 2;
+  min-width: 0;
+  margin-top: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-settings > .settings-control-button.self-start {
+  align-self: flex-end;
+  margin-right: 0;
+}
+
+.settings-page .settings-intelligence .settings-intelligence-provider-actions {
+  justify-content: flex-end;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 360px);
+  align-items: center;
+  gap: 4px 16px;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-control {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 360px;
+  justify-self: end;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-row {
+  grid-column: 1 / -1;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-control > input,
+.settings-page .settings-intelligence .settings-anthropic-key-value {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-control > .settings-control-button {
+  flex: 0 0 auto;
+  min-width: max-content;
+  white-space: nowrap !important;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-control .settings-control-button-label {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.settings-page .settings-intelligence .settings-anthropic-key-value {
+  display: flex;
+  height: 36px;
+  align-items: center;
+  overflow: hidden;
+  border-radius: var(--mem-radius-md);
+  background: var(--mem-hover);
+  padding: 0 10px;
+  color: var(--mem-text-secondary);
+  font-family: var(--mem-font-mono);
+  font-size: var(--mem-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@container (max-width: 480px) {
+  .settings-page .settings-intelligence .settings-intelligence-provider-row,
+  .settings-page .settings-intelligence .settings-anthropic-key-row,
+  .settings-page .settings-intelligence .settings-intelligence-provider-field {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .settings-page .settings-intelligence .settings-intelligence-provider-field > .settings-control-select-wrap,
+  .settings-page .settings-intelligence .settings-intelligence-provider-field > .settings-control-input,
+  .settings-page .settings-intelligence .settings-intelligence-provider-field > p {
+    grid-column: 1;
+    justify-self: stretch;
+  }
+
+  .settings-page .settings-intelligence .settings-intelligence-provider-control {
+    width: 180px;
+    max-width: 100%;
+    justify-self: end;
+  }
+
+  .settings-page .settings-intelligence .settings-anthropic-key-control {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .settings-page .settings-intelligence .settings-anthropic-key-section {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-page .settings-intelligence .settings-anthropic-key-row {
+    grid-column: 1;
+  }
+
 }

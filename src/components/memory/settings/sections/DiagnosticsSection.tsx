@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
-  clipboardWrite,
   getWireState,
   removeLegacyMcpEntry,
   removeRawMcpEntry,
   startDaemonSidecar,
-  type ActivityAssetStatus,
   type ActivityResponse,
   type ActivityStep,
   type BinaryCandidate,
@@ -24,19 +22,15 @@ import { readingIsNo, readingIsYes, type Reading } from "../../../../lib/reading
 import { relativeTime } from "../../../../lib/relativeTime";
 import { useActivity } from "../../../../lib/useActivity";
 import {
-  assetCount,
-  knownAssets,
   knownLane,
   knownState,
   laneKey,
   ROUTE_JOBS,
   STEP_UNIT,
-  stepCount,
-  type KnownActivityAsset,
   type KnownActivityAssetKind,
   type KnownActivityStep,
 } from "../../../../lib/activitySentence";
-import { ACTIVITY_ASSET_ORDER } from "../../activity/activityPresentation";
+import "./diagnosticsContent.css";
 import { Button, Card, SectionHeader, Skeleton, StatusChip, type ProbeState } from "../primitives";
 
 /** A daemon from before `/api/activity` answers it with a plain 404. */
@@ -95,8 +89,25 @@ function candidateLabel(t: TFunction, state: BinaryCandidate["state"]): string {
     case "not_a_file":
     case "not_executable":
       return t("settings.diagnostics.wiring.candidateUnusable");
-    default:
+    case "absent":
       return t("settings.diagnostics.wiring.candidateMissing");
+    default:
+      return t("settings.diagnostics.unknown");
+  }
+}
+
+function candidateState(candidate: BinaryCandidate, anyFound: boolean): ProbeState {
+  switch (candidate.state.kind) {
+    case "file":
+      return { kind: "up" };
+    case "unreadable":
+      return { kind: "unknown" };
+    case "absent":
+    case "not_a_file":
+    case "not_executable":
+      return anyFound ? { kind: "idle" } : { kind: "down" };
+    default:
+      return { kind: "unknown" };
   }
 }
 
@@ -136,182 +147,89 @@ function lastStopLabel(t: TFunction, stop: SidecarStopOutcome): string | null {
   }
 }
 
-/** Lines for the three sidecar facts, shared by the card and the copyable
- *  report so they cannot drift apart. */
-function sidecarReportLines(t: TFunction, daemon: DaemonWire): string[] {
-  const lines: string[] = [];
-  if (daemon.sidecar_job_binding) {
-    lines.push(sidecarBindingLabel(t, daemon.sidecar_job_binding));
-  }
-  const stop = daemon.last_sidecar_stop ? lastStopLabel(t, daemon.last_sidecar_stop) : null;
-  if (stop) lines.push(stop);
-  if (daemon.sidecar_spawned_on_unknown_owner) {
-    lines.push(t("settings.diagnostics.wiring.sidecarUnknownOwner"));
-  }
-  return lines;
-}
+// ── Technical details sections ──────────────────────────────────────────
 
-/** Plain-text dump of the wire state, built from the same translated labels
- *  the card renders — what a user pastes into a bug report matches what they
- *  saw on screen. */
-function buildWireReport(t: TFunction, wire: WireState): string {
-  const lines: string[] = [t("settings.diagnostics.wiring.title")];
-  lines.push("");
-
-  const daemonState = wire.daemon.reachable
-    ? t("settings.diagnostics.wiring.daemonReachable")
-    : t("settings.diagnostics.wiring.daemonUnreachable");
-  lines.push(`${t("settings.diagnostics.wiring.daemonTitle")}: ${daemonState}`);
-  lines.push(`  ${wire.daemon.base_url}`);
-  if (wire.daemon.version) {
-    lines.push(`  ${t("settings.diagnostics.wiring.daemonVersion", { version: wire.daemon.version })}`);
-  }
-  if (!wire.daemon.reachable && wire.daemon.error) {
-    lines.push(`  ${wire.daemon.error}`);
-  }
-  for (const line of sidecarReportLines(t, wire.daemon)) {
-    lines.push(`  ${line}`);
-  }
-  lines.push("");
-
-  lines.push(t("settings.diagnostics.wiring.mcpBinaryTitle"));
-  lines.push(
-    wire.mcp_binary.command === null
-      ? `  ${wire.mcp_binary.unresolved?.message ?? t("settings.diagnostics.wiring.binaryUnresolved")}`
-      : `  ${[wire.mcp_binary.command, ...wire.mcp_binary.args].join(" ")}`,
+function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="settings-diagnostics-detail-section">
+      <SectionHeader label={title} />
+      <Card padding="rows">{children}</Card>
+    </section>
   );
-  for (const candidate of wire.mcp_binary.candidates) {
-    lines.push(`  [${candidateLabel(t, candidate.state)}] ${candidate.path} (${candidate.source})`);
-  }
-  // An input that could not be determined has NO candidate row — its paths
-  // were never built — so a report that only listed candidates would show a
-  // short list and no reason for it. Read off `mcp_binary`, not `unresolved`:
-  // a pasted report from a machine where the binary WAS found must still name
-  // the input that went unread (round 5, D4).
-  for (const undetermined of wire.mcp_binary.undetermined ?? []) {
-    lines.push(
-      `  [${t("settings.diagnostics.wiring.candidateNotChecked")}] ${t(
-        "settings.diagnostics.wiring.binaryUndetermined",
-        { ...undetermined },
-      )}`,
-    );
-  }
-  lines.push("");
-
-  lines.push(t("settings.diagnostics.wiring.clientsTitle"));
-  if (wire.clients.length === 0) {
-    lines.push(`  ${t("settings.diagnostics.wiring.clientsEmpty")}`);
-  }
-  for (const client of wire.clients) {
-    const detected = detectionLabel(t, client.detected);
-    const path = client.config_path ?? t("settings.diagnostics.wiring.clientPathUnknown");
-    lines.push(`  ${client.name}: ${detected}, ${routeLabel(t, client.route)}, ${path}`);
-    // A pasted report has to carry the REASON, not just the word "unknown" —
-    // it is the only artefact the person debugging this ever sees.
-    if (client.detected.kind === "unreadable") {
-      lines.push(
-        `    ! ${t("settings.diagnostics.wiring.clientUnreadableDetail", {
-          error: client.detected.error,
-        })}`,
-      );
-    }
-    if (readingIsYes(client.has_plugin) && readingIsYes(client.has_raw_entry)) {
-      lines.push(`    ! ${t("settings.diagnostics.wiring.doubleRegistrationBody", { name: client.name })}`);
-    }
-    // `readingIsNo`, not `!has_plugin`: a plugin state that could not be read
-    // must not fire a warning whose whole premise is "this client has no
-    // plugin", nor suppress the one above.
-    if (readingIsNo(client.has_plugin) && readingIsYes(client.has_raw_duplicate)) {
-      lines.push(`    ! ${t("settings.diagnostics.wiring.rawDuplicateBody", { name: client.name })}`);
-    }
-  }
-
-  return lines.join("\n");
 }
 
-// ── Wiring rows: daemon, MCP binary, clients — three independent checks ──
-
-/** Loading state: three skeleton rows matching the resolved row shape.
- *  `sr-only` text carries the load to assistive tech, since the Skeleton
- *  bars are decorative. */
-function WiringSkeleton() {
+function WireLoading({ announce = false }: { announce?: boolean }) {
   const { t } = useTranslation();
   return (
-    <div aria-busy="true">
-      <span className="sr-only">{t("settings.diagnostics.wiring.loading")}</span>
-      {[0, 1, 2].map((index) => (
-        <div key={index} className="px-5 py-4">
-          <div className="flex flex-col gap-2">
-            <Skeleton width="35%" height={14} />
-            <Skeleton width="72%" height={10} />
-          </div>
-        </div>
-      ))}
+    <div
+      className="settings-diagnostics-detail-loading"
+      role={announce ? "status" : "group"}
+      aria-busy="true"
+      aria-label={t("settings.diagnostics.wiring.loading")}
+    >
+      {announce && <span className="sr-only">{t("settings.diagnostics.wiring.loading")}</span>}
+      <Skeleton width="40%" height={14} />
+      <Skeleton width="65%" height={10} />
     </div>
   );
 }
 
-function WiringRows({ wire, onRetry, onSetupAgent }: {
-  wire: WireState;
-  onRetry: () => void;
-  onSetupAgent?: () => void;
-}) {
+function ActivityPending({ loading }: { loading: boolean }) {
+  const { t } = useTranslation();
   return (
-    <>
-      <div className="px-5 py-4">
-        <DaemonStatus daemon={wire.daemon} onRetry={onRetry} />
-      </div>
-      <div className="px-5 py-4">
-        <McpBinaryStatus mcpBinary={wire.mcp_binary} onSetupAgent={onSetupAgent} />
-      </div>
-      <div className="px-5 py-4">
-        <ClientsWiring clients={wire.clients} />
-      </div>
-    </>
+    <div className="settings-diagnostics-detail-empty">
+      <StatusChip state={loading ? { kind: "probing" } : { kind: "unknown" }} label={t(loading ? "settings.diagnostics.loading" : "settings.diagnostics.unknown")} />
+    </div>
+  );
+}
+
+function WireUnavailable() {
+  const { t } = useTranslation();
+  return <p className="settings-diagnostics-detail-empty">{t("settings.diagnostics.wiring.unavailable")}</p>;
+}
+
+function StaleSnapshot({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    <p className="settings-diagnostics-detail-warning">
+      {t("settings.diagnostics.overview.lastSnapshot", { error: message })}
+    </p>
   );
 }
 
 function DaemonStatus({ daemon, onRetry }: { daemon: DaemonWire; onRetry: () => void }) {
   const { t } = useTranslation();
   return (
-    <>
-      <div className="flex items-center gap-2 flex-wrap mb-1">
-        <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
-          {t("settings.diagnostics.wiring.daemonTitle")}
-        </span>
-        <StatusChip
-          state={daemon.reachable ? { kind: "up" } : { kind: "down" }}
-          label={
-            daemon.reachable
-              ? t("settings.diagnostics.wiring.daemonReachable")
-              : t("settings.diagnostics.wiring.daemonUnreachable")
-          }
-        />
+    <div className="settings-diagnostics-detail-grid">
+      <div className="settings-diagnostics-detail-row">
+        <span className="settings-diagnostics-detail-label">{t("settings.diagnostics.detail.status")}</span>
+        <div className="settings-diagnostics-detail-value">
+          <StatusChip
+            state={daemon.reachable ? { kind: "up" } : { kind: "down" }}
+            label={
+              daemon.reachable
+                ? t("settings.diagnostics.wiring.daemonReachable")
+                : t("settings.diagnostics.wiring.daemonUnreachable")
+            }
+          />
+          {!daemon.reachable && daemon.error && (
+            <p className="settings-diagnostics-detail-error">{daemon.error}</p>
+          )}
+          <span className="settings-diagnostics-technical">{daemon.base_url}</span>
+          {daemon.version && <span className="settings-diagnostics-detail-muted">{t("settings.diagnostics.wiring.daemonVersion", { version: daemon.version })}</span>}
+        </div>
       </div>
-      <p style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", overflowWrap: "anywhere" }}>
-        {daemon.base_url}
-      </p>
-      {daemon.version && (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)", marginTop: 4 }}>
-          {t("settings.diagnostics.wiring.daemonVersion", { version: daemon.version })}
-        </p>
-      )}
       <DaemonSidecarStatus daemon={daemon} />
       {!daemon.reachable && (
-        <>
-          {daemon.error && (
-            <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-status-danger-text)", marginTop: 8, lineHeight: "1.5" }}>
-              {daemon.error}
-            </p>
-          )}
-          <div className="mt-3">
-            <Button variant="secondary" size="sm" onClick={onRetry}>
-              {t("settings.diagnostics.wiring.retry")}
-            </Button>
+        <div className="settings-diagnostics-detail-row">
+          <span className="settings-diagnostics-detail-label">{t("settings.diagnostics.wiring.unavailable")}</span>
+          <div className="settings-diagnostics-detail-value">
+          <Button variant="secondary" size="sm" onClick={onRetry}>{t("settings.diagnostics.wiring.retry")}</Button>
           </div>
-        </>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -325,12 +243,11 @@ function DaemonSidecarStatus({ daemon }: { daemon: DaemonWire }) {
   const lastStopText = lastStop ? lastStopLabel(t, lastStop) : null;
   if (!binding && !lastStopText && !daemon.sidecar_spawned_on_unknown_owner) return null;
   return (
-    <div className="mt-3 flex flex-col gap-2">
-      <div style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
-        {t("settings.diagnostics.wiring.daemonSidecarTitle")}
-      </div>
+    <div className="settings-diagnostics-detail-row">
+      <span className="settings-diagnostics-detail-label">{t("settings.diagnostics.wiring.daemonSidecarTitle")}</span>
+      <div className="settings-diagnostics-detail-value">
       {binding && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="settings-diagnostics-inline-value">
           <StatusChip
             state={
               binding.state === "bound"
@@ -342,14 +259,14 @@ function DaemonSidecarStatus({ daemon }: { daemon: DaemonWire }) {
             label={sidecarBindingLabel(t, binding)}
           />
           {binding.state === "unbound" && (
-            <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-2xs)", color: "var(--mem-text-tertiary)", overflowWrap: "anywhere" }}>
+            <span className="settings-diagnostics-technical">
               {binding.reason}
             </span>
           )}
         </div>
       )}
       {lastStop && lastStopText && (
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="settings-diagnostics-inline-value">
           <StatusChip
             // Round 5, D5 residual. `could_not_measure` used to fall into the
             // same `down` as `still_running`, so the colour asserted a
@@ -367,17 +284,18 @@ function DaemonSidecarStatus({ daemon }: { daemon: DaemonWire }) {
             label={lastStopText}
           />
           {"reason" in lastStop && (
-            <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-2xs)", color: "var(--mem-text-tertiary)", overflowWrap: "anywhere" }}>
+            <span className="settings-diagnostics-technical">
               {lastStop.reason}
             </span>
           )}
         </div>
       )}
       {daemon.sidecar_spawned_on_unknown_owner && (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-status-danger-text)", lineHeight: "1.5" }}>
+        <p className="settings-diagnostics-detail-error">
           {t("settings.diagnostics.wiring.sidecarUnknownOwner")}
         </p>
       )}
+      </div>
     </div>
   );
 }
@@ -404,77 +322,67 @@ function McpBinaryStatus({ mcpBinary, onSetupAgent }: {
   // command was chosen is how it stayed invisible in the case where the
   // command beside it looks like a complete answer.
   const undetermined = mcpBinary.undetermined ?? [];
+  const candidateKinds = ["file", "not_a_file", "not_executable", "absent", "unreadable"];
+  const hasUnknownCandidate = mcpBinary.candidates.some(
+    (candidate) => !candidateKinds.includes(candidate.state.kind),
+  );
   const searchIncomplete =
     mcpBinary.candidates.some((candidate) => candidate.state.kind === "unreadable") ||
-    undetermined.length > 0;
+    undetermined.length > 0 ||
+    hasUnknownCandidate;
   return (
-    <>
-      <div className="mb-1" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
-        {t("settings.diagnostics.wiring.mcpBinaryTitle")}
+    <div className="settings-diagnostics-detail-grid">
+      {mcpBinary.candidates.flatMap((candidate) =>
+        candidate.state.kind === "unreadable"
+          ? [
+              <p
+                key={`candidate-error:${candidate.source}:${candidate.path}`}
+                className="settings-diagnostics-detail-warning"
+              >
+                {candidateLabel(t, candidate.state)}: {candidate.state.error}
+              </p>,
+            ]
+          : [],
+      )}
+      {undetermined.map((input) => (
+        <p key={input.input} className="settings-diagnostics-detail-warning">
+          {t("settings.diagnostics.wiring.candidateNotChecked")}: {t("settings.diagnostics.wiring.binaryUndetermined", { ...input })}
+        </p>
+      ))}
+      <div className="settings-diagnostics-detail-row">
+        <span className="settings-diagnostics-detail-label">{t("settings.diagnostics.detail.selectedExecutable")}</span>
+        {mcpBinary.command === null ? (
+          <p className="settings-diagnostics-detail-error">
+            {mcpBinary.unresolved?.message ?? t("settings.diagnostics.wiring.binaryUnresolved")}
+          </p>
+        ) : (
+          <span data-testid="diagnostics-selected-executable" className="settings-diagnostics-technical">
+            {[mcpBinary.command, ...mcpBinary.args].join(" ")}
+          </span>
+        )}
       </div>
-      <p style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text)", overflowWrap: "anywhere" }}>
-        {mcpBinary.command === null
-          ? (mcpBinary.unresolved?.message ?? t("settings.diagnostics.wiring.binaryUnresolved"))
-          : [mcpBinary.command, ...mcpBinary.args].join(" ")}
-      </p>
-      <div className="mt-3 flex flex-col gap-2">
-        {/* Keyed by SOURCE as well as path: two slots can name the same file
-            (a dev override pointed at the installed binary), and they share one
-            reading rather than being deduplicated away. */}
-        {mcpBinary.candidates.map((candidate) => (
-          <div
-            key={`${candidate.source}:${candidate.path}`}
-            className="flex items-center gap-2 flex-wrap"
-          >
-            <StatusChip
-              // `unreadable` is a failed look, not a measured absence — same
-              // reasoning as the sidecar stop above, so it gets the same
-              // unknown tone rather than the red that would read as "this
-              // path is definitely not the binary".
-              state={
-                candidate.state.kind === "file"
-                  ? { kind: "up" }
-                  : candidate.state.kind === "unreadable"
-                    ? { kind: "unknown" }
-                    : anyFound
-                      ? { kind: "idle" }
-                      : { kind: "down" }
-              }
-              label={candidateLabel(t, candidate.state)}
-            />
-            <span
-              className="truncate flex-1 min-w-0"
-              style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}
-            >
-              {candidate.path}
-            </span>
-            <span style={{ fontFamily: "var(--mem-font-mono)", fontSize: "var(--mem-text-2xs)", color: "var(--mem-text-tertiary)" }}>
-              {candidate.source}
-            </span>
+      {mcpBinary.candidates.length > 0 && (
+        <div className="settings-diagnostics-candidate-list">
+          <div className="settings-diagnostics-candidate-grid settings-diagnostics-candidate-heading">
+            <span>{t("settings.diagnostics.detail.candidateSource")}</span>
+            <span>{t("settings.diagnostics.detail.candidatePath")}</span>
+            <span>{t("settings.diagnostics.detail.candidateStatus")}</span>
           </div>
-        ))}
-        {undetermined.map((input) => (
-          <div key={input.input} className="flex items-center gap-2 flex-wrap">
-            <StatusChip
-              // An input that could not be determined is the purest case of
-              // this: its candidate paths were never even built, so nothing
-              // about them was measured either way.
-              state={{ kind: "unknown" }}
-              label={t("settings.diagnostics.wiring.candidateNotChecked")}
-            />
-            <span
-              className="flex-1 min-w-0"
-              style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)", overflowWrap: "anywhere" }}
-            >
-              {t("settings.diagnostics.wiring.binaryUndetermined", { ...input })}
-            </span>
-          </div>
-        ))}
-      </div>
+          {/* Keep source as part of the identity: two slots may point to the same path. */}
+          {mcpBinary.candidates.map((candidate) => (
+            <div key={`${candidate.source}:${candidate.path}`} className="settings-diagnostics-candidate-grid">
+              <span className="settings-diagnostics-technical">{candidate.source}</span>
+              <span className="settings-diagnostics-technical settings-diagnostics-path">{candidate.path}</span>
+              <StatusChip state={candidateState(candidate, anyFound)} label={candidateLabel(t, candidate.state)} />
+            </div>
+          ))}
+        </div>
+      )}
       {/* Tool setup is an optional in-app route. Opening it leaves the
           first-launch completion flag intact and makes no reinstall claim. */}
       {!anyFound && !searchIncomplete && onSetupAgent && (
-        <div className="mt-3">
+        <div className="settings-diagnostics-detail-row">
+          <span />
           <Button
             variant="secondary"
             size="sm"
@@ -484,7 +392,7 @@ function McpBinaryStatus({ mcpBinary, onSetupAgent }: {
           </Button>
         </div>
       )}
-    </>
+    </div>
   );
 }
 
@@ -509,7 +417,7 @@ function DoubleRegistrationWarning({ client }: { client: ClientWire }) {
         : null;
   return (
     <div
-      className="flex items-start gap-2 mt-1"
+      className="settings-diagnostics-client-warning flex items-start gap-2 mt-1"
       style={{
         background: "var(--mem-status-danger-bg)",
         border: "1px solid var(--mem-status-danger-border)",
@@ -566,7 +474,7 @@ function RawDuplicateWarning({ client }: { client: ClientWire }) {
         : null;
   return (
     <div
-      className="flex items-start gap-2 mt-1"
+      className="settings-diagnostics-client-warning flex items-start gap-2 mt-1"
       style={{
         background: "var(--mem-status-danger-bg)",
         border: "1px solid var(--mem-status-danger-border)",
@@ -604,16 +512,13 @@ function RawDuplicateWarning({ client }: { client: ClientWire }) {
 function ClientsWiring({ clients }: { clients: ClientWire[] }) {
   const { t } = useTranslation();
   return (
-    <>
-      <div className="mb-1" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
-        {t("settings.diagnostics.wiring.clientsTitle")}
-      </div>
+    <div className="settings-diagnostics-detail-grid">
       {clients.length === 0 ? (
-        <p style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+        <p className="settings-diagnostics-detail-empty">
           {t("settings.diagnostics.wiring.clientsEmpty")}
         </p>
       ) : (
-        <div className="flex flex-col gap-3">
+        <div className="settings-diagnostics-client-list">
           {clients.map((client) => {
             // THE valuable finding this card exists to surface: Wenlan
             // registered twice for one client (plugin + a raw MCP entry).
@@ -638,57 +543,42 @@ function ClientsWiring({ clients }: { clients: ClientWire[] }) {
                 ? { kind: "up" }
                 : client.detected.kind === "no"
                   ? { kind: "idle" }
-                  : { kind: "unknown", detail: client.detected.error };
+                  : { kind: "unknown" };
+            const unreadableReads = [
+              ["detected", client.detected],
+              ["has_plugin", client.has_plugin],
+              ["has_raw_entry", client.has_raw_entry],
+              ["has_raw_duplicate", client.has_raw_duplicate],
+            ] as const;
             return (
-              <div key={client.client_type} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", fontWeight: 500, color: "var(--mem-text)" }}>
-                    {client.name}
-                  </span>
+              <div key={client.client_type} className="settings-diagnostics-client">
+                <span className="settings-diagnostics-client-name">{client.name}</span>
+                <div className="settings-diagnostics-client-detection">
                   <StatusChip state={detectedState} label={detectionLabel(t, client.detected)} />
-                  <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-2xs)", color: "var(--mem-text-tertiary)" }}>
-                    {routeLabel(t, client.route)}
-                  </span>
+                  <span className="settings-diagnostics-client-route">{routeLabel(t, client.route)}</span>
                 </div>
-                <p
-                  className="truncate"
-                  style={{ fontFamily: "var(--mem-font-mono)", fontSize: "10px", color: "var(--mem-text-tertiary)" }}
-                >
-                  {client.config_path ?? t("settings.diagnostics.wiring.clientPathUnknown")}
-                </p>
+                {unreadableReads.map(([field, reading]) => {
+                  if (reading.kind !== "unreadable") return null;
+                  return (
+                    <p key={field} className="settings-diagnostics-detail-error">
+                      <span className="settings-diagnostics-technical">{field}</span>: {t("settings.diagnostics.wiring.clientUnreadableDetail", { error: reading.error })}
+                    </p>
+                  );
+                })}
                 {doubleRegistered && <DoubleRegistrationWarning client={client} />}
                 {rawDuplicate && <RawDuplicateWarning client={client} />}
+                <span className="settings-diagnostics-detail-label settings-diagnostics-client-path-label">
+                  {t("settings.diagnostics.detail.configurationPath")}
+                </span>
+                <span className="settings-diagnostics-technical settings-diagnostics-path settings-diagnostics-client-path">
+                  {client.config_path ?? t("settings.diagnostics.wiring.clientPathUnknown")}
+                </span>
               </div>
             );
           })}
         </div>
       )}
-    </>
-  );
-}
-
-function CopyReportButton({ wire }: { wire: WireState }) {
-  const { t } = useTranslation();
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  const handleCopy = () => {
-    clipboardWrite(buildWireReport(t, wire));
-    setCopied(true);
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <Button variant="secondary" size="sm" onClick={handleCopy}>
-      {copied ? t("settings.diagnostics.wiring.copyReportCopied") : t("settings.diagnostics.wiring.copyReport")}
-    </Button>
+    </div>
   );
 }
 
@@ -742,117 +632,15 @@ function WiringError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-// ── Background work card ─────────────────────────────────────────────────
-// Reads `/api/activity` through `useActivity`, the same query the toolbar
-// Activity button keeps, so Settings adds no request of its own. It shows
-// the same counts the Activity page does, one level more literal: every
-// step, both model routes, and the open refinement suggestions by their
-// verbatim action and status, since this is what a bug report quotes.
-
-const STEP_STATE_WORDS = { idle: true, running: true, blocked: true } as const;
-
-/**
- * What an asset's `blocked` counts. The daemon counts Entities' blocked work
- * as memories not yet scanned (see `assetSentence`), so that count names
- * memories, never entities.
- */
-const BLOCKED_UNIT: Readonly<Record<KnownActivityAssetKind, "memories" | "pages">> = {
-  memories: "memories",
-  entities: "memories",
-  pages: "pages",
-};
-
+// `/api/activity` is shared with Activity. Settings summarizes its health and
+// leaves per-step progress to the Activity surface.
 function isKnownKind(kind: string): kind is KnownActivityAssetKind {
-  return (ACTIVITY_ASSET_ORDER as readonly string[]).includes(kind);
+  return ["memories", "entities", "pages"].includes(kind);
 }
 
 /** Known by `STEP_UNIT`, the one table that says what each step counts. */
 function isKnownStep(step: ActivityStep): step is KnownActivityStep {
   return Object.prototype.hasOwnProperty.call(STEP_UNIT, step.name);
-}
-
-const monoText = (color: string) => ({
-  fontFamily: "var(--mem-font-mono)",
-  fontSize: "var(--mem-text-sm)",
-  color,
-});
-
-const blockTitleStyle = {
-  fontFamily: "var(--mem-font-body)",
-  fontSize: "var(--mem-text-base)",
-  fontWeight: 600,
-  color: "var(--mem-text)",
-} as const;
-
-function StepRow({ step }: { step: ActivityStep }) {
-  const { t } = useTranslation();
-  const stateWord = Object.prototype.hasOwnProperty.call(STEP_STATE_WORDS, step.state)
-    ? t(`activityStatus.stepState.${step.state as keyof typeof STEP_STATE_WORDS}`)
-    : t("settings.diagnostics.unknown");
-  // A step this build has no word for gets its counts with no unit: the unit
-  // is exactly what it cannot know.
-  let name: string;
-  let progress: string;
-  let failed: string;
-  if (isKnownStep(step)) {
-    const count = stepCount(step);
-    name = t(`activityStatus.step.${step.name}`);
-    progress = t(count.key, count.params);
-    failed = t(`settings.diagnostics.failedCount.${STEP_UNIT[step.name]}`, { count: step.failed });
-  } else {
-    name = t("settings.diagnostics.unknown");
-    progress = t("settings.diagnostics.unknownProgress", { done: step.done, total: step.total });
-    failed = t("settings.diagnostics.unknownFailed", { count: step.failed });
-  }
-  return (
-    <div data-testid="diagnostics-step" className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3">
-      <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{name}</span>
-      <span style={monoText("var(--mem-text-tertiary)")}>{stateWord}</span>
-      <span style={monoText("var(--mem-text)")}>{progress}</span>
-      <span style={monoText(step.failed > 0 ? "var(--mem-status-danger-text)" : "var(--mem-text-tertiary)")}>{failed}</span>
-    </div>
-  );
-}
-
-function AssetBlock({
-  asset,
-  known,
-}: {
-  asset: ActivityAssetStatus;
-  /** The same asset narrowed by `knownAssets`, absent for a kind this build cannot name. */
-  known: KnownActivityAsset | undefined;
-}) {
-  const { t } = useTranslation();
-  // The headline `done`/`total` follow whichever step is busy, so they are
-  // never printed raw for a known asset: `assetCount` is its own unit.
-  const title = known ? t(`activityStatus.asset.${known.kind}`) : t("settings.diagnostics.unknown");
-  const count = known
-    ? t(`settings.diagnostics.assetCount.${known.kind}`, { count: assetCount(known) })
-    : t("settings.diagnostics.unknownProgress", { done: asset.done, total: asset.total });
-  const blocked = known
-    ? t(`settings.diagnostics.blockedCount.${BLOCKED_UNIT[known.kind]}`, { count: asset.blocked })
-    : t("settings.diagnostics.unknownBlocked", { count: asset.blocked });
-  return (
-    <div data-testid={`diagnostics-asset-${known ? known.kind : "unknown"}`} className="px-5 py-4">
-      <div className="mb-2 flex items-baseline justify-between gap-3 flex-wrap">
-        <span style={blockTitleStyle}>{title}</span>
-        <span className="flex items-baseline gap-3">
-          <span data-testid="diagnostics-asset-count" style={monoText("var(--mem-text)")}>{count}</span>
-          <span
-            data-testid="diagnostics-asset-blocked"
-            style={monoText(asset.blocked > 0 ? "var(--mem-status-danger-text)" : "var(--mem-text-tertiary)")}
-          >
-            {blocked}
-          </span>
-        </span>
-      </div>
-      <div className="flex flex-col gap-1.5">
-        {asset.steps.map((step, index) => (
-          <StepRow key={`${step.name}:${index}`} step={step} />
-        ))}
-      </div>
-    </div>
-  );
 }
 
 /** Red only for a model someone chose that cannot run. With no model chosen,
@@ -865,23 +653,26 @@ function routeChipState(route: ActivityResponse["everyday"]): ProbeState {
 function RoutesBlock({ activity }: { activity: ActivityResponse }) {
   const { t } = useTranslation();
   return (
-    <div className="px-5 py-4">
-      <div className="mb-2" style={blockTitleStyle}>
-        {t("settings.diagnostics.routesTitle")}
+    <div className="settings-diagnostics-route-list">
+      <div className="settings-diagnostics-route-heading" aria-hidden="true">
+        <span>{t("settings.diagnostics.detail.task")}</span>
+        <span>{t("settings.diagnostics.detail.service")}</span>
+        <span>{t("settings.diagnostics.detail.model")}</span>
+        <span>{t("settings.diagnostics.detail.status")}</span>
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="settings-diagnostics-route-rows">
         {ROUTE_JOBS.map((job) => {
           const route = activity[job];
           const lane = knownLane(route.lane);
           return (
-            <div key={job} data-testid={`diagnostics-route-${job}`} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3">
-              <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
+            <div key={job} data-testid={`diagnostics-route-${job}`} className="settings-diagnostics-route">
+              <span className="settings-diagnostics-route-task">
                 {t(`activityStatus.jobTitle.${job}`)}
               </span>
-              <span style={monoText("var(--mem-text-tertiary)")}>
+              <span className="settings-diagnostics-route-service">
                 {lane === undefined ? t("settings.diagnostics.unknown") : t(laneKey(lane))}
               </span>
-              <span style={monoText("var(--mem-text)")}>{route.model ?? t("settings.diagnostics.noModel")}</span>
+              <span className="settings-diagnostics-route-model">{route.model ?? t("settings.diagnostics.noModel")}</span>
               <StatusChip
                 state={routeChipState(route)}
                 label={route.available ? t("settings.diagnostics.available") : t("settings.diagnostics.notAvailable")}
@@ -894,40 +685,75 @@ function RoutesBlock({ activity }: { activity: ActivityResponse }) {
   );
 }
 
+const SUGGESTION_ACTION_KEYS = {
+  entity_merge: "review.kindEntityMerge",
+  detect_contradiction: "review.kindContradiction",
+  dedup_merge: "review.kindDuplicate",
+  relation_conflict: "review.kindRelationConflict",
+  suggest_entity: "review.kindEntitySuggestion",
+  page_merge: "review.kindPageMerge",
+  cross_space_discovery: "review.kindCrossSpace",
+  page_keep_or_archive: "review.kindPageArchive",
+  lint_repair_review: "review.kindLintRepair",
+  vocab_promote: "review.kindVocabPromote",
+} as const satisfies Readonly<Record<string, string>>;
+
+const SUGGESTION_STATUS_KEYS = {
+  pending: "settings.diagnostics.suggestionPending",
+  awaiting_review: "activity.refinementStatuses.awaitingReview",
+  dismissed: "activity.refinementStatuses.dismissed",
+  resolved: "activity.refinementStatuses.resolved",
+  auto_applied: "activity.refinementStatuses.autoApplied",
+  updated: "activity.refinementStatuses.updated",
+} as const satisfies Readonly<Record<string, string>>;
+
+function suggestionActionLabel(t: TFunction, action: string): string {
+  const key = Object.prototype.hasOwnProperty.call(SUGGESTION_ACTION_KEYS, action)
+    ? SUGGESTION_ACTION_KEYS[action as keyof typeof SUGGESTION_ACTION_KEYS]
+    : undefined;
+  return key ? t(key) : t("settings.diagnostics.unknownSuggestionAction", { value: action });
+}
+
+function suggestionStatusLabel(t: TFunction, status: string): string {
+  const key = Object.prototype.hasOwnProperty.call(SUGGESTION_STATUS_KEYS, status)
+    ? SUGGESTION_STATUS_KEYS[status as keyof typeof SUGGESTION_STATUS_KEYS]
+    : undefined;
+  return key ? t(key) : t("settings.diagnostics.unknownSuggestionStatus", { value: status });
+}
+
 function SuggestionsBlock({ activity }: { activity: ActivityResponse }) {
   const { t } = useTranslation();
   const { ready_for_review: ready, not_ready: notReady, groups } = activity.refinement;
   const headerStyle = {
-    ...monoText("var(--mem-text-tertiary)"),
+    fontFamily: "var(--mem-font-body)",
+    fontSize: "var(--mem-text-sm)",
+    color: "var(--mem-text-secondary)",
     fontWeight: 400,
     textAlign: "left",
     paddingBottom: 4,
   } as const;
   return (
-    <div data-testid="diagnostics-suggestions" className="px-5 py-4">
-      <div className="mb-2" style={blockTitleStyle}>
-        {t("activityStatus.suggestions.title")}
-      </div>
-      <div className="flex flex-col gap-1.5">
+    <div data-testid="diagnostics-suggestions" className="settings-diagnostics-suggestions-content">
+      <div className="settings-diagnostics-suggestion-counts">
         {(
           [
             ["ready", t("settings.diagnostics.readyForReview"), ready],
             ["not-ready", t("settings.diagnostics.notReady"), notReady],
           ] as const
         ).map(([id, label, count]) => (
-          <div key={id} data-testid={`diagnostics-suggestions-${id}`} className="flex items-center justify-between gap-3">
-            <span style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>{label}</span>
-            <span style={monoText("var(--mem-text)")}>{count}</span>
+          <div key={id} data-testid={`diagnostics-suggestions-${id}`} className="settings-diagnostics-suggestion-count">
+            <span>{label}</span>
+            <span>{count}</span>
           </div>
         ))}
       </div>
       {groups.length === 0 ? (
-        <p className="mt-3" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
+        <p className="settings-diagnostics-detail-empty">
           {t("settings.diagnostics.noOpenSuggestions")}
         </p>
       ) : (
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full" style={{ borderCollapse: "collapse" }}>
+        <div className="settings-diagnostics-suggestion-table-wrap">
+          <table className="settings-diagnostics-suggestions w-full" style={{ borderCollapse: "collapse" }}>
             <thead>
               <tr>
                 <th scope="col" style={headerStyle}>{t("settings.diagnostics.columnAction")}</th>
@@ -936,13 +762,11 @@ function SuggestionsBlock({ activity }: { activity: ActivityResponse }) {
               </tr>
             </thead>
             <tbody>
-              {/* Verbatim labels: these are the daemon's own words, and a bug
-                  report is only useful if it quotes them exactly. */}
               {groups.map((group) => (
                 <tr key={`${group.action}:${group.status}`} data-testid="diagnostics-suggestion-group">
-                  <td style={{ ...monoText("var(--mem-text-secondary)"), paddingBlock: 2 }}>{group.action}</td>
-                  <td style={{ ...monoText("var(--mem-text-tertiary)"), paddingBlock: 2 }}>{group.status}</td>
-                  <td style={{ ...monoText("var(--mem-text)"), paddingBlock: 2, textAlign: "right" }}>{group.count}</td>
+                  <td title={group.action}>{suggestionActionLabel(t, group.action)}</td>
+                  <td title={group.status}>{suggestionStatusLabel(t, group.status)}</td>
+                  <td>{group.count}</td>
                 </tr>
               ))}
             </tbody>
@@ -953,40 +777,271 @@ function SuggestionsBlock({ activity }: { activity: ActivityResponse }) {
   );
 }
 
-function BackgroundWorkRows({ activity }: { activity: ActivityResponse }) {
-  const { t, i18n } = useTranslation();
+function isUnreadable(value: Reading): boolean {
+  return value.kind === "unreadable";
+}
+
+function integrationSummary(t: TFunction, wire: WireState): {
+  state: ProbeState;
+  label: string;
+  messages: string[];
+} {
+  const messages: string[] = [];
+  const binaryIncomplete =
+    wire.mcp_binary.candidates.some((candidate) => candidate.state.kind === "unreadable") ||
+    (wire.mcp_binary.undetermined?.length ?? 0) > 0;
+  const unreadableClientRead = wire.clients.some((client) =>
+    [client.detected, client.has_plugin, client.has_raw_entry, client.has_raw_duplicate].some(isUnreadable),
+  );
+  const duplicate = wire.clients.some(
+    (client) =>
+      (readingIsYes(client.has_plugin) && readingIsYes(client.has_raw_entry)) ||
+      (readingIsNo(client.has_plugin) && readingIsYes(client.has_raw_duplicate)),
+  );
+  const unbound = wire.daemon.sidecar_job_binding?.state === "unbound";
+  const stillRunning = wire.daemon.last_sidecar_stop?.outcome === "still_running";
+  const unknownOwner = wire.daemon.sidecar_spawned_on_unknown_owner;
+  const unverifiedStop = wire.daemon.last_sidecar_stop?.outcome === "could_not_measure";
+
+  if (duplicate) messages.push(t("settings.diagnostics.overview.duplicateConfiguration"));
+  if (binaryIncomplete) messages.push(t("settings.diagnostics.overview.binarySearchIncomplete"));
+  if (unreadableClientRead) messages.push(t("settings.diagnostics.overview.clientCheckUnknown"));
+  if (unbound) messages.push(t("settings.diagnostics.overview.sidecarUnbound"));
+  if (stillRunning) messages.push(t("settings.diagnostics.overview.sidecarStillRunning"));
+  if (unknownOwner) messages.push(t("settings.diagnostics.overview.sidecarOwnerUnknown"));
+  if (unverifiedStop) messages.push(t("settings.diagnostics.overview.sidecarStopUnknown"));
+
+  if (wire.mcp_binary.command === null) {
+    messages.push(t("settings.diagnostics.overview.binaryMissing"));
+    return {
+      state: binaryIncomplete ? { kind: "unknown" } : { kind: "down" },
+      label: binaryIncomplete
+        ? t("settings.diagnostics.overview.unknown")
+        : t("settings.diagnostics.overview.needsAttention"),
+      messages,
+    };
+  }
+  if (duplicate || unbound || stillRunning) {
+    return { state: { kind: "down" }, label: t("settings.diagnostics.overview.needsAttention"), messages };
+  }
+  if (binaryIncomplete || unreadableClientRead || unknownOwner || unverifiedStop) {
+    return { state: { kind: "unknown" }, label: t("settings.diagnostics.overview.unknown"), messages };
+  }
+  const toolDetected = wire.clients.some((client) => readingIsYes(client.detected));
+  return toolDetected
+    ? { state: { kind: "up" }, label: t("settings.diagnostics.overview.toolDetected"), messages }
+    : { state: { kind: "idle" }, label: t("settings.diagnostics.overview.noToolDetected"), messages };
+}
+
+function activityOverview(t: TFunction, activity: ActivityResponse): {
+  state: ProbeState;
+  label: string;
+  messages: string[];
+  needsIntelligence: boolean;
+} {
   const state = knownState(activity);
-  const known = new Map(knownAssets(activity).map((asset) => [asset.kind, asset]));
-  // Known assets in the order every Activity surface uses, then anything this
-  // build cannot name, so an unknown asset is listed rather than dropped.
-  const ordered = [
-    ...ACTIVITY_ASSET_ORDER.flatMap((kind) => activity.assets.filter((asset) => asset.kind === kind)),
-    ...activity.assets.filter((asset) => !isKnownKind(asset.kind)),
-  ];
+  const failed = activity.assets.some((asset) => asset.steps.some((step) => step.failed > 0));
+  const blocked = activity.assets.some((asset) => asset.state === "blocked" || asset.blocked > 0);
+  const hasUnknownDetails = activity.assets.some((asset) =>
+    !isKnownKind(asset.kind) ||
+    !["idle", "running", "blocked"].includes(asset.state) ||
+    asset.steps.some((step) => !isKnownStep(step) || !["idle", "running", "blocked"].includes(step.state)),
+  );
+  const everydayUnavailable = activity.everyday.mode === "pinned_unavailable";
+  const synthesisUnavailable = activity.synthesis.mode === "pinned_unavailable";
+  const hasUnknownRoute =
+    !knownLane(activity.everyday.lane) ||
+    !knownLane(activity.synthesis.lane) ||
+    !["auto", "pinned", "pinned_unavailable", "unconfigured"].includes(activity.everyday.mode) ||
+    !["auto", "pinned", "pinned_unavailable", "unconfigured"].includes(activity.synthesis.mode);
+  const messages: string[] = [];
+  if (failed) messages.push(t("settings.diagnostics.overview.backgroundFailed"));
+  if (blocked) messages.push(t("settings.diagnostics.overview.backgroundBlocked"));
+  if (everydayUnavailable) messages.push(t("settings.diagnostics.overview.everydayUnavailable"));
+  if (synthesisUnavailable) messages.push(t("settings.diagnostics.overview.synthesisUnavailable"));
+  if (hasUnknownDetails || hasUnknownRoute || state === undefined) messages.push(t("settings.diagnostics.overview.backgroundUnknown"));
+
+  let probe: ProbeState = { kind: "up" };
+  if (state === undefined) probe = { kind: "unknown" };
+  else if (state === "blocked" || failed || blocked || everydayUnavailable || synthesisUnavailable) probe = { kind: "down" };
+  else if (state === "off") probe = { kind: "idle" };
+  else if (hasUnknownDetails || hasUnknownRoute) probe = { kind: "unknown" };
+
+  return {
+    state: probe,
+    label: state === undefined ? t("settings.diagnostics.overview.unknown") : t(`activityStatus.state.${state}`),
+    messages,
+    needsIntelligence: everydayUnavailable || synthesisUnavailable,
+  };
+}
+
+function ActivitySummary({
+  activity,
+  onOpenActivity,
+  onOpenIntelligence,
+}: {
+  activity: ActivityResponse;
+  onOpenActivity?: () => void;
+  onOpenIntelligence?: () => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const summary = activityOverview(t, activity);
+  const lastActivity = activity.last_activity_at === null
+    ? t("activityStatus.neverActive")
+    : t("activityStatus.lastActivity", {
+        time: relativeTime(activity.last_activity_at, t, i18n.language),
+      });
   return (
-    <>
-      <div className="px-5 py-4 flex items-baseline justify-between gap-3 flex-wrap">
-        <span data-testid="diagnostics-state" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-md)", fontWeight: 500, color: "var(--mem-text)" }}>
-          {state === undefined ? t("settings.diagnostics.unknown") : t(`activityStatus.state.${state}`)}
-        </span>
-        <span data-testid="diagnostics-last-activity" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-tertiary)" }}>
-          {activity.last_activity_at === null
-            ? t("activityStatus.neverActive")
-            : t("activityStatus.lastActivity", {
-                time: relativeTime(activity.last_activity_at, t, i18n.language),
-              })}
-        </span>
+    <div data-testid="diagnostics-activity-summary" className="settings-diagnostics-activity-summary">
+      <div className="settings-diagnostics-activity-summary-main">
+        <span data-testid="diagnostics-state"><StatusChip state={summary.state} label={summary.label} /></span>
+        <span data-testid="diagnostics-last-activity">{lastActivity}</span>
       </div>
-      {ordered.map((asset, index) => (
-        <AssetBlock
-          key={`${asset.kind}:${index}`}
-          asset={asset}
-          known={isKnownKind(asset.kind) ? known.get(asset.kind) : undefined}
-        />
-      ))}
-      <RoutesBlock activity={activity} />
-      <SuggestionsBlock activity={activity} />
-    </>
+      {summary.messages.length > 0 && (
+        <ul className="settings-diagnostics-activity-warnings">
+          {summary.messages.map((message) => <li key={message}>{message}</li>)}
+        </ul>
+      )}
+      {(onOpenActivity || (summary.needsIntelligence && onOpenIntelligence)) && (
+        <div className="settings-diagnostics-activity-actions">
+          {onOpenActivity && (
+            <Button variant="ghost" size="sm" onClick={onOpenActivity}>
+              {t("settings.diagnostics.overview.openActivity")}
+            </Button>
+          )}
+          {summary.needsIntelligence && onOpenIntelligence && (
+            <Button variant="ghost" size="sm" onClick={onOpenIntelligence}>
+              {t("settings.diagnostics.overview.openIntelligence")}
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OverviewRow({
+  title,
+  state,
+  label,
+  messages = [],
+  actions,
+  testId,
+}: {
+  title: string;
+  state: ProbeState;
+  label: string;
+  messages?: string[];
+  actions?: ReactNode;
+  testId: string;
+}) {
+  return (
+    <div className="settings-diagnostics-overview-row" data-testid={testId}>
+      <div className="settings-diagnostics-overview-main">
+        <span className="settings-diagnostics-overview-title">{title}</span>
+        <StatusChip state={state} label={label} />
+      </div>
+      {(messages.length > 0 || actions) && (
+        <div className="settings-diagnostics-overview-note">
+          {messages.map((message, index) => <span key={`${message}:${index}`}>{message}</span>)}
+          {actions}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiagnosticsOverview({
+  wireQuery,
+  activityQuery,
+  onOpenConnections,
+  onOpenIntelligence,
+  onOpenActivity,
+}: {
+  wireQuery: UseQueryResult<WireState>;
+  activityQuery: UseQueryResult<ActivityResponse>;
+  onOpenConnections?: () => void;
+  onOpenIntelligence?: () => void;
+  onOpenActivity?: () => void;
+}) {
+  const { t } = useTranslation();
+  let serviceState: ProbeState = { kind: "probing" };
+  let serviceLabel = t("settings.diagnostics.overview.checking");
+  let serviceMessage: string[] = [];
+  if (wireQuery.isError) {
+    serviceState = { kind: "unknown" };
+    serviceLabel = t("settings.diagnostics.overview.unknown");
+    serviceMessage = [t("settings.diagnostics.overview.serviceCheckUnknown")];
+  } else if (wireQuery.data) {
+    serviceState = wireQuery.data.daemon.reachable ? { kind: "up" } : { kind: "down" };
+    serviceLabel = wireQuery.data.daemon.reachable
+      ? t("settings.diagnostics.overview.responding")
+      : t("settings.diagnostics.overview.notResponding");
+    if (!wireQuery.data.daemon.reachable) serviceMessage = [t("settings.diagnostics.overview.serviceNotResponding")];
+  }
+
+  let integrationState: ProbeState = { kind: "probing" };
+  let integrationLabel = t("settings.diagnostics.overview.checking");
+  let integrationMessages: string[] = [];
+  if (wireQuery.isError) {
+    integrationState = { kind: "unknown" };
+    integrationLabel = t("settings.diagnostics.overview.unknown");
+    integrationMessages = [t("settings.diagnostics.overview.integrationCheckUnknown")];
+  } else if (wireQuery.data) {
+    const summary = integrationSummary(t, wireQuery.data);
+    integrationState = summary.state;
+    integrationLabel = summary.label;
+    integrationMessages = summary.messages;
+  }
+
+  let backgroundState: ProbeState = { kind: "probing" };
+  let backgroundLabel = t("settings.diagnostics.overview.checking");
+  let backgroundMessages: string[] = [];
+  let needsIntelligence = false;
+  if (activityQuery.isError) {
+    backgroundState = { kind: "unknown" };
+    backgroundLabel = t("settings.diagnostics.overview.unknown");
+    backgroundMessages = [t("settings.diagnostics.overview.backgroundCheckUnknown")];
+  } else if (activityQuery.data) {
+    const summary = activityOverview(t, activityQuery.data);
+    backgroundState = summary.state;
+    backgroundLabel = summary.label;
+    backgroundMessages = summary.messages;
+    needsIntelligence = summary.needsIntelligence;
+  }
+
+  const wireIssue = wireQuery.isError || Boolean(wireQuery.data && (!wireQuery.data.daemon.reachable || integrationState.kind === "down" || integrationState.kind === "unknown"));
+  return (
+    <div className="settings-diagnostics-overview" data-testid="diagnostics-overview">
+      <OverviewRow
+        testId="diagnostics-overview-service"
+        title={t("settings.diagnostics.overview.localService")}
+        state={serviceState}
+        label={serviceLabel}
+        messages={serviceMessage}
+      />
+      <OverviewRow
+        testId="diagnostics-overview-integration"
+        title={t("settings.diagnostics.overview.aiIntegration")}
+        state={integrationState}
+        label={integrationLabel}
+        messages={integrationMessages}
+        actions={wireIssue && onOpenConnections ? <Button variant="ghost" size="sm" onClick={onOpenConnections}>{t("settings.diagnostics.overview.openConnections")}</Button> : undefined}
+      />
+      <OverviewRow
+        testId="diagnostics-overview-background"
+        title={t("settings.diagnostics.overview.backgroundProcessing")}
+        state={backgroundState}
+        label={backgroundLabel}
+        messages={backgroundMessages}
+        actions={onOpenActivity || (needsIntelligence && onOpenIntelligence) ? (
+          <>
+            {onOpenActivity && <Button variant="ghost" size="sm" onClick={onOpenActivity}>{t("settings.diagnostics.overview.openActivity")}</Button>}
+            {needsIntelligence && onOpenIntelligence && <Button variant="ghost" size="sm" onClick={onOpenIntelligence}>{t("settings.diagnostics.overview.openIntelligence")}</Button>}
+          </>
+        ) : undefined}
+      />
+    </div>
   );
 }
 
@@ -1019,48 +1074,97 @@ function DiagnosticsError({ error, onRetry }: { error: unknown; onRetry: () => v
   );
 }
 
-export default function DiagnosticsSection({ onSetupAgent }: { onSetupAgent?: () => void }) {
+export default function DiagnosticsSection({
+  onSetupAgent,
+  onOpenConnections,
+  onOpenIntelligence,
+  onOpenActivity,
+}: {
+  onSetupAgent?: () => void;
+  onOpenConnections?: () => void;
+  onOpenIntelligence?: () => void;
+  onOpenActivity?: () => void;
+}) {
   const { t } = useTranslation();
+  const [showDetails, setShowDetails] = useState(false);
   const wireQuery = useQuery({
     queryKey: ["wireState"],
     queryFn: getWireState,
     retry: false,
   });
   const activityQuery = useActivity();
+  const refreshChecks = () => {
+    void wireQuery.refetch();
+    void activityQuery.refetch();
+  };
 
   return (
-    <>
+    <div className="settings-diagnostics">
       <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
         <SectionHeader
-          label={t("settings.diagnostics.wiring.title")}
-          action={wireQuery.data ? <CopyReportButton wire={wireQuery.data} /> : undefined}
-        />
-        <Card padding="rows">
-          {wireQuery.isLoading && <WiringSkeleton />}
-          {wireQuery.isError && <WiringError onRetry={() => wireQuery.refetch()} />}
-          {wireQuery.data && <WiringRows wire={wireQuery.data} onRetry={() => wireQuery.refetch()} onSetupAgent={onSetupAgent} />}
-        </Card>
-      </section>
-
-      <section className="mem-fade-up" style={{ animationDelay: "0ms" }}>
-        <SectionHeader
-          label={t("settings.diagnostics.backgroundTitle")}
+          label={showDetails ? t("settings.diagnostics.overview.technicalDetails") : t("settings.diagnostics.overview.title")}
           action={
-            <Button variant="secondary" size="sm" onClick={() => activityQuery.refetch()}>
-              {t("settings.diagnostics.refresh")}
-            </Button>
+            <div className="settings-diagnostics-header-actions">
+              <Button variant="secondary" size="sm" onClick={refreshChecks}>{t("settings.diagnostics.overview.refreshChecks")}</Button>
+              <Button variant="secondary" size="sm" data-testid="diagnostics-details-toggle" onClick={() => setShowDetails((value) => !value)}>
+                {showDetails ? t("settings.diagnostics.overview.backToOverview") : t("settings.diagnostics.overview.technicalDetails")}
+              </Button>
+            </div>
           }
         />
-        <Card padding="rows">
-          {activityQuery.isLoading && (
-            <p className="px-5 py-4" style={{ fontFamily: "var(--mem-font-body)", fontSize: "var(--mem-text-sm)", color: "var(--mem-text-secondary)" }}>
-              {t("settings.diagnostics.loading")}
-            </p>
-          )}
-          {activityQuery.isError && <DiagnosticsError error={activityQuery.error} onRetry={() => activityQuery.refetch()} />}
-          {activityQuery.data && <BackgroundWorkRows activity={activityQuery.data} />}
-        </Card>
+        {!showDetails ? (
+          <Card padding="rows">
+            <DiagnosticsOverview
+              wireQuery={wireQuery}
+              activityQuery={activityQuery}
+              onOpenConnections={onOpenConnections}
+              onOpenIntelligence={onOpenIntelligence}
+              onOpenActivity={onOpenActivity}
+            />
+          </Card>
+        ) : (
+          <div className="settings-diagnostics-details">
+            {wireQuery.isError && wireQuery.data && <StaleSnapshot error={wireQuery.error} />}
+            {activityQuery.isError && activityQuery.data && <StaleSnapshot error={activityQuery.error} />}
+            <DetailSection title={t("settings.diagnostics.wiring.daemonTitle")}>
+              {wireQuery.isLoading && <WireLoading announce />}
+              {wireQuery.isError && <WiringError onRetry={() => wireQuery.refetch()} />}
+              {wireQuery.data && <DaemonStatus daemon={wireQuery.data.daemon} onRetry={() => wireQuery.refetch()} />}
+            </DetailSection>
+            <DetailSection title={t("settings.diagnostics.wiring.mcpBinaryTitle")}>
+              {wireQuery.isLoading && <WireLoading />}
+              {wireQuery.isError && <WireUnavailable />}
+              {wireQuery.data && <McpBinaryStatus mcpBinary={wireQuery.data.mcp_binary} onSetupAgent={onSetupAgent} />}
+            </DetailSection>
+            <DetailSection title={t("settings.diagnostics.overview.aiIntegration")}>
+              {wireQuery.isLoading && <WireLoading />}
+              {wireQuery.isError && <WireUnavailable />}
+              {wireQuery.data && <ClientsWiring clients={wireQuery.data.clients} />}
+            </DetailSection>
+            <DetailSection title={t("settings.diagnostics.backgroundTitle")}>
+              {activityQuery.isLoading && <ActivityPending loading />}
+              {activityQuery.isError && <DiagnosticsError error={activityQuery.error} onRetry={() => activityQuery.refetch()} />}
+              {activityQuery.data && (
+                <ActivitySummary
+                  activity={activityQuery.data}
+                  onOpenActivity={onOpenActivity}
+                  onOpenIntelligence={onOpenIntelligence}
+                />
+              )}
+            </DetailSection>
+            <DetailSection title={t("settings.diagnostics.routesTitle")}>
+              {activityQuery.isLoading && <ActivityPending loading />}
+              {activityQuery.isError && <ActivityPending loading={false} />}
+              {activityQuery.data && <RoutesBlock activity={activityQuery.data} />}
+            </DetailSection>
+            <DetailSection title={t("activityDiscoveries.title")}>
+              {activityQuery.isLoading && <ActivityPending loading />}
+              {activityQuery.isError && <ActivityPending loading={false} />}
+              {activityQuery.data && <SuggestionsBlock activity={activityQuery.data} />}
+            </DetailSection>
+          </div>
+        )}
       </section>
-    </>
+    </div>
   );
 }

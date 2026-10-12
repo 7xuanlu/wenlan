@@ -9,16 +9,14 @@ import type { AgentActivityItem, AgentConnection } from "../../lib/tauri";
 
 const activityMock = vi.hoisted(() => vi.fn());
 const agentsMock = vi.hoisted(() => vi.fn());
-const distillMock = vi.hoisted(() => vi.fn());
-const refinementsMock = vi.hoisted(() => vi.fn());
-// Activity's visible suggestions issue the same read-only queries as its page
-// component, so these fixtures keep the feed tests independent of those reads.
+// The Now section mounts inside the feed and reads get_activity. Mock plumbing
+// only: no assertion in this file changes.
 const getActivityMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../lib/tauri", () => ({
   getActivity: getActivityMock,
-  distillReview: distillMock,
-  listRefinements: refinementsMock,
+  distillReview: vi.fn().mockResolvedValue({ pending: [], orphan_topics: [] }),
+  listRefinements: vi.fn().mockResolvedValue({ proposals: [] }),
   listAgentActivity: activityMock,
   listAgents: agentsMock,
 }));
@@ -60,6 +58,7 @@ function renderActivityFeed(onOpenReview?: () => void) {
 describe("ActivityFeed i18n", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    activityMock.mockReset();
     getActivityMock.mockResolvedValue({
       state: "up_to_date",
       last_activity_at: null,
@@ -69,11 +68,6 @@ describe("ActivityFeed i18n", () => {
       refinement: { ready_for_review: 0, not_ready: 0, groups: [] },
     });
     await i18n.changeLanguage("zh-Hant");
-    distillMock.mockResolvedValue({
-      pages_created: 0, scoped: false, created_ids: [], pending: [], stale_pages: [],
-      stale_truncated: false, orphan_topics: [],
-    });
-    refinementsMock.mockResolvedValue({ proposals: [] });
     agentsMock.mockResolvedValue([
       agent("codex", "Codex"),
       agent("claude-code", "Claude Code"),

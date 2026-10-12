@@ -14,10 +14,10 @@ const chunk = (content: string): ChunkDetail => ({ id: "c", content, chunk_index
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 function workspace() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
-  const onSelectPage = vi.fn(); const onCreatePage = vi.fn(); const onReviewAll = vi.fn();
-  const element = (spaceName: string) => <QueryClientProvider client={client}><SpaceDetail copy={SPACE_DETAIL_TEST_COPY} spaceName={spaceName} onBack={() => {}} onSelectPage={onSelectPage} onCreatePage={onCreatePage} onReviewAll={onReviewAll} /></QueryClientProvider>;
+  const onSelectPage = vi.fn(); const onCreatePage = vi.fn(); const onReviewAll = vi.fn(); const onOpenSource = vi.fn();
+  const element = (spaceName: string) => <QueryClientProvider client={client}><SpaceDetail copy={SPACE_DETAIL_TEST_COPY} spaceName={spaceName} onBack={() => {}} onSelectPage={onSelectPage} onCreatePage={onCreatePage} onReviewAll={onReviewAll} onOpenSource={onOpenSource} /></QueryClientProvider>;
   const result = render(element(a.name));
-  return { ...result, onSelectPage, onCreatePage, onReviewAll, switchSpace: () => result.rerender(element(b.name)) };
+  return { ...result, onSelectPage, onCreatePage, onReviewAll, onOpenSource, switchSpace: () => result.rerender(element(b.name)) };
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -29,7 +29,7 @@ beforeEach(() => {
 describe("Space notes and sources", () => {
   it("defaults to notes, creates in the current Space and never fetches standalone memories or topics", async () => {
     const result = workspace();
-    expect(await screen.findByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByRole("tab", { name: "Pages" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getAllByRole("tab")).toHaveLength(2);
     expect(listIndexedFiles).not.toHaveBeenCalled();
     expect(listEntities).not.toHaveBeenCalled(); expect(listMemoriesRich).not.toHaveBeenCalled();
@@ -59,7 +59,7 @@ describe("Space notes and sources", () => {
     await screen.findByText("Readme.md");
     expect(screen.getByRole("button", { name: "Cards" })).toHaveAttribute("aria-pressed", "true");
     expect(document.querySelector(".space-project-sources")).toHaveAttribute("data-lens", "cards");
-    fireEvent.click(screen.getByRole("tab", { name: "Notes" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Pages" }));
     expect(await screen.findByRole("button", { name: /Project note/ })).toBeInTheDocument();
     expect(document.querySelector(".space-dossier-page-list")).toHaveAttribute("data-lens", "cards");
   });
@@ -92,6 +92,18 @@ describe("Space notes and sources", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Sources" })).toHaveAttribute("aria-selected", "true");
   });
+  it("opens the source page from the preview while retaining the current Space scope", async () => {
+    const file = source("shared.md");
+    vi.mocked(listIndexedFiles).mockResolvedValue([file]);
+    vi.mocked(getChunks).mockResolvedValue([chunk("Only this Space text.")]);
+    const result = workspace();
+    fireEvent.click(await screen.findByRole("tab", { name: "Sources" }));
+    fireEvent.click(await screen.findByRole("button", { name: /shared.md.*Markdown/ }));
+    await screen.findByText("Only this Space text.");
+    expect(screen.queryByRole("button", { name: "Expand reading" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Go to source" }));
+    expect(result.onOpenSource).toHaveBeenCalledExactlyOnceWith({ ...file, space: a.name });
+  });
   it("returns focus to the activating source row after explicit preview close", async () => {
     vi.mocked(listIndexedFiles).mockResolvedValue([source("Book.pdf")]);
     vi.mocked(getChunks).mockResolvedValue([chunk("Only this project text.")]);
@@ -113,7 +125,7 @@ describe("Space notes and sources", () => {
     await screen.findByRole("dialog"); result.switchSpace();
     await screen.findByRole("heading", { name: b.name });
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Notes" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Pages" })).toHaveAttribute("aria-selected", "true");
     await act(async () => pending.resolve([chunk("Stale project body.")]));
     expect(screen.queryByText("Stale project body.")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
@@ -133,7 +145,7 @@ describe("Space notes and sources", () => {
     expect(screen.queryByText("Old.pdf")).not.toBeInTheDocument();
   });
   it("uses keyboard tabs and keeps review only in the overflow menu", async () => {
-    const result = workspace(); const notes = await screen.findByRole("tab", { name: "Notes" });
+    const result = workspace(); const notes = await screen.findByRole("tab", { name: "Pages" });
     notes.focus(); fireEvent.keyDown(notes, { key: "ArrowRight" });
     expect(screen.getByRole("tab", { name: "Sources" })).toHaveFocus();
     fireEvent.keyDown(screen.getByRole("tab", { name: "Sources" }), { key: "Home" });

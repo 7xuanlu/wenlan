@@ -110,25 +110,25 @@ describe("SpacesOverview management", () => {
   });
 
   it.each(["en", "zh-Hans", "zh-Hant"] as const)(
-    "renders localized self-labelled desktop and mobile counts in %s",
+    "renders one localized self-labelled page count in %s",
     async (locale) => {
       // Given one confirmed space and labels built from the selected locale
       api.listSpaces.mockResolvedValue([work]);
       await i18n.changeLanguage(locale);
       const localizedLabels = createSpacesOverviewLabels(i18n.getFixedT(locale));
 
-      // When the overview renders both responsive metadata structures
+      // When the overview renders its responsive row metadata
       renderOverview({ labels: localizedLabels });
       const inventory = await screen.findByRole("region", {
         name: localizedLabels.confirmedHeading,
       });
       const row = screen.getByTestId("space-row-work");
 
-      // Then both responsive counts use the localized note count and no table header remains
+      // Then the single responsive count uses the localized note count and no table header remains
       const count = i18n.getFixedT(locale)("spaces.overview.card.pages", { count: 0 });
       expect(within(inventory).queryByRole("columnheader")).not.toBeInTheDocument();
       expect(within(row).getByTestId("space-pages")).toHaveTextContent(count);
-      expect(within(row).getByTestId("space-mobile-pages")).toHaveTextContent(count);
+      expect(within(row).queryByTestId("space-mobile-pages")).not.toBeInTheDocument();
       expect(within(row).queryByTestId("space-mobile-memories")).not.toBeInTheDocument();
       expect(within(row).queryByTestId("space-mobile-updated")).not.toBeInTheDocument();
     },

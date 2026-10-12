@@ -10750,6 +10750,7 @@ async fn update_memory_preserves_metadata_and_synchronizes_episode_and_fts() {
                 "edit-preserve",
                 crate::post_write::MemoryUpdate {
                     content: Some(edited),
+                    expected_content: None,
                     space: None,
                     confirm: false,
                     memory_type: None,
@@ -10903,6 +10904,7 @@ async fn update_memory_rolls_back_all_fields_and_reuses_connection() {
 
         let update = crate::post_write::MemoryUpdate {
             content: Some("Replacement content must be fully atomic across every field."),
+            expected_content: None,
             space: Some(Some("new-space")),
             confirm: true,
             memory_type: Some("preference"),
@@ -27942,6 +27944,74 @@ async fn apply_memory_update_bumps_every_chunk_and_stales_receipts() {
         1,
         "the v1 receipt must not suppress enrichment for v2 content"
     );
+}
+
+#[tokio::test]
+async fn apply_memory_update_rejects_stale_expected_content_without_partial_mutation() {
+    let (db, _dir) = test_db().await;
+    db.upsert_documents(vec![make_memory_doc(
+        "mem_expected_content_cas",
+        "Current canonical content remains authoritative.",
+        "fact",
+        "engineering",
+        "test",
+    )])
+    .await
+    .unwrap();
+    let before = db
+        .get_memory_detail("mem_expected_content_cas")
+        .await
+        .unwrap()
+        .unwrap();
+    let origin_count_before = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM enrichment_origin WHERE source_id = ?1",
+                libsql::params!["mem_expected_content_cas"],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+
+    let error = db
+        .apply_memory_update_with_expected_content(
+            "mem_expected_content_cas",
+            super::MemoryContentUpdate {
+                new_content: Some("Stale editor draft must not replace the current body."),
+                expected_content: Some("Old editor baseline."),
+            },
+            None,
+            true,
+            Some("decision"),
+            Some("{\"status\":\"stale\"}"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, WenlanError::Conflict(_)));
+
+    let after = db
+        .get_memory_detail("mem_expected_content_cas")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(after.memory_type, before.memory_type);
+    assert_eq!(after.space, before.space);
+    assert_eq!(after.confirmed, before.confirmed);
+    let origin_count_after = {
+        let conn = db.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM enrichment_origin WHERE source_id = ?1",
+                libsql::params!["mem_expected_content_cas"],
+            )
+            .await
+            .unwrap();
+        rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap()
+    };
+    assert_eq!(origin_count_after, origin_count_before);
 }
 
 #[tokio::test]

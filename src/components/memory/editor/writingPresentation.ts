@@ -219,8 +219,12 @@ const writingTheme = EditorView.theme({
     fontFamily: "var(--mem-font-body)",
   },
   "&[data-editor-presentation-mode=writing] .cm-content": {
-    fontSize: "15px",
-    lineHeight: "1.75",
+    fontSize: "var(--reading-font-size, 15px)",
+    lineHeight: "var(--reading-line-height, 1.75)",
+  },
+  ".cm-line": {
+    paddingLeft: "0",
+    paddingRight: "0",
   },
   ".cm-writing-heading": {
     color: "var(--mem-text)",

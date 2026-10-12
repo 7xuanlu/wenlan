@@ -5,7 +5,6 @@ import {
   ArrowCounterClockwise,
   ArrowLeft,
   ArrowRight,
-  BookOpenText,
   Brain,
   Check,
   Copy,
@@ -26,6 +25,7 @@ import {
   type SampleSource,
   type SampleSourceType,
 } from "./firstUseSampleData";
+import { PageIcon } from "../memory/assets/PageIcon";
 import "./firstUseGuide.css";
 
 export interface FirstUseSampleProps {
@@ -61,7 +61,7 @@ function prefersReducedMotion(): boolean {
 
 function SourceGlyph({ type }: { type: SampleSourceType }) {
   if (type === "memory") return <Brain aria-hidden="true" weight="regular" />;
-  if (type === "page") return <BookOpenText aria-hidden="true" weight="regular" />;
+  if (type === "page") return <PageIcon />;
   return <FileText aria-hidden="true" weight="regular" />;
 }
 

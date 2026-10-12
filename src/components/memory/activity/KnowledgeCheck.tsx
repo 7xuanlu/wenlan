@@ -6,7 +6,6 @@ import {
   ArrowLeft,
   ArrowRight,
   CircleNotch,
-  FileText,
   LinkSimple,
   Note,
   WarningCircle,
@@ -22,6 +21,7 @@ import {
 } from "../../../lib/knowledgeCheckWorkflow";
 import { Button } from "../settings/primitives";
 import PageInfoDrawer from "../page/PageInfoDrawer";
+import { PageIcon } from "../assets/PageIcon";
 import "./KnowledgeCheck.css";
 
 interface KnowledgeCheckProps {
@@ -397,6 +397,7 @@ export default function KnowledgeCheck({ onBack, onOpenReview, onOpenPage, onNav
       <PageInfoDrawer
         closeLabel={t("common.close")}
         docked
+        inspector
         onClose={() => { restoreSelectedRow.current = true; setSelectedKey(null); }}
         open={!!selected}
         title={t("knowledgeCheck.detail")}
@@ -410,7 +411,7 @@ export default function KnowledgeCheck({ onBack, onOpenReview, onOpenPage, onNav
           <section className="knowledge-check-detail-section">
             <h4>{t("knowledgeCheck.affected")}</h4>
             {namedRecord ? <button type="button" className="knowledge-check-original" onClick={openOriginal}>
-              {namedRecord.kind === "page" ? <FileText aria-hidden="true" size={18} /> : <Note aria-hidden="true" size={18} />}
+              {namedRecord.kind === "page" ? <PageIcon /> : <Note aria-hidden="true" size={18} />}
               <span>{namedRecord.title}</span>
               <ArrowRight aria-hidden="true" size={16} />
             </button> : <p>{recordUnavailable ? t("knowledgeCheck.titleUnavailable") : t("knowledgeCheck.unavailable")}</p>}
