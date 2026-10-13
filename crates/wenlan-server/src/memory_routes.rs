@@ -1139,7 +1139,7 @@ async fn handle_search_memory_inner(
     // double-surfacing when the channel is on), surface gated distilled pages
     // through the SAME `supplemental_pages` wire field the MCP `recall` tool
     // already renders. Pages flow through the shared `select_visible_pages`
-    // visibility gate (space-scope → effective-tier → confirmed/rank/cap).
+    // visibility gate (space-scope → effective-tier → rank/cap, confirmed weighted up).
     // Fail CLOSED: any lookup error leaves pages out (never surface ungated).
     let supplemental_pages = if supplemental_pages.is_some() || req.query == "recent context" {
         supplemental_pages
@@ -3838,7 +3838,7 @@ mod partition_pages_tests {
 /// page-channel supplies nothing, so `partition_search_pages` leaves
 /// `supplemental_pages=None`. The handler then fetches + gates pages through
 /// the shared `select_visible_pages` visibility gate (space-scope + effective
-/// tier + confirmed/rank/cap) and surfaces them via the existing
+/// tier + rank/cap, confirmed weighted up) and surfaces them via the existing
 /// `supplemental_pages` wire field. Fail-CLOSED: any error leaves pages out.
 #[cfg(test)]
 mod search_quick_path_page_tests {

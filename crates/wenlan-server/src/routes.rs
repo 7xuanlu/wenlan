@@ -54,7 +54,7 @@ pub struct SearchResponse {
     pub results: Vec<wenlan_core::db::SearchResult>,
     pub took_ms: f64,
     /// Distilled pages surfaced through the shared `select_visible_pages`
-    /// visibility gate (space-scope → effective-tier → confirmed/rank/cap).
+    /// visibility gate (space-scope → effective-tier → rank/cap, confirmed weighted up).
     /// Absent when nothing passed the gate; mirrors `SearchMemoryResponse`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supplemental_pages: Option<Vec<wenlan_core::db::SearchResult>>,
@@ -269,7 +269,7 @@ async fn handle_search_inner(
     // Additive page path: surface gated distilled pages through the
     // `supplemental_pages` field, routed through the SAME shared
     // `select_visible_pages` visibility gate (space-scope → effective-tier →
-    // confirmed/rank/cap) used by /api/context and /api/memory/search. Resolve
+    // rank/cap, confirmed weighted up) used by /api/context and /api/memory/search. Resolve
     // caller trust from the `x-agent-name` header, fail-CLOSED to "unknown"
     // (mirror handle_context above). Skipped for the "recent context" sentinel.
     // Fail CLOSED: any lookup error leaves pages out (never surface ungated).

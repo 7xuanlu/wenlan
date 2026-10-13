@@ -159,10 +159,19 @@ pub fn filter_pages_by_source_overlap(
         .collect()
 }
 
-/// Select trusted pages for the assembled context block.
+/// How much a confirmed page's relevance counts against an unconfirmed one.
+/// Confirmation raises a page's rank; it is not a visibility gate. Pages are
+/// born unconfirmed and a manual edit returns a page to unconfirmed, so a
+/// gate would hide every page an AI client writes and every page the user
+/// edits from the very recall and context reads that should find them.
+const CONFIRMED_PAGE_WEIGHT: f64 = 1.25;
+
+/// Select pages for the assembled context block, ranked by relevance with
+/// confirmed pages weighted up by [`CONFIRMED_PAGE_WEIGHT`].
 ///
 /// `review_status == "confirmed"` means the page passed the distillation
-/// faithfulness gate, not that it was manually reviewed.
+/// faithfulness gate, not that it was manually reviewed. Callers can tell the
+/// two apart on the returned page.
 pub fn select_pages_for_context(
     pages: &[Page],
     search_result_source_ids: &std::collections::HashSet<String>,
@@ -174,7 +183,6 @@ pub fn select_pages_for_context(
     // comparison.
     let mut scored: Vec<(i64, usize, Page)> = pages
         .iter()
-        .filter(|page| page.review_status == "confirmed")
         .cloned()
         .map(|page| {
             let overlap = page
@@ -182,7 +190,12 @@ pub fn select_pages_for_context(
                 .iter()
                 .filter(|sid| search_result_source_ids.contains(sid.as_str()))
                 .count();
-            let bucket = ((page.relevance_score as f64) / 1e-6).round() as i64;
+            let weight = if page.review_status == "confirmed" {
+                CONFIRMED_PAGE_WEIGHT
+            } else {
+                1.0
+            };
+            let bucket = ((page.relevance_score as f64) * weight / 1e-6).round() as i64;
             (bucket, overlap, page)
         })
         .collect();
@@ -444,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn select_drops_unconfirmed() {
+    fn select_keeps_unconfirmed_pages() {
         let pages = vec![
             make_page_with("unconfirmed", &["m1"], 0.99, "unconfirmed"),
             make_page_with("confirmed", &["m2"], 0.10, "confirmed"),
@@ -452,6 +465,20 @@ mod tests {
         let search_ids: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
 
         let selected = select_pages_for_context(&pages, &search_ids, 3);
+
+        let ids: Vec<&str> = selected.iter().map(|page| page.id.as_str()).collect();
+        assert_eq!(ids, ["unconfirmed", "confirmed"]);
+    }
+
+    #[test]
+    fn select_weights_confirmed_pages_up() {
+        let pages = vec![
+            make_page_with("unconfirmed", &["m1"], 0.50, "unconfirmed"),
+            make_page_with("confirmed", &["m2"], 0.45, "confirmed"),
+        ];
+        let search_ids: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
+
+        let selected = select_pages_for_context(&pages, &search_ids, 1);
 
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].id, "confirmed");

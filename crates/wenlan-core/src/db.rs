@@ -31272,7 +31272,7 @@ impl MemoryDB {
             space: page.space,
             source_agent: None,
             confidence: None,
-            confirmed: None,
+            confirmed: Some(page.review_status == "confirmed"),
             stability: None,
             supersedes: None,
             summary: page.summary,
@@ -43982,7 +43982,7 @@ impl MemoryDB {
 
     /// The ONE shared page-visibility gate used by /api/context,
     /// /api/memory/search, and /api/search. Order: space-scope (pure) →
-    /// effective-tier (fail-closed) → confirmed/rank/cap. Returns at most `cap`
+    /// effective-tier (fail-closed) → rank (confirmed weighted up)/cap. Returns at most `cap`
     /// pages the caller may see.
     pub async fn select_visible_pages(
         &self,
