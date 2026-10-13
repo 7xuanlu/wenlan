@@ -234,9 +234,10 @@ test("docked tools resize the complete workspace and keep search usable across t
 
   await page.setViewportSize({ width: 1280, height: 900 });
   await expect(header.getByRole("textbox")).toHaveCount(0);
-  // Wide Wiki navigation owns the sidebar plus a 248px history lane;
+  // At 1280 the labelled sidebar leaves too little room for the history lane
+  // beside Info, so it starts hidden and the header keeps the sidebar's width;
   // note-group tools occupy their own header alongside it.
-  await expect.poll(async () => (await header.boundingBox())!.width).toBe(488);
+  await expect.poll(async () => (await header.boundingBox())!.width).toBe(240);
   const restoredFrame = (await frame.boundingBox())!;
   expect(restoredFrame.x + restoredFrame.width).toBeLessThanOrEqual(1280);
   expect(errors.pageErrors).toEqual([]);

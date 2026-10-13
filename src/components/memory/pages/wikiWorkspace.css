@@ -245,9 +245,27 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   letter-spacing: normal;
 }
 
-/* When Info and the list would leave the note too narrow, WikiWorkspace lets
-   the list give way until Info closes or the window has room again. */
+/* In a window too narrow for the list, Info and the note side by side, the
+   list starts hidden; the Notes button at the start of the tab strip docks it. */
 .wiki-workspace-body.is-list-yielded > .wiki-workspace-directory { display: none; }
+.wiki-workspace-list-toggle {
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 10px 0 0 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+}
+.wiki-workspace-list-toggle:hover,
+.wiki-workspace-list-toggle[aria-expanded="true"] { background: var(--mem-hover); color: var(--mem-text); }
+.wiki-workspace-list-toggle:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 1px; }
 /* The icon rail has no edge of its own; keep the list's line beside the note. */
 .memory-shell[data-sidebar-layout="icons"] .wiki-workspace-body.is-list-yielded {
   border-left: 1px solid color-mix(in srgb, var(--mem-border) 55%, transparent);

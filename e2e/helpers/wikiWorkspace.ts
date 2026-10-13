@@ -6,12 +6,10 @@ export async function showWikiFolders(page: Page) {
   const directory = page.locator(".wiki-workspace-directory");
   await expect(directory).toBeAttached();
   if (!(await directory.isVisible())) {
-    // Narrow windows use the Notes toggle. Wider ones hide the list only while
-    // Info has taken its room, and Wiki brings it back.
-    const toggle = page.locator(".wiki-workspace-folders-toggle");
-    if (await toggle.isVisible()) await toggle.click();
-    else await page.getByRole("navigation", { name: /^(Primary navigation|主要導覽|主要导航|主导航)$/ })
-      .getByRole("button", { name: "Wiki", exact: true }).click();
+    // Narrow windows use the Notes dropdown; windows too narrow for the list
+    // beside Info dock it from the Notes button in the tab strip.
+    const dropdown = page.locator(".wiki-workspace-folders-toggle");
+    await (await dropdown.isVisible() ? dropdown : page.locator(".wiki-workspace-list-toggle")).click();
   }
   await expect(directory).toBeVisible();
   await directory.getByRole("combobox").selectOption("folders");

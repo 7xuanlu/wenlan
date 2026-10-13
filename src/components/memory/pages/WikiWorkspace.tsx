@@ -13,8 +13,10 @@ import "./wikiWorkspace.css";
 
 /** The docked list's border-box width plus its inset; see wikiWorkspace.css. */
 const NOTE_LIST_WIDTH = 248;
-/** With Info open, the list stays docked only while the note keeps this much room. */
-const MIN_NOTE_LANE = 680;
+/** Info's default width beside the note. */
+const INFO_WIDTH = 320;
+/** The note keeps at least this much room beside the list and Info. */
+const MIN_NOTE_LANE = 600;
 /** Matches the wiki-main container query that turns the list into a dropdown. */
 const NARROW_WORKSPACE_WIDTH = 900;
 
@@ -41,9 +43,6 @@ export interface WikiWorkspaceProps {
   readonly onCreationFolderPathChange?: (path: string | null) => void;
   readonly onOpenDraft: (draftId: string, space: string | null) => void;
   readonly onOpenPage: (page: Page) => void;
-  /** Increments to bring back a list that gave way to Info, closing Info. */
-  readonly noteListRestoreRequest?: number;
-  readonly onNoteListYieldedChange?: (yielded: boolean) => void;
 }
 
 export function WikiWorkspace({
@@ -69,55 +68,45 @@ export function WikiWorkspace({
   onCreationFolderPathChange,
   onOpenDraft,
   onOpenPage,
-  noteListRestoreRequest = 0,
-  onNoteListYieldedChange,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
+  const id = useId();
   const [folderOpen, setFolderOpen] = useState(false);
-  // The list and Info share the room beside the note. When both would leave
-  // the note narrower than MIN_NOTE_LANE, Info (the one just opened) keeps its
-  // place and the list gives way until Info closes or the window has room.
-  const [listYielded, setListYielded] = useState(false);
-  const listYieldedRef = useRef(listYielded);
-  listYieldedRef.current = listYielded;
+  // When the window is too narrow for the list, Info and a comfortable note
+  // side by side, the list starts hidden and a Notes button at the start of
+  // the tab strip docks it on request. Opening or closing Info never changes it.
+  const [listCrowded, setListCrowded] = useState(false);
+  const [listRequested, setListRequested] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const inspectorCloser = useRef<(() => void) | null>(null);
   useEffect(() => {
     const root = workspaceRef.current;
     if (!root) return;
-    let frame = 0;
     const measure = () => {
-      frame = 0;
       const width = root.getBoundingClientRect().width;
-      const primary = root.querySelector<HTMLElement>(".wiki-primary-note-group");
-      const lane = primary?.querySelector<HTMLElement>(".note-group-content")?.getBoundingClientRect().width ?? 0;
-      const infoOpen = Boolean(primary?.querySelector(".page-info-drawer-group-overlay"));
-      // Two note groups side by side were chosen narrower; the list stays put.
-      const split = Boolean(root.querySelector(".wiki-workspace-reading.is-split"));
-      const besideList = listYieldedRef.current ? lane - NOTE_LIST_WIDTH : lane;
-      const yielded = width > NARROW_WORKSPACE_WIDTH && !split && infoOpen && lane > 0 && besideList < MIN_NOTE_LANE;
-      setListYielded(yielded);
+      const crowded = width > NARROW_WORKSPACE_WIDTH && width - NOTE_LIST_WIDTH - INFO_WIDTH < MIN_NOTE_LANE;
+      setListCrowded(crowded);
+      if (!crowded) setListRequested(false);
     };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
     measure();
-    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
     resize?.observe(root);
-    // Info opens, closes and resizes inside the note group, not on the root.
-    const mutations = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
-    mutations?.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
-    return () => {
-      if (frame) cancelAnimationFrame(frame);
-      resize?.disconnect();
-      mutations?.disconnect();
-    };
+    return () => resize?.disconnect();
   }, []);
-  useEffect(() => { onNoteListYieldedChange?.(listYielded); }, [listYielded, onNoteListYieldedChange]);
-  const handledRestoreRef = useRef(noteListRestoreRequest);
-  useEffect(() => {
-    if (handledRestoreRef.current === noteListRestoreRequest) return;
-    handledRestoreRef.current = noteListRestoreRequest;
-    inspectorCloser.current?.();
-  }, [noteListRestoreRequest]);
+  // Two note groups side by side were chosen narrower; the list stays put.
+  const listHidden = listCrowded && !listRequested && !secondaryOpen;
+  const listToggle = listCrowded && !secondaryOpen ? (
+    <button
+      type="button"
+      className="wiki-workspace-list-toggle"
+      aria-controls={`${id}-directory`}
+      aria-expanded={!listHidden}
+      aria-label={t("sidebar.notes")}
+      title={t("sidebar.notes")}
+      onClick={() => setListRequested(requested => !requested)}
+    >
+      <Folder aria-hidden="true" size={16} />
+    </button>
+  ) : null;
   const [localInventoryMode, setLocalInventoryMode] = useState<WikiInventoryMode>(readWikiInventoryMode);
   const inventoryMode = controlledInventoryMode ?? localInventoryMode;
   const [creationFolderPath, reportCreationFolderPath] = useState<string | null>(null);
@@ -126,7 +115,6 @@ export function WikiWorkspace({
   }, [creationFolderPath, inventoryMode, onCreationFolderPathChange]);
   const [canCreateFolder, setCanCreateFolder] = useState(false);
   const createFormRef = useRef<(() => void) | null>(null);
-  const id = useId();
   const reportCanCreateFolder = useCallback((available: boolean) => {
     setCanCreateFolder(current => current === available ? current : available);
   }, []);
@@ -176,7 +164,7 @@ export function WikiWorkspace({
         <Folder aria-hidden="true" size={16} />
         <span>{t("sidebar.notes")}</span>
       </button>
-      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${listYielded ? " is-list-yielded" : ""}`}>
+      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${listHidden ? " is-list-yielded" : ""}`}>
         <aside id={`${id}-directory`} className="wiki-workspace-directory">
           <div className="wiki-workspace-mode-row">
             <label className="wiki-workspace-mode">
@@ -231,7 +219,7 @@ export function WikiWorkspace({
         </aside>
         <div className={`wiki-workspace-reading${secondaryOpen ? " is-split" : ""}`}>
           <div className={`wiki-primary-note-group${fullBleed ? " is-full-bleed" : ""}`}>
-            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus} inspectorCloser={inspectorCloser}>
+            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={listToggle ? <>{listToggle}{tabs}</> : tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>
               {children}
             </NoteGroupFrame>
           </div>

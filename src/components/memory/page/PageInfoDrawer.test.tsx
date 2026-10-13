@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { StrictMode, useEffect, useState } from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import PageInfoDrawer from "./PageInfoDrawer";
@@ -89,26 +89,6 @@ function GroupExpandableInspectorHarness() {
 }
 
 describe("PageInfoDrawer", () => {
-  it("lets its note group close it while open, so the workspace can make room", async () => {
-    const inspectorCloser = { current: null as (() => void) | null };
-    function GroupHarness() {
-      const [open, setOpen] = useState(true);
-      return (
-        <NoteGroupFrame id="primary" label="Central notes" tabs={<button type="button">Note tab</button>} inspectorCloser={inspectorCloser}>
-          <PageInfoDrawer docked inspector closeLabel="Close inspector" onClose={() => setOpen(false)} open={open} title="Note inspector">
-            <p>Info</p>
-          </PageInfoDrawer>
-        </NoteGroupFrame>
-      );
-    }
-    render(<GroupHarness />);
-    expect(await screen.findByText("Info")).toBeInTheDocument();
-    expect(inspectorCloser.current).toBeTypeOf("function");
-    await act(async () => inspectorCloser.current?.());
-    expect(screen.queryByText("Info")).toBeNull();
-    expect(inspectorCloser.current).toBeNull();
-  });
-
   it.each([true, false])("preserves reader focus only for automatic docked context (wide=%s)", (wide) => {
     const original = window.matchMedia;
     window.matchMedia = vi.fn().mockReturnValue({ matches: wide, addEventListener: vi.fn(), removeEventListener: vi.fn() });

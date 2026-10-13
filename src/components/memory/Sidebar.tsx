@@ -22,8 +22,6 @@ interface SidebarProps {
   readonly onNavigateActivity?: () => void;
   readonly activityCurrent?: boolean;
   readonly onNavigatePages?: () => void;
-  /** The Wiki note list gave way to Info; Wiki then brings it back. */
-  readonly noteListHidden?: boolean;
   readonly onNavigateSettings?: () => void;
   readonly onNavigateSources?: () => void;
   readonly onNavigateSpaces?: (create: boolean) => void;
@@ -66,7 +64,6 @@ export default function Sidebar({
   onNavigateActivity,
   activityCurrent = false,
   onNavigatePages,
-  noteListHidden = false,
   onNavigateSettings,
   onNavigateSources,
   onNavigateSpaces = () => {},
@@ -169,7 +166,6 @@ export default function Sidebar({
             onNavigatePages={closeAfterNavigation(onNavigatePages, closeOverlay)}
             onNavigateSources={closeAfterNavigation(onNavigateSources, closeOverlay)}
             onNavigateSpaces={closeAfterNavigation(onNavigateSpaces, closeOverlay)}
-            pagesHint={noteListHidden ? t("sidebar.showNoteList") : undefined}
           />
         </div>
         <div className={`notes-rail-utilities${compact ? " notes-rail-utilities--icons" : ""}`}>

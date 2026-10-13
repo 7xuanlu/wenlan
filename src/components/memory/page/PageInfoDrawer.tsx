@@ -128,13 +128,6 @@ export default function PageInfoDrawer({ open, focusOnOpen = true, returnFocusRe
   const triggerRef = useRef<HTMLElement | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
-  const inspectorCloser = noteGroup?.inspectorCloser;
-  useEffect(() => {
-    if (!open || !inspectorCloser) return;
-    const close = () => onCloseRef.current();
-    inspectorCloser.current = close;
-    return () => { if (inspectorCloser.current === close) inspectorCloser.current = null; };
-  }, [open, inspectorCloser]);
   const closeFromResize = () => {
     const active = document.activeElement;
     const target = returnTarget(returnFocusRef, triggerRef.current);

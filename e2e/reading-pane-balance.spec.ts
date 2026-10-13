@@ -94,23 +94,20 @@ for (const cfg of [
     await balancedStart(".page-detail-document");
     expect(await titleAndTools(".page-detail-document", ".page-document-editor--title .cm-line:first-child", ".page-detail-actions-menu-trigger")).toEqual(headingType);
     await capture("wiki-info-closed");
+    // Only the window width decides whether the list shows; Info never does.
+    const directory = page.locator(".wiki-workspace-directory");
+    const listShown = await directory.isVisible();
     await page.getByRole("button", { name: t.pageInspector.open, exact: true }).click();
     await expect(pane).toBeVisible();
     expect((await pane.boundingBox())!.width).toBe(320);
     await readable(".page-detail-document", ".note-group-content");
     expect(await page.locator(".page-detail .cm-line:not(.cm-writing-heading)").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
     await balancedStart(".page-detail-document");
-    // The list stays beside Info only while the note keeps 680px; otherwise it
-    // gives way, and Wiki brings it back by closing Info.
-    const directory = page.locator(".wiki-workspace-directory");
-    const listBesideInfo = cfg.width === 1440 && cfg.mode === "icons";
-    await expect(directory).toBeVisible({ visible: listBesideInfo });
-    expect((await page.locator(".page-detail-document").boundingBox())!.width).toBeGreaterThanOrEqual(680);
+    await expect(directory).toBeVisible({ visible: listShown });
     await capture("wiki-info-open");
-    if (listBesideInfo) await pane.locator(".page-info-drawer-close").click();
-    else await page.getByRole("navigation", { name: "Primary navigation", exact: true }).getByRole("button", { name: t.sidebar.pages, exact: true }).click();
+    await pane.locator(".page-info-drawer-close").click();
     await expect(pane).toHaveCount(0);
-    await expect(directory).toBeVisible();
+    await expect(directory).toBeVisible({ visible: listShown });
     await expect(page.locator(".page-detail .cm-content")).toBeVisible();
     await readable(".page-detail-document", ".note-group-content");
     expect(Math.abs((await page.locator(".page-detail-document").boundingBox())!.x - wikiStart)).toBeLessThanOrEqual(1);
