@@ -41,7 +41,8 @@ for (const cfg of [
     }
     async function balancedStart(selector: string) {
       // The column centres in its lane, settling one frame after a side
-      // column opens or closes.
+      // column opens or closes and once the rail finishes folding.
+      await expect(page.locator(".memory-shell[data-sidebar-auto-transition]")).toHaveCount(0);
       await expect.poll(() => page.locator(selector).evaluate(el => {
         const frame = el.getBoundingClientRect();
         const lane = el.parentElement!;
@@ -97,16 +98,32 @@ for (const cfg of [
     // Info and the note list open and close independently.
     const directory = page.locator(".wiki-workspace-directory");
     const listShown = await directory.isVisible();
+    const shell = page.locator(".memory-shell");
+    await expect(shell).toHaveAttribute("data-sidebar-layout", cfg.mode);
     await page.getByRole("button", { name: t.pageInspector.open, exact: true }).click();
     await expect(pane).toBeVisible();
+    // Labels fold to icons while the rail, list, Info and a 600px note do not fit.
+    const folds = cfg.mode === "labels" && cfg.width < 240 + 248 + 320 + 600;
+    await expect(shell).toHaveAttribute("data-sidebar-layout", folds ? "icons" : cfg.mode);
+    await expect(page.locator(".memory-shell[data-sidebar-auto-transition]")).toHaveCount(0);
     expect((await pane.boundingBox())!.width).toBe(320);
     await readable(".page-detail-document", ".note-group-content");
     expect(await page.locator(".page-detail .cm-line:not(.cm-writing-heading)").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
     await balancedStart(".page-detail-document");
     await expect(directory).toBeVisible({ visible: listShown });
     await capture("wiki-info-open");
+    if (folds) {
+      // The rail toggle brings the labels back while Info stays open.
+      await page.locator("[data-sidebar-toggle]").click();
+      await expect(shell).toHaveAttribute("data-sidebar-layout", "labels");
+      await expect(pane).toBeVisible();
+      await expect(page.locator(".memory-shell[data-sidebar-auto-transition]")).toHaveCount(0);
+      await readable(".page-detail-document", ".note-group-content");
+    }
     await pane.locator(".page-info-drawer-close").click();
     await expect(pane).toHaveCount(0);
+    await expect(shell).toHaveAttribute("data-sidebar-layout", cfg.mode);
+    await expect(page.locator(".memory-shell[data-sidebar-auto-transition]")).toHaveCount(0);
     await expect(directory).toBeVisible({ visible: listShown });
     await expect(page.locator(".page-detail .cm-content")).toBeVisible();
     await readable(".page-detail-document", ".note-group-content");

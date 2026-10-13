@@ -9,6 +9,7 @@ import { RecentNotesPanel } from "./RecentNotesPanel";
 import { WikiFolderCreationContext } from "./WikiFolderCreationContext";
 import type { WikiInventoryScope } from "./pageInventory";
 import { NoteGroupFrame } from "./NoteGroupFrame";
+import { useReportWorkspaceDemand, WIKI_LIST_DOCKED_WIDTH } from "../navigation/workspaceDemand";
 import "./wikiWorkspace.css";
 
 export interface WikiWorkspaceProps {
@@ -71,6 +72,7 @@ export function WikiWorkspace({
   const [canCreateFolder, setCanCreateFolder] = useState(false);
   const createFormRef = useRef<(() => void) | null>(null);
   const id = useId();
+  useReportWorkspaceDemand("list", WIKI_LIST_DOCKED_WIDTH);
   const reportCanCreateFolder = useCallback((available: boolean) => {
     setCanCreateFolder(current => current === available ? current : available);
   }, []);

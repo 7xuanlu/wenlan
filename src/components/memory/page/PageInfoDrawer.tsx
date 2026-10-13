@@ -5,6 +5,7 @@ import { ArrowsIn, ArrowsOut, X } from "@phosphor-icons/react";
 import { WorkspaceNoteGroupContext, WorkspacePaneHostContext } from "../navigation/WorkspacePaneHost";
 import { clampRightSidebarWidth, readRightSidebarWidth, writeRightSidebarWidth } from "../navigation/rightSidebarPreferences";
 import { RightSidebarResizeHandle } from "../navigation/RightSidebarResizeHandle";
+import { useReportWorkspaceDemand } from "../navigation/workspaceDemand";
 import "./PageInfoDrawer.css";
 
 interface PageInfoDrawerProps {
@@ -149,6 +150,9 @@ export default function PageInfoDrawer({ open, focusOnOpen = true, returnFocusRe
     : 320);
   const baseWidth = committedWidth ?? defaultWidth;
   const displayWidth = previewWidth === 0 ? 0 : clampRightSidebarWidth(previewWidth ?? baseWidth, maxWidth);
+  // The shell weighs the preferred width, not the width this window allows,
+  // so folding the rail to make room does not change the answer.
+  useReportWorkspaceDemand("info", open && !expandedWorkspace && (hosted || groupOverlay) ? clampRightSidebarWidth(baseWidth, 600) : 0);
   const effectiveGroupWidth = groupWidth || noteGroup?.element?.getBoundingClientRect().width || 0;
   // Keep enough room for a readable selected note title, its close/menu
   // controls, the new-note button, and the global search action.
