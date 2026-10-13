@@ -54,6 +54,21 @@ for (const cfg of [
         expect(spacing.left / spacing.spare).toBeLessThanOrEqual(0.4);
       }
     }
+    async function notPastCentre(selector: string) {
+      const gaps = await page.locator(selector).evaluate(el => {
+        const frame = el.getBoundingClientRect();
+        const lane = el.parentElement!;
+        const box = lane.getBoundingClientRect();
+        const style = getComputedStyle(lane);
+        // The lane's content box, without its scrollbar.
+        const left = box.left + lane.clientLeft + parseFloat(style.paddingLeft);
+        const right = box.left + lane.clientLeft + lane.clientWidth - parseFloat(style.paddingRight);
+        return { leading: frame.left - left, trailing: right - frame.right };
+      });
+      // Squeezed by the folder list and Info, the column centres in what is
+      // left rather than keeping its origin and running into Info.
+      expect(gaps.leading).toBeLessThanOrEqual(gaps.trailing + 1);
+    }
     async function titleAndTools(frameSelector: string, titleSelector: string, toolsSelector?: string) {
       const frame = await page.locator(frameSelector).boundingBox();
       const title = page.locator(titleSelector).first();
@@ -78,13 +93,12 @@ for (const cfg of [
     const headingType = await titleAndTools(".source-document-page > .reading-document-frame", ".source-document-page .page-detail-title");
     const sourceType = await page.locator(".source-document-body p").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }));
     expect(sourceType).toEqual({ size: "15px", leading: "26.25px" });
-    const sourceStart = (await page.locator(".source-document-body").boundingBox())!.x;
+    await notPastCentre(".source-document-page > .reading-document-frame");
     const sourceOpenWidth = (await page.locator(".source-document-body").boundingBox())!.width;
     await capture("source-info-open");
     await pane.locator(".page-info-drawer-close").click();
     await expect(pane).toHaveCount(0);
     await readable(".source-document-page > .reading-document-frame", ".source-document-page");
-    expect(Math.abs((await page.locator(".source-document-body").boundingBox())!.x - sourceStart)).toBeLessThanOrEqual(1);
     expect((await page.locator(".source-document-body").boundingBox())!.width).toBeGreaterThanOrEqual(sourceOpenWidth);
     await balancedStart(".source-document-page > .reading-document-frame");
     await capture("source-info-closed");
@@ -102,7 +116,7 @@ for (const cfg of [
     expect((await pane.boundingBox())!.width).toBe(320);
     await readable(".page-detail-document", ".note-group-content");
     expect(await page.locator(".page-detail .cm-line:not(.cm-writing-heading)").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
-    expect(Math.abs((await page.locator(".page-detail-document").boundingBox())!.x - wikiStart)).toBeLessThanOrEqual(1);
+    await notPastCentre(".page-detail-document");
     await capture("wiki-info-open");
     await pane.locator(".page-info-drawer-close").click();
     await readable(".page-detail-document", ".note-group-content");
@@ -125,10 +139,10 @@ for (const cfg of [
         await titleAndTools(".memory-document-frame", ".memory-document-editor .cm-line:first-child", ".memory-detail-actions .page-detail-actions-menu-trigger");
         expect(await page.locator(".memory-document-editor .cm-line:first-child").evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
       }
+      await notPastCentre(kind === "memory" ? ".memory-document-frame" : ".entity-detail-dossier .page-detail-document");
       const start = (await reader.boundingBox())!.x;
       await capture(`${kind}-info-open`);
       await pane.locator(".page-info-drawer-close").click();
-      expect(Math.abs((await reader.boundingBox())!.x - start)).toBeLessThanOrEqual(1);
       await balancedStart(kind === "memory" ? ".memory-document-frame" : ".entity-detail-dossier .page-detail-document");
       await capture(`${kind}-info-closed`);
       await page.getByRole("button", { name: t.knowledgeContext.memoryPanel, exact: true }).click();

@@ -27,10 +27,14 @@
   display: flex;
   box-sizing: border-box;
   /* Reserve a useful line length even with the folder list and Info open.
-     Both bounds use the unobstructed lane, so toggling Info cannot move it. */
+     The first two bounds use the unobstructed lane, so toggling Info keeps the
+     origin where the lane has room. The last bound uses the lane actually
+     left: when the folder list and Info squeeze it, the column centres instead
+     of keeping its origin and running into Info. */
   --reading-leading-gutter: min(
     max(0px, calc((var(--reading-unobstructed-width, 100%) - var(--reading-anchor-width)) * var(--reading-leading-ratio))),
-    max(0px, calc(var(--reading-unobstructed-width, 100%) - var(--reading-info-width) - var(--reading-frame-min-width)))
+    max(0px, calc(var(--reading-unobstructed-width, 100%) - var(--reading-info-width) - var(--reading-frame-min-width))),
+    max(0px, calc((100% - var(--reading-frame-max-width)) / 2))
   );
   width: min(var(--reading-frame-max-width), calc(100% - var(--reading-leading-gutter)));
   margin-inline: var(--reading-leading-gutter) auto;
