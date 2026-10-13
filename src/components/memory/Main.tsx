@@ -66,6 +66,8 @@ import { ReviewEnvironmentBadge } from "./navigation/ReviewEnvironmentBadge";
 import QuickCaptureScrim from "./QuickCaptureScrim";
 import { useResponsiveSidebar } from "./navigation/useResponsiveSidebar";
 import { SidebarResizeHandle } from "./navigation/SidebarResizeHandle";
+import { useAutoCompactSidebar } from "./navigation/useAutoCompactSidebar";
+import { WorkspaceDemandContext } from "./navigation/workspaceDemand";
 import {
   readSidebarPreferences,
   writeSidebarPreferences,
@@ -837,7 +839,9 @@ export default function Main({
   const [sidebarPreferences, setSidebarPreferences] = useState<SidebarPreferences>(readSidebarPreferences);
   useEffect(() => writeSidebarPreferences(sidebarPreferences), [sidebarPreferences]);
   const [sidebarPreview, setSidebarPreview] = useState<SidebarPreferences | null>(null);
-  const effectiveSidebar = sidebarPreview ?? sidebarPreferences;
+  const autoSidebar = useAutoCompactSidebar(sidebarPreferences, view.kind !== "connect-agent");
+  const shownSidebarPreferences: SidebarPreferences = autoSidebar.compact ? { ...sidebarPreferences, mode: "icons" } : sidebarPreferences;
+  const effectiveSidebar = sidebarPreview ?? shownSidebarPreferences;
   const { query, setQuery, debouncedQuery, results, isLoading: memorySearchLoading, error: memorySearchError } = useSearch();
   const isWikiWorkspaceView = view.kind === "pages" || view.kind === "home" || view.kind === "page" || view.kind === "page-draft";
 
@@ -895,6 +899,10 @@ export default function Main({
 
   const toggleSidebar = () => {
     setSidebarPreview(null);
+    if (autoSidebar.compact) {
+      autoSidebar.keepExpanded();
+      return;
+    }
     setSidebarPreferences((current) => ({ ...current, visible: !current.visible }));
   };
   const activeNavigation = activeNavigationForView(view);
@@ -1166,9 +1174,11 @@ export default function Main({
     <WorkspaceReadingHostContext.Provider value={mainContentRef}>
     <WorkspacePaneHostContext.Provider value={workspacePaneHost}>
     <WorkspaceDocumentToolsHostContext.Provider value={documentToolsHost}>
+    <WorkspaceDemandContext.Provider value={autoSidebar.demand}>
     <div
       className="memory-shell h-screen w-full"
       data-sidebar-layout={sidebarLayout}
+      data-sidebar-auto-transition={autoSidebar.transitioning || undefined}
       data-note-workspace={isWikiWorkspaceView || undefined}
       inert={mobileSearchOpen || movingNote}
       style={{ backgroundColor: "var(--mem-bg)", color: "var(--mem-text)", "--workspace-labels-width": `${effectiveSidebar.width ?? 240}px` } as CSSProperties}
@@ -1185,7 +1195,7 @@ export default function Main({
         data-tauri-drag-region
       >
         {view.kind !== "connect-agent" && (
-          <SidebarToggleButton collapsed={sidebarCollapsed} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
+          <SidebarToggleButton collapsed={sidebarCollapsed || (!responsiveSidebar.isNarrow && autoSidebar.compact)} onToggle={responsiveSidebar.toggle} ref={sidebarToggleRef} />
         )}
         <div className="workspace-history-navigation" role="group" aria-label={t("main.historyNavigation")}>
           <button type="button" aria-label={t("main.back")} title={t("main.back")}
@@ -1225,7 +1235,7 @@ export default function Main({
       <SidebarResizeHandle
         key={view.kind}
         enabled={!responsiveSidebar.isNarrow && view.kind !== "connect-agent"}
-        preferences={sidebarPreferences}
+        preferences={shownSidebarPreferences}
         onPreview={setSidebarPreview}
         onCommit={setSidebarPreferences}
         onHidden={() => sidebarToggleRef.current?.focus()}
@@ -1625,6 +1635,7 @@ export default function Main({
       </SearchModal>
       <NoteTabDragProvider onDrop={dropNoteTab} disabled={movingNote || !isWikiWorkspaceView || mobileSearchOpen} />
     </div>
+    </WorkspaceDemandContext.Provider>
     </WorkspaceDocumentToolsHostContext.Provider>
     </WorkspacePaneHostContext.Provider>
     </WorkspaceReadingHostContext.Provider>
