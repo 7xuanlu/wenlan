@@ -22,6 +22,8 @@ interface SidebarProps {
   readonly onNavigateActivity?: () => void;
   readonly activityCurrent?: boolean;
   readonly onNavigatePages?: () => void;
+  /** Whether the note list is showing, while the Pages destination is open. */
+  readonly pagesPanelExpanded?: boolean;
   readonly onNavigateSettings?: () => void;
   readonly onNavigateSources?: () => void;
   readonly onNavigateSpaces?: (create: boolean) => void;
@@ -64,6 +66,7 @@ export default function Sidebar({
   onNavigateActivity,
   activityCurrent = false,
   onNavigatePages,
+  pagesPanelExpanded,
   onNavigateSettings,
   onNavigateSources,
   onNavigateSpaces = () => {},
@@ -164,6 +167,7 @@ export default function Sidebar({
             onNavigateGraph={closeAfterNavigation(onNavigateGraph, closeOverlay)}
             onNavigateLog={closeAfterNavigation(onNavigateLog, closeOverlay)}
             onNavigatePages={closeAfterNavigation(onNavigatePages, closeOverlay)}
+            pagesPanelExpanded={pagesPanelExpanded}
             onNavigateSources={closeAfterNavigation(onNavigateSources, closeOverlay)}
             onNavigateSpaces={closeAfterNavigation(onNavigateSpaces, closeOverlay)}
           />

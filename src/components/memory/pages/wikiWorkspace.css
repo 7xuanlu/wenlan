@@ -245,6 +245,25 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   letter-spacing: normal;
 }
 
+/* The Pages Rail icon closes the list. When the note beside it would get too
+   narrow (usually because Info is open) the list gives way first, and the icon
+   shows it over the note instead. WikiWorkspace sets these classes only above
+   the narrow breakpoint below. */
+.wiki-workspace-body { position: relative; }
+.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed) > .wiki-workspace-directory { display: none; }
+.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open > .wiki-workspace-directory {
+  position: absolute;
+  z-index: 60;
+  inset-block: 0;
+  left: 0;
+  display: flex;
+  margin: 0;
+  padding-left: 8px;
+  border-right: 1px solid var(--mem-border);
+  background: var(--workspace-sidebar-background, var(--mem-sidebar));
+  box-shadow: var(--mem-shadow-overlay);
+}
+
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
   .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
@@ -315,6 +334,23 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   .memory-shell[data-note-workspace] .memory-main-content--wiki { margin-top:-52px; }
   .memory-shell[data-note-workspace] .memory-workspace-header { width:calc(var(--workspace-sidebar-width) + 248px); }
   .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
+  /* Without the docked list, the titlebar controls keep their place and the
+     first note group's tabs start after them. */
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) {
+    --wiki-titlebar-controls-width: 220px;
+  }
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .memory-workspace-header {
+    width: max(var(--workspace-sidebar-width), var(--wiki-titlebar-controls-width));
+  }
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .wiki-primary-note-group .note-group-header {
+    padding-left: max(0px, calc(var(--wiki-titlebar-controls-width) - var(--workspace-sidebar-width)));
+  }
+  /* The shown-over list starts below the titlebar so its controls stay usable. */
+  .memory-shell[data-note-workspace] .wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open > .wiki-workspace-directory {
+    top: 52px;
+    padding-top: 12px;
+    border-top-right-radius: var(--workspace-radius);
+  }
 }
 
 .note-owner-notice { position:absolute; z-index:1200; bottom:24px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:12px; max-width:calc(100% - 32px); padding:10px 12px; border:1px solid var(--mem-border); border-radius:8px; background:var(--mem-surface); color:var(--mem-text); box-shadow:var(--mem-shadow-overlay); font:13px/1.5 var(--mem-font-body); }
