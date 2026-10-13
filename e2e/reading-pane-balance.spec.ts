@@ -40,19 +40,24 @@ for (const cfg of [
       expect(frame!.width).toBeGreaterThanOrEqual(460);
     }
     async function balancedStart(selector: string) {
-      const spacing = await page.locator(selector).evaluate(el => {
+      const geometry = await page.locator(selector).evaluate(el => {
         const frame = el.getBoundingClientRect();
-        const lane = el.parentElement!.getBoundingClientRect();
-        // Atomic documents establish the shared origin, even when a Wiki or
-        // file uses a longer line. Compare like origins, not unlike measures.
-        return { left: frame.left - lane.left, spare: lane.width - 624, width: lane.width };
+        const lane = el.parentElement!;
+        const box = lane.getBoundingClientRect();
+        const style = getComputedStyle(lane);
+        const left = box.left + lane.clientLeft + parseFloat(style.paddingLeft);
+        const width = lane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const viewport = document.documentElement.clientWidth;
+        return {
+          fits: (width - parseFloat(getComputedStyle(el).maxWidth)) / 2 >= Math.abs((viewport - (left + width) - left) / 2),
+          offCentre: frame.left + frame.width / 2 - viewport / 2,
+        };
       });
-      // Narrow lanes use their spare space for text; their minimum useful
-      // width and stable origin are checked separately by readable().
-      if (spacing.width >= 900) {
-        expect(spacing.left / spacing.spare).toBeGreaterThanOrEqual(0.15);
-        expect(spacing.left / spacing.spare).toBeLessThanOrEqual(0.4);
-      }
+      // Where the lane has room, the column sits on the window's centre, so
+      // side columns opening or closing never move the text. Otherwise it
+      // centres in the lane that is left.
+      if (geometry.fits) expect(Math.abs(geometry.offCentre)).toBeLessThanOrEqual(1);
+      else await notPastCentre(selector);
     }
     async function notPastCentre(selector: string) {
       const gaps = await page.locator(selector).evaluate(el => {
@@ -93,7 +98,7 @@ for (const cfg of [
     const headingType = await titleAndTools(".source-document-page > .reading-document-frame", ".source-document-page .page-detail-title");
     const sourceType = await page.locator(".source-document-body p").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }));
     expect(sourceType).toEqual({ size: "15px", leading: "26.25px" });
-    await notPastCentre(".source-document-page > .reading-document-frame");
+    await balancedStart(".source-document-page > .reading-document-frame");
     const sourceOpenWidth = (await page.locator(".source-document-body").boundingBox())!.width;
     await capture("source-info-open");
     await pane.locator(".page-info-drawer-close").click();
@@ -116,7 +121,7 @@ for (const cfg of [
     expect((await pane.boundingBox())!.width).toBe(320);
     await readable(".page-detail-document", ".note-group-content");
     expect(await page.locator(".page-detail .cm-line:not(.cm-writing-heading)").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
-    await notPastCentre(".page-detail-document");
+    await balancedStart(".page-detail-document");
     await capture("wiki-info-open");
     await pane.locator(".page-info-drawer-close").click();
     await readable(".page-detail-document", ".note-group-content");
@@ -139,7 +144,7 @@ for (const cfg of [
         await titleAndTools(".memory-document-frame", ".memory-document-editor .cm-line:first-child", ".memory-detail-actions .page-detail-actions-menu-trigger");
         expect(await page.locator(".memory-document-editor .cm-line:first-child").evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
       }
-      await notPastCentre(kind === "memory" ? ".memory-document-frame" : ".entity-detail-dossier .page-detail-document");
+      await balancedStart(kind === "memory" ? ".memory-document-frame" : ".entity-detail-dossier .page-detail-document");
       const start = (await reader.boundingBox())!.x;
       await capture(`${kind}-info-open`);
       await pane.locator(".page-info-drawer-close").click();

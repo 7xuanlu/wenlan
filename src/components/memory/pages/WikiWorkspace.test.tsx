@@ -39,12 +39,10 @@ describe("WikiWorkspace", () => {
     const host = document.createElement("div");
     document.body.append(host);
     const props = { onBrowse: vi.fn(), onCreatePage: vi.fn(), onOpenDraft: vi.fn(), onOpenPage: vi.fn(), sidebarPanelHost: host };
-    const { container, rerender } = render(<WikiWorkspace {...props}><textarea /></WikiWorkspace>);
+    const { container } = render(<WikiWorkspace {...props}><textarea /></WikiWorkspace>);
     expect(host.querySelector(".wiki-workspace-directory--sidebar")).not.toBeNull();
     expect(container.querySelector(".wiki-workspace-directory")).toBeNull();
     expect(container.querySelector(".wiki-workspace-folders-toggle")).toBeNull();
-    rerender(<WikiWorkspace {...props} noteListToggleRequest={1}><textarea /></WikiWorkspace>);
-    expect(host.querySelector(".wiki-workspace-directory")).toBeNull();
     host.remove();
   });
   it("defaults to recent notes and switches modes without remounting the active editor", () => {

@@ -36,8 +36,13 @@
     max(0px, calc(var(--reading-unobstructed-width, 100%) - var(--reading-info-width) - var(--reading-frame-min-width))),
     max(0px, calc((100% - var(--reading-frame-max-width)) / 2))
   );
-  width: min(var(--reading-frame-max-width), calc(100% - var(--reading-leading-gutter)));
-  margin-inline: var(--reading-leading-gutter) auto;
+  /* DetailReadingFrame sets the skew only when the column, centred on the
+     window, still fits in this lane. Otherwise the gutter above applies. */
+  --reading-window-gutter: calc((100% - var(--reading-frame-max-width)) / 2 + var(--reading-window-skew));
+  --reading-start: var(--reading-window-gutter, var(--reading-leading-gutter));
+  width: min(var(--reading-frame-max-width), calc(100% - var(--reading-start)));
+  max-width: var(--reading-frame-max-width);
+  margin-inline: var(--reading-start) auto;
   padding: var(--reading-frame-padding-block) var(--reading-frame-padding-inline) var(--reading-frame-padding-block-end);
   flex-direction: column;
   gap: 22px;

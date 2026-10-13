@@ -17,6 +17,8 @@ import "./wikiWorkspace.css";
 const NOTE_LIST_WIDTH = 248;
 /** The list gives way before the note beside it gets narrower than this. */
 const MIN_LANE_BESIDE_NOTE_LIST = 720;
+/** With Info open as well, both side columns stay only when the note keeps its full measure. */
+const MIN_LANE_BETWEEN_SIDE_COLUMNS = 794;
 /** Matches the wiki-main container query that turns the list into a dropdown. */
 const NARROW_WORKSPACE_WIDTH = 900;
 
@@ -84,7 +86,7 @@ export function WikiWorkspace({
   const workspaceRef = useRef<HTMLDivElement>(null);
   const directoryRef = useRef<HTMLElement>(null);
   const inSidebar = sidebarPanelHost !== null;
-  const docked = listOpen && (inSidebar || (!layout.narrow && !layout.squeezed));
+  const docked = inSidebar || (listOpen && !layout.narrow && !layout.squeezed);
   const dockedRef = useRef(docked);
   dockedRef.current = docked;
   // The note keeps a comfortable line first: with Info open the list gives way,
@@ -100,7 +102,9 @@ export function WikiWorkspace({
       const content = root.querySelector<HTMLElement>(".wiki-primary-note-group .note-group-content");
       const lane = content?.getBoundingClientRect().width ?? 0;
       const besideList = dockedRef.current ? lane : lane - NOTE_LIST_WIDTH;
-      const squeezed = !narrow && lane > 0 && besideList < MIN_LANE_BESIDE_NOTE_LIST;
+      const infoOpen = root.querySelector(".page-info-drawer-group-overlay-body-reserved") !== null;
+      const minimum = infoOpen ? MIN_LANE_BETWEEN_SIDE_COLUMNS : MIN_LANE_BESIDE_NOTE_LIST;
+      const squeezed = !narrow && lane > 0 && besideList < minimum;
       setLayout(current => current.narrow === narrow && current.squeezed === squeezed ? current : { narrow, squeezed });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -267,7 +271,7 @@ export function WikiWorkspace({
         <span>{t("sidebar.notes")}</span>
       </button>}
       <div className={`wiki-workspace-body${inSidebar ? " is-list-in-sidebar" : `${folderOpen ? " is-folder-open" : ""}${!layout.narrow && !listOpen ? " is-list-closed" : ""}${layout.squeezed ? " is-list-squeezed" : ""}`}`}>
-        {inSidebar ? (listOpen ? createPortal(directory, sidebarPanelHost) : null) : directory}
+        {inSidebar ? createPortal(directory, sidebarPanelHost) : directory}
         <div className={`wiki-workspace-reading${secondaryOpen ? " is-split" : ""}`}>
           <div className={`wiki-primary-note-group${fullBleed ? " is-full-bleed" : ""}`}>
             <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>

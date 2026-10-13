@@ -779,9 +779,10 @@ export default function Main({
   const [noteListVisible, setNoteListVisible] = useState(false);
   const [sidebarPanelHost, setSidebarPanelHost] = useState<HTMLDivElement | null>(null);
   const navigateNotes = () => {
-    // Inside the Wiki the Pages entry owns the note list: it opens and closes
-    // it rather than leaving the note. An open search closes first.
-    if (isWikiWorkspaceView) {
+    // On the icon rail, inside the Wiki, the Pages icon owns the note list: it
+    // opens and closes it rather than leaving the note. With labels the list
+    // lives in the sidebar, so Wiki keeps navigating. An open search closes first.
+    if (isWikiWorkspaceView && effectiveSidebar.mode === "icons") {
       if (query || pendingDraftSearchQuery || mobileSearchOpen) afterNavigationGuards(dismissSearch);
       else setNoteListToggleRequest(request => request + 1);
       return;
@@ -1271,7 +1272,7 @@ export default function Main({
             onNavigateActivity={() => navigateTo({ kind: "activity" })}
             activityCurrent={view.kind === "activity"}
             onNavigatePages={navigateNotes}
-            pagesPanelExpanded={isWikiWorkspaceView ? noteListVisible : undefined}
+            pagesPanelExpanded={isWikiWorkspaceView && effectiveSidebar.mode === "icons" ? noteListVisible : undefined}
             onPanelHost={setSidebarPanelHost}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
