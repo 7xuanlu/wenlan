@@ -261,7 +261,17 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   padding-left: 8px;
   border-right: 1px solid var(--mem-border);
   background: var(--workspace-sidebar-background, var(--mem-sidebar));
-  box-shadow: var(--mem-shadow-overlay);
+  /* The hairline carries the edge; the shadow only lifts it off the note. */
+  box-shadow: 8px 0 16px -12px rgb(0 0 0 / 18%);
+}
+/* The note under the flyout fades, so it reads as covered, not cut off. */
+.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open::after {
+  content: "";
+  position: absolute;
+  z-index: 59;
+  inset: 0;
+  background: color-mix(in srgb, var(--workspace-document-background, var(--mem-bg)) 62%, transparent);
+  pointer-events: none;
 }
 
 /* Inside the labelled sidebar the list is part of the navigation column. */
@@ -273,6 +283,22 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   border-right: 0;
 }
 .memory-shell[data-note-workspace] .wiki-workspace-directory.wiki-workspace-directory--sidebar { padding-top: 8px; }
+/* Rows share the navigation's two edges: hover boxes from 5px, icons in its
+   22px glyph column and titles where its labels start. */
+.wiki-workspace-directory--sidebar > .notes-list-panel { padding-inline: 5px; }
+.wiki-workspace-directory--sidebar .wiki-workspace-mode-row { padding-left: 12px; }
+.wiki-workspace-directory--sidebar .notes-list-state { margin-inline-start: 15px; }
+.wiki-workspace-directory--sidebar :is(.notes-inventory-page, .notes-inventory-scope, .wiki-recent-note) {
+  padding-left: 15px;
+  gap: 14px;
+}
+/* A shadow at the bottom edge shows there are more notes below; it is
+   covered once the list is scrolled to its end. */
+.wiki-workspace-directory--sidebar .notes-list-scroll {
+  background:
+    linear-gradient(transparent, var(--workspace-sidebar-background, var(--mem-sidebar)) 70%) center bottom / 100% 28px no-repeat local,
+    linear-gradient(transparent, color-mix(in srgb, var(--mem-text) 6%, transparent)) center bottom / 100% 12px no-repeat scroll;
+}
 
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
