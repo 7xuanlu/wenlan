@@ -10,7 +10,9 @@ export async function infoFixtures(page:Page){
 }
 async function boot(page:Page,width=1440){await page.setViewportSize({width,height:900});const errors=collectBrowserErrors(page);const controller=await installTauriMock(page,{locale:'en',rawActions:[]});await infoFixtures(page);await page.goto('/');await openWikiNote(page,'Fixture architecture');await expect(page.getByRole('textbox',{name:'Page editor',exact:true})).toBeVisible();return {errors,controller};}
 for(const tab of ['Info','Mind map'])test(`preserve ${tab} across inventory and central tabs`,async({page},info)=>{
- const {errors}=await boot(page);await openWikiNote(page,'Why fixtures stay deterministic');await openWikiNote(page,'Fixture architecture');
+ // Wide enough for the note list to stay beside the open inspector, Mind
+ // map's 460px included.
+ const {errors}=await boot(page,1700);await openWikiNote(page,'Why fixtures stay deterministic');await openWikiNote(page,'Fixture architecture');
  await page.getByRole('button',{name:'Open note sidebar',exact:true}).click();await page.getByRole('tab',{name:tab,exact:true}).click();
  await openWikiNote(page,'Why fixtures stay deterministic');await expect(page.getByRole('tab',{name:tab,exact:true})).toHaveAttribute('aria-selected','true');await expect(page.getByRole('button',{name:'Close note sidebar',exact:true})).toBeVisible();
  if(tab==='Mind map')await expect(page.getByRole('region',{name:'Canvas for Why fixtures stay deterministic',exact:true})).toBeVisible();
