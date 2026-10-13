@@ -95,7 +95,8 @@ export function WikiWorkspace({
     let frame = 0;
     const measure = () => {
       frame = 0;
-      const narrow = root.getBoundingClientRect().width <= NARROW_WORKSPACE_WIDTH;
+      const width = root.getBoundingClientRect().width;
+      const narrow = width > 0 && width <= NARROW_WORKSPACE_WIDTH;
       const content = root.querySelector<HTMLElement>(".wiki-primary-note-group .note-group-content");
       const lane = content?.getBoundingClientRect().width ?? 0;
       const besideList = dockedRef.current ? lane : lane - NOTE_LIST_WIDTH;

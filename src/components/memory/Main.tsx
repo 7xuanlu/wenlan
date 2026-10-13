@@ -779,8 +779,11 @@ export default function Main({
   const [noteListVisible, setNoteListVisible] = useState(false);
   const [sidebarPanelHost, setSidebarPanelHost] = useState<HTMLDivElement | null>(null);
   const navigateNotes = () => {
+    // Inside the Wiki the Pages entry owns the note list: it opens and closes
+    // it rather than leaving the note. An open search closes first.
     if (isWikiWorkspaceView) {
-      setNoteListToggleRequest(request => request + 1);
+      if (query || pendingDraftSearchQuery || mobileSearchOpen) afterNavigationGuards(dismissSearch);
+      else setNoteListToggleRequest(request => request + 1);
       return;
     }
     if (activeNavigationForView(view) !== "pages" && lastNoteViewRef.current) {

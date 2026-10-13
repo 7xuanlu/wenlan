@@ -112,6 +112,7 @@ vi.mock("./SettingsPage", () => ({ default: () => <div /> }));
 vi.mock("../SetupWizard", () => ({ SetupWizard: () => <div /> }));
 vi.mock("./Sidebar", () => ({
   default: (props: {
+    onNavigateLog?: () => void;
     onNavigatePages: () => void;
     onOpenSearch?: (trigger: HTMLButtonElement) => void;
     searchDisabled?: boolean;
@@ -128,6 +129,9 @@ vi.mock("./Sidebar", () => ({
       </button>
       <button type="button" onClick={props.onNavigatePages}>
         Sidebar Wiki
+      </button>
+      <button type="button" onClick={props.onNavigateLog}>
+        Sidebar Memories
       </button>
     </aside>
   ),
@@ -492,11 +496,11 @@ describe("Main published PageDetail navigation guards", () => {
     const { user } = renderMain();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
     await user.click(screen.getByRole("button", { name: "Start page save" }));
-    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Memories" }));
     expect(screen.getByText("Pending page")).toBeInTheDocument();
     expect(flushHarness.flush).toHaveBeenCalledOnce();
     await act(async () => settle(true));
-    expect(await screen.findByTestId("pages-overview")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Pending page")).toBeNull());
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
@@ -611,8 +615,7 @@ describe("Main published PageDetail navigation guards", () => {
   it("does not replay the consumed initial page after internal navigation", async () => {
     const { user } = renderMain();
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
-    await user.click(screen.getByRole("button", { name: "Open second page" }));
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
     expect(await screen.findByText("Second page")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Start page save" }));
@@ -719,7 +722,7 @@ describe("Main published PageDetail navigation guards", () => {
     expect(search).toHaveValue("");
     expect(confirmSpy).toHaveBeenCalledOnce();
 
-    await user.click(screen.getByRole("button", { name: "Sidebar Wiki" }));
+    await user.click(screen.getByRole("button", { name: "Sidebar Memories" }));
     expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(screen.getByText("Pending page")).toBeInTheDocument();
 
