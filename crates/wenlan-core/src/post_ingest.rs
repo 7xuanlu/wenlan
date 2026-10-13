@@ -1966,12 +1966,13 @@ mod tests {
             .generate_embeddings(&["new evidence for the ambient page".to_string()])
             .unwrap()
             .remove(0);
-        assert!(
+        assert_eq!(
             db.find_matching_page_scoped(Some(&entity_id), &embedding, 2.0, Some("work"), false)
                 .await
                 .unwrap()
-                .is_none(),
-            "dedup keeps its existing review gate"
+                .map(|page| page.id),
+            Some("ambient-growth-page".to_string()),
+            "dedup matches an unconfirmed page like growth does"
         );
         let provider = Arc::new(MutatingGrowthProvider {
             db: db.clone(),
@@ -2970,10 +2971,11 @@ mod tests {
     }
 
     /// The same post-reload recheck on the legacy `grow_page` entrypoint.
-    /// `grow_page` matches with `allow_user_edited = true`, so what bites there
-    /// is a page sent back for review: `review_status` leaves `confirmed` in the
-    /// match-to-reload window and the page stops being a dedup target. Mutation
-    /// check: delete the recheck and `grow_page` generates and writes anyway.
+    /// `grow_page` matches with `allow_user_edited = true` and dedup ignores
+    /// `review_status`, so what bites there is a page moved to another space in
+    /// the match-to-reload window: it stops being a dedup target for this
+    /// memory's space. Mutation check: delete the recheck and `grow_page`
+    /// generates and writes anyway.
     #[tokio::test]
     async fn grow_page_skips_a_page_that_stopped_matching_before_the_reload() {
         let (db, _dir) = test_db().await;
@@ -2986,7 +2988,7 @@ mod tests {
             "grow-recheck-page",
             &entity_id,
             "work",
-            "page before it left the confirmed set",
+            "page before it moved to another space",
         )
         .await;
         seed_page_growth_memory(
@@ -3035,7 +3037,7 @@ mod tests {
             parked_rx
                 .await
                 .expect("grow_page must reach the post-match pause");
-            db.set_page_review_status("grow-recheck-page", "unconfirmed")
+            db.set_page_workspace("grow-recheck-page", Some("personal"))
                 .await
                 .unwrap();
             go_tx.send(()).expect("grow_page must still be parked");
@@ -3044,14 +3046,14 @@ mod tests {
         let (grew, _) = tokio::join!(grow, unconfirm);
         assert!(
             !grew.unwrap(),
-            "a page that left the confirmed set must not be grown"
+            "a page that moved out of the memory's space must not be grown"
         );
         assert!(
             stub.captured_prompt.lock().unwrap().is_none(),
             "no prompt may be built for a page that stopped matching"
         );
         let page = db.get_page("grow-recheck-page").await.unwrap().unwrap();
-        assert_eq!(page.content, "page before it left the confirmed set");
+        assert_eq!(page.content, "page before it moved to another space");
     }
 
     /// Spec §5.1 (True source kinds): `grow_page`'s numbered-source list must
