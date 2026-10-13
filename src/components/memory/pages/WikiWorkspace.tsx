@@ -11,15 +11,6 @@ import type { WikiInventoryScope } from "./pageInventory";
 import { NoteGroupFrame } from "./NoteGroupFrame";
 import "./wikiWorkspace.css";
 
-/** The docked list's border-box width plus its inset; see wikiWorkspace.css. */
-const NOTE_LIST_WIDTH = 248;
-/** Info's default width beside the note. */
-const INFO_WIDTH = 320;
-/** The note keeps at least this much room beside the list and Info. */
-const MIN_NOTE_LANE = 600;
-/** Matches the wiki-main container query that turns the list into a dropdown. */
-const NARROW_WORKSPACE_WIDTH = 900;
-
 export interface WikiWorkspaceProps {
   readonly children: ReactNode;
   readonly tabs?: ReactNode;
@@ -70,43 +61,7 @@ export function WikiWorkspace({
   onOpenPage,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
-  const id = useId();
   const [folderOpen, setFolderOpen] = useState(false);
-  // When the window is too narrow for the list, Info and a comfortable note
-  // side by side, the list starts hidden and a Notes button at the start of
-  // the tab strip docks it on request. Opening or closing Info never changes it.
-  const [listCrowded, setListCrowded] = useState(false);
-  const [listRequested, setListRequested] = useState(false);
-  const workspaceRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const root = workspaceRef.current;
-    if (!root) return;
-    const measure = () => {
-      const width = root.getBoundingClientRect().width;
-      const crowded = width > NARROW_WORKSPACE_WIDTH && width - NOTE_LIST_WIDTH - INFO_WIDTH < MIN_NOTE_LANE;
-      setListCrowded(crowded);
-      if (!crowded) setListRequested(false);
-    };
-    measure();
-    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
-    resize?.observe(root);
-    return () => resize?.disconnect();
-  }, []);
-  // Two note groups side by side were chosen narrower; the list stays put.
-  const listHidden = listCrowded && !listRequested && !secondaryOpen;
-  const listToggle = listCrowded && !secondaryOpen ? (
-    <button
-      type="button"
-      className="wiki-workspace-list-toggle"
-      aria-controls={`${id}-directory`}
-      aria-expanded={!listHidden}
-      aria-label={t("sidebar.notes")}
-      title={t("sidebar.notes")}
-      onClick={() => setListRequested(requested => !requested)}
-    >
-      <Folder aria-hidden="true" size={16} />
-    </button>
-  ) : null;
   const [localInventoryMode, setLocalInventoryMode] = useState<WikiInventoryMode>(readWikiInventoryMode);
   const inventoryMode = controlledInventoryMode ?? localInventoryMode;
   const [creationFolderPath, reportCreationFolderPath] = useState<string | null>(null);
@@ -115,6 +70,7 @@ export function WikiWorkspace({
   }, [creationFolderPath, inventoryMode, onCreationFolderPathChange]);
   const [canCreateFolder, setCanCreateFolder] = useState(false);
   const createFormRef = useRef<(() => void) | null>(null);
+  const id = useId();
   const reportCanCreateFolder = useCallback((available: boolean) => {
     setCanCreateFolder(current => current === available ? current : available);
   }, []);
@@ -153,7 +109,7 @@ export function WikiWorkspace({
 
   return (
     <WikiFolderCreationContext.Provider value={folderCreationContext}>
-    <div className="wiki-workspace" ref={workspaceRef}>
+    <div className="wiki-workspace">
       <button
         type="button"
         className="wiki-workspace-folders-toggle"
@@ -164,7 +120,7 @@ export function WikiWorkspace({
         <Folder aria-hidden="true" size={16} />
         <span>{t("sidebar.notes")}</span>
       </button>
-      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${listHidden ? " is-list-yielded" : ""}`}>
+      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}`}>
         <aside id={`${id}-directory`} className="wiki-workspace-directory">
           <div className="wiki-workspace-mode-row">
             <label className="wiki-workspace-mode">
@@ -219,7 +175,7 @@ export function WikiWorkspace({
         </aside>
         <div className={`wiki-workspace-reading${secondaryOpen ? " is-split" : ""}`}>
           <div className={`wiki-primary-note-group${fullBleed ? " is-full-bleed" : ""}`}>
-            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={listToggle ? <>{listToggle}{tabs}</> : tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>
+            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>
               {children}
             </NoteGroupFrame>
           </div>

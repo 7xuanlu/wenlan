@@ -94,7 +94,7 @@ for (const cfg of [
     await balancedStart(".page-detail-document");
     expect(await titleAndTools(".page-detail-document", ".page-document-editor--title .cm-line:first-child", ".page-detail-actions-menu-trigger")).toEqual(headingType);
     await capture("wiki-info-closed");
-    // Only the window width decides whether the list shows; Info never does.
+    // Info and the note list open and close independently.
     const directory = page.locator(".wiki-workspace-directory");
     const listShown = await directory.isVisible();
     await page.getByRole("button", { name: t.pageInspector.open, exact: true }).click();

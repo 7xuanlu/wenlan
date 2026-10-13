@@ -5,12 +5,7 @@ import { expect, type Page } from "@playwright/test";
 export async function showWikiFolders(page: Page) {
   const directory = page.locator(".wiki-workspace-directory");
   await expect(directory).toBeAttached();
-  if (!(await directory.isVisible())) {
-    // Narrow windows use the Notes dropdown; windows too narrow for the list
-    // beside Info dock it from the Notes button in the tab strip.
-    const dropdown = page.locator(".wiki-workspace-folders-toggle");
-    await (await dropdown.isVisible() ? dropdown : page.locator(".wiki-workspace-list-toggle")).click();
-  }
+  if (!(await directory.isVisible())) await page.locator(".wiki-workspace-folders-toggle").click();
   await expect(directory).toBeVisible();
   await directory.getByRole("combobox").selectOption("folders");
   await expect(directory.locator(".notes-list-panel")).toBeVisible();

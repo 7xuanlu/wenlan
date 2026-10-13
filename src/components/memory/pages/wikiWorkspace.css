@@ -245,32 +245,6 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   letter-spacing: normal;
 }
 
-/* In a window too narrow for the list, Info and the note side by side, the
-   list starts hidden; the Notes button at the start of the tab strip docks it. */
-.wiki-workspace-body.is-list-yielded > .wiki-workspace-directory { display: none; }
-.wiki-workspace-list-toggle {
-  display: inline-flex;
-  flex: 0 0 32px;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  margin: 10px 0 0 12px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--mem-text-secondary);
-  cursor: pointer;
-}
-.wiki-workspace-list-toggle:hover,
-.wiki-workspace-list-toggle[aria-expanded="true"] { background: var(--mem-hover); color: var(--mem-text); }
-.wiki-workspace-list-toggle:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 1px; }
-/* The icon rail has no edge of its own; keep the list's line beside the note. */
-.memory-shell[data-sidebar-layout="icons"] .wiki-workspace-body.is-list-yielded {
-  border-left: 1px solid color-mix(in srgb, var(--mem-border) 55%, transparent);
-}
-
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
   .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
@@ -341,17 +315,6 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   .memory-shell[data-note-workspace] .memory-main-content--wiki { margin-top:-52px; }
   .memory-shell[data-note-workspace] .memory-workspace-header { width:calc(var(--workspace-sidebar-width) + 248px); }
   .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
-  /* Without the list, the titlebar controls keep their place and the first
-     note group's tabs start after them. */
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) {
-    --wiki-titlebar-controls-width: 220px;
-  }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) .memory-workspace-header {
-    width: max(var(--workspace-sidebar-width), var(--wiki-titlebar-controls-width));
-  }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) .wiki-primary-note-group .note-group-header {
-    padding-left: max(0px, calc(var(--wiki-titlebar-controls-width) - var(--workspace-sidebar-width)));
-  }
 }
 
 .note-owner-notice { position:absolute; z-index:1200; bottom:24px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:12px; max-width:calc(100% - 32px); padding:10px 12px; border:1px solid var(--mem-border); border-radius:8px; background:var(--mem-surface); color:var(--mem-text); box-shadow:var(--mem-shadow-overlay); font:13px/1.5 var(--mem-font-body); }
