@@ -1933,7 +1933,7 @@ mod distill_sweep_route_tests {
     }
 
     #[tokio::test]
-    async fn distill_with_no_model_and_no_clusters_hints_at_model_setup_not_more_memories() {
+    async fn distill_with_no_model_and_no_clusters_says_no_model_is_needed() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let emitter: Arc<dyn wenlan_core::events::EventEmitter> =
             Arc::new(wenlan_core::events::NoopEmitter);
@@ -1967,11 +1967,15 @@ mod distill_sweep_route_tests {
         let payload: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
 
         let hint = payload["hint"].as_str().expect("hint present");
+        // Clustering needs no model, so an empty pass on a no-model install
+        // asks for more related memories and only offers setup as a help.
         assert!(
-            hint.contains("wenlan setup"),
-            "with no model configured, the hint should point at setup, not more memories: {hint}"
+            hint.contains("Distilling does not need a model"),
+            "with no model configured, the hint must not make a model a prerequisite: {hint}"
         );
-        assert!(!hint.contains("Capture more related memories"));
+        assert!(hint.contains("Capture more related memories"), "{hint}");
+        assert!(hint.contains("wenlan setup"), "{hint}");
+        assert!(!hint.contains("before distilling"), "{hint}");
     }
 
     #[tokio::test]
