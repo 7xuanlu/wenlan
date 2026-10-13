@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { CaretDown, Folder, FolderPlus } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import type { Page } from "../../../lib/tauri";
@@ -15,10 +14,9 @@ import "./wikiWorkspace.css";
 
 /** The docked list's border-box width plus its inset; see wikiWorkspace.css. */
 const NOTE_LIST_WIDTH = 248;
-/** The list gives way before the note beside it gets narrower than this. */
-const MIN_LANE_BESIDE_NOTE_LIST = 720;
-/** With Info open as well, both side columns stay only when the note keeps its full measure. */
-const MIN_LANE_BETWEEN_SIDE_COLUMNS = 794;
+/** The list gives way (and opens as a flyout) before the note beside it, and
+ * beside Info when that is open, gets narrower than this. */
+const MIN_LANE_BESIDE_NOTE_LIST = 600;
 /** Matches the wiki-main container query that turns the list into a dropdown. */
 const NARROW_WORKSPACE_WIDTH = 900;
 
@@ -48,8 +46,6 @@ export interface WikiWorkspaceProps {
   /** Increments each time the Pages Rail icon is pressed while this workspace shows. */
   readonly noteListToggleRequest?: number;
   readonly onNoteListVisibleChange?: (visible: boolean) => void;
-  /** The labelled sidebar's panel; when set, the list renders there instead of beside the note. */
-  readonly sidebarPanelHost?: HTMLElement | null;
 }
 
 export function WikiWorkspace({
@@ -77,7 +73,6 @@ export function WikiWorkspace({
   onOpenPage,
   noteListToggleRequest = 0,
   onNoteListVisibleChange,
-  sidebarPanelHost = null,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
   const [folderOpen, setFolderOpen] = useState(false);
@@ -85,8 +80,7 @@ export function WikiWorkspace({
   const [layout, setLayout] = useState<{ narrow: boolean; squeezed: boolean }>({ narrow: false, squeezed: false });
   const workspaceRef = useRef<HTMLDivElement>(null);
   const directoryRef = useRef<HTMLElement>(null);
-  const inSidebar = sidebarPanelHost !== null;
-  const docked = inSidebar || (listOpen && !layout.narrow && !layout.squeezed);
+  const docked = listOpen && !layout.narrow && !layout.squeezed;
   const dockedRef = useRef(docked);
   dockedRef.current = docked;
   // The note keeps a comfortable line first: with Info open the list gives way,
@@ -102,9 +96,7 @@ export function WikiWorkspace({
       const content = root.querySelector<HTMLElement>(".wiki-primary-note-group .note-group-content");
       const lane = content?.getBoundingClientRect().width ?? 0;
       const besideList = dockedRef.current ? lane : lane - NOTE_LIST_WIDTH;
-      const infoOpen = root.querySelector(".page-info-drawer-group-overlay-body-reserved") !== null;
-      const minimum = infoOpen ? MIN_LANE_BETWEEN_SIDE_COLUMNS : MIN_LANE_BESIDE_NOTE_LIST;
-      const squeezed = !narrow && lane > 0 && besideList < minimum;
+      const squeezed = !narrow && lane > 0 && besideList < MIN_LANE_BESIDE_NOTE_LIST;
       setLayout(current => current.narrow === narrow && current.squeezed === squeezed ? current : { narrow, squeezed });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
@@ -126,7 +118,7 @@ export function WikiWorkspace({
   useEffect(() => {
     if (handledToggleRef.current === noteListToggleRequest) return;
     handledToggleRef.current = noteListToggleRequest;
-    if (!inSidebar && (layout.narrow || layout.squeezed)) {
+    if (layout.narrow || layout.squeezed) {
       setFolderOpen(open => !open);
       return;
     }
@@ -135,10 +127,10 @@ export function WikiWorkspace({
       writeNoteListOpen(!open);
       return !open;
     });
-  }, [noteListToggleRequest, inSidebar, layout.narrow, layout.squeezed]);
+  }, [noteListToggleRequest, layout.narrow, layout.squeezed]);
   const listVisible = docked || folderOpen;
   useEffect(() => { onNoteListVisibleChange?.(listVisible); }, [listVisible, onNoteListVisibleChange]);
-  const floating = !inSidebar && folderOpen && !layout.narrow && (!listOpen || layout.squeezed);
+  const floating = folderOpen && !layout.narrow && (!listOpen || layout.squeezed);
   useEffect(() => {
     if (!floating) return;
     const closeOutside = (event: PointerEvent) => {
@@ -202,65 +194,10 @@ export function WikiWorkspace({
     callback(...args);
   };
 
-  const directory = (
-    <aside id={`${id}-directory`} className={`wiki-workspace-directory${inSidebar ? " wiki-workspace-directory--sidebar" : ""}`} ref={directoryRef}>
-      <div className="wiki-workspace-mode-row">
-        <label className="wiki-workspace-mode">
-          <span>{t("pages.recent.modeLabel")}</span>
-          <select
-            aria-label={t("pages.recent.modeLabel")}
-            title={isManualOrder ? t("pages.recent.customHint") : undefined}
-            value={inventoryMode}
-            onChange={event => changeInventoryMode(event.target.value as WikiInventoryMode)}
-          >
-            <option value="recent">{t("pages.recent.title")}</option>
-            <option value="custom">{t("pages.recent.custom")}</option>
-            <option value="folders">{t("pages.folders.title")}</option>
-          </select>
-          <CaretDown aria-hidden="true" size={16} />
-        </label>
-        {inventoryMode === "folders" && (
-          <button
-            type="button"
-            className="wiki-workspace-new-folder"
-            aria-label={t("pages.folders.newFolder")}
-            title={t("pages.folders.newFolder")}
-            disabled={!canCreateFolder}
-            onClick={event => { event.currentTarget.focus(); requestCreateFolder(); }}
-          >
-            <FolderPlus aria-hidden="true" size={16} />
-          </button>
-        )}
-      </div>
-      {inventoryMode !== "folders" ? (
-        <RecentNotesPanel
-          mode={inventoryMode}
-          currentPageId={currentPageId}
-          revision={recentRevision}
-          onOpenPage={onOpenRecentPage ? closeForNavigation(onOpenRecentPage) : undefined}
-        />
-      ) : (
-        <PageInventoryPanel
-          inventoryScope={inventoryScope}
-          currentPageId={currentPageId}
-          currentFolderPath={creationFolderPath ?? currentFolderPath}
-          fileTree
-          browsing={browsing}
-          filter={filter}
-          onFilterChange={onFilterChange}
-          onBrowse={closeForNavigation(onBrowse)}
-          onCreatePage={closeForNavigation(onCreatePage)}
-          onOpenDraft={closeForNavigation(onOpenDraft)}
-          onOpenPage={closeForNavigation(onOpenPage)}
-        />
-      )}
-    </aside>
-  );
-
   return (
     <WikiFolderCreationContext.Provider value={folderCreationContext}>
     <div className="wiki-workspace" ref={workspaceRef}>
-      {!inSidebar && <button
+      <button
         type="button"
         className="wiki-workspace-folders-toggle"
         aria-expanded={folderOpen}
@@ -269,9 +206,60 @@ export function WikiWorkspace({
       >
         <Folder aria-hidden="true" size={16} />
         <span>{t("sidebar.notes")}</span>
-      </button>}
-      <div className={`wiki-workspace-body${inSidebar ? " is-list-in-sidebar" : `${folderOpen ? " is-folder-open" : ""}${!layout.narrow && !listOpen ? " is-list-closed" : ""}${layout.squeezed ? " is-list-squeezed" : ""}`}`}>
-        {inSidebar ? createPortal(directory, sidebarPanelHost) : directory}
+      </button>
+      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${!layout.narrow && !listOpen ? " is-list-closed" : ""}${layout.squeezed ? " is-list-squeezed" : ""}`}>
+        <aside id={`${id}-directory`} className="wiki-workspace-directory" ref={directoryRef}>
+          <div className="wiki-workspace-mode-row">
+            <label className="wiki-workspace-mode">
+              <span>{t("pages.recent.modeLabel")}</span>
+              <select
+                aria-label={t("pages.recent.modeLabel")}
+                title={isManualOrder ? t("pages.recent.customHint") : undefined}
+                value={inventoryMode}
+                onChange={event => changeInventoryMode(event.target.value as WikiInventoryMode)}
+              >
+                <option value="recent">{t("pages.recent.title")}</option>
+                <option value="custom">{t("pages.recent.custom")}</option>
+                <option value="folders">{t("pages.folders.title")}</option>
+              </select>
+              <CaretDown aria-hidden="true" size={16} />
+            </label>
+            {inventoryMode === "folders" && (
+              <button
+                type="button"
+                className="wiki-workspace-new-folder"
+                aria-label={t("pages.folders.newFolder")}
+                title={t("pages.folders.newFolder")}
+                disabled={!canCreateFolder}
+                onClick={event => { event.currentTarget.focus(); requestCreateFolder(); }}
+              >
+                <FolderPlus aria-hidden="true" size={16} />
+              </button>
+            )}
+          </div>
+          {inventoryMode !== "folders" ? (
+            <RecentNotesPanel
+              mode={inventoryMode}
+              currentPageId={currentPageId}
+              revision={recentRevision}
+              onOpenPage={onOpenRecentPage ? closeForNavigation(onOpenRecentPage) : undefined}
+            />
+          ) : (
+            <PageInventoryPanel
+              inventoryScope={inventoryScope}
+              currentPageId={currentPageId}
+              currentFolderPath={creationFolderPath ?? currentFolderPath}
+              fileTree
+              browsing={browsing}
+              filter={filter}
+              onFilterChange={onFilterChange}
+              onBrowse={closeForNavigation(onBrowse)}
+              onCreatePage={closeForNavigation(onCreatePage)}
+              onOpenDraft={closeForNavigation(onOpenDraft)}
+              onOpenPage={closeForNavigation(onOpenPage)}
+            />
+          )}
+        </aside>
         <div className={`wiki-workspace-reading${secondaryOpen ? " is-split" : ""}`}>
           <div className={`wiki-primary-note-group${fullBleed ? " is-full-bleed" : ""}`}>
             <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>

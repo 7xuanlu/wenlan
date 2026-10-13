@@ -274,32 +274,6 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   pointer-events: none;
 }
 
-/* Inside the labelled sidebar the list is part of the navigation column. */
-.wiki-workspace-directory.wiki-workspace-directory--sidebar {
-  flex: 1 1 auto;
-  width: auto;
-  margin: 0;
-  padding: 8px 0 8px;
-  border-right: 0;
-}
-.memory-shell[data-note-workspace] .wiki-workspace-directory.wiki-workspace-directory--sidebar { padding-top: 8px; }
-/* Rows share the navigation's two edges: hover boxes from 5px, icons in its
-   22px glyph column and titles where its labels start. */
-.wiki-workspace-directory--sidebar > .notes-list-panel { padding-inline: 5px; }
-.wiki-workspace-directory--sidebar .wiki-workspace-mode-row { padding-left: 12px; }
-.wiki-workspace-directory--sidebar .notes-list-state { margin-inline-start: 15px; }
-.wiki-workspace-directory--sidebar :is(.notes-inventory-page, .notes-inventory-scope, .wiki-recent-note) {
-  padding-left: 15px;
-  gap: 14px;
-}
-/* A shadow at the bottom edge shows there are more notes below; it is
-   covered once the list is scrolled to its end. */
-.wiki-workspace-directory--sidebar .notes-list-scroll {
-  background:
-    linear-gradient(transparent, var(--workspace-sidebar-background, var(--mem-sidebar)) 70%) center bottom / 100% 28px no-repeat local,
-    linear-gradient(transparent, color-mix(in srgb, var(--mem-text) 6%, transparent)) center bottom / 100% 12px no-repeat scroll;
-}
-
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
   .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
@@ -372,20 +346,19 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
   /* Without the docked list, the titlebar controls keep their place and the
      first note group's tabs start after them. */
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) {
     --wiki-titlebar-controls-width: 220px;
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) .memory-workspace-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .memory-workspace-header {
     width: max(var(--workspace-sidebar-width), var(--wiki-titlebar-controls-width));
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) .wiki-primary-note-group .note-group-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .wiki-primary-note-group .note-group-header {
     padding-left: max(0px, calc(var(--wiki-titlebar-controls-width) - var(--workspace-sidebar-width)));
   }
-  /* The shown-over list starts below the titlebar so its controls stay usable. */
-  .memory-shell[data-note-workspace] .wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open > .wiki-workspace-directory {
-    top: 52px;
-    padding-top: 12px;
-    border-top-right-radius: var(--workspace-radius);
+  /* The shown-over list runs the full height like the rail beside it and
+     matches the docked list: the titlebar controls stay above it, usable. */
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open) .memory-workspace-header {
+    z-index: 61;
   }
 }
 

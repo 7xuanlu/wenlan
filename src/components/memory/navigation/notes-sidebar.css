@@ -21,22 +21,6 @@
   overflow-y: auto;
 }
 
-/* The open destination's own panel shares the labelled sidebar with the
-   navigation, so the sidebar stays one column. The panel scrolls in what the
-   navigation leaves; in short windows the navigation scrolls instead, so the
-   panel keeps room for a few notes. */
-.notes-sidebar-panel:empty { display: none; }
-.notes-sidebar-panel {
-  display: flex;
-  flex: 1 1 0;
-  flex-direction: column;
-  min-height: min(200px, 40vh);
-  margin-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--mem-border) 55%, transparent);
-}
-.notes-workspace-sidebar:has(> .notes-sidebar-panel:not(:empty)) > .notes-icon-rail { flex: 0 1 auto; }
-.notes-workspace-sidebar:has(> .notes-sidebar-panel:not(:empty)) > .notes-rail-utilities { margin-top: 0; }
-
 .notes-rail-utilities {
   display: flex;
   flex-direction: column;

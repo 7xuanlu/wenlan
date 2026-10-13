@@ -35,16 +35,6 @@ describe("WikiWorkspace", () => {
     expect(localStorage.getItem("wenlan-note-list-v1")).toBe("open");
   });
 
-  it("puts the note list in the labelled sidebar instead of a second column", () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    const props = { onBrowse: vi.fn(), onCreatePage: vi.fn(), onOpenDraft: vi.fn(), onOpenPage: vi.fn(), sidebarPanelHost: host };
-    const { container } = render(<WikiWorkspace {...props}><textarea /></WikiWorkspace>);
-    expect(host.querySelector(".wiki-workspace-directory--sidebar")).not.toBeNull();
-    expect(container.querySelector(".wiki-workspace-directory")).toBeNull();
-    expect(container.querySelector(".wiki-workspace-folders-toggle")).toBeNull();
-    host.remove();
-  });
   it("defaults to recent notes and switches modes without remounting the active editor", () => {
     const { getByTestId } = render(
       <WikiWorkspace onBrowse={vi.fn()} onCreatePage={vi.fn()} onOpenDraft={vi.fn()} onOpenPage={vi.fn()}>

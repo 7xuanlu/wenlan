@@ -63,9 +63,6 @@ test("recent panel and Search align in either rail mode",async({page})=>{
   if(width===64){await separator.focus();for(let i=0;i<3;i++)await page.keyboard.press("ArrowLeft");}
   const search=page.locator(".notes-sidebar-search button");
   const mode=page.locator(".wiki-workspace-mode select");
-  // The labelled sidebar holds the list below its navigation, as one column.
-  if(width===240){await expect(page.locator(".notes-sidebar-panel .wiki-workspace-directory")).toBeVisible();const nav=await page.getByRole("navigation",{name:"Primary navigation",exact:true}).boundingBox(),panel=await mode.boundingBox();expect(panel!.y).toBeGreaterThan(nav!.y+nav!.height-1);continue;}
-  await expect(page.locator(".notes-sidebar-panel .wiki-workspace-directory")).toHaveCount(0);
   const a=await search.boundingBox(),b=await mode.boundingBox();
   expect(a).not.toBeNull();expect(b).not.toBeNull();expect(Math.abs(a!.y+a!.height/2-b!.y-b!.height/2)).toBeLessThanOrEqual(1);
  }
