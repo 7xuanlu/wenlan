@@ -60,6 +60,10 @@ export function useAutoCompactSidebar(preferences: SidebarPreferences, enabled: 
     const timer = window.setTimeout(() => setSettled(compact), AUTO_TRANSITION_MS);
     return () => window.clearTimeout(timer);
   }, [compact, settled]);
-  const keepExpanded = useCallback(() => setKeptExpanded(situation), [situation]);
+  // A manual expand is immediate, like the rail toggle elsewhere.
+  const keepExpanded = useCallback(() => {
+    setKeptExpanded(situation);
+    setSettled(false);
+  }, [situation]);
   return { compact, demand, keepExpanded, transitioning: compact !== settled };
 }

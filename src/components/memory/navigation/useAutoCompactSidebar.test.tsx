@@ -62,6 +62,7 @@ describe("useAutoCompactSidebar", () => {
     expect(result.current.compact).toBe(true);
     act(() => result.current.keepExpanded());
     expect(result.current.compact).toBe(false);
+    expect(result.current.transitioning).toBe(false);
     act(() => result.current.demand.report("info", "info", 0));
     act(() => result.current.demand.report("info", "info", 320));
     expect(result.current.compact).toBe(true);
