@@ -3264,9 +3264,9 @@ const RESPLIT_MAX_THRESHOLD: f64 = 0.92;
 /// one coherent topic into several shards, and nothing downstream ever compares
 /// a pending cluster with its siblings: the Jaccard/subset filter in
 /// `handle_distill` scores a cluster only against *existing* pages, and two
-/// disjoint shards of one topic score 0 there. The page each shard creates is
-/// born `unconfirmed`, so shard one cannot deduplicate shard two inside the
-/// same pass either — one topic becomes two pages.
+/// disjoint shards of one topic score 0 there. Write-time page dedup catches
+/// shard two only when its prose lands close enough to shard one's page, so
+/// one topic can still become two pages.
 ///
 /// Merge those siblings back together before the pass writes anything, using
 /// the one same-pass signal already computed for every cluster: the mean-pooled
@@ -31240,7 +31240,9 @@ impl MemoryDB {
     /// memory results SEED the merged score_map; page rows contribute only the
     /// RRF mass `1/(60+rank)` on top. Carrying `relevance_score` would double-add
     /// at different scales and warp ranking. `raw_score` retains the page's
-    /// internal vec+FTS RRF score for diagnostics only.
+    /// internal vec+FTS RRF score for diagnostics only. `confirmed` carries
+    /// [`crate::pages::page_is_trusted`] so a reader can tell a confirmed or
+    /// human-owned page from one an AI wrote that nobody has looked at.
     ///
     /// **Recency caveat**: `page.last_modified` is parsed from RFC3339; on parse
     /// failure, `last_modified=0` (1970-01-01). Page-channel rows MUST stay out of
@@ -31252,6 +31254,7 @@ impl MemoryDB {
     // by the additive page path on the search handlers (page-reachability Task 6).
     // `pub` (not `pub(crate)`) because the additive caller lives in wenlan-server.
     pub fn search_result_from_page(page: Page) -> SearchResult {
+        let trusted = crate::pages::page_is_trusted(&page);
         let last_modified = chrono::DateTime::parse_from_rfc3339(&page.last_modified)
             .map(|dt| dt.timestamp())
             .unwrap_or(0);
@@ -31272,7 +31275,7 @@ impl MemoryDB {
             space: page.space,
             source_agent: None,
             confidence: None,
-            confirmed: None,
+            confirmed: Some(trusted),
             stability: None,
             supersedes: None,
             summary: page.summary,
@@ -43982,7 +43985,7 @@ impl MemoryDB {
 
     /// The ONE shared page-visibility gate used by /api/context,
     /// /api/memory/search, and /api/search. Order: space-scope (pure) →
-    /// effective-tier (fail-closed) → confirmed/rank/cap. Returns at most `cap`
+    /// effective-tier (fail-closed) → rank (confirmed weighted up)/cap. Returns at most `cap`
     /// pages the caller may see.
     pub async fn select_visible_pages(
         &self,
@@ -53131,7 +53134,10 @@ impl MemoryDB {
     ///    eligible (M1 honest columns, migration 80: `workspace` and `space`
     ///    are mirrored duplicates, so reading either is equivalent).
     ///    `None` = no workspace constraint.
-    ///  - only `review_status='confirmed'` pages are dedup targets.
+    ///  - entity shadow pages and `creation_kind='source'` document pages are
+    ///    never dedup targets. `review_status` is not consulted: pages are
+    ///    born unconfirmed, so gating on it let AI-written pages pile up
+    ///    near-duplicates of each other.
     ///  - when `allow_user_edited=false`, human-owned pages (`user_edited=1` or
     ///    `creation_kind='authored'`) are REFUSED so the caller never silently
     ///    rewrites hand-owned prose.
@@ -53187,7 +53193,7 @@ impl MemoryDB {
                     "SELECT id, title, summary, content, entity_id, space, source_memory_ids, version, status, created_at, last_compiled, last_modified, COALESCE(sources_updated_count, 0), stale_reason, COALESCE(user_edited, 0), COALESCE(changelog, '[]'), COALESCE(creation_kind, 'distilled'), COALESCE(review_status, 'confirmed'), workspace, citations, COALESCE(kind, 'concept'), refresh_blocked_reason
                      FROM pages
                      WHERE entity_id = ?1 AND status = 'active'
-                       AND ((?5=0 AND COALESCE(review_status, 'confirmed')='confirmed') OR (?5=1 AND creation_kind IN ('distilled','research') AND LOWER(title) <> 'overview' AND COALESCE(kind, 'concept') <> 'entity'))
+                       AND ((?5=0 AND COALESCE(creation_kind, 'distilled') <> 'source' AND COALESCE(kind, 'concept') <> 'entity') OR (?5=1 AND creation_kind IN ('distilled','research') AND LOWER(title) <> 'overview' AND COALESCE(kind, 'concept') <> 'entity'))
                        AND (?2 IS NULL OR (?2 = ?4 AND space IS NULL) OR space = ?2)
                        AND (?3 != 0 OR (COALESCE(user_edited, 0) = 0 AND COALESCE(creation_kind, 'distilled') <> 'authored'))
                      ORDER BY id ASC LIMIT 1",
@@ -53203,7 +53209,7 @@ impl MemoryDB {
                 return Ok(Some(Self::row_to_page(&row)?));
             }
         }
-        // Embedding cosine, scoped in SQL on space + review_status + ownership.
+        // Embedding cosine, scoped in SQL on space + page kind + ownership.
         let emb_sql = Self::vec_to_sql(embedding);
         let allow_human_owned = i64::from(allow_user_edited);
         let conn = self.conn.lock().await;
@@ -53217,7 +53223,7 @@ impl MemoryDB {
                         vector_distance_cos(c.embedding, vector32(?1)) as dist
                  FROM pages c
                  WHERE c.status = 'active' AND c.embedding IS NOT NULL
-                   AND ((?5=0 AND COALESCE(c.review_status, 'confirmed')='confirmed') OR (?5=1 AND c.creation_kind IN ('distilled','research') AND LOWER(c.title) <> 'overview' AND COALESCE(c.kind, 'concept') <> 'entity'))
+                   AND ((?5=0 AND COALESCE(c.creation_kind, 'distilled') <> 'source' AND COALESCE(c.kind, 'concept') <> 'entity') OR (?5=1 AND c.creation_kind IN ('distilled','research') AND LOWER(c.title) <> 'overview' AND COALESCE(c.kind, 'concept') <> 'entity'))
                    AND (?2 IS NULL OR (?2 = ?4 AND c.space IS NULL) OR c.space = ?2)
                    AND (?3 != 0 OR (COALESCE(c.user_edited, 0) = 0 AND COALESCE(c.creation_kind, 'distilled') <> 'authored'))
                  ORDER BY dist ASC LIMIT 1",
