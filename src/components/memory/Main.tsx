@@ -777,6 +777,7 @@ export default function Main({
   };
   const [noteListToggleRequest, setNoteListToggleRequest] = useState(0);
   const [noteListVisible, setNoteListVisible] = useState(false);
+  const [sidebarPanelHost, setSidebarPanelHost] = useState<HTMLDivElement | null>(null);
   const navigateNotes = () => {
     if (isWikiWorkspaceView) {
       setNoteListToggleRequest(request => request + 1);
@@ -918,6 +919,9 @@ export default function Main({
   useEffect(() => setSidebarPreview(null), [view.kind, responsiveSidebar.isNarrow]);
   const sidebarCollapsed = responsiveSidebar.isNarrow ? responsiveSidebar.collapsed : !effectiveSidebar.visible;
   const sidebarOpen = responsiveSidebar.isNarrow ? responsiveSidebar.open : effectiveSidebar.visible;
+  // A labelled sidebar takes the note list in, so there is one navigation column.
+  const noteListSidebarHost = effectiveSidebar.mode === "labels" && !sidebarCollapsed && responsiveSidebar.presentation === "desktop"
+    ? sidebarPanelHost : null;
   searchFallbackFocusRef.current = searchHeaderButtonRef.current ?? sidebarToggleRef.current;
   const standardSidebarMounted = view.kind !== "settings" && view.kind !== "connect-agent";
   const sidebarLayout = responsiveSidebar.presentation === "overlay"
@@ -1265,6 +1269,7 @@ export default function Main({
             activityCurrent={view.kind === "activity"}
             onNavigatePages={navigateNotes}
             pagesPanelExpanded={isWikiWorkspaceView ? noteListVisible : undefined}
+            onPanelHost={setSidebarPanelHost}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
             onNavigateSources={() => navigateTo({ kind: "sources" })}
@@ -1329,6 +1334,7 @@ export default function Main({
               onOpenPage={openWikiPage}
               noteListToggleRequest={noteListToggleRequest}
               onNoteListVisibleChange={setNoteListVisible}
+              sidebarPanelHost={noteListSidebarHost}
             >
               <PagesOverview
                 inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
@@ -1416,6 +1422,7 @@ export default function Main({
               onOpenPage={openWikiPage}
               noteListToggleRequest={noteListToggleRequest}
               onNoteListVisibleChange={setNoteListVisible}
+              sidebarPanelHost={noteListSidebarHost}
             >
             <PageDraftEditor
               key={view.sessionKey ?? view.draftId ?? "new"}
@@ -1468,6 +1475,7 @@ export default function Main({
               onOpenPage={openWikiPage}
               noteListToggleRequest={noteListToggleRequest}
               onNoteListVisibleChange={setNoteListVisible}
+              sidebarPanelHost={noteListSidebarHost}
             >
             <PageDetail
               pageId={view.pageId}

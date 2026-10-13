@@ -24,6 +24,8 @@ interface SidebarProps {
   readonly onNavigatePages?: () => void;
   /** Whether the note list is showing, while the Pages destination is open. */
   readonly pagesPanelExpanded?: boolean;
+  /** With labels, the open destination's own panel (the note list) renders here, below the navigation. */
+  readonly onPanelHost?: (host: HTMLDivElement | null) => void;
   readonly onNavigateSettings?: () => void;
   readonly onNavigateSources?: () => void;
   readonly onNavigateSpaces?: (create: boolean) => void;
@@ -67,6 +69,7 @@ export default function Sidebar({
   activityCurrent = false,
   onNavigatePages,
   pagesPanelExpanded,
+  onPanelHost,
   onNavigateSettings,
   onNavigateSources,
   onNavigateSpaces = () => {},
@@ -172,6 +175,7 @@ export default function Sidebar({
             onNavigateSpaces={closeAfterNavigation(onNavigateSpaces, closeOverlay)}
           />
         </div>
+        {!compact && !overlay && onPanelHost && <div className="notes-sidebar-panel" ref={onPanelHost} />}
         <div className={`notes-rail-utilities${compact ? " notes-rail-utilities--icons" : ""}`}>
           {sidebarVisible && onNavigateActivity && (
             <ActivityStatus

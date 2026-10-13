@@ -264,6 +264,16 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   box-shadow: var(--mem-shadow-overlay);
 }
 
+/* Inside the labelled sidebar the list is part of the navigation column. */
+.wiki-workspace-directory.wiki-workspace-directory--sidebar {
+  flex: 1 1 auto;
+  width: auto;
+  margin: 0;
+  padding: 8px 0 8px;
+  border-right: 0;
+}
+.memory-shell[data-note-workspace] .wiki-workspace-directory.wiki-workspace-directory--sidebar { padding-top: 8px; }
+
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
   .memory-shell:has(.workspace-wiki-tabs) .wiki-workspace {
@@ -336,13 +346,13 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
   /* Without the docked list, the titlebar controls keep their place and the
      first note group's tabs start after them. */
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) {
     --wiki-titlebar-controls-width: 220px;
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .memory-workspace-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) .memory-workspace-header {
     width: max(var(--workspace-sidebar-width), var(--wiki-titlebar-controls-width));
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .wiki-primary-note-group .note-group-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed, .is-list-in-sidebar)) .wiki-primary-note-group .note-group-header {
     padding-left: max(0px, calc(var(--wiki-titlebar-controls-width) - var(--workspace-sidebar-width)));
   }
   /* The shown-over list starts below the titlebar so its controls stay usable. */
