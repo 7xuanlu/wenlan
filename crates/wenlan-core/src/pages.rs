@@ -508,7 +508,12 @@ mod tests {
     fn select_drops_pages_below_the_relevance_floor() {
         let pages = vec![
             make_page_with("related", &["m1"], 0.60, "unconfirmed"),
-            make_page_with("unrelated", &["m2"], PAGE_RELEVANCE_FLOOR - 0.01, "confirmed"),
+            make_page_with(
+                "unrelated",
+                &["m2"],
+                PAGE_RELEVANCE_FLOOR - 0.01,
+                "confirmed",
+            ),
         ];
         let search_ids: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
 
