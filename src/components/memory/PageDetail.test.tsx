@@ -416,19 +416,37 @@ describe("PageDetail", () => {
 
   it("closes page information on Escape while preserving the editor and unsaved draft", async () => {
     const { updatePage } = await import("../../lib/tauri");
-    const { user } = renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
+    renderWithQuery(<PageDetail {...defaultProps} initialMode="edit" />);
     const editor = await screen.findByRole("textbox", { name: "Page editor" });
-    act(() => replaceDocument(editorViewFromTextbox(editor), "Keep writing after information"));
     const trigger = screen.getByRole("button", { name: i18n.t("pageInspector.open") });
-    await openPageInfo(user);
-    expect(screen.getByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
-    await user.keyboard("{Escape}");
-    expect(screen.queryByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeNull();
-    expect(trigger).toHaveFocus();
-    expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
-    expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Keep writing after information");
-    expect(updatePage).not.toHaveBeenCalled();
+    // Control the 650 ms debounce so CI wall-clock load cannot save the draft
+    // mid-test. Testing Library's async helpers wait on a setTimeout(0) these
+    // fake timers never run, so the pane is driven with synchronous events.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      act(() => replaceDocument(editorViewFromTextbox(editor), "Keep writing after information"));
+      trigger.focus();
+      act(() => { fireEvent.click(trigger); });
+      expect(screen.getByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeInTheDocument();
+      const close = screen.getByRole("button", { name: "Close" });
+      expect(close).toHaveFocus();
+      act(() => { pressKey(close, "Escape"); });
+      expect(screen.queryByRole("dialog", { name: i18n.t("pageInspector.label") })).toBeNull();
+      expect(trigger).toHaveFocus();
+      expect(screen.getByRole("textbox", { name: "Page editor" })).toBe(editor);
+      expect(editorViewFromTextbox(editor).state.doc.toString()).toBe("Keep writing after information");
+      expect(updatePage).not.toHaveBeenCalled();
+
+      // The draft is still pending: its own debounce saves it once the delay elapses.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(650);
+      });
+      expect(updatePage).toHaveBeenCalledWith(
+        expect.objectContaining({ content: "Keep writing after information" }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a failed map-switch draft in the same editor", async () => {
