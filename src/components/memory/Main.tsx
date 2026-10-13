@@ -775,14 +775,12 @@ export default function Main({
     navigatePages();
     if (responsiveSidebar.presentation === "overlay") responsiveSidebar.close();
   };
-  const [noteListToggleRequest, setNoteListToggleRequest] = useState(0);
-  const [noteListVisible, setNoteListVisible] = useState(false);
+  const [noteListYielded, setNoteListYielded] = useState(false);
+  const [noteListRestoreRequest, setNoteListRestoreRequest] = useState(0);
   const navigateNotes = () => {
-    // Inside the Wiki, the Pages entry owns the note list: it opens and closes
-    // it rather than leaving the note. An open search closes first.
-    if (isWikiWorkspaceView) {
-      if (query || pendingDraftSearchQuery || mobileSearchOpen) afterNavigationGuards(dismissSearch);
-      else setNoteListToggleRequest(request => request + 1);
+    // While Info has taken the note list's room, Wiki brings the list back.
+    if (isWikiWorkspaceView && noteListYielded && !query && !pendingDraftSearchQuery && !mobileSearchOpen) {
+      setNoteListRestoreRequest(request => request + 1);
       return;
     }
     if (activeNavigationForView(view) !== "pages" && lastNoteViewRef.current) {
@@ -1267,7 +1265,6 @@ export default function Main({
             onNavigateActivity={() => navigateTo({ kind: "activity" })}
             activityCurrent={view.kind === "activity"}
             onNavigatePages={navigateNotes}
-            pagesPanelExpanded={isWikiWorkspaceView ? noteListVisible : undefined}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
             onNavigateSources={() => navigateTo({ kind: "sources" })}
@@ -1330,8 +1327,8 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
-              noteListToggleRequest={noteListToggleRequest}
-              onNoteListVisibleChange={setNoteListVisible}
+              noteListRestoreRequest={noteListRestoreRequest}
+              onNoteListYieldedChange={setNoteListYielded}
             >
               <PagesOverview
                 inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
@@ -1417,8 +1414,8 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
-              noteListToggleRequest={noteListToggleRequest}
-              onNoteListVisibleChange={setNoteListVisible}
+              noteListRestoreRequest={noteListRestoreRequest}
+              onNoteListYieldedChange={setNoteListYielded}
             >
             <PageDraftEditor
               key={view.sessionKey ?? view.draftId ?? "new"}
@@ -1469,8 +1466,8 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
-              noteListToggleRequest={noteListToggleRequest}
-              onNoteListVisibleChange={setNoteListVisible}
+              noteListRestoreRequest={noteListRestoreRequest}
+              onNoteListYieldedChange={setNoteListYielded}
             >
             <PageDetail
               pageId={view.pageId}

@@ -5,13 +5,7 @@ import { expect, type Page } from "@playwright/test";
 export async function showWikiFolders(page: Page) {
   const directory = page.locator(".wiki-workspace-directory");
   await expect(directory).toBeAttached();
-  if (!(await directory.isVisible())) {
-    // Narrow windows use the Notes toggle; otherwise the Wiki entry in the
-    // navigation opens and closes the list.
-    const toggle = page.locator(".wiki-workspace-folders-toggle");
-    if (await toggle.isVisible()) await toggle.click();
-    else await page.getByRole("navigation", { name: /^(Primary navigation|主要導覽|主要导航|主导航)$/ }).locator('[data-note-list-toggle="true"]').click();
-  }
+  if (!(await directory.isVisible())) await page.locator(".wiki-workspace-folders-toggle").click();
   await expect(directory).toBeVisible();
   await directory.getByRole("combobox").selectOption("folders");
   await expect(directory.locator(".notes-list-panel")).toBeVisible();

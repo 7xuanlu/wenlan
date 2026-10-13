@@ -56,18 +56,6 @@ beforeEach(() => {
 });
 
 describe("PrimaryNavigation", () => {
-  it("marks the Pages icon as the note list's toggle only while Pages is open", () => {
-    const { props, rerender } = renderNavigation("pages");
-    const pages = () => screen.getByRole("button", { name: "Wiki" });
-    expect(pages()).not.toHaveAttribute("aria-expanded");
-    rerender(<PrimaryNavigation {...props} pagesPanelExpanded />);
-    expect(pages()).toHaveAttribute("aria-expanded", "true");
-    rerender(<PrimaryNavigation {...props} pagesPanelExpanded={false} />);
-    expect(pages()).toHaveAttribute("aria-expanded", "false");
-    rerender(<PrimaryNavigation {...props} active="graph" pagesPanelExpanded />);
-    expect(pages()).not.toHaveAttribute("aria-expanded");
-  });
-
   it("defaults to Wiki, Spaces, Graph, Sources and More in that order with working named destinations", async () => {
     const user = userEvent.setup();
     localStorage.clear();

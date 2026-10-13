@@ -40,22 +40,16 @@ for (const cfg of [
       expect(frame!.width).toBeGreaterThanOrEqual(460);
     }
     async function balancedStart(selector: string) {
-      // The column settles one frame after a side column opens or closes.
+      // The column centres in its lane, settling one frame after a side
+      // column opens or closes.
       await expect.poll(() => page.locator(selector).evaluate(el => {
         const frame = el.getBoundingClientRect();
         const lane = el.parentElement!;
         const box = lane.getBoundingClientRect();
         const style = getComputedStyle(lane);
         const left = box.left + lane.clientLeft + parseFloat(style.paddingLeft);
-        const width = lane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-        const viewport = document.documentElement.clientWidth;
-        // Where the lane has room, the column sits on the window's centre, so
-        // side columns opening or closing never move the text. Otherwise it
-        // centres in the lane that is left, never past its centre.
-        if ((width - parseFloat(getComputedStyle(el).maxWidth)) / 2 >= Math.abs((viewport - (left + width) - left) / 2)) {
-          return Math.abs(frame.left + frame.width / 2 - viewport / 2);
-        }
-        return Math.max(0, (frame.left - left) - (left + width - frame.right));
+        const right = left + lane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        return Math.abs((frame.left - left) - (right - frame.right));
       })).toBeLessThanOrEqual(1);
     }
     async function titleAndTools(frameSelector: string, titleSelector: string, toolsSelector?: string) {
@@ -106,8 +100,18 @@ for (const cfg of [
     await readable(".page-detail-document", ".note-group-content");
     expect(await page.locator(".page-detail .cm-line:not(.cm-writing-heading)").first().evaluate(el => ({ size: getComputedStyle(el).fontSize, leading: getComputedStyle(el).lineHeight }))).toEqual(sourceType);
     await balancedStart(".page-detail-document");
+    // The list stays beside Info only while the note keeps 680px; otherwise it
+    // gives way, and Wiki brings it back by closing Info.
+    const directory = page.locator(".wiki-workspace-directory");
+    const listBesideInfo = cfg.width === 1440 && cfg.mode === "icons";
+    await expect(directory).toBeVisible({ visible: listBesideInfo });
+    expect((await page.locator(".page-detail-document").boundingBox())!.width).toBeGreaterThanOrEqual(680);
     await capture("wiki-info-open");
-    await pane.locator(".page-info-drawer-close").click();
+    if (listBesideInfo) await pane.locator(".page-info-drawer-close").click();
+    else await page.getByRole("navigation", { name: "Primary navigation", exact: true }).getByRole("button", { name: t.sidebar.pages, exact: true }).click();
+    await expect(pane).toHaveCount(0);
+    await expect(directory).toBeVisible();
+    await expect(page.locator(".page-detail .cm-content")).toBeVisible();
     await readable(".page-detail-document", ".note-group-content");
     expect(Math.abs((await page.locator(".page-detail-document").boundingBox())!.x - wikiStart)).toBeLessThanOrEqual(1);
     await page.getByRole("button", { name: t.pageInspector.open, exact: true }).click();

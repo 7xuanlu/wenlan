@@ -245,34 +245,9 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   letter-spacing: normal;
 }
 
-/* The Pages Rail icon closes the list. When the note beside it would get too
-   narrow (usually because Info is open) the list gives way first, and the icon
-   shows it over the note instead. WikiWorkspace sets these classes only above
-   the narrow breakpoint below. */
-.wiki-workspace-body { position: relative; }
-.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed) > .wiki-workspace-directory { display: none; }
-.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open > .wiki-workspace-directory {
-  position: absolute;
-  z-index: 60;
-  inset-block: 0;
-  left: 0;
-  display: flex;
-  margin: 0;
-  padding-left: 8px;
-  border-right: 1px solid var(--mem-border);
-  background: var(--workspace-sidebar-background, var(--mem-sidebar));
-  /* The hairline carries the edge; the shadow only lifts it off the note. */
-  box-shadow: 8px 0 16px -12px rgb(0 0 0 / 18%);
-}
-/* The note under the flyout fades, so it reads as covered, not cut off. */
-.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open::after {
-  content: "";
-  position: absolute;
-  z-index: 59;
-  inset: 0;
-  background: color-mix(in srgb, var(--workspace-document-background, var(--mem-bg)) 62%, transparent);
-  pointer-events: none;
-}
+/* When Info and the list would leave the note too narrow, WikiWorkspace lets
+   the list give way until Info closes or the window has room again. */
+.wiki-workspace-body.is-list-yielded > .wiki-workspace-directory { display: none; }
 
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {
@@ -344,21 +319,16 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
   .memory-shell[data-note-workspace] .memory-main-content--wiki { margin-top:-52px; }
   .memory-shell[data-note-workspace] .memory-workspace-header { width:calc(var(--workspace-sidebar-width) + 248px); }
   .memory-shell[data-note-workspace] .wiki-workspace-directory { padding-top:64px; }
-  /* Without the docked list, the titlebar controls keep their place and the
-     first note group's tabs start after them. */
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) {
+  /* Without the list, the titlebar controls keep their place and the first
+     note group's tabs start after them. */
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) {
     --wiki-titlebar-controls-width: 220px;
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .memory-workspace-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) .memory-workspace-header {
     width: max(var(--workspace-sidebar-width), var(--wiki-titlebar-controls-width));
   }
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed)) .wiki-primary-note-group .note-group-header {
+  .memory-shell[data-note-workspace]:has(.wiki-workspace-body.is-list-yielded) .wiki-primary-note-group .note-group-header {
     padding-left: max(0px, calc(var(--wiki-titlebar-controls-width) - var(--workspace-sidebar-width)));
-  }
-  /* The shown-over list runs the full height like the rail beside it and
-     matches the docked list: the titlebar controls stay above it, usable. */
-  .memory-shell[data-note-workspace]:has(.wiki-workspace-body:is(.is-list-closed, .is-list-squeezed).is-folder-open) .memory-workspace-header {
-    z-index: 61;
   }
 }
 

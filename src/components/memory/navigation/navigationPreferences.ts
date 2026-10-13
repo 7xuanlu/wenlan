@@ -95,14 +95,3 @@ export function writeSidebarPreferences(sidebar: SidebarPreferences): void {
     sidebar: parseSidebarPreferences(sidebar) ?? DEFAULT_SIDEBAR_PREFERENCES,
   }));
 }
-
-/** The note list is the Pages destination's own panel; its Rail icon opens and closes it. */
-export const NOTE_LIST_PREFERENCE_KEY = "wenlan-note-list-v1";
-
-export function readNoteListOpen(): boolean {
-  return readPreference(NOTE_LIST_PREFERENCE_KEY) !== "closed";
-}
-
-export function writeNoteListOpen(open: boolean): void {
-  writePreference(NOTE_LIST_PREFERENCE_KEY, open ? "open" : "closed");
-}

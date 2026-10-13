@@ -72,10 +72,8 @@ test('cancel blur lost capture and viewport changes restore geometry without clo
 test('keyboard mirrors direction and closing restores last width while viewport caps preserve preference', async ({ page }) => {
   await start(page); await handle(page).focus(); await page.keyboard.press('End'); await expectWidth(page, 600);
   await page.keyboard.press('ArrowRight'); await expectWidth(page, 580); await page.keyboard.press('ArrowLeft'); await expectWidth(page, 600);
-  // The note list lives in the labelled sidebar, so the note group is the
-  // window minus the sidebar and keeps 360px beside Info: 1120 caps at 520.
-  const saved = await stored(page); await page.setViewportSize({ width: 1120, height: 900 });
-  await expectWidth(page, 520);
+  const saved = await stored(page); await page.setViewportSize({ width: 1208, height: 900 });
+  await expect.poll(async () => (await pane(page).boundingBox())!.width).toBeLessThanOrEqual(380);
   expect(await stored(page)).toBe(saved);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.setViewportSize({ width: 1600, height: 900 }); await expectWidth(page, 600);

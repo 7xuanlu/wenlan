@@ -15,16 +15,17 @@ export interface NoteGroupFrameProps {
   readonly onGlobalToolsHost?: (host: HTMLDivElement | null) => void;
   readonly onFocus?: () => void;
   readonly contentId?: string;
+  readonly inspectorCloser?: { current: (() => void) | null };
 }
 
 /** One independently focused note column and its inspector host. */
-export function NoteGroupFrame({ id, label, tabs, children, onFocus, contentId, onGlobalToolsHost }: NoteGroupFrameProps) {
+export function NoteGroupFrame({ id, label, tabs, children, onFocus, contentId, onGlobalToolsHost, inspectorCloser }: NoteGroupFrameProps) {
   const [element, setElement] = useState<HTMLDivElement | null>(null);
   const [paneHost, setPaneHost] = useState<HTMLDivElement | null>(null);
   const [toolsHost, setToolsHost] = useState<HTMLDivElement | null>(null);
   const assignElement = useCallback((node: HTMLDivElement | null) => setElement(node), []);
   const notifyFocus = (_event: FocusEvent<HTMLDivElement> | PointerEvent<HTMLDivElement>) => onFocus?.();
-  const group = useMemo(() => ({ id, element }), [id, element]);
+  const group = useMemo(() => ({ id, element, inspectorCloser }), [id, element, inspectorCloser]);
 
   return (
     <WorkspaceNoteGroupContext.Provider value={group}>

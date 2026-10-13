@@ -3,7 +3,6 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { CaretDown, Folder, FolderPlus } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import type { Page } from "../../../lib/tauri";
-import { readNoteListOpen, writeNoteListOpen } from "../navigation/navigationPreferences";
 import { readWikiInventoryMode, writeWikiInventoryMode, type WikiInventoryMode } from "../../../lib/wikiNotesPreferences";
 import { PageInventoryPanel } from "./PageInventoryPanel";
 import { RecentNotesPanel } from "./RecentNotesPanel";
@@ -14,9 +13,8 @@ import "./wikiWorkspace.css";
 
 /** The docked list's border-box width plus its inset; see wikiWorkspace.css. */
 const NOTE_LIST_WIDTH = 248;
-/** The list gives way (and opens as a flyout) before the note beside it, and
- * beside Info when that is open, gets narrower than this. */
-const MIN_LANE_BESIDE_NOTE_LIST = 680;
+/** With Info open, the list stays docked only while the note keeps this much room. */
+const MIN_NOTE_LANE = 680;
 /** Matches the wiki-main container query that turns the list into a dropdown. */
 const NARROW_WORKSPACE_WIDTH = 900;
 
@@ -43,9 +41,9 @@ export interface WikiWorkspaceProps {
   readonly onCreationFolderPathChange?: (path: string | null) => void;
   readonly onOpenDraft: (draftId: string, space: string | null) => void;
   readonly onOpenPage: (page: Page) => void;
-  /** Increments each time the Pages Rail icon is pressed while this workspace shows. */
-  readonly noteListToggleRequest?: number;
-  readonly onNoteListVisibleChange?: (visible: boolean) => void;
+  /** Increments to bring back a list that gave way to Info, closing Info. */
+  readonly noteListRestoreRequest?: number;
+  readonly onNoteListYieldedChange?: (yielded: boolean) => void;
 }
 
 export function WikiWorkspace({
@@ -71,20 +69,19 @@ export function WikiWorkspace({
   onCreationFolderPathChange,
   onOpenDraft,
   onOpenPage,
-  noteListToggleRequest = 0,
-  onNoteListVisibleChange,
+  noteListRestoreRequest = 0,
+  onNoteListYieldedChange,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
   const [folderOpen, setFolderOpen] = useState(false);
-  const [listOpen, setListOpen] = useState(readNoteListOpen);
-  const [layout, setLayout] = useState<{ narrow: boolean; squeezed: boolean }>({ narrow: false, squeezed: false });
+  // The list and Info share the room beside the note. When both would leave
+  // the note narrower than MIN_NOTE_LANE, Info (the one just opened) keeps its
+  // place and the list gives way until Info closes or the window has room.
+  const [listYielded, setListYielded] = useState(false);
+  const listYieldedRef = useRef(listYielded);
+  listYieldedRef.current = listYielded;
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const directoryRef = useRef<HTMLElement>(null);
-  const docked = listOpen && !layout.narrow && !layout.squeezed;
-  const dockedRef = useRef(docked);
-  dockedRef.current = docked;
-  // The note keeps a comfortable line first: with Info open the list gives way,
-  // and the Pages icon then shows it over the note instead of beside it.
+  const inspectorCloser = useRef<(() => void) | null>(null);
   useEffect(() => {
     const root = workspaceRef.current;
     if (!root) return;
@@ -92,14 +89,14 @@ export function WikiWorkspace({
     const measure = () => {
       frame = 0;
       const width = root.getBoundingClientRect().width;
-      const narrow = width > 0 && width <= NARROW_WORKSPACE_WIDTH;
-      const content = root.querySelector<HTMLElement>(".wiki-primary-note-group .note-group-content");
-      const lane = content?.getBoundingClientRect().width ?? 0;
-      const besideList = dockedRef.current ? lane : lane - NOTE_LIST_WIDTH;
+      const primary = root.querySelector<HTMLElement>(".wiki-primary-note-group");
+      const lane = primary?.querySelector<HTMLElement>(".note-group-content")?.getBoundingClientRect().width ?? 0;
+      const infoOpen = Boolean(primary?.querySelector(".page-info-drawer-group-overlay"));
       // Two note groups side by side were chosen narrower; the list stays put.
       const split = Boolean(root.querySelector(".wiki-workspace-reading.is-split"));
-      const squeezed = !narrow && !split && lane > 0 && besideList < MIN_LANE_BESIDE_NOTE_LIST;
-      setLayout(current => current.narrow === narrow && current.squeezed === squeezed ? current : { narrow, squeezed });
+      const besideList = listYieldedRef.current ? lane - NOTE_LIST_WIDTH : lane;
+      const yielded = width > NARROW_WORKSPACE_WIDTH && !split && infoOpen && lane > 0 && besideList < MIN_NOTE_LANE;
+      setListYielded(yielded);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
     measure();
@@ -108,49 +105,19 @@ export function WikiWorkspace({
     // Info opens, closes and resizes inside the note group, not on the root.
     const mutations = typeof MutationObserver === "undefined" ? null : new MutationObserver(schedule);
     mutations?.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["class", "style"] });
-    window.addEventListener("pointerup", schedule);
     return () => {
       if (frame) cancelAnimationFrame(frame);
       resize?.disconnect();
       mutations?.disconnect();
-      window.removeEventListener("pointerup", schedule);
     };
   }, []);
-  const handledToggleRef = useRef(noteListToggleRequest);
+  useEffect(() => { onNoteListYieldedChange?.(listYielded); }, [listYielded, onNoteListYieldedChange]);
+  const handledRestoreRef = useRef(noteListRestoreRequest);
   useEffect(() => {
-    if (handledToggleRef.current === noteListToggleRequest) return;
-    handledToggleRef.current = noteListToggleRequest;
-    if (layout.narrow || layout.squeezed) {
-      setFolderOpen(open => !open);
-      return;
-    }
-    setFolderOpen(false);
-    setListOpen(open => {
-      writeNoteListOpen(!open);
-      return !open;
-    });
-  }, [noteListToggleRequest, layout.narrow, layout.squeezed]);
-  const listVisible = docked || folderOpen;
-  useEffect(() => { onNoteListVisibleChange?.(listVisible); }, [listVisible, onNoteListVisibleChange]);
-  const floating = folderOpen && !layout.narrow && (!listOpen || layout.squeezed);
-  useEffect(() => {
-    if (!floating) return;
-    const closeOutside = (event: PointerEvent) => {
-      const target = event.target as Element | null;
-      if (directoryRef.current?.contains(target) || target?.closest?.("[data-note-list-toggle]")) return;
-      setFolderOpen(false);
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setFolderOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOutside);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [floating]);
+    if (handledRestoreRef.current === noteListRestoreRequest) return;
+    handledRestoreRef.current = noteListRestoreRequest;
+    inspectorCloser.current?.();
+  }, [noteListRestoreRequest]);
   const [localInventoryMode, setLocalInventoryMode] = useState<WikiInventoryMode>(readWikiInventoryMode);
   const inventoryMode = controlledInventoryMode ?? localInventoryMode;
   const [creationFolderPath, reportCreationFolderPath] = useState<string | null>(null);
@@ -209,8 +176,8 @@ export function WikiWorkspace({
         <Folder aria-hidden="true" size={16} />
         <span>{t("sidebar.notes")}</span>
       </button>
-      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${!layout.narrow && !listOpen ? " is-list-closed" : ""}${layout.squeezed ? " is-list-squeezed" : ""}`}>
-        <aside id={`${id}-directory`} className="wiki-workspace-directory" ref={directoryRef}>
+      <div className={`wiki-workspace-body${folderOpen ? " is-folder-open" : ""}${listYielded ? " is-list-yielded" : ""}`}>
+        <aside id={`${id}-directory`} className="wiki-workspace-directory">
           <div className="wiki-workspace-mode-row">
             <label className="wiki-workspace-mode">
               <span>{t("pages.recent.modeLabel")}</span>
@@ -264,7 +231,7 @@ export function WikiWorkspace({
         </aside>
         <div className={`wiki-workspace-reading${secondaryOpen ? " is-split" : ""}`}>
           <div className={`wiki-primary-note-group${fullBleed ? " is-full-bleed" : ""}`}>
-            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus}>
+            <NoteGroupFrame id="primary" label={t("pages.groups.central")} tabs={tabs} onGlobalToolsHost={onGlobalToolsHost} contentId="wiki-note-content" onFocus={onGroupFocus} inspectorCloser={inspectorCloser}>
               {children}
             </NoteGroupFrame>
           </div>

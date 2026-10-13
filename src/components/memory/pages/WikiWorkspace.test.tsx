@@ -11,30 +11,7 @@ vi.mock("./PageInventoryPanel", () => ({
 }));
 
 describe("WikiWorkspace", () => {
-  beforeEach(() => {
-    localStorage.removeItem("wenlan:wiki-inventory:v1");
-    localStorage.removeItem("wenlan-note-list-v1");
-  });
-  it("lets the Pages icon close and reopen the note list and remembers the choice", () => {
-    const props = { onBrowse: vi.fn(), onCreatePage: vi.fn(), onOpenDraft: vi.fn(), onOpenPage: vi.fn() };
-    const onVisible = vi.fn();
-    const { container, rerender, unmount } = render(<WikiWorkspace {...props} onNoteListVisibleChange={onVisible}><textarea /></WikiWorkspace>);
-    const body = () => container.querySelector(".wiki-workspace-body")!;
-    expect(body()).not.toHaveClass("is-list-closed");
-    expect(onVisible).toHaveBeenLastCalledWith(true);
-    rerender(<WikiWorkspace {...props} noteListToggleRequest={1} onNoteListVisibleChange={onVisible}><textarea /></WikiWorkspace>);
-    expect(body()).toHaveClass("is-list-closed");
-    expect(onVisible).toHaveBeenLastCalledWith(false);
-    expect(localStorage.getItem("wenlan-note-list-v1")).toBe("closed");
-    unmount();
-    // A remount (another note view) keeps the choice and ignores the counter it starts with.
-    const next = render(<WikiWorkspace {...props} noteListToggleRequest={1}><textarea /></WikiWorkspace>);
-    expect(next.container.querySelector(".wiki-workspace-body")).toHaveClass("is-list-closed");
-    next.rerender(<WikiWorkspace {...props} noteListToggleRequest={2}><textarea /></WikiWorkspace>);
-    expect(next.container.querySelector(".wiki-workspace-body")).not.toHaveClass("is-list-closed");
-    expect(localStorage.getItem("wenlan-note-list-v1")).toBe("open");
-  });
-
+  beforeEach(() => localStorage.removeItem("wenlan:wiki-inventory:v1"));
   it("defaults to recent notes and switches modes without remounting the active editor", () => {
     const { getByTestId } = render(
       <WikiWorkspace onBrowse={vi.fn()} onCreatePage={vi.fn()} onOpenDraft={vi.fn()} onOpenPage={vi.fn()}>

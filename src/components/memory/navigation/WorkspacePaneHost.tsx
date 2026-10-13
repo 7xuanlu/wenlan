@@ -5,6 +5,8 @@ import { createContext, type RefObject } from "react";
 export interface WorkspaceNoteGroupContextValue {
   readonly id: string;
   readonly element: HTMLElement | null;
+  /** Holds the open inspector's close action, so the workspace can make room. */
+  readonly inspectorCloser?: { current: (() => void) | null };
 }
 
 export const WorkspaceNoteGroupContext = createContext<WorkspaceNoteGroupContextValue | null>(null);
