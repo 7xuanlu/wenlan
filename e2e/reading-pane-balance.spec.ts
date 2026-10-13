@@ -40,7 +40,8 @@ for (const cfg of [
       expect(frame!.width).toBeGreaterThanOrEqual(460);
     }
     async function balancedStart(selector: string) {
-      const geometry = await page.locator(selector).evaluate(el => {
+      // The column settles one frame after a side column opens or closes.
+      await expect.poll(() => page.locator(selector).evaluate(el => {
         const frame = el.getBoundingClientRect();
         const lane = el.parentElement!;
         const box = lane.getBoundingClientRect();
@@ -48,31 +49,14 @@ for (const cfg of [
         const left = box.left + lane.clientLeft + parseFloat(style.paddingLeft);
         const width = lane.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
         const viewport = document.documentElement.clientWidth;
-        return {
-          fits: (width - parseFloat(getComputedStyle(el).maxWidth)) / 2 >= Math.abs((viewport - (left + width) - left) / 2),
-          offCentre: frame.left + frame.width / 2 - viewport / 2,
-        };
-      });
-      // Where the lane has room, the column sits on the window's centre, so
-      // side columns opening or closing never move the text. Otherwise it
-      // centres in the lane that is left.
-      if (geometry.fits) expect(Math.abs(geometry.offCentre)).toBeLessThanOrEqual(1);
-      else await notPastCentre(selector);
-    }
-    async function notPastCentre(selector: string) {
-      const gaps = await page.locator(selector).evaluate(el => {
-        const frame = el.getBoundingClientRect();
-        const lane = el.parentElement!;
-        const box = lane.getBoundingClientRect();
-        const style = getComputedStyle(lane);
-        // The lane's content box, without its scrollbar.
-        const left = box.left + lane.clientLeft + parseFloat(style.paddingLeft);
-        const right = box.left + lane.clientLeft + lane.clientWidth - parseFloat(style.paddingRight);
-        return { leading: frame.left - left, trailing: right - frame.right };
-      });
-      // Squeezed by the folder list and Info, the column centres in what is
-      // left rather than keeping its origin and running into Info.
-      expect(gaps.leading).toBeLessThanOrEqual(gaps.trailing + 1);
+        // Where the lane has room, the column sits on the window's centre, so
+        // side columns opening or closing never move the text. Otherwise it
+        // centres in the lane that is left, never past its centre.
+        if ((width - parseFloat(getComputedStyle(el).maxWidth)) / 2 >= Math.abs((viewport - (left + width) - left) / 2)) {
+          return Math.abs(frame.left + frame.width / 2 - viewport / 2);
+        }
+        return Math.max(0, (frame.left - left) - (left + width - frame.right));
+      })).toBeLessThanOrEqual(1);
     }
     async function titleAndTools(frameSelector: string, titleSelector: string, toolsSelector?: string) {
       const frame = await page.locator(frameSelector).boundingBox();
