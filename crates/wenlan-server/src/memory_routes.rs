@@ -1165,7 +1165,12 @@ async fn handle_search_memory_inner(
                         .unwrap_or_else(|| "unknown".to_string())
                 };
                 let raw = db
-                    .search_pages_scoped(&req.query, 3, None, &scope)
+                    .search_pages_scoped(
+                        &req.query,
+                        wenlan_core::pages::PAGE_CANDIDATE_POOL,
+                        None,
+                        &scope,
+                    )
                     .await
                     .unwrap_or_default();
                 let ids: std::collections::HashSet<String> =

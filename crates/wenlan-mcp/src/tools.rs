@@ -1500,7 +1500,11 @@ impl WenlanMcpServer {
         if let Some(pages) = resp.supplemental_pages.as_ref().filter(|p| !p.is_empty()) {
             let pages_json = serde_json::to_string_pretty(pages)
                 .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-            output.push_str(&format!("\n\nCompiled pages:\n{}", pages_json));
+            output.push_str(&format!(
+                "\n\nCompiled pages:\n`confirmed: false` marks an AI-written page the user has \
+                 not confirmed or edited; `raw_score` is its relevance.\n{}",
+                pages_json
+            ));
         }
 
         Ok(CallToolResult::success(vec![ContentBlock::text(output)]))
@@ -2761,7 +2765,11 @@ fn format_update_page_response(
 
 fn format_create_page_response(resp: CreatePageResponse) -> String {
     let mut text = match resp.attached_to {
-        Some(page_id) => format!("Attached to existing page {page_id}"),
+        Some(page_id) => format!(
+            "Attached to existing page {page_id}. Your sources now back that page, but \
+             your prose was not saved. To merge it, read_page {page_id} and call \
+             write_page with page_id={page_id}."
+        ),
         None => format!("Created page {}", resp.id),
     };
     append_write_receipt(
@@ -3013,7 +3021,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Trigger Wenlan's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. With `force=true` on a page target, clears the user-edited guard and can replace the page prose during rebuild. Rebuild may send page and source material to the daemon's configured external LLM provider. Use when the user explicitly asks to synthesize, distill, or rebuild a page. The daemon also runs distillation periodically in the background, so don't trigger redundantly during normal flow.",
+        description = "Trigger Wenlan's distillation pass. With no `target`, runs a full pass that clusters new memories into pages and refreshes the wiki view. With a `target`, scopes the pass: a page id (`page_*` or `concept_*`) re-distills that single page, an entity name scopes clustering to that entity, a space value (e.g. `work`, `personal`) scopes to that space. With `force=true` on a page target, clears the user-edited guard and can replace the page prose during rebuild. Rebuild may send page and source material to the daemon's configured external LLM provider. Use when the user explicitly asks to synthesize, distill, or rebuild a page. With a model source chosen the daemon also distills in the background, so don't trigger redundantly; without one, nothing distills in the background.",
         annotations(
             title = "Distill",
             read_only_hint = false,
@@ -3114,7 +3122,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Resolve a durable named entity idempotently. Use only as a support step when the user explicitly establishes a durable named entity, or when resolved ids are needed for a relation the user explicitly stated. Do not call create_entity for every ordinary capture; capture already handles its primary entity and daemon enrichment handles routine extraction.",
+        description = "Resolve a durable named entity idempotently. Use only as a support step when the user explicitly establishes a durable named entity, or when resolved ids are needed for a relation the user explicitly stated. Do not call create_entity for every ordinary capture: with a model source chosen, daemon enrichment extracts entities. Without one (a capture receipt says enrichment is paused or off), capture's `entity` links only an entity that already exists, so create the entity first.",
         annotations(
             title = "Resolve entity",
             read_only_hint = false,

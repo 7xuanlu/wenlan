@@ -106,8 +106,8 @@ export const enActivityStatus = {
   // stopped and why; the button carries the fix. turnOnModel repeats Home's
   // empty-state button word for word: one action, one name.
   blockedCause: {
-    everyday: "Background organization is paused because no model is set up.",
-    synthesis: "Page updates are paused because no writing model is set up.",
+    everyday: "Background organization is paused because no model is set up. Your AI tools can still organize memories.",
+    synthesis: "Pages update when your AI tools write them, because no writing model is set up.",
   },
   // A model was chosen but is not serving: still loading, or its server is
   // down. The fix is the same page, so turnOnModel still applies.
@@ -330,8 +330,8 @@ export const hansActivityStatus = {
     pages_other: "{{count}} 个页面等待更新",
   },
   blockedCause: {
-    everyday: "后台整理已暂停，因为尚未设置模型。",
-    synthesis: "页面更新已暂停，因为尚未设置撰写模型。",
+    everyday: "后台整理已暂停，因为尚未设置模型。你的 AI 工具仍可整理记忆。",
+    synthesis: "尚未设置撰写模型，所以页面会在你的 AI 工具撰写时更新。",
   },
   blockedCauseUnavailable: {
     everyday: "后台整理已暂停，因为模型暂时无法使用。",
@@ -530,8 +530,8 @@ export const hantActivityStatus = {
     pages_other: "{{count}} 個頁面等待更新",
   },
   blockedCause: {
-    everyday: "背景整理已暫停，因為尚未設定模型。",
-    synthesis: "頁面更新已暫停，因為尚未設定撰寫模型。",
+    everyday: "背景整理已暫停，因為尚未設定模型。你的 AI 工具仍可整理記憶。",
+    synthesis: "尚未設定撰寫模型，所以頁面會在你的 AI 工具撰寫時更新。",
   },
   blockedCauseUnavailable: {
     everyday: "背景整理已暫停，因為模型暫時無法使用。",
