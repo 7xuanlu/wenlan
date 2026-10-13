@@ -248,6 +248,10 @@ html[data-theme="light"] .workspace-wiki-tabs { background: var(--mem-bg); }
 /* When Info and the list would leave the note too narrow, WikiWorkspace lets
    the list give way until Info closes or the window has room again. */
 .wiki-workspace-body.is-list-yielded > .wiki-workspace-directory { display: none; }
+/* The icon rail has no edge of its own; keep the list's line beside the note. */
+.memory-shell[data-sidebar-layout="icons"] .wiki-workspace-body.is-list-yielded {
+  border-left: 1px solid color-mix(in srgb, var(--mem-border) 55%, transparent);
+}
 
 /* Keep a useful reading lane beside Info before the directory squeezes it. */
 @container wiki-main (max-width: 900px) {

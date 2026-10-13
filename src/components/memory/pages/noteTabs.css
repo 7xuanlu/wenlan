@@ -258,18 +258,6 @@ body.note-tab-dragging *::after {
 
 .note-tab-drag-feedback { color: var(--mem-text-secondary); font-size: 11px; }
 
-.note-group-frame:has(.page-info-drawer-group-overlay) .note-tabs-list,
-.note-group-frame:has(.page-info-drawer-expanded-group) .note-tabs-list {
-  flex: 1 1 0;
-  min-width: 0;
-  overflow-x: auto;
-}
-
-.note-group-frame:has(.page-info-drawer-group-overlay) .note-tabs,
-.note-group-frame:has(.page-info-drawer-expanded-group) .note-tabs {
-  padding-inline: 8px;
-}
-
 .note-group-frame:has(.page-info-drawer-group-overlay) .note-tab,
 .note-group-frame:has(.page-info-drawer-expanded-group) .note-tab {
   max-width: 100%;

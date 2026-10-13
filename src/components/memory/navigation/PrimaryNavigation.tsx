@@ -28,18 +28,21 @@ type PrimaryNavigationProps = {
   readonly onNavigatePages?: () => void;
   readonly onNavigateSources?: () => void;
   readonly onNavigateSpaces: (create: boolean) => void;
+  /** Tooltip for Wiki while it would bring back a note list that gave way. */
+  readonly pagesHint?: string;
 };
 
 type NavButtonProps = {
   readonly active: boolean;
   readonly compact?: boolean;
+  readonly hint?: string;
   readonly icon: React.ReactNode;
   readonly label: string;
   readonly moreItem?: boolean;
   readonly onClick?: () => void;
 };
 
-function NavButton({ active, compact = false, icon, label, moreItem = false, onClick }: NavButtonProps) {
+function NavButton({ active, compact = false, hint, icon, label, moreItem = false, onClick }: NavButtonProps) {
   if (!onClick) return null;
   return (
     <button
@@ -48,7 +51,7 @@ function NavButton({ active, compact = false, icon, label, moreItem = false, onC
       className={moreItem ? "notes-more-destination-link" : compact ? "notes-rail-button" : "notes-primary-link"}
       data-active={active ? "true" : undefined}
       onClick={onClick}
-      title={compact ? label : undefined}
+      title={hint ?? (compact ? label : undefined)}
       type="button"
     >
       <span aria-hidden="true" className="notes-navigation-glyph">{icon}</span>
@@ -81,6 +84,7 @@ export function PrimaryNavigation({
   onNavigatePages,
   onNavigateSources,
   onNavigateSpaces,
+  pagesHint,
 }: PrimaryNavigationProps) {
   const [visibleState, setVisibleState] = useState(readNavigationPreferences);
   const visible = sanitizeVisibleNavigation(visibleState);
@@ -151,7 +155,7 @@ export function PrimaryNavigation({
   return (
     <nav aria-label={labels.navigation} className={`notes-rail-nav${compact ? " notes-rail-nav--icons" : " notes-rail-nav--labels"}`}>
       {railDestinations.map((destination) => (
-        <NavButton active={active === destination.key} compact={compact} icon={destination.icon} key={destination.key} label={destination.label} onClick={destination.onClick} />
+        <NavButton active={active === destination.key} compact={compact} hint={destination.key === "pages" ? pagesHint : undefined} icon={destination.icon} key={destination.key} label={destination.label} onClick={destination.onClick} />
       ))}
       <div
         className="notes-more-anchor"

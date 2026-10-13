@@ -1265,6 +1265,7 @@ export default function Main({
             onNavigateActivity={() => navigateTo({ kind: "activity" })}
             activityCurrent={view.kind === "activity"}
             onNavigatePages={navigateNotes}
+            noteListHidden={isWikiWorkspaceView && noteListYielded}
             onNavigateEntities={() => navigateTo({ kind: "entities" })}
             onNavigateGraph={() => navigateTo({ kind: "graph" })}
             onNavigateSources={() => navigateTo({ kind: "sources" })}
