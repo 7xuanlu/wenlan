@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -17,7 +18,11 @@ export default defineConfig({
     // The suite includes several jsdom-heavy CodeMirror and graph files.
     // Vitest otherwise uses every available core in run mode, which can
     // starve their async DOM work on developer laptops and Windows runners.
-    maxWorkers: 4,
+    // 4 is a cap, not a target. A 3-vCPU macos-14 CI runner gets Vitest's own
+    // default of cores - 1 = 2. Four workers on 3 vCPUs oversubscribe the CPU:
+    // in a local simulation that roughly doubled per-test time with no
+    // wall-clock gain, which pushed CPU-heavy tests past the 5 s timeout.
+    maxWorkers: Math.max(1, Math.min(4, availableParallelism() - 1)),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html', 'lcov'],
