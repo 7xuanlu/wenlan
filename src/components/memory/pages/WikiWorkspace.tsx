@@ -16,7 +16,7 @@ import "./wikiWorkspace.css";
 const NOTE_LIST_WIDTH = 248;
 /** The list gives way (and opens as a flyout) before the note beside it, and
  * beside Info when that is open, gets narrower than this. */
-const MIN_LANE_BESIDE_NOTE_LIST = 600;
+const MIN_LANE_BESIDE_NOTE_LIST = 680;
 /** Matches the wiki-main container query that turns the list into a dropdown. */
 const NARROW_WORKSPACE_WIDTH = 900;
 
