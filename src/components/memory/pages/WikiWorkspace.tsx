@@ -96,7 +96,9 @@ export function WikiWorkspace({
       const content = root.querySelector<HTMLElement>(".wiki-primary-note-group .note-group-content");
       const lane = content?.getBoundingClientRect().width ?? 0;
       const besideList = dockedRef.current ? lane : lane - NOTE_LIST_WIDTH;
-      const squeezed = !narrow && lane > 0 && besideList < MIN_LANE_BESIDE_NOTE_LIST;
+      // Two note groups side by side were chosen narrower; the list stays put.
+      const split = Boolean(root.querySelector(".wiki-workspace-reading.is-split"));
+      const squeezed = !narrow && !split && lane > 0 && besideList < MIN_LANE_BESIDE_NOTE_LIST;
       setLayout(current => current.narrow === narrow && current.squeezed === squeezed ? current : { narrow, squeezed });
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };

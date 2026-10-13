@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, type Page as BrowserPage } from "@playwright/test";
 import { createSpacesNavigationFixture } from "./fixtures/spacesNavigation";
-import { openWikiNote } from "./helpers/wikiWorkspace";
+import { openWikiNote, showWikiFolders } from "./helpers/wikiWorkspace";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 
 const evidenceDirectory = process.env.WENLAN_UI_EVIDENCE_DIR || "/tmp/wenlan-wiki-ui-evidence";
@@ -57,7 +57,7 @@ for(const locale of ["en","zh-Hant"] as const)for(const theme of ["light","dark"
  const right=page.locator(".wiki-workspace-reading"),tree=page.locator(".wiki-workspace-directory");
  await expect(right.locator(".wiki-table, .asset-card, .wiki-folder-lenses")).toHaveCount(0);
  await expect(page.locator(".note-tab-create")).toBeVisible();
- if(!(await tree.isVisible()))await page.locator(".wiki-workspace-folders-toggle").click();
+ await showWikiFolders(page);
  const inventoryMode=tree.getByRole("combobox");
  await inventoryMode.selectOption("folders");
  await expect(inventoryMode).toHaveValue("folders");
