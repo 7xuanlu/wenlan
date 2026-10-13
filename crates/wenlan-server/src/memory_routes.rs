@@ -949,8 +949,9 @@ async fn handle_store_memory_inner(
             ),
             wenlan_core::refinery::RouteMode::Unconfigured => (
                 "paused".to_string(),
-                "Stored. Recall is available now; Steep is paused until you \
-             choose a model source."
+                "Stored. Recall is available now. No model source is chosen, so \
+             Steep is not classifying or linking it; the AI tool that stored it \
+             can do that, or choose a model source to make it automatic."
                     .to_string(),
             ),
             wenlan_core::refinery::RouteMode::PinnedUnavailable => (

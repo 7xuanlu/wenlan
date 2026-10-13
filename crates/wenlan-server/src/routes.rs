@@ -936,10 +936,9 @@ async fn handle_distill_inner(
     });
     if no_clusters_and_no_pages {
         if let serde_json::Value::Object(ref mut map) = response {
-            // Distinguish "nothing to synthesize" from "nothing CAN
-            // synthesize" -- on a fresh install with no on-device model or
-            // API key configured, telling the user to capture more memories
-            // sends them the wrong way.
+            // Clustering itself needs no model, so an empty pass means too
+            // few related memories either way. Without a model nothing links
+            // memories to topics, so grouping rests on similarity alone.
             let prefer_llm =
                 foreground_rebuild_llm(api_llm.as_ref(), external_llm.as_ref(), llm.as_ref());
             let model_available = prefer_llm
@@ -949,7 +948,7 @@ async fn handle_distill_inner(
             let hint = if model_available {
                 "No page-sized cluster formed in this scope: nothing grouped into 3 or more related memories that fit one page. Capture more related memories, or check the daemon log for dropped clusters."
             } else {
-                "No synthesis model is configured or reachable: install an on-device model, connect a local server (Ollama, LM Studio), or set an Anthropic key via `wenlan setup` / `/wenlan:setup` before distilling."
+                "No page-sized cluster formed in this scope: nothing grouped into 3 or more related memories that fit one page. Distilling does not need a model. Capture more related memories on the same topic, then distill again. Choosing a model source in `wenlan setup` / `/wenlan:setup` also links memories to topics automatically, which helps them group."
             };
             map.insert("hint".into(), serde_json::json!(hint));
         }

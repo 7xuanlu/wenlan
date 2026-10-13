@@ -1221,7 +1221,28 @@ fn format_capture_success(resp: &StoreMemoryResponse) -> String {
             msg.push_str(&format!("\n  - {}", warning));
         }
     }
+    if matches!(resp.enrichment.as_str(), "paused" | "off") {
+        msg.push_str(&format!(
+            "\nenrichment: {}. No model is classifying memories, so this one stays `{}`. \
+             Set memory_type yourself on later captures.",
+            resp.enrichment, resp.memory_type
+        ));
+    }
     msg
+}
+
+/// Clients without the plugin's distill skill (Claude Desktop, Cursor) only
+/// see the tool reply, so the reply itself says how to finish `pending`.
+fn distill_pending_guide(pending: usize) -> String {
+    format!(
+        "{pending} cluster(s) in `pending` are waiting for you to write them as pages. \
+         For each one, read `contents`; skip it if the memories do not share one topic. \
+         Otherwise write a short noun-phrase title, a one-sentence summary and wiki prose \
+         that only states what the memories say, then call write_page with \
+         source_memory_ids set to the cluster's `source_ids` (and its `entity_id` and \
+         `space` when present). When `existing_page_id` is set, pass it as page_id to \
+         refresh that page instead of creating a new one."
+    )
 }
 
 fn daemon_setup_hint() -> &'static str {
@@ -2107,7 +2128,16 @@ impl WenlanMcpServer {
                 // thin wrapper; the synthesis lives where the LLM is.
                 let pretty =
                     serde_json::to_string_pretty(&resp).unwrap_or_else(|_| resp.to_string());
-                Ok(CallToolResult::success(vec![ContentBlock::text(pretty)]))
+                let pending = resp
+                    .get("pending")
+                    .and_then(|v| v.as_array())
+                    .map_or(0, Vec::len);
+                let text = if pending == 0 {
+                    pretty
+                } else {
+                    format!("{}\n\n{}", distill_pending_guide(pending), pretty)
+                };
+                Ok(CallToolResult::success(vec![ContentBlock::text(text)]))
             }
             Err(e) => Ok(tool_error(e, "distill")),
         }
@@ -2850,7 +2880,7 @@ impl WenlanMcpServer {
     // --- Primary Tools ---
 
     #[tool(
-        description = "Capture a memory: one durable insight the user's wiki should keep.\n\nSTORE PROACTIVELY, without waiting for 'remember this' (a floor, not a trigger): when the user states a preference, makes a decision, corrects you or earlier information, or shares a durable fact about themselves or the people, projects, and tools they care about.\n\nWHEN NOT TO STORE: conversation filler; things the user can trivially re-derive (file paths, recent git history); anything already stored (recall first if unsure); Tool output or command results (file contents, build logs, system prompts); transient task state; general world facts not personal to this user; Your own inferences the user did not express; agent operating rules ('always X' / 'never Y' belong in the agent's own config, not shared memory: store the preference as a fact, never the rule).\n\nCONTENT QUALITY: Specific beats vague ('prefers Rust for CLI tools because of compile-time safety' > 'likes Rust'). Include the WHY, which only you know. Name people, projects, and tools; this powers the knowledge graph. Atomic: one idea per memory. Each call is one atomic idea: 'prefers TDD' and 'uses pytest' are two calls. Declarative, not narrative: 'User prefers X because Y', not 'User said today they prefer X'; memories outlive the conversation.\n\nMEMORY TYPES: omit and trust the backend. By default do NOT set memory_type; the backend auto-classifies into identity / preference / decision / lesson / gotcha / fact with more context than you have, and agents that over-specify pick wrong. Opt in only when sure: 'profile' (about the user: identity / preference), 'knowledge' (about the world: decision / lesson / gotcha / fact), or a precise type when the distinction matters. EXCEPTION: set memory_type=\"decision\" explicitly ONLY when the user articulated the alternatives weighed AND the reasoning; those structured fields power the Decision Log view. A bare 'I'm switching to Cursor' is a preference change, not a decision.\n\nOmitting structured_fields beats guessing. If `supersedes` is supplied for a correction, this call can replace an existing memory in retrieval; use it only when that replacement is intended.",
+        description = "Capture a memory: one durable insight the user's wiki should keep.\n\nSTORE PROACTIVELY, without waiting for 'remember this' (a floor, not a trigger): when the user states a preference, makes a decision, corrects you or earlier information, or shares a durable fact about themselves or the people, projects, and tools they care about.\n\nWHEN NOT TO STORE: conversation filler; things the user can trivially re-derive (file paths, recent git history); anything already stored (recall first if unsure); Tool output or command results (file contents, build logs, system prompts); transient task state; general world facts not personal to this user; Your own inferences the user did not express; agent operating rules ('always X' / 'never Y' belong in the agent's own config, not shared memory: store the preference as a fact, never the rule).\n\nCONTENT QUALITY: Specific beats vague ('prefers Rust for CLI tools because of compile-time safety' > 'likes Rust'). Include the WHY, which only you know. Name people, projects, and tools; this powers the knowledge graph. Atomic: one idea per memory. Each call is one atomic idea: 'prefers TDD' and 'uses pytest' are two calls. Declarative, not narrative: 'User prefers X because Y', not 'User said today they prefer X'; memories outlive the conversation.\n\nMEMORY TYPES: omit and trust the backend. By default do NOT set memory_type; the backend auto-classifies into identity / preference / decision / lesson / gotcha / fact with more context than you have, and agents that over-specify pick wrong. Opt in only when sure: 'profile' (about the user: identity / preference), 'knowledge' (about the world: decision / lesson / gotcha / fact), or a precise type when the distinction matters. EXCEPTION: set memory_type=\"decision\" explicitly ONLY when the user articulated the alternatives weighed AND the reasoning; those structured fields power the Decision Log view. A bare 'I'm switching to Cursor' is a preference change, not a decision. NO MODEL: when a capture receipt says `enrichment: paused` or `enrichment: off`, nothing classifies memories, so set memory_type yourself on every capture.\n\nOmitting structured_fields beats guessing. If `supersedes` is supplied for a correction, this call can replace an existing memory in retrieval; use it only when that replacement is intended.",
         annotations(
             title = "Capture",
             read_only_hint = false,
@@ -3563,8 +3593,10 @@ impl ServerHandler for WenlanMcpServer {
              - get_page_sources shows what a page rests on.\n\n\
              BRIEF vs RECALL: brief is the Space-owned project snapshot; recall is a targeted lookup. \
              Brief reads never create or mutate state; only update_brief writes.\n\n\
-             The backend classifies, extracts entities, scores quality, and deduplicates. Focus on what only \
-             you know: the conversational context, why something matters, and what the user actually cares about."
+             When the user has chosen a model source, the backend classifies, extracts entities, scores quality, \
+             and deduplicates. Without one, capture receipts say enrichment is paused and you do the typing, and \
+             distill hands you clusters to write as pages. Either way, focus on what only you know: the \
+             conversational context, why something matters, and what the user actually cares about."
         )
     }
 }
