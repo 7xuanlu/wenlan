@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=dde5947d438bfa82794368b322ef33550b1d060d71c3fc7b669dd9609636b33f -->
+<!-- README_SYNC: source=README.md sha256=512050cd37ab138bbd29bc74b64fe3fa6725b8c4a6c9749a693e21901aa433e7 -->
 
 <p align="center">
   <picture>
@@ -93,8 +93,8 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 ### 探索你的个人知识图谱
 
 <p align="center">
-  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 中彼此连接的阅读、学习、生活、研究与开发知识" width="100%">
-  <br><sub>根据实机示范数据调整布局的示意，保留真实关联。</sub>
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 实机知识图谱，搭配个人兴趣、研究与开发的区域示意" width="100%">
+  <br><sub>实机图谱；区域名称与范围为示意标注。</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>

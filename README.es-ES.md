@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=dde5947d438bfa82794368b322ef33550b1d060d71c3fc7b669dd9609636b33f -->
+<!-- README_SYNC: source=README.md sha256=512050cd37ab138bbd29bc74b64fe3fa6725b8c4a6c9749a693e21901aa433e7 -->
 
 <p align="center">
   <picture>
@@ -93,8 +93,8 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 ### Explora tu grafo de conocimiento personal
 
 <p align="center">
-  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Lectura, aprendizaje, vida cotidiana, investigación y desarrollo conectados en Wenlan" width="100%">
-  <br><sub>Ilustración reorganizada a partir de datos de ejemplo de la app, conservando las relaciones reales.</sub>
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Grafo real de Wenlan con regiones ilustrativas de intereses personales, investigación y desarrollo" width="100%">
+  <br><sub>Grafo real de la app; los nombres y límites de las regiones son ilustrativos.</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>

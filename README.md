@@ -90,8 +90,8 @@ Scanned PDFs need text extraction before import.
 ### Explore your personal knowledge graph
 
 <p align="center">
-  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Connected reading, learning, daily life, research, and development in Wenlan" width="100%">
-  <br><sub>Illustration rearranged from actual App demo data; real relationships preserved.</sub>
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan knowledge graph with illustrative regions for personal interests, research, and development" width="100%">
+  <br><sub>Actual App graph; region names and boundaries are illustrative.</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
