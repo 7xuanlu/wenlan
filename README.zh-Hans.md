@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=25986dedb8169271e85378b72f08d624c26900824a202c2d491059554c5fdc7c -->
+<!-- README_SYNC: source=README.md sha256=dd54d0971e48eacf7cc1f676497781b2898fdd15b9f4819928889926cfb879c4 -->
 
 <p align="center">
   <picture>
@@ -67,7 +67,7 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 想让 AI 使用你保存的知识时，再连接 Claude Code、Codex 或其他受支持的客户端。请按[AI 设置指南](docs/setup-with-ai.md)操作。
 
-> 帮我把之前聊过的想法整理成一页，附上来源。
+> 参考我之前的笔记，帮我接着完成这个任务。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
