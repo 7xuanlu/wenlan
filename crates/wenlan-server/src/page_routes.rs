@@ -66,6 +66,54 @@ pub(crate) fn register_manual_edit(
     router.route("/api/memory/{id}/update-page", post(handle_update_page))
 }
 
+/// One `GET /api/pages` window, with `limit` and `offset` counted in pages this
+/// caller may see.
+///
+/// The truth adapter can hide a page, and it can only run after SQL has
+/// picked the rows. Applying `limit` and `offset` to raw rows made any window
+/// holding a hidden page come back short, and every pager of this route (the
+/// app's `listAllPages`, MCP `list_pages`) reads a short window as the end of
+/// the list, so every page after it silently disappeared. Here the scan
+/// starts at the first row, skips `offset` visible pages, and keeps reading
+/// until it has `limit` of them or the rows run out. Rescanning from the top
+/// costs O(offset) rows per call, which is cheap at library sizes and keeps
+/// the wire unchanged for every client.
+async fn list_visible_browse_pages(
+    db: &wenlan_core::db::MemoryDB,
+    grant: &wenlan_core::truth_contract::TruthGrant,
+    status: &str,
+    limit: usize,
+    offset: usize,
+    scope: &wenlan_core::read_scope::ReadScope,
+) -> Result<Vec<wenlan_core::pages::Page>, wenlan_core::WenlanError> {
+    const MIN_SCAN_BATCH: usize = 100;
+    let batch = limit.max(MIN_SCAN_BATCH);
+    let mut skipped = 0;
+    let mut row_offset = 0;
+    let mut window = Vec::with_capacity(limit.min(batch));
+    while window.len() < limit {
+        // Q1 browse surface: `kind='entity'` dual-write shadow pages appear
+        // here, so read the unfenced `_browse` twin (export + internal callers
+        // keep the fenced `list_pages_scoped`).
+        let rows = db
+            .list_pages_scoped_browse(status, batch as i64, row_offset as i64, scope)
+            .await?;
+        let read = rows.len();
+        row_offset += read;
+        for page in wenlan_core::truth_adapter::filter_pages(db, grant, rows).await? {
+            if skipped < offset {
+                skipped += 1;
+            } else if window.len() < limit {
+                window.push(page);
+            }
+        }
+        if read < batch {
+            break;
+        }
+    }
+    Ok(window)
+}
+
 /// GET /api/pages
 pub async fn handle_list_pages(
     State(state): State<Arc<RwLock<ServerState>>>,
@@ -97,14 +145,7 @@ pub async fn handle_list_pages(
     let scope =
         crate::read_scope::effective_read_scope(&db, space.as_deref(), header_space.as_deref())
             .await?;
-    // Q1 browse surface: `kind='entity'` dual-write shadow pages appear here,
-    // so read the unfenced `_browse` twin (export + internal callers keep the
-    // fenced `list_pages_scoped`).
-    let pages = db
-        .list_pages_scoped_browse(status, limit as i64, offset as i64, &scope)
-        .await
-        .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
-    let pages = wenlan_core::truth_adapter::filter_pages(&db, &view.grant, pages)
+    let pages = list_visible_browse_pages(&db, &view.grant, status, limit, offset, &scope)
         .await
         .map_err(|e| ServerError::SearchFailed(e.to_string()))?;
     // Enrich only the final scoped, truth-filtered browse result. Entity shadow

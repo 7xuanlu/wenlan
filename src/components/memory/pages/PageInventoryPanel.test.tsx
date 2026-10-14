@@ -19,6 +19,16 @@ describe("folder tree",()=>{
  it("supports keyboard disclosure and nested files",async()=>{setup({fileTree:true});const user=userEvent.setup();const expand=await screen.findByRole("button",{name:"Expand Work"});expand.focus();await user.keyboard("{Enter}");await user.click(screen.getByRole("button",{name:"Research"}));expect(screen.getByRole("button",{name:"Open Nested"})).toBeInTheDocument();await user.click(screen.getByRole("button",{name:"Collapse Work"}));expect(screen.queryByRole("button",{name:"Open Nested"})).not.toBeInTheDocument();});
  it("keeps legacy note children expandable in the non-folder-only inventory",async()=>{setup({browsing:false});const user=userEvent.setup();await user.click(await screen.findByRole("button",{name:"Expand Work"}));expect(screen.getByRole("button",{name:"Open Direct"})).toBeInTheDocument();});
  it("exposes root and legacy files directly without an All notes scope row",async()=>{active.mockResolvedValue([page("Root note",{storage_path:"root-note.md"}),page("Legacy"),page("Orphan",{folder_path:"Missing"})]);setup({fileTree:true});expect(await screen.findByRole("button",{name:"Open Root note"})).toBeInTheDocument();expect(screen.getByRole("button",{name:"Open Legacy"})).toBeInTheDocument();expect(screen.getByRole("button",{name:"Open Orphan"})).toBeInTheDocument();expect(screen.queryByRole("button",{name:"Top level"})).not.toBeInTheDocument();});
+ it("lists every root note, including notes distilled about an entity, and leaves out entity shadow pages",async()=>{
+  const notes=Array.from({length:60},(_,index)=>page(`Note ${index}`,{storage_path:`note-${index}.md`,creation_kind:"distilled",...(index%3===0?{entity_id:`ent_${index}`}:{})}));
+  active.mockResolvedValue([...notes,page("Shadow",{entity_id:"ent_0",creation_kind:"entity"})]);
+  vi.mocked(knowledgeFoldersList).mockResolvedValue({folders:[],truncated:false});
+  setup({fileTree:true});
+  expect(await screen.findByRole("button",{name:"Open Note 59"})).toBeInTheDocument();
+  expect(screen.getAllByRole("button",{name:/^Open Note \d+$/})).toHaveLength(60);
+  expect(screen.getByRole("button",{name:"Open Note 0"})).toBeInTheDocument();
+  expect(screen.queryByRole("button",{name:"Open Shadow"})).not.toBeInTheDocument();
+ });
  it("offers a single header folder button after an empty folder list loads", async () => {
   vi.mocked(knowledgeFoldersList).mockResolvedValue({ folders: [], truncated: false });
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
