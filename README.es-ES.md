@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=ed659083b0661b60dbb9487661b7a60afc4cf5b34365c5ce948a6b4b30bead85 -->
+<!-- README_SYNC: source=README.md sha256=a62a0d516b6744bce7d1da13e5f5333128565b001524eae123f5e890837e7cc1 -->
 
 <p align="center">
   <picture>
@@ -31,11 +31,13 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Replace this walkthrough when the separately produced release video is ready. -->
-https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
-
+<!-- Replace the linked walkthrough when the separately produced release video is ready. -->
 <p align="center">
-  <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con páginas y citas a sus fuentes.</sub>
+  <a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">
+    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Páginas, memorias y fuentes conectadas en Wenlan" width="100%">
+  </a>
+  <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Ver el vídeo</a>
+  <br><sub>Portada compuesta a partir de vistas reales de la app y datos de ejemplo.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -118,10 +120,6 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
-<p align="center">
-  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Páginas, memorias y fuentes conectadas en Wenlan" width="100%">
-  <br><sub>Composición basada en la app y sus relaciones reales; grafo reorganizado y anotado. No es una vista nativa de tres columnas.</sub>
-</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>

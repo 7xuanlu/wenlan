@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=ed659083b0661b60dbb9487661b7a60afc4cf5b34365c5ce948a6b4b30bead85 -->
+<!-- README_SYNC: source=README.md sha256=a62a0d516b6744bce7d1da13e5f5333128565b001524eae123f5e890837e7cc1 -->
 
 <p align="center">
   <picture>
@@ -31,11 +31,13 @@ Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Replace this walkthrough when the separately produced release video is ready. -->
-https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
-
+<!-- Replace the linked walkthrough when the separately produced release video is ready. -->
 <p align="center">
-  <sub>開場為組合示意，並非 app 的原生三欄介面；後續為 app 實際操作錄影，展示頁面與來源引用。</sub>
+  <a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">
+    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此連結的頁面、記憶與來源" width="100%">
+  </a>
+  <br><a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">▶ 觀看影片</a>
+  <br><sub>封面以實機畫面與示範資料組合而成。</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -117,10 +119,6 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 
-<p align="center">
-  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此連結的頁面、記憶與來源" width="100%">
-  <br><sub>基於實際 App 與關係資料的組合圖；圖譜重排並加上標示，非原生三欄畫面。</sub>
-</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>

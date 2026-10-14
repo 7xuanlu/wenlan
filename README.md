@@ -29,11 +29,13 @@ As sources change, you can ask AI to update the pages or enable background updat
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Replace this walkthrough when the separately produced release video is ready. -->
-https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
-
+<!-- Replace the linked walkthrough when the separately produced release video is ready. -->
 <p align="center">
-  <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including pages and source citations.</sub>
+  <a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">
+    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
+  </a>
+  <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Watch the video</a>
+  <br><sub>Cover composed from actual App views and demo data.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -115,10 +117,6 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 
 Your pages are local Markdown files you can read, edit, and take with you.
 
-<p align="center">
-  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
-  <br><sub>Composite based on the actual app and relationship data; graph layout and annotations enhanced. Not a native three-column view.</sub>
-</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
