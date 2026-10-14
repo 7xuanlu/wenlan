@@ -25,6 +25,8 @@ type PageInventoryPanelProps = {
   readonly onCreatePage?: (folderPath?: string) => void;
   readonly onOpenDraft?: (draftId: string, space: string | null) => void;
   readonly onOpenPage?: (page: Page) => void;
+  /** File-tree mode: the number of notes the tree lists, or null until it has loaded. */
+  readonly onNoteCountChange?: (count: number | null) => void;
 };
 
 type FolderContextMenuState = {
@@ -34,7 +36,7 @@ type FolderContextMenuState = {
   readonly invoker: HTMLElement;
 };
 
-export function PageInventoryPanel({ currentPageId = null, currentFolderPath, fileTree = false, inventoryScope = "all", browsing = false, filter: controlledFilter, onFilterChange, onBrowse, onCreatePage, onOpenDraft, onOpenPage }: PageInventoryPanelProps) {
+export function PageInventoryPanel({ currentPageId = null, currentFolderPath, fileTree = false, inventoryScope = "all", browsing = false, filter: controlledFilter, onFilterChange, onBrowse, onCreatePage, onOpenDraft, onOpenPage, onNoteCountChange }: PageInventoryPanelProps) {
   const { i18n, t } = useTranslation();
   const id = useId();
   const queryClient = useQueryClient();
@@ -57,6 +59,8 @@ export function PageInventoryPanel({ currentPageId = null, currentFolderPath, fi
   const drafts = useQuery({ queryKey: explicitBrowse ? ["pages", "draft"] : ["pages", "inventory", "passive", "draft"], queryFn: explicitBrowse ? listAllDraftPagesExplicitBrowse : listAllDraftPages, ...(explicitBrowse ? EXPLICIT_BROWSE_QUERY_POLICY : { staleTime: 30_000 }) });
   const folders = useKnowledgeFolders();
   const pages = useMemo(() => collectPageInventory(active.data ?? [], drafts.data ?? []), [active.data, drafts.data]);
+  const noteCount = fileTree && active.isSuccess && drafts.isSuccess ? pages.length : null;
+  useEffect(() => { onNoteCountChange?.(noteCount); }, [noteCount, onNoteCountChange]);
   const selectedPage = pages.find(page => page.id === currentPageId);
   const selectedPath = selectedPage ? pageFolderPath(selectedPage) : currentFolderPath !== undefined ? currentFolderPath : inventoryFolderPath(inventoryScope);
   const [creationPath, setCreationPath] = useState<string | null>(selectedPath);

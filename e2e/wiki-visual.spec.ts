@@ -12,11 +12,11 @@ function wikiPages() {
   if (!topic || !entity || !decision || !recap || !ambient || !person || !policy) throw new Error("Wiki fixture requires seven base pages");
   return [
     { ...topic, title: "Wenlan product principles", summary: "Guiding principles shaping the future of Wenlan.", space: "Wenlan" },
-    { ...entity, title: "Nash Su", summary: "Research partner in distributed cognition.", entity_id: "entity-ada", space: "Research" },
+    { ...entity, title: "Nash Su", summary: "Research partner in distributed cognition.", entity_id: "entity-ada", creation_kind: "entity", space: "Research" },
     { ...decision, title: "Why citations stay visible", summary: "Keep citations visible to preserve trust and traceability.", content: "Decision: keep citations visible.", space: "Wenlan" },
     { ...recap, title: "July research recap", summary: "Key findings and open questions from July.", space: "Research" },
     { ...ambient, title: "Ambient memory", summary: "Capturing and surfacing useful context over time.", domain: null, space: null },
-    { ...person, title: "Grace Hopper", summary: "Pioneer of programming languages and tooling.", entity_id: "entity-grace", domain: null, space: null },
+    { ...person, title: "Grace Hopper", summary: "Pioneer of programming languages and tooling.", entity_id: "entity-grace", creation_kind: "entity", domain: null, space: null },
     { ...policy, title: "Source credibility policy", summary: "Ensure sources are evaluated for credibility and trust.", content: "Decision: evaluate every source.", space: "Wenlan" },
     { ...topic, id: "page-eighth", title: "Memory provenance", summary: "Where durable context comes from.", last_modified: "2026-07-05T12:00:00Z", space: "Research", storage_path: "Research/memory-provenance.md" },
     { ...topic, id: "page-ninth", title: "Local-first architecture", summary: "Private knowledge stays on this device.", last_modified: "2026-07-04T12:00:00Z", space: "Wenlan", storage_path: "Research/Notes/local-first-architecture.md" },

@@ -7,7 +7,10 @@ import { WikiWorkspace } from "./WikiWorkspace";
 import { useWikiFolderCreation } from "./WikiFolderCreationContext";
 
 vi.mock("./PageInventoryPanel", () => ({
-  PageInventoryPanel: () => <div data-testid="wiki-directory" />,
+  PageInventoryPanel: ({ onNoteCountChange }: { onNoteCountChange?: (count: number | null) => void }) => {
+    useEffect(() => { onNoteCountChange?.(145); }, [onNoteCountChange]);
+    return <div data-testid="wiki-directory" />;
+  },
 }));
 
 describe("WikiWorkspace", () => {
@@ -32,6 +35,19 @@ describe("WikiWorkspace", () => {
     fireEvent.change(mode, { target: { value: "recent" } });
     expect(screen.queryByTestId("wiki-directory")).not.toBeInTheDocument();
     expect(getByTestId("active-editor")).toBe(editor);
+  });
+
+  it("shows the Folders note count as a number beside the title, and only in folders mode", () => {
+    render(<WikiWorkspace onBrowse={vi.fn()} onCreatePage={vi.fn()} onOpenDraft={vi.fn()} onOpenPage={vi.fn()}><textarea /></WikiWorkspace>);
+    const mode = screen.getByRole("combobox");
+    expect(screen.queryByText("145 notes")).not.toBeInTheDocument();
+    fireEvent.change(mode, { target: { value: "folders" } });
+    const count = screen.getByTitle("145 notes");
+    expect(count).toHaveTextContent("145");
+    expect(count.previousElementSibling).toBe(mode.closest("label"));
+    expect(screen.getByText("145 notes")).toHaveClass("sr-only");
+    fireEvent.change(mode, { target: { value: "recent" } });
+    expect(screen.queryByTitle("145 notes")).not.toBeInTheDocument();
   });
 
   it("restores the chosen custom mode after remount without entering the folder tree", () => {
