@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8abefca359370bd100af739b99936e5f180c6aeca3a20e39decff12871be1a66 -->
+<!-- README_SYNC: source=README.md sha256=172814021ebd0b464c6472ed4f8ae68dd191412f6666692c11a82b876693def1 -->
 
 <p align="center">
   <picture>
@@ -118,29 +118,25 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 
 <p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="直接閱讀與編輯你的維基" width="100%">
-  <br><sub>實際程式介面的瀏覽器截圖，使用虛構讀書會資料（英文介面）。</sub>
+  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此連結的頁面、記憶與來源" width="100%">
+  <br><sub>基於實際 App 與關係資料的組合圖；圖譜重排並加上標示，非原生三欄畫面。</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
-
-[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
-
 <a id="knowledge-graph"></a>
-
-### 從一頁，找到相關的知識
-
-圖譜把讀書會的頁面連起來，讓你沿著一個想法找到下一篇筆記。
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-graph.png" alt="Wenlan 圖譜中彼此連結的讀書會頁面" width="100%">
-  <br><sub>實際程式介面的瀏覽器截圖，使用虛構讀書會資料（英文介面）。</sub>
-</p>
-
 <a id="retrieval"></a>
 <a id="從關鍵字語意與關聯找回正確內容"></a>
 
-從頁面連到相關概念與依據。[圖譜與搜尋如何運作](docs/knowledge-guide.zh-Hant.md#graph-and-search)。
+### AI 接著做，不必從頭交代
+
+透過關鍵詞、語義與 Graph，將之前的研究與決定帶進下一個任務。
+
+<p align="center">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
+  <br><sub>概念示意：虛構專案與對話，非實測比較。</sub>
+</p>
+
+[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages) · [圖譜與搜尋如何運作](docs/knowledge-guide.zh-Hant.md#graph-and-search)。
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>

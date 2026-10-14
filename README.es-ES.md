@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=8abefca359370bd100af739b99936e5f180c6aeca3a20e39decff12871be1a66 -->
+<!-- README_SYNC: source=README.md sha256=172814021ebd0b464c6472ed4f8ae68dd191412f6666692c11a82b876693def1 -->
 
 <p align="center">
   <picture>
@@ -119,29 +119,25 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
 <p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="Lee y edita tu wiki directamente" width="100%">
-  <br><sub>Interfaz real capturada en un navegador con datos ficticios de un club de lectura (interfaz en inglés).</sub>
+  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Páginas, memorias y fuentes conectadas en Wenlan" width="100%">
+  <br><sub>Composición basada en la app y sus relaciones reales; grafo reorganizado y anotado. No es una vista nativa de tres columnas.</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
-
-[Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages).
-
 <a id="knowledge-graph"></a>
-
-### Sigue las conexiones que hay detrás de una página
-
-El grafo conecta las páginas del club de lectura para seguir una idea hasta la siguiente nota.
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-graph.png" alt="Páginas del club de lectura conectadas en el grafo de Wenlan" width="100%">
-  <br><sub>Interfaz real capturada en un navegador con datos ficticios de un club de lectura (interfaz en inglés).</sub>
-</p>
-
 <a id="retrieval"></a>
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
 
-Sigue una página hasta los conceptos y las fuentes relacionados. [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
+### La IA continúa con lo que ya sabes
+
+La búsqueda por palabras clave, significado y grafo incorpora investigaciones y decisiones previas a la siguiente tarea.
+
+<p align="center">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
+  <br><sub>Ilustración conceptual: proyecto y conversaciones ficticios, no una comparación medida.</sub>
+</p>
+
+[Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages) · [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>

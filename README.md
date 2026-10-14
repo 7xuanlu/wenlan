@@ -116,29 +116,25 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 Your pages are local Markdown files you can read, edit, and take with you.
 
 <p align="center">
-  <img src="./docs/assets/screenshots/v019-wiki-reading.png" alt="Read and edit your wiki, without leaving the page" width="100%">
-  <br><sub>Actual app interface, captured in a browser with fictional reading-club data.</sub>
+  <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
+  <br><sub>Composite based on the actual app and relationship data; graph layout and annotations enhanced. Not a native three-column view.</sub>
 </p>
 
 <a id="what-wenlan-is-not"></a>
-
-[How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages).
-
 <a id="knowledge-graph"></a>
-
-### Follow the connections behind a page
-
-The graph connects the reading-club pages, so you can follow an idea into the next note.
-
-<p align="center">
-  <img src="./docs/assets/screenshots/v019-graph.png" alt="Reading-club pages connected in Wenlan’s graph" width="100%">
-  <br><sub>Actual app interface, captured in a browser with fictional reading-club data.</sub>
-</p>
-
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
-Follow a page to related concepts and evidence. [How graph and search work](docs/knowledge-guide.md#graph-and-search).
+### Let AI continue from what you already know
+
+Keyword, semantic, and graph retrieval bring previous research and decisions into the next task.
+
+<p align="center">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
+  <br><sub>Concept illustration: fictional project and conversations, not a measured comparison.</sub>
+</p>
+
+[How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages) · [How graph and search work](docs/knowledge-guide.md#graph-and-search).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
