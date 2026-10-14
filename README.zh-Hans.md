@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2e7cc1be7163a3e4c11092e383924192ccaed6b883b42c5b0bb708be778c6e20 -->
+<!-- README_SYNC: source=README.md sha256=9d019b1e6f4c529a970c0aed856f16a04af2c4ecf42db521b542a1bd28a81e5f -->
 
 <p align="center">
   <picture>
@@ -7,9 +7,7 @@
   </picture>
 </p>
 
-Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链接的页面，让你和 AI 工具在已有成果上继续工作。
-
-来源有变，可以请 AI 更新页面，也能启用后台更新。如果你编辑过页面，Wenlan 会提出修订，让你确认是否采用，而不是自动覆盖你的内容。
+Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页面，让你和已连接的 AI 工具能够延续已有知识。
 
 <p align="center">
   <a href="./README.md">English</a> | 简体中文 | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
@@ -41,68 +39,35 @@ Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
-
-## 开始使用
-
 <a id="start-with-the-app"></a>
 <a id="open-the-wiki"></a>
 <a id="desktop-app"></a>
+<a id="claude-code-in-30-seconds"></a>
+<a id="codex-plugin"></a>
+<a id="mcp-setup"></a>
+<a id="mcp-clients"></a>
+
+## 开始使用
 
 ### 1. 下载并打开 Wenlan
 
 [下载桌面版](https://github.com/wenlan-app/wenlan/releases/latest)，安装后打开：
 
-- **macOS（Apple Silicon）：** 打开 `.dmg`，把 Wenlan 拖进「应用程序」。App 已签名并通过公证。
-- **Windows x64：** 运行 `-setup.exe`。安装包尚未签名。如果 SmartScreen 显示警告，请先确认文件来自官方 Releases 页面，再点「更多信息」→「仍要运行」。
-- **Linux：** 暂时没有桌面版；可按照[设置指南](docs/setup-with-ai.md#install-the-runtime)，不通过桌面 app，直接搭配 AI 工具使用。
+- **macOS（Apple Silicon）：** 打开 `.dmg`，把 Wenlan 拖进“应用程序”。App 已签名并通过公证。
+- **Windows x64：** 运行 `-setup.exe`，安装包尚未签名。若 SmartScreen 警告，请先确认文件来自官方 Releases 页面，再选“更多信息”→“仍要运行”。
+- **Linux：** 暂无桌面版；请按[AI 设置指南](docs/setup-with-ai.md#install-the-runtime)安装 runtime。
 
 首次启动会下载本地搜索模型，设置完成前请保持联网。[下载与隐私说明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
 
-<a id="claude-code-in-30-seconds"></a>
+### 2. 打开示例或创建页面
 
-<a id="codex-plugin"></a>
+选择“打开笔记”进入 Wenlan，可先看欢迎页中的示例，也可以创建自己的页面。
 
-<a id="mcp-setup"></a>
-<a id="mcp-clients"></a>
+### 3. 需要时再连接 AI 工具
 
-### 2. 先写下自己的笔记
+想让 AI 使用你保存的知识时，再连接 Claude Code、Codex 或其他受支持的客户端。请按[AI 设置指南](docs/setup-with-ai.md)操作。
 
-选择“打开笔记”进入 Wenlan，接着创建自己的页面。欢迎页面也提供示例，可以先看看。开始写笔记不必先导入资料、连接 AI 工具或设置 AI 模型。
-
-### 3. 想导入来源时再导入
-
-准备好时，可以[导入笔记或 ChatGPT／Claude 导出的对话](#what-can-i-bring-in)。导入是可选功能；你可以先写自己的页面。
-
-### 4. 想使用 AI 时再连接工具
-
-需要 AI 使用同一份知识时，再连接 Claude Code、Codex 等受支持的工具。连接后的 AI 可以撰写页面，不必另外安装本地语言模型。
-
-<details>
-<summary>连接时需要帮助？让 AI 协助设置</summary>
-
-如有提示，请重新启动 AI 工具。需要协助设置时，把下面这段贴给 Claude Code、Codex，或其他能够读取设置指南的工具：
-
-```text
-请按照这份指南，将当前的 AI 工具连接到 Wenlan：
-https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
-
-如果已安装 Wenlan，请沿用现有安装。
-只设置当前这个 AI 工具，并确认它能保存及找回一条测试记忆。
-```
-
-</details>
-
-想用已连接的 AI 整理主题时，打开一段值得保留的工作对话，然后提出：
-
-> 把这段对话中［主题］的结论与理由，整理成附来源引用的 Wenlan 页面。
-
-也可以请 AI 把已导入资料中的主题整理成页面。
-
-完成后，在 Wenlan 打开新页面，点击引用查看来源，也能补上自己的想法。下次做相关工作时，请 AI 先读这一页再继续。
-
-后台整理与自动更新是可选功能，需要[设置模型](#models-and-privacy)。终端安装、其他平台与更新方式，请见[设置指南](docs/setup-and-data.zh-Hans.md#installation)。
-
-遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/wenlan-app/wenlan/issues)。Issue 是公开的；分享任何内容（包括日志）前，请先遮盖密钥、凭据、访问令牌、标识符以及私人或个人内容。
+> 请运用我保存的［主题］资料，为［下一个任务］草拟一页内容，并引用所用来源。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -111,20 +76,13 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
 <a id="what-can-i-bring-in"></a>
+<a id="knowledge-graph"></a>
 
 ## 浏览和整理个人知识
 
-把笔记、文档和 AI 对话整理成彼此关联、可查引用的页面。页面是本地 Markdown 文件；记忆与图谱数据保存在本地数据库。
+来源是带入 Wenlan 的原始笔记、文档和对话。记忆保存其中有用的事实与决定；页面整理相关知识，并链接回来源。
 
-### 导入你的资料
-
-- **留下有用的 AI 对话：** 导入 ChatGPT 或 Claude 导出的 ZIP，已导入的对话不会重复加入。
-- **导入现有笔记：** 导入 Markdown、文本文件或可提取文本的 PDF，也能批量读取文件夹，或把 Obsidian 仓库接为来源。扫描版 PDF 需先提取文本。
-- **快速记录：** 直接在桌面 app 记下想法或决策，不必先打开 AI 对话。
-- **[请 AI 记住工作重点](https://wenlan.app/learn/ai-work-memory)：** 请 AI 工具记下决策、经验、更正、偏好与事实，保留来源及替代的旧记录。
-- **导入其他 wiki：** 通过 CLI 或 API 导入外部 OKF wiki，保留来源引用与链接。目前不支持重新导入 Wenlan 自己导出的 OKF。
-
-<a id="knowledge-graph"></a>
+可导入 Markdown、文本文件、可读取文本的 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP。扫描版 PDF 需先提取文本。
 
 ### 探索你的个人知识图谱
 
@@ -133,11 +91,9 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
   <br><sub>根据实机示范数据调整布局的示意，保留真实关联。</sub>
 </p>
 
-- **[可编辑、有来源的页面](https://wenlan.app/docs/source-backed-pages)：** 把相关文档与记忆整理成 Markdown 页面，附引用与页面链接。
-- **卡片或列表：** 用适合自己的方式浏览页面、实体与空间。
-- **[知识图谱](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 探索人物、项目、主张与支撑记忆之间的关系。
+浏览页面与相互关联的概念，点开引用即可查看原始来源。
 
-现有 Obsidian 仓库可连接为只读来源。Wenlan 不会修改原仓库，也不会把更改同步回去。
+Obsidian 仓库可连接为只读来源。Wenlan 不会修改或同步回去；需要时再手动刷新。
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -146,19 +102,16 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 ## 用 AI 延续已有知识
 
-连接后，其他客户端可使用与桌面 app、CLI 相同的本地页面和记忆；检索结合精确匹配、本地语义搜索和图谱关联。[客户端架构](https://wenlan.app/docs/architecture) · [搜索详情](docs/technical-foundations.md#retrieval-pipeline)。
+连接 Claude Code 或 Codex，让下一个任务能够运用你已有的知识。Wenlan 会按关键词、相近语义和知识图谱中的关联查找内容。
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
   <br><sub>概念示意：虚构项目与对话，非实测比较。</sub>
 </p>
 
-[来源、记忆与页面](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [图谱与搜索](docs/knowledge-guide.zh-Hans.md#graph-and-search)。
+[搜索方式](docs/technical-foundations.md#retrieval-pipeline)。
 
-- **[需要时，搜索得更细](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选择搜索页面与更细致的记忆，并重新排序结果。
-- **[不同项目，分开管理](https://wenlan.app/docs/spaces)：** 用空间选择 AI 这次要搜索的工作、个人、客户或代码库知识。
-- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你的整个资料库，或你选择的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
-- **接入自己的工具：** 通过本地 HTTP API 传入准备好的文本、网页内容或记忆；它接收内容，不会代为抓取网址。
+实验中的网页访问功能可让受支持的客户端搜索整个资料库或指定空间，但运行 Wenlan 的电脑必须保持联网。查询与结果会经过中继服务，详见[隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -172,7 +125,7 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 ## 持续更新知识并保留历史
 
-来源变化后可更新页面，修订历史则保留过去的判断。后台整理和自动更新是可选功能，需要先[配置模型](#models-and-privacy)。
+来源会持续变化。你可以请 AI 更新页面；也可配置[模型](docs/setup-and-data.zh-Hans.md#models)，选择后台整理与自动更新。
 
 <p align="center">
   <picture>
@@ -181,72 +134,33 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
   </picture>
 </p>
 
-审核适用于 AI 更新；直接编辑文件和强制重新生成遵循不同规则。[更新、审核和本地文件](docs/knowledge-guide.zh-Hans.md#updates-and-history)。
+文件与文件夹来源会追踪变化。自动更新若引用不足，就会拒绝草稿。你编辑过的页面会先提出修订供你审核；直接编辑文件和强制重新生成遵循不同规则。
 
-### 持续更新与维护
-
-后台整理与页面更新是可选功能，需要先[配置模型](#models-and-privacy)。
-
-- **增量同步：** 文件与文件夹会在后台追踪变化；Obsidian 仓库保持只读，需要时再同步。
-- **[整理已存的知识](docs/technical-foundations.md#typed-memory-schema)：** 配置模型后，可协助补上类型、字段、相关日期、标签、搜索提示与图谱链接。
-- **有引用才更新：** 自动更新会拒绝引用不足的草稿。AI 生成的页面可以更新；你编辑过的页面则先提出修订。
-- **[需要判断才审核](https://wenlan.app/docs/review-and-trust)：** 审核受保护的冲突、页面修订、实体合并与新词汇。
-- **进度看得见：** 在 Activity 查看进度与受阻原因。本地服务运行时，关闭 app 窗口后仍可继续执行已配置的同步、Steep（后台补全）与符合条件的页面更新。
-
-### 保有数据与控制权
-
-- **[数据在本地，也能检查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 页面、引用、修订与 Obsidian 导出；记忆与图谱存于本地 libSQL。
-- **把 wiki 带走：** 从设置或 CLI，把各空间符合条件的页面导出成 OKF v0.2 wiki。这是 wiki 导出，不是完整数据库备份。
-- **[模型自己选](docs/technical-foundations.md#model-roles)：** 基础检索留在本机。可选的 Steep（后台补全与页面合成）能用设备端 Qwen、本地接口或云端模型；远程服务会收到该任务所需的内容。
-- **检查问题，确认后修复：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 与 [lint](plugin/skills/lint/SKILL.md) 只报告问题，不改写知识。支持的修复可在 app 预览，确认后应用并验证。
-
-**先从一条想留下的笔记开始。** [开始使用](#start-in-30-seconds)。想以后再试，也可以先给这个 repo 一颗 Star。
+[更新与审核](docs/knowledge-guide.zh-Hans.md#updates-and-history) · [Doctor 与问题反馈](https://wenlan.app/docs/diagnostics-and-issue-reports)。
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
 
 ## 简单工作流程
 
-连接 AI 工具后，用这四个动作把知识带入下一个任务：
-
-以下快捷指令需要安装 Wenlan 插件；其他已连接的客户端可使用对应的 MCP 工具。
-
-- **找回：** 用 `/recall [主题]` 查找先前的决定与来源。
-- **记录：** 用 `/capture [决定、理由与来源]` 保存有用的决定、经验或更正。
-- **整理成页：** 用 `/distill` 把已保存资料整理成附引用的页面。
-- **交接：** 用 `/handoff` 保存进度与待解决问题，方便下次接续。
-
-在 Wenlan 打开页面阅读、编辑并检查来源。[插件指令参考](plugin/skills/README.md)。
-
-<a id="离线队列outbox"></a>
-
-[CLI 离线写入与重放](docs/setup-and-data.zh-Hans.md#offline-queue)。
+找回已有知识 → 保存有用决定 → 整理成页面 → 下次接着使用。安装 Wenlan 插件即可使用 `/recall`、`/capture`、`/distill`、`/handoff`（[指令说明](plugin/skills/README.md)）。
 
 <a id="models-and-privacy"></a>
 
-### 模型与隐私
+### 数据与隐私
 
-先用已连接的 AI 写页面，不必另装本地语言模型。后台整理与自动更新是可选功能，需要另外设置模型。
+页面与工作笔记是 Markdown 文件；记忆与图谱数据保存在本地数据库。云端 AI 客户端可能会把找回的知识传给其服务商，云端模型也会收到它处理所需的内容。本地存储不代表这些交互都留在本机。使用统计默认关闭。
 
-- **搜索在本机运行。** 首次启动会下载搜索模型，之后在你的电脑上运行，不需要 API key。
-- **连接 AI，就可能传出内容。** 云端 AI 可将读取的知识传给其提供商；选用云端模型整理资料，也会发送该任务所需的内容。本地存储不代表这些交互都留在本机。
-- **使用统计默认关闭。** 同意后才发送有限的操作计数、版本与平台，不包含知识内容或安装标识。[查看说明](docs/PRIVACY.md#telemetry)。
-
-模型下载、更新检查、远程图片与可选远程访问的联网行为，请见[隐私说明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
-
-[模型选项与设置](docs/setup-and-data.zh-Hans.md#models)。
-
-### 你的数据与卸载
-
-页面与会话笔记是 Markdown 文件；记忆与图谱保存在本地数据库。卸载 app 时，可以保留你的知识数据。
-
-[文件位置、备份与卸载方式](docs/setup-and-data.zh-Hans.md#backup-and-removal)。
+[文件位置、备份与卸载](docs/setup-and-data.zh-Hans.md#backup-and-removal) · [联网与隐私详情](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
 
 <a id="evaluation"></a>
 
 ## 评估
 
-以下是 retrieval-only snapshot，不代表 end-to-end answer quality。方法、环境 receipts 与更新流程见 [docs/eval](docs/eval/README.md)。
+这些结果用来检查搜索能否找到相关知识，不代表 AI 回答质量。
+
+<details>
+<summary>搜索指标</summary>
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
@@ -255,91 +169,41 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
+[评估方法与基准详情](docs/eval/README.md)。
+
+</details>
+
 <a id="learn-more"></a>
+<a id="离线队列outbox"></a>
 
 ## 进一步了解
 
-更完整的文档、概念说明与比较：
+从安装与连接开始，再查阅各项功能的详细指南：
 
-### 文档
-
-- [开始使用](https://wenlan.app/docs/get-started)：安装并验证第一个本地循环。
-- [日常工作流程](https://wenlan.app/docs/daily-workflow)：brief、capture、recall、handoff、distill、lint 与 curate。
-- [MCP 客户端](https://wenlan.app/docs/mcp-clients)：连接 Claude Code、Codex、Cursor、Claude Desktop 与其他工具。
-
-### 工作流指南
-
-- [建立第一个 LLM Wiki](https://wenlan.app/zh-CN/learn/distilled-wiki-pages-ai-memory)：用三份来源试做，核对引用，再检查来源更新后哪些内容需要修改。
-- [为咨询项目建立客户知识库](https://wenlan.app/zh-CN/learn/build-client-project-knowledge-base-for-consulting)
-- [建立有来源支撑的投资研究知识库](https://wenlan.app/zh-CN/learn/build-investment-research-knowledge-base)
-- [在撰写 PRD 前建立产品研究知识库](https://wenlan.app/zh-CN/learn/build-product-research-knowledge-base-for-prd)
-- [用运行手册与故障复盘建立 SRE 故障知识库](https://wenlan.app/zh-CN/learn/build-sre-incident-knowledge-base)
-- [建立业务指标定义知识库](https://wenlan.app/zh-CN/learn/build-business-metric-definition-knowledge-base)：把获准的 KPI 规范整理成有来源的数据字典，保留公式文本、粒度、排除条件、负责人、修订和审核状态。
-
-### 概念
-
-- [为什么需要持续演进的 wiki，而不只是 AI 记忆](https://wenlan.app/learn/ai-work-memory)：深入理解问题与产品模型。
-- [MCP 记忆服务器](https://wenlan.app/learn/mcp-memory-server)：Wenlan 如何让知识跨 AI 工具使用。
-- [本地优先的 AI 记忆](https://wenlan.app/learn/local-first-ai-memory)：数据、隐私与控制权。
-- [Markdown 与本地索引](https://wenlan.app/learn/local-first-ai-memory)：存储、检索与所有权。
-- [AI agent 的交接循环](https://wenlan.app/learn/ai-agent-handoff-loop)：把工作完整带到下一次会话。
-- [用论文建立研究知识库](https://wenlan.app/zh-CN/learn/source-backed-research-knowledge-base)：把已选好的论文整理成可检查的文献矩阵与来源支撑综述。
-
-### 比较
-
-- [Wenlan 与 Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)
-- [Wenlan 与 claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
-- [Wenlan 与 Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
+- [开始使用与安装](docs/setup-and-data.zh-Hans.md#installation)
+- [连接 AI 工具](docs/setup-with-ai.md)
+- [来源与导入](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [本地文件、备份与离线使用](docs/setup-and-data.zh-Hans.md)
+- [隐私](docs/PRIVACY.md)
+- [完整文档索引](docs/README.md)
 
 ## 贡献
 
-欢迎加入 [Discord 社区](https://discord.gg/nmzVTTU3HG)，交流使用方式、分享反馈，一起改善 Wenlan。
-
-欢迎 bug fixes、eval cases、文档与功能。安装 Wenlan 不需要从源码构建。本地开发时，请从本 repository 的根目录运行以下命令：
-
-```bash
-# daemon crates（default-members——不会编译桌面 app）
-cargo build
-cargo test
-
-# 桌面 app（Cargo target 与根目录的前端工具链）
-pnpm install
-pnpm dev:all
-pnpm build:all
-```
-
-`pnpm dev:all` 是桌面 app 受支持的开发入口。它让开发用的端口、数据、进程归属、app 标识、MCP socket 与 Remote Access 状态都与已安装的生产运行时隔离；未处于该隔离环境的 debug build 会拒绝启动。完整开发流程见本 repository 的 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](.github/CONTRIBUTING.md)，以及仓库内的 [app/AGENTS.md](app/AGENTS.md)。安全性问题请见 [SECURITY.md](.github/SECURITY.md)，隐私政策请见 [PRIVACY.md](docs/PRIVACY.md)，也请阅读 [Code of Conduct](.github/CODE_OF_CONDUCT.md)。
+欢迎加入 [Discord 社区](https://discord.gg/nmzVTTU3HG)。请在 [GitHub issues](https://github.com/wenlan-app/wenlan/issues) 反馈问题或提出功能建议；Issue 公开可见，分享前请遮盖密钥和个人资料。代码与文档贡献请见[贡献指南](.github/CONTRIBUTING.md)、[安全问题反馈](.github/SECURITY.md)和[行为准则](.github/CODE_OF_CONDUCT.md)。
 
 <a id="code-signing-policy"></a>
 
 ## 代码签名政策
 
-macOS 桌面版已通过 Developer ID 签名与公证。Windows 安装包尚未签名。
-
-发行版由 GitHub 托管的运行环境，按照此仓库的版本标签与对应提交构建。维护者必须在 GitHub 启用多因素认证。
-
-[各平台的签名说明（英文）](docs/code-signing.md) · [隐私政策（英文）](docs/PRIVACY.md)。
+请见[各平台签名与公证说明](docs/code-signing.md)。
 
 <a id="license"></a>
 
 ## 许可
 
-Wenlan 采用两种许可，按 repository 的不同部分划分。
-
-- **Apache-2.0**（[`LICENSE`](LICENSE)）覆盖 local runtime、CLI、MCP server、shared types，以及 Claude Code 与 Codex 的 plugin files。可以自由基于这些开发。
-- **AGPL-3.0-only**（[`app/LICENSE`](app/LICENSE)）覆盖桌面 app：`app/` crate 及其附带的 React 前端。如果你把修改过的 app 作为网络服务运行，AGPL 要求你向使用它的人提供这份修改后的源码。
-
-这个划分是有意为之。Apache-2.0 的代码可以用在 AGPL-3.0 程序里，所以桌面 app 建立在 runtime 之上，两种许可都不会被违反。
+本地 runtime、CLI、MCP server、shared types 和 plugins 使用 [Apache-2.0](LICENSE)。桌面 app 及其前端使用 [AGPL-3.0-only](app/LICENSE)；修改版若作为网络服务运行，须向用户提供其源代码。
 
 <a id="acknowledgments"></a>
 
 ## 源流与同类项目
 
-Wenlan（文澜）的名字来自文澜阁。这座皇家藏书楼收藏《四库全书》，曾是中国最大的藏书之一。
-
-Wenlan 的 llm-wiki v2 模型是自己的产品方向，并受到 LLM-wiki 与 agent-memory 两条脉络启发：
-
-- [Karpathy 的 LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) 建立了从 raw sources 到持续维护 wiki 的模式。
-- [Rohitg00 的 LLM Wiki v2 proposal](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) 加入 memory lifecycle、confidence、graph 与 retrieval mechanisms。[agentmemory](https://github.com/rohitg00/agentmemory) 是其具体的 agent-memory implementation。
-- [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) 是以文档为核心的 LLM-wiki 完整桌面实现。
-- [basic-memory](https://github.com/basicmachines-co/basic-memory)、[obsidian-mind](https://github.com/breferrari/obsidian-mind)、[mcp-memory-service](https://pypi.org/project/mcp-memory-service/)、[Memoria](https://github.com/matrixorigin/Memoria) 和 [OpenMemory](https://github.com/CaviraOSS/OpenMemory) 探索相邻的本地知识与 agent-memory 方向。
+Wenlan 名称来自文澜阁，产品方向承接 LLM-wiki 与 agent-memory 脉络：[Karpathy 的 LLM-wiki note](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)、[Rohitg00 的提案](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2)和 [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki)。

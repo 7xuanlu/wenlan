@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2e7cc1be7163a3e4c11092e383924192ccaed6b883b42c5b0bb708be778c6e20 -->
+<!-- README_SYNC: source=README.md sha256=9d019b1e6f4c529a970c0aed856f16a04af2c4ecf42db521b542a1bd28a81e5f -->
 
 <p align="center">
   <picture>
@@ -7,9 +7,7 @@
   </picture>
 </p>
 
-Wenlan convierte tus documentos, notas y conversaciones con IA en páginas editables con enlaces a sus fuentes, para que tú y tus herramientas de IA podáis seguir trabajando a partir de ellas.
-
-Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o activar las actualizaciones en segundo plano. Si has editado una página, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
+Wenlan organiza notas, documentos y conversaciones de IA en páginas editables con enlaces a sus fuentes, para que tú y las herramientas de IA conectadas podáis continuar lo que ya sabéis.
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
@@ -41,69 +39,35 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
-
-## Primeros pasos
-
 <a id="start-with-the-app"></a>
 <a id="open-the-wiki"></a>
 <a id="desktop-app"></a>
-
-### 1. Descarga y abre Wenlan
-
-[Descarga la aplicación](https://github.com/wenlan-app/wenlan/releases/latest) y ábrela tras instalarla:
-
-- **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada.
-- **Windows x64:** ejecuta el `-setup.exe`. Todavía no está firmado. Si SmartScreen muestra un aviso, confirma que lo has descargado de la página oficial de Releases antes de elegir "Más información" → "Ejecutar de todas formas".
-- **Linux:** todavía no tiene versión de escritorio; sigue la [guía de configuración](docs/setup-with-ai.md#install-the-runtime) para usar Wenlan con tus herramientas de IA sin la aplicación.
-
-Al iniciar por primera vez, Wenlan descarga un modelo para la búsqueda local. Mantén la conexión a internet hasta terminar la configuración. [Detalles de descarga y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
-
 <a id="claude-code-in-30-seconds"></a>
-
 <a id="codex-plugin"></a>
-
 <a id="mcp-setup"></a>
 <a id="mcp-clients"></a>
 
-### 2. Empieza con tus propias notas
+## Primeros pasos
 
-Abre Wenlan y empieza con una página propia. La pantalla de bienvenida también ofrece un ejemplo que puedes explorar primero. Puedes empezar a escribir sin importar material, conectar una herramienta de IA ni configurar un modelo de IA.
+### 1. Descarga y abre Wenlan
 
-### 3. Importa fuentes cuando quieras
+[Descarga la aplicación de escritorio](https://github.com/wenlan-app/wenlan/releases/latest) y ábrela:
 
-Cuando te venga bien, puedes [importar notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in). Es opcional: puedes empezar con una página propia.
+- **macOS (Apple Silicon):** abre el `.dmg` y arrastra Wenlan a Aplicaciones. La aplicación está firmada y notarizada.
+- **Windows x64:** ejecuta el `-setup.exe`; todavía no está firmado. Si SmartScreen avisa, confirma que procede de la página oficial de Releases antes de elegir «Más información» → «Ejecutar de todas formas».
+- **Linux:** aún no hay aplicación de escritorio; sigue la [guía de configuración de IA](docs/setup-with-ai.md#install-the-runtime) para instalar el runtime.
 
-### 4. Conecta herramientas de IA cuando quieras ayuda
+Al iniciar por primera vez se descarga el modelo de búsqueda local. Mantén la conexión hasta terminar la configuración. [Detalles de descarga y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
-Conecta Claude Code, Codex u otras herramientas de IA compatibles cuando quieras que usen el mismo conocimiento. Una IA conectada puede redactar páginas sin instalar otro modelo de lenguaje local.
+### 2. Abre un ejemplo o crea una página
 
-<details>
-<summary>¿Necesitas ayuda? Pídesela a tu IA</summary>
+Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o crea una página propia.
 
-Reinicia tu herramienta de IA si se te indica. Si necesitas ayuda con la configuración, pega esto en Claude Code, Codex u otra herramienta que pueda seguir una guía:
+### 3. Conecta una herramienta de IA cuando quieras
 
-```text
-Conecta esta herramienta de IA a Wenlan siguiendo:
-https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
+Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus conocimientos guardados. Sigue la [guía para conectar IA](docs/setup-with-ai.md).
 
-Reutiliza mi instalación de Wenlan si ya existe.
-Configura solo esta herramienta y comprueba que puede guardar y recuperar
-una memoria de prueba.
-```
-
-</details>
-
-Para organizar un tema con una IA conectada, abre una conversación de trabajo que merezca la pena conservar y pídele:
-
-> Organiza las conclusiones, los motivos y las fuentes sobre [tema] de esta conversación en una página de Wenlan con citas a las fuentes.
-
-También puedes pedirle que organice en una página un tema del material que hayas importado.
-
-Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consultar su fuente y añade tus propias ideas. La próxima vez que trabajes en ese tema, pídele a tu IA que lea esta página antes de continuar.
-
-La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
-
-¿Necesitas ayuda? [Guía de configuración](docs/setup-with-ai.md) · [Comunicar un problema](https://github.com/wenlan-app/wenlan/issues). Los issues son públicos: antes de compartir contenido, incluidos los registros, oculta secretos, credenciales, tokens de acceso, identificadores y contenido privado o personal.
+> Usa lo que he guardado sobre [tema] para redactar una página para [la siguiente tarea] y cita las fuentes consultadas.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -112,20 +76,13 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 <a id="what-you-get"></a>
 <a id="what-can-it-do"></a>
 <a id="what-can-i-bring-in"></a>
+<a id="knowledge-graph"></a>
 
 ## Explora y organiza tu conocimiento
 
-Reúne notas, documentos y conversaciones de IA en páginas enlazadas con citas que puedes comprobar. Las páginas son archivos Markdown locales; los recuerdos y el grafo se guardan en una base de datos local.
+Las fuentes son las notas, documentos y conversaciones originales que incorporas. Las Memorias conservan datos y decisiones útiles; las Páginas organizan conocimiento relacionado y enlazan a sus fuentes.
 
-### Incorpora tu material
-
-- **Conserva conversaciones útiles con IA:** Importa archivos ZIP de ChatGPT o Claude sin duplicar conversaciones ya importadas.
-- **Incorpora tus notas actuales:** Incorpora Markdown, texto o PDF con texto extraíble, por archivo o carpeta; indexa un vault de Obsidian. Los PDF escaneados requieren extraer el texto primero.
-- **Captura rápida:** Guarda una idea o decisión directamente en la aplicación de escritorio sin abrir un chat con IA.
-- **[Guarda decisiones con tu IA](https://wenlan.app/learn/ai-work-memory):** Pide a tu herramienta de IA que guarde decisiones, lecciones, correcciones, preferencias y hechos, con sus fuentes y los registros que sustituyen.
-- **Importa otra wiki:** Importa una wiki OKF externa mediante la CLI o la API, conservando referencias y enlaces. No se admite reimportar las propias exportaciones OKF de Wenlan.
-
-<a id="knowledge-graph"></a>
+Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP exportados de ChatGPT o Claude. Los PDF escaneados necesitan extraer el texto primero.
 
 ### Explora tu grafo de conocimiento personal
 
@@ -134,11 +91,9 @@ Reúne notas, documentos y conversaciones de IA en páginas enlazadas con citas 
   <br><sub>Ilustración reorganizada a partir de datos de ejemplo de la app, conservando las relaciones reales.</sub>
 </p>
 
-- **[Páginas editables con fuentes](https://wenlan.app/docs/source-backed-pages):** Convierte documentos y Memorias relacionados en Páginas Markdown con citas y enlaces a otras Páginas.
-- **Tarjetas o listas:** Explora Páginas, Entidades y Espacios con la vista que prefieras.
-- **[Grafo de conocimiento](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explora conexiones entre personas, proyectos, afirmaciones y las Memorias que las respaldan.
+Explora Páginas y conceptos relacionados; abre las citas para consultar las fuentes originales.
 
-Conecta una bóveda de Obsidian como fuente de solo lectura. Wenlan no la modifica ni sincroniza cambios de vuelta.
+Conecta una bóveda de Obsidian como fuente de solo lectura. Wenlan no la modifica ni sincroniza cambios de vuelta; actualízala cuando lo necesites.
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -147,19 +102,16 @@ Conecta una bóveda de Obsidian como fuente de solo lectura. Wenlan no la modifi
 
 ## Usa tu conocimiento con IA
 
-Los clientes conectados comparten las mismas Páginas y Memorias locales que la aplicación de escritorio y la CLI; la recuperación combina coincidencias exactas, búsqueda semántica local y conexiones del grafo. [Arquitectura de clientes](https://wenlan.app/docs/architecture) · [Detalles de búsqueda](docs/technical-foundations.md#retrieval-pipeline).
+Conecta Claude Code o Codex para que la siguiente tarea aproveche lo que ya sabes. Wenlan busca palabras clave, significados relacionados y enlaces en tu grafo de conocimiento.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
   <br><sub>Ilustración conceptual: proyecto y conversaciones ficticios, no una comparación medida.</sub>
 </p>
 
-[Fuentes, recuerdos y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages) · [Grafo y búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
+[Cómo funciona la búsqueda](docs/technical-foundations.md#retrieval-pipeline).
 
-- **[Búsqueda avanzada opcional](docs/technical-foundations.md#optional-channels-and-defaults):** Busca en Páginas y Memorias más detalladas, con reordenación opcional para afinar los resultados.
-- **[Separa tus proyectos](https://wenlan.app/docs/spaces):** Usa Espacios para elegir qué conocimiento laboral, personal, de clientes o de repositorios busca tu IA.
-- **Acceso web (experimental):** Conecta un cliente web de IA compatible a toda tu biblioteca, o a un Espacio que elijas, mientras tu ordenador está conectado. Las consultas y los resultados pasan por un relay; consulta el [funcionamiento del acceso y sus límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
-- **Conecta tus propias herramientas:** Envía texto preparado, contenido web o Memorias mediante la API HTTP local. Acepta contenido, no URL para descargar.
+El acceso web experimental permite que clientes compatibles busquen en toda la biblioteca o en un Espacio elegido, mientras el ordenador con Wenlan permanece conectado. Las consultas y los resultados pasan por un relay; consulta sus [límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -173,7 +125,7 @@ Los clientes conectados comparten las mismas Páginas y Memorias locales que la 
 
 ## Mantén el conocimiento al día y conserva su historial
 
-Los cambios en las fuentes pueden dar lugar a actualizaciones de páginas, mientras que el historial conserva las decisiones anteriores. La organización en segundo plano y las actualizaciones automáticas son opcionales y requieren [configurar un modelo](#models-and-privacy).
+Las fuentes cambian. Pide a la IA que actualice una Página o configura un [modelo](docs/setup-and-data.es-ES.md#models) para activar la organización y las actualizaciones automáticas opcionales.
 
 <p align="center">
   <picture>
@@ -182,72 +134,33 @@ Los cambios en las fuentes pueden dar lugar a actualizaciones de páginas, mient
   </picture>
 </p>
 
-La revisión se aplica a las actualizaciones de IA; las ediciones directas de archivos y la regeneración forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
+Las fuentes de archivos y carpetas siguen sus cambios. La actualización automática rechaza borradores con citas insuficientes. Los cambios en Páginas que hayas editado se proponen para revisión; las ediciones directas de archivos y la regeneración forzada siguen otras reglas.
 
-### Mantén el conocimiento al día
-
-La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
-
-- **Sincronización incremental:** Las Fuentes de archivos y carpetas rastrean cambios en segundo plano. Los vaults de Obsidian siguen siendo de solo lectura y se sincronizan bajo demanda.
-- **[Organiza el conocimiento guardado](docs/technical-foundations.md#typed-memory-schema):** Un modelo configurado puede añadir tipos, detalles estructurados, fechas relevantes, etiquetas, pistas de búsqueda y enlaces del grafo a las Memorias.
-- **Actualizaciones respaldadas por citas:** La actualización automática rechaza borradores con citas insuficientes. Las Páginas generadas por IA pueden actualizarse; los cambios en las que has editado se proponen para revisión.
-- **[Revisa cuando hace falta criterio](https://wenlan.app/docs/review-and-trust):** Revisa conflictos protegidos, cambios de Páginas, fusiones de entidades y vocabulario nuevo.
-- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, Steep (el enriquecimiento en segundo plano) y las actualizaciones de Páginas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
-
-### Conserva tus datos y el control
-
-- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Páginas Markdown, citas, revisiones y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
-- **Llévate tu wiki:** Exporta las Páginas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
-- **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. Steep, el enriquecimiento y la síntesis opcionales en segundo plano, puede usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
-- **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
-
-**Empieza con una nota que quieras conservar.** [Primeros pasos](#start-in-30-seconds). También puedes dar una estrella al repo para volver más adelante.
+[Actualizaciones y revisión](docs/knowledge-guide.es-ES.md#updates-and-history) · [Diagnóstico e incidencias](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
 
 ## Un flujo de trabajo sencillo
 
-Cuando hayas conectado tu herramienta de IA, estas cuatro acciones llevan el conocimiento a la siguiente tarea:
-
-Los comandos abreviados requieren el plugin de Wenlan; otros clientes conectados usan las herramientas MCP equivalentes.
-
-- **Recupera:** Busca decisiones anteriores y sus fuentes con `/recall [tema]`.
-- **Guarda:** Conserva una decisión, aprendizaje o corrección con `/capture [decisión, motivos y fuentes]`.
-- **Organiza:** Convierte el material guardado en una página con citas usando `/distill`.
-- **Entrega:** Guarda el progreso y las preguntas pendientes para la siguiente sesión con `/handoff`.
-
-Abre la página en Wenlan para leerla, editarla y comprobar sus fuentes. [Referencia de comandos del plugin](plugin/skills/README.md).
-
-<a id="cola-offline-outbox"></a>
-
-[Escrituras offline y reenvío desde la CLI](docs/setup-and-data.es-ES.md#offline-queue).
+Encuentra conocimiento previo → guarda decisiones útiles → organízalas en Páginas → retómalas en la siguiente tarea. El plugin de Wenlan añade `/recall`, `/capture`, `/distill` y `/handoff` ([comandos](plugin/skills/README.md)).
 
 <a id="models-and-privacy"></a>
 
-### Modelos y privacidad
+### Datos y privacidad
 
-Puedes usar tu IA conectada para escribir páginas sin instalar otro modelo de lenguaje local. La organización y las actualizaciones automáticas en segundo plano son opcionales y requieren configurar un modelo.
+Las Páginas y notas de sesión son archivos Markdown; las Memorias y el grafo se guardan en una base de datos local. Un cliente de IA en la nube puede enviarle el conocimiento recuperado a su proveedor; un modelo en la nube también recibe el contenido que procesa. El almacenamiento local no mantiene locales esas interacciones. Las estadísticas de uso están desactivadas por defecto.
 
-- **La búsqueda es local.** El modelo de búsqueda se descarga al iniciar por primera vez y se ejecuta en tu equipo, sin clave de API.
-- **La IA conectada puede recibir tus conocimientos.** Un cliente de IA en la nube puede enviar el contenido recuperado a su proveedor. Si eliges un modelo en la nube para organizar material, también recibirá lo necesario para esa tarea. El almacenamiento local no convierte esas interacciones en locales.
-- **Las estadísticas de uso están desactivadas por defecto.** Si las activas, Wenlan envía recuentos limitados de operaciones, versión y plataforma, no tus conocimientos ni un identificador de instalación. [Detalles](docs/PRIVACY.md#telemetry).
-
-Consulta la [información de red y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network) para las descargas, comprobaciones de actualizaciones, imágenes remotas y acceso remoto opcional.
-
-[Opciones y configuración de modelos](docs/setup-and-data.es-ES.md#models).
-
-### Tus datos y la desinstalación
-
-Tus páginas y notas de sesión son archivos Markdown; las memorias y el grafo se guardan en una base de datos local. Puedes conservar tus conocimientos al desinstalar la app.
-
-[Ubicación de archivos, copias de seguridad y eliminación](docs/setup-and-data.es-ES.md#backup-and-removal).
+[Ubicación de archivos, copias y eliminación](docs/setup-and-data.es-ES.md#backup-and-removal) · [Red y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
 <a id="evaluation"></a>
 
 ## Evaluación
 
-Esto es una instantánea de solo recuperación, no una afirmación sobre la calidad de la respuesta de extremo a extremo. El método, los recibos del entorno y el flujo de actualización residen en [docs/eval](docs/eval/README.md).
+Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no miden la calidad de las respuestas de IA.
+
+<details>
+<summary>Métricas de búsqueda</summary>
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
@@ -256,91 +169,42 @@ Esto es una instantánea de solo recuperación, no una afirmación sobre la cali
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
 
+[Método de evaluación y detalles del benchmark](docs/eval/README.md).
+
+</details>
+
 <a id="learn-more"></a>
+
+<a id="cola-offline-outbox"></a>
 
 ## Leer más
 
-Documentación más detallada, conceptos y comparaciones:
+Guías para empezar y consultar los detalles del flujo de trabajo:
 
-### Documentación
-
-- [Primeros pasos](https://wenlan.app/docs/get-started): instala y verifica el primer bucle local.
-- [Flujo diario](https://wenlan.app/docs/daily-workflow): brief, capture, recall, handoff, distill, lint y curate.
-- [Clientes MCP](https://wenlan.app/docs/mcp-clients): conecta Claude Code, Codex, Cursor, Claude Desktop y otros clientes.
-
-### Guías de flujo de trabajo
-
-- [Crear tu primera LLM Wiki (guía en inglés)](https://wenlan.app/learn/distilled-wiki-pages-ai-memory): prueba un ejemplo con tres fuentes, revisa las citas y comprueba qué cambia al actualizar una fuente.
-- [Crear una base de conocimiento de proyectos para consultoría](https://wenlan.app/learn/build-client-project-knowledge-base-for-consulting)
-- [Crear una base de conocimiento para investigación de inversiones](https://wenlan.app/learn/build-investment-research-knowledge-base)
-- [Crear una base de conocimiento de investigación de producto antes de redactar un PRD](https://wenlan.app/learn/build-product-research-knowledge-base-for-prd)
-- [Crear una base de conocimiento de incidentes SRE](https://wenlan.app/learn/build-sre-incident-knowledge-base)
-- [Crear una base de conocimiento de definiciones de métricas de negocio](https://wenlan.app/learn/build-business-metric-definition-knowledge-base): convierte especificaciones de KPI aprobadas en un diccionario de datos respaldado por fuentes, con texto de fórmula, granularidad, exclusiones, propietarios, revisiones y estado de revisión.
-
-### Conceptos
-
-- [Por qué una wiki viva, no solo memoria de IA](https://wenlan.app/learn/ai-work-memory): el problema y el modelo de producto en profundidad.
-- [Servidor de memoria MCP](https://wenlan.app/learn/mcp-memory-server): cómo Wenlan expone el conocimiento a través de herramientas de IA.
-- [Memoria de IA local-first](https://wenlan.app/learn/local-first-ai-memory): datos, privacidad y control.
-- [Markdown e índice local](https://wenlan.app/learn/local-first-ai-memory): almacenamiento, recuperación y propiedad.
-- [Bucle de entrega de agentes de IA](https://wenlan.app/learn/ai-agent-handoff-loop): cómo trasladar el trabajo limpiamente a la siguiente sesión.
-- [Base de conocimiento para investigación](https://wenlan.app/learn/source-backed-research-knowledge-base): convierte artículos seleccionados en una matriz bibliográfica y una síntesis verificable con fuentes.
-
-### Comparaciones
-
-- [Wenlan vs Basic Memory](https://wenlan.app/learn/wenlan-vs-basic-memory)
-- [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
-- [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
+- [Primeros pasos e instalación](docs/setup-and-data.es-ES.md#installation)
+- [Conectar una herramienta de IA](docs/setup-with-ai.md)
+- [Fuentes e importaciones](docs/knowledge-guide.es-ES.md#sources-and-pages) · [Archivos locales, copias y uso sin conexión](docs/setup-and-data.es-ES.md)
+- [Privacidad](docs/PRIVACY.md)
+- [Índice completo de documentación](docs/README.md)
 
 ## Contribuir
 
-Únete a la [comunidad de Discord](https://discord.gg/nmzVTTU3HG) para compartir cómo usas Wenlan, dar tu opinión y ayudarnos a mejorarlo.
-
-Las correcciones de errores, casos de evaluación, documentación y funciones son bienvenidos. Instalar Wenlan no requiere compilar desde el código fuente. Para el desarrollo local, ejecuta estos comandos desde la raíz de este repositorio:
-
-```bash
-# crates del daemon (default-members: la aplicación de escritorio no se compila)
-cargo build
-cargo test
-
-# aplicación de escritorio (target de Cargo y herramientas frontend en la raíz)
-pnpm install
-pnpm dev:all
-pnpm build:all
-```
-
-`pnpm dev:all` es el punto de entrada de desarrollo admitido para la aplicación de escritorio. Mantiene los puertos de desarrollo, los datos, la propiedad de los procesos, la identidad de la aplicación, los sockets MCP y el estado de Remote Access separados del runtime de producción instalado; una compilación de depuración iniciada sin ese aislamiento se niega a ejecutarse. Consulta el [AGENTS.md](AGENTS.md) y [CONTRIBUTING.md](.github/CONTRIBUTING.md) de este repositorio, además del [app/AGENTS.md](app/AGENTS.md) dentro del repositorio, para el flujo de trabajo de desarrollo completo. Reportes de seguridad: [SECURITY.md](.github/SECURITY.md). Política de privacidad: [PRIVACY.md](docs/PRIVACY.md). Por favor, lee también el [Código de Conducta](.github/CODE_OF_CONDUCT.md).
+Únete a la [comunidad de Discord](https://discord.gg/nmzVTTU3HG). Informa de errores o pide funciones en [GitHub issues](https://github.com/wenlan-app/wenlan/issues); son públicos, así que oculta secretos y datos personales. Para contribuir con código o documentación, consulta [Contribuir](.github/CONTRIBUTING.md), [Seguridad](.github/SECURITY.md) y el [Código de Conducta](.github/CODE_OF_CONDUCT.md).
 
 <a id="code-signing-policy"></a>
 
 ## Política de firma de código
 
-Las versiones de escritorio para macOS están firmadas con Developer ID y notarizadas. Los instaladores de Windows aún no están firmados.
-
-Las versiones se compilan desde commits etiquetados mediante el workflow de release de este repositorio, en runners alojados por GitHub. Los mantenedores deben usar autenticación multifactor en GitHub.
-
-[Detalles de firma por plataforma (en inglés)](docs/code-signing.md) · [Política de privacidad (en inglés)](docs/PRIVACY.md).
+Consulta los [detalles de firma y notarización por plataforma](docs/code-signing.md).
 
 <a id="license"></a>
 
 ## Licencia
 
-Wenlan usa dos licencias, una por cada parte del repositorio.
-
-- **Apache-2.0** ([`LICENSE`](LICENSE)) cubre el runtime local, la CLI, el servidor MCP, los tipos compartidos y los archivos del plugin de Claude Code y Codex. Constrúyelo libremente sobre esto.
-- **AGPL-3.0-only** ([`app/LICENSE`](app/LICENSE)) cubre la aplicación de escritorio: el crate `app/` y el frontend de React que incluye. Si ejecutas una versión modificada de la aplicación como servicio en red, la AGPL te pide ofrecer ese código modificado a sus usuarios.
-
-La separación es deliberada. El código Apache-2.0 puede usarse dentro de un programa AGPL-3.0, así que la aplicación de escritorio se apoya en el runtime sin que ninguna de las dos licencias se incumpla.
+El runtime local, la CLI, el servidor MCP, los tipos compartidos y los plugins usan [Apache-2.0](LICENSE). La aplicación de escritorio y su frontend usan [AGPL-3.0-only](app/LICENSE); si ejecutas una versión modificada como servicio de red, debes ofrecer su código fuente a los usuarios.
 
 <a id="acknowledgments"></a>
 
-## Linaje y pares
+## Linaje y proyectos afines
 
-Wenlan (文瀾) toma su nombre de Wenlan Ge (文瀾閣), una biblioteca imperial que albergaba la Siku Quanshu como parte de una de las colecciones de libros más grandes de China.
-
-El modelo llm-wiki v2 de Wenlan es su propia dirección de producto, informada por los linajes de LLM-wiki y memoria de agentes:
-
-- La [nota de LLM-wiki de Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) estableció el patrón de fuente bruta a wiki mantenida.
-- La [propuesta de LLM Wiki v2 de Rohitg00](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) extiende ese patrón con ciclo de vida de memoria, confianza, grafo y mecanismos de recuperación. [agentmemory](https://github.com/rohitg00/agentmemory) es su implementación concreta de memoria de agente.
-- [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki) es una implementación completa de escritorio del patrón LLM-wiki centrado en documentos.
-- [basic-memory](https://github.com/basicmachines-co/basic-memory), [obsidian-mind](https://github.com/breferrari/obsidian-mind), [mcp-memory-service](https://pypi.org/project/mcp-memory-service/), [Memoria](https://github.com/matrixorigin/Memoria) y [OpenMemory](https://github.com/CaviraOSS/OpenMemory) exploran formas adyacentes de conocimiento local y memoria de agentes.
+Wenlan toma su nombre del Pabellón Wenlan y continúa las tradiciones de LLM-wiki y agent-memory: [la nota LLM-wiki de Karpathy](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f), [la propuesta de Rohitg00](https://gist.github.com/rohitg00/2067ab416f7bbe447c1977edaaa681e2) y [nashsu/llm_wiki](https://github.com/nashsu/llm_wiki).
