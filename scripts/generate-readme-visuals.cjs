@@ -19,8 +19,8 @@ const TOOL_DIR = path.join(__dirname, "readme-visuals");
 const visualRequire = createRequire(path.join(TOOL_DIR, "package.json"));
 
 const BANNER_VIEWPORTS = {
-  desktop: { width: 1280, height: 440 },
-  mobile: { width: 720, height: 300 },
+  desktop: { width: 1280, height: 320 },
+  mobile: { width: 720, height: 256 },
 };
 
 const BANNER = {
@@ -87,23 +87,19 @@ function makeSimpleBanner(viewport, locale) {
   const text = (x, y, value, size, color = BANNER.white, weight = 400, anchor = "start", letterSpacing = null) =>
     `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
   const content = mobile
-    ? `${logoMarkup({ x: 294, y: 30, size: 132, prefix })}
-  ${text(360, 190, "WENLAN", 28, BANNER.cyan, 700, "middle", 4)}
-  ${text(360, 232, copy.title[0], 34, BANNER.white, 700, "middle")}
-  ${text(360, 270, copy.title[1], 34, BANNER.white, 700, "middle")}`
-    : `${logoMarkup({ x: 144, y: 104, size: 232, prefix })}
-  ${text(440, 174, "WENLAN", 34, BANNER.cyan, 700, "start", 4)}
-  ${text(440, 235, copy.title[0], 42, BANNER.white, 700, "start")}
-  ${text(440, 283, copy.title[1], 42, BANNER.white, 700, "start")}`;
-  const frame = mobile
-    ? '<rect x="24" y="16" width="672" height="268" rx="24" fill="#101024" stroke="#2F3769"/>'
-    : '<rect x="64" y="28" width="1152" height="384" rx="30" fill="#101024" stroke="#2F3769"/>';
+    ? `${logoMarkup({ x: 316, y: 20, size: 88, prefix })}
+  ${text(360, 138, "WENLAN", 20, BANNER.cyan, 700, "middle", 4)}
+  ${text(360, 185, copy.title[0], 34, BANNER.white, 700, "middle")}
+  ${text(360, 225, copy.title[1], 28, BANNER.white, 400, "middle")}`
+    : `${logoMarkup({ x: 80, y: 72, size: 176, prefix })}
+  ${text(312, 108, "WENLAN", 24, BANNER.cyan, 700, "start", 4)}
+  ${text(312, 165, copy.title[0], 44, BANNER.white, 700, "start")}
+  ${text(312, 211, copy.title[1], 32, BANNER.white, 400, "start")}`;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">${esc(`Wenlan: ${copy.title.join(" ")}`)}</desc>
   <rect width="${width}" height="${height}" fill="${BANNER.dark}"/>
-  ${frame}
   ${content}
   <defs>
     ${logoDefs(prefix)}

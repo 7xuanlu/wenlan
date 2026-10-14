@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=a62a0d516b6744bce7d1da13e5f5333128565b001524eae123f5e890837e7cc1 -->
+<!-- README_SYNC: source=README.md sha256=2e7cc1be7163a3e4c11092e383924192ccaed6b883b42c5b0bb708be778c6e20 -->
 
 <p align="center">
   <picture>
@@ -23,11 +23,10 @@ Wenlan 把你的文档、笔记和 AI 对话整理成可编辑、附有来源链
 
 <p align="center">
   <a href="#start-in-30-seconds">开&#8288;始&#8288;使&#8288;用</a> ·
-  <a href="#what-does-wenlan-build">这&#8288;是&#8288;什&#8288;么？</a> ·
-  <a href="#what-can-it-do">能&#8288;力</a> ·
-  <a href="#how-does-it-work">日&#8288;常&#8288;流&#8288;程</a> ·
-  <a href="#evaluation">评&#8288;估</a> ·
-  <a href="#learn-more">进&#8288;一&#8288;步&#8288;了&#8288;解</a> ·
+  <a href="#what-can-i-bring-in">浏&#8288;览&#8288;和&#8288;整&#8288;理</a> ·
+  <a href="#retrieval">配&#8288;合&#8288;AI</a> ·
+  <a href="#two-lifecycles">持&#8288;续&#8288;更&#8288;新</a> ·
+  <a href="#learn-more">文&#8288;档&#8288;与&#8288;社&#8288;区</a> ·
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
@@ -105,35 +104,25 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 遇到问题？[设置指南](docs/setup-with-ai.md) · [反馈问题](https://github.com/wenlan-app/wenlan/issues)。Issue 是公开的；分享任何内容（包括日志）前，请先遮盖密钥、凭据、访问令牌、标识符以及私人或个人内容。
 
-
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
-
 <a id="这是什么"></a>
+<a id="what-is-this"></a>
+<a id="what-you-get"></a>
+<a id="what-can-it-do"></a>
+<a id="what-can-i-bring-in"></a>
 
-## 你与 AI 共用的个人维基
+## 浏览和整理个人知识
 
-- **零散的资料，整理成主题。** 文档、笔记与 AI 对话，汇总成彼此连接的页面，引用可以点击查证。
-- **自己看，也给 AI 用。** 直接阅读、编辑，也能让 Claude Code、Codex 接着用。
-- **后续维护有流程，不必每次从头整理。** 跟踪来源变化、更新相关页面并保留历史；你编辑过的内容，先确认修订再更新。
+把笔记、文档和 AI 对话整理成彼此关联、可查引用的页面。页面是本地 Markdown 文件；记忆与图谱数据保存在本地数据库。
 
-页面是本地 Markdown 文件，你可以阅读、编辑，也能带走。
+### 导入你的资料
 
-
-<a id="what-wenlan-is-not"></a>
-<a id="retrieval"></a>
-<a id="从关键词语义与关联找回正确内容"></a>
-
-### AI 接着做，不必从头交代
-
-通过关键词、语义与 Graph，将之前的研究与决定带进下一个任务。
-
-<p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
-  <br><sub>概念示意：虚构项目与对话，非实测比较。</sub>
-</p>
-
-[来源、记忆与页面如何协作](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [图谱与搜索如何运行](docs/knowledge-guide.zh-Hans.md#graph-and-search)。
+- **留下有用的 AI 对话：** 导入 ChatGPT 或 Claude 导出的 ZIP，已导入的对话不会重复加入。
+- **导入现有笔记：** 导入 Markdown、文本文件或可提取文本的 PDF，也能批量读取文件夹，或把 Obsidian 仓库接为来源。扫描版 PDF 需先提取文本。
+- **快速记录：** 直接在桌面 app 记下想法或决策，不必先打开 AI 对话。
+- **[请 AI 记住工作重点](https://wenlan.app/learn/ai-work-memory)：** 请 AI 工具记下决策、经验、更正、偏好与事实，保留来源及替代的旧记录。
+- **导入其他 wiki：** 通过 CLI 或 API 导入外部 OKF wiki，保留来源引用与链接。目前不支持重新导入 Wenlan 自己导出的 OKF。
 
 <a id="knowledge-graph"></a>
 
@@ -144,15 +133,46 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
   <br><sub>根据实机示范数据调整布局的示意，保留真实关联。</sub>
 </p>
 
+- **[可编辑、有来源的页面](https://wenlan.app/docs/source-backed-pages)：** 把相关文档与记忆整理成 Markdown 页面，附引用与页面链接。
+- **卡片或列表：** 用适合自己的方式浏览页面、实体与空间。
+- **[知识图谱](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 探索人物、项目、主张与支撑记忆之间的关系。
+
+现有 Obsidian 仓库可连接为只读来源。Wenlan 不会修改原仓库，也不会把更改同步回去。
+
+<a id="what-wenlan-is-not"></a>
+<a id="retrieval"></a>
+<a id="从关键词语义与关联找回正确内容"></a>
+<a id="retrieval-across-words-meaning-and-connections"></a>
+
+## 用 AI 延续已有知识
+
+连接后，其他客户端可使用与桌面 app、CLI 相同的本地页面和记忆；检索结合精确匹配、本地语义搜索和图谱关联。[客户端架构](https://wenlan.app/docs/architecture) · [搜索详情](docs/technical-foundations.md#retrieval-pipeline)。
+
+<p align="center">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
+  <br><sub>概念示意：虚构项目与对话，非实测比较。</sub>
+</p>
+
+[来源、记忆与页面](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [图谱与搜索](docs/knowledge-guide.zh-Hans.md#graph-and-search)。
+
+- **[需要时，搜索得更细](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选择搜索页面与更细致的记忆，并重新排序结果。
+- **[不同项目，分开管理](https://wenlan.app/docs/spaces)：** 用空间选择 AI 这次要搜索的工作、个人、客户或代码库知识。
+- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你的整个资料库，或你选择的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
+- **接入自己的工具：** 通过本地 HTTP API 传入准备好的文本、网页内容或记忆；它接收内容，不会代为抓取网址。
+
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
 <a id="two-lifecycles-one-maintained-knowledge-system"></a>
 <a id="两套生命周期一个持续维护的知识系统"></a>
+<a id="local-markdown"></a>
+<a id="原子记忆"></a>
+<a id="持续维护的页面"></a>
+<a id="与-obsidian-共存的本地-markdown"></a>
 
-### 知识会改变，历史仍会保留。
+## 持续更新知识并保留历史
 
-新经验补进笔记，过去的判断仍找得到。以下示例把“测试通过就算完成”改为“测试加上桌面与手机画面检查”，保留修正原因与依据。
+来源变化后可更新页面，修订历史则保留过去的判断。后台整理和自动更新是可选功能，需要先[配置模型](#models-and-privacy)。
 
 <p align="center">
   <picture>
@@ -161,52 +181,7 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
   </picture>
 </p>
 
-<a id="local-markdown"></a>
-<a id="原子记忆"></a>
-<a id="持续维护的页面"></a>
-<a id="与-obsidian-共存的本地-markdown"></a>
-
-审核针对 AI 更新；直接修改文件与强制重建另有规则。[更新、审核与本地文件](docs/knowledge-guide.zh-Hans.md#updates-and-history)。
-
-### 已经在用 Obsidian 和 AI 插件？
-
-你可以用 [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) 让 AI 读写笔记、用 [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) 找相关内容，再用 [Obsidian Git](https://github.com/Vinzent03/obsidian-git) 保留版本。自由度很高，但插件怎么搭配、资料何时整理、旧页面如何更新，仍需要自己安排。
-
-Wenlan 把整理成页、跟踪来源变化、更新相关内容和保留修订历史接成一套流程，省下自行搭建与维护的工夫。整理好的知识，自己能阅读，也能让 Claude Code、Codex 接着用。
-
-可以直接请已连接的 AI 更新页面，也能[配置模型](#models-and-privacy)启用后台更新。你编辑过的页面，更新前先提出修订，由你确认是否采用。
-
-现有 Obsidian 仓库可以接为只读来源，不必搬动笔记。Wenlan 不会修改原本的仓库，也不会把变更同步回去。
-
-
-<a id="what-you-get"></a>
-<a id="what-can-it-do"></a>
-<a id="what-can-i-bring-in"></a>
-
-## 能力
-
-### 导入你的资料
-
-- **留下有用的 AI 对话：** 导入 ChatGPT 或 Claude 导出的 ZIP，已导入的对话不会重复加入。
-- **导入现有笔记：** 导入 Markdown、文本文件或可提取文本的 PDF，也能批量读取文件夹，或把 Obsidian 仓库接为来源。扫描版 PDF 需先提取文本。
-- **快速记录：** 直接在桌面 app 记下想法或决策，不必先打开 AI 对话。
-- **[请 AI 记住工作重点](https://wenlan.app/learn/ai-work-memory)：** 请 AI 工具记下决策、经验、更正、偏好与事实，保留来源及替代的旧记录。
-- **导入其他 wiki：** 通过 CLI 或 API 导入外部 OKF wiki，保留来源引用与链接。目前不支持重新导入 Wenlan 自己导出的 OKF。
-
-### 浏览你的个人 wiki
-
-- **[可编辑、有来源的页面](https://wenlan.app/docs/source-backed-pages)：** 把相关文档与记忆整理成 Markdown 页面，附引用与页面链接。
-- **卡片或列表：** 用适合自己的方式浏览页面、实体与空间。
-- **[知识图谱](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 探索人物、项目、主张与支撑记忆之间的关系。
-
-### 配合 AI 继续工作
-
-- **[换个 AI，也能接着用](https://wenlan.app/docs/architecture)：** 连接后，Claude Code、Codex 与其他 MCP 客户端，可使用和桌面 app、CLI 相同的本地页面与记忆。
-- **[原词与语义搜索](docs/technical-foundations.md#retrieval-pipeline)：** 结合精确匹配与本地语义搜索，图谱关系可补充相关背景。
-- **[需要时，搜索得更细](docs/technical-foundations.md#optional-channels-and-defaults)：** 可选择搜索页面与更细致的记忆，并重新排序结果。
-- **[不同项目，分开管理](https://wenlan.app/docs/spaces)：** 用空间选择 AI 这次要搜索的工作、个人、客户或代码库知识。
-- **网页 AI 访问（实验性）：** 电脑保持联网时，让支持的网页 AI 客户端连接到你的整个资料库，或你选择的一个空间。查询与结果会经过中继服务，详见[连接方式与隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
-- **接入自己的工具：** 通过本地 HTTP API 传入准备好的文本、网页内容或记忆；它接收内容，不会代为抓取网址。
+审核适用于 AI 更新；直接编辑文件和强制重新生成遵循不同规则。[更新、审核和本地文件](docs/knowledge-guide.zh-Hans.md#updates-and-history)。
 
 ### 持续更新与维护
 
@@ -225,55 +200,23 @@ Wenlan 把整理成页、跟踪来源变化、更新相关内容和保留修订�
 - **[模型自己选](docs/technical-foundations.md#model-roles)：** 基础检索留在本机。可选的 Steep（后台补全与页面合成）能用设备端 Qwen、本地接口或云端模型；远程服务会收到该任务所需的内容。
 - **检查问题，确认后修复：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 与 [lint](plugin/skills/lint/SKILL.md) 只报告问题，不改写知识。支持的修复可在 app 预览，确认后应用并验证。
 
-**先从一条想留下的笔记开始。** [开始使用](#start-in-30-seconds)。想之后再试，也可以先给这个 repo 一颗 Star，方便回来找到它。
-
+**先从一条想留下的笔记开始。** [开始使用](#start-in-30-seconds)。想以后再试，也可以先给这个 repo 一颗 Star。
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
 
-## 日常流程
+## 简单工作流程
 
-AI 工具连接好后，可以直接这样说：
+连接 AI 工具后，用这四个动作把知识带入下一个任务：
 
-安装 Wenlan 插件后，也能用快捷指令。
+以下快捷指令需要安装 Wenlan 插件；其他已连接的客户端可使用对应的 MCP 工具。
 
-### 开始工作前
+- **找回：** 用 `/recall [主题]` 查找先前的决定与来源。
+- **记录：** 用 `/capture [决定、理由与来源]` 保存有用的决定、经验或更正。
+- **整理成页：** 用 `/distill` 把已保存资料整理成附引用的页面。
+- **交接：** 用 `/handoff` 保存进度与待解决问题，方便下次接续。
 
-> 找出我存进 Wenlan 的［主题］相关资料，包括之前的决定与来源。
-
-快捷指令：`/recall [主题]`
-
-### 得到有用的结论时
-
-> 把这个决定、背后的原因和来源记到 Wenlan。
-
-快捷指令：`/capture [决定、理由与来源]`
-
-### 值得整理成页面时
-
-> 把［主题］的已存资料整理成 Wenlan 页面，已有的就更新，并保留引用。
-
-将已存知识整理成页面：`/distill`
-
-在 Wenlan 里阅读、编辑页面、查看来源。下次做相关工作时，请 AI 先读这一页，再接着做。
-
-### 工作收尾时
-
-> 把这次的进展、决定和待解决的问题记到 Wenlan，方便下次继续。
-
-快捷指令：`/handoff`
-
-<details>
-<summary>插件指令与维护</summary>
-
-- **读取项目摘要：** `/brief [topic]` 读取当前空间的项目摘要；加上主题时，会补充同一空间的相关内容。
-- **检查与审核：** `/lint` 检查知识库状态；`/curate` 审核待处理的记录或修订。
-
-这些快捷指令由 Wenlan 插件提供。其他已连接的客户端使用对应的 MCP 工具。可选的后台整理与页面更新需要先[配置模型](#models-and-privacy)。
-
-[完整指令参考](plugin/skills/README.md)。
-
-</details>
+在 Wenlan 打开页面阅读、编辑并检查来源。[插件指令参考](plugin/skills/README.md)。
 
 <a id="离线队列outbox"></a>
 
@@ -299,7 +242,6 @@ AI 工具连接好后，可以直接这样说：
 
 [文件位置、备份与卸载方式](docs/setup-and-data.zh-Hans.md#backup-and-removal)。
 
-
 <a id="evaluation"></a>
 
 ## 评估
@@ -312,7 +254,6 @@ AI 工具连接好后，可以直接这样说：
 | LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
 
 <a id="learn-more"></a>
 
@@ -350,7 +291,6 @@ AI 工具连接好后，可以直接这样说：
 - [Wenlan 与 claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan 与 Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
-
 ## 贡献
 
 欢迎加入 [Discord 社区](https://discord.gg/nmzVTTU3HG)，交流使用方式、分享反馈，一起改善 Wenlan。
@@ -370,7 +310,6 @@ pnpm build:all
 
 `pnpm dev:all` 是桌面 app 受支持的开发入口。它让开发用的端口、数据、进程归属、app 标识、MCP socket 与 Remote Access 状态都与已安装的生产运行时隔离；未处于该隔离环境的 debug build 会拒绝启动。完整开发流程见本 repository 的 [AGENTS.md](AGENTS.md) 与 [CONTRIBUTING.md](.github/CONTRIBUTING.md)，以及仓库内的 [app/AGENTS.md](app/AGENTS.md)。安全性问题请见 [SECURITY.md](.github/SECURITY.md)，隐私政策请见 [PRIVACY.md](docs/PRIVACY.md)，也请阅读 [Code of Conduct](.github/CODE_OF_CONDUCT.md)。
 
-
 <a id="code-signing-policy"></a>
 
 ## 代码签名政策
@@ -380,7 +319,6 @@ macOS 桌面版已通过 Developer ID 签名与公证。Windows 安装包尚未�
 发行版由 GitHub 托管的运行环境，按照此仓库的版本标签与对应提交构建。维护者必须在 GitHub 启用多因素认证。
 
 [各平台的签名说明（英文）](docs/code-signing.md) · [隐私政策（英文）](docs/PRIVACY.md)。
-
 
 <a id="license"></a>
 
@@ -392,7 +330,6 @@ Wenlan 采用两种许可，按 repository 的不同部分划分。
 - **AGPL-3.0-only**（[`app/LICENSE`](app/LICENSE)）覆盖桌面 app：`app/` crate 及其附带的 React 前端。如果你把修改过的 app 作为网络服务运行，AGPL 要求你向使用它的人提供这份修改后的源码。
 
 这个划分是有意为之。Apache-2.0 的代码可以用在 AGPL-3.0 程序里，所以桌面 app 建立在 runtime 之上，两种许可都不会被违反。
-
 
 <a id="acknowledgments"></a>
 

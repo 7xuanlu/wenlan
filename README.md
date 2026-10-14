@@ -21,11 +21,10 @@ As sources change, you can ask AI to update the pages or enable background updat
 
 <p align="center">
   <a href="#start-in-30-seconds">Get&nbsp;started</a> ·
-  <a href="#what-does-wenlan-build">What&nbsp;is&nbsp;this?</a> ·
-  <a href="#what-can-it-do">Capabilities</a> ·
-  <a href="#how-does-it-work">Daily&nbsp;workflow</a> ·
-  <a href="#evaluation">Evaluation</a> ·
-  <a href="#learn-more">Learn&nbsp;more</a> ·
+  <a href="#what-can-i-bring-in">Browse&nbsp;and&nbsp;organize</a> ·
+  <a href="#retrieval">Use&nbsp;with&nbsp;AI</a> ·
+  <a href="#two-lifecycles">Keep&nbsp;knowledge&nbsp;current</a> ·
+  <a href="#learn-more">Docs&nbsp;and&nbsp;community</a> ·
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
@@ -103,35 +102,24 @@ Background organization and automatic updates are optional and need a [configure
 
 Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://github.com/wenlan-app/wenlan/issues). Issues are public: redact secrets, credentials, access tokens, identifiers, private or personal content from anything you share, including logs.
 
-
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
-
 <a id="what-is-this"></a>
+<a id="what-you-get"></a>
+<a id="what-can-it-do"></a>
+<a id="what-can-i-bring-in"></a>
 
-## Your wiki, for you and your AI
+## Browse and organize your knowledge
 
-- **Turn scattered material into connected topics.** Bring documents, notes, and AI conversations together in linked pages, with citations you can open and check.
-- **Read it yourself. Use it with your AI.** Read and edit your pages, or ask Claude Code or Codex to use them for your next task.
-- **Maintain knowledge without starting over.** Track source changes, update related pages, and keep their history. AI proposes revisions to pages you've edited for you to review.
+Bring notes, documents, and AI conversations together as linked pages with citations you can check. Pages are local Markdown files; Memories and graph data are stored in a local database.
 
-Your pages are local Markdown files you can read, edit, and take with you.
+### Bring your material in
 
-
-<a id="what-wenlan-is-not"></a>
-<a id="retrieval"></a>
-<a id="retrieval-across-words-meaning-and-connections"></a>
-
-### Let AI continue from what you already know
-
-Keyword, semantic, and graph retrieval bring previous research and decisions into the next task.
-
-<p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
-  <br><sub>Concept illustration: fictional project and conversations, not a measured comparison.</sub>
-</p>
-
-[How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages) · [How graph and search work](docs/knowledge-guide.md#graph-and-search).
+- **Keep useful AI conversations:** Import ChatGPT or Claude export ZIPs without duplicating conversations already imported.
+- **Bring your existing notes:** Import Markdown, text files, or text-extractable PDFs, by file or folder; connect an Obsidian vault as a source. Scanned PDFs need text extraction first.
+- **Quick Capture:** Save a thought or decision directly in the desktop app without opening an AI chat.
+- **[Capture decisions with your AI](https://wenlan.app/learn/ai-work-memory):** Ask your AI tool to save decisions, lessons, corrections, preferences, and facts, with their sources and what they replace.
+- **Bring in another wiki:** Import an external OKF wiki through the CLI or API, preserving source references and links. Reimporting Wenlan's own OKF exports is not supported.
 
 <a id="knowledge-graph"></a>
 
@@ -142,14 +130,44 @@ Keyword, semantic, and graph retrieval bring previous research and decisions int
   <br><sub>Illustration rearranged from actual App demo data; real relationships preserved.</sub>
 </p>
 
+- **[Editable, source-linked Pages](https://wenlan.app/docs/source-backed-pages):** Turn related documents and Memories into Markdown Pages with citations and links to other Pages.
+- **Cards or lists:** Browse Pages, Entities, and Spaces in the view that suits you.
+- **[Knowledge graph](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explore connections between people, projects, claims, and the Memories supporting them.
+
+Connect an existing Obsidian vault as a read-only source. Wenlan does not modify the vault or sync changes back to it.
+
+<a id="what-wenlan-is-not"></a>
+<a id="retrieval"></a>
+<a id="retrieval-across-words-meaning-and-connections"></a>
+
+## Use your knowledge with AI
+
+Connected clients share the same local Pages and Memories as Wenlan’s desktop app and CLI; retrieval combines exact matches, local semantic search, and graph connections. [Client architecture](https://wenlan.app/docs/architecture) · [Search details](docs/technical-foundations.md#retrieval-pipeline).
+
+<p align="center">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
+  <br><sub>Concept illustration: fictional project and conversations, not a measured comparison.</sub>
+</p>
+
+[Sources, memories, and pages](docs/knowledge-guide.md#sources-and-pages) · [Graph and search](docs/knowledge-guide.md#graph-and-search).
+
+- **[Optional deeper search](docs/technical-foundations.md#optional-channels-and-defaults):** Search Pages and finer-grained Memories, with optional reranking to refine results.
+- **[Keep projects separate](https://wenlan.app/docs/spaces):** Use Spaces to choose which work, personal, client, or repository knowledge your AI searches.
+- **Web access (experimental):** Connect a supported web AI client to your whole library, or to one Space you choose, while your computer is online. Queries and results pass through a relay; see [how access works and its privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
+- **Connect your own tools:** Send prepared text, webpage content, or Memories through the local HTTP API. It accepts content, not URLs to fetch.
+
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
 <a id="two-lifecycles"></a>
 <a id="two-lifecycles-one-maintained-knowledge-system"></a>
+<a id="local-markdown"></a>
+<a id="atomic-memory"></a>
+<a id="maintained-page"></a>
+<a id="local-markdown-that-works-with-obsidian"></a>
 
-### Knowledge changes. History stays.
+## Keep knowledge current and preserve history
 
-New experience improves your notes without hiding earlier decisions. This example replaces “tests passed, so the UI is done” with “check tests and the desktop and mobile views,” keeping the reason and evidence for the change.
+As sources change, pages can be updated while revision history preserves earlier decisions. Background organization and automatic updates are optional and require a [configured model](#models-and-privacy).
 
 <p align="center">
   <picture>
@@ -158,56 +176,9 @@ New experience improves your notes without hiding earlier decisions. This exampl
   </picture>
 </p>
 
-<a id="local-markdown"></a>
-<a id="atomic-memory"></a>
-<a id="maintained-page"></a>
-<a id="local-markdown-that-works-with-obsidian"></a>
-
 Review applies to AI updates; direct file edits and forced regeneration follow different rules. [Updates, review, and local files](docs/knowledge-guide.md#updates-and-history).
 
-### Already using Obsidian with AI plugins?
-
-You can use [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) for AI-assisted reading and editing, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) to find related notes, and [Obsidian Git](https://github.com/Vinzent03/obsidian-git) to keep version history. That gives you flexibility, but choosing how the plugins work together, when to organize new material, and how to update older pages is still a workflow you arrange.
-
-Wenlan connects topic-page creation, source-change tracking, page updates, and revision history in one workflow, saving you the work of assembling and maintaining those steps yourself. You can read the resulting knowledge directly or let Claude Code, Codex, and other tools build on it.
-
-Ask your connected AI to update a page, or [configure a model](#models-and-privacy) to enable background updates. When AI updates a page you've edited, Wenlan proposes a revision for you to review.
-
-Connect your existing Obsidian vault as a read-only source without moving your notes. Wenlan does not modify the vault or sync changes back to it.
-
-
-<a id="what-you-get"></a>
-<a id="what-can-it-do"></a>
-<a id="what-can-i-bring-in"></a>
-
-## Capabilities
-
-### Bring your material in
-
-- **Keep useful AI conversations:** Import ChatGPT or Claude export ZIPs without duplicating conversations already imported.
-- **Bring your existing notes:** Import Markdown, text files, or text-extractable PDFs, by file or folder; connect an Obsidian vault as a source. Scanned PDFs need text extraction first.
-- **Quick Capture:** Save a thought or decision directly in the desktop app without opening an AI chat.
-- **[Capture decisions with your AI](https://wenlan.app/learn/ai-work-memory):** Ask your AI tool to save decisions, lessons, corrections, preferences, and facts, with their sources and what they replace.
-- **Bring in another wiki:** Import an external OKF wiki through the CLI or API, preserving source references and links. Reimporting Wenlan's own OKF exports is not supported.
-
-### Explore your personal wiki
-
-- **[Editable, source-linked Pages](https://wenlan.app/docs/source-backed-pages):** Turn related documents and Memories into Markdown Pages with citations and links to other Pages.
-- **Cards or lists:** Browse Pages, Entities, and Spaces in the view that suits you.
-- **[Knowledge graph](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explore connections between people, projects, claims, and the Memories supporting them.
-
-### Use it with your AI tools
-
-- **[Pick up in another AI tool](https://wenlan.app/docs/architecture):** Connected Claude Code, Codex, and other MCP clients can use the same local Pages and Memories as the desktop app and CLI.
-- **[Search by words and meaning](docs/technical-foundations.md#retrieval-pipeline):** Combine exact matches with local semantic search; graph connections can add relevant context.
-- **[Optional deeper search](docs/technical-foundations.md#optional-channels-and-defaults):** Search Pages and finer-grained Memories, with optional reranking to refine results.
-- **[Keep projects separate](https://wenlan.app/docs/spaces):** Use Spaces to choose which work, personal, client, or repository knowledge your AI searches.
-- **Web access (experimental):** Connect a supported web AI client to your whole library, or to one Space you choose, while your computer is online. Queries and results pass through a relay; see [how access works and its privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
-- **Connect your own tools:** Send prepared text, webpage content, or Memories through the local HTTP API. It accepts content, not URLs to fetch.
-
 ### Keep knowledge current
-
-Optional background organization and Page updates need a [configured model](#models-and-privacy).
 
 - **Incremental sync:** File and folder Sources track changes in the background. Obsidian vaults stay read-only and resync on demand.
 - **[Organize saved knowledge](docs/technical-foundations.md#typed-memory-schema):** A configured model can add types, structured details, relevant dates, tags, search cues, and graph links to Memories.
@@ -222,55 +193,23 @@ Optional background organization and Page updates need a [configured model](#mod
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Steep, the optional background enrichment and synthesis, can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.
 
-**Start with a note you want to keep.** [Get started](#start-in-30-seconds). Star this repo if you'd like to come back and try it later.
-
+**Start with a note you want to keep.** [Get started](#start-in-30-seconds). Star this repo if you would like to come back to it.
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
 
-## Daily workflow
+## A simple workflow
 
-Once your AI tool is connected, you can ask in plain language:
+Once your AI tool is connected, these four actions carry knowledge from one task to the next:
 
-With the Wenlan plugin installed, you can also use the slash commands below.
+Slash commands require the Wenlan plugin; other connected clients use the equivalent MCP tools.
 
-### Before starting a task
+- **Recall:** Find earlier decisions and their sources with `/recall [topic]`.
+- **Capture:** Save a useful decision, lesson, or correction with `/capture [decision, reasons, and sources]`.
+- **Distill:** Turn saved material into a cited page with `/distill`.
+- **Handoff:** Save progress and open questions for the next session with `/handoff`.
 
-> Find what I've saved in Wenlan about [topic], including earlier decisions and their sources.
-
-Shortcut: `/recall [topic]`
-
-### When you reach a useful conclusion
-
-> Save this decision and why we made it in Wenlan, with its sources.
-
-Shortcut: `/capture [decision, reasons, and sources]`
-
-### When a topic deserves a page
-
-> Create or update a Wenlan page on [topic] from the material we've saved. Keep the citations.
-
-To organize saved knowledge into pages: `/distill`
-
-Open the page in Wenlan to read, edit, and check its sources. Next time, ask your AI to use it for your next task.
-
-### When you wrap up
-
-> Save this session's progress, decisions, and open questions in Wenlan so we can pick up next time.
-
-Shortcut: `/handoff`
-
-<details>
-<summary>Plugin commands and maintenance</summary>
-
-- **Read the project summary:** `/brief [topic]` reads the current Space's project summary; an optional topic adds related context from that Space.
-- **Check and review:** `/lint` checks knowledge health; `/curate` reviews pending captures or revisions.
-
-These shortcuts are available through the Wenlan plugins. Other connected clients use the equivalent MCP tools. Optional background organization and Page updates need a [configured model](#models-and-privacy).
-
-[Full command reference](plugin/skills/README.md).
-
-</details>
+Open the page in Wenlan to read, edit, and check its sources. [Plugin command reference](plugin/skills/README.md).
 
 <a id="offline-queue-outbox"></a>
 
@@ -296,7 +235,6 @@ Your pages and session notes are Markdown files; memories and the graph live in 
 
 [File locations, backup, and removal](docs/setup-and-data.md#backup-and-removal).
 
-
 <a id="evaluation"></a>
 
 ## Evaluation
@@ -309,7 +247,6 @@ This is a retrieval-only snapshot, not a claim about end-to-end answer quality. 
 | LME_Oracle (500 Q) | 93.6% | 0.857 | 0.883 |
 | LME_S (deep, 90 Q) | 87.7% | 0.815 | 0.822 |
 <!-- EVAL_SNAPSHOT_END -->
-
 
 <a id="learn-more"></a>
 
@@ -347,7 +284,6 @@ More detailed documentation, concepts, and comparisons:
 - [Wenlan vs claude-mem](https://wenlan.app/learn/wenlan-vs-claude-mem)
 - [Wenlan vs Superlocal Memory](https://wenlan.app/learn/wenlan-vs-superlocal-memory)
 
-
 ## Contributing
 
 Join our [Discord community](https://discord.gg/nmzVTTU3HG) to discuss how you use Wenlan, share feedback, and help improve it.
@@ -367,7 +303,6 @@ pnpm build:all
 
 `pnpm dev:all` is the supported development entry point for the desktop app. It keeps development ports, data, process ownership, app identity, MCP sockets, and Remote Access state separate from the installed production runtime; a debug app started without that isolation refuses to run. See this repository's [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](.github/CONTRIBUTING.md), plus the in-tree [app/AGENTS.md](app/AGENTS.md), for the complete development workflow. Security reports: [SECURITY.md](.github/SECURITY.md). Privacy policy: [PRIVACY.md](docs/PRIVACY.md). Please also read the [Code of Conduct](.github/CODE_OF_CONDUCT.md).
 
-
 <a id="code-signing-policy"></a>
 
 ## Code signing policy
@@ -377,7 +312,6 @@ macOS desktop releases are Developer ID signed and notarized. Windows installers
 Releases are built from tagged commits by this repository's release workflow on GitHub-hosted runners. Maintainers must use multi-factor authentication on GitHub.
 
 [Platform signing details](docs/code-signing.md) · [Privacy policy](docs/PRIVACY.md).
-
 
 <a id="license"></a>
 
@@ -389,7 +323,6 @@ Wenlan uses two licenses, one per part of the repository.
 - **AGPL-3.0-only** ([`app/LICENSE`](app/LICENSE)) covers the desktop app: the `app/` crate and the React frontend it ships. If you run a modified version of the app as a network service, the AGPL asks you to offer that modified source to its users.
 
 The split is deliberate. Apache-2.0 code may be used inside an AGPL-3.0 program, so the desktop app builds on the runtime without either license being violated.
-
 
 <a id="acknowledgments"></a>
 
