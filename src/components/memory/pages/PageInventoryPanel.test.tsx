@@ -23,12 +23,13 @@ describe("folder tree",()=>{
   const notes=Array.from({length:60},(_,index)=>page(`Note ${index}`,{storage_path:`note-${index}.md`,creation_kind:"distilled",...(index%3===0?{entity_id:`ent_${index}`}:{})}));
   active.mockResolvedValue([...notes,page("Shadow",{entity_id:"ent_0",creation_kind:"entity"})]);
   vi.mocked(knowledgeFoldersList).mockResolvedValue({folders:[],truncated:false});
-  setup({fileTree:true});
+  const onNoteCountChange=vi.fn();
+  setup({fileTree:true,onNoteCountChange});
   expect(await screen.findByRole("button",{name:"Open Note 59"})).toBeInTheDocument();
   expect(screen.getAllByRole("button",{name:/^Open Note \d+$/})).toHaveLength(60);
   expect(screen.getByRole("button",{name:"Open Note 0"})).toBeInTheDocument();
   expect(screen.queryByRole("button",{name:"Open Shadow"})).not.toBeInTheDocument();
-  expect(screen.getByText("60 notes")).toBeInTheDocument();
+  expect(onNoteCountChange).toHaveBeenLastCalledWith(60);
  });
  it("offers a single header folder button after an empty folder list loads", async () => {
   vi.mocked(knowledgeFoldersList).mockResolvedValue({ folders: [], truncated: false });

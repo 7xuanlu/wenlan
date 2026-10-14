@@ -70,6 +70,7 @@ export function WikiWorkspace({
     onCreationFolderPathChange?.(inventoryMode === "folders" ? creationFolderPath : null);
   }, [creationFolderPath, inventoryMode, onCreationFolderPathChange]);
   const [canCreateFolder, setCanCreateFolder] = useState(false);
+  const [noteCount, setNoteCount] = useState<number | null>(null);
   const createFormRef = useRef<(() => void) | null>(null);
   const id = useId();
   useReportWorkspaceDemand("list", WIKI_LIST_DOCKED_WIDTH);
@@ -127,6 +128,8 @@ export function WikiWorkspace({
           <div className="wiki-workspace-mode-row">
             <label className="wiki-workspace-mode">
               <span>{t("pages.recent.modeLabel")}</span>
+              {/* Sizes the selector to the chosen mode's name so the note count can sit right after it. */}
+              <span className="wiki-workspace-mode-sizer" aria-hidden="true">{t(inventoryMode === "recent" ? "pages.recent.title" : inventoryMode === "custom" ? "pages.recent.custom" : "pages.folders.title")}</span>
               <select
                 aria-label={t("pages.recent.modeLabel")}
                 title={isManualOrder ? t("pages.recent.customHint") : undefined}
@@ -139,6 +142,12 @@ export function WikiWorkspace({
               </select>
               <CaretDown aria-hidden="true" size={16} />
             </label>
+            {inventoryMode === "folders" && noteCount !== null && (
+              <span className="wiki-workspace-note-count" title={t("pages.folders.noteCount", { count: noteCount })}>
+                <span aria-hidden="true">{noteCount}</span>
+                <span className="sr-only">{t("pages.folders.noteCount", { count: noteCount })}</span>
+              </span>
+            )}
             {inventoryMode === "folders" && (
               <button
                 type="button"
@@ -172,6 +181,7 @@ export function WikiWorkspace({
               onCreatePage={closeForNavigation(onCreatePage)}
               onOpenDraft={closeForNavigation(onOpenDraft)}
               onOpenPage={closeForNavigation(onOpenPage)}
+              onNoteCountChange={setNoteCount}
             />
           )}
         </aside>
