@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=9d019b1e6f4c529a970c0aed856f16a04af2c4ecf42db521b542a1bd28a81e5f -->
+<!-- README_SYNC: source=README.md sha256=25986dedb8169271e85378b72f08d624c26900824a202c2d491059554c5fdc7c -->
 
 <p align="center">
   <picture>
@@ -67,7 +67,7 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 需要 AI 使用你保存的知識時，再連接 Claude Code、Codex 或其他支援的用戶端。請依[AI 設定指南](docs/setup-with-ai.md)操作。
 
-> 請運用我保存的［主題］資料，為［下一個任務］草擬一頁內容，並引用所用來源。
+> 幫我把之前聊過的想法整理成一頁，附上來源。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

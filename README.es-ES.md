@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=9d019b1e6f4c529a970c0aed856f16a04af2c4ecf42db521b542a1bd28a81e5f -->
+<!-- README_SYNC: source=README.md sha256=25986dedb8169271e85378b72f08d624c26900824a202c2d491059554c5fdc7c -->
 
 <p align="center">
   <picture>
@@ -67,7 +67,7 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 
 Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus conocimientos guardados. Sigue la [guía para conectar IA](docs/setup-with-ai.md).
 
-> Usa lo que he guardado sobre [tema] para redactar una página para [la siguiente tarea] y cita las fuentes consultadas.
+> Organiza las ideas que hablamos en una página, con enlaces a las fuentes.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

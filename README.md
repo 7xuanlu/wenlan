@@ -65,7 +65,7 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 
 Connect Claude Code, Codex, or another supported client when you want it to use your saved knowledge. Follow the [AI setup guide](docs/setup-with-ai.md).
 
-> Use what I’ve saved about [topic] to draft a page for [next task]. Cite the sources you rely on.
+> Turn the ideas we discussed into a page, with links to the sources.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
