@@ -28,6 +28,7 @@ describe("folder tree",()=>{
   expect(screen.getAllByRole("button",{name:/^Open Note \d+$/})).toHaveLength(60);
   expect(screen.getByRole("button",{name:"Open Note 0"})).toBeInTheDocument();
   expect(screen.queryByRole("button",{name:"Open Shadow"})).not.toBeInTheDocument();
+  expect(screen.getByText("60 notes")).toBeInTheDocument();
  });
  it("offers a single header folder button after an empty folder list loads", async () => {
   vi.mocked(knowledgeFoldersList).mockResolvedValue({ folders: [], truncated: false });

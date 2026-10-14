@@ -198,4 +198,5 @@
 .notes-inventory-root-pages { margin-left: 0; }
 .notes-inventory-panel--file-tree .notes-inventory-page { min-width: 0; font-size: 14px; line-height: 20px; min-height: 36px; }
 .notes-inventory-panel--file-tree .notes-inventory-page > svg { width: 16px; height: 16px; }
+.notes-inventory-count { flex: 0 0 auto; margin: 0 0 4px; padding: 0 9px; color: var(--mem-text-tertiary); font: 12px/16px var(--mem-font-body); font-variant-numeric: tabular-nums; }
 @media (pointer: coarse) { .notes-inventory-panel--file-tree .notes-inventory-page { min-height: 44px; } }
