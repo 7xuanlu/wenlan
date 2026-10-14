@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=dd54d0971e48eacf7cc1f676497781b2898fdd15b9f4819928889926cfb879c4 -->
+<!-- README_SYNC: source=README.md sha256=452f6487c8e6aba5de70147dbf21af5286d1475a4f706547f4f00179bda26430 -->
 
 <p align="center">
   <picture>
@@ -82,7 +82,13 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 Las fuentes son las notas, documentos y conversaciones originales que incorporas. Las Memorias conservan datos y decisiones útiles; las Páginas organizan conocimiento relacionado y enlazan a sus fuentes.
 
-Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP exportados de ChatGPT o Claude. Los PDF escaneados necesitan extraer el texto primero.
+- **Importa tus materiales:** Incorpora Markdown, texto, PDF con texto seleccionable, carpetas y conversaciones exportadas de ChatGPT o Claude.
+- **Conecta Obsidian:** Lee una bóveda existente sin modificarla ni sincronizar cambios de vuelta, y actualízala cuando lo necesites.
+- **Captura una idea:** Guarda una idea o decisión directamente en la app de escritorio sin abrir un chat de IA.
+- **Crea Páginas con fuentes:** Organiza materiales relacionados en notas editables con citas que puedes abrir y comprobar.
+- **Explora conexiones:** Recorre Páginas, Temas, Memorias y Fuentes relacionadas mediante el grafo de conocimiento.
+
+Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 ### Explora tu grafo de conocimiento personal
 
@@ -91,10 +97,6 @@ Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP exportados 
   <br><sub>Ilustración reorganizada a partir de datos de ejemplo de la app, conservando las relaciones reales.</sub>
 </p>
 
-Explora Páginas y conceptos relacionados; abre las citas para consultar las fuentes originales.
-
-Conecta una bóveda de Obsidian como fuente de solo lectura. Wenlan no la modifica ni sincroniza cambios de vuelta; actualízala cuando lo necesites.
-
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
@@ -102,7 +104,10 @@ Conecta una bóveda de Obsidian como fuente de solo lectura. Wenlan no la modifi
 
 ## Usa tu conocimiento con IA
 
-Conecta Claude Code o Codex para que la siguiente tarea aproveche lo que ya sabes. Wenlan busca palabras clave, significados relacionados y enlaces en tu grafo de conocimiento.
+- **Continúa entre herramientas de IA:** Claude Code, Codex y otros clientes conectados pueden usar el mismo conocimiento guardado.
+- **Busca más que palabras exactas:** Combina palabras clave, significados similares y conexiones del grafo para recuperar contexto relevante.
+- **Retoma el trabajo:** Pide a tu IA que guarde decisiones y el progreso para continuar en la siguiente sesión.
+- **Separa proyectos:** Usa Espacios para elegir qué conocimiento personal o de proyecto consulta tu IA.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
@@ -125,7 +130,11 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Mantén el conocimiento al día y conserva su historial
 
-Las fuentes cambian. Pide a la IA que actualice una Página o configura un [modelo](docs/setup-and-data.es-ES.md#models) para activar la organización y las actualizaciones automáticas opcionales.
+- **Sigue los cambios de las fuentes:** Las Fuentes de archivos y carpetas registran los cambios del material original.
+- **Organiza en segundo plano:** Activa el enriquecimiento y las actualizaciones opcionales de Páginas con un [modelo configurado](docs/setup-and-data.es-ES.md#models).
+- **Revisa las modificaciones:** Las actualizaciones automáticas de Páginas que hayas editado se presentan como propuestas para tu revisión.
+- **Conserva el historial:** Consulta versiones anteriores de Páginas y el historial de Memorias cuando cambie tu conocimiento.
+- **Mantén el control:** Edita Páginas Markdown locales, exporta tu wiki y elige un modelo en el dispositivo, en un servidor local o en la nube para el trabajo en segundo plano.
 
 <p align="center">
   <picture>
@@ -134,7 +143,7 @@ Las fuentes cambian. Pide a la IA que actualice una Página o configura un [mode
   </picture>
 </p>
 
-Las fuentes de archivos y carpetas siguen sus cambios. La actualización automática rechaza borradores con citas insuficientes. Los cambios en Páginas que hayas editado se proponen para revisión; las ediciones directas de archivos y la regeneración forzada siguen otras reglas.
+La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
 
 [Actualizaciones y revisión](docs/knowledge-guide.es-ES.md#updates-and-history) · [Diagnóstico e incidencias](https://wenlan.app/docs/diagnostics-and-issue-reports).
 

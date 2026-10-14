@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=dd54d0971e48eacf7cc1f676497781b2898fdd15b9f4819928889926cfb879c4 -->
+<!-- README_SYNC: source=README.md sha256=452f6487c8e6aba5de70147dbf21af5286d1475a4f706547f4f00179bda26430 -->
 
 <p align="center">
   <picture>
@@ -82,7 +82,13 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 來源是帶入 Wenlan 的原始筆記、文件與對話。記憶保存其中有用的事實與決定；頁面整理相關知識，並連回來源。
 
-可匯入 Markdown、文字檔、可讀取文字的 PDF、資料夾，以及 ChatGPT 或 Claude 匯出的 ZIP。掃描版 PDF 須先擷取文字。
+- **匯入既有資料**：帶入 Markdown、文字檔、可讀取文字的 PDF、資料夾，以及 ChatGPT 或 Claude 匯出的對話。
+- **連接 Obsidian**：唯讀存取既有儲存庫，需要時重新整理，不會修改或同步回去。
+- **快速記下想法**：直接在桌面 App 保存想法或決定，不必先開 AI 對話。
+- **整理成有來源的頁面**：把相關資料整理成可編輯的筆記，點開引用就能核對依據。
+- **探索知識關聯**：透過圖譜瀏覽彼此連結的頁面、主題、記憶與來源。
+
+掃描版 PDF 須先擷取文字再匯入。
 
 ### 探索你的個人知識圖譜
 
@@ -91,10 +97,6 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
   <br><sub>根據實機示範資料調整布局的示意，保留真實關聯。</sub>
 </p>
 
-瀏覽頁面與彼此關聯的概念，點開引用即可查看原始來源。
-
-Obsidian 儲存庫可接為唯讀來源。Wenlan 不會修改或同步回去；需要時再手動重新整理。
-
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="從關鍵字語意與關聯找回正確內容"></a>
@@ -102,7 +104,10 @@ Obsidian 儲存庫可接為唯讀來源。Wenlan 不會修改或同步回去；�
 
 ## 用 AI 延續已有知識
 
-連接 Claude Code 或 Codex，讓下一個任務能運用你已有的知識。Wenlan 會依關鍵字、相近語意與知識圖譜中的關聯找出內容。
+- **跨 AI 工具接續工作**：讓 Claude Code、Codex 與其他已連接的工具使用同一份知識。
+- **不只找相同字詞**：結合關鍵字、相近語意與圖譜關聯，找回相關脈絡。
+- **把經驗帶到下一次**：請 AI 保存決定與交接進度，讓下一段對話能接著做。
+- **分開不同專案**：用 Spaces 選擇 AI 要搜尋的個人或專案知識。
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
@@ -125,7 +130,11 @@ Obsidian 儲存庫可接為唯讀來源。Wenlan 不會修改或同步回去；�
 
 ## 持續更新知識並保留歷史
 
-來源會持續變動。你可以請 AI 更新頁面；也可設定[模型](docs/setup-and-data.zh-Hant.md#models)，選用背景整理與自動更新。
+- **追蹤來源變更**：檔案與資料夾來源會追蹤原始資料的變動。
+- **選用背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，可開啟記憶整理與頁面自動更新。
+- **審核頁面修訂**：自動更新你編輯過的頁面時，先提出修訂供你確認。
+- **保留知識歷史**：知識改變後，仍可查看過往的頁面版本與記憶歷史。
+- **掌握資料與模型**：編輯本地 Markdown 頁面、匯出維基，並選擇裝置端、本地伺服器或雲端模型處理背景工作。
 
 <p align="center">
   <picture>
@@ -134,7 +143,7 @@ Obsidian 儲存庫可接為唯讀來源。Wenlan 不會修改或同步回去；�
   </picture>
 </p>
 
-檔案與資料夾來源會追蹤變更。自動更新若引用不足，就會拒絕草稿。你編輯過的頁面會先提出修訂供你審核；直接改檔與強制重建遵循不同規則。
+自動更新若引用不足，就會拒絕草稿；直接改檔與強制重建遵循不同的審核規則。
 
 [更新與審核](docs/knowledge-guide.zh-Hant.md#updates-and-history) · [Doctor 與問題回報](https://wenlan.app/docs/diagnostics-and-issue-reports)。
 

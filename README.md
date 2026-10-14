@@ -79,7 +79,13 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 Sources are the original notes, documents, and conversations you bring in. Memories preserve useful facts and decisions; Pages organize related knowledge and link back to sources.
 
-Import Markdown, text files, text-based PDFs, folders, and ChatGPT or Claude export ZIPs. Scanned PDFs need text extraction first.
+- **Import your material:** Bring in Markdown, text files, text-based PDFs, folders, and ChatGPT or Claude conversation exports.
+- **Connect Obsidian:** Read an existing vault without modifying it or syncing changes back, and refresh it when needed.
+- **Capture a thought:** Save an idea or decision directly in the desktop app without opening an AI chat.
+- **Build source-linked Pages:** Turn related material into editable notes with citations you can open and check.
+- **Explore connections:** Use the knowledge graph to browse related Pages, Topics, Memories, and Sources.
+
+Scanned PDFs need text extraction before import.
 
 ### Explore your personal knowledge graph
 
@@ -88,17 +94,16 @@ Import Markdown, text files, text-based PDFs, folders, and ChatGPT or Claude exp
   <br><sub>Illustration rearranged from actual App demo data; real relationships preserved.</sub>
 </p>
 
-Browse Pages and connected concepts, and open citations to inspect the original sources.
-
-Connect an Obsidian vault as a read-only source. Wenlan does not modify it or sync changes back; refresh it on demand.
-
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
 ## Use your knowledge with AI
 
-Connect Claude Code or Codex so the next task can draw on what you already know. Wenlan searches matching keywords, related meaning, and links across your knowledge graph.
+- **Continue across AI tools:** Let Claude Code, Codex, and other connected clients use the same saved knowledge.
+- **Find more than exact words:** Combine keyword matches, similar meaning, and graph connections to retrieve relevant context.
+- **Carry work forward:** Ask your AI to save decisions and hand off progress so the next session can pick up where you left off.
+- **Separate projects:** Use Spaces to choose which personal or project knowledge your AI searches.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
@@ -120,7 +125,11 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current and preserve history
 
-Sources can change over time. Ask AI to update a Page, or enable optional background organization and updates with a [configured model](docs/setup-and-data.md#models).
+- **Track source changes:** File and folder Sources keep track of changes to the material behind your knowledge.
+- **Organize in the background:** Enable optional enrichment and Page updates with a [configured model](docs/setup-and-data.md#models).
+- **Review revisions:** Automatic updates to Pages you have edited become proposals for your review.
+- **Keep history:** Inspect earlier Page revisions and the history of saved Memories as your knowledge changes.
+- **Keep control:** Edit local Markdown Pages, export your wiki, and choose an on-device, local-server, or cloud model for background work.
 
 <p align="center">
   <picture>
@@ -129,7 +138,7 @@ Sources can change over time. Ask AI to update a Page, or enable optional backgr
   </picture>
 </p>
 
-File and folder Sources track changes. Automatic refresh rejects drafts without enough citations. Updates to Pages you have edited become review proposals; direct file edits and forced regeneration follow different rules.
+Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
 
 [Updates and review](docs/knowledge-guide.md#updates-and-history) · [Doctor and issue reports](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
