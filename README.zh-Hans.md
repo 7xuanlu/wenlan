@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=172814021ebd0b464c6472ed4f8ae68dd191412f6666692c11a82b876693def1 -->
+<!-- README_SYNC: source=README.md sha256=ed659083b0661b60dbb9487661b7a60afc4cf5b34365c5ce948a6b4b30bead85 -->
 
 <p align="center">
   <picture>
@@ -123,7 +123,6 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 </p>
 
 <a id="what-wenlan-is-not"></a>
-<a id="knowledge-graph"></a>
 <a id="retrieval"></a>
 <a id="从关键词语义与关联找回正确内容"></a>
 
@@ -137,6 +136,15 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 </p>
 
 [来源、记忆与页面如何协作](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [图谱与搜索如何运行](docs/knowledge-guide.zh-Hans.md#graph-and-search)。
+
+<a id="knowledge-graph"></a>
+
+### 探索你的个人知识图谱
+
+<p align="center">
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 中彼此连接的阅读、学习、生活、研究与开发知识" width="100%">
+  <br><sub>根据实机示范数据调整布局的示意，保留真实关联。</sub>
+</p>
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>

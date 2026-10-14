@@ -24,4 +24,6 @@ The four READMEs share these approved Traditional Chinese assets, with localized
 - `wenlan-personal-knowledge-zh-Hant.png`: approved first composition, copied byte-for-byte. Combines actual App views and fictional relationship data; graph positions, community boundaries, and annotations are enhanced. It is not a native three-column screen. SHA-256: `349ff24d2c00d0759036091969389aad4b4e8ea7cf08da02f29a422426da142a`.
 - `wenlan-knowledge-to-work-zh-Hant.png`: approved v24 concept illustration. The project, Claude conversations, and resulting websites are illustrative, not screenshots of a measured AI comparison. It shows how keyword, semantic, and graph retrieval can bring additional Wenlan context into a task; it does not claim Claude lacks native memory.
 
-The first composition remains unchanged. Older product captures and concept assets remain available for reference.
+- `wenlan-personal-graph-zh-Hant.png`: approved v15 personal-knowledge graph illustration, rearranged from actual App demo data. The full-width layout removes the sidebar and preserves the saved relationships and product node colors/icons. Region contours and layout are editorial aids; this is not an unmodified native screenshot. SHA-256: `d18eb95a113997de4ea4536aeef16efc54889a55aa91c61e6ac790be26e4227f`.
+
+The first two compositions remain unchanged. Older product captures and concept assets remain available for reference.

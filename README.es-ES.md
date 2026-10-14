@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=172814021ebd0b464c6472ed4f8ae68dd191412f6666692c11a82b876693def1 -->
+<!-- README_SYNC: source=README.md sha256=ed659083b0661b60dbb9487661b7a60afc4cf5b34365c5ce948a6b4b30bead85 -->
 
 <p align="center">
   <picture>
@@ -124,7 +124,6 @@ Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte co
 </p>
 
 <a id="what-wenlan-is-not"></a>
-<a id="knowledge-graph"></a>
 <a id="retrieval"></a>
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
 
@@ -138,6 +137,15 @@ La búsqueda por palabras clave, significado y grafo incorpora investigaciones y
 </p>
 
 [Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages) · [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
+
+<a id="knowledge-graph"></a>
+
+### Explora tu grafo de conocimiento personal
+
+<p align="center">
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Lectura, aprendizaje, vida cotidiana, investigación y desarrollo conectados en Wenlan" width="100%">
+  <br><sub>Ilustración reorganizada a partir de datos de ejemplo de la app, conservando las relaciones reales.</sub>
+</p>
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>

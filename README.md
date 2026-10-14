@@ -121,7 +121,6 @@ Your pages are local Markdown files you can read, edit, and take with you.
 </p>
 
 <a id="what-wenlan-is-not"></a>
-<a id="knowledge-graph"></a>
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
@@ -135,6 +134,15 @@ Keyword, semantic, and graph retrieval bring previous research and decisions int
 </p>
 
 [How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages) · [How graph and search work](docs/knowledge-guide.md#graph-and-search).
+
+<a id="knowledge-graph"></a>
+
+### Explore your personal knowledge graph
+
+<p align="center">
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Connected reading, learning, daily life, research, and development in Wenlan" width="100%">
+  <br><sub>Illustration rearranged from actual App demo data; real relationships preserved.</sub>
+</p>
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
