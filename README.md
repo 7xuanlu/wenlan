@@ -79,11 +79,11 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 Sources are the original notes, documents, and conversations you bring in. Memories preserve useful facts and decisions; Pages organize related knowledge and link back to sources.
 
-- **Import your material:** Bring in Markdown, text files, text-based PDFs, folders, and ChatGPT or Claude conversation exports.
-- **Connect Obsidian:** Read an existing vault without modifying it or syncing changes back, and refresh it when needed.
-- **Capture a thought:** Save an idea or decision directly in the desktop app without opening an AI chat.
-- **Build source-linked Pages:** Turn related material into editable notes with citations you can open and check.
-- **Explore connections:** Use the knowledge graph to browse related Pages, Topics, Memories, and Sources.
+- **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references.
+- **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
+- **Quick Capture and atomic Memories:** Save individual decisions, lessons, and preferences in the app or through your AI, with their provenance.
+- **Source-cited Markdown Pages:** Compile related Sources and Memories into editable Pages with citations and `[[wikilinks]]` to other Pages.
+- **Knowledge graph and communities:** With enrichment configured, extract typed Entities and relations from Memories, resolve repeated mentions, and group connected Entities into communities.
 
 Scanned PDFs need text extraction before import.
 
@@ -100,10 +100,11 @@ Scanned PDFs need text extraction before import.
 
 ## Use your knowledge with AI
 
-- **Continue across AI tools:** Let Claude Code, Codex, and other connected clients use the same saved knowledge.
-- **Find more than exact words:** Combine keyword matches, similar meaning, and graph connections to retrieve relevant context.
-- **Carry work forward:** Ask your AI to save decisions and hand off progress so the next session can pick up where you left off.
-- **Separate projects:** Use Spaces to choose which personal or project knowledge your AI searches.
+- **MCP and AI plugins:** Claude Code, Codex, and other connected clients read and write the same local knowledge through Wenlan’s tools.
+- **Local hybrid retrieval:** Combine SQLite FTS5 full-text search and BGE embeddings with weighted Reciprocal Rank Fusion (RRF), without an API key for base search.
+- **Graph-assisted ranking:** When eligible Entity links exist, use them to boost related Memory candidates; optional cross-encoder reranking can refine results.
+- **Capture and handoff:** Use `/capture` to save decisions with context and `/handoff` to preserve progress and open questions for the next session.
+- **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
@@ -125,11 +126,11 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current and preserve history
 
-- **Track source changes:** File and folder Sources keep track of changes to the material behind your knowledge.
-- **Organize in the background:** Enable optional enrichment and Page updates with a [configured model](docs/setup-and-data.md#models).
-- **Review revisions:** Automatic updates to Pages you have edited become proposals for your review.
-- **Keep history:** Inspect earlier Page revisions and the history of saved Memories as your knowledge changes.
-- **Keep control:** Edit local Markdown Pages, export your wiki, and choose an on-device, local-server, or cloud model for background work.
+- **Evidence tracking and refresh:** Track supporting Sources and Memories so stale Pages can be refreshed from current evidence.
+- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), add Memory types, structured details, search cues, and graph links, and enable optional Page synthesis.
+- **Revision review and history:** Automatic refresh proposes changes to Pages you edited, while Page revisions and explicit Memory replacement chains remain inspectable.
+- **Local Markdown and wiki export:** Keep Pages as ordinary Markdown files and export eligible Pages as an OKF wiki, with Memories and graph data stored in local libSQL.
+- **Choose the model runtime:** Use on-device Qwen through llama.cpp, an OpenAI-compatible local server such as Ollama or LM Studio, or a configured cloud provider for enrichment and synthesis.
 
 <p align="center">
   <picture>

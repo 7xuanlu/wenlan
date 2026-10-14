@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=452f6487c8e6aba5de70147dbf21af5286d1475a4f706547f4f00179bda26430 -->
+<!-- README_SYNC: source=README.md sha256=dde5947d438bfa82794368b322ef33550b1d060d71c3fc7b669dd9609636b33f -->
 
 <p align="center">
   <picture>
@@ -82,11 +82,11 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 Las fuentes son las notas, documentos y conversaciones originales que incorporas. Las Memorias conservan datos y decisiones útiles; las Páginas organizan conocimiento relacionado y enlazan a sus fuentes.
 
-- **Importa tus materiales:** Incorpora Markdown, texto, PDF con texto seleccionable, carpetas y conversaciones exportadas de ChatGPT o Claude.
-- **Conecta Obsidian:** Lee una bóveda existente sin modificarla ni sincronizar cambios de vuelta, y actualízala cuando lo necesites.
-- **Captura una idea:** Guarda una idea o decisión directamente en la app de escritorio sin abrir un chat de IA.
-- **Crea Páginas con fuentes:** Organiza materiales relacionados en notas editables con citas que puedes abrir y comprobar.
-- **Explora conexiones:** Recorre Páginas, Temas, Memorias y Fuentes relacionadas mediante el grafo de conocimiento.
+- **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes.
+- **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
+- **Quick Capture y Memorias atómicas:** Guarda decisiones, lecciones y preferencias individuales desde la app o mediante tu IA, con su procedencia.
+- **Páginas Markdown con citas:** Organiza Fuentes y Memorias relacionadas en Páginas editables, con citas y `[[wikilinks]]` a otras Páginas.
+- **Grafo y comunidades:** Con el enriquecimiento configurado, extrae Entidades y relaciones tipadas de las Memorias, identifica menciones repetidas y agrupa Entidades conectadas en comunidades.
 
 Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
@@ -104,10 +104,11 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 ## Usa tu conocimiento con IA
 
-- **Continúa entre herramientas de IA:** Claude Code, Codex y otros clientes conectados pueden usar el mismo conocimiento guardado.
-- **Busca más que palabras exactas:** Combina palabras clave, significados similares y conexiones del grafo para recuperar contexto relevante.
-- **Retoma el trabajo:** Pide a tu IA que guarde decisiones y el progreso para continuar en la siguiente sesión.
-- **Separa proyectos:** Usa Espacios para elegir qué conocimiento personal o de proyecto consulta tu IA.
+- **MCP y plugins de IA:** Claude Code, Codex y otros clientes conectados leen y escriben el mismo conocimiento local mediante las herramientas de Wenlan.
+- **Búsqueda híbrida local:** Combina búsqueda de texto completo con SQLite FTS5 y embeddings BGE mediante Reciprocal Rank Fusion (RRF) ponderado, sin clave API para la búsqueda base.
+- **Clasificación asistida por el grafo:** Los enlaces válidos entre Entidades elevan la posición de Memorias candidatas relacionadas, y un reranking cross-encoder opcional puede refinar los resultados.
+- **Captura y traspaso de trabajo:** Usa `/capture` para guardar decisiones con contexto y `/handoff` para conservar el progreso y las preguntas pendientes para la siguiente sesión.
+- **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
@@ -130,11 +131,11 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Mantén el conocimiento al día y conserva su historial
 
-- **Sigue los cambios de las fuentes:** Las Fuentes de archivos y carpetas registran los cambios del material original.
-- **Organiza en segundo plano:** Activa el enriquecimiento y las actualizaciones opcionales de Páginas con un [modelo configurado](docs/setup-and-data.es-ES.md#models).
-- **Revisa las modificaciones:** Las actualizaciones automáticas de Páginas que hayas editado se presentan como propuestas para tu revisión.
-- **Conserva el historial:** Consulta versiones anteriores de Páginas y el historial de Memorias cuando cambie tu conocimiento.
-- **Mantén el control:** Edita Páginas Markdown locales, exporta tu wiki y elige un modelo en el dispositivo, en un servidor local o en la nube para el trabajo en segundo plano.
+- **Seguimiento de evidencias y actualización:** Sigue las Fuentes y Memorias que sustentan cada Página para actualizar Páginas obsoletas con evidencia actual.
+- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), añade tipos, datos estructurados, pistas de búsqueda y enlaces al grafo, y activa la síntesis opcional de Páginas.
+- **Revisión e historial:** La actualización automática propone cambios en Páginas que hayas editado y conserva versiones de Páginas y cadenas explícitas de sustitución de Memorias para su consulta.
+- **Markdown local y exportación de wikis:** Conserva Páginas como archivos Markdown y exporta las que cumplan los requisitos como una wiki OKF, con Memorias y grafo almacenados en libSQL local.
+- **Elige cómo ejecutar los modelos:** Usa Qwen en el dispositivo mediante llama.cpp, un servidor local compatible con OpenAI como Ollama o LM Studio, o un proveedor de nube configurado para enriquecimiento y síntesis.
 
 <p align="center">
   <picture>
