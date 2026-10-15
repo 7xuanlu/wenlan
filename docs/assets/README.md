@@ -19,11 +19,26 @@ See [screenshots and provenance](screenshots/README.md). Product captures use fi
 
 ## Approved README compositions
 
-The four READMEs share these approved Traditional Chinese assets, with localized surrounding copy:
+All four READMEs use the same approved Traditional Chinese figures, with localized alt text and captions. Native demo UI remains in its captured language.
 
-- `wenlan-personal-knowledge-zh-Hant.png`: approved first composition, copied byte-for-byte. Combines actual App views and fictional relationship data; graph positions, community boundaries, and annotations are enhanced. It is not a native three-column screen. SHA-256: `349ff24d2c00d0759036091969389aad4b4e8ea7cf08da02f29a422426da142a`.
-- `wenlan-knowledge-to-work-zh-Hant.png`: Approved v24 concept illustration with the approved ai-work-polish-v11 typography and layout refinement. The project, Claude conversations, and resulting websites are illustrative, not screenshots of a measured AI comparison. It shows how keyword, semantic, and graph retrieval can bring additional Wenlan context into a task; it does not claim Claude lacks native memory.
+The final consistency pass aligns the three explanatory titles (46px, semibold, shared left edge), uses Page teal for the editorial Page icon, and moves provenance footnotes into readable README captions. It preserves approved body composition and content. The video cover retains its native UI composition; only its separate footnote strip is removed.
 
-- `wenlan-personal-graph-zh-Hant.png`: approved real-graph-polish-v7 composition using the website's user-supplied September 6, 2026 App capture (`wenlan-live-knowledge-graph-20260906.webp`, source SHA-256 `63ab14b444c9cfd8527f9fc80440d7fb2507856b745c1d83b10e52e61df0b5f9`). Original node positions, colors and connections are preserved. Region boundaries, enlarged labels, and the Urban history / Genetics and evolution / Human-AI collaboration research names are editorial illustrations, not verified source-node identities or detected communities. The footer and all four README captions disclose this. No independent source nodes or links were added. Output SHA-256: `a52cfd9de96e6684dcb241596fe13765819f55c526b72ed1fe939e7f3aa876f2`.
+| Asset | Export | Provenance |
+| --- | --- | --- |
+| `wenlan-personal-knowledge-zh-Hant.png` | 3000 × 1720 | Actual App views combined with demo data and enhanced graph layout. Not a native three-column screen. The approved content area is pixel-identical. |
+| `wenlan-personal-graph-zh-Hant.png` | 3600 × 2488 | Actual graph capture; the approved graph body is pixel-identical. Region names and boundaries are editorial annotations, not verified source-node identities or detected communities. |
+| `wenlan-knowledge-to-work-zh-Hant.png` | 3600 × 2520 | Fictional project, Claude conversations, and resulting websites. Concept illustration, not a measured comparison. Additional Wenlan context complements Claude's native capabilities. |
+| `wenlan-updates-history-zh-Hant.png` | 3600 × 2080 | Actual memory, source, page, and revision captures with demo data; connecting lines and editorial labels are illustrative. Shows automatic updates to untouched AI-organized pages and per-page review for user-created or edited pages. |
 
-The first composition and personal knowledge graph remain unchanged by the AI-work refinement. Older product captures and concept assets remain available for reference.
+The graph uses the website's September 6, 2026 capture, `wenlan-live-knowledge-graph-20260906.webp` (source SHA-256 `63ab14b444c9cfd8527f9fc80440d7fb2507856b745c1d83b10e52e61df0b5f9`). Original graph nodes, colors, and connections remain intact. Urban history, Genetics and evolution, and Human–AI collaboration research are illustrative region names.
+
+Composition sources: `real-graph-polish-v7`, `ai-work-polish-v11`, and `lifecycle-polish-v26`, consolidated into the retained `readme-final-consistency` production package. The package contains HTML compositions, unchanged native capture inputs, export instructions, and SHA-256 verification. Native captures are not generatively redrawn; export resolution does not imply additional detail beyond the original captures.
+
+The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and their generators remain available for reference; the current READMEs do not use their old mobile variants.
+
+### Current export hashes
+
+- `wenlan-personal-knowledge-zh-Hant.png`: `f349a6e8a84b4b6185ad99111c4a4216af56cf78df5d97c971971518298d310e`
+- `wenlan-personal-graph-zh-Hant.png`: `df7de7ad6dd19041f915ab1b562d14fd0ee9c6396d8b63bd2e912197b145843f`
+- `wenlan-knowledge-to-work-zh-Hant.png`: `8a9a22d90282b20003b8222ee111cfcc2c2c6f8d89a48e2165624d2dd8f1ddf5`
+- `wenlan-updates-history-zh-Hant.png`: `d073e66e5a24f7f202ea1691ac977bac29a343f71ede06a4dc2462b0d3dcf251`

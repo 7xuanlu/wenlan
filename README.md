@@ -32,8 +32,8 @@ Wenlan organizes notes, documents, and AI conversations into editable, source-li
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Watch the video</a>
-  <br><sub>Cover composed from actual App views and demo data.</sub>
 </p>
+<p align="center">Cover combines actual App views with demo data; the graph is illustrative, not a native three-column screen.</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -91,8 +91,8 @@ Scanned PDFs need text extraction before import.
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan knowledge graph with illustrative regions for personal interests, research, and development" width="100%">
-  <br><sub>Actual App graph; region names and boundaries are illustrative.</sub>
 </p>
+<p align="center">Actual App nodes and connections; region names and boundaries are illustrative.</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -108,8 +108,8 @@ Scanned PDFs need text extraction before import.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
-  <br><sub>Concept illustration: fictional project and conversations, not a measured comparison.</sub>
 </p>
+<p align="center">Concept illustration with a fictional project and conversations, not a product test. The difference is added Wenlan context alongside Claude’s own capabilities, including its native memory.</p>
 
 [How search works](docs/technical-foundations.md#retrieval-pipeline).
 
@@ -133,11 +133,9 @@ Experimental web access lets supported web clients search the whole library or o
 - **Choose the model runtime:** Use on-device Qwen through llama.cpp, an OpenAI-compatible local server such as Ollama or LM Studio, or a configured cloud provider for enrichment and synthesis.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Illustrative before and after: “tests passed, so the UI is done” becomes “check tests and desktop and mobile views”; the evidence is a mobile label obscured despite passing tests. During automatic refresh, changes to a page you edited are proposed for your review." width="100%">
-  </picture>
+  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
+<p align="center">Actual App views with demo data; connections and labels are illustrative.</p>
 
 Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
 

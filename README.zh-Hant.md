@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=512050cd37ab138bbd29bc74b64fe3fa6725b8c4a6c9749a693e21901aa433e7 -->
+<!-- README_SYNC: source=README.md sha256=6de841b549c9e884e6ed47cf35a13226c270bcb81d348d58fcd7eed7897057cc -->
 
 <p align="center">
   <picture>
@@ -34,8 +34,8 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此連結的頁面、記憶與來源" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">▶ 觀看影片</a>
-  <br><sub>封面以實機畫面與示範資料組合而成。</sub>
 </p>
+<p align="center">封面由多個實機畫面與示範資料組合；圖譜為示意，並非 App 原生的三欄畫面。</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -94,8 +94,8 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 實機知識圖譜，搭配個人興趣、研究與開發的區域示意" width="100%">
-  <br><sub>實機圖譜；區域名稱與範圍為示意標註。</sub>
 </p>
+<p align="center">實機節點與連線；區域名稱與範圍為示意。</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -112,8 +112,8 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
-  <br><sub>概念示意：虛構專案與對話，非實測比較。</sub>
 </p>
+<p align="center">虛構專案與對話的概念示意，並非產品測試。差異在於加入文瀾脈絡，而非 Claude 沒有原生記憶。</p>
 
 [搜尋方式](docs/technical-foundations.md#retrieval-pipeline)。
 
@@ -138,11 +138,9 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 - **自由選擇模型執行方式**：以 llama.cpp 執行裝置端 Qwen，或連接 Ollama、LM Studio 等 OpenAI 相容本地服務及已設定的雲端供應商，處理整理與頁面合成。
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="示意的前後規則：「測試通過就算完成」改為「檢查測試以及桌面與手機畫面」；依據是測試雖通過，手機標籤仍被遮住。自動更新你編輯過的頁面時，修改會以提案交由你審核。" width="100%">
-  </picture>
+  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
 </p>
+<p align="center">實機畫面搭配示範資料；連線與標註為示意。</p>
 
 自動更新若引用不足，就會拒絕草稿；直接改檔與強制重建遵循不同的審核規則。
 

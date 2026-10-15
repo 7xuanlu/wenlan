@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=512050cd37ab138bbd29bc74b64fe3fa6725b8c4a6c9749a693e21901aa433e7 -->
+<!-- README_SYNC: source=README.md sha256=6de841b549c9e884e6ed47cf35a13226c270bcb81d348d58fcd7eed7897057cc -->
 
 <p align="center">
   <picture>
@@ -34,8 +34,8 @@ Wenlan organiza notas, documentos y conversaciones de IA en páginas editables c
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Páginas, memorias y fuentes conectadas en Wenlan" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Ver el vídeo</a>
-  <br><sub>Portada compuesta a partir de vistas reales de la app y datos de ejemplo.</sub>
 </p>
+<p align="center">Portada compuesta con varias vistas reales de la app y datos de ejemplo; el grafo es ilustrativo, no una pantalla nativa de tres columnas.</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -94,8 +94,8 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Grafo real de Wenlan con regiones ilustrativas de intereses personales, investigación y desarrollo" width="100%">
-  <br><sub>Grafo real de la app; los nombres y límites de las regiones son ilustrativos.</sub>
 </p>
+<p align="center">Nodos y conexiones reales de la app; los nombres y límites de las regiones son ilustrativos.</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -112,8 +112,8 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
-  <br><sub>Ilustración conceptual: proyecto y conversaciones ficticios, no una comparación medida.</sub>
 </p>
+<p align="center">Ilustración conceptual con un proyecto y conversaciones ficticios; no es una prueba del producto. La diferencia es el contexto adicional de Wenlan, junto con las capacidades propias de Claude, incluida su memoria nativa.</p>
 
 [Cómo funciona la búsqueda](docs/technical-foundations.md#retrieval-pipeline).
 
@@ -138,11 +138,9 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 - **Elige cómo ejecutar los modelos:** Usa Qwen en el dispositivo mediante llama.cpp, un servidor local compatible con OpenAI como Ollama o LM Studio, o un proveedor de nube configurado para enriquecimiento y síntesis.
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Cambio ilustrativo de regla: «las pruebas pasaron, así que la interfaz está lista» pasa a «comprueba las pruebas y las vistas de escritorio y móvil»; las pruebas pasaron, pero una línea tapaba una etiqueta en móvil. Durante la actualización automática, los cambios en una Página que hayas editado se proponen para que los revises." width="100%">
-  </picture>
+  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
 </p>
+<p align="center">Vistas reales de la app con datos de ejemplo; las conexiones y etiquetas son ilustrativas.</p>
 
 La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
 

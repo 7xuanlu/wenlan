@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=512050cd37ab138bbd29bc74b64fe3fa6725b8c4a6c9749a693e21901aa433e7 -->
+<!-- README_SYNC: source=README.md sha256=6de841b549c9e884e6ed47cf35a13226c270bcb81d348d58fcd7eed7897057cc -->
 
 <p align="center">
   <picture>
@@ -34,8 +34,8 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此连接的页面、记忆与来源" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad">▶ 观看影片</a>
-  <br><sub>封面以实机画面与示范数据组合而成。</sub>
 </p>
+<p align="center">封面由多个实机画面与示范数据组合；图谱为示意，并非 App 原生的三栏画面。</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -94,8 +94,8 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 实机知识图谱，搭配个人兴趣、研究与开发的区域示意" width="100%">
-  <br><sub>实机图谱；区域名称与范围为示意标注。</sub>
 </p>
+<p align="center">实机节点与连线；区域名称与范围为示意。</p>
 
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
@@ -112,8 +112,8 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
-  <br><sub>概念示意：虚构项目与对话，非实测比较。</sub>
 </p>
+<p align="center">虚构项目与对话的概念示意，并非产品测试。差异在于加入文澜脉络，而非 Claude 没有原生记忆。</p>
 
 [搜索方式](docs/technical-foundations.md#retrieval-pipeline)。
 
@@ -138,11 +138,9 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 - **自由选择模型运行方式**：以 llama.cpp 运行设备端 Qwen，或连接 Ollama、LM Studio 等 OpenAI 兼容本地服务及已配置的云端提供商，处理整理与页面合成。
 
 <p align="center">
-  <picture>
-    <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hans-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle-zh-Hans.png" alt="示意的前后规则：“测试通过就算完成”改为“检查测试以及桌面与手机画面”；依据是测试虽通过，手机标签仍被遮住。自动更新你编辑过的页面时，修改会以提案交由你审核。" width="100%">
-  </picture>
+  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
 </p>
+<p align="center">实机画面搭配示范数据；连线与标注为示意。</p>
 
 自动更新若引用不足，就会拒绝草稿；直接编辑文件和强制重新生成遵循不同的审核规则。
 
