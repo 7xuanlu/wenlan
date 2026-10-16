@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=35fa2fe042e405d47912b593c017e322965b4370ccfb0fd07cb42645b33a3464 -->
+<!-- README_SYNC: source=README.md sha256=cd867f9a47a3c5281ecb33e2c1960cf19c2446775b0393449dbc196a24005fe8 -->
 
 <p align="center">
   <picture>
@@ -60,13 +60,15 @@
 
 首次启动会下载本地搜索模型，设置完成前请保持联网。[下载与隐私说明](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
 
+也可[不安装桌面应用](docs/setup-and-data.zh-Hans.md#installation)，通过 AI 或 CLI 使用同一个本地知识库。
+
 ### 2. 打开示例或创建页面
 
 选择“打开笔记”进入 Wenlan，可先看欢迎页中的示例，也可以创建自己的页面。
 
 ### 3. 需要时再连接 AI 工具
 
-想让 AI 使用你保存的知识时，再连接 Claude Code、Codex 或其他受支持的客户端。请按[AI 设置指南](docs/setup-with-ai.md)操作。
+连接 Claude Code、Codex 或其他受支持的客户端，就能使用你保存的知识并撰写页面，无需另装本地语言模型。若要后台整理和自动更新，则需[另外配置模型](docs/setup-and-data.zh-Hans.md#models)。连接方式请参阅[AI 设置指南](docs/setup-with-ai.md)。
 
 > 参考我之前的笔记，帮我接着完成这个任务。
 
@@ -87,7 +89,7 @@
 
 编辑**带有引用的 Markdown 页面**，用 `[[wikilinks]]` 串起相关内容。点开引用，就能核对原始文档、对话或保存的记忆。
 
-- **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。扫描版 PDF 需先提取文本再导入。
+- **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。扫描版 PDF 需先提取文本再导入。对话导入保留当时记录；已注册的文件来源可刷新为最新内容。
 - **Obsidian 只读连接**：读取已有仓库并按需刷新，不修改原始文件，也不将变化同步回去。
 - **Quick Capture 与原子记忆**：在 App 或通过 AI，每次保存一条决定、经验或偏好，并保留其来源。
 - **知识图谱**：通过不同类型的实体、关系与知识群集（communities），发现相关主题；配置整理模型后，将重复提及连接到同一实体。

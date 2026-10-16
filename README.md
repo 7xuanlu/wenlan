@@ -58,13 +58,15 @@
 
 First launch downloads the local search model. Keep an internet connection until setup finishes. [Download and privacy details](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
+You can also [use Wenlan without the desktop app](docs/setup-and-data.md#installation) through AI tools or the CLI, with the same local knowledge base.
+
 ### 2. Open a sample or create a page
 
 Choose **Open notes** to enter Wenlan. Explore the sample from the welcome screen or create a page of your own.
 
 ### 3. Connect an AI tool when you want
 
-Connect Claude Code, Codex, or another supported client when you want it to use your saved knowledge. Follow the [AI setup guide](docs/setup-with-ai.md).
+Connect Claude Code, Codex, or another supported client to use saved knowledge and write Pages without installing another local language model. Optional background organization and automatic Page updates need a separately configured [model](docs/setup-and-data.md#models). Follow the [AI setup guide](docs/setup-with-ai.md) to connect a client.
 
 > Use my earlier notes to help me finish this task.
 
@@ -84,7 +86,7 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 Edit **Markdown Pages with citations** and link related content through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved Memory behind an idea.
 
-- **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import.
+- **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import. Chat imports preserve a snapshot; registered file sources can refresh from disk.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
 - **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
 - **Knowledge graph:** Discover related topics through typed Entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).

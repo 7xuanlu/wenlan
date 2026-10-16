@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=35fa2fe042e405d47912b593c017e322965b4370ccfb0fd07cb42645b33a3464 -->
+<!-- README_SYNC: source=README.md sha256=cd867f9a47a3c5281ecb33e2c1960cf19c2446775b0393449dbc196a24005fe8 -->
 
 <p align="center">
   <picture>
@@ -60,13 +60,15 @@
 
 Al iniciar por primera vez se descarga el modelo de búsqueda local. Mantén la conexión hasta terminar la configuración. [Detalles de descarga y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
+También puedes [usar Wenlan sin la aplicación de escritorio](docs/setup-and-data.es-ES.md#installation) mediante herramientas de IA o la CLI, con la misma base de conocimiento local.
+
 ### 2. Abre un ejemplo o crea una página
 
 Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o crea una página propia.
 
 ### 3. Conecta una herramienta de IA cuando quieras
 
-Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus conocimientos guardados. Sigue la [guía para conectar IA](docs/setup-with-ai.md).
+Conecta Claude Code, Codex u otro cliente compatible para usar tus conocimientos guardados y redactar Páginas sin instalar otro modelo de lenguaje local. Si quieres organización en segundo plano y actualizaciones automáticas, necesitas un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models). Para conectar un cliente, sigue la [guía de configuración de IA](docs/setup-with-ai.md).
 
 > Usa mis notas anteriores para ayudarme a terminar esta tarea.
 
@@ -87,7 +89,7 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la Memoria que respalda una idea.
 
-- **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos.
+- **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos. Los chats importados conservan una instantánea; las fuentes de archivos registradas se pueden actualizar desde el disco.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
 - **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
 - **Grafo de conocimiento:** Descubre temas relacionados mediante Entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
