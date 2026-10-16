@@ -45,3 +45,11 @@ The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and 
 - `wenlan-knowledge-to-work.png`: `90035731a53b9c228b488e38bdd551ea1525dd82aec99d2941926d1f1c1281aa`
 - `wenlan-knowledge-to-work-es-ES.png`: `826fef30c558a2cde583fdc0de21ca2b81d76148fa202b3013e863e728045f93`
 - `wenlan-updates-history-zh-Hant.png`: `d073e66e5a24f7f202ea1691ac977bac29a343f71ede06a4dc2462b0d3dcf251`
+
+## Architecture overview
+
+`wenlan-architecture.png`, `-zh-Hant.png`, `-zh-Hans.png`, and `-es-ES.png` are fully localized architecture illustrations, exported at 4800 × 3300. Matching SVG files are the editable vector sources. They are diagrams, not App screenshots. The approved Traditional Chinese composition is preserved; longer translated labels use concise wording and local line wrapping.
+
+The diagram separates imported materials, App/CLI and AI-tool access, the local service, and persistent knowledge. It distinguishes local search models, the external AI client’s own model, and optional background enrichment models. Page citations, dependent-page invalidation, review for human-owned pages, and version history are represented at product level, not as a complete database schema or a guarantee that every retrieval uses every channel.
+
+Source references: [setup and model roles](../setup-and-data.md#models), [retrieval and connected knowledge](../technical-foundations.md), [source invalidation](../../crates/wenlan-core/src/db.rs), and [Page ownership and proposed revisions](../../crates/wenlan-core/src/post_write/page_update.rs). Rendered at 3× from SVG and checked at 900px README width. Existing approved product figures are unchanged.

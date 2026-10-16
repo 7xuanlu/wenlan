@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=73a6426ce8f0c93205b37c74c5f3d6f6e729528a3e0bf745042631e6be8b8bb0 -->
+<!-- README_SYNC: source=README.md sha256=e620e5a8b3c8efbbcc98e42f5207d2088b18667571b751615a02b827edbc1835 -->
 
 <p align="center">
   <picture>
@@ -156,6 +156,16 @@ Cuando una Fuente o Memoria citada se actualiza o elimina en Wenlan, el **seguim
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
 La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
+
+<a id="architecture"></a>
+
+## Arquitectura
+
+<p align="center">
+  <img src="./docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
+</p>
+
+Esquema de la arquitectura. [Búsqueda, evidencias y modelos](docs/technical-foundations.md).
 
 <a id="models-and-privacy"></a>
 

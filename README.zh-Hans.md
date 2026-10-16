@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=73a6426ce8f0c93205b37c74c5f3d6f6e729528a3e0bf745042631e6be8b8bb0 -->
+<!-- README_SYNC: source=README.md sha256=e620e5a8b3c8efbbcc98e42f5207d2088b18667571b751615a02b827edbc1835 -->
 
 <p align="center">
   <picture>
@@ -156,6 +156,16 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 <p>实机画面搭配示范数据；连线与标注为示意。</p>
 
 自动更新若引用不足，就会拒绝草稿；直接编辑文件和强制重新生成遵循不同的审核规则。
+
+<a id="architecture"></a>
+
+## 系统架构
+
+<p align="center">
+  <img src="./docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">
+</p>
+
+架构示意。[检索、引用与模型](docs/technical-foundations.md)。
 
 <a id="models-and-privacy"></a>
 

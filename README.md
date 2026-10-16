@@ -152,6 +152,16 @@ When a cited Source or Memory is updated or removed in Wenlan, **evidence tracki
 
 Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
 
+<a id="architecture"></a>
+
+## Architecture
+
+<p align="center">
+  <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
+</p>
+
+Architecture overview. [Retrieval, evidence, and models](docs/technical-foundations.md).
+
 <a id="models-and-privacy"></a>
 
 ## Data and privacy
