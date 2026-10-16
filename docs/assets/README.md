@@ -32,13 +32,13 @@ The final consistency pass aligns the three explanatory titles (46px, semibold, 
 
 The graph uses the website's September 6, 2026 capture, `wenlan-live-knowledge-graph-20260906.webp` (source SHA-256 `63ab14b444c9cfd8527f9fc80440d7fb2507856b745c1d83b10e52e61df0b5f9`). Original graph nodes, colors, and connections remain intact. Urban history, Genetics and evolution, and Human–AI collaboration research are illustrative region names.
 
-Composition sources: `cover-polish-hd` (approved `cover-polish-v2` layout), `real-graph-polish-v7`, `ai-work-polish-v11`, and `lifecycle-polish-v26`, retained in the `cover-polish-hd` and `readme-final-consistency` production packages. The cover package includes read-only snapshots of the actual editor and hover-preview DOM/styles, original pseudo-element icon CSS, the approved composition, export instructions, and SHA-256 verification. Text and graph labels are rendered at high resolution rather than enlarged from the former small article crop. Heading font fallback is normalized to match the approved capture. Directory/header raster inputs remain unchanged; their detail is limited by the original captures. Browser capture uses JPEG transport; the published PNG adds no further lossy encoding. No generative enhancement or invented UI content is used.
+Composition sources: `cover-polish-title` (6000px `cover-polish-hd` master; approved `cover-polish-v2` layout), `real-graph-polish-v7`, `ai-work-polish-v11`, and `lifecycle-polish-v26`, retained in the `cover-polish-title`, `cover-polish-hd`, and `readme-final-consistency` production packages. The final title pass reduces only the article heading from 28.16px to 26px; every pixel outside that heading area is identical to the 6000px master. The cover package includes read-only snapshots of the actual editor and hover-preview DOM/styles, original pseudo-element icon CSS, the approved composition, export instructions, and SHA-256 verification. Text and graph labels are rendered at high resolution rather than enlarged from the former small article crop. Heading font fallback is normalized to match the approved capture. Directory/header raster inputs remain unchanged; their detail is limited by the original captures. Browser capture uses JPEG transport; the published PNG adds no further lossy encoding. No generative enhancement or invented UI content is used.
 
 The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and their generators remain available for reference; the current READMEs do not use their old mobile variants.
 
 ### Current export hashes
 
-- `wenlan-personal-knowledge-zh-Hant.png`: `6e1c9173c60ea30ccc21e64aeeeab99d50be966a300a88dfff88df4e36c716d9`
+- `wenlan-personal-knowledge-zh-Hant.png`: `328e4bf032d5dcf16cad24658d7d12a51d694fdd2b3d00f5b1e44f94b22246e5`
 - `wenlan-personal-graph-zh-Hant.png`: `df7de7ad6dd19041f915ab1b562d14fd0ee9c6396d8b63bd2e912197b145843f`
 - `wenlan-knowledge-to-work-zh-Hant.png`: `8a9a22d90282b20003b8222ee111cfcc2c2c6f8d89a48e2165624d2dd8f1ddf5`
 - `wenlan-updates-history-zh-Hant.png`: `d073e66e5a24f7f202ea1691ac977bac29a343f71ede06a4dc2462b0d3dcf251`
