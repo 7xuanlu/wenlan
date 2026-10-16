@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=bb08b03d874dd57e73a36301e0f58b5ba525216fb8510c4f94fcb10514988151 -->
+<!-- README_SYNC: source=README.md sha256=2d124637a25c3faf92bc59f72f345ea20fc2d1a078c21a767c31844e9f16eca5 -->
 
 <p align="center">
   <picture>
@@ -11,9 +11,7 @@ Wenlan organiza notas, documentos y conversaciones de IA en páginas editables c
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
-</p>
-
-<p align="center">
+  <br>
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="Licencia: Apache-2.0 y AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -21,10 +19,8 @@ Wenlan organiza notas, documentos y conversaciones de IA en páginas editables c
 
 <p align="center">
   <a href="#start-in-30-seconds">Primeros&nbsp;pasos</a> ·
-  <a href="#what-can-i-bring-in">Explorar&nbsp;y&nbsp;organizar</a> ·
-  <a href="#retrieval">Usar&nbsp;con&nbsp;IA</a> ·
-  <a href="#two-lifecycles">Mantener&nbsp;al&nbsp;día</a> ·
-  <a href="#learn-more">Docs&nbsp;y&nbsp;comunidad</a> ·
+  <a href="#what-can-i-bring-in">Funciones</a> ·
+  <a href="#learn-more">Docs</a> ·
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
@@ -35,7 +31,7 @@ Wenlan organiza notas, documentos y conversaciones de IA en páginas editables c
   </a>
   <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Ver el vídeo</a>
 </p>
-<p align="center">Portada compuesta con varias vistas reales de la app y datos de ejemplo; el grafo es ilustrativo, no una pantalla nativa de tres columnas.</p>
+<p>Composición de vistas reales con datos de ejemplo; el grafo es ilustrativo, no una vista nativa de tres columnas.</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -78,24 +74,25 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 <a id="what-can-i-bring-in"></a>
 <a id="knowledge-graph"></a>
 
-## Explora y organiza tu conocimiento
+<a id="explora-y-organiza-tu-conocimiento"></a>
 
-Las fuentes son las notas, documentos y conversaciones originales que incorporas. Las Memorias conservan datos y decisiones útiles; las Páginas organizan conocimiento relacionado y enlazan a sus fuentes.
+## Conecta tu conocimiento
+
+Las Fuentes guardan el material original; las Memorias conservan datos y decisiones. Wenlan los reúne en **Páginas Markdown editables con citas**, conectadas mediante `[[wikilinks]]`.
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
-- **Quick Capture y Memorias atómicas:** Guarda decisiones, lecciones y preferencias individuales desde la app o mediante tu IA, con su procedencia.
-- **Páginas Markdown con citas:** Lee y edita conocimiento compilado a partir de Fuentes y Memorias, consulta sus citas y conecta Páginas con `[[wikilinks]]`.
-- **Grafo y comunidades:** Explora conceptos relacionados y comunidades mediante Entidades tipadas, relaciones y resolución de menciones extraídas de Memorias con un modelo de enriquecimiento configurado.
+- **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
+- **Grafo y comunidades:** Explora Entidades tipadas, relaciones y comunidades; un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
-### Explora tu grafo de conocimiento personal
+<a id="explora-tu-grafo-de-conocimiento-personal"></a>
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Grafo real de Wenlan con regiones ilustrativas de intereses personales, investigación y desarrollo" width="100%">
 </p>
-<p align="center">Nodos y conexiones reales de la app; los nombres y límites de las regiones son ilustrativos.</p>
+<p>Nodos y conexiones de la app; los nombres y límites de las regiones son ilustrativos.</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -105,18 +102,21 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
-## Usa tu conocimiento con IA
+<a id="usa-tu-conocimiento-con-ia"></a>
 
-- **MCP y plugins de IA:** Reutiliza tu conocimiento en Claude Code, Codex y otros clientes conectados que leen y escriben el mismo almacén local mediante las herramientas de Wenlan.
+## Pon tu conocimiento a trabajar con IA
+
+Conecta Claude Code, Codex u otro cliente de IA mediante **MCP y plugins** para reutilizar y ampliar el mismo conocimiento local.
+
 - **Búsqueda híbrida local:** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
-- **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas mediante enlaces válidos entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
+- **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
 - **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza Páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
 </p>
-<p align="center">Ilustración conceptual con un proyecto y conversaciones ficticios; no es una prueba del producto. La diferencia es el contexto adicional de Wenlan, junto con las capacidades propias de Claude, incluida su memoria nativa.</p>
+<p>Ejemplo ficticio, no una prueba del producto; Wenlan aporta contexto junto con la memoria nativa de Claude.</p>
 
 [Cómo funciona la búsqueda](docs/technical-foundations.md#retrieval-pipeline).
 
@@ -132,18 +132,21 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 <a id="página-mantenida"></a>
 <a id="markdown-local-que-funciona-con-obsidian"></a>
 
-## Mantén el conocimiento al día y conserva su historial
+<a id="mantén-el-conocimiento-al-día-y-conserva-su-historial"></a>
 
-- **Seguimiento de evidencias y actualización:** Mantén las Páginas al día siguiendo las Fuentes y Memorias que las sustentan y actualizando las obsoletas con nueva evidencia.
+## Actualiza el conocimiento, conserva su historial
+
+El **seguimiento de evidencias** conecta las Páginas con las Fuentes y Memorias que las sustentan, para actualizar las Páginas afectadas cuando cambia ese conocimiento.
+
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
 - **Revisión e historial:** Consulta versiones de Páginas y cadenas de sustitución de Memorias; la actualización automática propone para revisión los cambios en Páginas que hayas editado.
-- **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las que cumplan los requisitos como una wiki OKF; las Memorias y el grafo permanecen en libSQL local.
+- **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las aptas como una wiki Open Knowledge Format (OKF); las Memorias y el grafo permanecen en libSQL local.
 - **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
 </p>
-<p align="center">Vistas reales de la app con datos de ejemplo; las conexiones y etiquetas son ilustrativas.</p>
+<p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
 La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
 

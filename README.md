@@ -9,9 +9,7 @@ Wenlan organizes notes, documents, and AI conversations into editable, source-li
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
-</p>
-
-<p align="center">
+  <br>
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="License: Apache-2.0 and AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -19,10 +17,8 @@ Wenlan organizes notes, documents, and AI conversations into editable, source-li
 
 <p align="center">
   <a href="#start-in-30-seconds">Get&nbsp;started</a> ·
-  <a href="#what-can-i-bring-in">Browse&nbsp;and&nbsp;organize</a> ·
-  <a href="#retrieval">Use&nbsp;with&nbsp;AI</a> ·
-  <a href="#two-lifecycles">Keep&nbsp;knowledge&nbsp;current</a> ·
-  <a href="#learn-more">Docs&nbsp;and&nbsp;community</a> ·
+  <a href="#what-can-i-bring-in">Capabilities</a> ·
+  <a href="#learn-more">Docs</a> ·
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
@@ -33,7 +29,7 @@ Wenlan organizes notes, documents, and AI conversations into editable, source-li
   </a>
   <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Watch the video</a>
 </p>
-<p align="center">Cover combines actual App views with demo data; the graph is illustrative, not a native three-column screen.</p>
+<p>Composite of App views with demo data; the graph is illustrative, not a native three-column layout.</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -75,24 +71,25 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 <a id="what-can-i-bring-in"></a>
 <a id="knowledge-graph"></a>
 
-## Browse and organize your knowledge
+<a id="browse-and-organize-your-knowledge"></a>
 
-Sources are the original notes, documents, and conversations you bring in. Memories preserve useful facts and decisions; Pages organize related knowledge and link back to sources.
+## Connect your knowledge
+
+Sources keep original material; Memories preserve facts and decisions. Wenlan brings them together as **editable Markdown Pages with citations**, connected through `[[wikilinks]]`.
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
-- **Quick Capture and atomic Memories:** Save individual decisions, lessons, and preferences in the app or through your AI, with their provenance.
-- **Source-cited Markdown Pages:** Read and edit knowledge compiled from Sources and Memories, follow its citations, and connect Pages with `[[wikilinks]]`.
-- **Knowledge graph and communities:** Explore related concepts and clusters through typed Entities, relations, and mention resolution extracted from Memories with a configured enrichment model.
+- **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
+- **Knowledge graph and communities:** Explore typed Entities, relations, and communities; a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 Scanned PDFs need text extraction before import.
 
-### Explore your personal knowledge graph
+<a id="explore-your-personal-knowledge-graph"></a>
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan knowledge graph with illustrative regions for personal interests, research, and development" width="100%">
 </p>
-<p align="center">Actual App nodes and connections; region names and boundaries are illustrative.</p>
+<p>App nodes and connections; region names and boundaries are illustrative.</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -101,18 +98,21 @@ Scanned PDFs need text extraction before import.
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
-## Use your knowledge with AI
+<a id="use-your-knowledge-with-ai"></a>
 
-- **MCP and AI plugins:** Reuse your knowledge in Claude Code, Codex, and other connected clients that read and write the same local store through Wenlan’s tools.
+## Put your knowledge to work with AI
+
+Connect Claude Code, Codex, or another AI client through **MCP and plugins** to reuse and add to the same local knowledge.
+
 - **Local hybrid retrieval:** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
-- **Graph-assisted ranking:** Bring related Memories higher in search results using eligible Entity links, with optional cross-encoder reranking to refine relevance.
+- **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
 - **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize Pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
 </p>
-<p align="center">Concept illustration with a fictional project and conversations, not a product test. The difference is added Wenlan context alongside Claude’s own capabilities, including its native memory.</p>
+<p>Fictional example, not a product test; Wenlan adds context alongside Claude’s native memory.</p>
 
 [How search works](docs/technical-foundations.md#retrieval-pipeline).
 
@@ -127,18 +127,21 @@ Experimental web access lets supported web clients search the whole library or o
 <a id="maintained-page"></a>
 <a id="local-markdown-that-works-with-obsidian"></a>
 
-## Keep knowledge current and preserve history
+<a id="keep-knowledge-current-and-preserve-history"></a>
 
-- **Evidence tracking and refresh:** Keep Pages current by tracking their supporting Sources and Memories and refreshing stale Pages from updated evidence.
+## Keep knowledge current, with its history
+
+**Evidence tracking** connects Pages to the Sources and Memories behind them, so Wenlan can refresh affected Pages when that knowledge changes.
+
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
 - **Revision review and history:** Inspect Page versions and Memory replacement chains; automatic refresh sends changes to Pages you edited for review.
-- **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an OKF wiki; Memories and graph data stay in local libSQL.
+- **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an Open Knowledge Format (OKF) wiki; Memories and graph data stay in local libSQL.
 - **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
-<p align="center">Actual App views with demo data; connections and labels are illustrative.</p>
+<p>App views with demo data; connections and labels are illustrative.</p>
 
 Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
 

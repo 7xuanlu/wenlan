@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=bb08b03d874dd57e73a36301e0f58b5ba525216fb8510c4f94fcb10514988151 -->
+<!-- README_SYNC: source=README.md sha256=2d124637a25c3faf92bc59f72f345ea20fc2d1a078c21a767c31844e9f16eca5 -->
 
 <p align="center">
   <picture>
@@ -11,9 +11,7 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文 | <a href="./README.es-ES.md">Español</a>
-</p>
-
-<p align="center">
+  <br>
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="授權：Apache-2.0 與 AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -21,10 +19,8 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 
 <p align="center">
   <a href="#start-in-30-seconds">開&#8288;始&#8288;使&#8288;用</a> ·
-  <a href="#what-can-i-bring-in">瀏&#8288;覽&#8288;與&#8288;整&#8288;理</a> ·
-  <a href="#retrieval">搭&#8288;配&#8288;AI</a> ·
-  <a href="#two-lifecycles">持&#8288;續&#8288;更&#8288;新</a> ·
-  <a href="#learn-more">文&#8288;件&#8288;與&#8288;社&#8288;群</a> ·
+  <a href="#what-can-i-bring-in">功&#8288;能</a> ·
+  <a href="#learn-more">文&#8288;件</a> ·
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
@@ -35,7 +31,7 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
   </a>
   <br><a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">▶ 觀看影片</a>
 </p>
-<p align="center">封面由多個實機畫面與示範資料組合；圖譜為示意，並非 App 原生的三欄畫面。</p>
+<p>實機畫面與示範資料的合成圖；圖譜為示意，非 App 原生三欄版面。</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -78,24 +74,25 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 <a id="what-can-i-bring-in"></a>
 <a id="knowledge-graph"></a>
 
-## 瀏覽與整理個人知識
+<a id="瀏覽與整理個人知識"></a>
 
-來源是帶入 Wenlan 的原始筆記、文件與對話。記憶保存其中有用的事實與決定；頁面整理相關知識，並連回來源。
+## 讓知識彼此連結
+
+來源保留原始資料，記憶保存事實與決定。Wenlan 將它們整理成**可編輯、有引用的 Markdown 頁面**，並以 `[[wikilinks]]` 連起來。
 
 - **檔案與對話匯入**：匯入 Markdown、文字檔、文字型 PDF、資料夾，以及 ChatGPT 或 Claude 匯出的 ZIP，保留來源參照。
 - **Obsidian 唯讀連接**：讀取既有儲存庫並按需重新整理，不修改原始檔案，也不將變更同步回去。
-- **Quick Capture 與原子記憶**：在 App 或透過 AI 保存一則則決定、經驗與偏好，並保留其來源。
-- **附引用的 Markdown 頁面**：閱讀與編輯由來源、記憶整理出的知識，循引用查看依據，並以 `[[wikilinks]]` 連到其他頁面。
-- **知識圖譜與社群分群**：探索相關概念與知識群集；設定整理模型後，從記憶擷取具類型的實體與關係，辨識重複提及並將相連實體分群。
+- **Quick Capture 與原子記憶**：在 App 或透過 AI，每次保存一則決定、經驗或偏好，並保留其來源。
+- **知識圖譜與社群分群**：探索具類型的實體、關係與知識群集；設定整理模型後，將重複提及的人物或概念連到同一實體。
 
 掃描版 PDF 須先擷取文字再匯入。
 
-### 探索你的個人知識圖譜
+<a id="探索你的個人知識圖譜"></a>
 
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 實機知識圖譜，搭配個人興趣、研究與開發的區域示意" width="100%">
 </p>
-<p align="center">實機節點與連線；區域名稱與範圍為示意。</p>
+<p>實機節點與連線；區域名稱與範圍為示意。</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -105,18 +102,21 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 <a id="從關鍵字語意與關聯找回正確內容"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
-## 用 AI 延續已有知識
+<a id="用-ai-延續已有知識"></a>
 
-- **MCP 與 AI 插件**：在 Claude Code、Codex 等已連接的用戶端沿用你的知識，透過 Wenlan 工具讀寫同一份本地資料。
+## 讓 AI 接續已有知識
+
+透過 **MCP 與插件**，讓 Claude Code、Codex 等已連接的 AI 用戶端沿用你的知識，也將新知寫回同一份本地資料。
+
 - **本地混合檢索（Hybrid Retrieval）**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
-- **圖譜輔助排序**：透過符合條件的實體連結，提高相關記憶在搜尋結果中的排名，也可選用 cross-encoder reranking 精排結果。
+- **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
 - **插件工作流程**：用 `/recall` 找脈絡、`/capture` 存決定、`/distill` 合成頁面，並用 `/handoff` 留下進度與待解問題（[指令說明](plugin/skills/README.md)）。
 - **Spaces 範圍檢索**：選定 Space，將回傳的知識限制在相關專案或個人資料集合內。
 
 <p align="center">
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
 </p>
-<p align="center">虛構專案與對話的概念示意，並非產品測試。差異在於加入文瀾脈絡，而非 Claude 沒有原生記憶。</p>
+<p>虛構案例，非產品測試；文瀾補充脈絡，與 Claude 原生記憶搭配使用。</p>
 
 [搜尋方式](docs/technical-foundations.md#retrieval-pipeline)。
 
@@ -132,18 +132,21 @@ Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面
 <a id="持續維護的頁面"></a>
 <a id="與-obsidian-共存的本地-markdown"></a>
 
-## 持續更新知識並保留歷史
+<a id="持續更新知識並保留歷史"></a>
 
-- **依據追蹤與頁面更新**：追蹤支撐頁面的來源與記憶，根據最新依據重新整理過時頁面，讓知識持續更新。
+## 更新知識，保留歷史
+
+**依據追蹤**將頁面連回支撐它的來源與記憶；當知識改變，Wenlan 就能重新整理受影響的頁面。
+
 - **Steep 背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，為保存的記憶補上類型、結構化資訊、搜尋線索與圖譜連結，供後續使用；頁面合成可選用。
 - **修訂審核與歷史**：查看頁面版本與記憶取代鏈；自動更新你編輯過的頁面時，先提出修訂供你審核。
-- **本地 Markdown 與維基匯出**：以一般檔案閱讀頁面，將符合條件的頁面匯出為 OKF 維基；記憶與圖譜保存在本地 libSQL。
+- **本地 Markdown 與維基匯出**：以一般檔案閱讀頁面，將符合條件的頁面匯出為 Open Knowledge Format（OKF）維基；記憶與圖譜保存在本地 libSQL。
 - **自由選擇模型執行方式**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商執行整理與頁面合成。
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
 </p>
-<p align="center">實機畫面搭配示範資料；連線與標註為示意。</p>
+<p>實機畫面搭配示範資料；連線與標註為示意。</p>
 
 自動更新若引用不足，就會拒絕草稿；直接改檔與強制重建遵循不同的審核規則。
 
