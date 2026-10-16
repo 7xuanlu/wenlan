@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=277d5d85f9c60ae93335f117105a0a9fdb0fa16462ce0a7172fd46ac1e271f07 -->
+<!-- README_SYNC: source=README.md sha256=114394b4e6871f36ae1e10f6ebc469ef8059cd1c1490548e8f4a5ba1caf8f475 -->
 
 <p align="center">
   <picture>
@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页面，让你和已连接的 AI 工具能够延续已有知识。
+  <strong>用你的知识，找到答案、完成工作。</strong><br>
+  由 AI 协助维护的个人知识库。文澜将笔记、文档和对话连成知识，供你与 AI 查找、核对来源、接续使用。
 </p>
 
 <p align="center">
@@ -80,14 +81,16 @@
 
 <a id="浏览和整理个人知识"></a>
 
-## 让知识彼此连接
+<a id="让知识彼此连接"></a>
 
-来源保留原始资料，记忆保存事实与决定。Wenlan 将它们整理成**可编辑、有引用的 Markdown 页面**，并以 `[[wikilinks]]` 连接起来。
+## 把散落的资料整理成知识
+
+把散落的资料整理成**可编辑、有引用的 Markdown 页面**，用 `[[wikilinks]]` 串起相关内容。点开引用，就能核对原始文档、对话或保存的记忆。
 
 - **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。扫描版 PDF 需先提取文本再导入。
 - **Obsidian 只读连接**：读取已有仓库并按需刷新，不修改原始文件，也不将变化同步回去。
 - **Quick Capture 与原子记忆**：在 App 或通过 AI，每次保存一条决定、经验或偏好，并保留其来源。
-- **知识图谱与社区分群**：探索具类型的实体、关系与知识群集；配置整理模型后，将重复提及的人物或概念连接到同一实体。
+- **知识图谱与社区分群**：通过具类型的实体、关系与知识群集，发现相关主题；配置整理模型后，将重复提及的人物或概念连接到同一实体。
 
 <a id="探索你的个人知识图谱"></a>
 
@@ -108,7 +111,7 @@
 
 ## 让 AI 接续已有知识
 
-通过 **MCP 与插件**，让 Claude Code、Codex 等已连接的 AI 客户端沿用你的知识，也将新知识写回同一份本地数据。
+让下一次写作、研究或开发用上先前的资料与决定。通过 **MCP 与插件**，Claude Code、Codex 等已连接的 AI 工具可找回相关知识，也将新的经验写回同一份本地数据。
 
 - **[本地混合检索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
 - **图谱辅助排序**：有可用的实体连接时，提高相关记忆的排名，也可选用 cross-encoder reranking 精排结果。
@@ -136,10 +139,10 @@
 
 ## 更新知识，保留历史
 
-**依据追踪**将页面连接到支撑它的来源与记忆；当知识改变，Wenlan 就能重新整理受影响的页面。
+新资料改变原来的判断时，Wenlan 可以重新整理受影响的页面。**依据追踪**记录支撑页面的来源与记忆；通过修订记录，你能查看改了什么，也能回看旧版。
 
 - **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为保存的记忆补上类型、结构化信息、搜索线索与图谱连接，供后续使用；页面合成可选用。
-- **[修订审核与历史](docs/knowledge-guide.zh-Hans.md#updates-and-history)**：查看页面版本与记忆替代链；自动更新你编辑过的页面时，先提出修订供你审核。
+- **[修订审核与历史](docs/knowledge-guide.zh-Hans.md#updates-and-history)**：比较页面版本、追溯记忆的替代关系；自动更新时，符合条件的 AI 维护页面直接更新，你编辑过的页面则提出修订供审核。
 - **本地 Markdown 与维基导出**：以普通文件阅读页面，将符合条件的页面导出为 Open Knowledge Format（OKF）维基；记忆与图谱保存在本地 libSQL。
 - **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
 

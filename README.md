@@ -6,7 +6,8 @@
 </p>
 
 <p align="center">
-  Wenlan organizes notes, documents, and AI conversations into editable, source-linked pages, so you and connected AI tools can build on what you already know.
+  <strong>Use your knowledge to find answers and get work done.</strong><br>
+  A personal knowledge base maintained with AI. Wenlan connects notes, documents, and conversations into knowledge you and your AI tools can find, check against sources, and reuse.
 </p>
 
 <p align="center">
@@ -77,14 +78,16 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 <a id="browse-and-organize-your-knowledge"></a>
 
-## Connect your knowledge
+<a id="connect-your-knowledge"></a>
 
-Sources keep original material; Memories preserve facts and decisions. Wenlan brings them together as **editable Markdown Pages with citations**, connected through `[[wikilinks]]`.
+## Organize scattered material into knowledge
+
+Bring scattered material together as **editable Markdown Pages with citations**, linked through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved Memory behind an idea.
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
 - **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
-- **Knowledge graph and communities:** Explore typed Entities, relations, and communities; a configured enrichment model links repeated mentions to the same entity (mention resolution).
+- **Knowledge graph and communities:** Discover related topics through typed Entities, relations, and communities; a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
 
@@ -104,7 +107,7 @@ Sources keep original material; Memories preserve facts and decisions. Wenlan br
 
 ## Put your knowledge to work with AI
 
-Connect Claude Code, Codex, or another AI client through **MCP and plugins** to reuse and add to the same local knowledge.
+Bring earlier research and decisions into your next writing, research, or development task. Through **MCP and plugins**, Claude Code, Codex, and other connected AI tools can retrieve relevant knowledge and save new lessons to the same local library.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -131,10 +134,10 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-**Evidence tracking** connects Pages to the Sources and Memories behind them, so Wenlan can refresh affected Pages when that knowledge changes.
+When new material changes an earlier conclusion, Wenlan can refresh the affected Pages. **Evidence tracking** records their supporting Sources and Memories; revisions let you inspect the changes and revisit earlier versions.
 
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
-- **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Inspect Page versions and Memory replacement chains; automatic refresh sends changes to Pages you edited for review.
+- **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare Page versions and trace Memory replacements; automatic refresh updates eligible machine-maintained Pages directly and proposes revisions for Pages you edited.
 - **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an Open Knowledge Format (OKF) wiki; Memories and graph data stay in local libSQL.
 - **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 

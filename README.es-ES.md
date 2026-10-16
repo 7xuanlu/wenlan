@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=277d5d85f9c60ae93335f117105a0a9fdb0fa16462ce0a7172fd46ac1e271f07 -->
+<!-- README_SYNC: source=README.md sha256=114394b4e6871f36ae1e10f6ebc469ef8059cd1c1490548e8f4a5ba1caf8f475 -->
 
 <p align="center">
   <picture>
@@ -8,7 +8,8 @@
 </p>
 
 <p align="center">
-  Wenlan organiza notas, documentos y conversaciones de IA en páginas editables con enlaces a sus fuentes, para que tú y las herramientas de IA conectadas podáis continuar lo que ya sabéis.
+  <strong>Usa tu conocimiento para encontrar respuestas y completar tu trabajo.</strong><br>
+  Una base de conocimiento personal mantenida con ayuda de la IA. Wenlan conecta notas, documentos y conversaciones para que tú y tus herramientas de IA podáis encontrar ese conocimiento, contrastarlo con sus fuentes y reutilizarlo.
 </p>
 
 <p align="center">
@@ -80,14 +81,16 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 <a id="explora-y-organiza-tu-conocimiento"></a>
 
-## Conecta tu conocimiento
+<a id="conecta-tu-conocimiento"></a>
 
-Las Fuentes guardan el material original; las Memorias conservan datos y decisiones. Wenlan los reúne en **Páginas Markdown editables con citas**, conectadas mediante `[[wikilinks]]`.
+## Organiza la información dispersa en conocimiento
+
+Reúne la información dispersa en **Páginas Markdown editables con citas**, conectadas mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la Memoria que respalda una idea.
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
 - **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
-- **Grafo y comunidades:** Explora Entidades tipadas, relaciones y comunidades; un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
+- **Grafo y comunidades:** Descubre temas relacionados mediante Entidades tipadas, relaciones y comunidades; un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
 
@@ -108,7 +111,7 @@ Las Fuentes guardan el material original; las Memorias conservan datos y decisio
 
 ## Pon tu conocimiento a trabajar con IA
 
-Conecta Claude Code, Codex u otro cliente de IA mediante **MCP y plugins** para reutilizar y ampliar el mismo conocimiento local.
+Aprovecha investigaciones y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo. Mediante **MCP y plugins**, Claude Code, Codex y otras herramientas de IA conectadas pueden recuperar conocimiento pertinente y guardar nuevas lecciones en la misma biblioteca local.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
@@ -136,10 +139,10 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-El **seguimiento de evidencias** conecta las Páginas con las Fuentes y Memorias que las sustentan, para actualizar las Páginas afectadas cuando cambia ese conocimiento.
+Cuando nueva información cambia una conclusión anterior, Wenlan puede actualizar las Páginas afectadas. El **seguimiento de evidencias** registra las Fuentes y Memorias que las sustentan; las revisiones permiten consultar los cambios y las versiones anteriores.
 
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
-- **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Consulta versiones de Páginas y cadenas de sustitución de Memorias; la actualización automática propone para revisión los cambios en Páginas que hayas editado.
+- **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de Páginas y sigue las sustituciones de Memorias; la actualización automática modifica directamente las Páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
 - **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las aptas como una wiki Open Knowledge Format (OKF); las Memorias y el grafo permanecen en libSQL local.
 - **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
