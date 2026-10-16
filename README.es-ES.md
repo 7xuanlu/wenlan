@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=5ac11f9f8c681323f5ccefe42dc3b62f5c2f3574454eace094b35b5a0f602a0e -->
+<!-- README_SYNC: source=README.md sha256=73a6426ce8f0c93205b37c74c5f3d6f6e729528a3e0bf745042631e6be8b8bb0 -->
 
 <p align="center">
   <picture>
@@ -68,9 +68,11 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 
 ### 3. Conecta una herramienta de IA cuando quieras
 
-Conecta Claude Code, Codex u otro cliente compatible para usar tus conocimientos guardados y redactar Páginas sin instalar otro modelo de lenguaje local. Si quieres organización en segundo plano y actualizaciones automáticas, necesitas un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models). Para conectar un cliente, sigue la [guía de configuración de IA](docs/setup-with-ai.md).
+Usa el plugin de Claude Code o Codex, o conecta Cursor, Claude Desktop, VS Code o Gemini CLI mediante MCP ([guía de configuración](docs/setup-with-ai.md)). Tu IA conectada puede usar los conocimientos guardados y redactar Páginas sin otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales requieren un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
 
 > Usa mis notas anteriores para ayudarme a terminar esta tarea.
+
+Empieza con una nota guardada o un documento importado. Pide a la IA que cite lo que utiliza para poder contrastar el resultado con la fuente.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -113,7 +115,7 @@ Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[
 
 ## Pon tu conocimiento a trabajar con IA
 
-Aprovecha hallazgos y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo. Mediante **MCP y plugins**, Claude Code, Codex y otras herramientas de IA conectadas pueden recuperar conocimiento pertinente y guardar nuevas lecciones en la misma base de conocimiento local.
+Aprovecha hallazgos y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo, y guarda nuevas lecciones en la misma base de conocimiento local. Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
@@ -141,7 +143,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-Cuando nueva información cambia una conclusión anterior, Wenlan puede actualizar las Páginas afectadas. El **seguimiento de evidencias** registra las Fuentes y Memorias que las sustentan.
+Cuando una Fuente o Memoria citada se actualiza o elimina en Wenlan, el **seguimiento de evidencias** marca las Páginas afectadas para su actualización. Con la IA en segundo plano activada y un modelo disponible, las Páginas que cumplen los requisitos se actualizan durante el mantenimiento en segundo plano.
 
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
 - **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de Páginas y sigue las sustituciones de Memorias; la actualización automática modifica directamente las Páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.

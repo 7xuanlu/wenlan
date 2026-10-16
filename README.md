@@ -66,9 +66,11 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 
 ### 3. Connect an AI tool when you want
 
-Connect Claude Code, Codex, or another supported client to use saved knowledge and write Pages without installing another local language model. Optional background organization and automatic Page updates need a separately configured [model](docs/setup-and-data.md#models). Follow the [AI setup guide](docs/setup-with-ai.md) to connect a client.
+Use the Claude Code or Codex plugin, or connect Cursor, Claude Desktop, VS Code, or Gemini CLI over MCP ([setup guide](docs/setup-with-ai.md)). Your connected AI can use saved knowledge and write Pages without another local language model. Optional background organization and automatic Page updates need a separately configured [model](docs/setup-and-data.md#models).
 
 > Use my earlier notes to help me finish this task.
+
+Start with one saved note or imported document. Ask the AI to cite what it uses, so you can check the result against the source.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -109,7 +111,7 @@ Edit **Markdown Pages with citations** and link related content through `[[wikil
 
 ## Put your knowledge to work with AI
 
-Bring earlier findings and decisions into your next writing, research, or development task. Through **MCP and plugins**, Claude Code, Codex, and other connected AI tools can retrieve relevant knowledge and save new lessons to the same local knowledge base.
+Bring earlier findings and decisions into your next writing, research, or development task, and save new lessons to the same local knowledge base. **Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -136,7 +138,7 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-When new material changes an earlier conclusion, Wenlan can refresh the affected Pages. **Evidence tracking** records their supporting Sources and Memories.
+When a cited Source or Memory is updated or removed in Wenlan, **evidence tracking** marks the affected Pages for refresh. With background AI enabled and a model available, eligible Pages refresh during background maintenance.
 
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare Page versions and trace Memory replacements; automatic refresh updates eligible machine-maintained Pages directly and proposes revisions for Pages you edited.

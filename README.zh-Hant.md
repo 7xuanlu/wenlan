@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=5ac11f9f8c681323f5ccefe42dc3b62f5c2f3574454eace094b35b5a0f602a0e -->
+<!-- README_SYNC: source=README.md sha256=73a6426ce8f0c93205b37c74c5f3d6f6e729528a3e0bf745042631e6be8b8bb0 -->
 
 <p align="center">
   <picture>
@@ -68,9 +68,11 @@
 
 ### 3. 想使用時再連接 AI 工具
 
-連接 Claude Code、Codex 或其他支援的用戶端，就能使用你保存的知識並撰寫頁面，不必另裝本地語言模型。若要背景整理與自動更新，則需[另外設定模型](docs/setup-and-data.zh-Hant.md#models)。連接方式請參閱[AI 設定指南](docs/setup-with-ai.md)。
+Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Gemini CLI 可透過 MCP 連接（[設定指南](docs/setup-with-ai.md)）。已連接的 AI 就能使用你保存的知識並撰寫頁面，不必另裝本地語言模型。若要背景整理與自動更新，則需[另外設定模型](docs/setup-and-data.zh-Hant.md#models)。
 
 > 參考我之前的筆記，幫我接著完成這個任務。
+
+先用一則已保存的筆記或匯入文件試做，請 AI 引用所用來源，讓你能回頭核對成果的依據。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -113,7 +115,7 @@
 
 ## 讓 AI 接續已有知識
 
-讓下一次寫作、研究或開發用上先前的資料與決定。透過 **MCP 與插件**，Claude Code、Codex 等已連接的 AI 工具可找回相關知識，也將新的經驗寫回同一個本地知識庫。
+讓下一次寫作、研究或開發用上先前的資料與決定，再將新的經驗存回同一個本地知識庫。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
@@ -141,7 +143,7 @@
 
 ## 更新知識，保留歷史
 
-新資料改變原來的判斷時，Wenlan 可以重新整理受影響的頁面。**依據追蹤**記錄支撐頁面的來源與記憶。
+頁面引用的來源或記憶在 Wenlan 中更新或移除時，**依據追蹤**會標記受影響的頁面。啟用背景 AI 並有可用模型後，符合條件的頁面會在背景維護時重新整理。
 
 - **Steep 背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，為保存的記憶補上類型、結構化資訊、搜尋線索與圖譜連結，供後續使用；頁面合成可選用。
 - **[修訂審核與歷史](docs/knowledge-guide.zh-Hant.md#updates-and-history)**：比較頁面版本、追溯記憶的取代關係；自動更新時，符合條件的 AI 維護頁面直接更新，你編輯過的頁面則提出修訂供審核。
