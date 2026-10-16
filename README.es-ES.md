@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=114394b4e6871f36ae1e10f6ebc469ef8059cd1c1490548e8f4a5ba1caf8f475 -->
+<!-- README_SYNC: source=README.md sha256=23af1852375b6f6157d4c72951f39bc26673ec6f90f5ec57b76f660c045c1ca3 -->
 
 <p align="center">
   <picture>
@@ -8,8 +8,8 @@
 </p>
 
 <p align="center">
-  <strong>Usa tu conocimiento para encontrar respuestas y completar tu trabajo.</strong><br>
-  Una base de conocimiento personal mantenida con ayuda de la IA. Wenlan conecta notas, documentos y conversaciones para que tú y tus herramientas de IA podáis encontrar ese conocimiento, contrastarlo con sus fuentes y reutilizarlo.
+  Wenlan organiza notas, documentos y conversaciones dispersos en conocimiento que se mantiene actualizado y enlaza a sus fuentes,<br>
+  para que tú y herramientas de IA como Claude y Codex podáis usarlo para encontrar respuestas y completar vuestro trabajo.
 </p>
 
 <p align="center">

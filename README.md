@@ -6,8 +6,8 @@
 </p>
 
 <p align="center">
-  <strong>Use your knowledge to find answers and get work done.</strong><br>
-  A personal knowledge base maintained with AI. Wenlan connects notes, documents, and conversations into knowledge you and your AI tools can find, check against sources, and reuse.
+  Wenlan organizes scattered notes, documents, and conversations into knowledge that stays current and links back to its sources,<br>
+  so you and AI tools like Claude and Codex can use it to find answers and get work done.
 </p>
 
 <p align="center">

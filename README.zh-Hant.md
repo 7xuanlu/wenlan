@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=114394b4e6871f36ae1e10f6ebc469ef8059cd1c1490548e8f4a5ba1caf8f475 -->
+<!-- README_SYNC: source=README.md sha256=23af1852375b6f6157d4c72951f39bc26673ec6f90f5ec57b76f660c045c1ca3 -->
 
 <p align="center">
   <picture>
@@ -8,8 +8,8 @@
 </p>
 
 <p align="center">
-  <strong>用你的知識，找到答案、完成工作。</strong><br>
-  由 AI 協助維護的個人知識庫。文瀾將筆記、文件與對話連成知識，供你與 AI 查找、核對來源、接續使用。
+  文瀾將散落的筆記、文件與對話，整理成持續更新、來源可查的知識，<br>
+  讓你和 Claude、Codex 等 AI 工具用來找到答案、完成工作。
 </p>
 
 <p align="center">

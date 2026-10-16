@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=114394b4e6871f36ae1e10f6ebc469ef8059cd1c1490548e8f4a5ba1caf8f475 -->
+<!-- README_SYNC: source=README.md sha256=23af1852375b6f6157d4c72951f39bc26673ec6f90f5ec57b76f660c045c1ca3 -->
 
 <p align="center">
   <picture>
@@ -8,8 +8,8 @@
 </p>
 
 <p align="center">
-  <strong>用你的知识，找到答案、完成工作。</strong><br>
-  由 AI 协助维护的个人知识库。文澜将笔记、文档和对话连成知识，供你与 AI 查找、核对来源、接续使用。
+  文澜将散落的笔记、文档与对话，整理成持续更新、来源可查的知识，<br>
+  让你和 Claude、Codex 等 AI 工具用来找到答案、完成工作。
 </p>
 
 <p align="center">
