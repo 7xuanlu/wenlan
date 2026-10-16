@@ -2,11 +2,11 @@
 <defs>
     <style>
       text { font-family: 'PingFang TC','Helvetica Neue',Arial,sans-serif; fill:#1a1a2e; }
-      .title {font-size:40px;font-weight:600;letter-spacing:-.8px}
-      .heading {font-size:29px;font-weight:600;letter-spacing:-.3px}
-      .body {font-size:26px;font-weight:400;fill:#586576}
-      .label {font-size:24px;font-weight:500;fill:#586576}
-      .small {font-size:24px;font-weight:400;fill:#657184}
+      .title {font-size:36px;font-weight:600;letter-spacing:-.8px}
+      .heading {font-size:26px;font-weight:600;letter-spacing:-.3px}
+      .body {font-size:24px;font-weight:400;fill:#586576}
+      .label {font-size:22px;font-weight:500;fill:#586576}
+      .small {font-size:22px;font-weight:400;fill:#657184}
       .icon {fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
       .wire {fill:none;stroke:#71869b;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
     </style>
@@ -27,7 +27,7 @@
   <symbol id="history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.8 7 M3 4v7h7 M12 7v5l3 2"/></symbol>
 </defs>
 <rect width="1600" height="1100" fill="#fcfcfc"/>
-<text class="title" x="64" y="82">App 与 AI，共用一份本地知识。</text>
+<text class="title" x="64" y="82">文澜架构</text>
 
 <rect x="550" y="148" width="986" height="698" rx="22" fill="#f4f6f6" stroke="#e1e6e7" stroke-width="1.5"/>
 <text class="label" x="584" y="192">本地核心</text>

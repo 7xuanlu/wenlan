@@ -2,11 +2,11 @@
 <defs>
     <style>
       text { font-family: 'PingFang TC','Helvetica Neue',Arial,sans-serif; fill:#1a1a2e; }
-      .title {font-size:40px;font-weight:600;letter-spacing:-.8px}
-      .heading {font-size:29px;font-weight:600;letter-spacing:-.3px}
-      .body {font-size:26px;font-weight:400;fill:#586576}
-      .label {font-size:24px;font-weight:500;fill:#586576}
-      .small {font-size:24px;font-weight:400;fill:#657184}
+      .title {font-size:36px;font-weight:600;letter-spacing:-.8px}
+      .heading {font-size:26px;font-weight:600;letter-spacing:-.3px}
+      .body {font-size:24px;font-weight:400;fill:#586576}
+      .label {font-size:22px;font-weight:500;fill:#586576}
+      .small {font-size:22px;font-weight:400;fill:#657184}
       .icon {fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
       .wire {fill:none;stroke:#71869b;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
     </style>
@@ -27,7 +27,7 @@
   <symbol id="history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.8 7 M3 4v7h7 M12 7v5l3 2"/></symbol>
 </defs>
 <rect width="1600" height="1100" fill="#fcfcfc"/>
-<text class="title" x="64" y="82">La app y la IA comparten una base de conocimiento local.</text>
+<text class="title" x="64" y="82">Arquitectura de Wenlan</text>
 
 <rect x="550" y="148" width="986" height="698" rx="22" fill="#f4f6f6" stroke="#e1e6e7" stroke-width="1.5"/>
 <text class="label" x="584" y="192">Núcleo local</text>
@@ -35,7 +35,7 @@
 <!-- Materials are inputs, not a second local storage system. -->
 <rect x="64" y="210" width="328" height="150" rx="12" fill="#fff" stroke="#dce1e6" stroke-width="1.5"/>
 <use href="#file" x="88" y="234" width="30" height="30" class="icon" color="#63788e"/>
-<text class="heading" x="132" y="260" style="font-size:26px">Material importado</text>
+<text class="heading" x="132" y="260" style="font-size:24px">Material importado</text>
 <text class="body" x="88" y="302">Documentos · Obsidian</text>
 <text class="body" x="88" y="341">Chats exportados</text>
 
@@ -109,12 +109,12 @@
 <text class="label" x="854" y="886">Opcional · organización en segundo plano</text>
 <rect x="568" y="914" width="968" height="142" rx="14" fill="#fff" stroke="#dce1e6" stroke-width="1.5"/>
 <use href="#chip" x="598" y="940" width="30" height="30" class="icon" color="#63788e"/>
-<text class="heading" x="644" y="965" style="font-size:26px">En el dispositivo</text>
+<text class="heading" x="644" y="965" style="font-size:24px">En el dispositivo</text>
 <path d="M880 934V1036M1234 934V1036" stroke="#e3e7eb" stroke-width="1.5"/>
 <use href="#server" x="914" y="940" width="30" height="30" class="icon" color="#63788e"/>
-<text class="heading" x="960" y="965" style="font-size:26px">Servidor local</text>
+<text class="heading" x="960" y="965" style="font-size:24px">Servidor local</text>
 <use href="#cloud" x="1268" y="940" width="30" height="30" class="icon" color="#63788e"/>
-<text class="heading" x="1314" y="965" style="font-size:26px">API en la nube</text>
+<text class="heading" x="1314" y="965" style="font-size:24px">API en la nube</text>
 <text class="small" x="724" y="1016" text-anchor="middle">Descarga en la app</text>
 <text class="small" x="1057" y="1016" text-anchor="middle">Ollama / LM Studio propio</text>
 <text class="small" x="1385" y="1016" text-anchor="middle">Conecta tu proveedor</text>
