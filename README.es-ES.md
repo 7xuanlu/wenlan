@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=59e67ad1808bf6966c11ece4b4d37a796b902085cd36414908b874d90e31bedb -->
+<!-- README_SYNC: source=README.md sha256=277d5d85f9c60ae93335f117105a0a9fdb0fa16462ce0a7172fd46ac1e271f07 -->
 
 <p align="center">
   <picture>
@@ -7,7 +7,9 @@
   </picture>
 </p>
 
-Wenlan organiza notas, documentos y conversaciones de IA en páginas editables con enlaces a sus fuentes, para que tú y las herramientas de IA conectadas podáis continuar lo que ya sabéis.
+<p align="center">
+  Wenlan organiza notas, documentos y conversaciones de IA en páginas editables con enlaces a sus fuentes, para que tú y las herramientas de IA conectadas podáis continuar lo que ya sabéis.
+</p>
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español

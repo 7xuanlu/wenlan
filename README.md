@@ -5,7 +5,9 @@
   </picture>
 </p>
 
-Wenlan organizes notes, documents, and AI conversations into editable, source-linked pages, so you and connected AI tools can build on what you already know.
+<p align="center">
+  Wenlan organizes notes, documents, and AI conversations into editable, source-linked pages, so you and connected AI tools can build on what you already know.
+</p>
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=59e67ad1808bf6966c11ece4b4d37a796b902085cd36414908b874d90e31bedb -->
+<!-- README_SYNC: source=README.md sha256=277d5d85f9c60ae93335f117105a0a9fdb0fa16462ce0a7172fd46ac1e271f07 -->
 
 <p align="center">
   <picture>
@@ -7,7 +7,9 @@
   </picture>
 </p>
 
-Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面，讓你和已連接的 AI 工具能延續已有知識。
+<p align="center">
+  Wenlan 將筆記、文件與 AI 對話整理成可編輯且連回來源的頁面，讓你和已連接的 AI 工具能延續已有知識。
+</p>
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文 | <a href="./README.es-ES.md">Español</a>
