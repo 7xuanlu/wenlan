@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=cd867f9a47a3c5281ecb33e2c1960cf19c2446775b0393449dbc196a24005fe8 -->
+<!-- README_SYNC: source=README.md sha256=5ac11f9f8c681323f5ccefe42dc3b62f5c2f3574454eace094b35b5a0f602a0e -->
 
 <p align="center">
   <picture>
@@ -121,7 +121,7 @@ Aprovecha hallazgos y decisiones anteriores en tu próxima tarea de escritura, i
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
+  <img src="./docs/assets/wenlan-knowledge-to-work-es-ES.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
 </p>
 <p>Ejemplo ficticio, no una prueba del producto; Wenlan aporta contexto junto con la memoria nativa de Claude.</p>
 

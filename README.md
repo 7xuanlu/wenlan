@@ -117,7 +117,7 @@ Bring earlier findings and decisions into your next writing, research, or develo
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
+  <img src="./docs/assets/wenlan-knowledge-to-work.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
 </p>
 <p>Fictional example, not a product test; Wenlan adds context alongside Claude’s native memory.</p>
 

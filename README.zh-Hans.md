@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=cd867f9a47a3c5281ecb33e2c1960cf19c2446775b0393449dbc196a24005fe8 -->
+<!-- README_SYNC: source=README.md sha256=5ac11f9f8c681323f5ccefe42dc3b62f5c2f3574454eace094b35b5a0f602a0e -->
 
 <p align="center">
   <picture>
@@ -121,7 +121,7 @@
 - **Spaces 范围检索**：选定 Space，将返回的知识限制在相关项目或个人资料集合内。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
+  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hans.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
 </p>
 <p>虚构案例，非产品测试；文澜补充上下文，与 Claude 原生记忆配合使用。</p>
 
