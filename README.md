@@ -30,11 +30,11 @@
 <!-- Replace the linked walkthrough when the separately produced release video is ready. -->
 <p align="center">
   <a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">
-    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
+    <img src="./docs/assets/wenlan-personal-knowledge.png" alt="Connected pages, memories, and sources in Wenlan" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Watch the video</a>
 </p>
-<p>Composite of App views with demo data; the graph is illustrative, not a native three-column layout.</p>
+<p>Localized composite of App views with demo data; the graph is illustrative, not a native three-column layout.</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -66,7 +66,7 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 
 ### 3. Connect an AI tool when you want
 
-Use the Claude Code or Codex plugin, or connect Cursor, Claude Desktop, VS Code, or Gemini CLI over MCP ([setup guide](docs/setup-with-ai.md)). Your connected AI can use saved knowledge and write Pages without another local language model. Optional background organization and automatic Page updates need a separately configured [model](docs/setup-and-data.md#models).
+Use the Claude Code or Codex plugin, or connect Cursor, Claude Desktop, VS Code, or Gemini CLI over MCP ([setup guide](docs/setup-with-ai.md)). Your connected AI can use saved knowledge and write pages without another local language model. Optional background organization and automatic page updates need a separately configured [model](docs/setup-and-data.md#models).
 
 > Use my earlier notes to help me finish this task.
 
@@ -86,19 +86,19 @@ Start with one saved note or imported document. Ask the AI to cite what it uses,
 
 ## Organize scattered material into knowledge
 
-Edit **Markdown Pages with citations** and link related content through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved Memory behind an idea.
+Edit **Markdown pages with citations** and link related content through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved memory behind an idea.
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import. Chat imports preserve a snapshot; registered file sources can refresh from disk.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
-- **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
-- **Knowledge graph:** Discover related topics through typed Entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
+- **Quick Capture and atomic memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
+- **Knowledge graph:** Discover related topics through typed entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
 
 <p align="center">
-  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan knowledge graph with illustrative regions for personal interests, research, and development" width="100%">
+  <img src="./docs/assets/wenlan-personal-graph.png" alt="Wenlan knowledge graph with illustrative regions for personal interests, research, and development" width="100%">
 </p>
-<p>App nodes and connections; region names and boundaries are illustrative.</p>
+<p>App nodes and connections; translated labels and illustrative regions.</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -114,8 +114,8 @@ Edit **Markdown Pages with citations** and link related content through `[[wikil
 Reuse earlier findings and save new lessons. **Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
-- **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
-- **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize Pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
+- **Graph-assisted ranking:** Rank related memories higher when entity links are available, with optional cross-encoder reranking to refine relevance.
+- **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
@@ -138,25 +138,25 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
-- **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare Page versions and trace Memory replacements; automatic refresh updates eligible machine-maintained Pages directly and proposes revisions for Pages you edited.
-- **Wiki export:** Export eligible Pages as an Open Knowledge Format (OKF) wiki.
+- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured memories for reuse with types, structured details, search cues, and graph links; page synthesis is optional.
+- **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare page versions and trace memory replacements; automatic refresh updates eligible machine-maintained pages directly and proposes revisions for pages you edited.
+- **Wiki export:** Export eligible pages as an Open Knowledge Format (OKF) wiki.
 - **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
+  <img src="./docs/assets/wenlan-updates-history.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
-<p>App views with demo data; connections and labels are illustrative.</p>
+<p>Localized App-view composite with demo data; connections are illustrative.</p>
 
-Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
+Automatic refresh rejects drafts without enough citations.
 
 <a id="architecture"></a>
 
 ## Architecture
 
-**One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; Memories, relationships, and search indexes live in local libSQL.
+**One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; memories, relationships, and search indexes live in local libSQL.
 
-**Updates follow citations.** When a cited Source or Memory changes or is removed in Wenlan, evidence tracking marks affected Pages. With background AI enabled and a model available, eligible Pages refresh under the update and review rules.
+**Updates follow citations.** When a cited source or memory changes or is removed in Wenlan, evidence tracking marks affected pages. With background AI enabled and a model available, eligible pages refresh under the update and review rules.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">

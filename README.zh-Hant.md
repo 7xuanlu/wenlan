@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
+<!-- README_SYNC: source=README.md sha256=f927704bc4df94ee55e6503a39f280bbc0958551c832cb2db0d235d10dfb5285 -->
 
 <p align="center">
   <picture>
@@ -101,7 +101,7 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 <p align="center">
   <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 實機知識圖譜，搭配個人興趣、研究與開發的區域示意" width="100%">
 </p>
-<p>實機節點與連線；區域名稱與範圍為示意。</p>
+<p>保留實機節點與連線；文字經翻譯，區域名稱與範圍為示意。</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -115,7 +115,7 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 
 ## 讓 AI 接續已有知識
 
-沿用舊知識，保存新經驗。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
+用上已有知識，保存新經驗。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
@@ -153,7 +153,7 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 </p>
 <p>實機畫面搭配示範資料；連線與標註為示意。</p>
 
-自動更新若引用不足，就會拒絕草稿；直接改檔與強制重建遵循不同的審核規則。
+自動更新會拒絕引用不足的草稿。
 
 <a id="architecture"></a>
 

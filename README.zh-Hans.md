@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
+<!-- README_SYNC: source=README.md sha256=f927704bc4df94ee55e6503a39f280bbc0958551c832cb2db0d235d10dfb5285 -->
 
 <p align="center">
   <picture>
@@ -32,11 +32,11 @@
 <!-- Replace the linked walkthrough when the separately produced release video is ready. -->
 <p align="center">
   <a href="https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad">
-    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此连接的页面、记忆与来源" width="100%">
+    <img src="./docs/assets/wenlan-personal-knowledge-zh-Hans.png" alt="Wenlan 中彼此连接的页面、记忆与来源" width="100%">
   </a>
   <br><a href="https://github.com/user-attachments/assets/2c91437c-59f5-44af-a5e1-da7627b921ad">▶ 观看影片</a>
 </p>
-<p>实机画面与示范数据的合成图；图谱为示意，非 App 原生三栏版面。</p>
+<p>实机画面与示范数据的翻译合成图；图谱为示意，非 App 原生三栏版面。</p>
 
 <a id="quickstart"></a>
 <a id="start-in-30-seconds"></a>
@@ -99,9 +99,9 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 <a id="探索你的个人知识图谱"></a>
 
 <p align="center">
-  <img src="./docs/assets/wenlan-personal-graph-zh-Hant.png" alt="Wenlan 实机知识图谱，搭配个人兴趣、研究与开发的区域示意" width="100%">
+  <img src="./docs/assets/wenlan-personal-graph-zh-Hans.png" alt="Wenlan 实机知识图谱，搭配个人兴趣、研究与开发的区域示意" width="100%">
 </p>
-<p>实机节点与连线；区域名称与范围为示意。</p>
+<p>保留实机节点与连线；文字经翻译，区域名称与范围为示意。</p>
 
 <a id="how-wenlan-works"></a>
 <a id="how-does-it-work"></a>
@@ -115,7 +115,7 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 
 ## 让 AI 接续已有知识
 
-沿用旧知识，保存新经验。**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
+用上已有知识，保存新经验。**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
 
 - **[本地混合检索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
 - **图谱辅助排序**：有可用的实体连接时，提高相关记忆的排名，也可选用 cross-encoder reranking 精排结果。
@@ -149,11 +149,11 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 - **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
+  <img src="./docs/assets/wenlan-updates-history-zh-Hans.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
 </p>
-<p>实机画面搭配示范数据；连线与标注为示意。</p>
+<p>实机画面的翻译合成图，搭配示范数据；连线为示意。</p>
 
-自动更新若引用不足，就会拒绝草稿；直接编辑文件和强制重新生成遵循不同的审核规则。
+自动更新会拒绝引用不足的草稿。
 
 <a id="architecture"></a>
 

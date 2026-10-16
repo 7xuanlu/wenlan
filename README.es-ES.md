@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
+<!-- README_SYNC: source=README.md sha256=f927704bc4df94ee55e6503a39f280bbc0958551c832cb2db0d235d10dfb5285 -->
 
 <p align="center">
   <picture>
@@ -68,7 +68,7 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 
 ### 3. Conecta una herramienta de IA cuando quieras
 
-Usa el plugin de Claude Code o Codex, o conecta Cursor, Claude Desktop, VS Code o Gemini CLI mediante MCP ([guía de configuración](docs/setup-with-ai.md)). Tu IA conectada puede usar los conocimientos guardados y redactar Páginas sin otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales requieren un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
+Usa el plugin de Claude Code o Codex, o conecta Cursor, Claude Desktop, VS Code o Gemini CLI mediante MCP ([guía de configuración](docs/setup-with-ai.md)). Tu IA conectada puede usar los conocimientos guardados y redactar páginas sin otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales requieren un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
 
 > Usa mis notas anteriores para ayudarme a terminar esta tarea.
 
@@ -89,12 +89,12 @@ Empieza con una nota guardada o un documento importado. Pide a la IA que cite lo
 
 ## Organiza la información dispersa en conocimiento
 
-Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la Memoria que respalda una idea.
+Edita **páginas Markdown con citas** y enlaza contenido relacionado mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la memoria que respalda una idea.
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos. Los chats importados conservan una instantánea; las fuentes de archivos registradas se pueden actualizar desde el disco.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
-- **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
-- **Grafo de conocimiento:** Descubre temas relacionados mediante Entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
+- **Quick Capture y memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
+- **Grafo de conocimiento:** Descubre temas relacionados mediante entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
 
@@ -118,8 +118,8 @@ Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[
 Reutiliza hallazgos anteriores y guarda nuevas lecciones. Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
-- **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
-- **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza Páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
+- **Clasificación asistida por el grafo:** Prioriza memorias relacionadas cuando hay enlaces entre entidades, con reranking cross-encoder opcional para afinar la relevancia.
+- **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
@@ -143,9 +143,9 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
-- **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de Páginas y sigue las sustituciones de Memorias; la actualización automática modifica directamente las Páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
-- **Exportación de wikis:** Exporta las Páginas aptas como una wiki Open Knowledge Format (OKF).
+- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de páginas es opcional.
+- **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de páginas y sigue las sustituciones de memorias; la actualización automática modifica directamente las páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
+- **Exportación de wikis:** Exporta las páginas aptas como una wiki Open Knowledge Format (OKF).
 - **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
@@ -153,15 +153,15 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 </p>
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
-La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
+La actualización automática rechaza los borradores con citas insuficientes.
 
 <a id="architecture"></a>
 
 ## Arquitectura
 
-**Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las Páginas son archivos Markdown; Memorias, relaciones e índices de búsqueda residen en libSQL local.
+**Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las páginas son archivos Markdown; memorias, relaciones e índices de búsqueda residen en libSQL local.
 
-**Las actualizaciones siguen las citas.** Cuando una Fuente o Memoria cambia o se elimina en Wenlan, el seguimiento de evidencias marca las Páginas afectadas. Con la IA en segundo plano activada y un modelo disponible, se actualizan según las reglas de actualización y revisión.
+**Las actualizaciones siguen las citas.** Cuando una fuente o memoria cambia o se elimina en Wenlan, el seguimiento de evidencias marca las páginas afectadas. Con la IA en segundo plano activada y un modelo disponible, se actualizan según las reglas de actualización y revisión.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
