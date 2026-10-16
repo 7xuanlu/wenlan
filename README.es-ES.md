@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0ef0dcfd756f82da5b962a5457c3e272039296146af8def46c3ca9f0e7bfc502 -->
+<!-- README_SYNC: source=README.md sha256=35fa2fe042e405d47912b593c017e322965b4370ccfb0fd07cb42645b33a3464 -->
 
 <p align="center">
   <picture>
@@ -85,12 +85,12 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 ## Organiza la información dispersa en conocimiento
 
-Reúne la información dispersa en **Páginas Markdown editables con citas**, conectadas mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la Memoria que respalda una idea.
+Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[[wikilinks]]`. Sigue una cita para consultar el documento, la conversación o la Memoria que respalda una idea.
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
 - **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
-- **Grafo y comunidades:** Descubre temas relacionados mediante Entidades tipadas, relaciones y comunidades; un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
+- **Grafo de conocimiento:** Descubre temas relacionados mediante Entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
 
@@ -111,7 +111,7 @@ Reúne la información dispersa en **Páginas Markdown editables con citas**, co
 
 ## Pon tu conocimiento a trabajar con IA
 
-Aprovecha investigaciones y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo. Mediante **MCP y plugins**, Claude Code, Codex y otras herramientas de IA conectadas pueden recuperar conocimiento pertinente y guardar nuevas lecciones en la misma biblioteca local.
+Aprovecha hallazgos y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo. Mediante **MCP y plugins**, Claude Code, Codex y otras herramientas de IA conectadas pueden recuperar conocimiento pertinente y guardar nuevas lecciones en la misma base de conocimiento local.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
@@ -139,7 +139,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-Cuando nueva información cambia una conclusión anterior, Wenlan puede actualizar las Páginas afectadas. El **seguimiento de evidencias** registra las Fuentes y Memorias que las sustentan; las revisiones permiten consultar los cambios y las versiones anteriores.
+Cuando nueva información cambia una conclusión anterior, Wenlan puede actualizar las Páginas afectadas. El **seguimiento de evidencias** registra las Fuentes y Memorias que las sustentan.
 
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
 - **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de Páginas y sigue las sustituciones de Memorias; la actualización automática modifica directamente las Páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.

@@ -82,12 +82,12 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 ## Organize scattered material into knowledge
 
-Bring scattered material together as **editable Markdown Pages with citations**, linked through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved Memory behind an idea.
+Edit **Markdown Pages with citations** and link related content through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved Memory behind an idea.
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
 - **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
-- **Knowledge graph and communities:** Discover related topics through typed Entities, relations, and communities; a configured enrichment model links repeated mentions to the same entity (mention resolution).
+- **Knowledge graph:** Discover related topics through typed Entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
 
@@ -107,7 +107,7 @@ Bring scattered material together as **editable Markdown Pages with citations**,
 
 ## Put your knowledge to work with AI
 
-Bring earlier research and decisions into your next writing, research, or development task. Through **MCP and plugins**, Claude Code, Codex, and other connected AI tools can retrieve relevant knowledge and save new lessons to the same local library.
+Bring earlier findings and decisions into your next writing, research, or development task. Through **MCP and plugins**, Claude Code, Codex, and other connected AI tools can retrieve relevant knowledge and save new lessons to the same local knowledge base.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -134,7 +134,7 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-When new material changes an earlier conclusion, Wenlan can refresh the affected Pages. **Evidence tracking** records their supporting Sources and Memories; revisions let you inspect the changes and revisit earlier versions.
+When new material changes an earlier conclusion, Wenlan can refresh the affected Pages. **Evidence tracking** records their supporting Sources and Memories.
 
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare Page versions and trace Memory replacements; automatic refresh updates eligible machine-maintained Pages directly and proposes revisions for Pages you edited.
