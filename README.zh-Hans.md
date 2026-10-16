@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=23af1852375b6f6157d4c72951f39bc26673ec6f90f5ec57b76f660c045c1ca3 -->
+<!-- README_SYNC: source=README.md sha256=0ef0dcfd756f82da5b962a5457c3e272039296146af8def46c3ca9f0e7bfc502 -->
 
 <p align="center">
   <picture>
@@ -8,7 +8,7 @@
 </p>
 
 <p align="center">
-  文澜将散落的笔记、文档与对话，整理成持续更新、来源可查的知识，<br>
+  文澜将散落的笔记、文档与对话，整理成持续更新、来源可查的知识库，<br>
   让你和 Claude、Codex 等 AI 工具用来找到答案、完成工作。
 </p>
 

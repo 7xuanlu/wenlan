@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=23af1852375b6f6157d4c72951f39bc26673ec6f90f5ec57b76f660c045c1ca3 -->
+<!-- README_SYNC: source=README.md sha256=0ef0dcfd756f82da5b962a5457c3e272039296146af8def46c3ca9f0e7bfc502 -->
 
 <p align="center">
   <picture>
@@ -8,8 +8,8 @@
 </p>
 
 <p align="center">
-  Wenlan organiza notas, documentos y conversaciones dispersos en conocimiento que se mantiene actualizado y enlaza a sus fuentes,<br>
-  para que tú y herramientas de IA como Claude y Codex podáis usarlo para encontrar respuestas y completar vuestro trabajo.
+  Wenlan organiza notas, documentos y conversaciones dispersos en una base de conocimiento que se actualiza y enlaza a sus fuentes,<br>
+  para que tú y herramientas de IA como Claude y Codex podáis usarla para encontrar respuestas y completar vuestro trabajo.
 </p>
 
 <p align="center">
