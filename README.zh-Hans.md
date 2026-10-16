@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2d124637a25c3faf92bc59f72f345ea20fc2d1a078c21a767c31844e9f16eca5 -->
+<!-- README_SYNC: source=README.md sha256=59e67ad1808bf6966c11ece4b4d37a796b902085cd36414908b874d90e31bedb -->
 
 <p align="center">
   <picture>
@@ -11,7 +11,9 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 <p align="center">
   <a href="./README.md">English</a> | 简体中文 | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
-  <br>
+</p>
+
+<p align="center">
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="许可证：Apache-2.0 与 AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -80,12 +82,10 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 来源保留原始资料，记忆保存事实与决定。Wenlan 将它们整理成**可编辑、有引用的 Markdown 页面**，并以 `[[wikilinks]]` 连接起来。
 
-- **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。
+- **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。扫描版 PDF 需先提取文本再导入。
 - **Obsidian 只读连接**：读取已有仓库并按需刷新，不修改原始文件，也不将变化同步回去。
 - **Quick Capture 与原子记忆**：在 App 或通过 AI，每次保存一条决定、经验或偏好，并保留其来源。
 - **知识图谱与社区分群**：探索具类型的实体、关系与知识群集；配置整理模型后，将重复提及的人物或概念连接到同一实体。
-
-扫描版 PDF 需先提取文本再导入。
 
 <a id="探索你的个人知识图谱"></a>
 
@@ -108,7 +108,7 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 通过 **MCP 与插件**，让 Claude Code、Codex 等已连接的 AI 客户端沿用你的知识，也将新知识写回同一份本地数据。
 
-- **本地混合检索（Hybrid Retrieval）**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
+- **[本地混合检索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
 - **图谱辅助排序**：有可用的实体连接时，提高相关记忆的排名，也可选用 cross-encoder reranking 精排结果。
 - **插件工作流程**：用 `/recall` 找上下文、`/capture` 存决定、`/distill` 合成页面，并用 `/handoff` 留下进度与待解问题（[指令说明](plugin/skills/README.md)）。
 - **Spaces 范围检索**：选定 Space，将返回的知识限制在相关项目或个人资料集合内。
@@ -117,8 +117,6 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
 </p>
 <p>虚构案例，非产品测试；文澜补充上下文，与 Claude 原生记忆配合使用。</p>
-
-[搜索方式](docs/technical-foundations.md#retrieval-pipeline)。
 
 实验中的网页访问功能可让受支持的客户端搜索整个资料库或指定空间，但运行 Wenlan 的电脑必须保持联网。查询与结果会经过中继服务，详见[隐私边界](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
 
@@ -139,7 +137,7 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 **依据追踪**将页面连接到支撑它的来源与记忆；当知识改变，Wenlan 就能重新整理受影响的页面。
 
 - **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为保存的记忆补上类型、结构化信息、搜索线索与图谱连接，供后续使用；页面合成可选用。
-- **修订审核与历史**：查看页面版本与记忆替代链；自动更新你编辑过的页面时，先提出修订供你审核。
+- **[修订审核与历史](docs/knowledge-guide.zh-Hans.md#updates-and-history)**：查看页面版本与记忆替代链；自动更新你编辑过的页面时，先提出修订供你审核。
 - **本地 Markdown 与维基导出**：以普通文件阅读页面，将符合条件的页面导出为 Open Knowledge Format（OKF）维基；记忆与图谱保存在本地 libSQL。
 - **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
 
@@ -149,8 +147,6 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 <p>实机画面搭配示范数据；连线与标注为示意。</p>
 
 自动更新若引用不足，就会拒绝草稿；直接编辑文件和强制重新生成遵循不同的审核规则。
-
-[更新与审核](docs/knowledge-guide.zh-Hans.md#updates-and-history) · [Doctor 与问题反馈](https://wenlan.app/docs/diagnostics-and-issue-reports)。
 
 <a id="models-and-privacy"></a>
 
@@ -166,9 +162,6 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 这些结果用来检查搜索能否找到相关知识，不代表 AI 回答质量。
 
-<details>
-<summary>搜索指标</summary>
-
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
 |---|---:|---:|---:|
@@ -177,8 +170,6 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 <!-- EVAL_SNAPSHOT_END -->
 
 [评估方法与基准详情](docs/eval/README.md)。
-
-</details>
 
 <a id="learn-more"></a>
 <a id="离线队列outbox"></a>
@@ -189,6 +180,7 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 - [连接 AI 工具](docs/setup-with-ai.md)
 - [来源与导入](docs/knowledge-guide.zh-Hans.md#sources-and-pages) · [本地文件、备份与离线使用](docs/setup-and-data.zh-Hans.md)
 - [隐私](docs/PRIVACY.md)
+- [Doctor 与问题反馈](https://wenlan.app/docs/diagnostics-and-issue-reports)
 - [完整文档索引](docs/README.md)
 
 ## 贡献

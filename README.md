@@ -9,7 +9,9 @@ Wenlan organizes notes, documents, and AI conversations into editable, source-li
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
-  <br>
+</p>
+
+<p align="center">
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="License: Apache-2.0 and AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -77,12 +79,10 @@ Connect Claude Code, Codex, or another supported client when you want it to use 
 
 Sources keep original material; Memories preserve facts and decisions. Wenlan brings them together as **editable Markdown Pages with citations**, connected through `[[wikilinks]]`.
 
-- **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references.
+- **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
 - **Quick Capture and atomic Memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
 - **Knowledge graph and communities:** Explore typed Entities, relations, and communities; a configured enrichment model links repeated mentions to the same entity (mention resolution).
-
-Scanned PDFs need text extraction before import.
 
 <a id="explore-your-personal-knowledge-graph"></a>
 
@@ -104,7 +104,7 @@ Scanned PDFs need text extraction before import.
 
 Connect Claude Code, Codex, or another AI client through **MCP and plugins** to reuse and add to the same local knowledge.
 
-- **Local hybrid retrieval:** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
+- **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
 - **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize Pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
@@ -113,8 +113,6 @@ Connect Claude Code, Codex, or another AI client through **MCP and plugins** to 
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
 </p>
 <p>Fictional example, not a product test; Wenlan adds context alongside Claude’s native memory.</p>
-
-[How search works](docs/technical-foundations.md#retrieval-pipeline).
 
 Experimental web access lets supported web clients search the whole library or one chosen Space while the computer running Wenlan stays online. Queries and results pass through a relay; see the [privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 
@@ -134,7 +132,7 @@ Experimental web access lets supported web clients search the whole library or o
 **Evidence tracking** connects Pages to the Sources and Memories behind them, so Wenlan can refresh affected Pages when that knowledge changes.
 
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
-- **Revision review and history:** Inspect Page versions and Memory replacement chains; automatic refresh sends changes to Pages you edited for review.
+- **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Inspect Page versions and Memory replacement chains; automatic refresh sends changes to Pages you edited for review.
 - **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an Open Knowledge Format (OKF) wiki; Memories and graph data stay in local libSQL.
 - **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
@@ -144,8 +142,6 @@ Experimental web access lets supported web clients search the whole library or o
 <p>App views with demo data; connections and labels are illustrative.</p>
 
 Automatic refresh rejects drafts without enough citations; direct file edits and forced regeneration follow different review rules.
-
-[Updates and review](docs/knowledge-guide.md#updates-and-history) · [Doctor and issue reports](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
 <a id="models-and-privacy"></a>
 
@@ -161,9 +157,6 @@ A cloud AI client may send retrieved knowledge to its provider, and a cloud mode
 
 These results show whether Wenlan search finds related saved knowledge; they do not measure the quality of AI answers.
 
-<details>
-<summary>Search metrics</summary>
-
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
 |---|---:|---:|---:|
@@ -172,8 +165,6 @@ These results show whether Wenlan search finds related saved knowledge; they do 
 <!-- EVAL_SNAPSHOT_END -->
 
 [Evaluation method and benchmark details](docs/eval/README.md).
-
-</details>
 
 <a id="learn-more"></a>
 
@@ -185,6 +176,7 @@ These results show whether Wenlan search finds related saved knowledge; they do 
 - [Connect an AI tool](docs/setup-with-ai.md)
 - [Sources and imports](docs/knowledge-guide.md#sources-and-pages) · [Local files, backups, and offline use](docs/setup-and-data.md)
 - [Privacy](docs/PRIVACY.md)
+- [Doctor and issue reports](https://wenlan.app/docs/diagnostics-and-issue-reports)
 - [Full documentation index](docs/README.md)
 
 ## Contributing

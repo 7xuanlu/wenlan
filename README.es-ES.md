@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=2d124637a25c3faf92bc59f72f345ea20fc2d1a078c21a767c31844e9f16eca5 -->
+<!-- README_SYNC: source=README.md sha256=59e67ad1808bf6966c11ece4b4d37a796b902085cd36414908b874d90e31bedb -->
 
 <p align="center">
   <picture>
@@ -11,7 +11,9 @@ Wenlan organiza notas, documentos y conversaciones de IA en páginas editables c
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
-  <br>
+</p>
+
+<p align="center">
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
   <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="Última versión" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release"></a>
   <a href="#license"><img alt="Licencia: Apache-2.0 y AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
@@ -80,12 +82,10 @@ Conecta Claude Code, Codex u otro cliente compatible cuando quieras que use tus 
 
 Las Fuentes guardan el material original; las Memorias conservan datos y decisiones. Wenlan los reúne en **Páginas Markdown editables con citas**, conectadas mediante `[[wikilinks]]`.
 
-- **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes.
+- **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
 - **Quick Capture y Memorias atómicas:** Guarda una decisión, lección o preferencia cada vez, desde la app o mediante tu IA, conservando su fuente.
 - **Grafo y comunidades:** Explora Entidades tipadas, relaciones y comunidades; un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
-
-Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
 
@@ -108,7 +108,7 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 Conecta Claude Code, Codex u otro cliente de IA mediante **MCP y plugins** para reutilizar y ampliar el mismo conocimiento local.
 
-- **Búsqueda híbrida local:** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
+- **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
 - **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza Páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
@@ -117,8 +117,6 @@ Conecta Claude Code, Codex u otro cliente de IA mediante **MCP y plugins** para 
   <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
 </p>
 <p>Ejemplo ficticio, no una prueba del producto; Wenlan aporta contexto junto con la memoria nativa de Claude.</p>
-
-[Cómo funciona la búsqueda](docs/technical-foundations.md#retrieval-pipeline).
 
 El acceso web experimental permite que clientes compatibles busquen en toda la biblioteca o en un Espacio elegido, mientras el ordenador con Wenlan permanece conectado. Las consultas y los resultados pasan por un relay; consulta sus [límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 
@@ -139,7 +137,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 El **seguimiento de evidencias** conecta las Páginas con las Fuentes y Memorias que las sustentan, para actualizar las Páginas afectadas cuando cambia ese conocimiento.
 
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
-- **Revisión e historial:** Consulta versiones de Páginas y cadenas de sustitución de Memorias; la actualización automática propone para revisión los cambios en Páginas que hayas editado.
+- **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Consulta versiones de Páginas y cadenas de sustitución de Memorias; la actualización automática propone para revisión los cambios en Páginas que hayas editado.
 - **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las aptas como una wiki Open Knowledge Format (OKF); las Memorias y el grafo permanecen en libSQL local.
 - **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
@@ -149,8 +147,6 @@ El **seguimiento de evidencias** conecta las Páginas con las Fuentes y Memorias
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
 La actualización automática rechaza borradores con citas insuficientes; las ediciones directas de archivos y la regeneración forzada siguen otras reglas de revisión.
-
-[Actualizaciones y revisión](docs/knowledge-guide.es-ES.md#updates-and-history) · [Diagnóstico e incidencias](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
 <a id="models-and-privacy"></a>
 
@@ -166,9 +162,6 @@ Un cliente de IA en la nube puede enviarle el conocimiento recuperado a su prove
 
 Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no miden la calidad de las respuestas de IA.
 
-<details>
-<summary>Métricas de búsqueda</summary>
-
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
 |---|---:|---:|---:|
@@ -177,8 +170,6 @@ Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no 
 <!-- EVAL_SNAPSHOT_END -->
 
 [Método de evaluación y detalles del benchmark](docs/eval/README.md).
-
-</details>
 
 <a id="learn-more"></a>
 
@@ -190,6 +181,7 @@ Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no 
 - [Conectar una herramienta de IA](docs/setup-with-ai.md)
 - [Fuentes e importaciones](docs/knowledge-guide.es-ES.md#sources-and-pages) · [Archivos locales, copias y uso sin conexión](docs/setup-and-data.es-ES.md)
 - [Privacidad](docs/PRIVACY.md)
+- [Diagnóstico e incidencias](https://wenlan.app/docs/diagnostics-and-issue-reports)
 - [Índice completo de documentación](docs/README.md)
 
 ## Contribuir
