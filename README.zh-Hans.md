@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e620e5a8b3c8efbbcc98e42f5207d2088b18667571b751615a02b827edbc1835 -->
+<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
 
 <p align="center">
   <picture>
@@ -115,7 +115,7 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 
 ## 让 AI 接续已有知识
 
-让下一次写作、研究或开发用上先前的资料与决定，再将新的经验存回同一个本地知识库。**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
+沿用旧知识，保存新经验。**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
 
 - **[本地混合检索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
 - **图谱辅助排序**：有可用的实体连接时，提高相关记忆的排名，也可选用 cross-encoder reranking 精排结果。
@@ -143,11 +143,9 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 
 ## 更新知识，保留历史
 
-页面引用的来源或记忆在 Wenlan 中更新或移除时，**依据追踪**会标记受影响的页面。启用后台 AI 并有可用模型后，符合条件的页面会在后台维护时刷新。
-
-- **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为保存的记忆补上类型、结构化信息、搜索线索与图谱连接，供后续使用；页面合成可选用。
+- **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为记忆补上类型、结构化信息、搜索线索与图谱连接；页面合成可选用。
 - **[修订审核与历史](docs/knowledge-guide.zh-Hans.md#updates-and-history)**：比较页面版本、追溯记忆的替代关系；自动更新时，符合条件的 AI 维护页面直接更新，你编辑过的页面则提出修订供审核。
-- **本地 Markdown 与维基导出**：以普通文件阅读页面，将符合条件的页面导出为 Open Knowledge Format（OKF）维基；记忆与图谱保存在本地 libSQL。
+- **维基导出**：将符合条件的页面导出为 Open Knowledge Format（OKF）维基。
 - **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
 
 <p align="center">
@@ -160,6 +158,10 @@ Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Ge
 <a id="architecture"></a>
 
 ## 系统架构
+
+**共用本地知识库。** App、CLI 与 AI 工具通过 Wenlan 本地服务读写。页面以 Markdown 保存；记忆、关系与搜索索引由本地 libSQL 管理。
+
+**沿引用关系更新。** 来源或记忆在 Wenlan 中更新或移除时，依据追踪会标记相关页面；启用后台 AI 并有可用模型后，再依更新与审核条件整理。
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">

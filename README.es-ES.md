@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e620e5a8b3c8efbbcc98e42f5207d2088b18667571b751615a02b827edbc1835 -->
+<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
 
 <p align="center">
   <picture>
@@ -115,7 +115,7 @@ Edita **Páginas Markdown con citas** y enlaza contenido relacionado mediante `[
 
 ## Pon tu conocimiento a trabajar con IA
 
-Aprovecha hallazgos y decisiones anteriores en tu próxima tarea de escritura, investigación o desarrollo, y guarda nuevas lecciones en la misma base de conocimiento local. Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
+Reutiliza hallazgos anteriores y guarda nuevas lecciones. Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas cuando hay enlaces entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
@@ -143,11 +143,9 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-Cuando una Fuente o Memoria citada se actualiza o elimina en Wenlan, el **seguimiento de evidencias** marca las Páginas afectadas para su actualización. Con la IA en segundo plano activada y un modelo disponible, las Páginas que cumplen los requisitos se actualizan durante el mantenimiento en segundo plano.
-
 - **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
 - **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de Páginas y sigue las sustituciones de Memorias; la actualización automática modifica directamente las Páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
-- **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las aptas como una wiki Open Knowledge Format (OKF); las Memorias y el grafo permanecen en libSQL local.
+- **Exportación de wikis:** Exporta las Páginas aptas como una wiki Open Knowledge Format (OKF).
 - **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
@@ -160,6 +158,10 @@ La actualización automática rechaza borradores con citas insuficientes; las ed
 <a id="architecture"></a>
 
 ## Arquitectura
+
+**Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las Páginas son archivos Markdown; Memorias, relaciones e índices de búsqueda residen en libSQL local.
+
+**Las actualizaciones siguen las citas.** Cuando una Fuente o Memoria cambia o se elimina en Wenlan, el seguimiento de evidencias marca las Páginas afectadas. Con la IA en segundo plano activada y un modelo disponible, se actualizan según las reglas de actualización y revisión.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">

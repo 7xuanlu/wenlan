@@ -111,7 +111,7 @@ Edit **Markdown Pages with citations** and link related content through `[[wikil
 
 ## Put your knowledge to work with AI
 
-Bring earlier findings and decisions into your next writing, research, or development task, and save new lessons to the same local knowledge base. **Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
+Reuse earlier findings and save new lessons. **Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related Memories higher when Entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -138,11 +138,9 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-When a cited Source or Memory is updated or removed in Wenlan, **evidence tracking** marks the affected Pages for refresh. With background AI enabled and a model available, eligible Pages refresh during background maintenance.
-
 - **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare Page versions and trace Memory replacements; automatic refresh updates eligible machine-maintained Pages directly and proposes revisions for Pages you edited.
-- **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an Open Knowledge Format (OKF) wiki; Memories and graph data stay in local libSQL.
+- **Wiki export:** Export eligible Pages as an Open Knowledge Format (OKF) wiki.
 - **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
@@ -155,6 +153,10 @@ Automatic refresh rejects drafts without enough citations; direct file edits and
 <a id="architecture"></a>
 
 ## Architecture
+
+**One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; Memories, relationships, and search indexes live in local libSQL.
+
+**Updates follow citations.** When a cited Source or Memory changes or is removed in Wenlan, evidence tracking marks affected Pages. With background AI enabled and a model available, eligible Pages refresh under the update and review rules.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=e620e5a8b3c8efbbcc98e42f5207d2088b18667571b751615a02b827edbc1835 -->
+<!-- README_SYNC: source=README.md sha256=e8a500b455136eae8a677b856b81fea50a11c1f07074592b8cda08678daf7fe2 -->
 
 <p align="center">
   <picture>
@@ -115,7 +115,7 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 
 ## 讓 AI 接續已有知識
 
-讓下一次寫作、研究或開發用上先前的資料與決定，再將新的經驗存回同一個本地知識庫。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
+沿用舊知識，保存新經驗。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
@@ -143,11 +143,9 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 
 ## 更新知識，保留歷史
 
-頁面引用的來源或記憶在 Wenlan 中更新或移除時，**依據追蹤**會標記受影響的頁面。啟用背景 AI 並有可用模型後，符合條件的頁面會在背景維護時重新整理。
-
-- **Steep 背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，為保存的記憶補上類型、結構化資訊、搜尋線索與圖譜連結，供後續使用；頁面合成可選用。
+- **Steep 背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，為記憶補上類型、結構化資訊、搜尋線索與圖譜連結；頁面合成可選用。
 - **[修訂審核與歷史](docs/knowledge-guide.zh-Hant.md#updates-and-history)**：比較頁面版本、追溯記憶的取代關係；自動更新時，符合條件的 AI 維護頁面直接更新，你編輯過的頁面則提出修訂供審核。
-- **本地 Markdown 與維基匯出**：以一般檔案閱讀頁面，將符合條件的頁面匯出為 Open Knowledge Format（OKF）維基；記憶與圖譜保存在本地 libSQL。
+- **維基匯出**：將符合條件的頁面匯出為 Open Knowledge Format（OKF）維基。
 - **自由選擇模型執行方式**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商執行整理與頁面合成。
 
 <p align="center">
@@ -160,6 +158,10 @@ Claude Code 與 Codex 可使用插件；Cursor、Claude Desktop、VS Code 與 Ge
 <a id="architecture"></a>
 
 ## 系統架構
+
+**共用本地知識庫。** App、CLI 與 AI 工具透過 Wenlan 本地服務讀寫。頁面以 Markdown 保存；記憶、關係與搜尋索引由本地 libSQL 管理。
+
+**沿引用關係更新。** 來源或記憶在 Wenlan 中更新或移除時，依據追蹤會標記相關頁面；啟用背景 AI 並有可用模型後，再依更新與審核條件整理。
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
