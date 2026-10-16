@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6de841b549c9e884e6ed47cf35a13226c270bcb81d348d58fcd7eed7897057cc -->
+<!-- README_SYNC: source=README.md sha256=bb08b03d874dd57e73a36301e0f58b5ba525216fb8510c4f94fcb10514988151 -->
 
 <p align="center">
   <picture>
@@ -85,8 +85,8 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 - **文件与对话导入**：导入 Markdown、文本文件、文本型 PDF、文件夹，以及 ChatGPT 或 Claude 导出的 ZIP，保留来源引用。
 - **Obsidian 只读连接**：读取已有仓库并按需刷新，不修改原始文件，也不将变化同步回去。
 - **Quick Capture 与原子记忆**：在 App 或通过 AI 保存一条条决定、经验与偏好，并保留其来源。
-- **附引用的 Markdown 页面**：将相关来源与记忆整理成可编辑的页面，附上引用并以 `[[wikilinks]]` 连接其他页面。
-- **知识图谱与社区分群**：配置整理模型后，从记忆提取具类型的实体与关系、识别重复提及，并将相连实体聚成社区。
+- **附引用的 Markdown 页面**：阅读和编辑由来源、记忆整理出的知识，沿引用查看依据，并以 `[[wikilinks]]` 连接其他页面。
+- **知识图谱与社区分群**：探索相关概念与知识群集；配置整理模型后，从记忆提取具类型的实体与关系，识别重复提及并将相连实体分群。
 
 扫描版 PDF 需先提取文本再导入。
 
@@ -97,6 +97,9 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 </p>
 <p align="center">实机节点与连线；区域名称与范围为示意。</p>
 
+<a id="how-wenlan-works"></a>
+<a id="how-does-it-work"></a>
+
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="从关键词语义与关联找回正确内容"></a>
@@ -104,10 +107,10 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 ## 用 AI 延续已有知识
 
-- **MCP 与 AI 插件**：Claude Code、Codex 和其他已连接的客户端，通过 Wenlan 工具读写同一份本地知识。
-- **本地混合检索（Hybrid Retrieval）**：以加权 RRF 合并 SQLite FTS5 全文搜索与 BGE 向量检索，基础搜索无需 API key。
-- **图谱辅助排序**：存在符合条件的实体连接时，提高相关候选记忆的排名，也可选用 cross-encoder reranking 精排结果。
-- **记忆捕获与工作交接**：用 `/capture` 保存决定与上下文，用 `/handoff` 留下进度和待解问题，供下一段工作接续。
+- **MCP 与 AI 插件**：在 Claude Code、Codex 等已连接的客户端沿用你的知识，通过 Wenlan 工具读写同一份本地数据。
+- **本地混合检索（Hybrid Retrieval）**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
+- **图谱辅助排序**：通过符合条件的实体连接，提高相关记忆在搜索结果中的排名，也可选用 cross-encoder reranking 精排结果。
+- **插件工作流程**：用 `/recall` 找上下文、`/capture` 存决定、`/distill` 合成页面，并用 `/handoff` 留下进度与待解问题（[指令说明](plugin/skills/README.md)）。
 - **Spaces 范围检索**：选定 Space，将返回的知识限制在相关项目或个人资料集合内。
 
 <p align="center">
@@ -131,11 +134,11 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 ## 持续更新知识并保留历史
 
-- **依据追踪与页面更新**：追踪支撑页面的来源与记忆，让过时页面可根据最新依据重新整理。
-- **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，补上记忆类型、结构化信息、搜索线索与图谱连接，并可选用页面合成。
-- **修订审核与历史**：自动更新你编辑过的页面时先提出修订，并保留可查看的页面版本与明确的记忆替代链。
-- **本地 Markdown 与维基导出**：页面保留为普通 Markdown 文件，可将符合条件的页面导出为 OKF 维基，记忆与图谱则保存在本地 libSQL。
-- **自由选择模型运行方式**：以 llama.cpp 运行设备端 Qwen，或连接 Ollama、LM Studio 等 OpenAI 兼容本地服务及已配置的云端提供商，处理整理与页面合成。
+- **依据追踪与页面更新**：追踪支撑页面的来源与记忆，根据最新依据重新整理过时页面，让知识持续更新。
+- **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为保存的记忆补上类型、结构化信息、搜索线索与图谱连接，供后续使用；页面合成可选用。
+- **修订审核与历史**：查看页面版本与记忆替代链；自动更新你编辑过的页面时，先提出修订供你审核。
+- **本地 Markdown 与维基导出**：以普通文件阅读页面，将符合条件的页面导出为 OKF 维基；记忆与图谱保存在本地 libSQL。
+- **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
@@ -146,18 +149,11 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 
 [更新与审核](docs/knowledge-guide.zh-Hans.md#updates-and-history) · [Doctor 与问题反馈](https://wenlan.app/docs/diagnostics-and-issue-reports)。
 
-<a id="how-wenlan-works"></a>
-<a id="how-does-it-work"></a>
-
-## 简单工作流程
-
-找回已有知识 → 保存有用决定 → 整理成页面 → 下次接着使用。安装 Wenlan 插件即可使用 `/recall`、`/capture`、`/distill`、`/handoff`（[指令说明](plugin/skills/README.md)）。
-
 <a id="models-and-privacy"></a>
 
-### 数据与隐私
+## 数据与隐私
 
-页面与工作笔记是 Markdown 文件；记忆与图谱数据保存在本地数据库。云端 AI 客户端可能会把找回的知识传给其服务商，云端模型也会收到它处理所需的内容。本地存储不代表这些交互都留在本机。使用统计默认关闭。
+云端 AI 客户端可能会把找回的知识传给其服务商，云端模型也会收到它处理所需的内容。本地存储不代表这些交互都留在本机。使用统计默认关闭。
 
 [文件位置、备份与卸载](docs/setup-and-data.zh-Hans.md#backup-and-removal) · [联网与隐私详情](docs/PRIVACY.md#when-wenlan-reaches-the-network)。
 
@@ -185,8 +181,6 @@ Wenlan 将笔记、文档和 AI 对话整理成可编辑且链接回来源的页
 <a id="离线队列outbox"></a>
 
 ## 进一步了解
-
-从安装与连接开始，再查阅各项功能的详细指南：
 
 - [开始使用与安装](docs/setup-and-data.zh-Hans.md#installation)
 - [连接 AI 工具](docs/setup-with-ai.md)

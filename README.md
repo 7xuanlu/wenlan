@@ -82,8 +82,8 @@ Sources are the original notes, documents, and conversations you bring in. Memor
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
 - **Quick Capture and atomic Memories:** Save individual decisions, lessons, and preferences in the app or through your AI, with their provenance.
-- **Source-cited Markdown Pages:** Compile related Sources and Memories into editable Pages with citations and `[[wikilinks]]` to other Pages.
-- **Knowledge graph and communities:** With enrichment configured, extract typed Entities and relations from Memories, resolve repeated mentions, and group connected Entities into communities.
+- **Source-cited Markdown Pages:** Read and edit knowledge compiled from Sources and Memories, follow its citations, and connect Pages with `[[wikilinks]]`.
+- **Knowledge graph and communities:** Explore related concepts and clusters through typed Entities, relations, and mention resolution extracted from Memories with a configured enrichment model.
 
 Scanned PDFs need text extraction before import.
 
@@ -94,16 +94,19 @@ Scanned PDFs need text extraction before import.
 </p>
 <p align="center">Actual App nodes and connections; region names and boundaries are illustrative.</p>
 
+<a id="how-wenlan-works"></a>
+<a id="how-does-it-work"></a>
+
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
 ## Use your knowledge with AI
 
-- **MCP and AI plugins:** Claude Code, Codex, and other connected clients read and write the same local knowledge through Wenlan’s tools.
-- **Local hybrid retrieval:** Combine SQLite FTS5 full-text search and BGE embeddings with weighted Reciprocal Rank Fusion (RRF), without an API key for base search.
-- **Graph-assisted ranking:** When eligible Entity links exist, use them to boost related Memory candidates; optional cross-encoder reranking can refine results.
-- **Capture and handoff:** Use `/capture` to save decisions with context and `/handoff` to preserve progress and open questions for the next session.
+- **MCP and AI plugins:** Reuse your knowledge in Claude Code, Codex, and other connected clients that read and write the same local store through Wenlan’s tools.
+- **Local hybrid retrieval:** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
+- **Graph-assisted ranking:** Bring related Memories higher in search results using eligible Entity links, with optional cross-encoder reranking to refine relevance.
+- **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize Pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
@@ -126,11 +129,11 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current and preserve history
 
-- **Evidence tracking and refresh:** Track supporting Sources and Memories so stale Pages can be refreshed from current evidence.
-- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), add Memory types, structured details, search cues, and graph links, and enable optional Page synthesis.
-- **Revision review and history:** Automatic refresh proposes changes to Pages you edited, while Page revisions and explicit Memory replacement chains remain inspectable.
-- **Local Markdown and wiki export:** Keep Pages as ordinary Markdown files and export eligible Pages as an OKF wiki, with Memories and graph data stored in local libSQL.
-- **Choose the model runtime:** Use on-device Qwen through llama.cpp, an OpenAI-compatible local server such as Ollama or LM Studio, or a configured cloud provider for enrichment and synthesis.
+- **Evidence tracking and refresh:** Keep Pages current by tracking their supporting Sources and Memories and refreshing stale Pages from updated evidence.
+- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured Memories for reuse with types, structured details, search cues, and graph links; Page synthesis is optional.
+- **Revision review and history:** Inspect Page versions and Memory replacement chains; automatic refresh sends changes to Pages you edited for review.
+- **Local Markdown and wiki export:** Read Pages as ordinary files and export eligible Pages as an OKF wiki; Memories and graph data stay in local libSQL.
+- **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
@@ -141,18 +144,11 @@ Automatic refresh rejects drafts without enough citations; direct file edits and
 
 [Updates and review](docs/knowledge-guide.md#updates-and-history) · [Doctor and issue reports](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
-<a id="how-wenlan-works"></a>
-<a id="how-does-it-work"></a>
-
-## A simple workflow
-
-Find prior knowledge → save useful decisions → organize them into Pages → pick up next time. The Wenlan plugin adds `/recall`, `/capture`, `/distill`, and `/handoff` ([commands](plugin/skills/README.md)).
-
 <a id="models-and-privacy"></a>
 
-### Data and privacy
+## Data and privacy
 
-Pages and session notes are Markdown files; Memories and graph data are stored in a local database. A cloud AI client may send retrieved knowledge to its provider, and a cloud model receives the material it processes. Local storage does not keep those interactions local. Usage statistics are off by default.
+A cloud AI client may send retrieved knowledge to its provider, and a cloud model receives the material it processes. Local storage does not keep those interactions local. Usage statistics are off by default.
 
 [File locations, backup, and removal](docs/setup-and-data.md#backup-and-removal) · [Network and privacy details](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
@@ -181,8 +177,6 @@ These results show whether Wenlan search finds related saved knowledge; they do 
 <a id="offline-queue-outbox"></a>
 
 ## Learn more
-
-Guides for the first steps and the details behind the workflow:
 
 - [Get started and install](docs/setup-and-data.md#installation)
 - [Connect an AI tool](docs/setup-with-ai.md)

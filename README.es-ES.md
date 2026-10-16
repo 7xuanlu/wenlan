@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6de841b549c9e884e6ed47cf35a13226c270bcb81d348d58fcd7eed7897057cc -->
+<!-- README_SYNC: source=README.md sha256=bb08b03d874dd57e73a36301e0f58b5ba525216fb8510c4f94fcb10514988151 -->
 
 <p align="center">
   <picture>
@@ -85,8 +85,8 @@ Las fuentes son las notas, documentos y conversaciones originales que incorporas
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
 - **Quick Capture y Memorias atómicas:** Guarda decisiones, lecciones y preferencias individuales desde la app o mediante tu IA, con su procedencia.
-- **Páginas Markdown con citas:** Organiza Fuentes y Memorias relacionadas en Páginas editables, con citas y `[[wikilinks]]` a otras Páginas.
-- **Grafo y comunidades:** Con el enriquecimiento configurado, extrae Entidades y relaciones tipadas de las Memorias, identifica menciones repetidas y agrupa Entidades conectadas en comunidades.
+- **Páginas Markdown con citas:** Lee y edita conocimiento compilado a partir de Fuentes y Memorias, consulta sus citas y conecta Páginas con `[[wikilinks]]`.
+- **Grafo y comunidades:** Explora conceptos relacionados y comunidades mediante Entidades tipadas, relaciones y resolución de menciones extraídas de Memorias con un modelo de enriquecimiento configurado.
 
 Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
@@ -97,6 +97,9 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 </p>
 <p align="center">Nodos y conexiones reales de la app; los nombres y límites de las regiones son ilustrativos.</p>
 
+<a id="how-wenlan-works"></a>
+<a id="how-does-it-work"></a>
+
 <a id="what-wenlan-is-not"></a>
 <a id="retrieval"></a>
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
@@ -104,10 +107,10 @@ Los PDF escaneados necesitan extracción de texto antes de importarlos.
 
 ## Usa tu conocimiento con IA
 
-- **MCP y plugins de IA:** Claude Code, Codex y otros clientes conectados leen y escriben el mismo conocimiento local mediante las herramientas de Wenlan.
-- **Búsqueda híbrida local:** Combina búsqueda de texto completo con SQLite FTS5 y embeddings BGE mediante Reciprocal Rank Fusion (RRF) ponderado, sin clave API para la búsqueda base.
-- **Clasificación asistida por el grafo:** Los enlaces válidos entre Entidades elevan la posición de Memorias candidatas relacionadas, y un reranking cross-encoder opcional puede refinar los resultados.
-- **Captura y traspaso de trabajo:** Usa `/capture` para guardar decisiones con contexto y `/handoff` para conservar el progreso y las preguntas pendientes para la siguiente sesión.
+- **MCP y plugins de IA:** Reutiliza tu conocimiento en Claude Code, Codex y otros clientes conectados que leen y escriben el mismo almacén local mediante las herramientas de Wenlan.
+- **Búsqueda híbrida local:** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
+- **Clasificación asistida por el grafo:** Prioriza Memorias relacionadas mediante enlaces válidos entre Entidades, con reranking cross-encoder opcional para afinar la relevancia.
+- **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza Páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
@@ -131,11 +134,11 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Mantén el conocimiento al día y conserva su historial
 
-- **Seguimiento de evidencias y actualización:** Sigue las Fuentes y Memorias que sustentan cada Página para actualizar Páginas obsoletas con evidencia actual.
-- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), añade tipos, datos estructurados, pistas de búsqueda y enlaces al grafo, y activa la síntesis opcional de Páginas.
-- **Revisión e historial:** La actualización automática propone cambios en Páginas que hayas editado y conserva versiones de Páginas y cadenas explícitas de sustitución de Memorias para su consulta.
-- **Markdown local y exportación de wikis:** Conserva Páginas como archivos Markdown y exporta las que cumplan los requisitos como una wiki OKF, con Memorias y grafo almacenados en libSQL local.
-- **Elige cómo ejecutar los modelos:** Usa Qwen en el dispositivo mediante llama.cpp, un servidor local compatible con OpenAI como Ollama o LM Studio, o un proveedor de nube configurado para enriquecimiento y síntesis.
+- **Seguimiento de evidencias y actualización:** Mantén las Páginas al día siguiendo las Fuentes y Memorias que las sustentan y actualizando las obsoletas con nueva evidencia.
+- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara Memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de Páginas es opcional.
+- **Revisión e historial:** Consulta versiones de Páginas y cadenas de sustitución de Memorias; la actualización automática propone para revisión los cambios en Páginas que hayas editado.
+- **Markdown local y exportación de wikis:** Lee Páginas como archivos normales y exporta las que cumplan los requisitos como una wiki OKF; las Memorias y el grafo permanecen en libSQL local.
+- **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
@@ -146,18 +149,11 @@ La actualización automática rechaza borradores con citas insuficientes; las ed
 
 [Actualizaciones y revisión](docs/knowledge-guide.es-ES.md#updates-and-history) · [Diagnóstico e incidencias](https://wenlan.app/docs/diagnostics-and-issue-reports).
 
-<a id="how-wenlan-works"></a>
-<a id="how-does-it-work"></a>
-
-## Un flujo de trabajo sencillo
-
-Encuentra conocimiento previo → guarda decisiones útiles → organízalas en Páginas → retómalas en la siguiente tarea. El plugin de Wenlan añade `/recall`, `/capture`, `/distill` y `/handoff` ([comandos](plugin/skills/README.md)).
-
 <a id="models-and-privacy"></a>
 
-### Datos y privacidad
+## Datos y privacidad
 
-Las Páginas y notas de sesión son archivos Markdown; las Memorias y el grafo se guardan en una base de datos local. Un cliente de IA en la nube puede enviarle el conocimiento recuperado a su proveedor; un modelo en la nube también recibe el contenido que procesa. El almacenamiento local no mantiene locales esas interacciones. Las estadísticas de uso están desactivadas por defecto.
+Un cliente de IA en la nube puede enviarle el conocimiento recuperado a su proveedor; un modelo en la nube también recibe el contenido que procesa. El almacenamiento local no mantiene locales esas interacciones. Las estadísticas de uso están desactivadas por defecto.
 
 [Ubicación de archivos, copias y eliminación](docs/setup-and-data.es-ES.md#backup-and-removal) · [Red y privacidad](docs/PRIVACY.md#when-wenlan-reaches-the-network).
 
@@ -186,8 +182,6 @@ Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no 
 <a id="cola-offline-outbox"></a>
 
 ## Leer más
-
-Guías para empezar y consultar los detalles del flujo de trabajo:
 
 - [Primeros pasos e instalación](docs/setup-and-data.es-ES.md#installation)
 - [Conectar una herramienta de IA](docs/setup-with-ai.md)
