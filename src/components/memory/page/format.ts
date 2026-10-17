@@ -9,6 +9,7 @@ const KNOWN_AGENTS: Record<string, string> = {
   "chatgpt-mcp": "ChatGPT",
   chatgpt: "ChatGPT",
   "gemini-cli": "Gemini CLI",
+  "muse-code": "Muse Code",
   windsurf: "Windsurf",
   zed: "Zed",
 };

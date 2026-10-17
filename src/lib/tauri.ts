@@ -1003,6 +1003,7 @@ export const AGENT_DISPLAY: Record<string, string> = {
   codex: "Codex",
   cursor: "Cursor",
   "gemini-cli": "Gemini CLI",
+  "muse-code": "Muse Code",
   windsurf: "Windsurf",
   zed: "Zed",
   wenlan: "Wenlan",
