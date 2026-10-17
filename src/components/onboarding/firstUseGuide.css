@@ -802,3 +802,15 @@ button.fus-marker {
     animation: none;
   }
 }
+
+/* The sample walkthrough should fit one window without scrolling, so it
+   drops the generous page padding the reading views use. */
+.memory-main-content:has(> .fug-root[data-view="sample"]) {
+  padding-top: 8px;
+  padding-bottom: 16px;
+}
+
+.fug-root[data-view="sample"] {
+  padding-top: 0;
+  padding-bottom: 0;
+}

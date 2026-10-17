@@ -300,7 +300,7 @@ describe("Main published PageDetail navigation guards", () => {
     flushHarness.flush.mockResolvedValue(true);
     let quitGuard: (() => Promise<boolean>) | null = null;
     const { user } = renderMain({ initialPageId: "page-one", onRegisterQuitGuard: guard => { quitGuard = guard; } });
-    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.pointer({ keys: "[MouseRight]", target: document.querySelector<HTMLElement>('[data-note-tab-group="primary"] [role="tab"][aria-selected="true"]')! });
     await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
     const right = await screen.findByRole("region", { name: "Right notes" });
     await user.click(screen.getByRole("button", { name: "Open second page" }));
@@ -350,7 +350,7 @@ describe("Main published PageDetail navigation guards", () => {
     let quitGuard: (() => Promise<boolean>) | null = null;
     const { user } = renderMain({ initialPageId: "page-one", onRegisterQuitGuard: guard => { quitGuard = guard; } });
 
-    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.pointer({ keys: "[MouseRight]", target: document.querySelector<HTMLElement>('[data-note-tab-group="primary"] [role="tab"][aria-selected="true"]')! });
     await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
     expect(flushHarness.flush).toHaveBeenCalledOnce();
 
@@ -372,7 +372,7 @@ describe("Main published PageDetail navigation guards", () => {
     flushHarness.flush.mockReturnValue(saving);
     const { user, rerenderMain } = renderMain();
 
-    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.pointer({ keys: "[MouseRight]", target: document.querySelector<HTMLElement>('[data-note-tab-group="primary"] [role="tab"][aria-selected="true"]')! });
     await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
     rerenderMain({ initialPageId: "page-two" });
     expect(flushHarness.flush).toHaveBeenCalledOnce();
@@ -458,7 +458,7 @@ describe("Main published PageDetail navigation guards", () => {
       initialView: { kind: "page-draft", draftId: "missing-draft", space: null, sessionKey: 72 },
       onRegisterQuitGuard: guard => { quitGuard = guard; },
     });
-    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.pointer({ keys: "[MouseRight]", target: document.querySelector<HTMLElement>('[data-note-tab-group="primary"] [role="tab"][aria-selected="true"]')! });
     await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
     const right = await screen.findByRole("region", { name: "Right notes" });
     expect(within(right).getByText("Unhydrated draft")).toBeInTheDocument();
@@ -473,7 +473,7 @@ describe("Main published PageDetail navigation guards", () => {
       initialView: { kind: "page-draft", space: null, sessionKey: 81 },
     });
     await user.click(screen.getByRole("button", { name: "Report draft X identity" }));
-    await user.click(screen.getByRole("button", { name: "Move to right group" }));
+    await user.pointer({ keys: "[MouseRight]", target: document.querySelector<HTMLElement>('[data-note-tab-group="primary"] [role="tab"][aria-selected="true"]')! });
     await user.click(screen.getByRole("menuitem", { name: "Move to right group" }));
     const right = await screen.findByRole("region", { name: "Right notes" });
     const ownerEditor = within(right).getByTestId("draft-editor");

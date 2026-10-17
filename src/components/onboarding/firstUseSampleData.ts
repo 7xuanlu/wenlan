@@ -95,7 +95,7 @@ const enData: SampleDataset = {
       body: [
         "We want a slow weekend trip with no packed schedule.",
         "We decided to take the train to Tainan, leaving Saturday morning.",
-        "Keep the afternoon open for wandering — no hour-by-hour plan.",
+        "Keep the afternoon open for wandering. No hour-by-hour plan.",
       ],
     },
     {
@@ -106,7 +106,7 @@ const enData: SampleDataset = {
       location: "trip folder / packing-list.md",
       excerpt: "Book a stay near the Tainan station and pack light.",
       body: [
-        "No driving this time — keep getting around simple.",
+        "No driving this time. Keep getting around simple.",
         "Book a stay near the Tainan station and pack light.",
         "Rooms and tickets aren't booked yet; confirm before we leave.",
       ],
@@ -146,7 +146,7 @@ const enData: SampleDataset = {
     {
       id: "sample-cite-4",
       sourceId: "sample-memory",
-      quote: "Keep the afternoon open for wandering — no hour-by-hour plan.",
+      quote: "Keep the afternoon open for wandering. No hour-by-hour plan.",
     },
     {
       id: "sample-cite-5",
@@ -167,7 +167,7 @@ const enData: SampleDataset = {
         citationIds: ["sample-cite-2"],
       },
       {
-        text: "Wander one neighborhood and keep unscheduled hours — echoing the decision not to pack the afternoon.",
+        text: "Wander one neighborhood and keep unscheduled hours, as decided: no packed afternoon.",
         citationIds: ["sample-cite-4", "sample-cite-3"],
       },
     ],
@@ -181,7 +181,7 @@ const enData: SampleDataset = {
     chatgpt: {
       recall: "@wenlan recall the decisions and next steps from my imported notes, and list the sources.",
       handoff: null,
-      brief: "@wenlan this is a new conversation — catch me up on earlier work and open todos.",
+      brief: "@wenlan this is a new conversation. Catch me up on earlier work and open todos.",
     },
     codex: {
       recall: "/recall decisions and next steps from my imports",

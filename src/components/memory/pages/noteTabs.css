@@ -71,7 +71,10 @@
   cursor: pointer;
 }
 
-.note-tab-home[data-active="true"] { background: var(--mem-hover); color: var(--mem-text); }
+/* On the home itself the button has nowhere to go. It keeps its slot while
+   notes are open so their tabs do not shift, and drops out when none are. */
+.note-tab-home[data-active="true"] { visibility: hidden; }
+.note-tabs:not(:has(.note-tabs-list)) > .note-tab-home[data-active="true"] { display: none; }
 .note-tab-home:hover { background: var(--mem-hover); color: var(--mem-text); }
 .note-tab-home:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 1px; }
 
@@ -221,9 +224,6 @@ body.note-tab-dragging *::after {
   .note-tab { transition: none; }
 }
 
-.note-tab-more { display:flex; align-items:center; justify-content:center; width:28px; height:32px; flex:0 0 28px; border:0; background:transparent; color:var(--mem-text-secondary); cursor:pointer; border-radius:5px; }
-.note-tab-more:hover { background:var(--mem-hover); }
-.note-tab-more:focus-visible { outline:2px solid var(--mem-accent-page); outline-offset:-2px; }
 
 .note-tab-drag-ghost {
   position: fixed;

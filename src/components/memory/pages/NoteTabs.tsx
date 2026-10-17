@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { DotsThree, House, Plus, X } from "@phosphor-icons/react";
+import { House, Plus, X } from "@phosphor-icons/react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { NoteTab } from "./noteTabState";
@@ -16,7 +16,7 @@ type NoteTabsProps = {
   readonly moveLabel?: string;
   readonly groupId?: "primary" | "secondary";
   readonly tabListLabel?: string;
-  /** Primary strip only: a permanent button for the Wiki home, which has no tab of its own. */
+  /** Primary strip only: a button back to the Wiki home, which has no tab of its own. It hides while the home is showing. */
   readonly onHome?: () => void;
   readonly homeActive?: boolean;
 };
@@ -139,10 +139,6 @@ export function NoteTabs({ tabs, activeKey, onSelect, onClose, onCreate, content
               event.preventDefault();
               openContextMenu(tab, event.currentTarget, event.clientX, event.clientY);
             }}><span>{title}</span></button>
-          {canMove && tab.key === activeKey && <button type="button" className="note-tab-more" aria-label={moveLabel} title={moveLabel}
-            onClick={event => { const bounds = event.currentTarget.getBoundingClientRect(); openContextMenu(tab, event.currentTarget, bounds.left, bounds.bottom); }}>
-            <DotsThree size={16} aria-hidden="true" />
-          </button>}
           <button type="button" className="note-tab-close" aria-label={t("pages.tabs.close", { title })}
             onClick={() => { closing.current = { key: tab.key, index }; onClose(tab); }}><X size={14} aria-hidden="true" /></button>
         </div>;

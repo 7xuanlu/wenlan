@@ -20,7 +20,7 @@ async function start(page: Page, theme = "light", width = 1440) {
 }
 async function move(page:Page, from="primary") {
  const label=from==="primary"?"Move to right group":"Move to central group";
- await group(page,from).getByRole("button",{name:label,exact:true}).click();
+ await group(page,from).getByRole("tab",{selected:true}).click({button:"right"});
  await page.getByRole("menuitem",{name:label,exact:true}).click();
 }
 async function append(page:Page, id:string, text:string) {
