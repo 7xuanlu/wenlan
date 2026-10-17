@@ -216,8 +216,8 @@ changed. Restyling is not a reason to write.
 
 To update a page:
 
-1. Call `mcp__wenlan__read_page` and keep `page.version` and the
-   ids in `sources`.
+1. Call `mcp__wenlan__read_page` and keep `page.version` and
+   `page.source_memory_ids` (it may be empty).
 2. Edit the current body: keep everything still true, change only what this
    session changed. Do not rewrite from memory of an older read.
 3. Call `mcp__wenlan__write_page` with `page_id`, the edited
