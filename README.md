@@ -66,11 +66,17 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 
 ### 3. Connect an AI tool when you want
 
-Use the Claude Code or Codex plugin, or connect Cursor, Claude Desktop, VS Code, or Gemini CLI over MCP ([setup guide](docs/setup-with-ai.md)). Your connected AI can use saved knowledge and write pages without another local language model. Optional background organization and automatic page updates need a separately configured [model](docs/setup-and-data.md#models).
+| AI tool | Connection | Setup |
+|---|---|---|
+| Claude Code | Plugin | [Claude Code guide](docs/setup-with-ai.md#claude-code) |
+| Codex | Plugin | [Codex guide](docs/setup-with-ai.md#codex) |
+| Cursor, Claude Desktop, VS Code, Gemini CLI | MCP | [MCP guide](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
+
+Connecting an AI tool needs no additional local language model. Optional background organization and automatic updates require a separately configured [model](docs/setup-and-data.md#models).
 
 > Use my earlier notes to help me finish this task.
 
-Start with one saved note or imported document. Ask the AI to cite what it uses, so you can check the result against the source.
+**First success:** Your AI finds the saved note or imported document you asked for and cites a source you can check.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

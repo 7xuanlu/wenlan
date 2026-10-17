@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f927704bc4df94ee55e6503a39f280bbc0958551c832cb2db0d235d10dfb5285 -->
+<!-- README_SYNC: source=README.md sha256=7698c8ab135c583e46a5e26a1a91f14fab859bb2f13ab8d06c9364b6516418f1 -->
 
 <p align="center">
   <picture>
@@ -68,11 +68,17 @@
 
 ### 3. 需要时再连接 AI 工具
 
-Claude Code 和 Codex 可使用插件；Cursor、Claude Desktop、VS Code 和 Gemini CLI 可通过 MCP 连接（[设置指南](docs/setup-with-ai.md)）。已连接的 AI 就能使用你保存的知识并撰写页面，无需另装本地语言模型。若要后台整理和自动更新，则需[另外配置模型](docs/setup-and-data.zh-Hans.md#models)。
+| AI 工具 | 连接方式 | 设置入口 |
+|---|---|---|
+| Claude Code | 插件 | [Claude Code 指南](docs/setup-with-ai.md#claude-code) |
+| Codex | 插件 | [Codex 指南](docs/setup-with-ai.md#codex) |
+| Cursor、Claude Desktop、VS Code、Gemini CLI | MCP | [MCP 指南](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
+
+连接 AI 无需另装本地语言模型；可选的后台整理和自动更新才需[另外配置模型](docs/setup-and-data.zh-Hans.md#models)。
 
 > 参考我之前的笔记，帮我接着完成这个任务。
 
-先用一则已保存的笔记或导入的文件试做，请 AI 引用所用来源，让你能回头核对成果的依据。
+**首次使用成功的标准：** AI 找回你指定的笔记或导入文件，并附上可回查的来源。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f927704bc4df94ee55e6503a39f280bbc0958551c832cb2db0d235d10dfb5285 -->
+<!-- README_SYNC: source=README.md sha256=7698c8ab135c583e46a5e26a1a91f14fab859bb2f13ab8d06c9364b6516418f1 -->
 
 <p align="center">
   <picture>
@@ -68,11 +68,17 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 
 ### 3. Conecta una herramienta de IA cuando quieras
 
-Usa el plugin de Claude Code o Codex, o conecta Cursor, Claude Desktop, VS Code o Gemini CLI mediante MCP ([guía de configuración](docs/setup-with-ai.md)). Tu IA conectada puede usar los conocimientos guardados y redactar páginas sin otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales requieren un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
+| Herramienta de IA | Conexión | Configuración |
+|---|---|---|
+| Claude Code | Plugin | [Guía de Claude Code](docs/setup-with-ai.md#claude-code) |
+| Codex | Plugin | [Guía de Codex](docs/setup-with-ai.md#codex) |
+| Cursor, Claude Desktop, VS Code, Gemini CLI | MCP | [Guía de MCP](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
+
+Conectar una IA no requiere otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales necesitan un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
 
 > Usa mis notas anteriores para ayudarme a terminar esta tarea.
 
-Empieza con una nota guardada o un documento importado. Pide a la IA que cite lo que utiliza para poder contrastar el resultado con la fuente.
+**Primera prueba superada:** Tu IA encuentra la nota guardada o el documento importado que le pediste y cita una fuente que puedes comprobar.
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
