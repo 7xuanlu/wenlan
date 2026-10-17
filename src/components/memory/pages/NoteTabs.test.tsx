@@ -130,3 +130,13 @@ describe("NoteTabs", () => {
     expect(props.onCreate).toHaveBeenCalledOnce();
   });
 });
+
+describe("NoteTabs window dragging", () => {
+  it("lets the empty strip drag the window while tabs and buttons stay plain", () => {
+    renderTabs({ onHome: vi.fn() });
+    expect(document.querySelector(".note-tabs")).toHaveAttribute("data-tauri-drag-region");
+    expect(screen.getByRole("tablist")).toHaveAttribute("data-tauri-drag-region");
+    expect(screen.getByRole("tab", { name: "First note" })).not.toHaveAttribute("data-tauri-drag-region");
+    expect(screen.getByRole("button", { name: "Wiki home" })).not.toHaveAttribute("data-tauri-drag-region");
+  });
+});

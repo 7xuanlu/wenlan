@@ -100,12 +100,14 @@ export function NoteTabs({ tabs, activeKey, onSelect, onClose, onCreate, content
     setContextMenu(null);
     if (restoreFocus) invoker?.focus();
   };
-  return <div className="note-tabs" data-note-tab-group={groupId}>
+  // Tauri only drags the window when the pressed element itself is marked, so
+  // the strip and its list mark themselves; the tabs and buttons stay clickable.
+  return <div className="note-tabs" data-note-tab-group={groupId} data-tauri-drag-region>
     {onHome && <button type="button" className="note-tab-home" aria-label={t("pages.tabs.home")} title={t("pages.tabs.home")}
       data-active={homeActive} aria-current={homeActive ? "page" : undefined} onClick={onHome}>
       <House size={14} aria-hidden="true" />
     </button>}
-    {tabs.length > 0 && <div className="note-tabs-list" role="tablist" aria-label={tabListLabel ?? t("pages.tabs.label")} ref={list}>
+    {tabs.length > 0 && <div className="note-tabs-list" role="tablist" aria-label={tabListLabel ?? t("pages.tabs.label")} ref={list} data-tauri-drag-region>
       {tabs.map((tab, index) => {
         const title = tab.title.trim() || t("pages.overview.untitledDraft");
         return <div className="note-tab" data-note-tab-key={tab.key} data-active={tab.key === activeKey} key={tab.key}>
