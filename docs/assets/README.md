@@ -42,21 +42,23 @@ The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and 
 
 - `wenlan-personal-knowledge-zh-Hant.png`: `328e4bf032d5dcf16cad24658d7d12a51d694fdd2b3d00f5b1e44f94b22246e5`
 - `wenlan-personal-graph-zh-Hant.png`: `65a4588af858c942060477578ef2340a0ff967bf6bebde67ebf6d8de66aafc97`
-- `wenlan-knowledge-to-work-zh-Hant.png`: `cbf00dc906f128b585c22f6bcf3049fdd4243602c036af174dcc57c894ea39ee`
-- `wenlan-knowledge-to-work-zh-Hans.png`: `609cfb9d7d85ebbb37c51749f7baa9b1ddb112e6b1db0acf4fa69cb866ecb52c`
-- `wenlan-knowledge-to-work.png`: `90035731a53b9c228b488e38bdd551ea1525dd82aec99d2941926d1f1c1281aa`
-- `wenlan-knowledge-to-work-es-ES.png`: `826fef30c558a2cde583fdc0de21ca2b81d76148fa202b3013e863e728045f93`
-- `wenlan-updates-history-zh-Hant.png`: `85815939e11e1e1c05cc5b9252dbd1f5b78a6d64fb28e15e388647c9b1d17ba9`
+- `wenlan-knowledge-to-work-zh-Hant.png`: `59f8a3e6a0254414bd99926902a14ac7eddc0ee372a2a354f2aa477abe58f8fb`
+- `wenlan-knowledge-to-work-zh-Hans.png`: `70b9b18efeb889511e5ecc151fcb0f2a138968ef64d4257f1da26cb065cce3f6`
+- `wenlan-knowledge-to-work.png`: `edd2f27e215915e8aec3467dad218a45e94e79eccfdd7d27c11dca7045922751`
+- `wenlan-knowledge-to-work-es-ES.png`: `09b1449052f53448e41effd9dc330298c763745dbf08f375e330617b29327ad4`
+- `wenlan-updates-history-zh-Hant.png`: `d087921837018ea0efff0d8788ce1e21f5b82db37df2dc4806790cc2a3ba304c`
 - `wenlan-personal-knowledge.png`: `6aa9bd21bb7e5b746ec1c1545570f0f5df9539fb81ffcf4dc1f915295b2de0e9`
 - `wenlan-personal-knowledge-zh-Hans.png`: `96736638a3611964a0b63888e41777f98d07f93e8f9db7b39c964df43dc4eeba`
 - `wenlan-personal-graph.png`: `a06050ed7a3a5bb3d43ef31e5a7982b9a640ac328167487b3490bb5da70cccf2`
 - `wenlan-personal-graph-zh-Hans.png`: `46330eb6094ca49b149bf05acc6d234d93b5ca3b14d9574fe72d5b9c23607696`
-- `wenlan-updates-history.png`: `bc9aa5cb2d5ac57ad1e910f89b790077b64177e876a68a6317e6ef0af0896669`
-- `wenlan-updates-history-zh-Hans.png`: `b5dd12b5b4db70282ef47d248609f091b6aa3b9caded385f51236f623528558e`
+- `wenlan-updates-history.png`: `9b99f9e504d42e61452beddbdf487b7c78f452808bc8ceff0b0d65749b93f58a`
+- `wenlan-updates-history-zh-Hans.png`: `525580619e66dd62f5f806b885f5b986feb43025980c4392030740bbb16034d2`
 
-## Shared website palette
+## App-light background palette
 
-The update/history and architecture exports use the approved website palette: warm paper `#FBFBF8`, dark ink, and restrained warm-orange paths. Broad editorial green fills and text are removed; native App diff pixels and small success markers remain unchanged. The history composition uses the compact-heading v5 export (3600 × 2000), with its redundant subtitle removed; architecture retains its established geometry. Original App crop files are unchanged. English and Simplified Chinese history panels remain localized reconstructions rather than new native captures. Sources and provenance are retained in the `shared-visual-palette-20261016` production package. All seven PNG exports were checked at 830px README width.
+The daily workflow, update/history, architecture, and AI-work compositions use the approved App-light background direction: `#FCFCFB` canvas, neutral `#F4F5F5` panels, and white cards. Warm editorial background fills are neutralized; existing text, accents, semantic highlights, and native App screenshot colors are retained. The already-neutral panorama and personal graph remain byte-identical, as does the dark banner.
+
+The palette pass preserves the approved PNG dimensions and original text/geometry pixels. Background masks come from before/after renders of the existing code-native sources; only matching light background pixels are changed, without resampling the approved raster. All 11 native capture regions in the Traditional Chinese history composition are pixel-identical. Four-language variants were inspected at 900px README width; Spanish retains the previously approved fallback images where localized artwork was deferred. Source, masks, original exports, and verification are retained in the `readme-app-light-20261017` production package. The earlier `shared-visual-palette-20261016` package remains the history composition's source; its compact heading and warm-orange paths are unchanged.
 
 ## Architecture overview
 

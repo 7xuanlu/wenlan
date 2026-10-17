@@ -3,7 +3,7 @@ text{font-family:'PingFang TC','Noto Sans CJK TC','Helvetica Neue',sans-serif;fi
 .compact{font-size:21px;fill:#586174}.heading{font-size:26px;font-weight:600;letter-spacing:-.3px}.pageTitle{font-size:26px;font-weight:600}.body{font-size:22px}.strong{font-size:23px;font-weight:600}.sub{font-size:21px;fill:#586174}.label{font-size:21px;font-weight:500;fill:#586174}
 .command{font-size:20px;font-weight:400;fill:#586174;font-family:"SFMono-Regular",Menlo,monospace}
 .flow{fill:none;stroke:#858896;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
-</style><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M2 2L8 5L2 8" fill="none" stroke="#858896" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></marker></defs><rect width="1328" height="752" fill="#FBFBF8"/><g transform="translate(24,24)"><text x="24" y="42" class="heading" >帶入既有資料</text>
+</style><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M2 2L8 5L2 8" fill="none" stroke="#858896" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></marker></defs><rect width="1328" height="752" fill="#fcfcfb"/><g transform="translate(24,24)"><text x="24" y="42" class="heading" >帶入既有資料</text>
 <text x="424" y="42" class="heading" >累積在 Wenlan</text>
 <text x="954" y="42" class="heading" >取用知識，接著工作</text>
 <path d="M286 192H422" class="flow" marker-end="url(#arrow)" />

@@ -26,10 +26,10 @@
 
   <symbol id="history" viewBox="0 0 24 24"><path d="M3 11a9 9 0 1 1 2.8 7 M3 4v7h7 M12 7v5l3 2"/></symbol>
 <marker id="warm-arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M2 1.5 8 5 2 8.5" fill="none" stroke="#a65330" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
-<rect width="1600" height="1100" fill="#fbfbf8"/>
+<rect width="1600" height="1100" fill="#fcfcfb"/>
 <text class="title" x="64" y="82">文澜架构</text>
 
-<rect x="550" y="148" width="986" height="698" rx="22" fill="#f8f7f4" stroke="#e3e7ee" stroke-width="1.5"/>
+<rect x="550" y="148" width="986" height="698" rx="22" fill="#f4f5f5" stroke="#e3e7ee" stroke-width="1.5"/>
 <text class="label" x="584" y="192">本地核心</text>
 
 <!-- Materials are inputs, not a second local storage system. -->
