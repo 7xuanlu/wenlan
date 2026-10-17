@@ -1037,7 +1037,7 @@ export default function ReviewDialog({
               fontFamily: "var(--mem-font-heading)",
               fontSize: flashNotice ? 16 : 19,
               color: flashNotice
-                ? "var(--mem-text-primary)"
+                ? "var(--mem-text)"
                 : "var(--mem-status-success-text)",
               padding: "0 32px",
               textAlign: "center",
