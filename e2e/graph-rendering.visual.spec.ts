@@ -164,7 +164,7 @@ test("Graph keeps app search focused and canvas controls reachable", async ({ pa
     await window.__TAURI_INTERNALS__?.invoke("plugin:event|emit", { event: "toggle-spotlight", payload: null });
   });
   const search = page.getByRole("dialog", { name: "Search", exact: true });
-  const input = search.getByPlaceholder("Search pages, memories, sources...");
+  const input = search.getByPlaceholder("Search notes, memories, sources...");
   await expect(input).toBeFocused();
   await input.press("Meta+k");
   await expect(input).toBeFocused();

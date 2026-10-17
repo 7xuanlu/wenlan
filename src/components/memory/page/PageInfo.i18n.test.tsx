@@ -91,7 +91,7 @@ describe("PageInfo i18n", () => {
       citationState: "cited",
     });
     expect(screen.getByText("1 backlink · 1 revision · 1 source")).toBeInTheDocument();
-    await user.click(screen.getByText("Page info"));
+    await user.click(screen.getByText("Note info"));
     expect(screen.getByText("1 incoming memory")).toBeInTheDocument();
     expect(
       screen.getByText("Citations: 2 (1 unverified)"),
@@ -110,7 +110,7 @@ describe("PageInfo i18n", () => {
         source("mem-b", { memory_type: "pdfx" }),
       ],
     });
-    await user.click(screen.getByText("Page info"));
+    await user.click(screen.getByText("Note info"));
     const rows = screen.getAllByTestId("page-info-source-row");
     expect(within(rows[0]).getByText("unknown agent")).toBeInTheDocument();
     // Arbitrary data values are never translated.
@@ -128,7 +128,7 @@ describe("PageInfo i18n", () => {
     expect(
       screen.getByText("0 条反向链接 · 0 个修订 · 1 个来源"),
     ).toBeInTheDocument();
-    await user.click(screen.getByText("页面信息"));
+    await user.click(screen.getByText("笔记信息"));
     const headings = screen.getAllByRole("heading", { level: 4 });
     expect(headings.map((h) => h.textContent)).toEqual(["来源"]);
     const row = screen.getByTestId("page-info-source-row");
@@ -158,7 +158,7 @@ describe("PageInfo i18n", () => {
       ],
       citationState: "stripped-empty",
     });
-    await user.click(screen.getByText("页面信息"));
+    await user.click(screen.getByText("笔记信息"));
     expect(
       screen.getByText("编辑已清除引用——重新整理以恢复"),
     ).toBeInTheDocument();
@@ -180,7 +180,7 @@ describe("PageInfo i18n", () => {
     expect(
       screen.getByText("0 條反向連結 · 0 個修訂 · 1 個來源"),
     ).toBeInTheDocument();
-    await user.click(screen.getByText("頁面資訊"));
+    await user.click(screen.getByText("筆記資訊"));
     const headings = screen.getAllByRole("heading", { level: 4 });
     expect(headings.map((h) => h.textContent)).toEqual(["來源"]);
     const row = screen.getByTestId("page-info-source-row");
@@ -193,7 +193,7 @@ describe("PageInfo i18n", () => {
   it("localizes the mismatch diagnostic in zh-Hant", async () => {
     await i18n.changeLanguage("zh-Hant");
     const { user } = renderInfo({ citationState: "stripped-mismatch" });
-    await user.click(screen.getByText("頁面資訊"));
+    await user.click(screen.getByText("筆記資訊"));
     expect(
       screen.getByText("引用資料不相符——重新整理以修復"),
     ).toBeInTheDocument();

@@ -27,7 +27,7 @@ async function boot(page: Page, width = 1280, mode = 'normal') {
   }, { mode });
   await page.goto('/'); await openWikiNote(page, title);
   await expect(page.getByRole('button', { name: 'Open note sidebar', exact: true })).toBeVisible();
-  await openPageTool(page, 'Page info');
+  await openPageTool(page, 'Note info');
   return { errors, controller };
 }
 
@@ -46,7 +46,7 @@ for (const width of [1280, 375]) test(`whole graph handoff and roundtrip ${width
   await expect(page.locator('.atlas-open-detail')).toBeVisible();
   if (width >= 1100) await expect.poll(() => page.locator('canvas.sigma-nodes').evaluate((el: HTMLCanvasElement) => Math.abs(el.width / devicePixelRatio - el.parentElement!.clientWidth))).toBeLessThanOrEqual(1);
   await page.locator('.atlas-open-detail').click();
-  await expect(page.getByRole('textbox', { name: 'Page editor', exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Note editor', exact: true })).toBeVisible();
   await page.locator('.workspace-history-button').first().click();
   await expect(page.locator('.atlas-count-line')).toContainText('7 pages');
   await page.getByRole('button', { name: 'Fit entire graph', exact: true }).click();
@@ -82,7 +82,7 @@ test('failed note save blocks graph navigation and preserves editor/sidebar', as
   const { errors, controller } = await boot(page);
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   controller.failNext('update_page', 'Synthetic save failure', 20);
-  const editor = page.getByRole('textbox', { name: 'Page editor', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Note editor', exact: true });
   await editor.click(); await page.keyboard.press('End'); await page.keyboard.type(' protected edit');
   await page.getByRole('button', { name: 'Open note sidebar', exact: true }).click();
   await page.getByRole('tab', { name: 'Info', exact: true }).click();

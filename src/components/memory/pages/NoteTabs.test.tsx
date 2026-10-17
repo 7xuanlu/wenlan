@@ -126,7 +126,7 @@ describe("NoteTabs", () => {
 
     rerender(<NoteTabs {...props} tabs={[tabs[1]]} activeKey={tabs[1].key} />);
     await waitFor(() => expect(screen.getByRole("tab", { name: "Second note" })).toHaveFocus());
-    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
     expect(props.onCreate).toHaveBeenCalledOnce();
   });
 });

@@ -99,7 +99,7 @@ vi.mock("./PageDetail", async () => {
       >
         PageDetail back
       </button>
-      <div aria-label="Page editor" contentEditable role="textbox" />
+      <div aria-label="Note editor" contentEditable role="textbox" />
       <textarea aria-label="Page notes" />
       <select aria-label="Block style" defaultValue="paragraph">
         <option value="paragraph">Paragraph</option>
@@ -582,7 +582,7 @@ describe("Main published PageDetail navigation guards", () => {
     const { user } = renderMain();
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
     await user.click(screen.getByRole("button", { name: "Search" }));
-    const search = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const search = screen.getByPlaceholderText("Search notes, memories, sources...");
     fireEvent.change(search, { target: { value: "first" } });
     fireEvent.change(search, { target: { value: "latest" } });
     expect(screen.getByText("Pending page")).toBeInTheDocument();
@@ -633,7 +633,7 @@ describe("Main published PageDetail navigation guards", () => {
     await expect(quitGuard!()).resolves.toBe(true);
     eventListeners.get("focus-search")?.();
     expect(await screen.findByRole("dialog", { name: "Search" })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Search pages, memories, sources...")).toHaveFocus();
+    expect(screen.getByPlaceholderText("Search notes, memories, sources...")).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "Make page dirty" }));
     await expect(quitGuard!()).resolves.toBe(false);
@@ -696,9 +696,9 @@ describe("Main published PageDetail navigation guards", () => {
 
     await user.click(screen.getByRole("button", { name: "Search" }));
     const search = screen.getByPlaceholderText(
-      "Search pages, memories, sources...",
+      "Search notes, memories, sources...",
     );
-    const editor = screen.getByRole("textbox", { name: "Page editor" });
+    const editor = screen.getByRole("textbox", { name: "Note editor" });
     const textarea = screen.getByRole("textbox", { name: "Page notes" });
     const select = screen.getByRole("combobox", { name: "Block style" });
     fireEvent.keyDown(editor, { key: "/" });
@@ -757,7 +757,7 @@ describe("Main published PageDetail navigation guards", () => {
 
     await user.click(screen.getByRole("button", { name: "Search" }));
     const search = screen.getByPlaceholderText(
-      "Search pages, memories, sources...",
+      "Search notes, memories, sources...",
     );
     fireEvent.change(search, { target: { value: "blocked" } });
     expect(search).toHaveValue("");

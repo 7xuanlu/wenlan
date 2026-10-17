@@ -149,7 +149,7 @@ describe("ReviewDialog page-target revision card", () => {
       await within(dialog).findByRole("heading", { name: PAGE_TITLE }),
     ).toBeVisible();
     expect(within(dialog).queryByRole("heading", { name: /Neo4j/ })).toBeNull();
-    expect(within(dialog).getByText("Page revision")).toBeVisible();
+    expect(within(dialog).getByText("Note revision")).toBeVisible();
     expect(within(dialog).queryByText("Memory revision")).toBeNull();
   });
 
@@ -227,7 +227,7 @@ describe("ReviewDialog page-target revision card", () => {
       within(dialog).queryByRole("button", { name: "Open memory" }),
     ).toBeNull();
     const user = userEvent.setup();
-    await user.click(within(dialog).getByRole("button", { name: "Open page" }));
+    await user.click(within(dialog).getByRole("button", { name: "Open note" }));
     expect(onOpenPage).toHaveBeenCalledWith(PAGE_ID);
     expect(onOpenMemory).not.toHaveBeenCalled();
   });

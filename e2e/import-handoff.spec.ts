@@ -16,7 +16,7 @@ const BACKGROUND_PHASE_LABELS = [
   "Detecting entities",
   "Enriching memories",
   "Linking memories",
-  "Distilling pages",
+  "Organizing notes",
 ] as const;
 
 type ImportChunkArgs = {
