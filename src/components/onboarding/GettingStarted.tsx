@@ -114,18 +114,27 @@ export function GettingStarted({
       </header>
       <p className="getting-started-progress">
         {t("firstUse.checklist.progress", { done: doneCount, total: order.length })}
+        {/* Once the ask row offers its own button, the sample moves up here. */}
+        {progress.recall || promptText ? (
+          <>
+            {" · "}
+            <button type="button" className="getting-started-link" onClick={onSeeExample}>
+              {t("firstUse.checklist.steps.recall.action")}
+            </button>
+          </>
+        ) : null}
       </p>
       <ol className="getting-started-steps">
         {order.map((id) => {
           const step = stepsById[id];
           const done = progress[id];
-          // Once there is a question to paste, the recall row's one button
-          // copies it; the sample becomes a quiet link under the question.
+          // Once there is a question to paste, the recall row reads like the
+          // others: the question as its one line, and one button to copy it.
           const asking = !done && id === "recall" && promptTool != null && promptText != null;
           const body = id === "note" && onlyDrafts
             ? t("firstUse.checklist.steps.note.draftBody")
             : asking
-              ? t("firstUse.checklist.steps.recall.promptLead", { tool: promptTool })
+              ? t("firstUse.checklist.steps.recall.askLine", { tool: promptTool, title: published[0].title })
               : t(`firstUse.checklist.steps.${id}.body`);
           return (
             <li
@@ -144,18 +153,6 @@ export function GettingStarted({
                   ) : null}
                 </p>
                 {done ? null : <p className="getting-started-step-body">{body}</p>}
-                {asking ? (
-                  <div className="getting-started-prompt" data-testid="getting-started-prompt">
-                    <p className="getting-started-prompt-text">{promptText}</p>
-                    <button
-                      type="button"
-                      className="getting-started-link"
-                      onClick={step.onAction}
-                    >
-                      {t("firstUse.checklist.steps.recall.exampleLink")}
-                    </button>
-                  </div>
-                ) : null}
               </div>
               {done ? null : asking ? (
                 <button

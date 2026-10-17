@@ -163,29 +163,13 @@
   }
 }
 
-/* The question to paste into the connected tool, under the recall step. */
-.getting-started-prompt {
-  margin-top: 6px;
-}
-
-.getting-started-prompt-text {
-  margin: 0;
-  padding: 6px 10px;
-  border-radius: var(--mem-radius-md);
-  background-color: var(--mem-bg);
-  color: var(--mem-text);
-  font: 13px/1.5 var(--mem-font-body);
-  overflow-wrap: anywhere;
-}
-
 .getting-started-link {
-  margin-top: 4px;
   padding: 0;
   border: none;
   background: none;
   color: var(--mem-text-secondary);
   cursor: pointer;
-  font: 13px/1.4 var(--mem-font-body);
+  font: inherit;
   text-decoration: underline;
   text-decoration-color: var(--mem-border);
   text-underline-offset: 3px;

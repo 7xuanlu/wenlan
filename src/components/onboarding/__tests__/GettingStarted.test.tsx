@@ -211,7 +211,7 @@ describe("GettingStarted", () => {
     await screen.findByRole("heading", { name: title() });
     expect(screen.getByTestId("getting-started-note")).toHaveAttribute("data-done", "false");
     expect(screen.getByText(i18n.t("firstUse.checklist.steps.note.draftBody"))).toBeInTheDocument();
-    expect(screen.queryByTestId("getting-started-prompt")).toBeNull();
+    expect(screen.queryByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copy") })).toBeNull();
   });
 
   it("hands over the exact question to paste into the connected tool once a note is saved", async () => {
@@ -224,20 +224,20 @@ describe("GettingStarted", () => {
     await screen.findByRole("heading", { name: title() });
 
     const prompt = i18n.t("firstUse.checklist.steps.recall.prompt", { title: "Kyoto itinerary" });
-    expect(screen.getByText(i18n.t("firstUse.checklist.steps.recall.promptLead", { tool: "Claude Code" }))).toBeInTheDocument();
-    expect(screen.getByText(prompt)).toBeInTheDocument();
+    expect(
+      screen.getByText(i18n.t("firstUse.checklist.steps.recall.askLine", { tool: "Claude Code", title: "Kyoto itinerary" })),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copy") }));
     await vi.waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(prompt));
     expect(await screen.findByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copied") })).toBeInTheDocument();
-    // The example stays one click away for whoever wants to see it first.
-    expect(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.exampleLink") })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.action") })).toBeNull();
+    // The example stays one click away in the header for whoever wants to see it first.
+    expect(screen.getAllByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.action") })).toHaveLength(1);
   });
 
   it("keeps the prompt away until a tool has actually connected", async () => {
     renderCard([page()]);
     await screen.findByRole("heading", { name: title() });
-    expect(screen.queryByTestId("getting-started-prompt")).toBeNull();
+    expect(screen.queryByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copy") })).toBeNull();
   });
 
   it("can be hidden, remembers that, and can be shown again", async () => {
