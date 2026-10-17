@@ -84,14 +84,15 @@ Tras instalar un plugin, inicia una nueva sesión de IA y ejecuta `/setup`. Cone
 
 ## Uso diario
 
-Puedes usar la aplicación por sí sola o junto con tu IA. Los comandos del plugin que aparecen a continuación son atajos opcionales, no una lista de tareas diarias.
+Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan el conocimiento útil y el progreso para retomarlos en la próxima tarea.
 
-- **Empieza por tu material.** Escribe una página o importa documentos y conversaciones seleccionadas como fuentes. No necesitas conectar una IA.
-- **Lee, escribe y ponlo en práctica.** Edita páginas y sigue las citas en la aplicación, o pide a tu IA que use una página existente para una tarea o que redacte una nueva. Usa `/recall` cuando necesites contexto anterior.
-- **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, mediante Quick Capture en la aplicación o con `/capture` a través de tu IA.
-- **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
+<p align="center">
+  <img src="./docs/assets/wenlan-daily-workflow-es-ES.png" alt="Las fuentes y memorias previas se acumulan en Wenlan; úsalas en la aplicación o con IA y guarda nuevas memorias y el progreso para continuar después." width="100%">
+</p>
 
-**Cuando varias memorias merezcan una página:** `/distill` pide a tu IA que sintetice o actualice ahora páginas con citas. Es opcional: puedes escribir las páginas directamente y la IA en segundo plano configurada puede mantenerlas entre sesiones. [Comandos del plugin](plugin/skills/README.md).
+Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
+
+**Cuando quieras una página de conocimiento:** `/distill` sintetiza o actualiza páginas con citas. También puedes escribirlas directamente o configurar la IA en segundo plano. [Comandos del plugin](plugin/skills/README.md).
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

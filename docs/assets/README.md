@@ -61,3 +61,11 @@ The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and 
 The diagram separates imported materials, App/CLI and AI-tool access, the local service, and persistent knowledge. It distinguishes local search models, the external AI client’s own model, and optional background enrichment models. Page citations, dependent-page invalidation, review for human-owned pages, and version history are represented at product level, not as a complete database schema or a guarantee that every retrieval uses every channel.
 
 Source references: [setup and model roles](../setup-and-data.md#models), [retrieval and connected knowledge](../technical-foundations.md), [source invalidation](../../crates/wenlan-core/src/db.rs), and [Page ownership and proposed revisions](../../crates/wenlan-core/src/post_write/page_update.rs). Rendered at 3× from SVG and checked at 900px README width. Existing approved product figures are unchanged.
+
+## Daily workflow
+
+`wenlan-daily-workflow.png`, `-zh-Hant.png`, `-zh-Hans.png`, and `-es-ES.png` are fully localized concept diagrams, exported at 3984 × 2256. Matching SVG files preserve editable text and geometry. The Traditional Chinese export is the approved V13 master; other locales retain its layout, icons, colors and connections, with localized line wrapping.
+
+Sources and existing memories enter a shared local library. App access is bidirectional. AI tools read shared knowledge through a plugin/MCP connection and save memories, session records and progress back. `/capture`, `/handoff`, and `/brief` are optional actions in AI work, not a mandatory sequence. Handoff does not imply automatic transcript import or page synthesis. Knowledge-page organization and updating remain optional.
+
+Source contracts: [capture](../../plugin/skills/capture/SKILL.md), [handoff](../../plugin/skills/handoff/SKILL.md), [brief](../../plugin/skills/brief/SKILL.md), and [knowledge guide](../knowledge-guide.md). All four locale exports were inspected at 830px reading width. The existing README images are unchanged.

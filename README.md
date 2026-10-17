@@ -82,14 +82,15 @@ After installing a plugin, start a new AI session and run `/setup`. Connecting y
 
 ## In everyday use
 
-Use the App on its own or alongside your AI. The plugin commands below are optional shortcuts, not a daily checklist.
+Use the App on its own or work with your AI. Keep useful knowledge and progress in Wenlan, ready for the next task.
 
-- **Start with your material.** Write a page or import documents and selected conversations as sources. No AI connection is required.
-- **Read, write, and put it to use.** Edit pages and follow citations in the App, or ask your AI to use an existing page for a task or draft a new one. Use `/recall` when you need earlier context.
-- **Keep what you learn.** Save a decision or lesson, with its reasons and sources, through Quick Capture in the App or `/capture` with your AI.
-- **Pause and resume.** `/handoff` saves durable memories and a session log, and updates the current Space’s Brief with progress and next steps. Use `/brief` when you want the next session to pick up that context.
+<p align="center">
+  <img src="./docs/assets/wenlan-daily-workflow.png" alt="Sources and saved memories accumulate in Wenlan; use them in the App or AI tools, then save new memories and work progress for later." width="100%">
+</p>
 
-**When several memories deserve a page:** `/distill` asks your AI to synthesize or refresh cited pages now. It is optional: you can write pages directly, and configured background AI can maintain them between sessions. [Plugin commands](plugin/skills/README.md).
+Simplified workflow. Plugin commands and page organization are optional, with no fixed sequence.
+
+**When you want a knowledge page:** `/distill` synthesizes or refreshes cited pages. You can also write pages directly or configure background AI. [Plugin commands](plugin/skills/README.md).
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>

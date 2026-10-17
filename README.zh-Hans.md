@@ -84,14 +84,15 @@
 
 ## 日常使用
 
-你可以单独使用 App，也可以搭配 AI 使用。以下插件指令是可选的快捷方式，不是每天都要完成的清单。
+你可以单独使用 App，也可以搭配 AI 工作。把值得留下的知识与进度存回 Wenlan，下次接着用。
 
-- **从你的资料开始。** 编写页面，或导入文档和选定的对话作为来源。无需连接 AI。
-- **阅读、编写并实际使用。** 在 App 编辑页面、沿引用查回来源，也可请 AI 参考现有页面完成任务或起草新页面。需要先前上下文时，用 `/recall` 找回。
-- **留下你的新发现。** 通过 App 的 Quick Capture，或请 AI 使用 `/capture`，保存决定或心得，以及其理由和来源。
-- **告一段落，下次继续。** `/handoff` 保存记忆与工作记录，并更新当前 Space 的 Brief，记下进度和下一步。下次需要时，用 `/brief` 读回这些上下文。
+<p align="center">
+  <img src="./docs/assets/wenlan-daily-workflow-zh-Hans.png" alt="来源与已有记忆积累在 Wenlan；在 App 或 AI 中使用，再存回新记忆与工作进度，供下次继续。" width="100%">
+</p>
 
-**需要把多条记忆整理成页面时：** `/distill` 可请 AI 立即整理或更新带引用的页面。它不是必做步骤：你可以直接编写页面，也可以配置后台 AI 持续维护。[插件指令](plugin/skills/README.md)。
+简化流程示意；插件指令与页面整理均按需使用，没有固定顺序。
+
+**需要整理成知识页时：** `/distill` 可整理或更新带引用的页面；也可直接编写，或配置后台 AI。[插件指令](plugin/skills/README.md)。
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
