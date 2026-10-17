@@ -90,15 +90,15 @@ function makeSimpleBanner(viewport, locale) {
     `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
   const chineseName = locale === "zh-Hant" ? "文瀾" : locale === "zh-Hans" ? "文澜" : "";
   const brand = (x, y, size, anchor) =>
-    `<text x="${x}" y="${y}" fill="${BANNER.accent}" font-size="${size}" font-weight="600" text-anchor="${anchor}"><tspan font-family="${esc(BANNER.latin)}">Wenlan</tspan>${chineseName ? `<tspan dx="12" font-family="${esc(copy.font)}">${chineseName}</tspan>` : ""}</text>`;
+    `<text x="${x}" y="${y}" fill="${BANNER.accent}" font-size="${size}" font-weight="500" text-anchor="${anchor}"><tspan font-family="${esc(BANNER.latin)}">Wenlan</tspan>${chineseName ? `<tspan dx="12" font-family="${esc(copy.font)}">${chineseName}</tspan>` : ""}</text>`;
   const content = mobile
     ? `${logoMarkup({ x: 320, y: 20, size: 80, prefix })}
   ${brand(360, 138, 28, "middle")}
-  ${text(360, 183, copy.title[0], 32, BANNER.white, 600, "middle")}
+  ${text(360, 183, copy.title[0], 32, BANNER.white, 500, "middle")}
   ${text(360, 223, copy.title[1], 23, BANNER.secondary, 400, "middle")}`
-    : `${logoMarkup({ x: 88, y: 68, size: 168, prefix })}
+    : `${logoMarkup({ x: 81.28, y: 63.28, size: 181.44, prefix })}
   ${brand(300, 113, 32, "start")}
-  ${text(300, 169, copy.title[0], 36, BANNER.white, 600, "start")}
+  ${text(300, 169, copy.title[0], 36, BANNER.white, 500, "start")}
   ${text(300, 218, copy.title[1], 26, BANNER.secondary, 400, "start")}`;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
