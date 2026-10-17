@@ -34,7 +34,7 @@ async function boot(page: Page, width = 1280, mode = 'normal') {
 for (const width of [1280, 375]) test(`whole graph handoff and roundtrip ${width}`, async ({ page }, info) => {
   const { errors } = await boot(page, width);
   await page.getByRole('button', { name: 'Open in graph', exact: true }).press('Enter');
-  await expect(page.locator('.atlas-count-line')).toContainText('7 pages');
+  await expect(page.locator('.atlas-count-line')).toContainText('7 notes');
   await expect(page.getByRole('button', { name: 'Show full graph', exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('atlas.layers'))).toBe(JSON.stringify({ entity: true, page: true, memory: false }));
   expect(await page.evaluate(() => localStorage.getItem('atlas.smallGroups'))).toBe('false');
@@ -48,7 +48,7 @@ for (const width of [1280, 375]) test(`whole graph handoff and roundtrip ${width
   await page.locator('.atlas-open-detail').click();
   await expect(page.getByRole('textbox', { name: 'Note editor', exact: true })).toBeVisible();
   await page.locator('.workspace-history-button').first().click();
-  await expect(page.locator('.atlas-count-line')).toContainText('7 pages');
+  await expect(page.locator('.atlas-count-line')).toContainText('7 notes');
   await page.getByRole('button', { name: 'Fit entire graph', exact: true }).click();
   await page.screenshot({ path: info.outputPath('02-zoomed-out.png') });
   expect(errors.pageErrors).toEqual([]); expect(errors.consoleErrors).toEqual([]);
@@ -57,10 +57,10 @@ for (const width of [1280, 375]) test(`whole graph handoff and roundtrip ${width
 test('global Graph navigation remains the same destination without a page focus', async ({ page }) => {
   const { errors } = await boot(page);
   await page.getByRole('button', { name: 'Open in graph', exact: true }).click();
-  await expect(page.locator('.atlas-count-line')).toContainText('7 pages');
+  await expect(page.locator('.atlas-count-line')).toContainText('7 notes');
   await openPrimaryDestination(page, 'Graph');
   await expect(page.getByTestId('atlas-view')).toBeVisible();
-  await expect(page.locator('.atlas-count-line')).toContainText('7 pages');
+  await expect(page.locator('.atlas-count-line')).toContainText('7 notes');
   expect(errors.pageErrors).toEqual([]);
 });
 
@@ -68,7 +68,7 @@ for (const mode of ['empty', 'missing']) test(`safe ${mode} note graph`, async (
   const { errors } = await boot(page, 1280, mode);
   await page.getByRole('button', { name: 'Open in graph', exact: true }).click();
   await expect(page.getByTestId('atlas-view')).toBeVisible();
-  await expect(page.locator('.atlas-count-line')).toContainText(mode === 'missing' ? '6 pages' : '7 pages');
+  await expect(page.locator('.atlas-count-line')).toContainText(mode === 'missing' ? '6 notes' : '7 notes');
   const filter = page.getByRole('combobox');
   await filter.fill('Weekly');
   await expect(page.getByRole('option', { name: 'Weekly fixture recap', exact: true })).toBeVisible();

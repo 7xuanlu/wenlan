@@ -476,7 +476,7 @@ test("blocks editing below the daemon floor and records the typed diagnostic", a
   });
 
   await expect(page.getByRole("alert")).toContainText(
-    "Page editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
+    "Note editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
   );
   await expect(page.getByRole("textbox", { name: "Note editor" })).toHaveCount(0);
   await expect.poll(() =>
@@ -503,7 +503,7 @@ test("keeps the local draft when the daemon falls below the save floor", async (
   await editor.fill(localDraft);
 
   await expect(page.getByRole("alert")).toContainText(
-    "Page editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
+    "Note editing requires stable Wenlan daemon 0.14.1 or later. Running version: 0.14.0.",
     AUTOSAVE_TIMEOUT,
   );
   await expect.poll(() => editorSource(editor)).toBe(localDraft);

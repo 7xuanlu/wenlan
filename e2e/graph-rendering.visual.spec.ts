@@ -27,9 +27,9 @@ test("renders Graph as a structured canvas instead of a flat orange field", asyn
 
   const graph = page.getByTestId("atlas-view");
   await expect(graph).toBeVisible();
-  // Pages lead the line now, and the counts are over what is actually drawn:
-  // seven wiki pages plus the three entities that have a connection.
-  await expect(page.getByText(/^7 pages · 3 topics(?: · \d+ regions?)?$/)).toBeVisible();
+  // Notes lead the line now, and the counts are over what is actually drawn:
+  // seven notes plus the three entities that have a connection.
+  await expect(page.getByText(/^7 notes · 3 topics(?: · \d+ regions?)?$/)).toBeVisible();
 
   // Regions stay quiet by default. Names and contours have separate transparent
   // canvases, above and below Sigma respectively, and become visible together.

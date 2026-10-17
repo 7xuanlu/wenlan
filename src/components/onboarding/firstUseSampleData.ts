@@ -140,7 +140,7 @@ const enData: SampleDataset = {
   ],
   page: {
     title: "An unhurried Tainan weekend",
-    subtitle: "From a chat decision and a packing list to one page.",
+    subtitle: "From a chat decision and a packing list to one note.",
     paragraphs: [
       {
         text: "Take the train to Tainan, leaving Saturday morning.",
@@ -162,7 +162,7 @@ const enData: SampleDataset = {
   },
   ai: {
     question: "What's left before the Tainan weekend?",
-    answer: "From your page “An unhurried Tainan weekend”: book a room near the station, then confirm the Saturday morning train.",
+    answer: "From your note “An unhurried Tainan weekend”: book a room near the station, then confirm the Saturday morning train.",
   },
   commands: {
     chatgpt: {
@@ -238,7 +238,7 @@ const hansData: SampleDataset = {
   ],
   page: {
     title: "一个不赶路的台南周末",
-    subtitle: "从一段对话里的决定和一份清单，整理成一页。",
+    subtitle: "从一段对话里的决定和一份清单，整理成一篇笔记。",
     paragraphs: [
       {
         text: "搭火车去台南，周六早上出发。",
@@ -260,7 +260,7 @@ const hansData: SampleDataset = {
   },
   ai: {
     question: "这周末去台南，出发前还要做什么？",
-    answer: "根据你的页面《一个不赶路的台南周末》：先订车站附近的住宿，再确认周六早上的车票。",
+    answer: "根据你的笔记《一个不赶路的台南周末》：先订车站附近的住宿，再确认周六早上的车票。",
   },
   commands: {
     chatgpt: {
@@ -336,7 +336,7 @@ const hantData: SampleDataset = {
   ],
   page: {
     title: "一個不趕路的台南週末",
-    subtitle: "從一段對話裡的決定和一份清單，整理成一頁。",
+    subtitle: "從一段對話裡的決定和一份清單，整理成一篇筆記。",
     paragraphs: [
       {
         text: "搭火車去台南，週六早上出發。",
@@ -358,7 +358,7 @@ const hantData: SampleDataset = {
   },
   ai: {
     question: "這週末去台南，出發前還要做什麼？",
-    answer: "根據你的頁面《一個不趕路的台南週末》：先訂車站附近的住宿，再確認週六早上的車票。",
+    answer: "根據你的筆記《一個不趕路的台南週末》：先訂車站附近的住宿，再確認週六早上的車票。",
   },
   commands: {
     chatgpt: {

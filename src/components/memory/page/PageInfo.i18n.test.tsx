@@ -160,7 +160,7 @@ describe("PageInfo i18n", () => {
     });
     await user.click(screen.getByText("笔记信息"));
     expect(
-      screen.getByText("编辑已清除引用——重新整理以恢复"),
+      screen.getByText("编辑已清除引用。重新整理即可恢复"),
     ).toBeInTheDocument();
     expect(screen.getByText("2 条新增记忆")).toBeInTheDocument();
     expect(screen.getByText("显示全部 6 个来源")).toBeInTheDocument();
@@ -195,7 +195,7 @@ describe("PageInfo i18n", () => {
     const { user } = renderInfo({ citationState: "stripped-mismatch" });
     await user.click(screen.getByText("筆記資訊"));
     expect(
-      screen.getByText("引用資料不相符——重新整理以修復"),
+      screen.getByText("引用資料不相符。重新整理即可修復"),
     ).toBeInTheDocument();
   });
 

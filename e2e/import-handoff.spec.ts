@@ -207,7 +207,7 @@ test("an import hands background work to Activity after returning to the workspa
     await expect(page.getByText(label)).toHaveCount(0);
   }
   await expect(page.getByText(/detected entities/)).toHaveCount(0);
-  await expect(page.getByText(/related pages/)).toHaveCount(0);
+  await expect(page.getByText(/related (pages|notes)/)).toHaveCount(0);
 
   // Settings has no Activity rail. Use the shell's actual Back history to
   // return through Sources and General to the primary Wiki workspace first.

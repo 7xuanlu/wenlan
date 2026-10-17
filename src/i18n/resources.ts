@@ -3228,8 +3228,8 @@ const zhHans = {
     incoming_one: "{{count}} 条新增记忆",
     incoming_other: "{{count}} 条新增记忆",
     citationsLine: "引用：{{total}}（{{unverified}} 未验证）",
-    citationsStrippedEmpty: "编辑已清除引用——重新整理以恢复",
-    citationsStrippedMismatch: "引用数据不匹配——重新整理以修复",
+    citationsStrippedEmpty: "编辑已清除引用。重新整理即可恢复",
+    citationsStrippedMismatch: "引用数据不匹配。重新整理即可修复",
     unresolvedLink: "尚未整理成笔记",
     unknownAgent: "未知代理",
     sourceKind: {
@@ -5766,8 +5766,8 @@ const zhHant = {
     incoming_one: "{{count}} 則新增記憶",
     incoming_other: "{{count}} 則新增記憶",
     citationsLine: "引用：{{total}}（{{unverified}} 未驗證）",
-    citationsStrippedEmpty: "編輯已清除引用——重新整理以恢復",
-    citationsStrippedMismatch: "引用資料不相符——重新整理以修復",
+    citationsStrippedEmpty: "編輯已清除引用。重新整理即可恢復",
+    citationsStrippedMismatch: "引用資料不相符。重新整理即可修復",
     unresolvedLink: "尚未整理成筆記",
     unknownAgent: "未知代理",
     sourceKind: {
