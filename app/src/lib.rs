@@ -1693,6 +1693,7 @@ pub fn run() {
             search::remove_legacy_mcp_entry,
             search::get_wenlan_mcp_entry,
             search::install_client_plugin,
+            search::register_connected_agent,
             search::wire_state,
             // Remote access commands
             search::toggle_remote_access,

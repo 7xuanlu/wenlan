@@ -2958,6 +2958,14 @@ export async function installClientPlugin(clientType: PluginInstallClientType): 
   return invoke("install_client_plugin", { clientType });
 }
 
+/** Tell the daemon the user connected `clientType` when setup found it already
+ *  configured (so neither a config write nor a plugin install ran). Resolves
+ *  to whether the daemon accepted the row; false for an unknown client or a
+ *  daemon that is down or slow. Best-effort: it never rejects on those. */
+export async function registerConnectedAgent(clientType: string): Promise<boolean> {
+  return invoke("register_connected_agent", { clientType });
+}
+
 // ===== Wire State (real, resolved wiring — wizard progress + Diagnostics) =====
 
 /** Whether the daemon this app spawned sits in the app's kill-on-close job

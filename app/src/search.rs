@@ -318,7 +318,7 @@ fn client_config_path_or_message(client_type: &str) -> Result<std::path::PathBuf
 /// to be the same `()`, so the UI could only report the first.
 ///
 /// Once the entry is on disk the daemon is told the user connected this tool
-/// (`register_connected_agent`), so its first search already sees what a
+/// (`register_connected_agent_best_effort`), so its first search already sees what a
 /// trusted tool sees. That call is best-effort: the config file is the
 /// deliverable, and a daemon that is down or slow never fails the write. A
 /// write that is refused (`PreserveExisting`, unreadable file) returns before
@@ -336,7 +336,7 @@ pub async fn write_mcp_config(
             .map_err(|e| e.to_string())?
     };
     let client = daemon_client(&state).await;
-    register_connected_agent(&client, &client_type).await;
+    register_connected_agent_best_effort(&client, &client_type).await;
     Ok(undetermined)
 }
 
@@ -350,11 +350,14 @@ const REGISTER_CONNECTED_AGENT_TIMEOUT: std::time::Duration = std::time::Duratio
 /// a tool from the app is the user's authorisation. Returns whether the daemon
 /// accepted it. Never an error: a client with no agent name, or a daemon that
 /// is down, slow or refusing, is logged and the caller carries on.
-async fn register_connected_agent(client: &crate::api::WenlanClient, client_type: &str) -> bool {
+async fn register_connected_agent_best_effort(
+    client: &crate::api::WenlanClient,
+    client_type: &str,
+) -> bool {
     register_connected_agent_within(client, client_type, REGISTER_CONNECTED_AGENT_TIMEOUT).await
 }
 
-/// [`register_connected_agent`] with the wait handed in, so a test can pin the
+/// [`register_connected_agent_best_effort`] with the wait handed in, so a test can pin the
 /// timeout branch without waiting out the real bound.
 async fn register_connected_agent_within(
     client: &crate::api::WenlanClient,
@@ -365,7 +368,10 @@ async fn register_connected_agent_within(
         return false;
     };
     match tokio::time::timeout(timeout, client.register_agent(agent_name)).await {
-        Ok(Ok(_)) => true,
+        Ok(Ok(_)) => {
+            log::info!("[mcp-config] registered connected tool {agent_name}");
+            true
+        }
         Ok(Err(error)) => {
             log::warn!("[mcp-config] could not register connected tool {agent_name}: {error}");
             false
@@ -434,12 +440,44 @@ pub async fn get_wenlan_mcp_entry() -> Result<crate::mcp_config::WenlanMcpEntryR
 /// Idempotent: succeeds if the marketplace or plugin is already present.
 /// Runs on a blocking thread since the marketplace step can clone over the
 /// network.
+///
+/// Once the plugin is installed (or found already installed) the daemon is
+/// told the user connected this tool (`register_connected_agent_best_effort`), exactly as
+/// `write_mcp_config` does for a raw entry: the plugin path never writes an
+/// entry, so without this the daemon would never learn the tool was connected.
+/// The call is best-effort — the install is the deliverable, and a daemon that
+/// is down or slow never fails it. A failed install returns before it, so
+/// nothing is registered for a tool that was not connected.
 #[tauri::command]
-pub async fn install_client_plugin(client_type: String) -> Result<(), String> {
-    tokio::task::spawn_blocking(move || crate::plugin_install::install_client_plugin(&client_type))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())
+pub async fn install_client_plugin(
+    state: tauri::State<'_, State>,
+    client_type: String,
+) -> Result<(), String> {
+    let install_client_type = client_type.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::plugin_install::install_client_plugin(&install_client_type)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    let client = daemon_client(&state).await;
+    register_connected_agent_best_effort(&client, &client_type).await;
+    Ok(())
+}
+
+/// Tells the daemon the user connected `client_type` when the wizard FOUND it
+/// already configured (a raw entry or plugin present), so no write or install
+/// ran and nothing else would register it. Same best-effort contract as the
+/// write/install commands: returns whether the daemon accepted the row, and
+/// `Ok(false)` for a client with no agent name or a daemon that is down, slow
+/// or refusing. Never an error.
+#[tauri::command]
+pub async fn register_connected_agent(
+    state: tauri::State<'_, State>,
+    client_type: String,
+) -> Result<bool, String> {
+    let client = daemon_client(&state).await;
+    Ok(register_connected_agent_best_effort(&client, &client_type).await)
 }
 
 /// The real, resolved wiring of Wenlan on this machine — daemon
@@ -6297,7 +6335,7 @@ mod register_connected_agent_tests {
             );
             let (client, request) = serve_status_once("200 OK", AGENT_JSON).await;
 
-            assert!(register_connected_agent(&client, client_type).await);
+            assert!(register_connected_agent_best_effort(&client, client_type).await);
 
             let request = request.await.unwrap();
             assert_eq!(
@@ -6316,7 +6354,7 @@ mod register_connected_agent_tests {
             listener.local_addr().unwrap()
         ));
 
-        assert!(!register_connected_agent(&client, "some_other_client").await);
+        assert!(!register_connected_agent_best_effort(&client, "some_other_client").await);
 
         let connection =
             tokio::time::timeout(std::time::Duration::from_millis(150), listener.accept()).await;
@@ -6326,10 +6364,10 @@ mod register_connected_agent_tests {
     #[tokio::test]
     async fn a_refusing_or_unreachable_daemon_is_not_an_error() {
         let (client, _request) = serve_status_once("500 Internal Server Error", "{}").await;
-        assert!(!register_connected_agent(&client, "cursor").await);
+        assert!(!register_connected_agent_best_effort(&client, "cursor").await);
 
         let (client, _request) = serve_status_once("400 Bad Request", r#"{"error":"bad"}"#).await;
-        assert!(!register_connected_agent(&client, "cursor").await);
+        assert!(!register_connected_agent_best_effort(&client, "cursor").await);
 
         // Nothing is listening: bind to learn a free port, then drop it.
         let port = {
@@ -6337,7 +6375,7 @@ mod register_connected_agent_tests {
             listener.local_addr().unwrap().port()
         };
         let client = crate::api::WenlanClient::with_base_url(format!("http://127.0.0.1:{port}"));
-        assert!(!register_connected_agent(&client, "cursor").await);
+        assert!(!register_connected_agent_best_effort(&client, "cursor").await);
     }
 
     #[tokio::test]

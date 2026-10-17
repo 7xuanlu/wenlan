@@ -28,6 +28,7 @@ vi.mock("../lib/tauri", () => ({
   detectMcpClients: vi.fn().mockResolvedValue([]),
   writeMcpConfig: vi.fn().mockResolvedValue([]),
   installClientPlugin: vi.fn().mockResolvedValue(undefined),
+  registerConnectedAgent: vi.fn().mockResolvedValue(true),
   listAgents: vi.fn().mockResolvedValue([]),
   getWenlanMcpEntry: vi.fn().mockResolvedValue({ command: "npx", args: ["-y", "wenlan-mcp"] }),
   getRemoteAccessStatus: vi.fn().mockResolvedValue({ status: "off" }),
@@ -134,6 +135,7 @@ import {
   detectMcpClients,
   writeMcpConfig,
   installClientPlugin,
+  registerConnectedAgent,
   listAgents,
   setApiKey,
   getWireState,
@@ -204,6 +206,7 @@ describe("SetupWizard", () => {
     (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (writeMcpConfig as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (installClientPlugin as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    (registerConnectedAgent as ReturnType<typeof vi.fn>).mockResolvedValue(true);
     (listAgents as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (setApiKey as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (getWireState as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -1305,6 +1308,42 @@ describe("SetupWizard", () => {
     expect(screen.getByText("Gemini CLI")).toBeInTheDocument();
     expect(screen.queryByText("Claude desktop")).not.toBeInTheDocument();
     expect(screen.queryByText("Gemini cli")).not.toBeInTheDocument();
+  });
+
+  // A tool found already wired never runs a write or an install, so nothing
+  // else tells the daemon the user connected it (the agents table stayed at
+  // just `wenlan-setup`, and the home checklist stayed 0/N).
+  it("registers a tool reported already configured with the daemon, once, and not an unconfigured one", async () => {
+    (detectMcpClients as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        name: "Gemini CLI",
+        client_type: "gemini_cli",
+        config_path: "/path/to/gemini/settings.json",
+        detected: YES,
+        already_configured: YES,
+        has_raw_entry: YES,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+      },
+      {
+        name: "Cursor",
+        client_type: "cursor",
+        config_path: "/path/to/cursor",
+        detected: YES,
+        already_configured: NO,
+        has_raw_entry: NO,
+        has_raw_duplicate: NO,
+        has_plugin: NO,
+      },
+    ]);
+
+    renderWizard({ initialStep: "connect" });
+
+    await waitFor(() => {
+      expect(registerConnectedAgent).toHaveBeenCalledWith("gemini_cli");
+    });
+    expect(registerConnectedAgent).toHaveBeenCalledTimes(1);
+    expect(registerConnectedAgent).not.toHaveBeenCalledWith("cursor");
   });
 
   // Same bug, the other call site: a client that's *already configured*

@@ -6,6 +6,7 @@ import {
   detectMcpClients,
   writeMcpConfig,
   installClientPlugin,
+  registerConnectedAgent,
   listAgents,
   getWireState,
   downloadOnDeviceModel,
@@ -625,7 +626,11 @@ function ConnectStep({
   hideDots: boolean;
 }) {
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [selectedClients, setSelectedClients] = useState<Record<string, boolean>>({});
+  // Client types already told to the daemon this mount. The effect below re-runs
+  // whenever `clients` refetches; each tool is registered once.
+  const registeredRef = useRef<Set<string>>(new Set());
 
   const { data: clients, isLoading, isError } = useQuery({
     queryKey: ["mcp-clients"],
@@ -677,8 +682,18 @@ function ConnectStep({
       .map((client) => client.client_type);
     if (configuredNames.length > 0) {
       onConnected(configuredNames);
+      // A tool found already wired never goes through a write or an install, so
+      // nothing else tells the daemon the user connected it. Best-effort: this
+      // never blocks or fails the step, and each tool is sent once per mount.
+      const unregistered = configuredNames.filter((name) => !registeredRef.current.has(name));
+      if (unregistered.length > 0) {
+        for (const name of unregistered) registeredRef.current.add(name);
+        void Promise.allSettled(unregistered.map((name) => registerConnectedAgent(name))).then(
+          () => queryClient.invalidateQueries({ queryKey: ["agents"] }),
+        );
+      }
     }
-  }, [clients, onConnected]);
+  }, [clients, onConnected, queryClient]);
 
   // ROUND 5, DEFECT 4. This was `.filter((client) => client.detected)` over a
   // boolean, so a client whose detection FAILED was dropped from the list
@@ -1204,6 +1219,9 @@ function SettingUpStep({
             }
             onConnectedRef.current([clientType]);
             queryClient.invalidateQueries({ queryKey: ["mcp-clients"] });
+            // The write/install registered the tool with the daemon; refresh
+            // the agents list so the home checklist sees the new row.
+            queryClient.invalidateQueries({ queryKey: ["agents"] });
           },
           (err) => {
             // A failed row never blocks the wizard: it shows its reason, stays
