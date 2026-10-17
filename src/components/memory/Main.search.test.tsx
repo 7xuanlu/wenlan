@@ -58,6 +58,9 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+const reloadWindowMock = vi.hoisted(() => vi.fn());
+vi.mock("../../lib/reloadWindow", () => ({ reloadWindow: reloadWindowMock }));
+
 vi.mock("../../hooks/useSearch", () => ({
   useSearch: useSearchMock,
 }));
@@ -620,6 +623,19 @@ describe("Main search", () => {
     expect(onBackFromDetail).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: i18n.t("main.back") }));
     expect(onBackFromDetail).toHaveBeenCalledOnce();
+  });
+
+  it("reloads on Cmd+R only after the open draft has saved", async () => {
+    const user = userEvent.setup();
+    const flush = deferred<boolean>();
+    draftFlushMock.mockReturnValue(flush.promise);
+    reloadWindowMock.mockReset();
+    renderMain();
+    await user.click(screen.getByRole("button", { name: "Create standalone draft" }));
+    fireEvent.keyDown(window, { key: "r", metaKey: true });
+    expect(reloadWindowMock).not.toHaveBeenCalled();
+    await act(async () => flush.resolve(true));
+    expect(reloadWindowMock).toHaveBeenCalledOnce();
   });
 
   it("keeps global Back in a draft until it saves and restores the saved identity with Forward", async () => {

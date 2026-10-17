@@ -19,6 +19,7 @@ import {
   type SearchResult,
   type Space,
 } from "../../lib/tauri";
+import { reloadWindow } from "../../lib/reloadWindow";
 import { setPendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
@@ -1100,6 +1101,13 @@ export default function Main({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
+      // Cmd/Ctrl+R reloads the window, like other desktop apps built on a web
+      // view. It works from inside an editor too, and saves the open note first.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        afterPrimaryNavigationGuards(() => reloadWindow());
+        return;
+      }
       if (e.key === "Escape" && movingNoteRef.current) return;
       const target = e.target;
       const closesOpenSearch = e.key === "Escape" && mobileSearchOpen;
