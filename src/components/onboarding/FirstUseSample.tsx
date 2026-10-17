@@ -328,14 +328,9 @@ export function FirstUseSample({
           if (trigger instanceof HTMLElement) dialogTrigger.current = trigger;
         }}
       >
-        <div className="fug-row">
-          <button type="button" className="fug-back" onClick={onBack}>
-            <ArrowLeft aria-hidden="true" weight="regular" />
-            {backLabel ?? t("firstUse.sample.back")}
-          </button>
-          <span className="fus-animation-label">{t("firstUse.sample.animationLabel")}</span>
-        </div>
-
+        {/* The steps and the way out share one row, so the walkthrough starts at
+            the top of the window and its last steps fit without scrolling. */}
+        <div className="fus-top">
         <ol className="fus-phases" aria-label={t("firstUse.sample.animationLabel")}>
           {phaseNames.map((name, index) => {
             const id = index as SamplePhase;
@@ -359,8 +354,14 @@ export function FirstUseSample({
             );
           })}
         </ol>
-        <p className="fus-phase-body">{phaseBodies[phase]}</p>
+          <button type="button" className="fug-back fus-exit" onClick={onBack}>
+            <ArrowLeft aria-hidden="true" weight="regular" />
+            {backLabel ?? t("firstUse.sample.back")}
+          </button>
+        </div>
 
+        <div className="fus-step-row">
+        <p className="fus-phase-body">{phaseBodies[phase]}</p>
         <div className="fus-controls">
           {playing ? (
             <button
@@ -415,6 +416,7 @@ export function FirstUseSample({
               {t("firstUse.sample.skipToResult")}
             </button>
           ) : null}
+        </div>
         </div>
 
         {aiOpen ? (
@@ -568,7 +570,10 @@ export function FirstUseSample({
                     <SourceGlyph type={source.type} />
                   </span>
                   <span className="fus-rack-copy">
-                    <span className="fus-source-kind">{source.kind}</span>
+                    <span className="fus-source-kind">
+                      {phase >= 2 ? <LinkSimple aria-hidden="true" weight="regular" /> : null}
+                      {source.kind}
+                    </span>
                     <span className="fus-rack-title">{source.title}</span>
                     {phase === 0 ? (
                       <span className="fus-rack-excerpt">{source.excerpt}</span>
@@ -580,12 +585,6 @@ export function FirstUseSample({
                         />
                       </span>
                     )}
-                    {phase >= 2 ? (
-                      <span className="fus-marker">
-                        <LinkSimple aria-hidden="true" weight="regular" />
-                        {source.kind}
-                      </span>
-                    ) : null}
                   </span>
                 </button>
               ))}

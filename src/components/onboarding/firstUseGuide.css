@@ -35,7 +35,7 @@
   border: none;
   cursor: pointer;
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-secondary);
   padding: 4px 0;
 }
@@ -132,18 +132,24 @@
   gap: 16px;
 }
 
-.fus-animation-label {
-  font-family: var(--mem-font-mono);
-  font-size: 11px;
-  color: var(--mem-text-tertiary);
-  white-space: nowrap;
+.fus-top,
+.fus-step-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.fus-exit {
+  margin-left: auto;
 }
 
 .fus-phases {
   list-style: none;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin: 0;
   padding: 0;
 }
@@ -153,12 +159,13 @@
   align-items: center;
   gap: 8px;
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-secondary);
   background-color: var(--mem-surface);
   border: 1px solid var(--mem-border);
   border-radius: 999px;
-  padding: 6px 12px 6px 6px;
+  padding: 5px 12px 5px 5px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -181,7 +188,7 @@
 
 .fus-phase-body {
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 15px;
   color: var(--mem-text-secondary);
   margin: 0;
 }
@@ -222,9 +229,10 @@
 }
 
 .fus-rack-heading {
-  font-family: var(--mem-font-mono);
-  font-size: 11px;
-  color: var(--mem-text-tertiary);
+  font-family: var(--mem-font-body);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--mem-text-secondary);
   margin: 0;
 }
 
@@ -255,14 +263,14 @@
 
 .fus-rack-title {
   font-family: var(--mem-font-heading);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--mem-text);
 }
 
 .fus-rack-excerpt,
 .fus-rack-point {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-secondary);
   line-height: 1.55;
 }
@@ -295,18 +303,23 @@
   }
 }
 
+/* The quoted line reads as plain text with a quiet underline in the page
+   accent, instead of a filled block that breaks up across lines. */
 .fus-doc mark,
 .fus-rack-card mark,
 .fus-dialog mark {
-  background-color: color-mix(in srgb, var(--mem-accent-warm) 25%, transparent);
-  color: inherit;
-  border-radius: 3px;
-  padding: 0 2px;
+  background: none;
+  color: var(--mem-text);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--mem-accent-indigo) 55%, transparent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  text-decoration-skip-ink: auto;
 }
 
 .fus-forming {
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-tertiary);
   line-height: 1.6;
   margin: 0;
@@ -314,7 +327,7 @@
 
 .fus-doc-heading {
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--mem-text-secondary);
   margin: 0 0 10px;
@@ -373,9 +386,11 @@ button.fus-marker {
 }
 
 .fus-source-kind {
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-family: var(--mem-font-body);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--mem-text-tertiary);
 }
 
@@ -394,7 +409,7 @@ button.fus-marker {
   gap: 10px;
   align-items: flex-start;
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 15px;
   color: var(--mem-text);
   line-height: 1.6;
   padding: 10px 12px;
@@ -412,7 +427,7 @@ button.fus-marker {
 
 .fus-connect-list p {
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 15px;
   color: var(--mem-text);
   line-height: 1.6;
   margin: 0 0 8px;
@@ -426,7 +441,7 @@ button.fus-marker {
 
 .fus-result-page h2 {
   font-family: var(--mem-font-heading);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 500;
   color: var(--mem-text);
   margin: 0 0 4px;
@@ -434,7 +449,7 @@ button.fus-marker {
 
 .fus-result-subtitle {
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-secondary);
   margin: 0 0 12px;
 }
@@ -446,10 +461,10 @@ button.fus-marker {
 
 .fus-result-paragraph {
   font-family: var(--mem-font-body);
-  font-size: 14px;
+  font-size: 15px;
   color: var(--mem-text);
-  line-height: 1.7;
-  margin: 0 0 12px;
+  line-height: 1.65;
+  margin: 0 0 10px;
 }
 
 .fus-citation {
@@ -457,7 +472,7 @@ button.fus-marker {
   align-items: center;
   gap: 4px;
   font-family: var(--mem-font-body);
-  font-size: 12px;
+  font-size: 13px;
   border-radius: 999px;
   padding: 1px 10px;
   margin-left: 6px;
@@ -469,8 +484,8 @@ button.fus-marker {
 }
 
 .fus-related-card {
-  margin-top: 16px;
-  padding: 14px 16px;
+  margin-top: 12px;
+  padding: 12px 16px;
   border: 1px solid var(--mem-border);
   border-radius: 10px;
   background-color: var(--mem-bg);
@@ -487,7 +502,7 @@ button.fus-marker {
 
 .fus-related-title {
   font-family: var(--mem-font-heading);
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 500;
   color: var(--mem-text);
   margin: 0 0 4px;
@@ -495,7 +510,7 @@ button.fus-marker {
 
 .fus-related-body {
   font-family: var(--mem-font-body);
-  font-size: 13px;
+  font-size: 14px;
   color: var(--mem-text-secondary);
   line-height: 1.6;
   margin: 0 0 8px;
@@ -804,13 +819,57 @@ button.fus-marker {
 }
 
 /* The sample walkthrough should fit one window without scrolling, so it
-   drops the generous page padding the reading views use. */
+   drops the generous page padding the reading views use and takes the
+   window's height. A window too short for the last step scrolls inside the
+   two columns instead of the whole page. */
 .memory-main-content:has(> .fug-root[data-view="sample"]) {
-  padding-top: 8px;
-  padding-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  padding: 8px 40px 20px;
 }
 
 .fug-root[data-view="sample"] {
-  padding-top: 0;
-  padding-bottom: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 0;
+}
+
+.fug-root[data-view="sample"] .fug-sample {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.fug-root[data-view="sample"] .fus-workbench {
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.fug-root[data-view="sample"] .fus-doc-column {
+  min-height: 0;
+}
+
+.fug-root[data-view="sample"] .fus-rack,
+.fug-root[data-view="sample"] .fus-doc {
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+@media (max-width: 640px) {
+  .memory-main-content:has(> .fug-root[data-view="sample"]) {
+    display: block;
+    padding-inline: 20px;
+  }
+
+  .fug-root[data-view="sample"] .fus-workbench {
+    grid-template-rows: none;
+  }
+
+  .fug-root[data-view="sample"] .fus-rack,
+  .fug-root[data-view="sample"] .fus-doc {
+    overflow: visible;
+  }
 }
