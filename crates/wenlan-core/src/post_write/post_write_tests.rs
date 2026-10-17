@@ -4386,6 +4386,16 @@ async fn accept_pending_revision_page_write_card_updates_page_content() {
         db.get_memory_detail(card_id).await.unwrap().is_none(),
         "accepted Page proposal is a transient card, not a new ambient memory"
     );
+    let changelog: Vec<serde_json::Value> =
+        serde_json::from_str(&db.get_page_changelog(&page_id).await.unwrap()).unwrap();
+    let accept_entry = changelog.last().expect("accept logs a changelog entry");
+    assert_eq!(accept_entry["edited_by"], "revision_accept");
+    assert_eq!(
+        accept_entry["char_delta"],
+        proposed_content.chars().count() as i64 - human_content.chars().count() as i64
+    );
+    assert_eq!(accept_entry["sources_added"], 1);
+    assert_eq!(accept_entry["sources_removed"], 0);
 
     let writer =
         crate::export::knowledge::KnowledgeWriter::new(knowledge_dir.path().to_path_buf(), &db);
@@ -7631,4 +7641,144 @@ async fn staged_page_card_names_its_proposer() {
             .expect("staged card is queued");
         assert_eq!(card.source_agent.as_deref(), expected, "card {card_id}");
     }
+}
+
+/// The card says why it needs review: the page's lock, Wenlan's own
+/// background upkeep, or the rare mid-write ownership flip. Both queue
+/// listings carry it, and a card staged before the field existed derives it
+/// from its writer.
+#[tokio::test]
+async fn staged_page_card_records_review_reason() {
+    let (db, _dir) = test_db().await;
+    let mem_id = "mem_card_reason";
+    let content = "Rust ownership keeps memory safety rules explicit";
+    seed_memory(&db, mem_id, content).await;
+    let page_id = seed_page(&db, mem_id, content).await;
+    let source_revision = db.get_page_source_revision(&page_id).await.unwrap();
+    let sources = [mem_id.to_string()];
+
+    let unlocked = db.get_page(&page_id).await.unwrap().unwrap();
+    assert!(db.set_page_review_required(&page_id, true).await.unwrap());
+    let locked = db.get_page(&page_id).await.unwrap().unwrap();
+
+    let mut cases = Vec::new();
+    for (page, edited_by, expected) in [
+        (&locked, "agent_refresh", Some("locked")),
+        // The lock wins over the writer: a background write to a locked page
+        // waits on the lock, not on upkeep.
+        (&locked, "re_distill", Some("locked")),
+        (&unlocked, "re_distill", Some("background")),
+        (&unlocked, "agent_refresh", Some("owned")),
+    ] {
+        let staged = stage_page_revision_card(
+            &db,
+            page,
+            &format!("{content} ({edited_by} {expected:?})"),
+            &sources,
+            source_revision,
+            edited_by,
+            None,
+        )
+        .await
+        .unwrap();
+        cases.push((staged.revision_card_id.unwrap(), expected));
+    }
+
+    let global = db.list_pending_revisions(10).await.unwrap();
+    let scoped = db
+        .list_pending_revisions_scoped(10, &crate::read_scope::ReadScope::Global)
+        .await
+        .unwrap();
+    for listed in [&global, &scoped] {
+        for (card_id, expected) in &cases {
+            let card = listed
+                .iter()
+                .find(|row| &row.revision_source_id == card_id)
+                .expect("staged card is queued");
+            assert_eq!(card.review_reason.as_deref(), *expected, "card {card_id}");
+        }
+    }
+
+    // Legacy cards have no `review_reason`: a pipeline writer reads as
+    // background upkeep, anything else stays unexplained.
+    for (edited_by, expected) in [
+        ("re_distill", Some("background")),
+        ("page_growth", Some("background")),
+        ("some_future_writer", Some("background")),
+        ("agent_refresh", None),
+        ("manual_edit", None),
+    ] {
+        let legacy = serde_json::json!({ "edited_by": edited_by });
+        assert_eq!(
+            crate::db::revision_review_reason(Some(&legacy)).as_deref(),
+            expected,
+            "legacy {edited_by}"
+        );
+    }
+    assert_eq!(crate::db::revision_review_reason(None), None);
+    let stamped = serde_json::json!({ "edited_by": "re_distill", "review_reason": "locked" });
+    assert_eq!(
+        crate::db::revision_review_reason(Some(&stamped)).as_deref(),
+        Some("locked")
+    );
+}
+
+/// An `agent_refresh` write records which agent made it, and every new
+/// changelog entry carries the numeric delta the app localizes from.
+#[tokio::test]
+async fn changelog_entry_records_agent_and_numeric_delta() {
+    let (db, _dir) = test_db().await;
+    seed_memory(&db, "mem-cl-a", "first source").await;
+    seed_memory(&db, "mem-cl-b", "second source").await;
+    let page_id = seed_page(&db, "mem-cl-a", "first source").await;
+
+    let write = |content: &'static str, agent: Option<&'static str>, sources: Vec<String>| {
+        let db = &db;
+        let page_id = page_id.clone();
+        async move {
+            let revision = db.get_page_source_revision(&page_id).await.unwrap();
+            page_write(
+                db,
+                PageWrite::AgentUpdate {
+                    page_id: &page_id,
+                    req: UpdatePageRequest {
+                        content: content.to_string(),
+                        source_memory_ids: sources,
+                        expected_version: None,
+                        caller_id: None,
+                        operation_id: None,
+                    },
+                    agent,
+                    expected_source_revision: revision,
+                    knowledge_path: None,
+                },
+            )
+            .await
+            .unwrap()
+        }
+    };
+
+    let first = write(
+        "first source, now longer",
+        Some("claude-code"),
+        vec!["mem-cl-a".to_string(), "mem-cl-b".to_string()],
+    )
+    .await;
+    assert!(first.wrote, "{first:?}");
+    let second = write("short", None, vec!["mem-cl-a".to_string()]).await;
+    assert!(second.wrote, "{second:?}");
+
+    let cl = db.get_page_changelog(&page_id).await.unwrap();
+    let entries: Vec<serde_json::Value> = serde_json::from_str(&cl).unwrap();
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(entries[0]["edited_by"], "agent_refresh");
+    assert_eq!(entries[0]["agent"], "claude-code");
+    assert_eq!(entries[0]["char_delta"], 12);
+    assert_eq!(entries[0]["sources_added"], 1);
+    assert_eq!(entries[0]["sources_removed"], 0);
+    assert!(entries[1].get("agent").is_none(), "{:?}", entries[1]);
+    assert_eq!(entries[1]["char_delta"], -19);
+    assert_eq!(entries[1]["sources_added"], 0);
+    assert_eq!(entries[1]["sources_removed"], 1);
+    assert!(entries[1]["delta_summary"].is_string());
 }

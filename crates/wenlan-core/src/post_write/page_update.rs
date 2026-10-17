@@ -281,6 +281,16 @@ async fn stage_page_revision_card_inner(
             .take(12)
             .collect::<String>()
     );
+    // Why this write needed review, so the card can say so: the review lock
+    // first, then Wenlan's own background lanes, else the page became
+    // user-owned while the write was in flight.
+    let review_reason = if page.review_required {
+        "locked"
+    } else if matches!(Writer::classify(edited_by), Writer::Pipeline(_)) {
+        "background"
+    } else {
+        "owned"
+    };
     let structured = serde_json::json!({
         "revision_kind": "page_write",
         "target_kind": "page",
@@ -289,6 +299,7 @@ async fn stage_page_revision_card_inner(
         "source_revision": source_revision,
         "edited_by": edited_by,
         "source_memory_ids": source_memory_ids,
+        "review_reason": review_reason,
     })
     .to_string();
     let title: String = format!("Revision: {}", page.title)
@@ -605,6 +616,7 @@ pub(super) async fn update_page_impl(
     preserve_sources: bool,
     user_forced: bool,
     page_fence: Option<&PageFence>,
+    agent: Option<&str>,
 ) -> Result<WriteResult, WenlanError> {
     let result = update_page_db_impl(
         db,
@@ -619,6 +631,7 @@ pub(super) async fn update_page_impl(
         preserve_sources,
         user_forced,
         page_fence,
+        agent,
     )
     .await?;
     // Receipts describe the DB transaction. Repairing an independent
@@ -666,6 +679,7 @@ async fn update_page_db_impl(
     preserve_sources: bool,
     user_forced: bool,
     page_fence: Option<&PageFence>,
+    agent: Option<&str>,
 ) -> Result<WriteResult, WenlanError> {
     // ── Pre-write validation ────────────────────────────────────────────────
     if req.content.trim().is_empty() {
@@ -1101,6 +1115,16 @@ async fn update_page_db_impl(
                 "delta_summary": delta_summary,
                 "incoming_source_ids": added_sources_json,
             });
+            crate::db::add_page_delta_counts(
+                &mut entry,
+                &current.content,
+                &current.source_memory_ids,
+                &req.content,
+                &source_refs,
+            );
+            if let Some(agent) = agent {
+                entry["agent"] = serde_json::Value::String(agent.to_string());
+            }
             if let Some((_, ref stats_summary)) = citations {
                 entry["citations_summary"] = serde_json::Value::String(stats_summary.clone());
             }

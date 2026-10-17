@@ -34,6 +34,8 @@ export type ReviewItem =
       revisionSourceId: string;
       content: string;
       agent: string | null;
+      /** Why a page revision needs review ("locked", "background", "owned"). */
+      reviewReason?: string | null;
       timestampMs: number | null;
     }
   | {
@@ -179,6 +181,7 @@ export function useReviewQueue(enabled: boolean = true, scope: "default" | "note
           revisionSourceId: item.revision_source_id,
           content: item.revision_content,
           agent: agentDisplayName(item.source_agent),
+          reviewReason: item.review_reason ?? null,
           timestampMs: item.last_modified ? item.last_modified * 1000 : null,
         }),
       ),

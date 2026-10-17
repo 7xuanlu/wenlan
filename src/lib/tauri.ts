@@ -1000,7 +1000,7 @@ export const AGENT_DISPLAY: Record<string, string> = {
 
 export function agentDisplayName(slug: string | null | undefined): string | null {
   if (!slug) return null;
-  return AGENT_DISPLAY[slug] ?? slug;
+  return AGENT_DISPLAY[slug.trim().toLowerCase()] ?? slug;
 }
 
 export type StabilityTier = "protected" | "standard" | "ephemeral";
@@ -1039,6 +1039,9 @@ export interface PendingRevisionItem {
   source_agent: string | null;
   last_modified: number;
   target_kind: RevisionTargetKind;
+  /** Why a page revision card needs review: "locked", "background" or
+   * "owned". Absent when the daemon cannot say (memory revisions, old cards). */
+  review_reason?: string | null;
 }
 
 export interface RevisionAcceptResponse {
@@ -1091,6 +1094,12 @@ export interface PageChangelogEntry {
   delta_summary?: string | null;
   incoming_source_ids?: string[] | null;
   citations_summary?: string | null;
+  /** The agent behind an `agent_refresh` write (the `x-agent-name` header). */
+  agent?: string | null;
+  /** Numeric twin of `delta_summary`; absent on entries written before them. */
+  char_delta?: number | null;
+  sources_added?: number | null;
+  sources_removed?: number | null;
 }
 
 export interface ListPageRevisionsResponse {
