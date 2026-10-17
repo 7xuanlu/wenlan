@@ -47,6 +47,13 @@ describe("AddSourceMenu", () => {
     expect(screen.queryByText("Your daemon needs an update to index files.")).toBeNull();
   });
 
+  it("offers past AI chats and opens the chat export import in place", async () => {
+    render(wrap(<AddSourceMenu onClose={() => {}} />));
+    fireEvent.click(await screen.findByText("Past AI chats"));
+    expect(await screen.findByRole("dialog", { name: "Past AI chats" })).toBeInTheDocument();
+    expect(screen.getByTestId("chat-import-drop-zone")).toBeInTheDocument();
+  });
+
   it("shows the update-daemon notice on an old daemon", async () => {
     mocks.getDaemonVersion.mockResolvedValue("0.9.5");
     render(wrap(<AddSourceMenu onClose={() => {}} />));

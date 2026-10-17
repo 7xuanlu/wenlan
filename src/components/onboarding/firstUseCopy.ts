@@ -13,7 +13,7 @@ export const enFirstUse = {
     seeKnowledge: "See my knowledge",
   },
   sample: {
-    ownBody: "Want a page like this from your own work? Connect an AI tool and add your folder. Wenlan organizes it the same way.",
+    ownBody: "Want a page like this from your own work? Connect an AI tool, add your folder, then ask your AI to organize it into a page.",
     startOwn: "Start with my own",
     phasePage: "The page",
     phasePageBody: "Wenlan turns scattered decisions and files into one page.",
@@ -137,7 +137,7 @@ export const hansFirstUse = {
     seeKnowledge: "查看我的知识",
   },
   sample: {
-    ownBody: "想要你自己的这一页？连上 AI 工具，再加入你的文件夹，文澜就会这样整理。",
+    ownBody: "想要你自己的这一页？连上 AI 工具、加入你的文件夹，再请 AI 帮你整理成页面。",
     startOwn: "开始做我的",
     phasePage: "整理好的一页",
     phasePageBody: "文澜把散落的决定和资料，整理成一页。",
@@ -257,7 +257,7 @@ export const hantFirstUse = {
     seeKnowledge: "查看我的知識",
   },
   sample: {
-    ownBody: "想要你自己的這一頁？連上 AI 工具，再加入你的資料夾，文瀾就會這樣整理。",
+    ownBody: "想要你自己的這一頁？連上 AI 工具、加入你的資料夾，再請 AI 幫你整理成頁面。",
     startOwn: "開始做我的",
     phasePage: "整理好的一頁",
     phasePageBody: "文瀾把散落的決定和資料，整理成一頁。",
