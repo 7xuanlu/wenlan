@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0b61b556c472f818d83e05b8ef71eb3dc8d353495005b3180fd8913d8411d7d2 -->
+<!-- README_SYNC: source=README.md sha256=0030183bcf68040d77a9d0cae784a978b26356c0147f46ffa0be278d18fb29dd -->
 
 <p align="center">
   <picture>
@@ -91,6 +91,11 @@
 </p>
 
 簡化流程示意；插件指令與頁面整理均按需使用，沒有固定順序。
+
+- **從你的資料開始。** 撰寫頁面，或匯入文件與選定的對話作為來源。不必連接 AI。
+- **閱讀、撰寫並實際運用。** 在 App 編輯頁面、沿引用查回來源、審核待審修訂，也可請 AI 參考現有頁面完成任務或草擬新頁面。需要先前脈絡時，用 `/recall` 找回。
+- **留下你的新發現。** 透過 App 的 Quick Capture，或請 AI 使用 `/capture`，保存決定或心得，以及其理由與來源。
+- **告一段落，下次接續。** `/handoff` 保存記憶與工作紀錄，並更新目前 Space 的 Brief，記下進度與下一步。下次需要時，用 `/brief` 讀回這些脈絡。
 
 **需要整理成知識頁時：** `/distill` 可整理或更新帶引用的頁面；也可直接撰寫，或設定背景 AI。[插件指令](plugin/skills/README.md)。
 

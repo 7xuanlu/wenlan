@@ -28,11 +28,11 @@ The final consistency pass aligns the three explanatory titles (46px, semibold, 
 | `wenlan-personal-knowledge.png`, `-zh-Hant.png`, `-zh-Hans.png` | 6000 × 3600 | Actual App directory/header captures and a high-resolution render of the actual editor and memory-preview DOM/styles, combined with an editorial graph layout. All 33 graph nodes and 80 typed relationships retain their verified demo identities. Not a native three-column screen; App behavior is unchanged. |
 | `wenlan-personal-graph.png`, `-zh-Hant.png`, `-zh-Hans.png` | 3600 × 2488 | Actual graph capture; the original nodes and connections are preserved, with localized legend and text layers. Region names and boundaries are editorial annotations, not verified source-node identities or detected communities. |
 | `wenlan-knowledge-to-work.png`, `-zh-Hant.png`, `-zh-Hans.png`, `-es-ES.png` | 3600 × 2320 each | Fictional Claude conversations and FORMA homepage, using the film’s unchanged hero-image asset. Keyword, semantic, and graph paths point to the matching headline, primary action, and image. Concept illustration, not a measured comparison; Wenlan context complements Claude’s native capabilities. |
-| `wenlan-updates-history.png`, `-zh-Hant.png`, `-zh-Hans.png` | 3600 × 2080 | Actual memory, source, page, and revision captures with demo data; connecting lines and editorial labels are illustrative. Shows automatic updates to untouched AI-organized pages and per-page review for user-created or edited pages. |
+| `wenlan-updates-history.png`, `-zh-Hant.png`, `-zh-Hans.png` | 3600 × 2000 | Actual memory, source, page, and revision captures with demo data; connecting lines and editorial labels are illustrative. Shows automatic updates to untouched AI-organized pages and per-page review for user-created or edited pages. |
 
 The graph uses the website's September 6, 2026 capture, `wenlan-live-knowledge-graph-20260906.webp` (source SHA-256 `63ab14b444c9cfd8527f9fc80440d7fb2507856b745c1d83b10e52e61df0b5f9`). Original graph nodes, colors, and connections remain intact. Urban history, Genetics and evolution, and Human–AI collaboration research are illustrative region names.
 
-The localization sources are retained in the `readme-locales-final` production package. Panorama exports are 6000 × 3600; graph exports are 3600 × 2488; update-history exports are 3600 × 2080. Each was inspected at 900px reading width. The Traditional Chinese panorama and history remain byte-identical to their approved versions; its graph changes only the native English legend and footer text to Traditional Chinese. Longer translations wrap inside the existing composition.
+The localization sources are retained in the `readme-locales-final` production package. Panorama exports are 6000 × 3600; graph exports are 3600 × 2488; update-history exports are 3600 × 2000. Each was inspected at 900px reading width. The Traditional Chinese panorama remains byte-identical to its approved version; its graph changes only the native English legend and footer text to Traditional Chinese. Longer translations wrap inside the existing composition.
 
 Composition sources: `cover-polish-title` (6000px `cover-polish-hd` master; approved `cover-polish-v2` layout), `real-graph-polish-v7`, `ai-work-film-case-v7` / `ai-work-film-case-v7-localized`, and `lifecycle-polish-v26`, retained in their corresponding production packages, including `cover-polish-title`, `cover-polish-hd`, `readme-final-consistency`, and `ai-work-film-case-v7-localized`. The final title pass reduces only the article heading from 28.16px to 26px; every pixel outside that heading area is identical to the 6000px master. The cover package includes read-only snapshots of the actual editor and hover-preview DOM/styles, original pseudo-element icon CSS, the approved composition, export instructions, and SHA-256 verification. Text and graph labels are rendered at high resolution rather than enlarged from the former small article crop. Heading font fallback is normalized to match the approved capture. Directory/header raster inputs remain unchanged; their detail is limited by the original captures. Browser capture uses JPEG transport; the published PNG adds no further lossy encoding. No generative enhancement or invented UI content is used in the product cover. The AI-work comparison remains an authored concept as noted above.
 
@@ -46,13 +46,17 @@ The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and 
 - `wenlan-knowledge-to-work-zh-Hans.png`: `609cfb9d7d85ebbb37c51749f7baa9b1ddb112e6b1db0acf4fa69cb866ecb52c`
 - `wenlan-knowledge-to-work.png`: `90035731a53b9c228b488e38bdd551ea1525dd82aec99d2941926d1f1c1281aa`
 - `wenlan-knowledge-to-work-es-ES.png`: `826fef30c558a2cde583fdc0de21ca2b81d76148fa202b3013e863e728045f93`
-- `wenlan-updates-history-zh-Hant.png`: `d073e66e5a24f7f202ea1691ac977bac29a343f71ede06a4dc2462b0d3dcf251`
+- `wenlan-updates-history-zh-Hant.png`: `85815939e11e1e1c05cc5b9252dbd1f5b78a6d64fb28e15e388647c9b1d17ba9`
 - `wenlan-personal-knowledge.png`: `6aa9bd21bb7e5b746ec1c1545570f0f5df9539fb81ffcf4dc1f915295b2de0e9`
 - `wenlan-personal-knowledge-zh-Hans.png`: `96736638a3611964a0b63888e41777f98d07f93e8f9db7b39c964df43dc4eeba`
 - `wenlan-personal-graph.png`: `a06050ed7a3a5bb3d43ef31e5a7982b9a640ac328167487b3490bb5da70cccf2`
 - `wenlan-personal-graph-zh-Hans.png`: `46330eb6094ca49b149bf05acc6d234d93b5ca3b14d9574fe72d5b9c23607696`
-- `wenlan-updates-history.png`: `4a1408d19095c9e57ff21c3e3a0509f9e2ec673caa0c32580bccd8e3163e620d`
-- `wenlan-updates-history-zh-Hans.png`: `138cb06111ca09442a48c4e0ec2649d34df8440e90b3cdf32a4f1ce7ab4a9a03`
+- `wenlan-updates-history.png`: `bc9aa5cb2d5ac57ad1e910f89b790077b64177e876a68a6317e6ef0af0896669`
+- `wenlan-updates-history-zh-Hans.png`: `b5dd12b5b4db70282ef47d248609f091b6aa3b9caded385f51236f623528558e`
+
+## Shared website palette
+
+The update/history and architecture exports use the approved website palette: warm paper `#FBFBF8`, dark ink, and restrained warm-orange paths. Broad editorial green fills and text are removed; native App diff pixels and small success markers remain unchanged. The history composition uses the compact-heading v5 export (3600 × 2000), with its redundant subtitle removed; architecture retains its established geometry. Original App crop files are unchanged. English and Simplified Chinese history panels remain localized reconstructions rather than new native captures. Sources and provenance are retained in the `shared-visual-palette-20261016` production package. All seven PNG exports were checked at 830px README width.
 
 ## Architecture overview
 

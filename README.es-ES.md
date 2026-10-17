@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0b61b556c472f818d83e05b8ef71eb3dc8d353495005b3180fd8913d8411d7d2 -->
+<!-- README_SYNC: source=README.md sha256=0030183bcf68040d77a9d0cae784a978b26356c0147f46ffa0be278d18fb29dd -->
 
 <p align="center">
   <picture>
@@ -91,6 +91,11 @@ Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan e
 </p>
 
 Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
+
+- **Empieza por tu material.** Escribe una página o importa documentos y conversaciones seleccionadas como fuentes. No necesitas conectar una IA.
+- **Lee, escribe y ponlo en práctica.** Edita páginas, sigue las citas y revisa los cambios propuestos en la aplicación, o pide a tu IA que use una página existente para una tarea o que redacte una nueva. Usa `/recall` cuando necesites contexto anterior.
+- **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, mediante Quick Capture en la aplicación o con `/capture` a través de tu IA.
+- **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
 
 **Cuando quieras una página de conocimiento:** `/distill` sintetiza o actualiza páginas con citas. También puedes escribirlas directamente o configurar la IA en segundo plano. [Comandos del plugin](plugin/skills/README.md).
 
