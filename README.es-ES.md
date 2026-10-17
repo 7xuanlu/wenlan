@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=6a5da72da52e5e970e1ef63771c75a094e2af81ebba9d746a018f83019a016ed -->
+<!-- README_SYNC: source=README.md sha256=da7285d6188afd22efb31e0a4dc404ad530b08e3122ed0135fb6add111e21eff -->
 
 <p align="center">
   <picture>
@@ -76,9 +76,11 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 
 Tras instalar un plugin, inicia una nueva sesión de IA y ejecuta `/setup`. Conectar tu IA no requiere otro modelo de lenguaje local.
 
-> Usa mis notas anteriores para ayudarme a terminar esta tarea.
+Prueba con la página que acabas de abrir o guardar:
 
-**Primera prueba superada:** Tu IA encuentra la nota guardada o el documento importado que le pediste y cita una fuente que puedes comprobar.
+> Busca mi nota «[título]» en Wenlan y cítala.
+
+**Primera prueba superada:** Tu IA encuentra esa nota y proporciona una cita que puedes abrir y comprobar.
 
 <a id="daily-workflow"></a>
 
@@ -95,9 +97,9 @@ Flujo simplificado. Los comandos del plugin y la organización de páginas son o
 - **Empieza por tu material.** Importa documentos y conversaciones seleccionadas como fuentes, o escribe páginas en la aplicación. Allí puedes editar, consultar las fuentes citadas y revisar cambios sin conectar una IA.
 - **Usa tu conocimiento y escribe páginas nuevas.** Pide a tu IA que recupere fuentes y memorias relevantes con `/recall` y las use en la tarea. También puede escribir una página nueva con citas y guardarla en Wenlan.
 - **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, en la aplicación o con `/capture` a través de tu IA.
-- **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
+- **Pausa y retoma.** Guarda el progreso y los siguientes pasos con `/handoff`, que también conserva memorias útiles y un registro de la sesión. Usa `/brief` para leer el resumen del proyecto y retomar ese contexto la próxima vez.
 
-**Organiza las memorias acumuladas cuando lo necesites:** `/distill` sintetiza o actualiza páginas con citas a partir de memorias relacionadas; no es necesario para escribir una página nueva. La IA en segundo plano es opcional. [Comandos del plugin](plugin/skills/README.md).
+**Organiza las memorias acumuladas cuando lo necesites:** `/distill` sintetiza o actualiza páginas con citas a partir de memorias relacionadas; no es necesario para escribir una página nueva. [Comandos del plugin](plugin/skills/README.md).
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -118,7 +120,7 @@ Las **fuentes** conservan el material que has leído; las **memorias** recogen t
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos. Los chats importados conservan una instantánea; las fuentes de archivos registradas se pueden actualizar desde el disco.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
-- **Memorias atómicas:** Cada memoria conserva un hallazgo reutilizable con sus motivos y referencias a las fuentes, para recuperarlo de forma independiente.
+- **Memorias atómicas:** Recupera un hallazgo concreto sin cargar una conversación o página entera.
 - **Grafo de conocimiento:** Descubre temas relacionados mediante entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
@@ -167,6 +169,8 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
+**Las actualizaciones siguen las citas.** Si cambias o eliminas en Wenlan una fuente o memoria citada, el sistema marca para actualizar las páginas que la utilizan. Con la IA en segundo plano activada y un modelo disponible, las páginas aptas se reconstruyen a partir de las evidencias actuales; se rechazan los borradores con citas insuficientes.
+
 - **Enriquecimiento en segundo plano con Steep:** Añade tipos, datos estructurados, pistas de búsqueda y enlaces al grafo a las memorias capturadas; la síntesis opcional combina memorias y fuentes en páginas con citas.
 - **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de páginas y sigue las sustituciones de memorias; la actualización automática modifica directamente las páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
 - **Exportación de wikis:** Exporta las páginas aptas como una wiki Open Knowledge Format (OKF).
@@ -182,8 +186,6 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 ## Arquitectura
 
 **Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las páginas son archivos Markdown; memorias, relaciones e índices de búsqueda residen en libSQL local.
-
-**Las actualizaciones siguen las citas.** Si cambias o eliminas en Wenlan una fuente o memoria citada, el sistema marca para actualizar las páginas que la utilizan. Con la IA en segundo plano activada y un modelo disponible, las páginas aptas se reconstruyen a partir de las evidencias actuales; se rechazan los borradores con citas insuficientes.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
@@ -203,7 +205,7 @@ Un cliente de IA en la nube puede enviarle el conocimiento recuperado a su prove
 
 ## Evaluación
 
-Estos resultados indican si la búsqueda encuentra conocimiento relacionado; no miden la calidad de las respuestas de IA.
+Estas mediciones de LongMemEval (LME) evalúan la recuperación de conocimiento guardado, no la calidad de las respuestas de IA. Recall@5 mide cuánto material relevante aparece entre los cinco primeros resultados.
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |

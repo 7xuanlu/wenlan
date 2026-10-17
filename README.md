@@ -74,9 +74,11 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 
 After installing a plugin, start a new AI session and run `/setup`. Connecting your AI needs no additional local language model.
 
-> Use my earlier notes to help me finish this task.
+Ask about the page you just opened or saved:
 
-**First success:** Your AI finds the saved note or imported document you asked for and cites a source you can check.
+> Find my note “[title]” in Wenlan and cite it.
+
+**First success:** Your AI finds that note and provides a citation you can open and check.
 
 <a id="daily-workflow"></a>
 
@@ -93,9 +95,9 @@ Simplified workflow. Plugin commands and page organization are optional, with no
 - **Start with your material.** Import documents and selected conversations as sources, or write pages in the App. You can edit, follow citations, and review proposed changes there without connecting AI.
 - **Use your knowledge and write new pages.** Ask your AI to find relevant sources and memories with `/recall` and use them for the task. It can also write a new page with citations and save it to Wenlan.
 - **Keep what you learn.** Save a decision or lesson, with its reasons and sources, in the App or with `/capture` through your AI.
-- **Pause and resume.** `/handoff` saves durable memories and a session log, and updates the current Space’s Brief with progress and next steps. Use `/brief` when you want the next session to pick up that context.
+- **Pause and resume.** Save progress and next steps with `/handoff`, which also keeps durable memories and a session log. Use `/brief` to read the project brief and pick up that context next time.
 
-**Organize accumulated memories when needed:** `/distill` synthesizes or refreshes cited pages from related memories; it is not required to write a new page. Background AI is optional. [Plugin commands](plugin/skills/README.md).
+**Organize accumulated memories when needed:** `/distill` synthesizes or refreshes cited pages from related memories; it is not required to write a new page. [Plugin commands](plugin/skills/README.md).
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -115,7 +117,7 @@ Simplified workflow. Plugin commands and page organization are optional, with no
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import. Chat imports preserve a snapshot; registered file sources can refresh from disk.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
-- **Atomic memories:** Each memory holds one reusable finding with its reasoning and source references, so it can be retrieved independently.
+- **Atomic memories:** Retrieve individual findings without loading an entire conversation or page.
 - **Knowledge graph:** Discover related topics through typed entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
@@ -162,6 +164,8 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
+**Updates follow citations.** Changing or removing a cited source or memory in Wenlan marks the pages that use it for refresh. With background AI enabled and a model available, eligible pages rebuild from current evidence; drafts with insufficient citations are rejected.
+
 - **Steep background enrichment:** Add types, structured details, search cues, and graph links to captured memories; optional page synthesis combines them with sources into cited pages.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare page versions and trace memory replacements; automatic refresh updates eligible machine-maintained pages directly and proposes revisions for pages you edited.
 - **Wiki export:** Export eligible pages as an Open Knowledge Format (OKF) wiki.
@@ -177,8 +181,6 @@ Experimental web access lets supported web clients search the whole library or o
 ## Architecture
 
 **One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; memories, relationships, and search indexes live in local libSQL.
-
-**Updates follow citations.** Changing or removing a cited source or memory in Wenlan marks the pages that use it for refresh. With background AI enabled and a model available, eligible pages rebuild from current evidence; drafts with insufficient citations are rejected.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
@@ -198,7 +200,7 @@ A cloud AI client may send retrieved knowledge to its provider, and a cloud mode
 
 ## Evaluation
 
-These results show whether Wenlan search finds related saved knowledge; they do not measure the quality of AI answers.
+These LongMemEval (LME) snapshots measure retrieval of saved knowledge, not AI answer quality. Recall@5 measures how much relevant material appears in the top five results.
 
 <!-- EVAL_SNAPSHOT_START -->
 | Benchmark | Recall@5 | MRR | NDCG@10 |
