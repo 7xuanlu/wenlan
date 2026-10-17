@@ -24,8 +24,8 @@ const BANNER_VIEWPORTS = {
 };
 
 const BANNER = {
-  // Match the App dark background; preserve the established banner text colors.
-  dark: "#191C24",
+  // Deep ink blue complements the logo; preserve the established text colors.
+  dark: "#151D2B",
   white: "#F7F8FF",
   accent: "#93E3F2",
   latin: 'Arial, "Helvetica Neue", sans-serif',

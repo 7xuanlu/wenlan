@@ -1,7 +1,7 @@
 <svg width="720" height="256" viewBox="0 0 720 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">Wenlan: 持續更新的個人維基。 AI 幫你整理，你保有主導權。</desc>
-  <rect width="720" height="256" fill="#191C24"/>
+  <rect width="720" height="256" fill="#151D2B"/>
   <g transform="translate(316 20) scale(0.171875)">
     <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
     <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-zh-Hant-mobile-ring)" stroke-width="76"/>
