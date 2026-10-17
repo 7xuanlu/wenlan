@@ -28,10 +28,11 @@ export interface WikiWorkspaceProps {
   readonly onOpenRecentPage?: (id: string) => void;
   readonly browsing?: boolean;
   readonly fullBleed?: boolean;
-  /** A library with no notes and no drafts. The directory has nothing to list,
-   *  so the workspace collapses to the reading column alone and the first-run
-   *  start panel owns the whole width. */
-  readonly libraryEmpty?: boolean;
+  /** A library with no notes and no drafts, or one whose getting-started
+   *  checklist is still open. The directory has nothing to list or would read
+   *  as a second sidebar, so the workspace collapses to the reading column
+   *  alone and the start panel owns the whole width. */
+  readonly directoryHidden?: boolean;
   readonly filter?: string;
   readonly onFilterChange?: (filter: string) => void;
   readonly onBrowse: (scope: WikiInventoryScope) => void;
@@ -59,7 +60,7 @@ export function WikiWorkspace({
   onOpenRecentPage,
   browsing = false,
   fullBleed = false,
-  libraryEmpty = false,
+  directoryHidden = false,
   filter,
   onFilterChange,
   onBrowse,
@@ -120,7 +121,7 @@ export function WikiWorkspace({
 
   return (
     <WikiFolderCreationContext.Provider value={folderCreationContext}>
-    <div className="wiki-workspace" data-library-empty={libraryEmpty ? "true" : undefined}>
+    <div className="wiki-workspace" data-directory-hidden={directoryHidden ? "true" : undefined}>
       <button
         type="button"
         className="wiki-workspace-folders-toggle"

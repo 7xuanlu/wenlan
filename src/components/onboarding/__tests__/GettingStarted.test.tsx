@@ -1,28 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n";
 import {
   clipboardWrite,
   listAgents,
   listOnboardingMilestones,
+  listPagesExplicitBrowse,
   listRegisteredSources,
   type AgentConnection,
   type MilestoneRecord,
   type Page,
   type RegisteredSource,
 } from "../../../lib/tauri";
+import { GettingStarted } from "../GettingStarted";
 import {
   ESTABLISHED_LIBRARY_PAGES,
-  GettingStarted,
   gettingStartedProgress,
-} from "../GettingStarted";
+  useGettingStartedState,
+} from "../useGettingStartedState";
 
 vi.mock("../../../lib/tauri", () => ({
   clipboardWrite: vi.fn(),
   listAgents: vi.fn(),
   listOnboardingMilestones: vi.fn(),
+  listPagesExplicitBrowse: vi.fn(),
   listRegisteredSources: vi.fn(),
 }));
 
@@ -66,6 +70,13 @@ function agent(name: string, overrides: Partial<AgentConnection> = {}): AgentCon
 const folder = { id: "src-1", source_type: "directory", path: "/notes" } as RegisteredSource;
 const recall = { id: "first-recall", first_triggered_at: 1, acknowledged_at: null, payload: null } as MilestoneRecord;
 
+/** The library the card reads through the shared inventory: active pages and
+ *  drafts come from separate lists, as the daemon serves them. */
+function mockLibrary(pages: Page[]) {
+  vi.mocked(listPagesExplicitBrowse).mockImplementation(async (status) =>
+    pages.filter((p) => (status === "draft") === (p.status === "draft")));
+}
+
 function renderCard(pages: Page[] = [], handlers: Partial<Record<"onWriteNote" | "onConnectTool" | "onAddSources" | "onSeeExample", () => void>> = {}) {
   const props = {
     onWriteNote: vi.fn(),
@@ -75,9 +86,10 @@ function renderCard(pages: Page[] = [], handlers: Partial<Record<"onWriteNote" |
     ...handlers,
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  mockLibrary(pages);
   render(
     <QueryClientProvider client={client}>
-      <GettingStarted pages={pages} pagesReady {...props} />
+      <GettingStarted {...props} />
     </QueryClientProvider>,
   );
   return props;
@@ -144,6 +156,7 @@ describe("GettingStarted", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([]);
     vi.mocked(listAgents).mockResolvedValue([]);
     vi.mocked(listRegisteredSources).mockResolvedValue([]);
     vi.mocked(listOnboardingMilestones).mockResolvedValue([]);
@@ -235,5 +248,87 @@ describe("GettingStarted", () => {
     fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.checklist.reopen") }));
     expect(screen.getByRole("heading", { name: title() })).toBeInTheDocument();
     expect(localStorage.getItem("onboarding:gettingStartedDismissed")).toBeNull();
+  });
+});
+
+describe("useGettingStartedState", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    vi.mocked(listPagesExplicitBrowse).mockResolvedValue([]);
+    vi.mocked(listAgents).mockResolvedValue([]);
+    vi.mocked(listRegisteredSources).mockResolvedValue([]);
+    vi.mocked(listOnboardingMilestones).mockResolvedValue([]);
+  });
+
+  function renderState() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    return renderHook(() => useGettingStartedState(), { wrapper });
+  }
+
+  it("is not visible until every read has loaded", async () => {
+    const { result } = renderState();
+    expect(result.current.visible).toBe(false);
+    await waitFor(() => expect(result.current.visible).toBe(true));
+    expect(result.current.doneCount).toBe(0);
+    expect(result.current.dismissed).toBe(false);
+  });
+
+  it("counts finished steps and stays visible while collapsed", async () => {
+    mockLibrary([page()]);
+    vi.mocked(listAgents).mockResolvedValue([agent("claude-code")]);
+    const { result } = renderState();
+    await waitFor(() => expect(result.current.visible).toBe(true));
+    expect(result.current.doneCount).toBe(2);
+    expect(result.current.progress).toMatchObject({ note: true, tool: true, sources: false, recall: false });
+
+    act(() => result.current.setDismissed(true));
+    expect(result.current.visible).toBe(true);
+    expect(result.current.dismissed).toBe(true);
+    expect(localStorage.getItem("onboarding:gettingStartedDismissed")).toBe("1");
+
+    act(() => result.current.setDismissed(false));
+    expect(result.current.dismissed).toBe(false);
+  });
+
+  it("shares the dismissed choice between two consumers", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => ({ a: useGettingStartedState(), b: useGettingStartedState() }), { wrapper });
+    await waitFor(() => expect(result.current.a.visible).toBe(true));
+    act(() => result.current.a.setDismissed(true));
+    expect(result.current.b.dismissed).toBe(true);
+    act(() => result.current.b.setDismissed(false));
+  });
+
+  it("is not visible when a read fails, the library is established, or all steps are done", async () => {
+    vi.mocked(listAgents).mockRejectedValue(new Error("daemon down"));
+    const failed = renderState();
+    await waitFor(() => expect(listAgents).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(failed.result.current.visible).toBe(false);
+    failed.unmount();
+
+    vi.mocked(listAgents).mockResolvedValue([]);
+    mockLibrary(Array.from({ length: ESTABLISHED_LIBRARY_PAGES }, (_, i) => page({ id: `p${i}` })));
+    const established = renderState();
+    await waitFor(() => expect(listPagesExplicitBrowse).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(established.result.current.visible).toBe(false);
+    established.unmount();
+
+    mockLibrary([page()]);
+    vi.mocked(listAgents).mockResolvedValue([agent("codex")]);
+    vi.mocked(listRegisteredSources).mockResolvedValue([folder]);
+    vi.mocked(listOnboardingMilestones).mockResolvedValue([recall]);
+    const done = renderState();
+    await waitFor(() => expect(listOnboardingMilestones).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(done.result.current.visible).toBe(false);
   });
 });

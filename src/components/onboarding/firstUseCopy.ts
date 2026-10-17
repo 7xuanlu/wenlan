@@ -66,7 +66,6 @@ export const enFirstUse = {
   },
   checklist: {
     title: "Get started with Wenlan",
-    lede: "Wenlan is a personal wiki that you and your AI tools build together. These steps show you what it can do.",
     progress: "{{done}} of {{total}} done",
     done: "Done",
     hide: "Hide getting started",
@@ -74,13 +73,13 @@ export const enFirstUse = {
     steps: {
       note: {
         title: "Write your first note",
-        body: "Write down anything: a plan, an idea, or something you learned today. It counts once you save it.",
+        body: "Write down anything. It counts once you save it.",
         draftBody: "Your note is still a draft. Leave the editor and it is saved as a page your AI tools can find.",
         action: "Write a note",
       },
       tool: {
         title: "Connect an AI tool",
-        body: "Let Claude Code, Codex or ChatGPT read and write your library, so it remembers you from one chat to the next.",
+        body: "Let Claude Code, Codex or ChatGPT read and write your library.",
         action: "Connect a tool",
       },
       sources: {
@@ -90,7 +89,7 @@ export const enFirstUse = {
       },
       recall: {
         title: "Let your AI use what you saved",
-        body: "Ask a connected tool about something in your library and see it answer with the source.",
+        body: "Ask a connected tool about your notes. It answers with the source.",
         action: "See an example",
         promptLead: "Ask {{tool}}:",
         prompt: "Did I save anything about \"{{title}}\"? Recap it and tell me where it came from.",
@@ -190,7 +189,6 @@ export const hansFirstUse = {
   },
   checklist: {
     title: "开始使用文澜",
-    lede: "文澜是你和 AI 工具一起搭建的个人知识库。完成下面几步，就能看到它能做什么。",
     progress: "已完成 {{done}}/{{total}}",
     done: "已完成",
     hide: "隐藏开始使用清单",
@@ -198,23 +196,23 @@ export const hansFirstUse = {
     steps: {
       note: {
         title: "写下第一篇笔记",
-        body: "写下任何内容：一个计划、一个想法，或今天学到的东西。保存后这一步就完成。",
+        body: "随便写点什么，保存后就算完成。",
         draftBody: "你的笔记还是草稿。离开编辑器后它才会保存为页面，AI 工具才能找到。",
         action: "写笔记",
       },
       tool: {
         title: "连接一个 AI 工具",
-        body: "让 Claude Code、Codex 或 ChatGPT 读写你的知识库，换一个对话也记得你。",
+        body: "让 Claude Code、Codex 或 ChatGPT 读写你的库。",
         action: "连接工具",
       },
       sources: {
         title: "带入已有资料",
-        body: "添加一个笔记文件夹或 Obsidian 笔记库。",
+        body: "加一个笔记文件夹或 Obsidian 库。",
         action: "添加来源",
       },
       recall: {
         title: "让 AI 用上你存的内容",
-        body: "在已连接的工具里问一个知识库里有的问题，看它带着出处回答。",
+        body: "问连接好的工具一件笔记里的事，它会带出处回答。",
         action: "看示例",
         promptLead: "在 {{tool}} 里问它：",
         prompt: "我之前记过「{{title}}」相关的内容吗？帮我回顾一下，并说明来源。",
@@ -311,7 +309,6 @@ export const hantFirstUse = {
   },
   checklist: {
     title: "開始使用文瀾",
-    lede: "文瀾是你和 AI 工具一起建立的個人知識庫。完成下面幾步，就能看到它能做什麼。",
     progress: "已完成 {{done}}/{{total}}",
     done: "已完成",
     hide: "隱藏開始使用清單",
@@ -319,23 +316,23 @@ export const hantFirstUse = {
     steps: {
       note: {
         title: "寫下第一篇筆記",
-        body: "寫下任何內容：一個計畫、一個想法，或今天學到的東西。儲存後這一步就完成。",
+        body: "隨便寫點什麼，儲存後就算完成。",
         draftBody: "你的筆記還是草稿。離開編輯器後它才會儲存為頁面，AI 工具才能找到。",
         action: "寫筆記",
       },
       tool: {
         title: "連接一個 AI 工具",
-        body: "讓 Claude Code、Codex 或 ChatGPT 讀寫你的知識庫，換一個對話也記得你。",
+        body: "讓 Claude Code、Codex 或 ChatGPT 讀寫你的庫。",
         action: "連接工具",
       },
       sources: {
         title: "帶入既有資料",
-        body: "新增一個筆記資料夾或 Obsidian 筆記庫。",
+        body: "加一個筆記資料夾或 Obsidian 庫。",
         action: "新增來源",
       },
       recall: {
         title: "讓 AI 用上你存的內容",
-        body: "在已連接的工具裡問一個知識庫裡有的問題，看它帶著出處回答。",
+        body: "問連接好的工具一件筆記裡的事，它會附出處回答。",
         action: "看範例",
         promptLead: "在 {{tool}} 裡問它：",
         prompt: "我之前記過「{{title}}」相關的內容嗎？幫我回顧一下，並說明來源。",

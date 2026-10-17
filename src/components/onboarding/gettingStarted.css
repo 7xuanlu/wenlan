@@ -5,7 +5,7 @@
 .getting-started {
   margin: 0 auto;
   max-width: min(100%, 560px);
-  padding: 18px 20px 8px;
+  padding: 14px 20px 4px;
   border: 1px solid var(--mem-border);
   border-radius: var(--mem-radius-lg);
   background-color: var(--mem-surface);
@@ -23,12 +23,6 @@
   margin: 0;
   color: var(--mem-text);
   font: 600 16px/1.35 var(--mem-font-body);
-}
-
-.getting-started-lede {
-  margin: 6px 0 0;
-  color: var(--mem-text-secondary);
-  font: 13px/1.6 var(--mem-font-body);
 }
 
 .getting-started-hide {
@@ -52,7 +46,7 @@
 }
 
 .getting-started-progress {
-  margin: 12px 0 4px;
+  margin: 2px 0 2px;
   color: var(--mem-text-tertiary);
   font: 12px/1.5 var(--mem-font-body);
 }
@@ -67,7 +61,7 @@
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 10px 0;
+  padding: 8px 0;
 }
 
 .getting-started-icon {
@@ -105,9 +99,9 @@
 }
 
 .getting-started-step-body {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   color: var(--mem-text-secondary);
-  font: 13px/1.55 var(--mem-font-body);
+  font: 13px/1.5 var(--mem-font-body);
   overflow-wrap: anywhere;
 }
 
@@ -169,35 +163,22 @@
   }
 }
 
-/* While the checklist shows, the reading-start panel gives up its tall
-   centring box so the steps sit above the fold at the default window size. */
-.wiki-reading-start:has(.getting-started) .wiki-reading-start-panel {
-  flex: 0 0 auto;
-  padding: 48px 20px 28px;
-}
-
-@media (max-width: 639px) {
-  .wiki-reading-start:has(.getting-started) .wiki-reading-start-panel {
-    padding: 28px 8px 20px;
-  }
-}
-
 /* The question to paste into the connected tool, under the recall step. */
 .getting-started-prompt {
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .getting-started-prompt-lead {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   color: var(--mem-text-secondary);
-  font: 13px/1.5 var(--mem-font-body);
+  font: 13px/1.4 var(--mem-font-body);
 }
 
 .getting-started-prompt-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--mem-border);
   border-radius: var(--mem-radius-md);
   background-color: var(--mem-bg);
@@ -207,24 +188,13 @@
   flex: 1;
   min-width: 0;
   color: var(--mem-text);
-  font: 13px/1.5 var(--mem-font-body);
+  font: 13px/1.4 var(--mem-font-body);
   overflow-wrap: anywhere;
 }
 
-/* An empty library has nothing to open or search, so the panel keeps only
-   its title (the Wiki's landmark heading) and the checklist offers the first
-   note in its place. */
-.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-panel {
-  padding-bottom: 16px;
-}
-
-.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-panel p,
-.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-icon {
-  display: none;
-}
-
 /* With the directory gone the checklist is the whole screen, so it may be a
-   little wider than the two-column default. */
-.wiki-reading-start[data-library-empty="true"] .getting-started {
+   little wider than the two-column default. The compact reading-start panel
+   above it lives in wikiInventoryOverview.css. */
+.wiki-reading-start[data-onboarding="true"] .getting-started {
   max-width: min(100%, 620px);
 }

@@ -43,10 +43,11 @@ function createFirstRunFixture(): SpacesNavigationFixture {
   };
 }
 
-async function openWiki(page: BrowserPage, fixture: SpacesNavigationFixture) {
+async function openWiki(page: BrowserPage, fixture: SpacesNavigationFixture, { gettingStarted = false } = {}) {
   const browserErrors = collectBrowserErrors(page);
   await installTauriMock(page, {
     fixture,
+    gettingStarted,
     locale: "en",
     localStorage: { "wenlan-theme": "dark" },
     rawActions: [],
@@ -110,6 +111,38 @@ for (const [label, makeFixture] of LIBRARIES) {
     expect(browserErrors.consoleErrors).toEqual([]);
   });
 }
+
+test("a new user's home keeps one column and fits 1280x800 while getting started is open", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const populated = createSpacesNavigationFixture();
+  await openWiki(page, { ...populated, pages: populated.pages.slice(0, 2) }, { gettingStarted: true });
+
+  const checklist = page.getByTestId("getting-started");
+  await expect(checklist).toBeVisible();
+  await expect(page.locator(".wiki-reading-start")).toHaveAttribute("data-onboarding", "true");
+  await expect(page.locator(".wiki-workspace")).toHaveAttribute("data-directory-hidden", "true");
+  await expect(page.locator(".wiki-workspace-directory")).toBeHidden();
+  const overflow = await page.evaluate(() => {
+    const scroller = document.querySelector(".note-group-content") ?? document.documentElement;
+    return {
+      document: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+      content: scroller.scrollHeight - scroller.clientHeight,
+    };
+  });
+  expect(overflow.document).toBeLessThanOrEqual(0);
+  expect(overflow.content).toBeLessThanOrEqual(0);
+
+  // Adding a source opens its dialog without leaving the Wiki.
+  await checklist.getByRole("button", { name: "Add a source" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+
+  // Hiding the card brings the directory back.
+  await checklist.getByRole("button", { name: "Hide getting started" }).click();
+  await expect(page.locator(".wiki-workspace-directory")).toBeVisible();
+  await expect(page.locator(".wiki-reading-start")).not.toHaveAttribute("data-onboarding");
+});
 
 test("empty notes can start writing without AI setup", async ({ page }) => {
   await page.setViewportSize({ ...DEFAULT_WINDOW });

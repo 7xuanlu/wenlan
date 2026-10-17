@@ -176,19 +176,19 @@ describe("WikiWorkspace", () => {
     expect(container.querySelector(".wiki-recent-notes-list")).not.toBeInTheDocument();
   });
 
-  it("marks the workspace only while the library is empty so CSS can drop the directory", () => {
+  it("marks the workspace only while the directory is hidden so CSS can drop it", () => {
     const props = { onBrowse: vi.fn(), onCreatePage: vi.fn(), onOpenDraft: vi.fn(), onOpenPage: vi.fn() };
     const { container, rerender } = render(<WikiWorkspace {...props}><textarea /></WikiWorkspace>);
     const workspace = container.querySelector(".wiki-workspace");
-    expect(workspace).not.toHaveAttribute("data-library-empty");
+    expect(workspace).not.toHaveAttribute("data-directory-hidden");
 
-    rerender(<WikiWorkspace {...props} libraryEmpty><textarea /></WikiWorkspace>);
-    expect(workspace).toHaveAttribute("data-library-empty", "true");
+    rerender(<WikiWorkspace {...props} directoryHidden><textarea /></WikiWorkspace>);
+    expect(workspace).toHaveAttribute("data-directory-hidden", "true");
     // The folders toggle and directory stay mounted (CSS hides them) so the
     // two-column layout returns without remounting the reading column.
     expect(container.querySelector(".wiki-workspace-directory")).toBeInTheDocument();
 
-    rerender(<WikiWorkspace {...props} libraryEmpty={false}><textarea /></WikiWorkspace>);
-    expect(workspace).not.toHaveAttribute("data-library-empty");
+    rerender(<WikiWorkspace {...props} directoryHidden={false}><textarea /></WikiWorkspace>);
+    expect(workspace).not.toHaveAttribute("data-directory-hidden");
   });
 });

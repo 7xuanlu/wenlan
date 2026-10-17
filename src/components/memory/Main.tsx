@@ -27,6 +27,7 @@ import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
 import { FirstUseGuide } from "../onboarding/FirstUseGuide";
+import { useGettingStartedState } from "../onboarding/useGettingStartedState";
 import AtlasView from "./AtlasView";
 import { SearchResults } from "./SearchResults";
 import MemoryDetail from "./MemoryDetail";
@@ -933,8 +934,12 @@ export default function Main({
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
-  // A brand-new library gets a single-column Wiki; see WikiWorkspace `libraryEmpty`.
+  // The directory has nothing to say to a brand-new library, and it reads as a
+  // second sidebar next to the open getting-started checklist, so both give the
+  // Wiki a single column; see WikiWorkspace `directoryHidden`.
   const { empty: libraryEmpty } = useLibraryInventory();
+  const gettingStarted = useGettingStartedState();
+  const directoryHidden = libraryEmpty || (gettingStarted.visible && !gettingStarted.dismissed);
 
   useEffect(() => {
     if (!mobileSearchOpen) return;
@@ -1342,7 +1347,7 @@ export default function Main({
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
             <WikiWorkspace
-              libraryEmpty={libraryEmpty}
+              directoryHidden={directoryHidden}
               tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
               secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
               inventoryMode={wikiInventoryMode}
@@ -1369,7 +1374,6 @@ export default function Main({
                 onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
                 onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
                 onConnectTool={() => navigateTo({ kind: "connect-agent" })}
-                onAddSources={() => navigateTo({ kind: "sources" })}
                 onSeeExample={() => navigateTo({ kind: "first-use" })}
               />
             </WikiWorkspace>

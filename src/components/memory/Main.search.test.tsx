@@ -68,6 +68,10 @@ vi.mock("../../lib/tauri", () => ({
   getMemoryStats: vi.fn().mockResolvedValue({ total: 0, new_today: 0, confirmed: 0, domains: [] }),
   searchEntities: vi.fn().mockResolvedValue([]),
   searchPages: vi.fn().mockResolvedValue([]),
+  // Main reads the getting-started state to decide whether the Wiki shows its directory.
+  listAgents: vi.fn().mockResolvedValue([]),
+  listRegisteredSources: vi.fn().mockResolvedValue([]),
+  listOnboardingMilestones: vi.fn().mockResolvedValue([]),
   listSpaces: listSpacesMock,
   openFile: openFileMock,
   openSearchResult: openSearchResultMock,
