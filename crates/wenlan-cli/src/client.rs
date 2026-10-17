@@ -27,8 +27,9 @@ use wenlan_types::{
         StoreMemoryResponse,
     },
     sources::Source,
-    BriefReadRequest, BriefReadResponse, BriefUpdateReceipt, BriefUpdateRequest, EntityDetail,
-    OutboxDrainReport, PageSourceWithMemory,
+    BriefHistoryResponse, BriefReadRequest, BriefReadResponse, BriefUpdateReceipt,
+    BriefUpdateRequest, BriefVersionResponse, EntityDetail, OutboxDrainReport,
+    PageSourceWithMemory,
 };
 
 mod lint;
@@ -340,6 +341,18 @@ impl WenlanClient {
     /// PATCH /api/brief — item-level handoff deltas.
     pub async fn update_brief(&self, request: &BriefUpdateRequest) -> Result<BriefUpdateReceipt> {
         self.patch_json("/api/brief", request).await
+    }
+
+    /// GET /api/brief/history — past Brief updates, newest first.
+    pub async fn brief_history(&self, limit: usize) -> Result<BriefHistoryResponse> {
+        self.get_json(&format!("/api/brief/history?limit={limit}"), true)
+            .await
+    }
+
+    /// GET /api/brief/history/{version} — the Brief as of one past update.
+    pub async fn brief_version(&self, version: i64) -> Result<BriefVersionResponse> {
+        self.get_json(&format!("/api/brief/history/{version}"), true)
+            .await
     }
 
     /// POST /api/memory/store — write a memory.

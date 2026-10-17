@@ -306,6 +306,26 @@ Options:
 
 - `--file <JSON_FILE>`: JSON file containing a BriefUpdateRequest.
 
+#### `wenlan brief history`
+
+List past Brief updates, newest first.
+
+```text
+wenlan brief history [OPTIONS]
+```
+
+Options:
+
+- `-l, --limit <LIMIT>`: Maximum number of updates to list. Default: `20`.
+
+#### `wenlan brief show`
+
+Show the Brief as it stood after one past update.
+
+```text
+wenlan brief show [OPTIONS] --version <VERSION>
+```
+
 ### `wenlan capture`
 
 Capture a memory. Provide text positionally, or use --file, or pipe via stdin.
