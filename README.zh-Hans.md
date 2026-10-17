@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7698c8ab135c583e46a5e26a1a91f14fab859bb2f13ab8d06c9364b6516418f1 -->
+<!-- README_SYNC: source=README.md sha256=cc6d28d455866bcfe9ae071404573998eb1464632de1e33d2383731dceafcdfd -->
 
 <p align="center">
   <picture>
@@ -74,7 +74,7 @@
 | Codex | 插件 | [Codex 指南](docs/setup-with-ai.md#codex) |
 | Cursor、Claude Desktop、VS Code、Gemini CLI | MCP | [MCP 指南](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
 
-连接 AI 无需另装本地语言模型；可选的后台整理和自动更新才需[另外配置模型](docs/setup-and-data.zh-Hans.md#models)。
+安装插件后，开启新的 AI 对话并运行 `/setup`。连接 AI 无需另装本地语言模型。
 
 > 参考我之前的笔记，帮我接着完成这个任务。
 
@@ -121,7 +121,7 @@
 
 ## 让 AI 接续已有知识
 
-用上已有知识，保存新经验。**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
+**插件**提供何时搜索和保存的指引；**仅连接 MCP** 则提供工具，由 AI 按任务需要或你的要求调用。
 
 - **[本地混合检索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同词句、BGE 向量找出相近语义，再以加权 RRF 合并排名；基础搜索无需 API key。
 - **图谱辅助排序**：有可用的实体连接时，提高相关记忆的排名，也可选用 cross-encoder reranking 精排结果。
@@ -149,17 +149,15 @@
 
 ## 更新知识，保留历史
 
-- **Steep 后台整理**：配置[模型](docs/setup-and-data.zh-Hans.md#models)后，为记忆补上类型、结构化信息、搜索线索与图谱连接；页面合成可选用。
+- **Steep 后台整理**：为记忆补上类型、结构化信息、搜索线索与图谱连接；页面合成可选用。
 - **[修订审核与历史](docs/knowledge-guide.zh-Hans.md#updates-and-history)**：比较页面版本、追溯记忆的替代关系；自动更新时，符合条件的 AI 维护页面直接更新，你编辑过的页面则提出修订供审核。
 - **维基导出**：将符合条件的页面导出为 Open Knowledge Format（OKF）维基。
-- **自由选择模型运行方式**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商运行整理与页面合成。
+- **[可选的后台模型](docs/setup-and-data.zh-Hans.md#models)**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商启用整理、页面合成和自动更新。
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hans.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
 </p>
 <p>实机画面的翻译合成图，搭配示范数据；连线为示意。</p>
-
-自动更新会拒绝引用不足的草稿。
 
 <a id="architecture"></a>
 
@@ -167,7 +165,7 @@
 
 **共用本地知识库。** App、CLI 与 AI 工具通过 Wenlan 本地服务读写。页面以 Markdown 保存；记忆、关系与搜索索引由本地 libSQL 管理。
 
-**沿引用关系更新。** 来源或记忆在 Wenlan 中更新或移除时，依据追踪会标记相关页面；启用后台 AI 并有可用模型后，再依更新与审核条件整理。
+**沿引用关系更新。** 来源或记忆在 Wenlan 中更新或移除时，依据追踪会标记相关页面；启用后台 AI 并有可用模型后，更新符合条件的页面，拒绝引用不足的草稿。
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">

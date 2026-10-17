@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7698c8ab135c583e46a5e26a1a91f14fab859bb2f13ab8d06c9364b6516418f1 -->
+<!-- README_SYNC: source=README.md sha256=cc6d28d455866bcfe9ae071404573998eb1464632de1e33d2383731dceafcdfd -->
 
 <p align="center">
   <picture>
@@ -74,7 +74,7 @@ Elige **Open notes** para entrar en Wenlan. Explora el ejemplo de bienvenida o c
 | Codex | Plugin | [Guía de Codex](docs/setup-with-ai.md#codex) |
 | Cursor, Claude Desktop, VS Code, Gemini CLI | MCP | [Guía de MCP](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
 
-Conectar una IA no requiere otro modelo de lenguaje local. La organización en segundo plano y las actualizaciones automáticas opcionales necesitan un [modelo configurado por separado](docs/setup-and-data.es-ES.md#models).
+Tras instalar un plugin, inicia una nueva sesión de IA y ejecuta `/setup`. Conectar tu IA no requiere otro modelo de lenguaje local.
 
 > Usa mis notas anteriores para ayudarme a terminar esta tarea.
 
@@ -121,7 +121,7 @@ Edita **páginas Markdown con citas** y enlaza contenido relacionado mediante `[
 
 ## Pon tu conocimiento a trabajar con IA
 
-Reutiliza hallazgos anteriores y guarda nuevas lecciones. Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
+Los **plugins** orientan a tu IA sobre cuándo buscar y guardar; las **conexiones solo por MCP** ofrecen herramientas que la IA puede usar según la tarea o cuando se lo pidas.
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza memorias relacionadas cuando hay enlaces entre entidades, con reranking cross-encoder opcional para afinar la relevancia.
@@ -149,17 +149,15 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 
 ## Actualiza el conocimiento, conserva su historial
 
-- **Enriquecimiento en segundo plano con Steep:** Con un [modelo configurado](docs/setup-and-data.es-ES.md#models), prepara memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de páginas es opcional.
+- **Enriquecimiento en segundo plano con Steep:** Prepara memorias para reutilizarlas con tipos, datos estructurados, pistas de búsqueda y enlaces al grafo; la síntesis de páginas es opcional.
 - **[Revisión e historial](docs/knowledge-guide.es-ES.md#updates-and-history):** Compara versiones de páginas y sigue las sustituciones de memorias; la actualización automática modifica directamente las páginas mantenidas por la IA que cumplen los requisitos y propone revisiones para las que hayas editado.
 - **Exportación de wikis:** Exporta las páginas aptas como una wiki Open Knowledge Format (OKF).
-- **Elige cómo ejecutar los modelos:** Ejecuta el enriquecimiento y la síntesis con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
+- **[Modelos opcionales en segundo plano](docs/setup-and-data.es-ES.md#models):** Activa el enriquecimiento, la síntesis y la actualización automática con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
 </p>
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
-
-La actualización automática rechaza los borradores con citas insuficientes.
 
 <a id="architecture"></a>
 
@@ -167,7 +165,7 @@ La actualización automática rechaza los borradores con citas insuficientes.
 
 **Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las páginas son archivos Markdown; memorias, relaciones e índices de búsqueda residen en libSQL local.
 
-**Las actualizaciones siguen las citas.** Cuando una fuente o memoria cambia o se elimina en Wenlan, el seguimiento de evidencias marca las páginas afectadas. Con la IA en segundo plano activada y un modelo disponible, se actualizan según las reglas de actualización y revisión.
+**Las actualizaciones siguen las citas.** Cuando una fuente o memoria cambia o se elimina en Wenlan, el seguimiento de evidencias marca las páginas afectadas. Con la IA en segundo plano activada y un modelo disponible, se actualizan las páginas aptas; se rechazan los borradores con citas insuficientes.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">

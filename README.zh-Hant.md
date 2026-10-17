@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7698c8ab135c583e46a5e26a1a91f14fab859bb2f13ab8d06c9364b6516418f1 -->
+<!-- README_SYNC: source=README.md sha256=cc6d28d455866bcfe9ae071404573998eb1464632de1e33d2383731dceafcdfd -->
 
 <p align="center">
   <picture>
@@ -74,7 +74,7 @@
 | Codex | 插件 | [Codex 指南](docs/setup-with-ai.md#codex) |
 | Cursor、Claude Desktop、VS Code、Gemini CLI | MCP | [MCP 指南](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
 
-連接 AI 不必另裝本地語言模型；選配的背景整理與自動更新才需[另外設定模型](docs/setup-and-data.zh-Hant.md#models)。
+安裝插件後，開啟新的 AI 對話並執行 `/setup`。連接 AI 不必另裝本地語言模型。
 
 > 參考我之前的筆記，幫我接著完成這個任務。
 
@@ -121,7 +121,7 @@
 
 ## 讓 AI 接續已有知識
 
-用上已有知識，保存新經驗。**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
+**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
@@ -149,17 +149,15 @@
 
 ## 更新知識，保留歷史
 
-- **Steep 背景整理**：設定[模型](docs/setup-and-data.zh-Hant.md#models)後，為記憶補上類型、結構化資訊、搜尋線索與圖譜連結；頁面合成可選用。
+- **Steep 背景整理**：為記憶補上類型、結構化資訊、搜尋線索與圖譜連結；頁面合成可選用。
 - **[修訂審核與歷史](docs/knowledge-guide.zh-Hant.md#updates-and-history)**：比較頁面版本、追溯記憶的取代關係；自動更新時，符合條件的 AI 維護頁面直接更新，你編輯過的頁面則提出修訂供審核。
 - **維基匯出**：將符合條件的頁面匯出為 Open Knowledge Format（OKF）維基。
-- **自由選擇模型執行方式**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商執行整理與頁面合成。
+- **[選配的背景模型](docs/setup-and-data.zh-Hant.md#models)**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商啟用整理、頁面合成與自動更新。
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
 </p>
 <p>實機畫面搭配示範資料；連線與標註為示意。</p>
-
-自動更新會拒絕引用不足的草稿。
 
 <a id="architecture"></a>
 
@@ -167,7 +165,7 @@
 
 **共用本地知識庫。** App、CLI 與 AI 工具透過 Wenlan 本地服務讀寫。頁面以 Markdown 保存；記憶、關係與搜尋索引由本地 libSQL 管理。
 
-**沿引用關係更新。** 來源或記憶在 Wenlan 中更新或移除時，依據追蹤會標記相關頁面；啟用背景 AI 並有可用模型後，再依更新與審核條件整理。
+**沿引用關係更新。** 來源或記憶在 Wenlan 中更新或移除時，依據追蹤會標記相關頁面；啟用背景 AI 並有可用模型後，更新符合條件的頁面，拒絕引用不足的草稿。
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">

@@ -72,7 +72,7 @@ Choose **Open notes** to enter Wenlan. Explore the sample from the welcome scree
 | Codex | Plugin | [Codex guide](docs/setup-with-ai.md#codex) |
 | Cursor, Claude Desktop, VS Code, Gemini CLI | MCP | [MCP guide](docs/setup-with-ai.md#mcp-only-setup-and-other-clients) |
 
-Connecting an AI tool needs no additional local language model. Optional background organization and automatic updates require a separately configured [model](docs/setup-and-data.md#models).
+After installing a plugin, start a new AI session and run `/setup`. Connecting your AI needs no additional local language model.
 
 > Use my earlier notes to help me finish this task.
 
@@ -117,7 +117,7 @@ Edit **Markdown pages with citations** and link related content through `[[wikil
 
 ## Put your knowledge to work with AI
 
-Reuse earlier findings and save new lessons. **Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
+**Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related memories higher when entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -144,17 +144,15 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-- **Steep background enrichment:** With a [configured model](docs/setup-and-data.md#models), prepare captured memories for reuse with types, structured details, search cues, and graph links; page synthesis is optional.
+- **Steep background enrichment:** Prepare captured memories for reuse with types, structured details, search cues, and graph links; page synthesis is optional.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare page versions and trace memory replacements; automatic refresh updates eligible machine-maintained pages directly and proposes revisions for pages you edited.
 - **Wiki export:** Export eligible pages as an Open Knowledge Format (OKF) wiki.
-- **Choose the model runtime:** Run enrichment and synthesis with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
+- **[Optional background models](docs/setup-and-data.md#models):** Enable enrichment, synthesis, and automatic refresh with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
   <img src="./docs/assets/wenlan-updates-history.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
 <p>Localized App-view composite with demo data; connections are illustrative.</p>
-
-Automatic refresh rejects drafts without enough citations.
 
 <a id="architecture"></a>
 
@@ -162,7 +160,7 @@ Automatic refresh rejects drafts without enough citations.
 
 **One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; memories, relationships, and search indexes live in local libSQL.
 
-**Updates follow citations.** When a cited source or memory changes or is removed in Wenlan, evidence tracking marks affected pages. With background AI enabled and a model available, eligible pages refresh under the update and review rules.
+**Updates follow citations.** When a cited source or memory changes or is removed in Wenlan, evidence tracking marks affected pages. With background AI enabled and a model available, eligible pages refresh; drafts with insufficient citations are rejected.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
