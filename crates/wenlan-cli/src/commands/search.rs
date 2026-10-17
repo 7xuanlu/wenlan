@@ -30,8 +30,9 @@ fn print_table(resp: &SearchResponse) {
 }
 
 fn format_table(resp: &SearchResponse) -> String {
+    let pages = super::format_supplemental_pages(resp.supplemental_pages.as_deref());
     if resp.results.is_empty() {
-        return "(no results)\n".to_string();
+        return format!("(no results)\n{pages}");
     }
     let mut output = format!(
         "{} result(s) in {:.0}ms\n",
@@ -56,8 +57,6 @@ fn format_table(resp: &SearchResponse) -> String {
             r.score, title_disp, r.source_id
         ));
     }
-    output.push_str(&super::format_supplemental_pages(
-        resp.supplemental_pages.as_deref(),
-    ));
+    output.push_str(&pages);
     output
 }

@@ -46,11 +46,11 @@ pub(crate) fn format_supplemental_pages(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::format_supplemental_pages;
     use wenlan_types::memory::SearchResult;
 
-    fn page(title: &str, source_id: &str) -> SearchResult {
+    pub(crate) fn page(title: &str, source_id: &str) -> SearchResult {
         SearchResult {
             id: "p1".to_string(),
             content: "First page line\nSecond page line".to_string(),

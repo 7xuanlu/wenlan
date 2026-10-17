@@ -26,8 +26,11 @@ pub async fn run(
 }
 
 fn format_table(response: &SearchMemoryResponse) -> String {
+    let pages = super::format_supplemental_pages(response.supplemental_pages.as_deref());
     if response.results.is_empty() {
-        return "(no recalled memories)\n".to_string();
+        // Pages can match when no memory does (a new library holds notes
+        // before any memory), so they still print under the empty line.
+        return format!("(no recalled memories)\n{pages}");
     }
     let mut output = format!(
         "{} recalled memor{} in {:.0}ms\n",
@@ -55,8 +58,38 @@ fn format_table(response: &SearchMemoryResponse) -> String {
             result.score, title, result.source_id
         ));
     }
-    output.push_str(&super::format_supplemental_pages(
-        response.supplemental_pages.as_deref(),
-    ));
+    output.push_str(&pages);
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_table;
+    use crate::commands::tests::page;
+    use wenlan_types::responses::SearchMemoryResponse;
+
+    #[test]
+    fn pages_print_when_no_memory_matches() {
+        let response = SearchMemoryResponse {
+            results: Vec::new(),
+            took_ms: 1.0,
+            supplemental_pages: Some(vec![page("Sourdough starter routine", "page_1")]),
+        };
+        let output = format_table(&response);
+        assert!(output.starts_with("(no recalled memories)\n"), "{output}");
+        assert!(
+            output.contains("Compiled pages:\n  - Sourdough starter routine (page_1)"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn nothing_matched_prints_only_the_empty_line() {
+        let response = SearchMemoryResponse {
+            results: Vec::new(),
+            took_ms: 1.0,
+            supplemental_pages: None,
+        };
+        assert_eq!(format_table(&response), "(no recalled memories)\n");
+    }
 }
