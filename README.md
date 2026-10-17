@@ -7,7 +7,7 @@
 
 <p align="center">
   Wenlan organizes scattered notes, documents, and conversations into a knowledge base that stays current and links back to its sources,<br>
-  so you and AI tools like Claude and Codex can use it to find answers and get work done.
+  so you and AI tools like Claude and Codex can reuse what you learned without explaining past decisions again.
 </p>
 
 <p align="center">
@@ -92,11 +92,11 @@ After installing a plugin, start a new AI session and run `/setup`. Connecting y
 
 ## Organize scattered material into knowledge
 
-Edit **Markdown pages with citations** and link related content through `[[wikilinks]]`. Follow a citation to check the original document, conversation, or saved memory behind an idea.
+**Sources** preserve the material you read; **memories** capture findings and the reasoning behind them. Bring both together in **Markdown pages with citations** you can read, edit, and connect with `[[wikilinks]]`. Follow citations back to the supporting material.
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import. Chat imports preserve a snapshot; registered file sources can refresh from disk.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
-- **Quick Capture and atomic memories:** Save one decision, lesson, or preference at a time in the app or through your AI, with its source.
+- **Quick Capture and atomic memories:** Save individual decisions, lessons, and preferences with their reasons and sources, in the app or through your AI.
 - **Knowledge graph:** Discover related topics through typed entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
@@ -117,7 +117,7 @@ Edit **Markdown pages with citations** and link related content through `[[wikil
 
 ## Put your knowledge to work with AI
 
-**Plugins** guide your AI on when to search and save; **MCP-only connections** provide tools the AI can call as needed or at your request.
+Use the same knowledge base across AI tools. **Plugins** guide when to retrieve earlier context and save new decisions; **MCP-only connections** let your AI call these tools as needed or at your request.
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related memories higher when entity links are available, with optional cross-encoder reranking to refine relevance.
@@ -144,7 +144,7 @@ Experimental web access lets supported web clients search the whole library or o
 
 ## Keep knowledge current, with its history
 
-- **Steep background enrichment:** Prepare captured memories for reuse with types, structured details, search cues, and graph links; page synthesis is optional.
+- **Steep background enrichment:** Add types, structured details, search cues, and graph links to captured memories; optional page synthesis combines them with sources into cited pages.
 - **[Revision review and history](docs/knowledge-guide.md#updates-and-history):** Compare page versions and trace memory replacements; automatic refresh updates eligible machine-maintained pages directly and proposes revisions for pages you edited.
 - **Wiki export:** Export eligible pages as an Open Knowledge Format (OKF) wiki.
 - **[Optional background models](docs/setup-and-data.md#models):** Enable enrichment, synthesis, and automatic refresh with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
@@ -160,7 +160,7 @@ Experimental web access lets supported web clients search the whole library or o
 
 **One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; memories, relationships, and search indexes live in local libSQL.
 
-**Updates follow citations.** When a cited source or memory changes or is removed in Wenlan, evidence tracking marks affected pages. With background AI enabled and a model available, eligible pages refresh; drafts with insufficient citations are rejected.
+**Updates follow citations.** Changing or removing a cited source or memory in Wenlan marks the pages that use it for refresh. With background AI enabled and a model available, eligible pages rebuild from current evidence; drafts with insufficient citations are rejected.
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">

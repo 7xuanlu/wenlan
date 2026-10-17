@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=cc6d28d455866bcfe9ae071404573998eb1464632de1e33d2383731dceafcdfd -->
+<!-- README_SYNC: source=README.md sha256=bfc83221b292f82e00cc26696510c926ed11db5ad52ebfc03fe5dd1c3543cafc -->
 
 <p align="center">
   <picture>
@@ -9,7 +9,7 @@
 
 <p align="center">
   文瀾將散落的筆記、文件與對話，整理成持續更新、來源可查的知識庫，<br>
-  讓你和 Claude、Codex 等 AI 工具用來找到答案、完成工作。
+  讓你和 Claude、Codex 等 AI 工具用上先前累積的知識，不必一再交代過去的決定。
 </p>
 
 <p align="center">
@@ -95,11 +95,11 @@
 
 ## 把散落的資料整理成知識
 
-編輯**帶有引用的 Markdown 頁面**，用 `[[wikilinks]]` 串起相關內容。點開引用，就能核對原始文件、對話或保存的記憶。
+**來源**保留你讀過的資料；**記憶**留下你的發現與判斷理由。將兩者整理成**帶有引用的 Markdown 頁面**，讓你閱讀、編輯，用 `[[wikilinks]]` 連結相關內容，也能沿引用查回原始資料。
 
 - **檔案與對話匯入**：匯入 Markdown、文字檔、文字型 PDF、資料夾，以及 ChatGPT 或 Claude 匯出的 ZIP，保留來源參照。掃描版 PDF 須先擷取文字再匯入。對話匯入保留當時紀錄；已登錄的檔案來源可重新整理為最新內容。
 - **Obsidian 唯讀連接**：讀取既有儲存庫並按需重新整理，不修改原始檔案，也不將變更同步回去。
-- **Quick Capture 與原子記憶**：在 App 或透過 AI，每次保存一則決定、經驗或偏好，並保留其來源。
+- **Quick Capture 與原子記憶**：在 App 或透過 AI，逐則保存決定、經驗與偏好，並記下原因及來源。
 - **知識圖譜**：透過不同類型的實體、關係與知識群集（communities），發現相關主題；設定整理模型後，將重複提及連到同一實體。
 
 <a id="探索你的個人知識圖譜"></a>
@@ -121,7 +121,7 @@
 
 ## 讓 AI 接續已有知識
 
-**插件**提供何時搜尋與保存的指引；**僅連接 MCP** 則提供工具，由 AI 按任務需要或你的要求呼叫。
+在不同 AI 工具間共用同一個知識庫。**插件**引導 AI 何時取回先前脈絡、保存新決定；**僅連接 MCP** 則讓 AI 可按需或依你的要求呼叫這些工具。
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
@@ -149,7 +149,7 @@
 
 ## 更新知識，保留歷史
 
-- **Steep 背景整理**：為記憶補上類型、結構化資訊、搜尋線索與圖譜連結；頁面合成可選用。
+- **Steep 背景整理**：為已保存的記憶補上類型、結構化資訊、搜尋線索與圖譜連結；也可選擇將記憶與來源合成為帶有引用的頁面。
 - **[修訂審核與歷史](docs/knowledge-guide.zh-Hant.md#updates-and-history)**：比較頁面版本、追溯記憶的取代關係；自動更新時，符合條件的 AI 維護頁面直接更新，你編輯過的頁面則提出修訂供審核。
 - **維基匯出**：將符合條件的頁面匯出為 Open Knowledge Format（OKF）維基。
 - **[選配的背景模型](docs/setup-and-data.zh-Hant.md#models)**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商啟用整理、頁面合成與自動更新。
@@ -165,7 +165,7 @@
 
 **共用本地知識庫。** App、CLI 與 AI 工具透過 Wenlan 本地服務讀寫。頁面以 Markdown 保存；記憶、關係與搜尋索引由本地 libSQL 管理。
 
-**沿引用關係更新。** 來源或記憶在 Wenlan 中更新或移除時，依據追蹤會標記相關頁面；啟用背景 AI 並有可用模型後，更新符合條件的頁面，拒絕引用不足的草稿。
+**依引用關係更新。** Wenlan 中的來源或記憶變更、移除時，引用它的頁面會被標記為待更新。啟用背景 AI 並有可用模型後，符合條件的頁面會依最新資料重新整理；引用不足的草稿不會採用。
 
 <p align="center">
   <img src="./docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
