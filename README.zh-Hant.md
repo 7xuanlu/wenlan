@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f03b82d48dad527a9ef5d48ec6361ffad2bd798eac1d20d9c88711796e1e80bc -->
+<!-- README_SYNC: source=README.md sha256=2b13676b07e82ef950f80ba62901b7bd57bc2a113f934d1b889c068638d4c5a3 -->
 
 <p align="center">
   <picture>
@@ -173,7 +173,7 @@
 - **[選配的背景模型](docs/setup-and-data.zh-Hant.md#models)**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商啟用整理、頁面合成與自動更新。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png?v=85815939e11e" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
 </p>
 <p>實機畫面搭配示範資料；連線與標註為示意。</p>
 
@@ -186,7 +186,7 @@
 **依引用關係更新。** Wenlan 中的來源或記憶變更、移除時，引用它的頁面會被標記為待更新。啟用背景 AI 並有可用模型後，符合條件的頁面會依最新資料重新整理；引用不足的草稿不會採用。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-architecture-zh-Hant.png?v=9f8ae33df4c3" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
 </p>
 
 架構示意。[檢索、引用與模型](docs/technical-foundations.md)。

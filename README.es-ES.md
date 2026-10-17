@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=f03b82d48dad527a9ef5d48ec6361ffad2bd798eac1d20d9c88711796e1e80bc -->
+<!-- README_SYNC: source=README.md sha256=2b13676b07e82ef950f80ba62901b7bd57bc2a113f934d1b889c068638d4c5a3 -->
 
 <p align="center">
   <picture>
@@ -173,7 +173,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 - **[Modelos opcionales en segundo plano](docs/setup-and-data.es-ES.md#models):** Activa el enriquecimiento, la síntesis y la actualización automática con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history-zh-Hant.png?v=85815939e11e" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
 </p>
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
@@ -186,7 +186,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 **Las actualizaciones siguen las citas.** Si cambias o eliminas en Wenlan una fuente o memoria citada, el sistema marca para actualizar las páginas que la utilizan. Con la IA en segundo plano activada y un modelo disponible, las páginas aptas se reconstruyen a partir de las evidencias actuales; se rechazan los borradores con citas insuficientes.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-architecture-es-ES.png?v=883af5d1a50b" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
 </p>
 
 Esquema de la arquitectura. [Búsqueda, evidencias y modelos](docs/technical-foundations.md).
