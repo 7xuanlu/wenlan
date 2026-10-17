@@ -256,7 +256,7 @@ async fn moved_memory_revision_handlers_preserve_typed_contracts() {
 
 /// The Review lane's own reader, at the surface where the bug was seen.
 ///
-/// `PUT /api/pages/{id}` on a human-owned page is gated: the daemon stages a
+/// `PUT /api/pages/{id}` on a review-locked page is gated: the daemon stages a
 /// revision card and leaves the prose alone. `GET /api/memory/pending-revisions`
 /// then returned `[]`, because its target-existence check only knew how to
 /// resolve a target that lives in `memories` — and a page does not. The staged
@@ -288,6 +288,8 @@ async fn pending_revisions_lists_a_gated_page_write_card() {
         "authored",
     )
     .await;
+    assert!(db.set_page_review_required(&page_id, true).await.unwrap());
+    let version = db.get_page(&page_id).await.unwrap().unwrap().version;
 
     let proposed = "Ferns reproduce by spores rather than by seeds.";
     let response = router
@@ -301,6 +303,7 @@ async fn pending_revisions_lists_a_gated_page_write_card() {
                     serde_json::json!({
                         "content": proposed,
                         "source_memory_ids": ["work-page-source"],
+                        "expected_version": version,
                     })
                     .to_string(),
                 ))
@@ -315,7 +318,7 @@ async fn pending_revisions_lists_a_gated_page_write_card() {
     let gated: PageWriteResponse = serde_json::from_slice(&bytes).unwrap();
     assert!(
         gated.gated,
-        "a human-owned page must gate a machine refresh"
+        "a review-locked page must gate a machine refresh"
     );
     let card_id = gated
         .revision_card_id

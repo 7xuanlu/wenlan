@@ -165,6 +165,7 @@ main|put|/api/memory/{id}/update|wenlan_server::memory_routes::handle_update_mem
 main|put|/api/pages/drafts/{id}|wenlan_server::page_routes::handle_update_page_draft
 main|put|/api/pages/{id}|wenlan_server::page_routes::handle_refresh_page
 main|put|/api/pages/{id}/map/layout|wenlan_server::page_map_routes::handle_put_page_map_layout
+main|put|/api/pages/{id}/review-required|wenlan_server::page_routes::handle_set_page_review_required
 main|put|/api/profile|wenlan_server::profile_agents_routes::handle_update_profile
 main|put|/api/setup/anthropic-key|wenlan_server::config_routes::handle_set_anthropic_key
 main|put|/api/spaces/default|wenlan_server::spaces_routes::handle_set_default_space
