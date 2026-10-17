@@ -24,10 +24,10 @@ const BANNER_VIEWPORTS = {
 };
 
 const BANNER = {
-  // Match the App dark theme: background, primary text, and accent.
+  // Match the App dark background; preserve the established banner text colors.
   dark: "#191C24",
-  white: "#F1EFE8",
-  accent: "#8FB3EA",
+  white: "#F7F8FF",
+  accent: "#93E3F2",
   latin: 'Arial, "Helvetica Neue", sans-serif',
 };
 

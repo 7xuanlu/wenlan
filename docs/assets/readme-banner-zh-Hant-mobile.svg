@@ -7,9 +7,9 @@
     <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-zh-Hant-mobile-ring)" stroke-width="76"/>
     <circle cx="322" cy="160" r="42" fill="url(#banner-zh-Hant-mobile-orb)"/>
   </g>
-  <text x="360" y="138" fill="#8FB3EA" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="20" font-weight="700" text-anchor="middle" letter-spacing="4">WENLAN</text>
-  <text x="360" y="185" fill="#F1EFE8" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">持續更新的個人維基。</text>
-  <text x="360" y="225" fill="#F1EFE8" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="28" font-weight="400" text-anchor="middle">AI 幫你整理，你保有主導權。</text>
+  <text x="360" y="138" fill="#93E3F2" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="20" font-weight="700" text-anchor="middle" letter-spacing="4">WENLAN</text>
+  <text x="360" y="185" fill="#F7F8FF" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="34" font-weight="700" text-anchor="middle">持續更新的個人維基。</text>
+  <text x="360" y="225" fill="#F7F8FF" font-family="Arial, &quot;PingFang TC&quot;, sans-serif" font-size="28" font-weight="400" text-anchor="middle">AI 幫你整理，你保有主導權。</text>
   <defs>
     <linearGradient id="banner-zh-Hant-mobile-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>
