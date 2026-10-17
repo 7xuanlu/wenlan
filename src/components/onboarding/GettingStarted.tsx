@@ -21,7 +21,6 @@ import {
 } from "../../lib/tauri";
 import { resolveAgentDisplayName, toolFamilyOf } from "../../lib/agents";
 import { useLiveAgents } from "../connect/connectionState";
-import { readStartPath, type StartPath } from "./startPath";
 import "./gettingStarted.css";
 
 /** Per-viewer convenience only: losing it just shows the card again. */
@@ -88,13 +87,6 @@ export function gettingStartedProgress({
 
 const DEFAULT_ORDER: readonly GettingStartedStepId[] = ["note", "tool", "sources", "recall"];
 
-/** The step the user chose on the welcome screen leads; recall, which needs
- *  the others, stays last. */
-export function orderSteps(startPath: StartPath | null): GettingStartedStepId[] {
-  if (startPath === null) return [...DEFAULT_ORDER];
-  return [startPath, ...DEFAULT_ORDER.filter((id) => id !== startPath)];
-}
-
 function readDismissed(): boolean {
   try {
     return localStorage.getItem(DISMISSED_KEY) === "1";
@@ -148,7 +140,6 @@ export function GettingStarted({
 }: GettingStartedProps) {
   const { t } = useTranslation();
   const [dismissed, setDismissed] = useState(readDismissed);
-  const [startPath] = useState(readStartPath);
   const [copied, setCopied] = useState(false);
   const agentsQuery = useLiveAgents();
   const sourcesQuery = useQuery({
@@ -189,7 +180,7 @@ export function GettingStarted({
     sources: { icon: <FolderSimplePlus weight="regular" />, onAction: onAddSources },
     recall: { icon: <Sparkle weight="regular" />, onAction: onSeeExample },
   };
-  const order = orderSteps(startPath);
+  const order = DEFAULT_ORDER;
   const doneCount = order.filter((id) => progress[id]).length;
   if (doneCount === order.length) return null;
 
@@ -224,7 +215,6 @@ export function GettingStarted({
     <section
       className="getting-started"
       data-testid="getting-started"
-      data-start-path={startPath ?? undefined}
       aria-labelledby="getting-started-title"
     >
       <header className="getting-started-header">

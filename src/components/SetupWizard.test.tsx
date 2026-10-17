@@ -263,12 +263,9 @@ describe("SetupWizard", () => {
   it("starts with notes and an optional example, without setup questions", () => {
     renderWizard();
     expect(screen.getByText("Welcome to Wenlan")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Let my AI tools remember me" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Bring in what I already have" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Write a note first" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Just look around" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Get started" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try an example" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button")).toHaveLength(5);
+    expect(screen.getAllByRole("button")).toHaveLength(2);
     expect(screen.queryByTestId("wizard-action-bar")).not.toBeInTheDocument();
     expect(detectMcpClients).not.toHaveBeenCalled();
     expect(getWireState).not.toHaveBeenCalled();
@@ -333,14 +330,13 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(screen.getByText("欢迎使用文澜")).toBeInTheDocument();
-    expect(screen.getByText("你想先怎么用文澜？")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "先写一篇笔记" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "先随便看看" })).toBeInTheDocument();
+    expect(screen.getByText(/你和 AI 工具一起搭建的个人知识库/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始使用" })).toBeInTheDocument();
   });
 
   it("opens notes directly without entering intelligence setup", async () => {
     const { onComplete } = renderWizard();
-    fireEvent.click(screen.getByRole("button", { name: "Just look around" }));
+    fireEvent.click(screen.getByRole("button", { name: "Get started" }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Choose how Wenlan thinks")).not.toBeInTheDocument();
     expect(setSourcePin).not.toHaveBeenCalled();
@@ -1497,7 +1493,7 @@ describe("SetupWizard", () => {
       },
     });
     const { onComplete } = renderWizard();
-    fireEvent.click(screen.getByRole("button", { name: "Just look around" }));
+    fireEvent.click(screen.getByRole("button", { name: "Get started" }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
     expect(getResolvedRouting).not.toHaveBeenCalled();
@@ -2514,7 +2510,7 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(
-      await screen.findByText("How do you want to start?"),
+      await screen.findByText(/A personal knowledge base you and your AI tools build together/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Welcome to Wenlan" }),

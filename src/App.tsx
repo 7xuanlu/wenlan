@@ -327,9 +327,7 @@ export default function App() {
         <Main
           initialView={welcomeDestination === "connections"
             ? { kind: "settings", section: "agents" }
-            : welcomeDestination === "page-draft"
-              ? { kind: "page-draft", space: null }
-              : welcomeDestination ? { kind: welcomeDestination } : undefined}
+            : welcomeDestination ? { kind: welcomeDestination } : undefined}
           initialMemoryId={selectedMemoryId}
           initialPageId={selectedPageId}
           onRegisterQuitGuard={registerQuitGuard}

@@ -17,7 +17,6 @@ import {
   ESTABLISHED_LIBRARY_PAGES,
   GettingStarted,
   gettingStartedProgress,
-  orderSteps,
 } from "../GettingStarted";
 
 vi.mock("../../../lib/tauri", () => ({
@@ -131,12 +130,6 @@ describe("gettingStartedProgress", () => {
     }).note).toBe(false);
   });
 
-  it("leads with the path chosen on the welcome screen and keeps recall last", () => {
-    expect(orderSteps(null)).toEqual(["note", "tool", "sources", "recall"]);
-    expect(orderSteps("sources")).toEqual(["sources", "note", "tool", "recall"]);
-    expect(orderSteps("tool")).toEqual(["tool", "note", "sources", "recall"]);
-  });
-
   it("counts imported source pages as brought-in material and distilled pages as AI use", () => {
     expect(gettingStartedProgress({
       pages: [page({ creation_kind: "imported" })], agents: [], sources: [], milestones: [],
@@ -198,16 +191,6 @@ describe("GettingStarted", () => {
     await vi.waitFor(() => expect(listOnboardingMilestones).toHaveBeenCalled());
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByTestId("getting-started")).toBeNull();
-  });
-
-  it("orders the steps by the start path the welcome screen stored", async () => {
-    localStorage.setItem("onboarding:startPath", "sources");
-    renderCard();
-    await screen.findByRole("heading", { name: title() });
-    const ids = screen.getAllByTestId(/^getting-started-(note|tool|sources|recall)$/)
-      .map((item) => item.getAttribute("data-testid"));
-    expect(ids).toEqual(["getting-started-sources", "getting-started-note", "getting-started-tool", "getting-started-recall"]);
-    expect(screen.getByTestId("getting-started")).toHaveAttribute("data-start-path", "sources");
   });
 
   it("tells a user whose only note is a draft to leave the editor so AI can find it", async () => {

@@ -1,44 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useRef, useState } from "react";
-import {
-  BookOpenText,
-  FolderSimplePlus,
-  NotePencil,
-  PlugsConnected,
-} from "@phosphor-icons/react";
+import { BookOpenText } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 import { dragStripHeight } from "../../lib/windowChrome";
 import { Button } from "../memory/settings/primitives";
 import { FirstUseSample } from "./FirstUseSample";
-import { writeStartPath, type StartPath } from "./startPath";
 import "./notesWelcome.css";
 
 export type NotesWelcomeDestination =
   | "sources"
   | "connect-agent"
-  | "connections"
-  | "page-draft";
+  | "connections";
 
 interface NotesWelcomeProps {
   onComplete: (destination?: NotesWelcomeDestination) => void | Promise<void>;
 }
 
-/** The three ways in, in the order they are offered. Each remembers itself as
- *  the user's start path so the Wiki's checklist leads with that step. */
-const START_PATHS: readonly {
-  id: StartPath;
-  destination: NotesWelcomeDestination;
-  icon: React.ReactNode;
-}[] = [
-  { id: "tool", destination: "connect-agent", icon: <PlugsConnected weight="regular" /> },
-  { id: "sources", destination: "sources", icon: <FolderSimplePlus weight="regular" /> },
-  { id: "note", destination: "page-draft", icon: <NotePencil weight="regular" /> },
-];
-
 export function NotesWelcome({ onComplete }: NotesWelcomeProps) {
   const { t } = useTranslation();
   const titleId = useId();
-  const pathIdBase = useId();
   const inFlight = useRef(false);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -148,74 +128,36 @@ export function NotesWelcome({ onComplete }: NotesWelcomeProps) {
             <h1 id={titleId} className="notes-welcome__title">
               {t("setup.welcomeTitle")}
             </h1>
-            <p className="notes-welcome__body">{t("setup.notesFirst.question")}</p>
+            <p className="notes-welcome__body">{t("setup.notesFirst.intro")}</p>
             {failed && (
               <p className="notes-welcome__error" role="alert">
                 {t("setup.notesFirst.openFailed")}
               </p>
             )}
-            <div className="notes-welcome__paths" data-testid="notes-welcome-paths">
-              {START_PATHS.map((path) => (
-                <button
-                  key={path.id}
-                  type="button"
-                  className="notes-welcome__path"
-                  data-testid={`notes-welcome-path-${path.id}`}
-                  aria-labelledby={`${pathIdBase}-${path.id}-title`}
-                  aria-describedby={`${pathIdBase}-${path.id}-body`}
-                  aria-busy={pending}
-                  disabled={pending}
-                  onClick={() => {
-                    if (inFlight.current) return;
-                    writeStartPath(path.id);
-                    void openNotes(path.destination);
-                  }}
-                >
-                  <span className="notes-welcome__path-icon" aria-hidden="true">
-                    {path.icon}
-                  </span>
-                  <span className="notes-welcome__path-copy">
-                    <span
-                      id={`${pathIdBase}-${path.id}-title`}
-                      className="notes-welcome__path-title"
-                    >
-                      {t(`setup.notesFirst.paths.${path.id}.title`)}
-                    </span>
-                    <span
-                      id={`${pathIdBase}-${path.id}-body`}
-                      className="notes-welcome__path-body"
-                    >
-                      {t(`setup.notesFirst.paths.${path.id}.body`)}
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-            <p className="notes-welcome__hint">{t("setup.notesFirst.pathsHint")}</p>
-            <div className="notes-welcome__secondary">
-              <button
-                ref={sampleTrigger}
-                type="button"
-                className="notes-welcome__try"
-                disabled={pending}
-                onClick={() => {
-                  if (inFlight.current) return;
-                  setFailed(false);
-                  setSampleOpen(true);
-                }}
-              >
-                {t("firstUse.guide.tryExample")}
-              </button>
-              <button
-                type="button"
-                className="notes-welcome__try"
-                disabled={pending}
-                aria-busy={pending}
-                onClick={() => void openNotes()}
-              >
-                {t("setup.notesFirst.lookAround")}
-              </button>
-            </div>
+            <Button
+              type="button"
+              variant="primary"
+              className="notes-welcome__open"
+              loading={pending}
+              disabled={pending}
+              aria-busy={pending}
+              onClick={() => void openNotes()}
+            >
+              {t("setup.notesFirst.start")}
+            </Button>
+            <button
+              ref={sampleTrigger}
+              type="button"
+              className="notes-welcome__try"
+              disabled={pending}
+              onClick={() => {
+                if (inFlight.current) return;
+                setFailed(false);
+                setSampleOpen(true);
+              }}
+            >
+              {t("firstUse.guide.tryExample")}
+            </button>
           </div>
         )}
       </main>

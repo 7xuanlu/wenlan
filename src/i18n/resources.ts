@@ -145,23 +145,8 @@ const en = {
       openFailed: "Could not open your notes. Please try again.",
       checkConnection: "Check connection",
       backToWelcome: "Back to welcome",
-      question: "How do you want to start?",
-      pathsHint: "All three lead to the same library. You can switch any time.",
-      lookAround: "Just look around",
-      paths: {
-        tool: {
-          title: "Let my AI tools remember me",
-          body: "Claude Code, Codex or ChatGPT keep what you tell them, from one chat to the next.",
-        },
-        sources: {
-          title: "Bring in what I already have",
-          body: "A folder, an Obsidian vault, or a ChatGPT or Claude export.",
-        },
-        note: {
-          title: "Write a note first",
-          body: "Jot something down and add AI later.",
-        },
-      },
+      intro: "A personal knowledge base you and your AI tools build together. Notes, files and chats become pages they can recall.",
+      start: "Get started",
     },
     tagline: "A living knowledge base your AI tools build as they work.",
     welcomeBody:
@@ -2763,23 +2748,8 @@ const zhHans = {
       openFailed: "暂时无法打开笔记，请再试一次。",
       checkConnection: "检查连接",
       backToWelcome: "返回欢迎页",
-      question: "你想先怎么用文澜？",
-      pathsHint: "三条路通向同一个知识库，之后随时可以换。",
-      lookAround: "先随便看看",
-      paths: {
-        tool: {
-          title: "让我的 AI 工具记得我",
-          body: "Claude Code、Codex 或 ChatGPT 换一个对话也记得你。",
-        },
-        sources: {
-          title: "带入已有资料",
-          body: "文件夹、Obsidian 笔记，或 ChatGPT、Claude 的对话导出。",
-        },
-        note: {
-          title: "先写一篇笔记",
-          body: "随手记点什么，之后再接上 AI。",
-        },
-      },
+      intro: "你和 AI 工具一起搭建的个人知识库。笔记、文件和对话会变成它们记得住的页面。",
+      start: "开始使用",
     },
     tagline: "一个由你的 AI 工具在工作中不断构建的活知识库。",
     welcomeBody: "你的 AI 工具会把学到的内容写成带来源引用的页面，并在会话之间自动刷新。",
@@ -5319,23 +5289,8 @@ const zhHant = {
       openFailed: "暫時無法開啟筆記，請再試一次。",
       checkConnection: "檢查連線",
       backToWelcome: "返回歡迎頁",
-      question: "你想先怎麼用文瀾？",
-      pathsHint: "三條路通向同一個知識庫，之後隨時可以換。",
-      lookAround: "先隨便看看",
-      paths: {
-        tool: {
-          title: "讓我的 AI 工具記得我",
-          body: "Claude Code、Codex 或 ChatGPT 換一個對話也記得你。",
-        },
-        sources: {
-          title: "帶入既有資料",
-          body: "資料夾、Obsidian 筆記，或 ChatGPT、Claude 的對話匯出。",
-        },
-        note: {
-          title: "先寫一篇筆記",
-          body: "隨手記點什麼，之後再接上 AI。",
-        },
-      },
+      intro: "你和 AI 工具一起搭建的個人知識庫。筆記、檔案和對話會變成它們記得住的頁面。",
+      start: "開始使用",
     },
     tagline: "一個由你的 AI 工具在工作中不斷建立的活知識庫。",
     welcomeBody: "你的 AI 工具會把學到的內容寫成附來源引用的頁面，並在工作階段之間自動更新。",
