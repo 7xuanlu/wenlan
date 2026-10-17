@@ -168,7 +168,7 @@ Experimental web access lets supported web clients search the whole library or o
 - **[Optional background models](docs/setup-and-data.md#models):** Enable enrichment, synthesis, and automatic refresh with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
+  <img src="./docs/assets/wenlan-updates-history.png?v=bc9aa5cb2d5a" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
 <p>Localized App-view composite with demo data; connections are illustrative.</p>
 
@@ -181,7 +181,7 @@ Experimental web access lets supported web clients search the whole library or o
 **Updates follow citations.** Changing or removing a cited source or memory in Wenlan marks the pages that use it for refresh. With background AI enabled and a model available, eligible pages rebuild from current evidence; drafts with insufficient citations are rejected.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
+  <img src="./docs/assets/wenlan-architecture.png?v=3ae6e0d06e28" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
 </p>
 
 Architecture overview. [Retrieval, evidence, and models](docs/technical-foundations.md).

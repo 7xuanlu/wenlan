@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0030183bcf68040d77a9d0cae784a978b26356c0147f46ffa0be278d18fb29dd -->
+<!-- README_SYNC: source=README.md sha256=f03b82d48dad527a9ef5d48ec6361ffad2bd798eac1d20d9c88711796e1e80bc -->
 
 <p align="center">
   <picture>
@@ -173,7 +173,7 @@
 - **[可选的后台模型](docs/setup-and-data.zh-Hans.md#models)**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商启用整理、页面合成和自动更新。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-updates-history-zh-Hans.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
+  <img src="./docs/assets/wenlan-updates-history-zh-Hans.png?v=b5dd12b5b4db" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
 </p>
 <p>实机画面的翻译合成图，搭配示范数据；连线为示意。</p>
 
@@ -186,7 +186,7 @@
 **依据引用关系更新。** Wenlan 中的来源或记忆变更、移除时，引用它的页面会被标记为待更新。启用后台 AI 并有可用模型后，符合条件的页面会根据最新资料重新生成；引用不足的草稿不会采用。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">
+  <img src="./docs/assets/wenlan-architecture-zh-Hans.png?v=8d92753d65b9" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">
 </p>
 
 架构示意。[检索、引用与模型](docs/technical-foundations.md)。
