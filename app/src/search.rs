@@ -316,15 +316,65 @@ fn client_config_path_or_message(client_type: &str) -> Result<std::path::PathBuf
 /// vector means every input was read; a non-empty one means the write
 /// succeeded off a search that skipped candidates it never built. The two used
 /// to be the same `()`, so the UI could only report the first.
+///
+/// Once the entry is on disk the daemon is told the user connected this tool
+/// (`register_connected_agent`), so its first search already sees what a
+/// trusted tool sees. That call is best-effort: the config file is the
+/// deliverable, and a daemon that is down or slow never fails the write. A
+/// write that is refused (`PreserveExisting`, unreadable file) returns before
+/// it, so nothing is registered for a tool that was not connected.
 #[tauri::command]
 pub async fn write_mcp_config(
+    state: tauri::State<'_, State>,
     client_type: String,
 ) -> Result<Vec<crate::mcp_config::UndeterminedInput>, String> {
     let config_path = client_config_path_or_message(&client_type)?;
-    if client_type == "codex_cli" {
-        return crate::mcp_config::write_wenlan_entry_toml(&config_path).map_err(|e| e.to_string());
+    let undetermined = if client_type == "codex_cli" {
+        crate::mcp_config::write_wenlan_entry_toml(&config_path).map_err(|e| e.to_string())?
+    } else {
+        crate::mcp_config::write_wenlan_entry(&config_path, &client_type)
+            .map_err(|e| e.to_string())?
+    };
+    let client = daemon_client(&state).await;
+    register_connected_agent(&client, &client_type).await;
+    Ok(undetermined)
+}
+
+/// How long the connect path waits for the daemon to register a tool. The
+/// shared client's request timeout is minutes long; the config write is
+/// already done, so the user must not wait on a hung daemon for a courtesy.
+const REGISTER_CONNECTED_AGENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Registers the agent a freshly written `client_type` entry reports as
+/// (`--agent-name`) with the daemon, which trusts it from then on: connecting
+/// a tool from the app is the user's authorisation. Returns whether the daemon
+/// accepted it. Never an error: a client with no agent name, or a daemon that
+/// is down, slow or refusing, is logged and the caller carries on.
+async fn register_connected_agent(client: &crate::api::WenlanClient, client_type: &str) -> bool {
+    register_connected_agent_within(client, client_type, REGISTER_CONNECTED_AGENT_TIMEOUT).await
+}
+
+/// [`register_connected_agent`] with the wait handed in, so a test can pin the
+/// timeout branch without waiting out the real bound.
+async fn register_connected_agent_within(
+    client: &crate::api::WenlanClient,
+    client_type: &str,
+    timeout: std::time::Duration,
+) -> bool {
+    let Some(agent_name) = crate::mcp_config::agent_name_for_client(client_type) else {
+        return false;
+    };
+    match tokio::time::timeout(timeout, client.register_agent(agent_name)).await {
+        Ok(Ok(_)) => true,
+        Ok(Err(error)) => {
+            log::warn!("[mcp-config] could not register connected tool {agent_name}: {error}");
+            false
+        }
+        Err(_) => {
+            log::warn!("[mcp-config] registering connected tool {agent_name} timed out");
+            false
+        }
     }
-    crate::mcp_config::write_wenlan_entry(&config_path, &client_type).map_err(|e| e.to_string())
 }
 
 /// Removes the raw `wenlan`/legacy `origin` MCP entry from `client_type`'s
@@ -6191,4 +6241,128 @@ pub async fn page_move(
             },
         )
         .await
+}
+
+#[cfg(test)]
+mod register_connected_agent_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const AGENT_JSON: &str = r#"{"id":"a-1","name":"x","agent_type":"api","description":null,"enabled":true,"trust_level":"full","last_seen_at":null,"memory_count":0,"created_at":1,"updated_at":1}"#;
+
+    async fn serve_status_once(
+        status: &'static str,
+        response_body: &'static str,
+    ) -> (crate::api::WenlanClient, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = vec![0_u8; 8192];
+            let size = stream.read(&mut bytes).await.unwrap();
+            let request = String::from_utf8_lossy(&bytes[..size]).to_string();
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body,
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        (
+            crate::api::WenlanClient::with_base_url(format!("http://{address}")),
+            handle,
+        )
+    }
+
+    fn body_of(request: &str) -> serde_json::Value {
+        let (_, body) = request.split_once("\r\n\r\n").expect("request has a body");
+        serde_json::from_str(body).expect("request body is JSON")
+    }
+
+    #[tokio::test]
+    async fn every_client_with_an_agent_name_registers_that_exact_name() {
+        for (client_type, agent_name) in [
+            ("claude_code", "claude-code"),
+            ("codex_cli", "codex"),
+            ("claude_desktop", "claude-desktop"),
+            ("cursor", "cursor"),
+            ("gemini_cli", "gemini-cli"),
+        ] {
+            // The name sent is the one the written entry reports with
+            // `--agent-name`, or the daemon would trust a row the tool never uses.
+            assert_eq!(
+                crate::mcp_config::agent_name_for_client(client_type),
+                Some(agent_name)
+            );
+            let (client, request) = serve_status_once("200 OK", AGENT_JSON).await;
+
+            assert!(register_connected_agent(&client, client_type).await);
+
+            let request = request.await.unwrap();
+            assert_eq!(
+                request.lines().next().unwrap_or_default(),
+                "POST /api/agents HTTP/1.1"
+            );
+            assert_eq!(body_of(&request), serde_json::json!({"name": agent_name}));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_client_without_an_agent_name_sends_nothing() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = crate::api::WenlanClient::with_base_url(format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        ));
+
+        assert!(!register_connected_agent(&client, "some_other_client").await);
+
+        let connection =
+            tokio::time::timeout(std::time::Duration::from_millis(150), listener.accept()).await;
+        assert!(connection.is_err(), "no request may reach the daemon");
+    }
+
+    #[tokio::test]
+    async fn a_refusing_or_unreachable_daemon_is_not_an_error() {
+        let (client, _request) = serve_status_once("500 Internal Server Error", "{}").await;
+        assert!(!register_connected_agent(&client, "cursor").await);
+
+        let (client, _request) = serve_status_once("400 Bad Request", r#"{"error":"bad"}"#).await;
+        assert!(!register_connected_agent(&client, "cursor").await);
+
+        // Nothing is listening: bind to learn a free port, then drop it.
+        let port = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let client = crate::api::WenlanClient::with_base_url(format!("http://127.0.0.1:{port}"));
+        assert!(!register_connected_agent(&client, "cursor").await);
+    }
+
+    #[tokio::test]
+    async fn a_daemon_that_never_answers_does_not_hold_the_connect_up() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = crate::api::WenlanClient::with_base_url(format!(
+            "http://{}",
+            listener.local_addr().unwrap()
+        ));
+        // Accept and hold the connection open without ever replying.
+        let held = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            drop(stream);
+        });
+
+        let started = std::time::Instant::now();
+        let registered = register_connected_agent_within(
+            &client,
+            "cursor",
+            std::time::Duration::from_millis(200),
+        )
+        .await;
+        assert!(!registered);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        held.abort();
+    }
 }

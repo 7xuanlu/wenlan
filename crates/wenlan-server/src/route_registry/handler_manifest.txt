@@ -150,6 +150,7 @@ main|post|/api/spaces/{name}/confirm|wenlan_server::spaces_routes::handle_confir
 main|post|/api/spaces/{name}/pin|wenlan_server::spaces_routes::handle_pin_space
 main|post|/api/spaces/{name}/star|wenlan_server::spaces_routes::handle_toggle_space_starred
 main|post|/api/steep|wenlan_server::routes::handle_steep
+main|post|/api/agents|wenlan_server::profile_agents_routes::handle_register_agent
 main|put|/api/agents/{name}|wenlan_server::profile_agents_routes::handle_update_agent
 main|put|/api/chunks/{id}/update|wenlan_server::indexed_files_routes::handle_update_chunk
 main|put|/api/config|wenlan_server::config_routes::handle_update_config

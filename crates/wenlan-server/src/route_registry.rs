@@ -414,6 +414,7 @@ const NON_SENSITIVE_PATHS: &[&str] = &[
 const NON_SENSITIVE_MIXED_ROUTES: &[(RegisteredMethod, &str)] = &[
     (RegisteredMethod::Patch, "/api/brief"),
     (RegisteredMethod::Put, "/api/profile"),
+    (RegisteredMethod::Post, "/api/agents"),
     (RegisteredMethod::Put, "/api/agents/{name}"),
     (RegisteredMethod::Delete, "/api/agents/{name}"),
     (RegisteredMethod::Post, "/api/spaces"),
