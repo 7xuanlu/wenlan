@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=5a3a40ac100acd0a84691c2c8f904f25d5ee8fe6d024c40c0055aa2b0d7510e3 -->
+<!-- README_SYNC: source=README.md sha256=0e61ea41833e515e8af9d6748181daa01122c2ad65d8461d1367c0c445bab0dc -->
 
 <p align="center">
   <picture>
@@ -92,12 +92,12 @@ Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan e
 
 Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
 
-- **Empieza por tu material.** Escribe una página o importa documentos y conversaciones seleccionadas como fuentes. No necesitas conectar una IA.
-- **Usa tu conocimiento y escribe páginas nuevas.** Pide a tu IA que use las fuentes y memorias guardadas para completar una tarea o escribir una página nueva con citas. En la aplicación puedes editar páginas, consultar las fuentes citadas y revisar cambios; usa `/recall` en tu herramienta de IA para recuperar contexto anterior.
+- **Empieza por tu material.** Importa documentos y conversaciones seleccionadas como fuentes, o escribe páginas en la aplicación. Allí puedes editar, consultar las fuentes citadas y revisar cambios sin conectar una IA.
+- **Usa tu conocimiento y escribe páginas nuevas.** Pide a tu IA que use las fuentes y memorias guardadas para una tarea, o que escriba una página nueva con citas y la guarde en Wenlan. Usa `/recall` para recuperar contexto anterior.
 - **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, en la aplicación o con `/capture` a través de tu IA.
 - **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
 
-**Cuando quieras una página de conocimiento:** `/distill` sintetiza o actualiza páginas con citas. También puedes escribirlas directamente o configurar la IA en segundo plano. [Comandos del plugin](plugin/skills/README.md).
+**Organiza las memorias acumuladas cuando lo necesites:** `/distill` sintetiza o actualiza páginas con citas a partir de memorias relacionadas; no es necesario para escribir una página nueva. La IA en segundo plano es opcional. [Comandos del plugin](plugin/skills/README.md).
 
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
@@ -118,7 +118,7 @@ Las **fuentes** conservan el material que has leído; las **memorias** recogen t
 
 - **Importación de archivos y conversaciones:** Importa Markdown, texto, PDF con texto seleccionable, carpetas y ZIP de ChatGPT o Claude conservando las referencias a sus fuentes. Los PDF escaneados necesitan extracción de texto antes de importarlos. Los chats importados conservan una instantánea; las fuentes de archivos registradas se pueden actualizar desde el disco.
 - **Conexión de solo lectura con Obsidian:** Lee una bóveda existente y actualízala bajo demanda sin modificar sus archivos ni sincronizar cambios de vuelta.
-- **Memorias atómicas:** Guarda decisiones, lecciones y preferencias de una en una, con sus motivos y fuentes, desde la app o mediante tu IA.
+- **Memorias atómicas:** Cada memoria conserva un hallazgo reutilizable con sus motivos y referencias a las fuentes, para recuperarlo de forma independiente.
 - **Grafo de conocimiento:** Descubre temas relacionados mediante entidades tipadas, relaciones y grupos de conocimiento (comunidades); un modelo de enriquecimiento configurado vincula menciones repetidas a la misma entidad (resolución de menciones).
 
 <a id="explora-tu-grafo-de-conocimiento-personal"></a>
