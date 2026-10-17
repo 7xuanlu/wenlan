@@ -93,6 +93,36 @@ export const enFirstUse = {
     pointsTitle: "Key points so far",
     connectHint: "First bring your data, then connect your AI. This example is not saved and cannot be found by your AI.",
   },
+  checklist: {
+    title: "Get started with Wenlan",
+    lede: "Wenlan is a personal wiki that you and your AI tools build together. These steps show you what it can do.",
+    progress: "{{done}} of {{total}} done",
+    done: "Done",
+    hide: "Hide getting started",
+    reopen: "Show getting started",
+    steps: {
+      note: {
+        title: "Write your first note",
+        body: "Write down anything: a plan, an idea, or something you learned today.",
+        action: "Write a note",
+      },
+      tool: {
+        title: "Connect an AI tool",
+        body: "Let Claude Code, Codex or ChatGPT read and write your library, so it remembers you from one chat to the next.",
+        action: "Connect a tool",
+      },
+      sources: {
+        title: "Bring in what you already have",
+        body: "Add a folder of notes or an Obsidian vault.",
+        action: "Add a source",
+      },
+      recall: {
+        title: "Let your AI use what you saved",
+        body: "Ask a connected tool about something in your library and see it answer with the source.",
+        action: "See an example",
+      },
+    },
+  },
   live: {
     title: "Your knowledge, live",
     body: "Follow your imports and open the knowledge Wenlan has organized.",
@@ -207,6 +237,36 @@ export const hansFirstUse = {
     pointsTitle: "目前的重点",
     connectHint: "先带入自己的数据，再连接 AI。此示例并未保存，AI 无法找到它。",
   },
+  checklist: {
+    title: "开始使用文澜",
+    lede: "文澜是你和 AI 工具一起搭建的个人知识库。完成下面几步，就能看到它能做什么。",
+    progress: "已完成 {{done}}/{{total}}",
+    done: "已完成",
+    hide: "隐藏开始使用清单",
+    reopen: "显示开始使用清单",
+    steps: {
+      note: {
+        title: "写下第一篇笔记",
+        body: "随手记点什么：一个计划、一个想法，或今天学到的东西。",
+        action: "写笔记",
+      },
+      tool: {
+        title: "连接一个 AI 工具",
+        body: "让 Claude Code、Codex 或 ChatGPT 读写你的知识库，换一个对话也记得你。",
+        action: "连接工具",
+      },
+      sources: {
+        title: "带入已有资料",
+        body: "添加一个笔记文件夹或 Obsidian 笔记库。",
+        action: "添加来源",
+      },
+      recall: {
+        title: "让 AI 用上你存的内容",
+        body: "在已连接的工具里问一个知识库里有的问题，看它带着出处回答。",
+        action: "看示例",
+      },
+    },
+  },
   live: {
     title: "你的知识 · 实时",
     body: "看看资料整理到哪一步，再打开文澜整理好的知识。",
@@ -317,6 +377,36 @@ export const hantFirstUse = {
     formingNote: "來源整理完成後，頁面會在這裡成形。",
     pointsTitle: "目前的重點",
     connectHint: "先帶入自己的資料，再連接 AI。此示例並未儲存，AI 無法找到它。",
+  },
+  checklist: {
+    title: "開始使用文瀾",
+    lede: "文瀾是你和 AI 工具一起建立的個人知識庫。完成下面幾步，就能看到它能做什麼。",
+    progress: "已完成 {{done}}/{{total}}",
+    done: "已完成",
+    hide: "隱藏開始使用清單",
+    reopen: "顯示開始使用清單",
+    steps: {
+      note: {
+        title: "寫下第一篇筆記",
+        body: "隨手記點什麼：一個計畫、一個想法，或今天學到的東西。",
+        action: "寫筆記",
+      },
+      tool: {
+        title: "連接一個 AI 工具",
+        body: "讓 Claude Code、Codex 或 ChatGPT 讀寫你的知識庫，換一個對話也記得你。",
+        action: "連接工具",
+      },
+      sources: {
+        title: "帶入既有資料",
+        body: "新增一個筆記資料夾或 Obsidian 筆記庫。",
+        action: "新增來源",
+      },
+      recall: {
+        title: "讓 AI 用上你存的內容",
+        body: "在已連接的工具裡問一個知識庫裡有的問題，看它帶著出處回答。",
+        action: "看範例",
+      },
+    },
   },
   live: {
     title: "你的知識 · 即時",

@@ -1,0 +1,184 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Getting-started checklist under the Wiki reading start. One card, flat rows
+   inside it (no nested cards); color and type come from --mem-* tokens. */
+
+.getting-started {
+  margin: 0 auto;
+  max-width: min(100%, 560px);
+  padding: 18px 20px 8px;
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-lg);
+  background-color: var(--mem-surface);
+  width: 100%;
+}
+
+.getting-started-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.getting-started-header h2 {
+  margin: 0;
+  color: var(--mem-text);
+  font: 600 16px/1.35 var(--mem-font-body);
+}
+
+.getting-started-lede {
+  margin: 6px 0 0;
+  color: var(--mem-text-secondary);
+  font: 13px/1.6 var(--mem-font-body);
+}
+
+.getting-started-hide {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--mem-radius-sm);
+  background: none;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.getting-started-hide:hover {
+  background-color: var(--mem-hover);
+  color: var(--mem-text);
+}
+
+.getting-started-progress {
+  margin: 12px 0 4px;
+  color: var(--mem-text-tertiary);
+  font: 12px/1.5 var(--mem-font-body);
+}
+
+.getting-started-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.getting-started-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--mem-border);
+}
+
+.getting-started-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--mem-radius-sm);
+  background-color: var(--mem-indigo-bg);
+  color: var(--mem-accent-indigo);
+  font-size: 16px;
+}
+
+.getting-started-steps li[data-done="true"] .getting-started-icon {
+  background: none;
+  color: var(--mem-accent-sage-text);
+  font-size: 20px;
+}
+
+.getting-started-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.getting-started-step-title {
+  margin: 4px 0 0;
+  color: var(--mem-text);
+  font: 500 14px/1.4 var(--mem-font-body);
+}
+
+.getting-started-steps li[data-done="true"] .getting-started-step-title {
+  color: var(--mem-text-tertiary);
+}
+
+.getting-started-step-body {
+  margin: 4px 0 0;
+  color: var(--mem-text-secondary);
+  font: 13px/1.55 var(--mem-font-body);
+  overflow-wrap: anywhere;
+}
+
+.getting-started-action {
+  flex-shrink: 0;
+  align-self: center;
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-md);
+  background: none;
+  color: var(--mem-text);
+  cursor: pointer;
+  font: 500 13px/1.3 var(--mem-font-body);
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+
+.getting-started-action:hover {
+  background-color: var(--mem-hover);
+}
+
+.getting-started-hide:focus-visible,
+.getting-started-action:focus-visible,
+.getting-started-reopen:focus-visible {
+  outline: 2px solid var(--mem-focus-ring);
+  outline-offset: 2px;
+}
+
+.getting-started-reopen {
+  align-self: center;
+  margin: 0 auto;
+  border: none;
+  background: none;
+  color: var(--mem-text-tertiary);
+  cursor: pointer;
+  font: 13px/1.5 var(--mem-font-body);
+  padding: 4px 0;
+}
+
+.getting-started-reopen:hover {
+  color: var(--mem-text);
+}
+
+@media (max-width: 639px) {
+  .getting-started {
+    padding: 16px 14px 6px;
+  }
+
+  .getting-started-steps li {
+    flex-wrap: wrap;
+  }
+
+  .getting-started-copy {
+    flex-basis: calc(100% - 40px);
+  }
+
+  .getting-started-action {
+    align-self: flex-start;
+    margin-left: 40px;
+  }
+}
+
+/* While the checklist shows, the reading-start panel gives up its tall
+   centring box so the steps sit above the fold at the default window size. */
+.wiki-reading-start:has(.getting-started) .wiki-reading-start-panel {
+  flex: 0 0 auto;
+  padding: 48px 20px 28px;
+}
+
+@media (max-width: 639px) {
+  .wiki-reading-start:has(.getting-started) .wiki-reading-start-panel {
+    padding: 28px 8px 20px;
+  }
+}

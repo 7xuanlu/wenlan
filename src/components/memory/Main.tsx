@@ -1339,6 +1339,9 @@ export default function Main({
                 onSelectDraft={openWikiDraft}
                 onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
                 onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
+                onConnectTool={() => navigateTo({ kind: "connect-agent" })}
+                onAddSources={() => navigateTo({ kind: "sources" })}
+                onSeeExample={() => navigateTo({ kind: "first-use" })}
               />
             </WikiWorkspace>
           ) : view.kind === "entities" ? (
