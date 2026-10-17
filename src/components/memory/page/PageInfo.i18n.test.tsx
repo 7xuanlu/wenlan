@@ -254,7 +254,7 @@ describe("PageInfo i18n", () => {
         { version: 1, at, edited_by: "migration_99" },
       ],
     });
-    await user.click(screen.getByText("Page info"));
+    await user.click(screen.getByText("Note info"));
     await user.click(screen.getByRole("button", { name: "Show all 4 revisions" }));
     const rows = screen.getAllByRole("listitem").filter((li) => li.className.includes("note-revision-entry"));
     expect(rows.map((row) => row.querySelector(".note-revision-meta")?.textContent)).toEqual([
@@ -279,7 +279,7 @@ describe("PageInfo i18n", () => {
         { version: 2, at, edited_by: "re_distill", delta_summary: "+mem_a; +71 chars (re_distill)" },
       ],
     });
-    await user.click(screen.getByText("頁面資訊"));
+    await user.click(screen.getByText("筆記資訊"));
     const meta = document.querySelectorAll(".note-revision-meta");
     expect(meta[0]).toHaveTextContent("Claude Code 更新");
     expect(meta[1]).toHaveTextContent("文瀾重新整理");
