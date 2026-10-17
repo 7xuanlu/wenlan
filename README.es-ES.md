@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c68c2bfa674ec54344b1ca9c628060fdf383e3bd98c04a86bc3e57a848bf461e -->
+<!-- README_SYNC: source=README.md sha256=6a5da72da52e5e970e1ef63771c75a094e2af81ebba9d746a018f83019a016ed -->
 
 <p align="center">
   <picture>
@@ -93,7 +93,7 @@ Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan e
 Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
 
 - **Empieza por tu material.** Importa documentos y conversaciones seleccionadas como fuentes, o escribe páginas en la aplicación. Allí puedes editar, consultar las fuentes citadas y revisar cambios sin conectar una IA.
-- **Usa tu conocimiento y escribe páginas nuevas.** Usa `/recall` para recuperar fuentes y memorias guardadas. `/pages write` escribe una página nueva con citas y la guarda en Wenlan ([aún no publicado · #877](https://github.com/wenlan-app/wenlan/pull/877)).
+- **Usa tu conocimiento y escribe páginas nuevas.** Pide a tu IA que recupere fuentes y memorias relevantes con `/recall` y las use en la tarea. También puede escribir una página nueva con citas y guardarla en Wenlan.
 - **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, en la aplicación o con `/capture` a través de tu IA.
 - **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
 

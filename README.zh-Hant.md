@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=c68c2bfa674ec54344b1ca9c628060fdf383e3bd98c04a86bc3e57a848bf461e -->
+<!-- README_SYNC: source=README.md sha256=6a5da72da52e5e970e1ef63771c75a094e2af81ebba9d746a018f83019a016ed -->
 
 <p align="center">
   <picture>
@@ -93,7 +93,7 @@
 簡化流程示意；插件指令與頁面整理均按需使用，沒有固定順序。
 
 - **從你的資料開始。** 匯入文件與選定的對話作為來源，或在 App 撰寫頁面。你也能編輯內容、查回引用來源、審核修訂，不必連接 AI。
-- **運用知識、撰寫新頁面。** 用 `/recall` 取用已保存的來源與記憶；用 `/pages write` 撰寫帶引用的新頁面，存回 Wenlan（[尚未發布 · #877](https://github.com/wenlan-app/wenlan/pull/877)）。
+- **運用知識、撰寫新頁面。** 請 AI 用 `/recall` 找回相關來源與記憶，接著完成任務；也能撰寫帶引用的新頁面，存回 Wenlan。
 - **留下你的新發現。** 在 App 中，或請 AI 使用 `/capture`，保存決定或心得，以及其理由與來源。
 - **告一段落，下次接續。** `/handoff` 保存記憶與工作紀錄，並更新目前 Space 的 Brief，記下進度與下一步。下次需要時，用 `/brief` 讀回這些脈絡。
 
