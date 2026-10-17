@@ -243,4 +243,48 @@ describe("PageInfo i18n", () => {
       unmountError();
     }
   });
+  it("labels revisions by writer instead of showing the raw slug", async () => {
+    await i18n.changeLanguage("en");
+    const at = Math.floor(Date.now() / 1000);
+    const { user } = renderInfo({
+      revisions: [
+        { version: 4, at, edited_by: "agent_refresh", agent: "claude-code", char_delta: 71, sources_added: 2, sources_removed: 0, delta_summary: "+mem_a; +71 chars" },
+        { version: 3, at, edited_by: "agent_refresh", char_delta: -3, sources_added: 0, sources_removed: 1 },
+        { version: 2, at, edited_by: "distill", delta_summary: "Synthesized from 3 sources" },
+        { version: 1, at, edited_by: "migration_99" },
+      ],
+    });
+    await user.click(screen.getByText("Page info"));
+    await user.click(screen.getByRole("button", { name: "Show all 4 revisions" }));
+    const rows = screen.getAllByRole("listitem").filter((li) => li.className.includes("note-revision-entry"));
+    expect(rows.map((row) => row.querySelector(".note-revision-meta")?.textContent)).toEqual([
+      expect.stringContaining("Updated by Claude Code"),
+      expect.stringContaining("Updated by an agent"),
+      expect.stringContaining("Wenlan compiled it from sources"),
+      expect.stringContaining("Updated"),
+    ]);
+    expect(screen.getByText("+71 characters · 2 sources added")).toBeInTheDocument();
+    expect(screen.getByText("-3 characters · 1 source removed")).toBeInTheDocument();
+    // Old entries show their English summary for an English UI.
+    expect(screen.getByText("Synthesized from 3 sources")).toBeInTheDocument();
+    expect(screen.queryByText(/agent_refresh|distill\b|migration_99|mem_a/)).toBeNull();
+  });
+
+  it("localizes the revision label and summary, and drops old English summaries", async () => {
+    await i18n.changeLanguage("zh-Hant");
+    const at = Math.floor(Date.now() / 1000);
+    const { user } = renderInfo({
+      revisions: [
+        { version: 3, at, edited_by: "agent_refresh", agent: "claude-code", char_delta: 71, sources_added: 2, sources_removed: 0 },
+        { version: 2, at, edited_by: "re_distill", delta_summary: "+mem_a; +71 chars (re_distill)" },
+      ],
+    });
+    await user.click(screen.getByText("頁面資訊"));
+    const meta = document.querySelectorAll(".note-revision-meta");
+    expect(meta[0]).toHaveTextContent("Claude Code 更新");
+    expect(meta[1]).toHaveTextContent("文瀾重新整理");
+    expect(screen.getByText("+71 字 · 新增 2 個來源")).toBeInTheDocument();
+    expect(screen.queryByText(/mem_a/)).toBeNull();
+    expect(document.querySelectorAll(".note-revision-summary")).toHaveLength(1);
+  });
 });

@@ -27,6 +27,7 @@ vi.mock("../../lib/tauri", () => ({
   // the review action stays disabled unless a test opts in.
   pageReviewSupported: vi.fn().mockResolvedValue("daemon_unsupported"),
   reviewPage: vi.fn(),
+  agentDisplayName: (slug: string | null) => slug,
   ...tauriMocks,
   FACET_COLORS: {},
   STABILITY_TIERS: {},

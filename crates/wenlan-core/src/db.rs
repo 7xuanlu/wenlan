@@ -235,6 +235,25 @@ fn revision_target_kind(target_is_page: i64) -> wenlan_types::responses::Revisio
     }
 }
 
+/// Why a staged page revision card needs review, for the card's reason line.
+/// Reads `review_reason` from the card's structured_fields; a card staged
+/// before that field existed is `background` when its `edited_by` is a
+/// pipeline writer, and unexplained otherwise.
+pub(crate) fn revision_review_reason(
+    structured_fields: Option<&serde_json::Value>,
+) -> Option<String> {
+    let fields = structured_fields?;
+    if let Some(reason) = fields.get("review_reason").and_then(|r| r.as_str()) {
+        return Some(reason.to_string());
+    }
+    let edited_by = fields.get("edited_by").and_then(|e| e.as_str())?;
+    matches!(
+        crate::post_write::Writer::classify(edited_by),
+        crate::post_write::Writer::Pipeline(_)
+    )
+    .then(|| "background".to_string())
+}
+
 fn legacy_read_scope(space: Option<&str>) -> ReadScope {
     match space {
         None => ReadScope::Global,
@@ -44731,15 +44750,16 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions row: {e}")))?
         {
-            let grounded_in = row
+            let structured_fields = row
                 .get::<Option<String>>(5)
                 .unwrap_or(None)
-                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok())
-                .and_then(|v| {
-                    v.get("grounded_in")
-                        .and_then(|g| g.as_str())
-                        .map(str::to_string)
-                });
+                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok());
+            let grounded_in = structured_fields.as_ref().and_then(|v| {
+                v.get("grounded_in")
+                    .and_then(|g| g.as_str())
+                    .map(str::to_string)
+            });
+            let review_reason = revision_review_reason(structured_fields.as_ref());
             let targets_a_page = row.get::<i64>(6).unwrap_or(0) != 0;
             let chunk = row
                 .get::<String>(2)
@@ -44780,6 +44800,7 @@ impl MemoryDB {
                 last_modified,
                 target_kind: revision_target_kind(row.get::<i64>(6).unwrap_or(0)),
                 grounded_in,
+                review_reason,
             });
         }
         Ok(out)
@@ -44905,16 +44926,16 @@ impl MemoryDB {
             .await
             .map_err(|e| WenlanError::VectorDb(format!("list_pending_revisions_scoped row: {e}")))?
         {
-            let grounded_in = row
+            let structured_fields = row
                 .get::<Option<String>>(5)
                 .unwrap_or(None)
-                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok())
-                .and_then(|value| {
-                    value
-                        .get("grounded_in")
-                        .and_then(|ground| ground.as_str())
-                        .map(str::to_string)
-                });
+                .and_then(|sf| serde_json::from_str::<serde_json::Value>(&sf).ok());
+            let grounded_in = structured_fields.as_ref().and_then(|v| {
+                v.get("grounded_in")
+                    .and_then(|g| g.as_str())
+                    .map(str::to_string)
+            });
+            let review_reason = revision_review_reason(structured_fields.as_ref());
             let targets_a_page = row.get::<i64>(6).unwrap_or(0) != 0;
             let chunk = row
                 .get::<String>(2)
@@ -44955,6 +44976,7 @@ impl MemoryDB {
                 last_modified,
                 target_kind: revision_target_kind(row.get::<i64>(6).unwrap_or(0)),
                 grounded_in,
+                review_reason,
             });
         }
         Ok(out)
@@ -60233,6 +60255,25 @@ pub(crate) fn compute_page_delta_summary(
     };
 
     Some(result)
+}
+
+/// Stamp the numeric twin of `compute_page_delta_summary` onto a changelog
+/// entry (`char_delta`, `sources_added`, `sources_removed`), so the app can
+/// localize the summary instead of showing the English `delta_summary`.
+pub(crate) fn add_page_delta_counts(
+    entry: &mut serde_json::Value,
+    old_content: &str,
+    old_source_ids: &[String],
+    new_content: &str,
+    new_source_ids: &[&str],
+) {
+    use std::collections::HashSet;
+    let old_set: HashSet<&str> = old_source_ids.iter().map(|s| s.as_str()).collect();
+    let new_set: HashSet<&str> = new_source_ids.iter().copied().collect();
+    entry["char_delta"] =
+        serde_json::json!(new_content.chars().count() as i64 - old_content.chars().count() as i64);
+    entry["sources_added"] = serde_json::json!(new_set.difference(&old_set).count() as i64);
+    entry["sources_removed"] = serde_json::json!(old_set.difference(&new_set).count() as i64);
 }
 
 /// Compute a short human-readable summary of what changed between two adjacent
