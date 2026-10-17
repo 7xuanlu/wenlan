@@ -19,7 +19,7 @@ These files are also the source for the Codex plugin: `scripts/gen-codex-plugin.
 | `/recall <q>` | search local memory |
 | `/lint [deep\|repair] [scope]` | diagnose, or resolve all findings safely |
 | `/distill [t]` | synthesize or refresh source-backed pages for the active Space |
-| `/pages [q]` | browse and open distilled pages |
+| `/pages [write <request> \| q]` | browse, open, or write source-backed pages |
 | `/curate <surface>` | deep audit of captures, revisions or refinements |
 | `/forget <id>` | delete one memory by ID, after confirmation |
 | `/handoff` | end-of-session debrief: captures, session log, Brief update |

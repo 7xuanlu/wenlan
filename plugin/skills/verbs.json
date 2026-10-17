@@ -5,7 +5,7 @@
   { "verb": "/recall", "args": "<q>", "line": "search local memory" },
   { "verb": "/lint", "args": "[deep|repair] [scope]", "line": "diagnose, or resolve all findings safely" },
   { "verb": "/distill", "args": "[t]", "line": "synthesize or refresh source-backed pages for the active Space" },
-  { "verb": "/pages", "args": "[q]", "line": "browse and open distilled pages" },
+  { "verb": "/pages", "args": "[write <request> | q]", "line": "browse, open, or write source-backed pages" },
   { "verb": "/curate", "args": "<surface>", "line": "deep audit of captures, revisions or refinements" },
   { "verb": "/forget", "args": "<id>", "line": "delete one memory by ID, after confirmation" },
   { "verb": "/handoff", "line": "end-of-session debrief: captures, session log, Brief update" },

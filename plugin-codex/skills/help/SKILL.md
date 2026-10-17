@@ -27,17 +27,17 @@ Wenlan plugin — daily verbs
 
 <!-- verbs:start -->
 <!-- generated from the Claude help card by scripts/gen-codex-plugin.mjs; edit plugin/skills/verbs.json -->
-  /setup                       set up or repair Wenlan (installs the local runtime)
-  /brief [topic]               load the Brief for the current Space (optional; not a boot step)
-  /capture <x>                 save one durable memory in flow
-  /recall <q>                  search local memory
-  /lint [deep|repair] [scope]  diagnose, or resolve all findings safely
-  /distill [t]                 synthesize or refresh source-backed pages for the active Space
-  /pages [q]                   browse and open distilled pages
-  /curate <surface>            deep audit of captures, revisions or refinements
-  /forget <id>                 delete one memory by ID, after confirmation
-  /handoff                     end-of-session debrief: captures, session log, Brief update
-  /help                        one-screen quick reference
+  /setup                        set up or repair Wenlan (installs the local runtime)
+  /brief [topic]                load the Brief for the current Space (optional; not a boot step)
+  /capture <x>                  save one durable memory in flow
+  /recall <q>                   search local memory
+  /lint [deep|repair] [scope]   diagnose, or resolve all findings safely
+  /distill [t]                  synthesize or refresh source-backed pages for the active Space
+  /pages [write <request> | q]  browse, open, or write source-backed pages
+  /curate <surface>             deep audit of captures, revisions or refinements
+  /forget <id>                  delete one memory by ID, after confirmation
+  /handoff                      end-of-session debrief: captures, session log, Brief update
+  /help                         one-screen quick reference
 <!-- verbs:end -->
 
 Import progress: ask explicitly; Wenlan checks `list_pending_imports` on demand.

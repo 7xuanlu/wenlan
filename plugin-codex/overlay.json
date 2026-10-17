@@ -239,12 +239,12 @@
     "pages": {
       "openai": {
         "display_name": "Wenlan Pages",
-        "short_description": "List or open distilled Wenlan pages from Codex"
+        "short_description": "Browse or write source-backed Wenlan pages"
       },
       "description": [
-        "List or open distilled pages by delegating to the local `wenlan pages` CLI.",
-        "`/pages <query>` opens the page when one matches, or prints the matches when",
-        "several do. `/pages` lists recent pages. Invoked as `/pages [query]`."
+        "Browse, open, or print pages with the local `wenlan pages` CLI. Use explicit",
+        "`/pages write <request>` or an explicit request to save a new source-backed page",
+        "to author through Wenlan tools. Invoked as `/pages [write <request> | query]`."
       ],
       "sections": {
         "## `/pages <query>` — open, or pick when ambiguous": [
@@ -272,18 +272,6 @@
         ]
       },
       "replace": [
-        {
-          "from": [
-            "Open a distilled page fast. The **`wenlan pages`** CLI does the open (one local",
-            "command on your PATH — nothing to register, source, or install). This skill only",
-            "adds a small native picker for the ambiguous case."
-          ],
-          "to": [
-            "Open a distilled page fast. The **`wenlan pages`** CLI does the open (one local",
-            "command on your PATH — nothing to register, source, or install). This skill is",
-            "only the slash workflow wrapper."
-          ]
-        },
         {
           "from": [
             "tell the user to `/pages <query>` to open one. No picker over the whole set —",

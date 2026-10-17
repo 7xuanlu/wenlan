@@ -49,7 +49,7 @@ REQUIRED_SKILL_INTERFACE = {
     },
     "pages": {
         "display_name": "Wenlan Pages",
-        "short_description": "List or open distilled Wenlan pages from Codex",
+        "short_description": "Browse or write source-backed Wenlan pages",
     },
     "recall": {
         "display_name": "Wenlan Recall",
