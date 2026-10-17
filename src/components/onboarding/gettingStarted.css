@@ -192,13 +192,47 @@
   outline-offset: 2px;
 }
 
-/* With the directory gone the checklist is the whole screen. It sits in the
-   upper third, where the eye lands first, at a width that keeps each step's
-   text and its button close together. */
+/* With the directory gone the checklist is the whole screen, so it is sized
+   for that screen: wider, larger type and more room per step. It sits in the
+   upper third, where the eye lands first. */
 .wiki-reading-start[data-onboarding="true"] .getting-started {
+  max-width: min(100%, 640px);
   margin-top: clamp(32px, 14vh, 128px);
+  padding: 24px 28px 10px;
 }
 
 .wiki-reading-start[data-onboarding="true"] .getting-started-header h2 {
-  font-size: 18px;
+  font-size: 22px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-progress {
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-steps li {
+  gap: 14px;
+  padding: 12px 0;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-step-title {
+  font-size: 16px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-step-body {
+  font-size: 14px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-action {
+  font-size: 14px;
+  padding: 8px 14px;
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-extra {
+  font-size: 13px;
 }
