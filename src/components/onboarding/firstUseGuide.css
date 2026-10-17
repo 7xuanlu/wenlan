@@ -196,7 +196,16 @@
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
   gap: 16px;
-  align-items: start;
+  align-items: stretch;
+}
+
+/* The page column mirrors the source rack: the same mono heading on the same
+   baseline, and the panel fills the row so both columns end together. */
+.fus-doc-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
 }
 
 @media (max-width: 640px) {
@@ -259,6 +268,7 @@
 }
 
 .fus-doc {
+  flex: 1;
   border: 1px solid var(--mem-border);
   border-radius: 12px;
   background-color: var(--mem-surface);

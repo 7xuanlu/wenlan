@@ -591,6 +591,8 @@ export function FirstUseSample({
               ))}
             </div>
 
+            <div className="fus-doc-column">
+            <p className="fus-rack-heading">{t("firstUse.sample.pageTitle")}</p>
             <div className="fus-doc" data-phase={phase}>
               {phase === 0 ? (
                 <p className="fus-forming" key="staging">
@@ -706,6 +708,7 @@ export function FirstUseSample({
                   </div>
                 </article>
               ) : null}
+            </div>
             </div>
           </div>
         )}
