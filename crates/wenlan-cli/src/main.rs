@@ -120,8 +120,12 @@ enum Commands {
     },
     /// Read the current Space Brief, optionally with related context.
     Brief(commands::brief::BriefArgs),
-    /// Browse distilled pages, or open one in your editor by title query.
+    /// Browse distilled pages, open one in your editor by title query, or
+    /// lock a page so machine updates wait for your review.
+    #[command(args_conflicts_with_subcommands = true)]
     Pages {
+        #[command(subcommand)]
+        action: Option<commands::pages::PagesAction>,
         /// Title/filename substring. Omit to list pages newest-first.
         query: Option<String>,
         /// Max pages to list (newest-first). 0 = all. Ignored when a query opens a page.
@@ -460,6 +464,11 @@ async fn main() -> anyhow::Result<ExitCode> {
             .await?
         }
         Commands::Pages {
+            action: Some(action),
+            ..
+        } => commands::pages::run_action(&client, format, cli.quiet, action).await?,
+        Commands::Pages {
+            action: None,
             query,
             limit,
             resolve_id,
@@ -565,6 +574,64 @@ mod catalog_tests {
                 .collect::<BTreeSet<_>>(),
             visible,
             "HELP_GROUPS in main.rs drifted from the visible clap subcommands"
+        );
+    }
+
+    /// `wenlan pages lock|unlock <id>` parse as the review-lock actions, and
+    /// a plain query (or no argument) still browses pages as before.
+    #[test]
+    fn pages_lock_unlock_and_query_parse() {
+        use super::commands::pages::PagesAction;
+        use super::Commands;
+        use clap::Parser;
+
+        let lock = Cli::try_parse_from(["wenlan", "pages", "lock", "page_abc"]).expect("lock");
+        let Commands::Pages {
+            action: Some(PagesAction::Lock { page_id }),
+            query: None,
+            ..
+        } = lock.command
+        else {
+            panic!("expected pages lock");
+        };
+        assert_eq!(page_id, "page_abc");
+
+        let unlock =
+            Cli::try_parse_from(["wenlan", "pages", "unlock", "page_abc"]).expect("unlock");
+        let Commands::Pages {
+            action: Some(PagesAction::Unlock { page_id }),
+            ..
+        } = unlock.command
+        else {
+            panic!("expected pages unlock");
+        };
+        assert_eq!(page_id, "page_abc");
+
+        let browse = Cli::try_parse_from(["wenlan", "pages", "daemon", "--print"]).expect("query");
+        let Commands::Pages {
+            action: None,
+            query: Some(query),
+            print: true,
+            ..
+        } = browse.command
+        else {
+            panic!("expected a page query");
+        };
+        assert_eq!(query, "daemon");
+
+        let list = Cli::try_parse_from(["wenlan", "pages"]).expect("list");
+        assert!(matches!(
+            list.command,
+            Commands::Pages {
+                action: None,
+                query: None,
+                ..
+            }
+        ));
+
+        assert!(
+            Cli::try_parse_from(["wenlan", "pages", "lock"]).is_err(),
+            "lock needs a page id"
         );
     }
 

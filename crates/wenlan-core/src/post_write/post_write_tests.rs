@@ -6814,3 +6814,485 @@ fn known_writers_are_not_unknown() {
         );
     }
 }
+
+// ── PR A: page write ownership (creation kind, expected_version, review lock) ──
+
+const OWNERSHIP_SOURCE: &str = "Tokio runtimes schedule async tasks across worker threads";
+
+async fn ownership_write(
+    db: &MemoryDB,
+    page_id: &str,
+    content: &str,
+    sources: &[&str],
+    edited_by: &str,
+    expected_version: Option<i64>,
+) -> Result<WriteResult, WenlanError> {
+    page_write(
+        db,
+        PageWrite::Update {
+            page_id,
+            req: UpdatePageRequest {
+                content: content.to_string(),
+                source_memory_ids: sources.iter().map(|s| s.to_string()).collect(),
+                expected_version,
+                caller_id: None,
+                operation_id: None,
+            },
+            edited_by,
+            require_stale: false,
+            expected_source_revision: None,
+            knowledge_path: None,
+            citations: None,
+        },
+    )
+    .await
+}
+
+/// A machine-owned page (`insert_page` writes `creation_kind = distilled`)
+/// cited by one memory.
+async fn ownership_page(db: &MemoryDB, page_id: &str, mem_id: &str) -> crate::pages::Page {
+    seed_memory(db, mem_id, OWNERSHIP_SOURCE).await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page(
+        page_id,
+        "Tokio Scheduling",
+        None,
+        OWNERSHIP_SOURCE,
+        None,
+        None,
+        &[mem_id],
+        &now,
+    )
+    .await
+    .unwrap();
+    db.get_page(page_id).await.unwrap().unwrap()
+}
+
+/// Same page after a human `fs_edit`, so `user_edited` is set.
+async fn ownership_user_edited_page(
+    db: &MemoryDB,
+    page_id: &str,
+    mem_id: &str,
+) -> crate::pages::Page {
+    ownership_page(db, page_id, mem_id).await;
+    ownership_write(
+        db,
+        page_id,
+        "Tokio runtimes schedule async tasks across worker threads, with human notes",
+        &[mem_id],
+        "fs_edit",
+        None,
+    )
+    .await
+    .unwrap();
+    let page = db.get_page(page_id).await.unwrap().unwrap();
+    assert!(
+        page.user_edited,
+        "precondition: fs_edit marks human ownership"
+    );
+    page
+}
+
+#[test]
+fn resolve_page_creation_kind_follows_the_distinct_source_floor() {
+    let ids = |n: usize| (0..n).map(|i| format!("mem-{i}")).collect::<Vec<_>>();
+    assert_eq!(resolve_page_creation_kind(None, &ids(0), 3), "authored");
+    assert_eq!(resolve_page_creation_kind(None, &ids(1), 3), "authored");
+    assert_eq!(resolve_page_creation_kind(None, &ids(2), 3), "authored");
+    assert_eq!(resolve_page_creation_kind(None, &ids(3), 3), "distilled");
+    assert_eq!(
+        resolve_page_creation_kind(None, &["a".into(), "a".into(), "a".into()], 3),
+        "authored",
+        "duplicate ids count once against the floor"
+    );
+    assert_eq!(
+        resolve_page_creation_kind(Some("research"), &ids(5), 3),
+        "research",
+        "an explicit kind always wins"
+    );
+}
+
+#[tokio::test]
+async fn machine_write_requires_review_matrix() {
+    let (db, _dir) = test_db().await;
+    let machine = ownership_page(&db, "page_gate_matrix", "mem-gate-matrix").await;
+    let mut edited = machine.clone();
+    edited.user_edited = true;
+    let mut authored = machine.clone();
+    authored.creation_kind = "authored".to_string();
+    let mut locked = machine.clone();
+    locked.review_required = true;
+
+    let agent = Writer::classify("agent_refresh");
+    let pipeline = Writer::classify("re_distill");
+    let human = Writer::classify("manual_edit");
+
+    // Human writers are never gated, not even by the lock.
+    for page in [&machine, &edited, &authored, &locked] {
+        assert!(!machine_write_requires_review(human, page, false, false));
+        assert!(!machine_write_requires_review(human, page, true, true));
+    }
+    // Machine-owned page: nobody is gated.
+    assert!(!machine_write_requires_review(
+        agent, &machine, false, false
+    ));
+    assert!(!machine_write_requires_review(
+        pipeline, &machine, false, false
+    ));
+    // Agent with a checked version writes over human ownership.
+    assert!(!machine_write_requires_review(agent, &edited, true, false));
+    assert!(!machine_write_requires_review(
+        agent, &authored, true, false
+    ));
+    // Agent without a version is gated by human ownership.
+    assert!(machine_write_requires_review(agent, &edited, false, false));
+    assert!(machine_write_requires_review(
+        agent, &authored, false, false
+    ));
+    // Pipeline writers are gated by human ownership; a version does not help.
+    assert!(machine_write_requires_review(
+        pipeline, &edited, true, false
+    ));
+    assert!(machine_write_requires_review(
+        pipeline, &authored, true, false
+    ));
+    // user_forced releases user_edited but never authored.
+    assert!(!machine_write_requires_review(
+        pipeline, &edited, false, true
+    ));
+    assert!(machine_write_requires_review(
+        pipeline, &authored, false, true
+    ));
+    // The lock gates every machine writer, whatever else holds.
+    assert!(machine_write_requires_review(agent, &locked, true, false));
+    assert!(machine_write_requires_review(agent, &locked, false, false));
+    assert!(machine_write_requires_review(
+        pipeline, &locked, false, false
+    ));
+    assert!(machine_write_requires_review(
+        pipeline, &locked, false, true
+    ));
+}
+
+#[tokio::test]
+async fn create_page_without_kind_below_floor_lands_as_authored() {
+    let (db, _dir) = test_db().await;
+    seed_memory(&db, "mem-kind-one", OWNERSHIP_SOURCE).await;
+    for (title, sources) in [
+        ("No Sources", Vec::<String>::new()),
+        ("One Source", vec!["mem-kind-one".to_string()]),
+    ] {
+        let req = CreateConceptRequest {
+            title: title.to_string(),
+            content: OWNERSHIP_SOURCE.to_string(),
+            summary: None,
+            entity_id: None,
+            space: (None).into(),
+            source_memory_ids: sources,
+            creation_kind: None,
+            workspace: None,
+        };
+        let result = create_page(&db, req, "test", None).await.unwrap();
+        let page = db.get_page(&result.id).await.unwrap().unwrap();
+        assert_eq!(
+            page.creation_kind, "authored",
+            "{title}: no kind and fewer sources than the floor must resolve to authored"
+        );
+    }
+}
+
+#[tokio::test]
+async fn create_page_without_kind_at_floor_lands_as_distilled() {
+    let (db, _dir) = test_db().await;
+    seed_memory(&db, "mem-kind-a", "Tokio runtimes schedule async tasks").await;
+    seed_memory(&db, "mem-kind-b", "Tokio worker threads steal async tasks").await;
+    seed_memory(&db, "mem-kind-c", "Tokio schedules tasks across threads").await;
+    let req = CreateConceptRequest {
+        title: "Tokio Scheduling".to_string(),
+        content: OWNERSHIP_SOURCE.to_string(),
+        summary: None,
+        entity_id: None,
+        space: (None).into(),
+        source_memory_ids: vec![
+            "mem-kind-a".to_string(),
+            "mem-kind-b".to_string(),
+            "mem-kind-c".to_string(),
+        ],
+        creation_kind: None,
+        workspace: None,
+    };
+    let result = create_page_with_floor(&db, req, "test", None, 3)
+        .await
+        .unwrap();
+    let page = db.get_page(&result.id).await.unwrap().unwrap();
+    assert_eq!(page.creation_kind, "distilled");
+}
+
+#[tokio::test]
+async fn agent_refresh_with_matching_expected_version_writes_over_user_edit() {
+    let (db, _dir) = test_db().await;
+    let before = ownership_user_edited_page(&db, "page_agent_cas", "mem-agent-cas").await;
+    let content = "Tokio runtimes schedule async tasks across worker threads, refreshed by agent";
+    let result = ownership_write(
+        &db,
+        "page_agent_cas",
+        content,
+        &["mem-agent-cas"],
+        "agent_refresh",
+        Some(before.version),
+    )
+    .await
+    .unwrap();
+    assert!(result.wrote, "a version-checked agent refresh must land");
+    assert!(!result.gated);
+    let after = db.get_page("page_agent_cas").await.unwrap().unwrap();
+    assert_eq!(after.content, content);
+    assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn agent_refresh_without_expected_version_is_staged_on_user_edited_page() {
+    let (db, _dir) = test_db().await;
+    let before = ownership_user_edited_page(&db, "page_agent_nocas", "mem-agent-nocas").await;
+    let result = ownership_write(
+        &db,
+        "page_agent_nocas",
+        "Tokio runtimes schedule async tasks, rewritten without a version",
+        &["mem-agent-nocas"],
+        "agent_refresh",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(!result.wrote);
+    assert!(result.gated);
+    let after = db.get_page("page_agent_nocas").await.unwrap().unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(db.list_pending_revisions(10).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn agent_refresh_with_stale_expected_version_is_refused_before_any_card() {
+    let (db, _dir) = test_db().await;
+    let before = ownership_user_edited_page(&db, "page_agent_stale", "mem-agent-stale").await;
+    let result = ownership_write(
+        &db,
+        "page_agent_stale",
+        "Tokio runtimes schedule async tasks, written against an old version",
+        &["mem-agent-stale"],
+        "agent_refresh",
+        Some(before.version - 1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.outcome, WriteOutcome::Refused);
+    assert!(!result.wrote);
+    assert!(!result.gated, "a stale version is refused, never staged");
+    let after = db.get_page("page_agent_stale").await.unwrap().unwrap();
+    assert_eq!(after.content, before.content);
+    assert_eq!(after.version, before.version);
+    assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn review_lock_stages_agent_and_pipeline_writes_but_not_human_edits() {
+    let (db, _dir) = test_db().await;
+    let page = ownership_page(&db, "page_locked", "mem-locked").await;
+    assert!(!page.review_required);
+    assert!(db
+        .set_page_review_required("page_locked", true)
+        .await
+        .unwrap());
+    let locked = db.get_page("page_locked").await.unwrap().unwrap();
+    assert!(locked.review_required);
+
+    let agent = ownership_write(
+        &db,
+        "page_locked",
+        "Tokio runtimes schedule async tasks, agent rewrite under lock",
+        &["mem-locked"],
+        "agent_refresh",
+        Some(locked.version),
+    )
+    .await
+    .unwrap();
+    assert!(
+        agent.gated && !agent.wrote,
+        "the lock gates an agent even with a matching expected_version"
+    );
+
+    let pipeline = ownership_write(
+        &db,
+        "page_locked",
+        "Tokio runtimes schedule async tasks, pipeline rewrite under lock",
+        &["mem-locked"],
+        "re_distill",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        pipeline.gated && !pipeline.wrote,
+        "the lock gates pipeline writers"
+    );
+    assert_eq!(db.list_pending_revisions(10).await.unwrap().len(), 2);
+    assert_eq!(
+        db.get_page("page_locked").await.unwrap().unwrap().content,
+        locked.content
+    );
+
+    let human_content = "Tokio runtimes schedule async tasks across worker threads, human edit";
+    let human = ownership_write(
+        &db,
+        "page_locked",
+        human_content,
+        &["mem-locked"],
+        "manual_edit",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(human.wrote, "a human edit passes the lock");
+    let after = db.get_page("page_locked").await.unwrap().unwrap();
+    assert_eq!(after.content, human_content);
+    assert!(
+        after.review_required,
+        "a human edit leaves the lock in place"
+    );
+}
+
+#[tokio::test]
+async fn user_forced_rebuild_is_still_staged_under_review_lock() {
+    let (db, _dir) = test_db().await;
+    let before = ownership_user_edited_page(&db, "page_forced_lock", "mem-forced-lock").await;
+    assert!(db
+        .set_page_review_required("page_forced_lock", true)
+        .await
+        .unwrap());
+    let fence = db
+        .try_get_page_fence("page_forced_lock")
+        .await
+        .unwrap()
+        .unwrap();
+    let result = page_write(
+        &db,
+        PageWrite::UserForcedUpdate {
+            page_id: "page_forced_lock",
+            req: UpdatePageRequest {
+                content: "Tokio runtimes schedule async tasks, forced rebuild".to_string(),
+                source_memory_ids: vec!["mem-forced-lock".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            edited_by: "re_distill",
+            expected_fence: &fence,
+            knowledge_path: None,
+            citations: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        result.gated && !result.wrote,
+        "user_forced never releases the lock"
+    );
+    let after = db.get_page("page_forced_lock").await.unwrap().unwrap();
+    assert_eq!(after.content, before.content);
+    assert!(after.user_edited);
+}
+
+#[tokio::test]
+async fn machine_refresh_with_empty_sources_is_allowed_only_for_a_sourceless_page() {
+    let (db, _dir) = test_db().await;
+    // Sourceless machine-owned page.
+    let req = CreateConceptRequest {
+        title: "Sourceless Notes".to_string(),
+        content: OWNERSHIP_SOURCE.to_string(),
+        summary: None,
+        entity_id: None,
+        space: (None).into(),
+        source_memory_ids: vec![],
+        creation_kind: Some("research".to_string()),
+        workspace: None,
+    };
+    let sourceless = create_page(&db, req, "test", None).await.unwrap().id;
+    let content = "Tokio runtimes schedule async tasks, refreshed with no sources";
+    let ok = ownership_write(&db, &sourceless, content, &[], "agent_refresh", None)
+        .await
+        .unwrap();
+    assert!(
+        ok.wrote,
+        "an empty-source refresh of a sourceless page must land"
+    );
+    let page = db.get_page(&sourceless).await.unwrap().unwrap();
+    assert_eq!(page.content, content);
+    assert!(page.source_memory_ids.is_empty());
+
+    // Sourced page: an empty source list would orphan it.
+    ownership_page(&db, "page_sourced_empty", "mem-sourced-empty").await;
+    let err = ownership_write(
+        &db,
+        "page_sourced_empty",
+        "Tokio runtimes schedule async tasks, sources dropped",
+        &[],
+        "agent_refresh",
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&err, WenlanError::Validation(m) if m.contains("must cite at least one source")),
+        "got {err:?}"
+    );
+    let page = db.get_page("page_sourced_empty").await.unwrap().unwrap();
+    assert_eq!(
+        page.source_memory_ids,
+        vec!["mem-sourced-empty".to_string()]
+    );
+}
+
+#[tokio::test]
+async fn set_page_review_required_round_trips_without_bumping_version() {
+    let (db, _dir) = test_db().await;
+    let before = ownership_page(&db, "page_lock_rt", "mem-lock-rt").await;
+    let rev_before = db.get_page_source_revision("page_lock_rt").await.unwrap();
+    assert!(db
+        .set_page_review_required("page_lock_rt", true)
+        .await
+        .unwrap());
+    let locked = db.get_page("page_lock_rt").await.unwrap().unwrap();
+    assert!(locked.review_required);
+    assert_eq!(
+        locked.version, before.version,
+        "the lock is not a content edit"
+    );
+    assert_eq!(
+        db.get_page_source_revision("page_lock_rt").await.unwrap(),
+        rev_before
+    );
+    let listed = db.list_pages("active", 100, 0).await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .any(|p| p.id == "page_lock_rt" && p.review_required),
+        "list reads must carry the lock too"
+    );
+    assert!(db
+        .set_page_review_required("page_lock_rt", false)
+        .await
+        .unwrap());
+    assert!(
+        !db.get_page("page_lock_rt")
+            .await
+            .unwrap()
+            .unwrap()
+            .review_required
+    );
+    assert!(
+        !db.set_page_review_required("page_missing", true)
+            .await
+            .unwrap(),
+        "an unknown page reports false"
+    );
+}

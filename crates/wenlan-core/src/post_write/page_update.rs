@@ -115,6 +115,41 @@ pub fn page_is_human_owned(page: &crate::pages::Page) -> bool {
     page.user_edited || page.creation_kind == "authored"
 }
 
+/// The write gate's one ownership question: must this write be staged as a
+/// revision card instead of landing on `page`?
+///
+/// - A human writer is never gated, not even by the review lock.
+/// - The review lock (`page.review_required`) gates every machine writer.
+/// - An agent that proved it read the current page (`version_checked`: it
+///   sent an `expected_version` that matched) may update a human-owned page
+///   directly; the human-owned rule exists to stop blind overwrites, and a
+///   version-checked write is not blind.
+/// - A user-forced rebuild may release `user_edited`, but an authored page
+///   still gets a card.
+/// - Every other machine writer is gated on a human-owned page.
+///
+/// `version_checked` must only be true once the caller's `expected_version`
+/// has been compared with the loaded page: a mismatch is refused before this
+/// gate runs, so it never reaches here.
+pub fn machine_write_requires_review(
+    writer: Writer<'_>,
+    page: &crate::pages::Page,
+    version_checked: bool,
+    user_forced: bool,
+) -> bool {
+    if !writer.is_machine() {
+        return false;
+    }
+    if page.review_required {
+        return true;
+    }
+    match writer {
+        Writer::Agent(_) if version_checked => false,
+        _ if user_forced => page.creation_kind == "authored",
+        _ => page_is_human_owned(page),
+    }
+}
+
 /// Stage a machine write to a human-owned page as a pending revision card
 /// instead of overwriting the page's prose. Uses the same grammar as L3
 /// doc-grounded revisions (`crate::reconcile::write_revision`): a
@@ -636,11 +671,11 @@ async fn update_page_db_impl(
     // authored page is legitimately born with zero sources (create_page
     // allows exactly that), so demanding one here would reject every later
     // human edit of that page — in the app and in the vault alike.
-    if !preserve_sources && req.source_memory_ids.is_empty() && writer.is_machine() {
-        return Err(WenlanError::Validation(
-            "page must cite at least one source memory".into(),
-        ));
-    }
+    // The check itself runs inside the CAS loop below, against the loaded
+    // page: an empty set is accepted only when the page has no sources to
+    // drop (an authored page written from a conversation).
+    let machine_empty_sources =
+        !preserve_sources && req.source_memory_ids.is_empty() && writer.is_machine();
     // Source-existence check removed. create_page validates sources at
     // creation time. Updates only carry forward or extend an already-valid
     // source list; re-checking on every update would break daemon-internal
@@ -722,6 +757,11 @@ async fn update_page_db_impl(
             let current = db.get_page(page_id).await?.ok_or_else(|| {
                 WenlanError::Validation(format!("page '{page_id}' does not exist"))
             })?;
+            if machine_empty_sources && !current.source_memory_ids.is_empty() {
+                return Err(WenlanError::Validation(
+                    "page must cite at least one source memory".into(),
+                ));
+            }
             let effective_sources = if preserve_sources {
                 &current.source_memory_ids
             } else {
@@ -746,7 +786,9 @@ async fn update_page_db_impl(
                 if current.version != guard.expected_page_version {
                     return Ok(no_op(WriteOutcome::Refused, vec![]));
                 }
-                if page_is_human_owned(&current) {
+                // A review-locked Page is skipped the same way: Page Growth
+                // never stages cards, it only grows machine-owned Pages.
+                if page_is_human_owned(&current) || current.review_required {
                     return terminal_result_with_receipt(
                         db,
                         retry.as_ref(),
@@ -801,13 +843,15 @@ async fn update_page_db_impl(
             // it is no longer advisory: whatever it decided is what the write
             // guards on. A user-forced rebuild overrides `user_edited` (the
             // write releases it together with the new body) but never an
-            // authored page, which still gets a revision card.
-            let human_owned = if user_forced {
-                current.creation_kind == "authored"
-            } else {
-                page_is_human_owned(&current)
-            };
-            if writer.is_machine() && human_owned {
+            // authored page or the review lock, which still get a revision
+            // card. An agent whose `expected_version` matched above may land
+            // on a human-owned page; see `machine_write_requires_review`.
+            if machine_write_requires_review(
+                writer,
+                &current,
+                req.expected_version.is_some(),
+                user_forced,
+            ) {
                 // `expected_source_revision` is the caller's compile fence
                 // when it supplied one. A caller with none (e.g. the generic
                 // `update_page` wrapper) gets an acceptance-time staging

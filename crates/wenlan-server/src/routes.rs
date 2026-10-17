@@ -2942,6 +2942,7 @@ mod context_page_selection_tests {
             stale_reason: None,
             pending_rebuild: None,
             refresh_blocked_reason: None,
+            review_required: false,
             user_edited: false,
             relevance_score,
             last_edited_by: None,

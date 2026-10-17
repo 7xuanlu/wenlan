@@ -925,10 +925,15 @@ pub struct WritePageParams {
     #[serde(default, alias = "domain")]
     pub space: Option<String>,
     #[schemars(
-        description = "Memory source_ids the page is distilled from. Required for traceability."
+        description = "Memory source_ids the page is distilled from. Optional: pass them when the page is built from captured memories, because they are its traceability (the daemon attaches provenance from them). Omit them for a page written from the conversation itself. On refresh, carry the page's existing list through; a page that has sources refuses an empty list."
     )]
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
+    #[schemars(
+        description = "Refresh only: pass page.version from read_page. When the page has moved on, the write is refused and nothing changes; re-read the page with read_page and retry. With it, a refresh of a page the user edited lands directly; without it, that refresh is staged as a revision card for the user."
+    )]
+    #[serde(default)]
+    pub expected_version: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1266,6 +1271,23 @@ Install:
 /// Convert a backend error into a tool-level error result (isError: true)
 /// with an actionable message. This keeps the MCP transport healthy
 /// (no protocol-level McpError) while telling the caller what happened.
+/// A refresh the daemon refused with 409 wrote nothing: the page moved past
+/// the caller's `expected_version`. Say so plainly, with the recovery steps.
+fn page_write_conflict_result(page_id: &str, current_version: Option<i64>) -> CallToolResult {
+    let text = match current_version {
+        Some(version) => format!(
+            "write_page refused, nothing was written: page {page_id} moved to v{version}. \
+             Re-read it with read_page and retry write_page with expected_version {version}."
+        ),
+        None => format!(
+            "write_page refused, nothing was written: page {page_id} moved to a newer version. \
+             Re-read it with read_page and retry write_page with its page.version as \
+             expected_version."
+        ),
+    };
+    CallToolResult::error(vec![ContentBlock::text(text)])
+}
+
 fn tool_error(e: WenlanError, verb: &str) -> CallToolResult {
     let msg = match &e {
         WenlanError::Unreachable(_) => format!(
@@ -2345,13 +2367,6 @@ impl WenlanMcpServer {
     ) -> Result<CallToolResult, McpError> {
         match params.page_id {
             Some(page_id) => {
-                if params.source_memory_ids.is_empty() {
-                    return Ok(CallToolResult::error(vec![ContentBlock::text(
-                        "source_memory_ids is required when refreshing — carry through \
-                         the stale page's existing list from distill output"
-                            .to_string(),
-                    )]));
-                }
                 if self.transport == TransportMode::Http {
                     return Ok(CallToolResult::error(vec![ContentBlock::text(
                         "Update operations are not available over remote connections. \
@@ -2363,13 +2378,31 @@ impl WenlanMcpServer {
                     content: params.content,
                     source_memory_ids: params.source_memory_ids,
                     summary: params.summary,
+                    expected_version: params.expected_version,
                 };
                 let path = format!("/api/pages/{page_id}");
                 // Typed end-to-end: a wire-shape drift on the daemon side fails at
                 // deserialize instead of silently returning the no-op "Refreshed"
                 // line. Same discipline as the other typed page responses.
                 let resp: wenlan_types::responses::PageWriteResponse =
-                    try_call!(self.client.put(&path, &req), "write_page");
+                    match self.client.put(&path, &req).await {
+                        Ok(resp) => resp,
+                        // 409: the page moved past expected_version and
+                        // nothing was written. The client withholds daemon
+                        // free text from agents, so read the page's current
+                        // version here and give the same recovery steps the
+                        // daemon's 409 body carries.
+                        Err(WenlanError::Api { status: 409, .. }) => {
+                            let current = self
+                                .client
+                                .get::<wenlan_types::responses::PageReadResponse>(&path)
+                                .await
+                                .ok()
+                                .map(|page| page.page.page.version);
+                            return Ok(page_write_conflict_result(&page_id, current));
+                        }
+                        Err(e) => return Ok(tool_error(e, "write_page")),
+                    };
                 // Ownership gate (spec §5.2): a human-owned page is never overwritten
                 // in place; the daemon stages a revision card. Surface that so the
                 // caller does not believe the prose was rewritten.
@@ -2503,8 +2536,19 @@ impl WenlanMcpServer {
             "read_page"
         );
         let visible = visible_page_sources_for_standard(&sources, crate::lock_state::is_locked());
+        let review_required = page.page.page.review_required;
+        let source_count = page.page.page.source_memory_ids.len();
+        let mut page_value = serde_json::to_value(&page.page).map_err(|error| {
+            McpError::internal_error(format!("read_page encode: {error}"), None)
+        })?;
+        // The Page wire omits an unset review lock; an agent deciding how to
+        // write needs the explicit answer either way.
+        if let Some(object) = page_value.as_object_mut() {
+            object.insert("review_required".into(), review_required.into());
+            object.insert("source_count".into(), source_count.into());
+        }
         let value = serde_json::json!({
-            "page": page.page,
+            "page": page_value,
             "okf": page.okf,
             "sources": visible,
         });
@@ -2558,6 +2602,9 @@ impl WenlanMcpServer {
                     "last_modified": entry.page.last_modified,
                     "stale_reason": entry.page.stale_reason,
                     "storage_path": entry.storage_path,
+                    "creation_kind": entry.page.creation_kind,
+                    "source_count": entry.page.source_memory_ids.len(),
+                    "review_required": entry.page.review_required,
                 })
             })
             .collect();
@@ -3156,7 +3203,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Create or refresh a distilled wiki page. This write can replace an existing page: omit page_id to create a new page (title required); the daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Refresh is not available over remote HTTP MCP transport (local stdio only).",
+        description = "Create or refresh a wiki page. When the user asks to turn something from this conversation into a page, call write_page with a title and the content; source_memory_ids are optional. This write can replace an existing page: omit page_id to create a new page (title required); with enough cited sources it lands as a distilled page, otherwise as an authored page. The daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Before a refresh, read_page and pass its page.version as expected_version: if the page moved on, the write is refused with nothing changed, so re-read and retry. Without expected_version, a refresh of a page the user wrote or edited is staged as a revision card, and a page with review_required set always stages one. Refresh is not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Write page",
             read_only_hint = false,
@@ -5683,6 +5730,7 @@ mod tests {
             summary: None,
             entity_id: None,
             space: None,
+            expected_version: None,
         };
         let result = server.write_page_impl(params).await.unwrap();
         let content = &result.content[0];
@@ -5705,6 +5753,7 @@ mod tests {
             summary: None,
             entity_id: None,
             space: None,
+            expected_version: None,
         };
         let result = server.write_page_impl(params).await.unwrap();
         assert!(
@@ -5737,12 +5786,63 @@ mod tests {
         assert!(text.contains("write_outcome: attached_existing"));
     }
 
+    /// A daemon Page as the `/api/pages` reads serialize it, for wiremock.
+    fn page_wire_json(id: &str, version: i64, review_required: bool) -> serde_json::Value {
+        let mut page = serde_json::json!({
+            "id": id,
+            "title": "Conversation notes",
+            "summary": null,
+            "content": "body",
+            "entity_id": null,
+            "source_memory_ids": ["mem_a", "mem_b"],
+            "version": version,
+            "status": "active",
+            "created_at": "2026-10-01T00:00:00Z",
+            "last_compiled": "2026-10-01T00:00:00Z",
+            "last_modified": "2026-10-01T00:00:00Z",
+            "sources_updated_count": 0,
+            "stale_reason": null,
+            "user_edited": true,
+            "creation_kind": "authored",
+        });
+        if review_required {
+            page["review_required"] = serde_json::Value::Bool(true);
+        }
+        page
+    }
+
+    /// The MCP side no longer requires sources on refresh: an authored page
+    /// written from a conversation has none, and the daemon decides whether an
+    /// empty list is allowed for the page it holds. `expected_version` rides
+    /// on the wire.
     #[tokio::test]
-    async fn write_page_refresh_rejects_empty_sources_before_network() {
-        let server = make_server(TransportMode::Stdio, "agent", None);
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            server.write_page_impl(WritePageParams {
+    async fn write_page_refresh_sends_empty_sources_and_expected_version_to_the_daemon() {
+        use wiremock::matchers::{body_json, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/pages/page_x"))
+            .and(body_json(serde_json::json!({
+                "content": "body",
+                "source_memory_ids": [],
+                "summary": null,
+                "expected_version": 3
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ok": true
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+        let result = server
+            .write_page_impl(WritePageParams {
                 page_id: Some("page_x".into()),
                 title: None,
                 content: "body".into(),
@@ -5750,19 +5850,186 @@ mod tests {
                 summary: None,
                 entity_id: None,
                 space: None,
-            }),
-        )
-        .await
-        .expect("empty-source guard must return before any daemon retry")
-        .unwrap();
+                expected_version: Some(3),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(false), "{result:?}");
+    }
+
+    /// A 409 from the refresh route means the page moved past
+    /// `expected_version`: the agent is told nothing was written, the page's
+    /// current version, and to re-read with read_page before retrying.
+    #[tokio::test]
+    async fn write_page_refresh_conflict_tells_the_agent_to_reread_and_retry() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/api/pages/page_x"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(serde_json::json!({
+                "error": "page page_x moved to v5; re-read it with read_page and retry write_page with expected_version 5"
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/pages/page_x"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "page": page_wire_json("page_x", 5, false)
+            })))
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+        let result = server
+            .write_page_impl(WritePageParams {
+                page_id: Some("page_x".into()),
+                title: None,
+                content: "body".into(),
+                source_memory_ids: vec!["mem_a".into()],
+                summary: None,
+                entity_id: None,
+                space: None,
+                expected_version: Some(4),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.is_error, Some(true));
         let text = match &result.content[0] {
             rmcp::model::ContentBlock::Text(text) => &text.text,
             other => panic!("expected text content, got {other:?}"),
         };
-        assert!(
-            result.is_error.unwrap_or(false) && text.contains("source_memory_ids is required"),
-            "empty refresh sources must fail locally before any daemon call: {text}"
+        for needle in [
+            "nothing was written",
+            "moved to v5",
+            "read_page",
+            "expected_version 5",
+        ] {
+            assert!(text.contains(needle), "missing {needle:?} in: {text}");
+        }
+    }
+
+    /// list_pages tells the agent what kind of page each one is, how many
+    /// sources it cites, and whether it is review-locked, so it can pick the
+    /// right write without reading every page first.
+    #[tokio::test]
+    async fn list_pages_reports_creation_kind_source_count_and_review_lock() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/pages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "pages": [
+                    page_wire_json("page_locked", 2, true),
+                    page_wire_json("page_open", 1, false),
+                ]
+            })))
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
         );
+        let result = server
+            .list_pages_impl(ListPagesParams {
+                status: None,
+                limit: None,
+                offset: None,
+                space: None,
+            })
+            .await
+            .unwrap();
+        let value = result.structured_content.expect("structured list");
+        let pages = value["pages"].as_array().expect("pages array");
+        assert_eq!(pages[0]["creation_kind"], "authored");
+        assert_eq!(pages[0]["source_count"], 2);
+        assert_eq!(pages[0]["review_required"], true);
+        assert_eq!(pages[1]["review_required"], false);
+    }
+
+    /// read_page always states the review lock and the source count, even
+    /// though the Page wire omits an unset lock.
+    #[tokio::test]
+    async fn read_page_states_review_lock_explicitly() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/pages/page_open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "page": page_wire_json("page_open", 7, false)
+            })))
+            .mount(&mock)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/pages/page_open/sources"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .mount(&mock)
+            .await;
+        let server = WenlanMcpServer::new(
+            WenlanClient::new(mock.uri()),
+            TransportMode::Stdio,
+            "agent".into(),
+            None,
+        );
+        let result = server.read_page_impl("page_open").await.unwrap();
+        let value = result.structured_content.expect("structured page");
+        assert_eq!(value["page"]["review_required"], false);
+        assert_eq!(value["page"]["version"], 7);
+        assert_eq!(value["page"]["source_count"], 2);
+    }
+
+    /// The schema tells agents sources are optional and expected_version
+    /// comes from read_page; the tool description carries the
+    /// conversation-to-page usage.
+    #[test]
+    fn write_page_documents_optional_sources_and_expected_version() {
+        let schema = serde_json::to_value(schemars::schema_for!(WritePageParams)).unwrap();
+        let props = &schema["properties"];
+        let sources = props["source_memory_ids"]["description"]
+            .as_str()
+            .expect("source_memory_ids description");
+        assert!(sources.contains("Optional"), "{sources}");
+        let expected = props["expected_version"]["description"]
+            .as_str()
+            .expect("expected_version description");
+        assert!(
+            expected.contains("page.version from read_page"),
+            "{expected}"
+        );
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert!(!required.contains(&"expected_version"));
+        assert!(!required.contains(&"source_memory_ids"));
+
+        let tool = WenlanMcpServer::tool_router()
+            .list_all()
+            .into_iter()
+            .find(|tool| tool.name == "write_page")
+            .expect("write_page registered");
+        let description = tool.description.as_deref().unwrap_or_default();
+        assert!(
+            description.contains("turn something from this conversation into a page"),
+            "{description}"
+        );
+        assert!(
+            description.contains("source_memory_ids are optional"),
+            "{description}"
+        );
+        assert!(description.contains("expected_version"), "{description}");
     }
 
     #[tokio::test]

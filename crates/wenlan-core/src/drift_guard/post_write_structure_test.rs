@@ -94,11 +94,15 @@ impl Phase {
             for item in [
                 "PipelineStage",
                 "Writer",
+                "machine_write_requires_review",
                 "page_is_human_owned",
                 "stage_page_revision_card",
             ] {
                 expected.insert(format!("pub:page_update:{item}"));
             }
+            // The create gate's kind resolution is shared with the HTTP route
+            // so its telemetry follows the same rule as the write.
+            expected.insert("pub:page_create:resolve_page_creation_kind".to_string());
             for item in ["PRE_WRITE_GATE", "merge_shrink_threshold"] {
                 expected.insert(format!("pub(crate):page_update:{item}"));
             }
@@ -503,7 +507,8 @@ pub use self::entity_graph::{create_entity, create_relation, create_relation_wit
 pub use self::page_dispatch::{PageWrite, page_write, create_page, create_page_with_floor, create_page_with_tuning, update_page, update_page_at_source_revision, update_page_preserving_sources};
 pub(crate) use self::page_dispatch::update_page_growth_at_versions;
 pub use self::page_revision::{accept_pending_revision, accept_pending_revision_with_knowledge_path, dismiss_pending_revision, dismiss_contradiction};
-pub use self::page_update::{PipelineStage, Writer, page_is_human_owned, stage_page_revision_card};
+pub use self::page_create::resolve_page_creation_kind;
+pub use self::page_update::{PipelineStage, Writer, machine_write_requires_review, page_is_human_owned, stage_page_revision_card};
 pub(crate) use self::page_update::{PRE_WRITE_GATE, merge_shrink_threshold};
 pub(crate) async fn log_activity_best_effort() {}
 "#;
