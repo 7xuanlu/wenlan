@@ -114,6 +114,7 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "read_text_file",
   "rebuild_activities",
   "regenerate_narrative",
+  "register_connected_agent",
   "reindex",
   "remove_avatar",
   "remove_legacy_mcp_entry",

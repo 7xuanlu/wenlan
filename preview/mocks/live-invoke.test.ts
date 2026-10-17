@@ -1277,6 +1277,7 @@ const UNSTUBBED_DEBT = new Set([
   "rebuild_activities",
   "reclassify_memory_cmd",
   "regenerate_narrative",
+  "register_connected_agent",
   "reindex",
   "remove_avatar",
   "remove_legacy_mcp_entry",
