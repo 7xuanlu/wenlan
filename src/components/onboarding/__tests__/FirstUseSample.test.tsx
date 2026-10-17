@@ -293,7 +293,7 @@ describe("FirstUseSample AI-use panel", () => {
     renderSample();
     openAiPanel();
     expect(
-      screen.getByText(/ChatGPT can read your memories here but cannot write them back/),
+      screen.getByText(/ChatGPT can read but not write/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/note today's decisions/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
@@ -339,13 +339,13 @@ describe("FirstUseSample AI-use panel", () => {
     fireEvent.click(
       within(panel).getByRole("button", { name: "Copy command" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Copy command: Leave progress behind" }));
+    fireEvent.click(screen.getByRole("button", { name: "Copy command: Save progress" }));
     await act(async () => {
       resolvers[1]!();
     });
-    const handoffRow = screen.getByRole("button", { name: "Copy command: Leave progress behind" }).closest("li")!;
+    const handoffRow = screen.getByRole("button", { name: "Copy command: Save progress" }).closest("li")!;
     expect(within(handoffRow).getByTestId("copy-ok")).toBeInTheDocument();
-    expect(within(handoffRow).getByRole("status")).toHaveTextContent("Leave progress behind: Copied");
+    expect(within(handoffRow).getByRole("status")).toHaveTextContent("Save progress: Copied");
     await act(async () => {
       resolvers[0]!();
     });
@@ -406,42 +406,42 @@ describe("FirstUseSample AI-use panel", () => {
     openAiPanel();
     // Default client is ChatGPT: explain the limitation, never offer a save action.
     expect(
-      screen.getByText(/ChatGPT can read your memories here but cannot write them back/),
+      screen.getByText(/ChatGPT can read but not write/),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Copy command: Leave progress behind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy command: Save progress" })).not.toBeInTheDocument();
     expect(screen.queryByText("/handoff")).not.toBeInTheDocument();
     expect(
       screen.getByText(/@wenlan recall the decisions/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
-    expect(screen.getByText(/Leave progress behind/)).toBeInTheDocument();
+    expect(screen.getByText(/Save progress/)).toBeInTheDocument();
     expect(screen.getByText("/handoff")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-    expect(screen.getByText(/Leave progress behind/)).toBeInTheDocument();
+    expect(screen.getByText(/Save progress/)).toBeInTheDocument();
   });
 
   it("shows the ChatGPT read-only note only for ChatGPT", () => {
     renderSample();
     openAiPanel();
     expect(
-      screen.getByText(/read-only web access to the selected project/),
+      screen.getByText(/through the web relay/),
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     expect(
-      screen.queryByText(/read-only web access to the selected project/),
+      screen.queryByText(/through the web relay/),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
     expect(
-      screen.queryByText(/read-only web access to the selected project/),
+      screen.queryByText(/through the web relay/),
     ).not.toBeInTheDocument();
   });
 
   it("announces which secondary command was copied and reports its failure", async () => {
     renderSample();
     openAiPanel();
-    const copy = screen.getByRole("button", { name: "Copy command: Brief a new conversation" });
+    const copy = screen.getByRole("button", { name: "Copy command: Brief a new chat" });
     fireEvent.click(copy);
-    expect(await within(copy.closest("li")!).findByText("Brief a new conversation: Copied")).toHaveAttribute("role", "status");
+    expect(await within(copy.closest("li")!).findByText("Brief a new chat: Copied")).toHaveAttribute("role", "status");
     mockedClipboardWrite.mockRejectedValueOnce(new Error("denied"));
     fireEvent.click(copy);
     expect(await within(copy.closest("li")!).findByRole("alert")).toHaveTextContent("Copy failed");

@@ -474,7 +474,7 @@ export function FirstUseSample({
                     <div>
                       <code>{handoffCommand}</code>
                       <span>
-                        {t("firstUse.sample.handoffLabel")}. {t("firstUse.sample.handoffHint")}
+                        <strong>{t("firstUse.sample.handoffLabel")}</strong> {t("firstUse.sample.handoffHint")}
                       </span>
                     </div>
                     <button
@@ -501,7 +501,7 @@ export function FirstUseSample({
                 ) : (
                   <div>
                     <span>
-                      {t("firstUse.sample.handoffLabel")}. {t("firstUse.sample.handoffReadOnlyNote")}
+                      <strong>{t("firstUse.sample.handoffLabel")}</strong> {t("firstUse.sample.handoffReadOnlyNote")}
                     </span>
                   </div>
                 )}
@@ -510,7 +510,7 @@ export function FirstUseSample({
                 <div>
                   <code>{commands.brief}</code>
                   <span>
-                    {t("firstUse.sample.briefLabel")}. {t("firstUse.sample.briefHint")}
+                    <strong>{t("firstUse.sample.briefLabel")}</strong> {t("firstUse.sample.briefHint")}
                   </span>
                 </div>
                 <button
