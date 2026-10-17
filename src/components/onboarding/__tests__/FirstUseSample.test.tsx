@@ -83,8 +83,8 @@ describe("FirstUseSample demo isolation", () => {
     fireEvent.click(screen.getByTestId("sample-citation-sample-cite-2"));
     expect(screen.getByTestId("sample-citation-dialog")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Close" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open related page" }));
-    expect(screen.getByTestId("sample-related-dialog")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use with AI" }));
+    expect(screen.getByText("Let AI use your knowledge")).toBeInTheDocument();
     // The only daemon-adjacent call allowed on the sample path is clipboard.
     expect(mockedInvoke).not.toHaveBeenCalled();
   });
@@ -138,28 +138,25 @@ describe("FirstUseSample demo isolation", () => {
 });
 
 describe("FirstUseSample source rack and page flow", () => {
-  it("keeps the three-source rack visible from import through the final page", () => {
+  it("leads with the page, shows where it came from, then an AI answering from it", () => {
     renderSample();
-    for (const testId of [
-      "sample-source-sample-memory",
-      "sample-source-sample-file",
-      "sample-source-sample-page",
-    ]) {
-      expect(screen.getByTestId(testId)).toBeInTheDocument();
-    }
+    expect(screen.getByText("An unhurried Tainan weekend")).toBeInTheDocument();
+    expect(screen.getByTestId("sample-source-sample-memory")).toBeInTheDocument();
+    expect(screen.getByTestId("sample-source-sample-file")).toBeInTheDocument();
+    expect(screen.queryByTestId("sample-source-sample-page")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("sample-phase-1"));
+    expect(screen.getByTestId("sample-source-sample-memory")).toHaveAttribute("data-lit", "true");
+    expect(screen.getByTestId("sample-source-sample-file")).toHaveAttribute("data-dimmed", "true");
+
+    fireEvent.click(screen.getByTestId("sample-phase-2"));
+    expect(screen.getByTestId("sample-source-sample-file")).toHaveAttribute("data-lit", "true");
+    expect(screen.getByTestId("sample-source-sample-memory")).toHaveAttribute("data-dimmed", "true");
+
     skipToResult();
-    for (const testId of [
-      "sample-source-sample-memory",
-      "sample-source-sample-file",
-      "sample-source-sample-page",
-    ]) {
-      expect(screen.getByTestId(testId)).toBeInTheDocument();
-    }
-    expect(
-      screen.getByText("Weekend trip decision"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("packing-list.md")).toBeInTheDocument();
-    expect(screen.getByText("Slow travel")).toBeInTheDocument();
+    expect(screen.getByText("An unhurried Tainan weekend")).toBeInTheDocument();
+    expect(screen.queryByTestId("sample-source-sample-memory")).not.toBeInTheDocument();
+    expect(screen.getByText("What's left before the Tainan weekend?")).toBeInTheDocument();
   });
 
   it("opens the file original with path and line context", () => {
@@ -190,25 +187,6 @@ describe("FirstUseSample source rack and page flow", () => {
     expect(
       within(dialog).queryByText(/File /),
     ).not.toBeInTheDocument();
-  });
-
-  it("opens the related internal sample page and returns", () => {
-    renderSample();
-    skipToResult();
-    fireEvent.click(screen.getByRole("button", { name: "Open related page" }));
-    const dialog = screen.getByTestId("sample-related-dialog");
-    expect(
-      within(dialog).getByText("Two things left before departure"),
-    ).toBeInTheDocument();
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Back to the page" }),
-    );
-    expect(
-      screen.queryByTestId("sample-related-dialog"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText("An unhurried Tainan weekend"),
-    ).toBeInTheDocument();
   });
 
   it("reveals the AI step only through Use with AI, with a way back", () => {
@@ -252,21 +230,17 @@ describe("FirstUseSample dialogs", () => {
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("traps Tab and Shift+Tab inside the dialog", () => {
+  it("keeps Tab and Shift+Tab inside the dialog", () => {
     renderSample();
     skipToResult();
-    fireEvent.click(screen.getByRole("button", { name: "Open related page" }));
-    const dialog = screen.getByTestId("sample-related-dialog");
+    fireEvent.click(screen.getByTestId("sample-citation-sample-cite-2"));
+    const dialog = screen.getByTestId("sample-citation-dialog");
     const closeButton = within(dialog).getByRole("button", { name: "Close" });
-    const backButton = within(dialog).getByRole("button", {
-      name: "Back to the page",
-    });
-    backButton.focus();
+    closeButton.focus();
     fireEvent.keyDown(document, { key: "Tab" });
     expect(document.activeElement).toBe(closeButton);
-    closeButton.focus();
     fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
-    expect(document.activeElement).toBe(backButton);
+    expect(document.activeElement).toBe(closeButton);
   });
 });
 
