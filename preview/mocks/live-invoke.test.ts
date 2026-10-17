@@ -1271,6 +1271,7 @@ const UNSTUBBED_DEBT = new Set([
   "move_space",
   "open_file",
   "open_search_result",
+  "open_tool_with_prompt",
   "quick_capture",
   "read_source_dir",
   "read_text_file",

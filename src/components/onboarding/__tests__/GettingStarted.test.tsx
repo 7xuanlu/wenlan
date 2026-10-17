@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../../i18n";
 import {
   clipboardWrite,
+  getBackgroundAiEnabled,
   listAgents,
   listOnboardingMilestones,
   listPagesExplicitBrowse,
@@ -25,6 +26,7 @@ import {
 
 vi.mock("../../../lib/tauri", () => ({
   clipboardWrite: vi.fn(),
+  getBackgroundAiEnabled: vi.fn(),
   listAgents: vi.fn(),
   listOnboardingMilestones: vi.fn(),
   listPagesExplicitBrowse: vi.fn(),
@@ -80,7 +82,7 @@ function mockLibrary(pages: Page[]) {
     pages.filter((p) => (status === "draft") === (p.status === "draft")));
 }
 
-function renderCard(pages: Page[] = [], handlers: Partial<Record<"onWriteNote" | "onConnectTool" | "onAddSources" | "onSeeExample", () => void>> = {}) {
+function renderCard(pages: Page[] = [], handlers: Partial<Record<"onWriteNote" | "onConnectTool" | "onAddSources" | "onSeeExample" | "onTurnOnSteeping", () => void>> = {}) {
   const props = {
     onWriteNote: vi.fn(),
     onConnectTool: vi.fn(),
@@ -267,6 +269,24 @@ describe("GettingStarted", () => {
     fireEvent.click(screen.getByRole("button", { name: ask("copy") }));
     expect(await screen.findByRole("button", { name: ask("copied") })).toBeInTheDocument();
     expect(openToolWithPrompt).not.toHaveBeenCalled();
+  });
+
+  it("offers background steeping under the steps while it is off", async () => {
+    vi.mocked(getBackgroundAiEnabled).mockResolvedValue(false);
+    const onTurnOnSteeping = vi.fn();
+    renderCard([], { onTurnOnSteeping });
+    const line = await screen.findByTestId("getting-started-steep");
+    expect(line).toHaveTextContent(i18n.t("firstUse.checklist.steep.line"));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steep.action") }));
+    expect(onTurnOnSteeping).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer steeping once it is on, or when its state is unknown", async () => {
+    vi.mocked(getBackgroundAiEnabled).mockResolvedValue(true);
+    renderCard([], { onTurnOnSteeping: vi.fn() });
+    await screen.findByRole("heading", { name: title() });
+    await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalled());
+    expect(screen.queryByTestId("getting-started-steep")).toBeNull();
   });
 
   it("keeps the prompt away until a tool has actually connected", async () => {

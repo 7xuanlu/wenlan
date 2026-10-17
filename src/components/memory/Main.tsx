@@ -1383,6 +1383,7 @@ export default function Main({
                 onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
                 onConnectTool={() => navigateTo({ kind: "connect-agent" })}
                 onSeeExample={() => navigateTo({ kind: "first-use" })}
+                onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               />
             </WikiWorkspace>
           ) : view.kind === "entities" ? (

@@ -22,6 +22,7 @@ interface PagesOverviewProps {
    *  source opens its dialog in place and needs no destination. */
   readonly onConnectTool?: () => void;
   readonly onSeeExample?: () => void;
+  readonly onOpenIntelligence?: () => void;
 }
 
 export function PagesOverview({
@@ -29,6 +30,7 @@ export function PagesOverview({
   onSelectPage,
   onConnectTool,
   onSeeExample,
+  onOpenIntelligence,
 }: PagesOverviewProps) {
   const { t } = useTranslation();
   const { pages, empty } = useLibraryInventory();
@@ -40,6 +42,7 @@ export function PagesOverview({
       onConnectTool={onConnectTool}
       onAddSources={() => setAdding(true)}
       onSeeExample={onSeeExample}
+      onTurnOnSteeping={onOpenIntelligence}
     />
   ) : null;
   // While the open checklist is the screen's content the panel above it shrinks

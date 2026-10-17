@@ -4,7 +4,7 @@
 
 .getting-started {
   margin: 0 auto;
-  max-width: min(100%, 480px);
+  max-width: min(100%, 520px);
   padding: 14px 20px 4px;
   border: 1px solid var(--mem-border);
   border-radius: var(--mem-radius-lg);
@@ -177,6 +177,14 @@
 
 .getting-started-link:hover {
   color: var(--mem-text);
+}
+
+.getting-started-extra {
+  margin: 0 0 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--mem-border);
+  color: var(--mem-text-secondary);
+  font: 12px/1.5 var(--mem-font-body);
 }
 
 .getting-started-link:focus-visible {

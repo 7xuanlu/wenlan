@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
   CheckCircle,
@@ -9,7 +10,7 @@ import {
   Sparkle,
   X,
 } from "@phosphor-icons/react";
-import { clipboardWrite, openToolWithPrompt, PROMPT_LINK_FAMILIES } from "../../lib/tauri";
+import { clipboardWrite, getBackgroundAiEnabled, openToolWithPrompt, PROMPT_LINK_FAMILIES } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
 import {
   connectedToolFamilies,
@@ -42,6 +43,9 @@ export interface GettingStartedProps {
   readonly onConnectTool: () => void;
   readonly onAddSources: () => void;
   readonly onSeeExample: () => void;
+  /** Opens the setting that turns background steeping on. Without it the
+   *  optional steeping line is not offered. */
+  readonly onTurnOnSteeping?: () => void;
 }
 
 export function GettingStarted({
@@ -49,6 +53,7 @@ export function GettingStarted({
   onConnectTool,
   onAddSources,
   onSeeExample,
+  onTurnOnSteeping,
 }: GettingStartedProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -56,6 +61,12 @@ export function GettingStarted({
   // opened, so the question is on the clipboard to paste there instead.
   const [handedOver, setHandedOver] = useState<"opened" | "copied" | null>(null);
   const { visible, progress, doneCount, dismissed, setDismissed, pages, agents } = useGettingStartedState();
+  // Same key as the Intelligence settings, so turning it on there hides the line here.
+  const backgroundAi = useQuery({
+    queryKey: ["backgroundAiEnabled"],
+    queryFn: getBackgroundAiEnabled,
+    enabled: visible && onTurnOnSteeping != null,
+  });
 
   useEffect(() => {
     if (!copied) return;
@@ -210,6 +221,16 @@ export function GettingStarted({
           );
         })}
       </ol>
+      {/* Optional, so it sits under the steps instead of being one of them.
+          Shown only when the setting is known to be off. */}
+      {onTurnOnSteeping && backgroundAi.data === false ? (
+        <p className="getting-started-extra" data-testid="getting-started-steep">
+          {t("firstUse.checklist.steep.line")}{" "}
+          <button type="button" className="getting-started-link" onClick={onTurnOnSteeping}>
+            {t("firstUse.checklist.steep.action")}
+          </button>
+        </p>
+      ) : null}
     </section>
   );
 }

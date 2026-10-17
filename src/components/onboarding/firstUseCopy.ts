@@ -99,6 +99,10 @@ export const enFirstUse = {
         waiting: "The question is ready in {{tool}}. Send it, and this step checks itself once it reads your note.",
       },
     },
+    steep: {
+      line: "Optional: turn on background steeping so AI tools look things up faster, cheaper, and more accurately.",
+      action: "Turn on",
+    },
   },
   live: {
     title: "Your knowledge, live",
@@ -224,6 +228,10 @@ export const hansFirstUse = {
         waiting: "问题已填好，在 {{tool}} 按下送出。它读到你的笔记后，这一步会自动打勾。",
       },
     },
+    steep: {
+      line: "可选：开启后台沉淀，AI 工具查你的笔记会更快、更省、更准。",
+      action: "开启",
+    },
   },
   live: {
     title: "你的知识 · 实时",
@@ -345,6 +353,10 @@ export const hantFirstUse = {
         question: "問題：我之前記過「{{title}}」嗎？",
         waiting: "問題已填好，在 {{tool}} 按下送出。它讀到你的筆記後，這一步會自動打勾。",
       },
+    },
+    steep: {
+      line: "可選：開啟背景沉澱，AI 工具查你的筆記會更快、更省、更準。",
+      action: "開啟",
     },
   },
   live: {
