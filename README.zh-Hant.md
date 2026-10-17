@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=da7285d6188afd22efb31e0a4dc404ad530b08e3122ed0135fb6add111e21eff -->
+<!-- README_SYNC: source=README.md sha256=3dc9b730a0ba7b43d7070c3b8460e21b538eaa4a2d699eb2d9eeb7620d1ec056 -->
 
 <p align="center">
   <picture>
@@ -29,12 +29,12 @@
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Replace the linked walkthrough when the separately produced release video is ready. -->
+<!-- R113 walkthrough: 1080p GitHub delivery; original masters retained. -->
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">
+  <a href="https://github.com/user-attachments/assets/6f354266-9400-44a8-8c69-91223a2b7c13">
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Wenlan 中彼此連結的頁面、記憶與來源" width="100%">
   </a>
-  <br><a href="https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d">▶ 觀看影片</a>
+  <br><a href="https://github.com/user-attachments/assets/6f354266-9400-44a8-8c69-91223a2b7c13">▶ 觀看影片</a>
 </p>
 <p>實機畫面與示範資料的合成圖；圖譜為示意，非 App 原生三欄版面。</p>
 

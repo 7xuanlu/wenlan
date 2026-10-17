@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=da7285d6188afd22efb31e0a4dc404ad530b08e3122ed0135fb6add111e21eff -->
+<!-- README_SYNC: source=README.md sha256=3dc9b730a0ba7b43d7070c3b8460e21b538eaa4a2d699eb2d9eeb7620d1ec056 -->
 
 <p align="center">
   <picture>
@@ -29,12 +29,12 @@
   <a href="https://discord.gg/nmzVTTU3HG">Discord</a>
 </p>
 
-<!-- Replace the linked walkthrough when the separately produced release video is ready. -->
+<!-- R113 walkthrough: 1080p GitHub delivery; original masters retained. -->
 <p align="center">
-  <a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">
+  <a href="https://github.com/user-attachments/assets/6e55ae64-be35-4aae-8845-d5407b9ce3fc">
     <img src="./docs/assets/wenlan-personal-knowledge-zh-Hant.png" alt="Páginas, memorias y fuentes conectadas en Wenlan" width="100%">
   </a>
-  <br><a href="https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e">▶ Ver el vídeo</a>
+  <br><a href="https://github.com/user-attachments/assets/6e55ae64-be35-4aae-8845-d5407b9ce3fc">▶ Ver el vídeo</a>
 </p>
 <p>Composición de vistas reales con datos de ejemplo; el grafo es ilustrativo, no una vista nativa de tres columnas.</p>
 
