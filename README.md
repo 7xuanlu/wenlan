@@ -91,7 +91,7 @@ Use the App on its own or work with your AI. Keep useful knowledge and progress 
 Simplified workflow. Plugin commands and page organization are optional, with no fixed sequence.
 
 - **Start with your material.** Import documents and selected conversations as sources, or write pages in the App. You can edit, follow citations, and review proposed changes there without connecting AI.
-- **Use your knowledge and write new pages.** Ask your AI to use saved sources and memories for a task, or write a new page with citations and save it to Wenlan. Use `/recall` to find earlier context.
+- **Use your knowledge and write new pages.** Use `/recall` to bring saved sources and memories into a task. `/pages write` writes a new page with citations back to Wenlan ([not yet released · #877](https://github.com/wenlan-app/wenlan/pull/877)).
 - **Keep what you learn.** Save a decision or lesson, with its reasons and sources, in the App or with `/capture` through your AI.
 - **Pause and resume.** `/handoff` saves durable memories and a session log, and updates the current Space’s Brief with progress and next steps. Use `/brief` when you want the next session to pick up that context.
 

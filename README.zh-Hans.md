@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=0e61ea41833e515e8af9d6748181daa01122c2ad65d8461d1367c0c445bab0dc -->
+<!-- README_SYNC: source=README.md sha256=c68c2bfa674ec54344b1ca9c628060fdf383e3bd98c04a86bc3e57a848bf461e -->
 
 <p align="center">
   <picture>
@@ -93,7 +93,7 @@
 简化流程示意；插件指令与页面整理均按需使用，没有固定顺序。
 
 - **从你的资料开始。** 导入文档和选定的对话作为来源，或在 App 编写页面。你也能编辑内容、查看引用来源、审核修订，无需连接 AI。
-- **运用知识、编写新页面。** 请 AI 运用已保存的来源与记忆完成任务，或编写带引用的新页面，存回 Wenlan。需要先前上下文时，用 `/recall` 找回。
+- **运用知识、编写新页面。** 用 `/recall` 取用已保存的来源与记忆；用 `/pages write` 编写带引用的新页面，存回 Wenlan（[尚未发布 · #877](https://github.com/wenlan-app/wenlan/pull/877)）。
 - **留下你的新发现。** 在 App 中，或请 AI 使用 `/capture`，保存决定或心得，以及其理由和来源。
 - **告一段落，下次继续。** `/handoff` 保存记忆与工作记录，并更新当前 Space 的 Brief，记下进度和下一步。下次需要时，用 `/brief` 读回这些上下文。
 
