@@ -154,6 +154,7 @@ fn page_routes(id: &str) -> Vec<RouteCase> {
                 content: "Refreshed route probe".to_string(),
                 source_memory_ids: vec!["route-probe-source".to_string()],
                 summary: None,
+                expected_version: None,
             }),
             marked: false,
         },
@@ -470,6 +471,7 @@ async fn page_routes_preserve_typed_contracts() {
         content: "Refresh content after, grounded in its source memory.".to_string(),
         source_memory_ids: vec!["page-route-source".to_string()],
         summary: Some("Refreshed Page route".to_string()),
+        expected_version: None,
     };
     let (status, refreshed): (StatusCode, PageWriteResponse) = request_typed(
         &router,

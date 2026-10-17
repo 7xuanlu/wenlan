@@ -53,7 +53,7 @@ const LINKED_PAGE = {
     "Intro sentence.\n\nThis page references [[Resolved Link]] and [[Missing Link]].\n\nIt also cites [memory](#memory:mem-1).",
   entity_id: null,
   domain: "testing",
-  source_memory_ids: [],
+  source_memory_ids: ["mem-1"],
   version: 1,
   status: "active",
   created_at: "2026-06-26T00:00:00+00:00",
@@ -78,7 +78,7 @@ describe("PageDetail stored actions in seamless editing", () => {
  beforeEach(() => {
   vi.clearAllMocks(); current = { ...LINKED_PAGE, user_edited: false };
   tauriMocks.getPage.mockImplementation(async () => current);
-  tauriMocks.getPageSources.mockResolvedValue([]); tauriMocks.listRegisteredSources.mockResolvedValue([]);
+  tauriMocks.getPageSources.mockResolvedValue([{source:{page_id:'page-1',memory_source_id:'mem-1',linked_at:0},memory:null}]); tauriMocks.listRegisteredSources.mockResolvedValue([]);
   tauriMocks.getPageLinks.mockResolvedValue({outbound:[],inbound:[]});
   tauriMocks.listOrphanLinks.mockResolvedValue({min_count:2,orphan_labels:[]});
   tauriMocks.getPageRevisions.mockResolvedValue({page_id:'page-1',current_version:1,user_edited:false,entries:[]});
@@ -103,6 +103,14 @@ describe("PageDetail stored actions in seamless editing", () => {
   await user.click(screen.getByRole('button',{name:i18n.t('pageInspector.open')}));
   return screen.getByRole('button',{name:i18n.t('pageDetail.markPageReviewed')});
  }
+ it('hides Re-distill on a page with no sources to rebuild from',async()=>{
+  current={...current,source_memory_ids:[]};
+  tauriMocks.getPageSources.mockResolvedValue([]);
+  const {user}=await start();
+  await user.click(screen.getByRole('button',{name:i18n.t('pageDetail.actions')}));
+  expect(screen.getByRole('menuitem',{name:'Delete page'})).toBeInTheDocument();
+  expect(screen.queryByRole('menuitem',{name:'Re-distill page'})).toBeNull();
+ });
  it('exposes existing commands without leaving seamless editing',async()=>{
   const {user}=await start();
   await expect(action(user,'Re-distill page')).resolves.toBeEnabled();

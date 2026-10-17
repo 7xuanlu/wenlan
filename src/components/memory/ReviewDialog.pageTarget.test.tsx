@@ -42,7 +42,7 @@ const pageItem: ReviewItem = {
   targetKind: "page",
   revisionSourceId: "mem_c3e1600d7c3a",
   content: PROPOSED,
-  agent: "page_write",
+  agent: "Claude Code",
   timestampMs: 1_760_000_000_000,
 };
 
@@ -61,10 +61,12 @@ function ReviewHarness({
   item,
   onOpenPage,
   onOpenMemory,
+  onResolve = vi.fn().mockResolvedValue(undefined),
 }: {
   readonly item: ReviewItem;
   readonly onOpenPage?: (pageId: string) => void;
   readonly onOpenMemory?: (sourceId: string) => void;
+  readonly onResolve?: (args: { item: ReviewItem; approve: boolean }) => Promise<unknown>;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const queryClient = new QueryClient({
@@ -79,7 +81,7 @@ function ReviewHarness({
         items={[item]}
         openId={openId}
         onOpenChange={setOpenId}
-        onResolve={vi.fn().mockResolvedValue(undefined)}
+        onResolve={onResolve}
         isResolving={false}
         onOpenPage={onOpenPage}
         onOpenMemory={onOpenMemory}
@@ -93,6 +95,7 @@ async function openDialog(
   handlers: {
     onOpenPage?: (pageId: string) => void;
     onOpenMemory?: (sourceId: string) => void;
+    onResolve?: (args: { item: ReviewItem; approve: boolean }) => Promise<unknown>;
   } = {},
 ): Promise<HTMLElement> {
   const user = userEvent.setup();
@@ -191,6 +194,27 @@ describe("ReviewDialog page-target revision card", () => {
     await within(dialog).findByRole("heading", { name: PAGE_TITLE });
     await waitFor(() => expect(getPageRevisions).toHaveBeenCalled());
     expect(within(dialog).queryByText(/History ·/)).toBeNull();
+  });
+
+  it("names the proposing agent by its display name", async () => {
+    const dialog = await openDialog(pageItem);
+    await within(dialog).findByRole("heading", { name: PAGE_TITLE });
+    expect(within(dialog).getByText("proposed by Claude Code")).toBeInTheDocument();
+  });
+
+  it("explains and moves on when the daemon discarded an outdated card", async () => {
+    const onResolve = vi.fn().mockRejectedValue(
+      new Error('HTTP 409: {"error":"page_revision_outdated: page x changed after revision card y was proposed"}'),
+    );
+    const dialog = await openDialog(pageItem, { onResolve });
+    await within(dialog).findByRole("heading", { name: PAGE_TITLE });
+    const user = userEvent.setup();
+    await user.click(within(dialog).getByRole("button", { name: "Approve" }));
+    expect(
+      await screen.findByText(i18n.t("review.revisionOutdated")),
+    ).toBeInTheDocument();
+    expect(onResolve).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("offers Open page (not Open memory) and opens the page itself", async () => {

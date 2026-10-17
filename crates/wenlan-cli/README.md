@@ -361,10 +361,11 @@ Options:
 
 ### `wenlan pages`
 
-Browse distilled pages, or open one in your editor by title query.
+Browse distilled pages, open one in your editor by title query, or lock a page so machine updates wait for your review.
 
 ```text
 wenlan pages [OPTIONS] [QUERY]
+       wenlan pages <COMMAND>
 ```
 
 Arguments:
@@ -376,6 +377,30 @@ Options:
 - `-l, --limit <LIMIT>`: Max pages to list (newest-first). 0 = all. Ignored when a query opens a page. Default: `20`.
 - `--resolve-id`: Print the matched page's stable internal id instead of opening it.
 - `--print`: Print the matched page's text and its sources instead of opening it.
+
+#### `wenlan pages lock`
+
+Require review for every machine write to a page: agent and pipeline updates are staged as revision cards. Your own edits still apply.
+
+```text
+wenlan pages lock [OPTIONS] <PAGE_ID>
+```
+
+Arguments:
+
+- `<PAGE_ID>`: The page's id (see `wenlan pages <query> --resolve-id`).
+
+#### `wenlan pages unlock`
+
+Clear a page's review lock.
+
+```text
+wenlan pages unlock [OPTIONS] <PAGE_ID>
+```
+
+Arguments:
+
+- `<PAGE_ID>`: The page's id (see `wenlan pages <query> --resolve-id`).
 
 ### `wenlan memories`
 

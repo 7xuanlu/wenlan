@@ -996,9 +996,16 @@ export const FACET_COLORS: Record<string, string> = {
 // One agent-slug prettifier for every surface (list row, card, detail).
 export const AGENT_DISPLAY: Record<string, string> = {
   "claude-code": "Claude Code",
+  "claude-desktop": "Claude Desktop",
   claude: "Claude",
   chatgpt: "ChatGPT",
+  "chatgpt-mcp": "ChatGPT",
+  codex: "Codex",
   cursor: "Cursor",
+  "gemini-cli": "Gemini CLI",
+  windsurf: "Windsurf",
+  zed: "Zed",
+  wenlan: "Wenlan",
 };
 
 export function agentDisplayName(slug: string | null | undefined): string | null {
@@ -1538,6 +1545,13 @@ export function daemonErrorMessage(error: unknown): string | null {
   if (typeof payload !== "object" || payload === null) return null;
   const message = Reflect.get(payload, "error");
   return typeof message === "string" && message.trim() !== "" ? message : null;
+}
+
+/** True when the daemon refused a page revision card because the page moved
+ * past the version the card was proposed on. The daemon has already discarded
+ * the card; it can never apply. */
+export function isPageRevisionOutdated(error: unknown): boolean {
+  return daemonErrorMessage(error)?.startsWith("page_revision_outdated") ?? false;
 }
 
 /** The daemon's guard when a page delete is refused because the row belongs

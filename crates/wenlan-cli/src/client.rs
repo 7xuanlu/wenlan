@@ -495,6 +495,21 @@ impl WenlanClient {
         self.delete_ok("/api/spaces/default").await
     }
 
+    /// PUT /api/pages/{id}/review-required — set or clear a page's review
+    /// lock. While set, every machine write to the page is staged as a
+    /// revision card; your own edits are unaffected.
+    pub async fn set_page_review_required(
+        &self,
+        page_id: &str,
+        required: bool,
+    ) -> Result<wenlan_types::responses::PageReviewRequiredResponse> {
+        self.put_json(
+            &format!("/api/pages/{page_id}/review-required"),
+            &wenlan_types::requests::SetPageReviewRequiredRequest { required },
+        )
+        .await
+    }
+
     /// PUT /api/agents/{name} — update an agent's metadata.
     pub async fn update_agent(&self, name: &str, req: UpdateAgentRequest) -> Result<AgentResponse> {
         self.put_json(&format!("/api/agents/{}", name), &req).await

@@ -729,6 +729,13 @@ pub struct PageWriteResponse {
     pub gated: bool,
 }
 
+/// Receipt for `PUT /api/pages/{id}/review-required`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PageReviewRequiredResponse {
+    pub page_id: String,
+    pub review_required: bool,
+}
+
 /// DB save and Markdown projection are separate completion boundaries.
 /// Existing PageWriteResponse consumers ignore these additive fields.
 #[derive(Debug, Serialize, Deserialize)]
