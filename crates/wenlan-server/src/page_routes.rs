@@ -1448,6 +1448,13 @@ pub async fn handle_refresh_page(
 /// 409 for an agent refresh whose `expected_version` no longer matches. The
 /// text is what the MCP `write_page` tool shows the agent, so it says exactly
 /// how to recover.
+fn page_read_required_conflict(id: &str, current_version: i64) -> ServerError {
+    ServerError::Conflict(format!(
+        "page {id} has the user's own writing, so a refresh must say which version it read; \
+         read it with read_page and retry write_page with expected_version {current_version}"
+    ))
+}
+
 fn page_moved_conflict(id: &str, current_version: i64) -> ServerError {
     ServerError::Conflict(format!(
         "page {id} moved to v{current_version}; re-read it with read_page and retry \
@@ -1523,6 +1530,18 @@ async fn handle_refresh_page_inner(
             return Err(page_moved_conflict(&id, existing.version));
         }
     }
+    // A refresh that does not say which version it read cannot prove it saw
+    // the user's own writing, so it is refused the same way a stale read is:
+    // the agent re-reads and retries, and its next write lands directly. This
+    // used to stage a revision card, which turned an agent's omission into
+    // review work for the human. A locked page still stages a card below,
+    // because the lock asks for review of every agent change.
+    if req.expected_version.is_none()
+        && !existing.review_required
+        && wenlan_core::post_write::page_is_human_owned(&existing)
+    {
+        return Err(page_read_required_conflict(&id, existing.version));
+    }
     if req.source_memory_ids.is_empty() && !existing.source_memory_ids.is_empty() {
         return Err(ServerError::ValidationError(
             "source_memory_ids must not be empty for a page that has sources; \
@@ -1533,10 +1552,11 @@ async fn handle_refresh_page_inner(
 
     // Ownership gate (spec §5.1/§5.2): agent refresh is a machine write. A
     // review-locked page always stages a card. A human-owned page
-    // (user_edited=1 OR creation_kind='authored') stages a card unless the
-    // agent proved it read the current version with `expected_version`. The
-    // page prose stays byte-unchanged until the human accepts a card. The core
-    // gate re-runs the same rule inside its CAS loop.
+    // (user_edited=1 OR creation_kind='authored') reaches here only with a
+    // checked `expected_version` (refused above otherwise), so it lands
+    // directly. The page prose stays byte-unchanged until the human accepts a
+    // card. The core gate re-runs the same rule inside its CAS loop, which
+    // still stages a card if the page turns human-owned mid-write.
     if wenlan_core::post_write::machine_write_requires_review(
         wenlan_core::post_write::Writer::classify("agent_refresh"),
         &existing,
@@ -2402,7 +2422,9 @@ mod create_page_endpoint_tests {
         assert_eq!(after.content, content);
         assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
 
-        // Without expected_version the same page is staged, not written.
+        // Without expected_version the same page is refused: nothing is
+        // written and no card is staged, and the agent is told to re-read.
+        let current = db.get_page(&page.id).await.unwrap().unwrap().version;
         let (status, body) = send_json(
             &app,
             "PUT",
@@ -2413,8 +2435,13 @@ mod create_page_endpoint_tests {
             }),
         )
         .await;
-        assert_eq!(status, StatusCode::OK, "{body}");
-        assert_eq!(body["gated"], json!(true), "{body}");
+        assert_eq!(status, StatusCode::CONFLICT, "{body}");
+        let text = body["error"].as_str().unwrap_or_default();
+        assert!(
+            text.contains(&format!("expected_version {current}")) && text.contains("read_page"),
+            "409 must say how to recover: {body}"
+        );
+        assert!(db.list_pending_revisions(10).await.unwrap().is_empty());
         assert_eq!(
             db.get_page(&page.id).await.unwrap().unwrap().content,
             content
