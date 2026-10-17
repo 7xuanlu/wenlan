@@ -19,7 +19,7 @@ const TOOL_DIR = path.join(__dirname, "readme-visuals");
 const visualRequire = createRequire(path.join(TOOL_DIR, "package.json"));
 
 const BANNER_VIEWPORTS = {
-  desktop: { width: 1280, height: 320 },
+  desktop: { width: 1120, height: 350 },
   mobile: { width: 720, height: 256 },
 };
 
@@ -28,24 +28,25 @@ const BANNER = {
   dark: "#151D2B",
   white: "#F7F8FF",
   accent: "#93E3F2",
-  latin: 'Arial, "Helvetica Neue", sans-serif',
+  secondary: "#BAC4D2",
+  latin: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Arial, sans-serif',
 };
 
 const BANNER_COPY = {
   en: {
-    title: ["A living personal wiki.", "AI organizes. You stay in control."],
+    title: ["A living personal wiki", "AI organizes. You stay in control."],
     font: BANNER.latin,
   },
   "zh-Hant": {
-    title: ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
-    font: 'Arial, "PingFang TC", sans-serif',
+    title: ["持續更新的個人知識庫", "AI 幫你整理，你保有主導權"],
+    font: '"PingFang TC", "Noto Sans TC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "zh-Hans": {
-    title: ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
-    font: 'Arial, "PingFang SC", sans-serif',
+    title: ["持续更新的个人知识库", "AI 帮你整理，你保有主导权"],
+    font: '"PingFang SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "es-ES": {
-    title: ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+    title: ["Una wiki personal viva", "La IA organiza. Tú tienes el control."],
     font: BANNER.latin,
   },
 };
@@ -87,21 +88,24 @@ function makeSimpleBanner(viewport, locale) {
   const prefix = `banner-${locale}-${viewport}`;
   const text = (x, y, value, size, color = BANNER.white, weight = 400, anchor = "start", letterSpacing = null) =>
     `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
+  const chineseName = locale === "zh-Hant" ? "文瀾" : locale === "zh-Hans" ? "文澜" : "";
+  const brand = (x, y, size, anchor) =>
+    `<text x="${x}" y="${y}" fill="${BANNER.accent}" font-size="${size}" font-weight="600" text-anchor="${anchor}"><tspan font-family="${esc(BANNER.latin)}">Wenlan</tspan>${chineseName ? `<tspan dx="12" font-family="${esc(copy.font)}">${chineseName}</tspan>` : ""}</text>`;
   const content = mobile
-    ? `${logoMarkup({ x: 316, y: 20, size: 88, prefix })}
-  ${text(360, 138, "WENLAN", 20, BANNER.accent, 700, "middle", 4)}
-  ${text(360, 185, copy.title[0], 34, BANNER.white, 700, "middle")}
-  ${text(360, 225, copy.title[1], 28, BANNER.white, 400, "middle")}`
-    : `${logoMarkup({ x: 80, y: 72, size: 176, prefix })}
-  ${text(312, 108, "WENLAN", 24, BANNER.accent, 700, "start", 4)}
-  ${text(312, 165, copy.title[0], 44, BANNER.white, 700, "start")}
-  ${text(312, 211, copy.title[1], 32, BANNER.white, 400, "start")}`;
+    ? `${logoMarkup({ x: 320, y: 20, size: 80, prefix })}
+  ${brand(360, 138, 28, "middle")}
+  ${text(360, 183, copy.title[0], 32, BANNER.white, 600, "middle")}
+  ${text(360, 223, copy.title[1], 23, BANNER.secondary, 400, "middle")}`
+    : `${logoMarkup({ x: 88, y: 68, size: 168, prefix })}
+  ${brand(300, 113, 32, "start")}
+  ${text(300, 169, copy.title[0], 36, BANNER.white, 600, "start")}
+  ${text(300, 218, copy.title[1], 26, BANNER.secondary, 400, "start")}`;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">${esc(`Wenlan: ${copy.title.join(" ")}`)}</desc>
   <rect width="${width}" height="${height}" fill="${BANNER.dark}"/>
-  ${content}
+  ${mobile ? content : `<g transform="translate(150 22)">${content}</g>`}
   <defs>
     ${logoDefs(prefix)}
   </defs>
@@ -114,7 +118,7 @@ function makeSimpleBanner(viewport, locale) {
     width,
     height,
     background: BANNER.dark,
-    requiredCopy: ["WENLAN", ...copy.title],
+    requiredCopy: ["Wenlan", ...(chineseName ? [chineseName] : []), ...copy.title],
     svg,
   };
 }

@@ -19,10 +19,10 @@ const ASSET_DIR = path.resolve(__dirname, "..", "docs", "assets");
 
 test("borderless banners preserve four-locale copy in desktop and mobile layouts", () => {
   const expected = {
-    en: ["A living personal wiki.", "AI organizes. You stay in control."],
-    "zh-Hant": ["持續更新的個人維基。", "AI 幫你整理，你保有主導權。"],
-    "zh-Hans": ["持续更新的个人维基。", "AI 帮你整理，你保有主导权。"],
-    "es-ES": ["Una wiki personal viva.", "La IA organiza. Tú tienes el control."],
+    en: ["A living personal wiki", "AI organizes. You stay in control."],
+    "zh-Hant": ["持續更新的個人知識庫", "AI 幫你整理，你保有主導權"],
+    "zh-Hans": ["持续更新的个人知识库", "AI 帮你整理，你保有主导权"],
+    "es-ES": ["Una wiki personal viva", "La IA organiza. Tú tienes el control."],
   };
 
   for (const [locale, lines] of Object.entries(expected)) {
@@ -30,10 +30,11 @@ test("borderless banners preserve four-locale copy in desktop and mobile layouts
       const banner = makeBanner(viewport, locale);
       const suffix = locale === "en" ? "" : `-${locale}`;
       assert.equal(banner.name, `readme-banner${suffix}${viewport === "mobile" ? "-mobile" : ""}`);
-      assert.deepEqual([banner.width, banner.height], viewport === "desktop" ? [1280, 320] : [720, 256]);
+      assert.deepEqual([banner.width, banner.height], viewport === "desktop" ? [1120, 350] : [720, 256]);
       assert.match(banner.svg, new RegExp(`>${lines[0].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
       assert.match(banner.svg, new RegExp(`>${lines[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}<`, "u"));
-      assert.equal((banner.svg.match(/letter-spacing="4"/gu) ?? []).length, 1);
+      assert.doesNotMatch(banner.svg, /letter-spacing="4"|>WENLAN</u);
+      assert.match(banner.svg, />Wenlan<\/tspan>/u);
       assert.doesNotMatch(banner.svg, /data-fit-region|input-1|input-2|topic-page|\[1\]|\[2\]/u);
       assert.doesNotMatch(banner.svg, /stroke="#2F3769"/u);
       assert.equal((banner.svg.match(/<rect /gu) ?? []).length, 2, "only background and logo tile");
