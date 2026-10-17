@@ -176,6 +176,7 @@ export function WikiWorkspace({
               currentPageId={currentPageId}
               revision={recentRevision}
               onOpenPage={onOpenRecentPage ? closeForNavigation(onOpenRecentPage) : undefined}
+              onBrowseFolders={() => changeInventoryMode("folders")}
             />
           ) : (
             <PageInventoryPanel

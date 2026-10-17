@@ -151,8 +151,18 @@ export function PageInventoryPanel({ currentPageId = null, currentFolderPath, fi
     try {
       if (note.status === "draft") {
         // delete_page rejects drafts; a draft is discarded at its latest version.
-        const latest = await getPage(noteId);
-        if (latest) await discardPageDraft({ id: noteId, expectedVersion: latest.version });
+        // An open editor can autosave between the read and the discard, so a
+        // version conflict reads the version again once.
+        for (let attempt = 0; ; attempt++) {
+          const latest = await getPage(noteId);
+          if (!latest) break;
+          try { await discardPageDraft({ id: noteId, expectedVersion: latest.version }); break; }
+          catch (cause) {
+            const code = cause && typeof cause === "object" && "code" in cause ? (cause as { code?: unknown }).code : null;
+            if (code === "page_draft_not_found") break;
+            if (code !== "draft_version_conflict" || attempt > 0) throw cause;
+          }
+        }
       } else await deletePage(noteId);
       void queryClient.invalidateQueries({ queryKey: ["page", noteId], refetchType: "none" });
       void queryClient.invalidateQueries({ queryKey: ["pages"] });
