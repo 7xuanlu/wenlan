@@ -364,22 +364,20 @@ type PreWriteGate = (
     tokio::sync::oneshot::Receiver<()>,
 );
 
+/// One armed gate per page id, so race tests on different pages can run in
+/// parallel without overwriting each other's gate.
 #[cfg(test)]
-pub(crate) static PRE_WRITE_GATE: std::sync::Mutex<Option<PreWriteGate>> =
-    std::sync::Mutex::new(None);
+pub(crate) static PRE_WRITE_GATE: std::sync::Mutex<Vec<PreWriteGate>> =
+    std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
 async fn pre_write_pause(page_id: &str) {
     let gate = {
-        let mut slot = PRE_WRITE_GATE.lock().unwrap();
-        if slot
-            .as_ref()
-            .is_some_and(|(target, _, _)| target == page_id)
-        {
-            slot.take()
-        } else {
-            None
-        }
+        let mut slots = PRE_WRITE_GATE.lock().unwrap();
+        slots
+            .iter()
+            .position(|(target, _, _)| target == page_id)
+            .map(|i| slots.swap_remove(i))
     };
     if let Some((_, parked, go)) = gate {
         let _ = parked.send(());
@@ -1117,9 +1115,11 @@ async fn update_page_db_impl(
             // citation source for this write; a stale claim-map must not
             // survive a content change, and the new body re-enters bounded
             // annotation).
-            // The two CAS modes are mutually exclusive — the inner write refuses a
-            // call carrying both. A source-revision caller is guarded by the
-            // revision it compiled against, so it passes no expected_version.
+            // A source-revision caller is guarded by the revision it compiled
+            // against. An agent that also sent `expected_version` (already
+            // checked equal to `current_version` above) fences on both, so a
+            // version bump that leaves the source revision alone, such as a
+            // human rename, still refuses the write.
             let wrote = if let Some(guard) = page_growth {
                 db.try_update_page_growth_at_versions(
                     page_id,
@@ -1156,6 +1156,12 @@ async fn update_page_db_impl(
                     &new_changelog,
                     citations.as_ref().map(|(json, _)| json.as_str()),
                     source_revision,
+                    // Only the agent lane fences on both. Distill also carries
+                    // an `expected_version` here, but its write has always been
+                    // source-revision-only and the db layer refuses the pair
+                    // for any writer but `agent_refresh`.
+                    req.expected_version
+                        .filter(|_| matches!(writer, Writer::Agent(_))),
                     receipt,
                 )
                 .await?
@@ -1203,8 +1209,15 @@ async fn update_page_db_impl(
             // write only if the page was stale, and it wasn't. That is the answer to
             // the question it asked, not a discarded write, and it is the common
             // path on every re-distill sweep.
-            let landed_version = db.get_page(page_id).await?.map(|p| p.version);
-            if landed_version != Some(current_version) {
+            let landed = db.get_page(page_id).await?;
+            let landed_version = landed.as_ref().map(|p| p.version);
+            // A review lock set after the gate read leaves the version alone,
+            // but the UPDATE's lock predicate matched zero rows. Re-read so
+            // the next attempt's gate sees the lock and stages a card.
+            let lock_appeared = writer.is_machine()
+                && !current.review_required
+                && landed.as_ref().is_some_and(|p| p.review_required);
+            if landed_version != Some(current_version) || lock_appeared {
                 if attempt < MAX_CAS_ATTEMPTS {
                     log::debug!(
                         "[update_page] {page_id}: version moved {current_version} -> {landed_version:?} mid-write; reloading (attempt {attempt})"

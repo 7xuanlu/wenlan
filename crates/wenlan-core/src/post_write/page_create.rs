@@ -171,7 +171,10 @@ pub(super) async fn replace_source_page_impl(
         .get_page(page_id)
         .await?
         .ok_or_else(|| WenlanError::NotFound(format!("Page not found: {page_id}")))?;
-    if current.creation_kind != "source" || current.user_edited {
+    // A review lock holds a source page the same way a human edit does: the
+    // enrichment replacement is a machine write and never lands on it. The
+    // db-layer UPDATE carries the same predicate for a lock set after this read.
+    if current.creation_kind != "source" || current.user_edited || current.review_required {
         return Err(WenlanError::Conflict(format!(
             "source Page {page_id} is not machine-owned"
         )));

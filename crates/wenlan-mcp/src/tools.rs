@@ -2799,10 +2799,10 @@ fn format_update_page_response(
     if resp.gated {
         match resp.revision_card_id {
             Some(card) => format!(
-                "Page {page_id} is human-owned; staged revision card for review — prose left unchanged.\ngated: true\nrevision_card_id: {card}"
+                "Page {page_id} needs review before machine changes land; staged a revision card, prose left unchanged.\ngated: true\nrevision_card_id: {card}"
             ),
             None => format!(
-                "Page {page_id} is human-owned; staged a revision card for review — prose left unchanged.\ngated: true"
+                "Page {page_id} needs review before machine changes land; staged a revision card, prose left unchanged.\ngated: true"
             ),
         }
     } else {
@@ -6050,6 +6050,13 @@ mod tests {
             text.contains("revision_card_id: mem_page_card_1"),
             "revision_card_id missing from write_page refresh response: {text}"
         );
+        // A card is staged for a human-owned page and for a review lock alike,
+        // so the lead sentence names no single cause.
+        assert!(
+            text.starts_with("Page page_x needs review before machine changes land;"),
+            "{text}"
+        );
+        assert!(!text.contains("human-owned"), "{text}");
     }
 
     // ===== Remember request construction =====

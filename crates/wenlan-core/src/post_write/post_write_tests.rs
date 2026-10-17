@@ -3861,7 +3861,10 @@ async fn page_write_update_edit_landing_mid_write_is_not_clobbered() {
     // (page is still machine-owned) and before writing.
     let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
     let (go_tx, go_rx) = tokio::sync::oneshot::channel();
-    *PRE_WRITE_GATE.lock().unwrap() = Some((page_id.to_string(), parked_tx, go_rx));
+    PRE_WRITE_GATE
+        .lock()
+        .unwrap()
+        .push((page_id.to_string(), parked_tx, go_rx));
 
     // Close to the seeded source: `fs_edit` is not exempt from the
     // hallucination guard, so an unrelated body would be rejected before
@@ -7294,5 +7297,227 @@ async fn set_page_review_required_round_trips_without_bumping_version() {
             .await
             .unwrap(),
         "an unknown page reports false"
+    );
+}
+
+// ── PR A fix round: fences that hold when the page moves after the gate ──
+
+/// Park the next write to `page_id` at the pre-write seam. Returns the
+/// "parked" receiver and the "go" sender.
+fn arm_pre_write_gate(
+    page_id: &str,
+) -> (
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let (parked_tx, parked_rx) = tokio::sync::oneshot::channel();
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel();
+    PRE_WRITE_GATE
+        .lock()
+        .unwrap()
+        .push((page_id.to_string(), parked_tx, go_rx));
+    (parked_rx, go_tx)
+}
+
+fn source_fenced_write<'a>(
+    page_id: &'a str,
+    content: &str,
+    mem_id: &str,
+    edited_by: &'a str,
+    expected_version: Option<i64>,
+    expected_source_revision: i64,
+) -> PageWrite<'a> {
+    PageWrite::Update {
+        page_id,
+        req: UpdatePageRequest {
+            content: content.to_string(),
+            source_memory_ids: vec![mem_id.to_string()],
+            expected_version,
+            caller_id: None,
+            operation_id: None,
+        },
+        edited_by,
+        require_stale: false,
+        expected_source_revision: Some(expected_source_revision),
+        knowledge_path: None,
+        citations: None,
+    }
+}
+
+/// Ruling 1: an agent refresh that sent `expected_version` and rides the
+/// source-revision fence must still lose to a version bump that leaves the
+/// source revision alone. A human rename lands while the agent write is
+/// parked after its version check; the agent write must come back Refused
+/// (route 409), not Contended, and the body must not move.
+///
+/// Mutation check: pass `None` instead of the agent's `expected_version` to
+/// the source-revision write and this test lands the stale agent body.
+#[tokio::test]
+async fn agent_refresh_loses_to_a_rename_between_version_check_and_write() {
+    let (db, _dir) = test_db().await;
+    let page_id = "page_agent_rename_race";
+    let page = ownership_page(&db, page_id, "mem-agent-rename-race").await;
+    let source_revision = db.get_page_source_revision(page_id).await.unwrap();
+    let (parked_rx, go_tx) = arm_pre_write_gate(page_id);
+
+    let agent = page_write(
+        &db,
+        source_fenced_write(
+            page_id,
+            "Tokio runtimes schedule async tasks, agent body from the pre-rename read",
+            "mem-agent-rename-race",
+            "agent_refresh",
+            Some(page.version),
+            source_revision,
+        ),
+    );
+    let rename = async {
+        parked_rx.await.expect("agent write must park");
+        db.rename_page(
+            page_id,
+            "Tokio Scheduling Renamed",
+            page.version,
+            &crate::read_scope::ReadScope::Global,
+            None,
+        )
+        .await
+        .expect("the rename lands while the agent write is parked");
+        go_tx.send(()).expect("agent write still parked");
+    };
+    let (agent, ()) = tokio::join!(agent, rename);
+    let agent = agent.unwrap();
+
+    let after = db.get_page(page_id).await.unwrap().unwrap();
+    assert!(
+        !agent.wrote,
+        "the stale agent body must not land: {agent:?}"
+    );
+    assert_eq!(after.content, page.content);
+    assert_eq!(agent.outcome, WriteOutcome::Refused);
+    assert!(
+        after.version > page.version,
+        "the rename bumped the version"
+    );
+    assert_eq!(
+        db.get_page_source_revision(page_id).await.unwrap(),
+        source_revision,
+        "the rename left the source revision alone, so only the version fence could catch it"
+    );
+    assert_eq!(after.title, "Tokio Scheduling Renamed");
+}
+
+async fn assert_late_lock_stages_a_card(page_id: &str, mem_id: &str, source_fenced: bool) {
+    let (db, _dir) = test_db().await;
+    let page = ownership_page(&db, page_id, mem_id).await;
+    let source_revision = db.get_page_source_revision(page_id).await.unwrap();
+    let (parked_rx, go_tx) = arm_pre_write_gate(page_id);
+    let body = "Tokio runtimes schedule async tasks, pipeline body from the unlocked read";
+
+    let write = if source_fenced {
+        source_fenced_write(page_id, body, mem_id, "re_distill", None, source_revision)
+    } else {
+        PageWrite::Update {
+            page_id,
+            req: UpdatePageRequest {
+                content: body.to_string(),
+                source_memory_ids: vec![mem_id.to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            edited_by: "re_distill",
+            require_stale: false,
+            expected_source_revision: None,
+            knowledge_path: None,
+            citations: None,
+        }
+    };
+    let machine = page_write(&db, write);
+    let lock = async {
+        parked_rx
+            .await
+            .expect("machine write must park after the gate");
+        assert!(db.set_page_review_required(page_id, true).await.unwrap());
+        go_tx.send(()).expect("machine write still parked");
+    };
+    let (machine, ()) = tokio::join!(machine, lock);
+    let machine = machine.unwrap();
+
+    let after = db.get_page(page_id).await.unwrap().unwrap();
+    assert_eq!(
+        after.version, page.version,
+        "precondition: the lock toggle does not bump the version"
+    );
+    assert!(!machine.wrote, "a lock set after the gate must hold");
+    assert!(
+        machine.gated && machine.revision_card_id.is_some(),
+        "the retry re-reads the page, sees the lock, and stages a card: {machine:?}"
+    );
+    assert_eq!(after.content, page.content, "prose is unchanged");
+    assert_eq!(db.list_pending_revisions(10).await.unwrap().len(), 1);
+}
+
+/// Ruling 2, version-fenced mode. Mutation check: drop the review-lock
+/// predicate from the UPDATE and the pipeline body lands on the locked page.
+#[tokio::test]
+async fn review_lock_set_after_the_gate_stages_a_version_fenced_write() {
+    assert_late_lock_stages_a_card("page_late_lock_version", "mem-late-lock-version", false).await;
+}
+
+/// Ruling 2, source-revision-fenced mode.
+#[tokio::test]
+async fn review_lock_set_after_the_gate_stages_a_source_fenced_write() {
+    assert_late_lock_stages_a_card("page_late_lock_source", "mem-late-lock-source", true).await;
+}
+
+/// Ruling 3: the source-page replacement path (document enrichment) treats
+/// the review lock like `user_edited` and refuses before writing.
+#[tokio::test]
+async fn replace_source_on_a_review_locked_source_page_is_refused() {
+    let (db, _dir) = test_db().await;
+    let now = chrono::Utc::now().to_rfc3339();
+    db.insert_page_with_kind(
+        "page_locked_source",
+        "Source page",
+        None,
+        "Original body",
+        None,
+        None,
+        &["source-old"],
+        &now,
+        "source",
+        "confirmed",
+        None,
+        Some("[]"),
+    )
+    .await
+    .unwrap();
+    assert!(db
+        .set_page_review_required("page_locked_source", true)
+        .await
+        .unwrap());
+
+    let sources = vec!["source-new".to_string()];
+    let error = page_write(
+        &db,
+        PageWrite::ReplaceSource {
+            page_id: "page_locked_source",
+            title: "Source page",
+            summary: None,
+            content: "Enrichment body that must not land",
+            source_memory_ids: &sources,
+            agent: "doc-enrich",
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, WenlanError::Conflict(_)), "{error:?}");
+    assert_eq!(
+        db.get_page("page_locked_source")
+            .await
+            .unwrap()
+            .unwrap()
+            .content,
+        "Original body"
     );
 }
