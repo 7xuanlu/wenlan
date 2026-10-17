@@ -303,18 +303,15 @@
   }
 }
 
-/* The quoted line reads as plain text with a quiet underline in the page
-   accent, instead of a filled block that breaks up across lines. */
+/* The quoted line gets a faint neutral wash over the lower half of the
+   text, like a soft pencil mark, rather than a coloured fill or line. */
 .fus-doc mark,
 .fus-rack-card mark,
 .fus-dialog mark {
-  background: none;
   color: var(--mem-text);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--mem-accent-indigo) 55%, transparent);
-  text-decoration-thickness: 2px;
-  text-underline-offset: 4px;
-  text-decoration-skip-ink: auto;
+  background: linear-gradient(transparent 55%, color-mix(in srgb, var(--mem-text) 9%, transparent) 55%);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .fus-forming {
