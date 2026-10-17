@@ -44,7 +44,7 @@ describe("revisionWriterLabel", () => {
   });
 
   it("never shows a raw slug for a writer it does not know", () => {
-    for (const slug of ["page_write", "human", "migration_84", "user", ""]) {
+    for (const slug of ["page_write", "human", "migration_84", "user", "", "toString", "constructor", "__proto__", "hasOwnProperty"]) {
       const label = revisionWriterLabel(tFor("en"), slug);
       expect(label).toBe("Updated");
       expect(label).not.toContain(slug || "\u0000");

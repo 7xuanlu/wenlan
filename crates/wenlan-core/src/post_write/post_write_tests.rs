@@ -7725,6 +7725,45 @@ async fn staged_page_card_records_review_reason() {
 
 /// An `agent_refresh` write records which agent made it, and every new
 /// changelog entry carries the numeric delta the app localizes from.
+/// A refresh that core itself gates (the page became locked or user-owned
+/// after the route checked it) still names the agent on the staged card.
+#[tokio::test]
+async fn core_gated_agent_refresh_keeps_the_agent_on_the_card() {
+    let (db, _dir) = test_db().await;
+    seed_memory(&db, "mem-gate-a", "gated source").await;
+    let page_id = seed_page(&db, "mem-gate-a", "gated source").await;
+    db.set_page_review_required(&page_id, true).await.unwrap();
+    let revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+    let result = page_write(
+        &db,
+        PageWrite::AgentUpdate {
+            page_id: &page_id,
+            req: UpdatePageRequest {
+                content: "gated source, refreshed".to_string(),
+                source_memory_ids: vec!["mem-gate-a".to_string()],
+                expected_version: None,
+                caller_id: None,
+                operation_id: None,
+            },
+            agent: Some("claude-code"),
+            expected_source_revision: revision,
+            knowledge_path: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!result.wrote, "{result:?}");
+
+    let pending = db.list_pending_revisions(10).await.unwrap();
+    let card = pending
+        .iter()
+        .find(|p| p.target_source_id == page_id)
+        .expect("a staged card for the page");
+    assert_eq!(card.source_agent.as_deref(), Some("claude-code"));
+    assert_eq!(card.review_reason.as_deref(), Some("locked"));
+}
+
 #[tokio::test]
 async fn changelog_entry_records_agent_and_numeric_delta() {
     let (db, _dir) = test_db().await;

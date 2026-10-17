@@ -942,13 +942,14 @@ async fn update_page_db_impl(
                         }
                     },
                     None => {
-                        stage_page_revision_card(
+                        stage_page_revision_card_proposed_by(
                             db,
                             &current,
                             &req.content,
                             effective_sources,
                             staged_source_revision,
                             edited_by,
+                            agent,
                             retry.as_ref(),
                         )
                         .await?
