@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=3dc9b730a0ba7b43d7070c3b8460e21b538eaa4a2d699eb2d9eeb7620d1ec056 -->
+<!-- README_SYNC: source=README.md sha256=341c4354b0ebb067c2660a4a6c53f39f1d5ea85467e3e1d36c5aa376833db59c -->
 
 <p align="center">
   <picture>
@@ -89,7 +89,7 @@
 你可以单独使用 App，也可以搭配 AI 工作。把值得留下的知识与进度存回 Wenlan，下次接着用。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-daily-workflow-zh-Hans.png" alt="来源与已有记忆积累在 Wenlan；在 App 或 AI 中使用，再存回新记忆与工作进度，供下次继续。" width="100%">
+  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-zh-Hans.png" alt="来源与已有记忆积累在 Wenlan；在 App 或 AI 中使用，再存回新记忆与工作进度，供下次继续。" width="100%">
 </p>
 
 简化流程示意；插件指令与页面整理均按需使用，没有固定顺序。
@@ -149,7 +149,7 @@
 - **Spaces 范围检索**：选定 Space，将返回的知识限制在相关项目或个人资料集合内。
 
 <p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work-zh-Hans.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
+  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-zh-Hans.png" alt="AI 接着做，不必从头交代：关键词、语义与图谱检索" width="100%">
 </p>
 <p>虚构案例，非产品测试；文澜补充上下文，与 Claude 原生记忆配合使用。</p>
 
@@ -177,7 +177,7 @@
 - **[可选的后台模型](docs/setup-and-data.zh-Hans.md#models)**：用设备端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 兼容本地服务，或已配置的云端提供商启用整理、页面合成和自动更新。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-updates-history-zh-Hans.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-updates-history-zh-Hans.png" alt="示意流程：文件来源中的发现将记忆由 V1 更新为 V2，再影响自动更新或待审修订的知识页。" width="100%">
 </p>
 <p>实机画面的翻译合成图，搭配示范数据；连线为示意。</p>
 
@@ -188,7 +188,7 @@
 **共用本地知识库。** App、CLI 与 AI 工具通过 Wenlan 本地服务读写。页面以 Markdown 保存；记忆、关系与搜索索引由本地 libSQL 管理。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-architecture-zh-Hans.png" alt="架构示意：App 与 AI 工具共用本地知识库，后台整理模型为可选项。" width="100%">
 </p>
 
 架构示意。[检索、引用与模型](docs/technical-foundations.md)。

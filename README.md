@@ -87,7 +87,7 @@ Ask about the page you just opened or saved:
 Use the App on its own or work with your AI. Keep useful knowledge and progress in Wenlan, ready for the next task.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-daily-workflow.png" alt="Sources and saved memories accumulate in Wenlan; use them in the App or AI tools, then save new memories and work progress for later." width="100%">
+  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow.png" alt="Sources and saved memories accumulate in Wenlan; use them in the App or AI tools, then save new memories and work progress for later." width="100%">
 </p>
 
 Simplified workflow. Plugin commands and page organization are optional, with no fixed sequence.
@@ -145,7 +145,7 @@ Use the same knowledge base across AI tools. **Plugins** guide when to retrieve 
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">
-  <img src="./docs/assets/wenlan-knowledge-to-work.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
+  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work.png" alt="Let AI continue from what you already know: keyword, semantic and Graph retrieval" width="100%">
 </p>
 <p>Fictional example, not a product test; Wenlan adds context alongside Claude’s native memory.</p>
 
@@ -172,7 +172,7 @@ Experimental web access lets supported web clients search the whole library or o
 - **[Optional background models](docs/setup-and-data.md#models):** Enable enrichment, synthesis, and automatic refresh with on-device Qwen (llama.cpp), local OpenAI-compatible servers such as Ollama or LM Studio, or configured cloud providers.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-updates-history.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-updates-history.png" alt="Illustrative flow: a finding in a source document updates memory from V1 to V2, then informs a knowledge page that is either updated automatically or sent for review." width="100%">
 </p>
 <p>Localized App-view composite with demo data; connections are illustrative.</p>
 
@@ -183,7 +183,7 @@ Experimental web access lets supported web clients search the whole library or o
 **One local knowledge base.** App, CLI, and connected AI tools read and write through Wenlan’s local service. Pages are Markdown files; memories, relationships, and search indexes live in local libSQL.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/b03c3cdb657032b04ca7b79a690b403775351692/docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-architecture.png" alt="Architecture overview: App and AI tools share a local knowledge base, with optional background enrichment models." width="100%">
 </p>
 
 Architecture overview. [Retrieval, evidence, and models](docs/technical-foundations.md).
