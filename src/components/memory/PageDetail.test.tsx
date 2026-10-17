@@ -1198,11 +1198,13 @@ describe("PageDetail", () => {
   );
 
   it.each([
-    ["source", "Last updated 5m ago"],
-    ["imported", "Last updated 5m ago"],
+    ["source", false, "Last updated 5m ago"],
+    ["imported", false, "Last updated 5m ago"],
+    ["authored", false, "Last updated 5m ago"],
+    ["distilled", true, "Last updated 5m ago"],
   ] as const)(
-    "shows a neutral updated dateline from last_modified for %s pages",
-    async (creationKind, dateline) => {
+    "shows a neutral updated dateline from last_modified for %s pages (user_edited=%s)",
+    async (creationKind, userEdited, dateline) => {
       const { getPage } = await import("../../lib/tauri");
       (getPage as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
         id: "concept_abc",
@@ -1215,9 +1217,10 @@ describe("PageDetail", () => {
         version: 1,
         status: "active",
         creation_kind: creationKind,
+        user_edited: userEdited,
         created_at: "2026-07-17T11:00:00+00:00",
-        // last_compiled is deliberately older: source/imported pages must
-        // read last_modified so the dateline never claims a distillation.
+        // last_compiled is deliberately older: these pages must read
+        // last_modified so the dateline never claims a distillation.
         last_compiled: "2026-07-17T10:00:00+00:00",
         last_modified: "2026-07-17T11:55:00+00:00",
       });

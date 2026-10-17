@@ -930,7 +930,7 @@ pub struct WritePageParams {
     #[serde(default)]
     pub source_memory_ids: Vec<String>,
     #[schemars(
-        description = "Refresh only: pass page.version from read_page. When the page has moved on, the write is refused and nothing changes; re-read the page with read_page and retry. With it, a refresh of a page the user edited lands directly; without it, that refresh is staged as a revision card for the user."
+        description = "Refresh only: pass page.version from read_page. When the page has moved on, the write is refused and nothing changes; re-read the page with read_page and retry. A refresh of a page the user wrote or edited lands directly with it and is refused without it."
     )]
     #[serde(default)]
     pub expected_version: Option<i64>,
@@ -1273,7 +1273,21 @@ Install:
 /// (no protocol-level McpError) while telling the caller what happened.
 /// A refresh the daemon refused with 409 wrote nothing: the page moved past
 /// the caller's `expected_version`. Say so plainly, with the recovery steps.
-fn page_write_conflict_result(page_id: &str, current_version: Option<i64>) -> CallToolResult {
+fn page_write_conflict_result(
+    page_id: &str,
+    current_version: Option<i64>,
+    sent_version: bool,
+) -> CallToolResult {
+    if !sent_version {
+        let retry = current_version
+            .map(|version| format!("expected_version {version}"))
+            .unwrap_or_else(|| "its page.version as expected_version".to_string());
+        return CallToolResult::error(vec![ContentBlock::text(format!(
+            "write_page refused, nothing was written: page {page_id} has the user's own \
+             writing, so a refresh must say which version it read. Read it with read_page \
+             and retry write_page with {retry}."
+        ))]);
+    }
     let text = match current_version {
         Some(version) => format!(
             "write_page refused, nothing was written: page {page_id} moved to v{version}. \
@@ -2374,6 +2388,7 @@ impl WenlanMcpServer {
                             .to_string(),
                     )]));
                 }
+                let sent_version = params.expected_version.is_some();
                 let req = wenlan_types::requests::RefreshPageRequest {
                     content: params.content,
                     source_memory_ids: params.source_memory_ids,
@@ -2387,7 +2402,8 @@ impl WenlanMcpServer {
                 let resp: wenlan_types::responses::PageWriteResponse =
                     match self.client.put(&path, &req).await {
                         Ok(resp) => resp,
-                        // 409: the page moved past expected_version and
+                        // 409: the page moved past expected_version, or the
+                        // refresh of a user-written page sent none, and
                         // nothing was written. The client withholds daemon
                         // free text from agents, so read the page's current
                         // version here and give the same recovery steps the
@@ -2399,7 +2415,7 @@ impl WenlanMcpServer {
                                 .await
                                 .ok()
                                 .map(|page| page.page.page.version);
-                            return Ok(page_write_conflict_result(&page_id, current));
+                            return Ok(page_write_conflict_result(&page_id, current, sent_version));
                         }
                         Err(e) => return Ok(tool_error(e, "write_page")),
                     };
@@ -3203,7 +3219,7 @@ impl WenlanMcpServer {
     }
 
     #[tool(
-        description = "Create or refresh a wiki page. When the user asks to turn something from this conversation into a page, call write_page with a title and the content; source_memory_ids are optional. This write can replace an existing page: omit page_id to create a new page (title required); with enough cited sources it lands as a distilled page, otherwise as an authored page. The daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Before a refresh, read_page and pass its page.version as expected_version: if the page moved on, the write is refused with nothing changed, so re-read and retry. Without expected_version, a refresh of a page the user wrote or edited is staged as a revision card, and a page with review_required set always stages one. Refresh is not available over remote HTTP MCP transport (local stdio only).",
+        description = "Create or refresh a wiki page. When the user asks to turn something from this conversation into a page, call write_page with a title and the content; source_memory_ids are optional. This write can replace an existing page: omit page_id to create a new page (title required); with enough cited sources it lands as a distilled page, otherwise as an authored page. The daemon writes the DB row and the on-disk <pages dir>/<slug>.md projection atomically (default ~/.wenlan/pages/, slug made unique on collision). Pass page_id (from the `stale_pages` block in distill output) to refresh that page in place — replaces content + source_memory_ids + optional summary, clears stale_reason, preserves page_id and created_at, bumps version monotonically so external [[wikilinks]] keep working. Never delete_page + recreate to refresh: that churns ids and loses version history. To change an existing page's title at the user's explicit request, use rename_page; refresh keeps the existing title. Before a refresh, read_page and pass its page.version as expected_version: if the page moved on, the write is refused with nothing changed, so re-read and retry. Without expected_version, a refresh of a page the user wrote or edited is refused the same way. A page with review_required set stages every refresh as a revision card for the user. Refresh is not available over remote HTTP MCP transport (local stdio only).",
         annotations(
             title = "Write page",
             read_only_hint = false,
@@ -3829,6 +3845,21 @@ mod tests {
             }
             other => panic!("unexpected tool error content: {other:?}"),
         }
+    }
+
+    #[test]
+    fn page_write_conflict_says_why_it_was_refused() {
+        let text = |result: CallToolResult| match &result.content[0] {
+            rmcp::model::ContentBlock::Text(text) => text.text.clone(),
+            other => panic!("unexpected tool error content: {other:?}"),
+        };
+        let unversioned = text(page_write_conflict_result("page_a", Some(4), false));
+        assert!(unversioned.contains("must say which version it read"));
+        assert!(unversioned.contains("expected_version 4"));
+        assert!(!unversioned.contains("moved to"));
+        let stale = text(page_write_conflict_result("page_a", Some(4), true));
+        assert!(stale.contains("moved to v4"));
+        assert!(stale.contains("expected_version 4"));
     }
 
     // ===== call_tool boundary: every LOCAL_ONLY_TOOL_NAMES entry is refused =====

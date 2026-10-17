@@ -535,9 +535,9 @@ A surface that transmits anyway is a failing test on that surface. That gate is
 soft, and saying so plainly is what cooperative-tier means. It is also no longer
 load-bearing: the shape gate holds even when this one is bypassed.
 
-## HTTP — all 195 registered `(method, path, handler)` triples
+## HTTP — all 197 registered `(method, path, handler)` triples
 
-73 page-bearing, 122 not.
+73 page-bearing, 124 not.
 
 | Method | Path | Builder | Page-bearing | Class | Marker-shape | Adapter | Evidence |
 |---|---|---|---|---|---|---|---|
@@ -551,6 +551,8 @@ load-bearing: the shape gate holds even when this one is bypassed.
 | `POST` | `/api/ambient/sweep` | main | no | not_applicable | `none` | — | no prose fields |
 | `PATCH` | `/api/brief` | main | no | not_applicable | `none` | — | BriefUpdateReceipt carries no page prose |
 | `POST` | `/api/brief` | main | yes | automatic | `none` | `handle_read_brief` | Brief.last_session_summary, BriefItem.text, SearchResult.content |
+| `GET` | `/api/brief/history` | main | no | not_applicable | `none` | — | Brief update log: Brief text only, no page prose |
+| `GET` | `/api/brief/history/{version}` | main | no | not_applicable | `none` | — | past Brief snapshot: Brief text only, no page prose |
 | `GET` | `/api/briefing` | main | yes | automatic | `none` | `handle_get_briefing` | BriefingResponse.content = revision-card titles |
 | `GET` | `/api/capture-stats` | main | yes | automatic | `none` | `handle_capture_stats` | opaque response type — fail-closed |
 | `POST` | `/api/chunks/delete-bulk` | main | no | not_applicable | `none` | — | no prose fields |
@@ -1259,8 +1261,8 @@ carrying the authority of agreement.
 | `core/post_write/page_create.rs::create_page_impl` | `pub(super)` | no | no | — | `core/db.rs::find_matching_page_scoped`, `core/db.rs::insert_page_with_kind`, `core/db.rs::resolve_orphan_page_links` |
 | `core/post_write/page_create.rs::replace_source_page_impl` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_create.rs::write_document_source_page_impl` | `pub(super)` | no | no | — | `core/db.rs::insert_document_source_page_at_hash` |
-| `core/post_write/page_revision.rs::accept_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
-| `core/post_write/page_revision.rs::resolve_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_revision.rs::accept_page_revision_card` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_revision.rs::resolve_page_revision_card` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_update.rs::project_latest_page` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_update.rs::update_page_db_impl` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/refinery/mod.rs::enqueue_changed_pages` | `pub(crate)` | no | no | — | `core/db.rs::list_pages` |
