@@ -638,7 +638,7 @@ export function FirstUseSample({
                   </p>
                   <button
                     type="button"
-                    className="fug-button-primary"
+                    className="fug-button-secondary"
                     onClick={() => setAiOpen(true)}
                   >
                     {t("firstUse.sample.useWithAi")}
@@ -652,6 +652,13 @@ export function FirstUseSample({
                 <div className="fus-chat-turn" data-role="ai">
                   <span className="fus-chat-who">{t("firstUse.sample.aiName")}</span>
                   <p>{ai.answer}</p>
+                </div>
+                {/* Bridge from the sample to the user's own library. */}
+                <div className="fus-own">
+                  <p>{t("firstUse.sample.ownBody")}</p>
+                  <button type="button" className="fug-button-primary" onClick={onFinish}>
+                    {finishLabel ?? t("firstUse.sample.startOwn")}
+                  </button>
                 </div>
               </section>
             )}

@@ -230,7 +230,8 @@ describe("GettingStarted", () => {
     await vi.waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(prompt));
     expect(await screen.findByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copied") })).toBeInTheDocument();
     // The example stays one click away for whoever wants to see it first.
-    expect(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.action") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.exampleLink") })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.action") })).toBeNull();
   });
 
   it("keeps the prompt away until a tool has actually connected", async () => {

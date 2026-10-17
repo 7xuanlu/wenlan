@@ -322,6 +322,26 @@
   color: var(--mem-text);
 }
 
+.fus-own {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.fus-own p {
+  margin: 0;
+  font-family: var(--mem-font-body);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--mem-text-secondary);
+}
+
+.fus-own button {
+  flex-shrink: 0;
+}
+
 @keyframes fus-fade-in {
   from {
     opacity: 0;

@@ -119,9 +119,14 @@ export function GettingStarted({
         {order.map((id) => {
           const step = stepsById[id];
           const done = progress[id];
+          // Once there is a question to paste, the recall row's one button
+          // copies it; the sample becomes a quiet link under the question.
+          const asking = !done && id === "recall" && promptTool != null && promptText != null;
           const body = id === "note" && onlyDrafts
             ? t("firstUse.checklist.steps.note.draftBody")
-            : t(`firstUse.checklist.steps.${id}.body`);
+            : asking
+              ? t("firstUse.checklist.steps.recall.promptLead", { tool: promptTool })
+              : t(`firstUse.checklist.steps.${id}.body`);
           return (
             <li
               key={id}
@@ -139,32 +144,35 @@ export function GettingStarted({
                   ) : null}
                 </p>
                 {done ? null : <p className="getting-started-step-body">{body}</p>}
-                {!done && id === "recall" && promptTool && promptText ? (
+                {asking ? (
                   <div className="getting-started-prompt" data-testid="getting-started-prompt">
-                    <p className="getting-started-prompt-lead">
-                      {t("firstUse.checklist.steps.recall.promptLead", { tool: promptTool })}
-                    </p>
-                    <div className="getting-started-prompt-row">
-                      <code className="getting-started-prompt-text">{promptText}</code>
-                      <button
-                        type="button"
-                        className="getting-started-action"
-                        aria-live="polite"
-                        onClick={() => {
-                          void copyText(promptText).then((ok) => {
-                            if (ok) setCopied(true);
-                          });
-                        }}
-                      >
-                        {copied
-                          ? t("firstUse.checklist.steps.recall.copied")
-                          : t("firstUse.checklist.steps.recall.copy")}
-                      </button>
-                    </div>
+                    <p className="getting-started-prompt-text">{promptText}</p>
+                    <button
+                      type="button"
+                      className="getting-started-link"
+                      onClick={step.onAction}
+                    >
+                      {t("firstUse.checklist.steps.recall.exampleLink")}
+                    </button>
                   </div>
                 ) : null}
               </div>
-              {done ? null : (
+              {done ? null : asking ? (
+                <button
+                  type="button"
+                  className="getting-started-action"
+                  aria-live="polite"
+                  onClick={() => {
+                    void copyText(promptText).then((ok) => {
+                      if (ok) setCopied(true);
+                    });
+                  }}
+                >
+                  {copied
+                    ? t("firstUse.checklist.steps.recall.copied")
+                    : t("firstUse.checklist.steps.recall.copy")}
+                </button>
+              ) : (
                 <button
                   type="button"
                   className="getting-started-action"
