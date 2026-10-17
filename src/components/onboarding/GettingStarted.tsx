@@ -19,8 +19,8 @@ import {
   type Page,
   type RegisteredSource,
 } from "../../lib/tauri";
-import { resolveAgentDisplayName } from "../../lib/agents";
-import { seenFamiliesOf, useLiveAgents } from "../connect/connectionState";
+import { resolveAgentDisplayName, toolFamilyOf } from "../../lib/agents";
+import { useLiveAgents } from "../connect/connectionState";
 import { readStartPath, type StartPath } from "./startPath";
 import "./gettingStarted.css";
 
@@ -49,9 +49,18 @@ export function publishedPages(pages: readonly Page[]): Page[] {
   return pages.filter((page) => page.status !== "draft");
 }
 
-/** The AI tools that have called, Wenlan's own identities excluded. */
+/** The AI tools the daemon knows, Wenlan's own identities excluded.
+ *  Connecting a tool from the app registers it (`POST /api/agents`), so a row
+ *  is the user's own act of connecting; the step does not also wait for the
+ *  tool's first call, which happens outside the app and reads as "I did it,
+ *  why isn't it done". */
 export function connectedToolFamilies(agents: readonly AgentConnection[]): string[] {
-  return [...seenFamiliesOf(agents)].filter((family) => !OWN_IDENTITY.test(family));
+  const families = new Set<string>();
+  for (const agent of agents) {
+    const family = toolFamilyOf(agent);
+    if (!OWN_IDENTITY.test(family)) families.add(family);
+  }
+  return [...families];
 }
 
 /** Each step is read from what the library holds now, not from a stored

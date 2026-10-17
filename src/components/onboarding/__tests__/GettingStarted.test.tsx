@@ -98,7 +98,7 @@ describe("gettingStartedProgress", () => {
     })).toEqual({ note: true, tool: true, sources: true, recall: true });
   });
 
-  it("does not count Wenlan's own identities or a tool that never called", () => {
+  it("does not count Wenlan's own identities", () => {
     const progress = gettingStartedProgress({
       pages: [],
       agents: [
@@ -106,12 +106,23 @@ describe("gettingStartedProgress", () => {
         agent("wenlan-setup"),
         agent("wenlan-cli"),
         agent("manual"),
-        agent("codex", { last_seen_at: null, memory_count: 0 }),
       ],
       sources: [],
       milestones: [],
     });
     expect(progress.tool).toBe(false);
+  });
+
+  it("counts a tool the app registered before it ever called", () => {
+    // Connecting from the app registers the tool with the daemon; the user
+    // did the step, so it is done even though the tool has not called yet.
+    const progress = gettingStartedProgress({
+      pages: [],
+      agents: [agent("codex", { last_seen_at: null, memory_count: 0 })],
+      sources: [],
+      milestones: [],
+    });
+    expect(progress.tool).toBe(true);
   });
 
   it("does not count a draft as a saved note, because recall cannot see it yet", () => {
