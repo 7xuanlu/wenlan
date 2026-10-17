@@ -91,8 +91,8 @@ Use the App on its own or work with your AI. Keep useful knowledge and progress 
 Simplified workflow. Plugin commands and page organization are optional, with no fixed sequence.
 
 - **Start with your material.** Write a page or import documents and selected conversations as sources. No AI connection is required.
-- **Read, write, and put it to use.** Edit pages, follow citations, and review proposed changes in the App, or ask your AI to use an existing page for a task or draft a new one. Use `/recall` when you need earlier context.
-- **Keep what you learn.** Save a decision or lesson, with its reasons and sources, through Quick Capture in the App or `/capture` with your AI.
+- **Use your knowledge and write new pages.** Ask your AI to draw on saved sources and memories to complete a task or write a new page with citations. In the App, edit pages, follow citations, and review proposed changes; use `/recall` in your AI tool to find earlier context.
+- **Keep what you learn.** Save a decision or lesson, with its reasons and sources, in the App or with `/capture` through your AI.
 - **Pause and resume.** `/handoff` saves durable memories and a session log, and updates the current Space’s Brief with progress and next steps. Use `/brief` when you want the next session to pick up that context.
 
 **When you want a knowledge page:** `/distill` synthesizes or refreshes cited pages. You can also write pages directly or configure background AI. [Plugin commands](plugin/skills/README.md).
@@ -115,7 +115,7 @@ Simplified workflow. Plugin commands and page organization are optional, with no
 
 - **File and conversation imports:** Import Markdown, text, text-based PDFs, folders, and ChatGPT or Claude export ZIPs while retaining source references. Scanned PDFs need text extraction before import. Chat imports preserve a snapshot; registered file sources can refresh from disk.
 - **Read-only Obsidian connection:** Read an existing vault and refresh it on demand without modifying its files or syncing changes back.
-- **Quick Capture and atomic memories:** Save individual decisions, lessons, and preferences with their reasons and sources, in the app or through your AI.
+- **Atomic memories:** Save individual decisions, lessons, and preferences with their reasons and sources, in the app or through your AI.
 - **Knowledge graph:** Discover related topics through typed entities, relations, and knowledge clusters (communities); a configured enrichment model links repeated mentions to the same entity (mention resolution).
 
 <a id="explore-your-personal-knowledge-graph"></a>
