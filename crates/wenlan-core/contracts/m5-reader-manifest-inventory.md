@@ -1259,8 +1259,8 @@ carrying the authority of agreement.
 | `core/post_write/page_create.rs::create_page_impl` | `pub(super)` | no | no | — | `core/db.rs::find_matching_page_scoped`, `core/db.rs::insert_page_with_kind`, `core/db.rs::resolve_orphan_page_links` |
 | `core/post_write/page_create.rs::replace_source_page_impl` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_create.rs::write_document_source_page_impl` | `pub(super)` | no | no | — | `core/db.rs::insert_document_source_page_at_hash` |
-| `core/post_write/page_revision.rs::accept_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
-| `core/post_write/page_revision.rs::resolve_page_revision_card` | `private` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_revision.rs::accept_page_revision_card` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
+| `core/post_write/page_revision.rs::resolve_page_revision_card` | `pub(super)` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_update.rs::project_latest_page` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/post_write/page_update.rs::update_page_db_impl` | `private` | no | no | — | `core/db.rs::get_page` |
 | `core/refinery/mod.rs::enqueue_changed_pages` | `pub(crate)` | no | no | — | `core/db.rs::list_pages` |

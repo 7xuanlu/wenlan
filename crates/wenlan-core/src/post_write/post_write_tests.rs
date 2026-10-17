@@ -4836,6 +4836,58 @@ async fn accept_page_revision_source_failure_keeps_page_retryable() {
 }
 
 #[tokio::test]
+async fn accept_of_a_card_consumed_concurrently_is_not_reported_as_outdated() {
+    // Two accepts can load the same pending card; the first lands it and
+    // consumes it, so the second fails the fence. That second caller must
+    // not be told the revision was discarded, because it was applied.
+    let (db, _dir) = test_db().await;
+    let mem_id = "mem_page_accept_race_original";
+    let content = "Rust ownership keeps memory safety rules explicit";
+    let proposed = "Rust ownership lets the compiler enforce memory safety rules";
+    seed_memory(&db, mem_id, content).await;
+    let page_id = seed_page(&db, mem_id, content).await;
+    let before = db.get_page(&page_id).await.unwrap().unwrap();
+    let source_revision = db.get_page_source_revision(&page_id).await.unwrap();
+    let staged = stage_page_revision_card(
+        &db,
+        &before,
+        proposed,
+        &[mem_id.to_string()],
+        source_revision,
+        "page_growth",
+        None,
+    )
+    .await
+    .unwrap();
+    let card_id = staged.revision_card_id.as_deref().unwrap();
+    let loaded_by_second_caller = super::page_revision::resolve_page_revision_card(&db, card_id)
+        .await
+        .unwrap()
+        .expect("pending page card must resolve");
+
+    let first = accept_pending_revision(&db, card_id, "test-agent")
+        .await
+        .unwrap();
+    assert!(first.wrote);
+
+    let err = super::page_revision::accept_page_revision_card(&db, loaded_by_second_caller, None)
+        .await
+        .unwrap_err();
+    match err {
+        WenlanError::NotFound(msg) => assert!(
+            !msg.starts_with(crate::post_write::PAGE_REVISION_OUTDATED),
+            "a consumed card must not carry the outdated code, got: {msg}"
+        ),
+        other => panic!("expected NotFound for an already-resolved card, got {other:?}"),
+    }
+    assert_eq!(
+        db.get_page(&page_id).await.unwrap().unwrap().content,
+        proposed,
+        "the first accept's content must stay applied"
+    );
+}
+
+#[tokio::test]
 async fn accept_pending_revision_page_write_card_conflicts_when_page_version_changed() {
     let (db, _dir) = test_db().await;
     let mem_id = "mem_page_accept_conflict_original";

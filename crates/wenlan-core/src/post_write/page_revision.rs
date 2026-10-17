@@ -10,7 +10,7 @@ use std::path::Path;
 /// card is discarded when this is returned.
 pub const PAGE_REVISION_OUTDATED: &str = "page_revision_outdated";
 
-struct PageRevisionCard {
+pub(super) struct PageRevisionCard {
     page_id: String,
     revision_id: String,
     page_version: Option<i64>,
@@ -19,7 +19,7 @@ struct PageRevisionCard {
     source_memory_ids: Vec<String>,
 }
 
-async fn resolve_page_revision_card(
+pub(super) async fn resolve_page_revision_card(
     db: &MemoryDB,
     id: &str,
 ) -> Result<Option<PageRevisionCard>, WenlanError> {
@@ -100,7 +100,7 @@ async fn resolve_page_revision_card(
 // with card consumption. A card carrying no `source_revision` is refused
 // outright and its page re-queued; a card carrying no `page_version` still
 // accepts on the source-revision fence, which is the stronger of the two.
-async fn accept_page_revision_card(
+pub(super) async fn accept_page_revision_card(
     db: &MemoryDB,
     card: PageRevisionCard,
     knowledge_path: Option<&Path>,
@@ -188,6 +188,22 @@ async fn accept_page_revision_card(
         .await?;
 
     if !wrote {
+        // A concurrent accept or dismiss of this same card consumes it in its
+        // own transaction, which also moves the page past this card's fences.
+        // That is not an outdated card: the change may well have landed, so
+        // never tell the human it was discarded. The check is sound after the
+        // failed write because the fences only move forward: once this CAS
+        // missed, no later accept of the card can succeed either.
+        if db
+            .pending_memory_revision_payload(&card.revision_id)
+            .await?
+            .is_none()
+        {
+            return Err(WenlanError::NotFound(format!(
+                "revision card {} for page {} was already resolved",
+                card.revision_id, card.page_id
+            )));
+        }
         let current_version = db
             .get_page(&card.page_id)
             .await?
