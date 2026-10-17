@@ -27,8 +27,6 @@ export interface SourceLibraryState {
 export interface SourceLibraryProps {
   onAdd: () => void;
   onOpenDocument: (file: IndexedFileInfo) => void;
-  /** Optional way out of the empty state, back to the Wiki home. */
-  onBackHome?: () => void;
   /** Provide both props to retain search and filter in the owning route. */
   state?: SourceLibraryState;
   onStateChange?: (state: SourceLibraryState) => void;
@@ -65,7 +63,7 @@ function documentUrl(file: IndexedFileInfo): URL | null {
   return null;
 }
 
-export default function SourceLibrary({ onAdd, onOpenDocument, onBackHome, state, onStateChange }: SourceLibraryProps) {
+export default function SourceLibrary({ onAdd, onOpenDocument, state, onStateChange }: SourceLibraryProps) {
   const { t } = useTranslation();
   const libraryRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -172,7 +170,7 @@ export default function SourceLibrary({ onAdd, onOpenDocument, onBackHome, state
 
       {collectionItems.length > 0 && <SourceCollection items={collectionItems} lens={lens} label={t("sourceLibrary.listLabel")} />}
 
-      {realEmpty && <div className="source-library-empty"><SourceTypeIcon kind="file" size={32} /><h2>{t("sourceLibrary.emptyTitle")}</h2><p>{t("sourceLibrary.emptyBody")}</p><p className="source-library-support">{t("sourceLibrary.supportedFiles")}</p><button className="source-library-add" onClick={onAdd}><Plus size={16} aria-hidden="true" />{t("sourceLibrary.add")}</button>{onBackHome && <button className="source-library-home" onClick={onBackHome}>{t("sourceLibrary.backHome")}</button>}</div>}
+      {realEmpty && <div className="source-library-empty"><SourceTypeIcon kind="file" size={32} /><h2>{t("sourceLibrary.emptyTitle")}</h2><p>{t("sourceLibrary.emptyBody")}</p><p className="source-library-support">{t("sourceLibrary.supportedFiles")}</p><button className="source-library-add" onClick={onAdd}><Plus size={16} aria-hidden="true" />{t("sourceLibrary.add")}</button></div>}
       {filteredEmpty && <div className="source-library-empty"><Funnel size={28} aria-hidden="true" /><h2>{t("sourceLibrary.noMatches")}</h2><p>{t("sourceLibrary.noMatchesBody")}</p><button className="source-library-manage" onClick={clearFilters}>{t("sourceLibrary.clearFilters")}</button></div>}
     </section>
   );

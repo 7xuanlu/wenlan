@@ -81,11 +81,11 @@ async function fakeReadDir(p: string) {
   return [];
 }
 
-function renderView(props: { onBackHome?: () => void } = {}) {
+function renderView() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <SourcesView onManageSources={() => {}} {...props} />
+      <SourcesView onManageSources={() => {}} />
     </QueryClientProvider>,
   );
 }
@@ -343,16 +343,6 @@ describe("empty state", () => {
 
     expect(await screen.findByText("Nothing on the shelf yet")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add your first source/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Back to Wiki home" })).not.toBeInTheDocument();
-  });
-
-  it("offers a way back to the Wiki home when the owner provides one", async () => {
-    vi.mocked(listRegisteredSources).mockResolvedValue([]);
-    const onBackHome = vi.fn();
-    renderView({ onBackHome });
-    await screen.findByText("Nothing on the shelf yet");
-    fireEvent.click(screen.getByRole("button", { name: "Back to Wiki home" }));
-    expect(onBackHome).toHaveBeenCalledOnce();
   });
 });
 

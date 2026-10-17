@@ -1535,7 +1535,6 @@ export default function Main({
               onOpenDocument={(file) => navigateTo({ kind: "source-document", file })}
               onRegisterFlush={registerSourceDescriptionFlush}
               onManageSources={() => navigateTo({ kind: "settings", section: "sources" })}
-              onBackHome={() => navigatePages()}
             />
           ) : view.kind === "graph" ? (
             <div style={{ position: "relative", width: "100%", height: "100%" }}>

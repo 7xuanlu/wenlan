@@ -58,8 +58,6 @@
 .source-library-empty p { max-width: 360px; margin: 12px 0 0; font-size: 13px; line-height: 1.7; }
 .source-library-empty .source-library-support { font-size: 12px; margin-top: 8px; }
 .source-library-empty button { margin-top: 22px; }
-.source-library-empty .source-library-home { margin-top: 10px; background: transparent; border: 1px solid var(--mem-border); border-radius: 8px; color: var(--mem-text-secondary); font-size: 14px; min-height: 36px; padding: 0 12px; }
-.source-library-empty .source-library-home:hover { color: var(--mem-text); background: var(--mem-hover); }
 @media (max-width: 700px) {
   .source-library { padding: 24px var(--collection-gutter, 24px) 48px; }
   .source-library-actions { flex-direction: row; }

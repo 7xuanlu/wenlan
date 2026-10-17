@@ -94,25 +94,23 @@ type SourcesNode =
 interface SourcesViewProps {
   /** Settings › Sources, for remove and advanced source management. */
   onManageSources: () => void;
-  /** Empty-state way out, back to the Wiki home. Omit to hide the button. */
-  onBackHome?: () => void;
   libraryState?: SourceLibraryState;
   onLibraryStateChange?: (state: SourceLibraryState) => void;
   onOpenDocument?: (file: IndexedFileInfo) => void;
   onRegisterFlush?: (flush: (() => Promise<boolean>) | null) => void;
 }
 
-export default function SourcesView({ libraryState, onLibraryStateChange, onOpenDocument, onRegisterFlush, onBackHome }: SourcesViewProps) {
+export default function SourcesView({ libraryState, onLibraryStateChange, onOpenDocument, onRegisterFlush }: SourcesViewProps) {
   const [adding, setAdding] = useState(false);
   const [document, setDocument] = useState<IndexedFileInfo | null>(null);
   return <>
-    <SourceLibrary onAdd={() => setAdding(true)} onBackHome={onBackHome} onOpenDocument={onOpenDocument ?? setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
+    <SourceLibrary onAdd={() => setAdding(true)} onOpenDocument={onOpenDocument ?? setDocument} state={libraryState} onStateChange={onLibraryStateChange} />
     {adding && <AddSourceMenu onClose={() => setAdding(false)} />}
     {document && <SourceDocumentPreview key={`${document.source}:${document.source_id}`} file={document} onClose={() => setDocument(null)} onRegisterFlush={onRegisterFlush} />}
   </>;
 }
 
-export function SourceFolderBrowser({ onManageSources, onBackHome, initialSourceId }: SourcesViewProps & { initialSourceId?: string }) {
+export function SourceFolderBrowser({ onManageSources, initialSourceId }: SourcesViewProps & { initialSourceId?: string }) {
   const [adding, setAdding] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedNode, setSelectedNode] = useState<SourcesNode | null>(null);
@@ -219,7 +217,7 @@ export function SourceFolderBrowser({ onManageSources, onBackHome, initialSource
   if (sources.length === 0) {
     return (
       <>
-        <EmptyShelf onAdd={() => setAdding(true)} onBackHome={onBackHome} />
+        <EmptyShelf onAdd={() => setAdding(true)} />
         {adding && <AddSourceMenu onClose={() => setAdding(false)} />}
       </>
     );
@@ -1023,8 +1021,7 @@ function FolderError({ onReveal, atRoot }: { onReveal: () => void; atRoot: boole
   );
 }
 
-function EmptyShelf({ onAdd, onBackHome }: { onAdd: () => void; onBackHome?: () => void }) {
-  const { t } = useTranslation();
+function EmptyShelf({ onAdd }: { onAdd: () => void }) {
   return (
     <div className="flex h-full w-full items-center justify-center px-8">
       <div className="flex flex-col items-center text-center" style={{ maxWidth: 420 }}>
@@ -1068,24 +1065,6 @@ function EmptyShelf({ onAdd, onBackHome }: { onAdd: () => void; onBackHome?: () 
         >
           + Add your first source
         </button>
-        {onBackHome && (
-          <button
-            onClick={onBackHome}
-            className="rounded-md transition-colors duration-150 hover:bg-[var(--mem-hover)]"
-            style={{
-              marginTop: 10,
-              padding: "8px 16px",
-              fontFamily: "var(--mem-font-body)",
-              fontSize: "13px",
-              color: "var(--mem-text-secondary)",
-              background: "transparent",
-              border: "1px solid var(--mem-border)",
-              cursor: "pointer",
-            }}
-          >
-            {t("sourceLibrary.backHome")}
-          </button>
-        )}
       </div>
     </div>
   );
