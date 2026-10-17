@@ -41,7 +41,7 @@
 /* While the getting-started checklist is open the panel gives up its tall
    centring box and keeps only the icon and the landmark heading, so the whole
    home fits the default window. The heading stays in the DOM for navigation. */
-.wiki-reading-start[data-onboarding="true"] .wiki-reading-start-panel { flex:0 0 auto;padding:24px 20px 8px; }
+.wiki-reading-start[data-onboarding="true"] .wiki-reading-start-panel { flex:0 0 auto;padding:24px 20px 20px; }
 .wiki-reading-start[data-onboarding="true"] .wiki-reading-start-icon { height:24px;margin-bottom:8px;width:24px; }
 .wiki-reading-start[data-onboarding="true"] .wiki-reading-start-panel p { display:none; }
 @media (max-width:639px) { .wiki-reading-start-panel { flex-basis:clamp(240px,42vh,420px);padding:24px 8px; }.wiki-reading-start-panel h1 { font-size:19px; } }
