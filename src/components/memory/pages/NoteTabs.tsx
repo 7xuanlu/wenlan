@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
-import { DotsThree, Plus, X } from "@phosphor-icons/react";
+import { DotsThree, House, Plus, X } from "@phosphor-icons/react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { NoteTab } from "./noteTabState";
@@ -16,11 +16,14 @@ type NoteTabsProps = {
   readonly moveLabel?: string;
   readonly groupId?: "primary" | "secondary";
   readonly tabListLabel?: string;
+  /** Primary strip only: a permanent button for the Wiki home, which has no tab of its own. */
+  readonly onHome?: () => void;
+  readonly homeActive?: boolean;
 };
 
 type TabContextMenu = { readonly tab: NoteTab; readonly invoker: HTMLButtonElement; readonly x: number; readonly y: number };
 
-export function NoteTabs({ tabs, activeKey, onSelect, onClose, onCreate, contentId = "wiki-note-content", onMoveToOtherGroup, moveLabel, groupId = "primary", tabListLabel }: NoteTabsProps) {
+export function NoteTabs({ tabs, activeKey, onSelect, onClose, onCreate, contentId = "wiki-note-content", onMoveToOtherGroup, moveLabel, groupId = "primary", tabListLabel, onHome, homeActive = false }: NoteTabsProps) {
   const { t } = useTranslation();
   const id = useId();
   const list = useRef<HTMLDivElement>(null);
@@ -98,6 +101,10 @@ export function NoteTabs({ tabs, activeKey, onSelect, onClose, onCreate, content
     if (restoreFocus) invoker?.focus();
   };
   return <div className="note-tabs" data-note-tab-group={groupId}>
+    {onHome && <button type="button" className="note-tab-home" aria-label={t("pages.tabs.home")} title={t("pages.tabs.home")}
+      data-active={homeActive} aria-current={homeActive ? "page" : undefined} onClick={onHome}>
+      <House size={14} aria-hidden="true" />
+    </button>}
     {tabs.length > 0 && <div className="note-tabs-list" role="tablist" aria-label={tabListLabel ?? t("pages.tabs.label")} ref={list}>
       {tabs.map((tab, index) => {
         const title = tab.title.trim() || t("pages.overview.untitledDraft");

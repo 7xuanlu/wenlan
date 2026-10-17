@@ -120,6 +120,25 @@ test("empty notes can start writing without AI setup", async ({ page }) => {
   await expect(page.getByRole("textbox", { name: "Content", exact: true })).toBeVisible();
 });
 
+test("the home button returns to the Wiki home while the open note keeps its tab", async ({ page }) => {
+  await page.setViewportSize({ ...DEFAULT_WINDOW });
+  await openWiki(page, createFirstRunFixture());
+  const home = page.getByRole("button", { name: "Wiki home", exact: true });
+  const overviewTitle = page.locator(".wiki-overview").getByRole("heading", { name: "Open a note", exact: true });
+  await expect(home).toHaveAttribute("aria-current", "page");
+  await expect(overviewTitle).toBeVisible();
+
+  await page.locator(".note-tab-create").click();
+  await expect(page.getByRole("textbox", { name: "Content", exact: true })).toBeVisible();
+  await expect(home).not.toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("tablist").getByRole("tab")).toHaveCount(1);
+
+  await home.click();
+  await expect(overviewTitle).toBeVisible();
+  await expect(home).toHaveAttribute("aria-current", "page");
+  await expect(page.getByRole("tablist").getByRole("tab")).toHaveCount(1);
+});
+
 // Review page changes is an existing Space dossier action, and Back returns
 // to that Space. This test does not add a new Activity-to-Review entry point.
 test("the Space review action opens Review and Back returns to the Space", async ({ page }) => {

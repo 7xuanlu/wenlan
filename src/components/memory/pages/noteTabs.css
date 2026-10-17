@@ -16,6 +16,7 @@
   background: transparent;
   user-select: none;
   -webkit-user-select: none;
+  container: note-tabs / inline-size;
 }
 
 .note-tabs-list {
@@ -52,6 +53,33 @@
 
 .note-tab-create:hover { background: var(--mem-hover); color: var(--mem-text); }
 .note-tab-create:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 1px; }
+
+/* The Wiki home has no tab, so it keeps a fixed place at the start of the strip. */
+.note-tab-home {
+  display: inline-flex;
+  flex: 0 0 32px;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--mem-text-secondary);
+  cursor: pointer;
+}
+
+.note-tab-home[data-active="true"] { background: var(--mem-hover); color: var(--mem-text); }
+.note-tab-home:hover { background: var(--mem-hover); color: var(--mem-text); }
+.note-tab-home:focus-visible { outline: 2px solid var(--mem-text-secondary); outline-offset: 1px; }
+
+/* In a very narrow group the open note outranks the shortcut; the sidebar's
+   Wiki entry still leads home. */
+@container note-tabs (max-width: 160px) {
+  .note-tab-home { display: none; }
+}
 
 .note-tab {
   position: relative;
@@ -180,6 +208,7 @@ body.note-tab-dragging *::after {
   .note-tabs { padding-top: 4px; }
   .note-tab > button { height: 44px; }
   .note-tab-close { flex-basis: 44px; width: 44px; }
+  .note-tab-home,
   .note-tab-create { flex-basis: 44px; width: 44px; height: 44px; margin-top: 0; }
 }
 

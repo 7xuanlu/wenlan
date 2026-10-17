@@ -762,6 +762,7 @@ export default function Main({
   const noteTabStrip = <NoteTabs tabs={noteTabs}
     activeKey={isNoteView(view) ? noteTabs.find(tab => matchesNote(tab, view))?.key : undefined}
     onSelect={tab => { focusPrimaryGroup(); navigateTo(tab.view); }} onClose={closeNoteTab}
+    onHome={() => { focusPrimaryGroup(); navigatePages(); }} homeActive={view.kind === "pages" || view.kind === "home"}
     onMoveToOtherGroup={moveToSecondary} moveLabel={t("pages.groups.moveToRight")}
     onCreate={() => navigateTo({
       kind: "page-draft",
