@@ -284,14 +284,14 @@ async fn main() -> anyhow::Result<ExitCode> {
         .with_recovery(recovery_enabled);
     let is_brief_update = matches!(
         &cli.command,
-        Commands::Brief(args) if args.command.is_some()
+        Commands::Brief(args) if args.is_update()
     );
     let is_outbox = matches!(&cli.command, Commands::Outbox { .. });
     let operation = match &cli.command {
-        Commands::Search { .. }
-        | Commands::Recall { .. }
-        | Commands::Brief(commands::brief::BriefArgs { command: None, .. })
-        | Commands::Memories { .. } => Some(CliSpaceOperation::Read),
+        Commands::Search { .. } | Commands::Recall { .. } | Commands::Memories { .. } => {
+            Some(CliSpaceOperation::Read)
+        }
+        Commands::Brief(args) if !args.is_update() => Some(CliSpaceOperation::Read),
         Commands::Capture { .. } => Some(CliSpaceOperation::Write),
         _ => None,
     };
@@ -633,6 +633,47 @@ mod catalog_tests {
             Cli::try_parse_from(["wenlan", "pages", "lock"]).is_err(),
             "lock needs a page id"
         );
+    }
+
+    #[test]
+    fn brief_history_and_show_parse_beside_topic_and_update() {
+        use super::commands::brief::BriefCommand;
+        use super::Commands;
+        use clap::Parser;
+
+        let parse = |args: &[&str]| match Cli::try_parse_from(args).unwrap().command {
+            Commands::Brief(brief) => brief,
+            _ => panic!("expected brief"),
+        };
+
+        let plain = parse(&["wenlan", "brief"]);
+        assert!(plain.command.is_none() && plain.topic.is_none());
+        let topic = parse(&["wenlan", "brief", "release gate"]);
+        assert_eq!(topic.topic.as_deref(), Some("release gate"));
+        assert!(!topic.is_update());
+
+        let default_limit = parse(&["wenlan", "brief", "history"]);
+        assert!(matches!(
+            default_limit.command,
+            Some(BriefCommand::History { limit: 20 })
+        ));
+        let short = parse(&["wenlan", "brief", "history", "-l", "5"]);
+        assert!(matches!(
+            short.command,
+            Some(BriefCommand::History { limit: 5 })
+        ));
+        let long = parse(&["wenlan", "brief", "history", "--limit", "7"]);
+        assert!(matches!(
+            long.command,
+            Some(BriefCommand::History { limit: 7 })
+        ));
+        let show = parse(&["wenlan", "brief", "show", "--version", "3"]);
+        assert!(matches!(
+            show.command,
+            Some(BriefCommand::Show { version: 3 })
+        ));
+        assert!(Cli::try_parse_from(["wenlan", "brief", "show"]).is_err());
+        assert!(parse(&["wenlan", "brief", "update", "--file", "x.json"]).is_update());
     }
 
     #[test]

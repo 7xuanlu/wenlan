@@ -1467,8 +1467,10 @@ pub const EMBEDDING_DIM: usize = 768;
 /// Migration 134 extends Page Map nodes with independent, map-owned ideas and
 /// reconciles both schema-133 lineages.
 /// Migration 135 stores user-authored source annotations independently of
-/// source-ingest chunks and Page lifetimes. Migration 136 adds
-/// `pages.review_required`, the review lock that stages every machine write.
+/// source-ingest chunks and Page lifetimes.
+/// Migration 136 records one history row per successful Brief update.
+/// Migration 137 adds `pages.review_required`, the review lock that stages
+/// every machine write.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1476,7 +1478,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 136;
+pub const SCHEMA_VERSION: u32 = 137;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10414,14 +10416,21 @@ impl MemoryDB {
                 self.migrate_135_source_annotations().await?;
             }
 
-            // Migration 136 adds the page review lock: `pages.review_required`
-            // makes every machine write stage a revision card. See
-            // migrate_136_page_review_required.
+            // Migration 136 records one history row per successful Brief update.
             if ceiling < 136 {
                 return Ok(());
             }
             if version < 136 {
-                self.migrate_136_page_review_required(version).await?;
+                self.migrate_136_brief_history().await?;
+            }
+            // Migration 137 adds the page review lock: `pages.review_required`
+            // makes every machine write stage a revision card. See
+            // migrate_137_page_review_required.
+            if ceiling < 137 {
+                return Ok(());
+            }
+            if version < 137 {
+                self.migrate_137_page_review_required(version).await?;
             }
         }
 
@@ -17793,18 +17802,18 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Migration 136: add `pages.review_required`, the review lock. While it
+    /// Migration 137: add `pages.review_required`, the review lock. While it
     /// is 1, every machine write (agent refresh with or without
     /// `expected_version`, and every pipeline stage) stages a revision card
     /// instead of landing; human edits are unaffected. `NOT NULL DEFAULT 0`
     /// leaves every existing row unlocked. The column-exists check keeps a
     /// crash-replay (ALTER applied, version bump lost) idempotent, same
     /// pattern as migration 127.
-    async fn migrate_136_page_review_required(
+    async fn migrate_137_page_review_required(
         &self,
         prior_version: i64,
     ) -> Result<(), WenlanError> {
-        self.backup_before_migration(136, prior_version).await?;
+        self.backup_before_migration(137, prior_version).await?;
         let conn = self.conn.lock().await;
         let has_col: bool = {
             let mut rows = conn
@@ -17814,7 +17823,7 @@ impl MemoryDB {
                     (),
                 )
                 .await
-                .map_err(|e| WenlanError::VectorDb(format!("m136 col check: {e}")))?;
+                .map_err(|e| WenlanError::VectorDb(format!("m137 col check: {e}")))?;
             match rows.next().await {
                 Ok(Some(row)) => row.get::<i64>(0).unwrap_or(0) > 0,
                 _ => false,
@@ -17826,12 +17835,12 @@ impl MemoryDB {
                 (),
             )
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("m136 add review_required: {e}")))?;
+            .map_err(|e| WenlanError::VectorDb(format!("m137 add review_required: {e}")))?;
         }
-        conn.execute("PRAGMA user_version = 136", ())
+        conn.execute("PRAGMA user_version = 137", ())
             .await
-            .map_err(|e| WenlanError::VectorDb(format!("m136 bump: {e}")))?;
-        log::info!("[migration] Migration 136 applied: pages.review_required column added");
+            .map_err(|e| WenlanError::VectorDb(format!("m137 bump: {e}")))?;
+        log::info!("[migration] Migration 137 applied: pages.review_required column added");
         Ok(())
     }
 
@@ -17852,6 +17861,17 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("m135 source annotations: {e}")))?;
+        Ok(())
+    }
+
+    async fn migrate_136_brief_history(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute_batch(&format!(
+            "{} PRAGMA user_version = 136;",
+            brief::BRIEF_HISTORY_DDL
+        ))
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("m136 brief history: {e}")))?;
         Ok(())
     }
 
@@ -55634,7 +55654,7 @@ impl MemoryDB {
                 Ok(libsql::Value::Text(reason)) => Some(reason),
                 _ => None,
             },
-            // Column 22 (migration 136). Same graceful raw-Value read: a
+            // Column 22 (migration 137). Same graceful raw-Value read: a
             // SELECT that stops before it (or carries a non-integer there)
             // reads as unlocked.
             review_required: matches!(row.get_value(22), Ok(libsql::Value::Integer(v)) if v != 0),
@@ -57266,7 +57286,7 @@ impl MemoryDB {
         Ok(())
     }
 
-    /// Set or clear the review lock (`pages.review_required`, migration 136).
+    /// Set or clear the review lock (`pages.review_required`, migration 137).
     /// While set, every machine write stages a revision card instead of
     /// landing; human edits are unaffected. The flag is page metadata, not
     /// content: it does not bump `version` or touch `last_modified`, so a
