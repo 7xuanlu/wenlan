@@ -17,9 +17,8 @@ const mockedClipboardWrite = vi.mocked(clipboardWrite);
 function renderSample(props = {}) {
   return render(
     <FirstUseSample
-      onBackToGuide={vi.fn()}
-      onBringData={vi.fn()}
-      onConnect={vi.fn()}
+      onBack={vi.fn()}
+      onFinish={vi.fn()}
       {...props}
     />,
   );
@@ -376,26 +375,30 @@ describe("FirstUseSample AI-use panel", () => {
     expect(screen.queryByText(/Copy failed/)).not.toBeInTheDocument();
   });
 
-  it("routes CTAs to the genuine setup route and the own-data chooser", () => {
-    const onConnect = vi.fn();
-    const onBringData = vi.fn();
-    renderSample({ onConnect, onBringData });
+  it("ends the AI panel with exactly one primary CTA that calls onFinish, and no connect or import CTAs", () => {
+    const onFinish = vi.fn();
+    const onBack = vi.fn();
+    renderSample({ onFinish, onBack });
     openAiPanel();
-    fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
-    fireEvent.click(screen.getByRole("button", { name: "Bring my data" }));
-    expect(onConnect).toHaveBeenCalledTimes(1);
-    expect(onConnect).toHaveBeenCalledWith("chatgpt");
-    expect(onBringData).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Connect my AI" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bring my data" })).not.toBeInTheDocument();
+    const panel = screen.getByRole("tab", { name: "ChatGPT" }).closest("section")!;
+    const primary = panel.querySelectorAll("button.fug-button-primary");
+    expect(primary).toHaveLength(1);
+    expect(primary[0]).toHaveTextContent("Back to home");
+    expect(screen.getByText(i18n.t("firstUse.sample.notInLibrary"))).toBeVisible();
+    fireEvent.click(primary[0]!);
+    expect(onFinish).toHaveBeenCalledTimes(1);
+    expect(onBack).not.toHaveBeenCalled();
   });
 
-  it("passes the selected client to onConnect", () => {
-    const onConnect = vi.fn();
-    renderSample({ onConnect });
+  it("uses the header back button for onBack and honours custom labels", () => {
+    const onBack = vi.fn();
+    renderSample({ onBack, backLabel: "Custom back", finishLabel: "Custom finish" });
+    fireEvent.click(screen.getByRole("button", { name: "Custom back" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
     openAiPanel();
-    fireEvent.click(screen.getByRole("tab", { name: "Claude" }));
-    fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
-    expect(onConnect).toHaveBeenCalledTimes(1);
-    expect(onConnect).toHaveBeenCalledWith("claude");
+    expect(screen.getByRole("button", { name: "Custom finish" })).toBeInTheDocument();
   });
 
   it("explains read-only ChatGPT without a handoff command but keeps writes for local clients", () => {
@@ -470,15 +473,17 @@ describe("FirstUseSample AI-use panel", () => {
 
   it.each(["en", "zh-Hant", "zh-Hans"])("renders capability-aware setup in %s", async (locale) => {
     await i18n.changeLanguage(locale);
-    const onConnect = vi.fn();
-    renderSample({ onConnect });
+    const onFinish = vi.fn();
+    renderSample({ onFinish });
     fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.skipToResult") }));
     fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.useWithAi") }));
     expect(screen.getByText(i18n.t("firstUse.sample.chatgptNote"))).toBeVisible();
-    expect(screen.getByText(i18n.t("firstUse.sample.connectHint"))).toBeVisible();
+    expect(screen.getByText(i18n.t("firstUse.sample.useBody"))).toBeVisible();
     expect(screen.queryByText("/handoff")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.sample.connectCta") }));
-    expect(onConnect).toHaveBeenCalledWith("chatgpt");
+    // Header back and the final button share the label; the final one is last.
+    const finishButtons = screen.getAllByRole("button", { name: i18n.t("firstUse.sample.finish") });
+    fireEvent.click(finishButtons[finishButtons.length - 1]!);
+    expect(onFinish).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("tab", { name: "Codex" }));
     expect(screen.queryByText(i18n.t("firstUse.sample.chatgptNote"))).not.toBeInTheDocument();
     expect(screen.getByText("/handoff")).toBeVisible();

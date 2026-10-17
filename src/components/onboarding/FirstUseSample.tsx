@@ -29,11 +29,12 @@ import { PageIcon } from "../memory/assets/PageIcon";
 import "./firstUseGuide.css";
 
 export interface FirstUseSampleProps {
-  onBackToGuide: () => void;
-  onBringData: () => void;
-  onConnect: (client: SampleClient) => void;
+  /** Header back button: returns to wherever the walkthrough was opened from. */
+  onBack: () => void;
   backLabel?: string;
-  headerAction?: ReactNode;
+  /** Closing action of the "Let AI use your knowledge" panel. */
+  onFinish: () => void;
+  finishLabel?: string;
 }
 
 type SamplePhase = 0 | 1 | 2 | 3;
@@ -161,11 +162,10 @@ function SampleDialog({
 }
 
 export function FirstUseSample({
-  onBackToGuide,
-  onBringData,
-  onConnect,
+  onBack,
   backLabel,
-  headerAction,
+  onFinish,
+  finishLabel,
 }: FirstUseSampleProps) {
   const { t, i18n } = useTranslation();
   const data = getSampleData(resolveSampleLocale(i18n.language));
@@ -329,12 +329,11 @@ export function FirstUseSample({
         }}
       >
         <div className="fug-row">
-          <button type="button" className="fug-back" onClick={onBackToGuide}>
+          <button type="button" className="fug-back" onClick={onBack}>
             <ArrowLeft aria-hidden="true" weight="regular" />
             {backLabel ?? t("firstUse.sample.back")}
           </button>
           <span className="fus-animation-label">{t("firstUse.sample.animationLabel")}</span>
-          {headerAction}
         </div>
 
         <ol className="fus-phases" aria-label={t("firstUse.sample.animationLabel")}>
@@ -426,12 +425,6 @@ export function FirstUseSample({
             </button>
             <h2 id="fus-use-title">{t("firstUse.sample.useTitle")}</h2>
             <p>{t("firstUse.sample.useBody")}</p>
-            <p className="fus-note">{t("firstUse.sample.connectHint")}</p>
-            <div className="fus-cta-row">
-              <button type="button" className="fug-button-primary" onClick={() => onConnect(client)}>
-                {t("firstUse.sample.connectCta")}
-              </button>
-            </div>
             <div className="fus-tabs" role="tablist" aria-label={t("firstUse.sample.useTitle")}>
               {clientTabs.map((tab) => (
                 <button
@@ -544,8 +537,8 @@ export function FirstUseSample({
             </ul>
             <p className="fus-note">{t("firstUse.sample.notInLibrary")}</p>
             <div className="fus-cta-row">
-              <button type="button" className="fug-button-secondary" onClick={onBringData}>
-                {t("firstUse.sample.bringCta")}
+              <button type="button" className="fug-button-primary" onClick={onFinish}>
+                {finishLabel ?? t("firstUse.sample.finish")}
               </button>
             </div>
           </section>

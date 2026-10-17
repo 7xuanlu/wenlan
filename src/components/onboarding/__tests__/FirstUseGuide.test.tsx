@@ -93,18 +93,12 @@ function renderGuide(props = {}) {
       <FirstUseGuide
         onBack={vi.fn()}
         onImport={vi.fn()}
-        onSources={vi.fn()}
-        onConnect={vi.fn()}
         onOpenIntelligence={vi.fn()}
         onOpenPage={vi.fn()}
         {...props}
       />
     </QueryClientProvider>,
   );
-}
-
-function enterLive() {
-  fireEvent.click(screen.getByRole("button", { name: "See my knowledge" }));
 }
 
 beforeEach(() => {
@@ -126,44 +120,39 @@ afterEach(() => {
 });
 
 describe("FirstUseGuide navigation", () => {
-  it("stays query-silent until the live view is entered", async () => {
+  it("opens the sample walkthrough directly, with no guide or chooser, and stays query-silent", () => {
     renderGuide();
-    expect(mockedListPages).not.toHaveBeenCalled();
-    expect(mockedBatches).not.toHaveBeenCalled();
-    expect(mockedMemoryStats).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Try an example" }));
     expect(screen.getByTestId("first-use-sample")).toBeInTheDocument();
+    expect(screen.getByTestId("first-use-guide")).toHaveAttribute("data-view", "sample");
+    expect(screen.queryByRole("button", { name: "Bring my data" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Try an example" })).not.toBeInTheDocument();
     expect(mockedListPages).not.toHaveBeenCalled();
     expect(mockedBatches).not.toHaveBeenCalled();
     expect(mockedMemoryStats).not.toHaveBeenCalled();
   });
 
-  it("routes the own-data chooser to the real import, sources, and connect targets", () => {
-    const onImport = vi.fn();
-    const onSources = vi.fn();
-    const onConnect = vi.fn();
-    renderGuide({ onImport, onSources, onConnect });
-    fireEvent.click(screen.getByRole("button", { name: "Bring my data" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open import" }));
-    fireEvent.click(screen.getByRole("button", { name: "Open sources" }));
-    fireEvent.click(screen.getByRole("button", { name: "Set up a tool" }));
-    expect(onImport).toHaveBeenCalledTimes(1);
-    expect(onSources).toHaveBeenCalledTimes(1);
-    expect(onConnect).toHaveBeenCalledTimes(1);
-    expect(onConnect).toHaveBeenCalledWith();
-  });
-
-  it.each(["ChatGPT", "Codex", "Claude"])("forwards the sample's %s setup destination", (label) => {
-    const onConnect = vi.fn();
-    renderGuide({ onConnect });
-    fireEvent.click(screen.getByRole("button", { name: "Try an example" }));
+  it("returns home from the sample header back button and from its final button", () => {
+    const onBack = vi.fn();
+    renderGuide({ onBack });
+    fireEvent.click(screen.getByRole("button", { name: "Back to home" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Skip to result" }));
     fireEvent.click(screen.getByRole("button", { name: "Use with AI" }));
-    fireEvent.click(screen.getByRole("tab", { name: label }));
-    fireEvent.click(screen.getByRole("button", { name: "Connect my AI" }));
-    expect(onConnect).toHaveBeenCalledWith(label.toLowerCase());
+    expect(screen.queryByRole("button", { name: "Connect my AI" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Bring my data" })).not.toBeInTheDocument();
+    const [, finish] = screen.getAllByRole("button", { name: "Back to home" });
+    fireEvent.click(finish);
+    expect(onBack).toHaveBeenCalledTimes(2);
     expect(mockedListPages).not.toHaveBeenCalled();
     expect(mockedBatches).not.toHaveBeenCalled();
+  });
+
+  it("returns home from the live view", async () => {
+    const onBack = vi.fn();
+    renderGuide({ onBack, initialView: "live" });
+    fireEvent.click(screen.getByRole("button", { name: "Back to home" }));
+    expect(onBack).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
   });
 });
 
@@ -171,8 +160,7 @@ describe("FirstUseGuide live view", () => {
   it("shows the empty state with real actions when the library is empty", async () => {
     const onImport = vi.fn();
     const onOpenIntelligence = vi.fn();
-    renderGuide({ onImport, onOpenIntelligence });
-    enterLive();
+    renderGuide({ onImport, onOpenIntelligence, initialView: "live" });
     expect(await screen.findByText("Nothing here yet")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Import memories" }));
     fireEvent.click(screen.getByRole("button", { name: "Set up intelligence" }));
@@ -182,8 +170,7 @@ describe("FirstUseGuide live view", () => {
 
   it("reports a page-list failure as failure with retry, not as empty success", async () => {
     mockedListPages.mockRejectedValueOnce(new Error("down"));
-    renderGuide();
-    enterLive();
+    renderGuide({ initialView: "live" });
     expect(
       await screen.findByText("Wenlan couldn't read this right now."),
     ).toBeInTheDocument();
@@ -196,8 +183,7 @@ describe("FirstUseGuide live view", () => {
   it("reports an active-batch failure as failure, not as progress", async () => {
     mockedBatches.mockRejectedValueOnce(new Error("down"));
     mockedListPages.mockResolvedValue([makePage()]);
-    renderGuide();
-    enterLive();
+    renderGuide({ initialView: "live" });
     expect(
       await screen.findByText("Wenlan couldn't read this right now."),
     ).toBeInTheDocument();
@@ -274,8 +260,7 @@ describe("FirstUseGuide live view", () => {
         entry("distill", "pending", 0, 0),
       ],
     })] });
-    renderGuide();
-    enterLive();
+    renderGuide({ initialView: "live" });
     expect(await screen.findByText("Import progress")).toBeInTheDocument();
     expect(screen.getByTestId("import-phase-store")).toHaveAttribute(
       "data-state",
@@ -294,8 +279,7 @@ describe("FirstUseGuide live view", () => {
     mockedBatches.mockResolvedValue({ batches: [
       makeBatch(), makeBatch({ batch_id: "batch-2", source: "claude" }),
     ] });
-    renderGuide();
-    enterLive();
+    renderGuide({ initialView: "live" });
     expect(await screen.findByText(/8 memories imported from ChatGPT · Claude/)).toBeVisible();
   });
 
@@ -352,8 +336,7 @@ describe("FirstUseGuide live view", () => {
       }),
       makePage({ id: "page-real-7", title: "Weekend in Tainan" }),
     ]);
-    renderGuide({ onOpenPage });
-    enterLive();
+    renderGuide({ onOpenPage, initialView: "live" });
     expect(await screen.findByText("Your knowledge pages")).toBeInTheDocument();
     expect(screen.queryByText("Shadow entity page")).not.toBeInTheDocument();
     const live = screen.getByTestId("first-use-live");
@@ -377,8 +360,7 @@ describe("FirstUseGuide live view", () => {
 
   it("keeps polling pages and batches while the live view is mounted", async () => {
     vi.useFakeTimers();
-    renderGuide();
-    enterLive();
+    renderGuide({ initialView: "live" });
     await act(async () => {});
     expect(mockedListPages.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(mockedBatches.mock.calls.length).toBeGreaterThanOrEqual(1);

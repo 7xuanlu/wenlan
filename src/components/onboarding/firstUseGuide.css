@@ -67,65 +67,6 @@
   max-width: 62ch;
 }
 
-.fug-steps,
-.fug-options {
-  list-style: none;
-  margin: 8px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.fug-steps li,
-.fug-options li {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  border: 1px solid var(--mem-border);
-  border-radius: 12px;
-  background-color: var(--mem-surface);
-}
-
-.fug-options li {
-  align-items: center;
-}
-
-.fug-options li div {
-  flex: 1;
-  min-width: 0;
-}
-
-.fug-step-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: 8px;
-  background-color: var(--mem-indigo-bg);
-  color: var(--mem-accent-indigo);
-  font-size: 18px;
-}
-
-.fug-step-title {
-  font-family: var(--mem-font-body);
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--mem-text);
-  margin: 0 0 4px;
-}
-
-.fug-step-body {
-  font-family: var(--mem-font-body);
-  font-size: 13px;
-  color: var(--mem-text-secondary);
-  line-height: 1.6;
-  margin: 0;
-}
-
 .fug-button-primary,
 .fug-button-secondary {
   display: inline-flex;

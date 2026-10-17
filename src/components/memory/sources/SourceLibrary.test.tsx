@@ -189,6 +189,20 @@ describe("SourceLibrary", () => {
     expect(screen.queryByRole("button", { name: "Clear search and filters" })).not.toBeInTheDocument();
   });
 
+  it("offers a way back to the Wiki home from the truly empty state only when asked", async () => {
+    const onBackHome = vi.fn();
+    renderLibrary({ onBackHome });
+    const emptyState = (await screen.findByText("Bring your sources together")).parentElement!;
+    fireEvent.click(within(emptyState).getByRole("button", { name: "Back to Wiki home" }));
+    expect(onBackHome).toHaveBeenCalledOnce();
+  });
+
+  it("shows no back-home button in the empty state without the prop", async () => {
+    renderLibrary();
+    await screen.findByText("Bring your sources together");
+    expect(screen.queryByRole("button", { name: "Back to Wiki home" })).not.toBeInTheDocument();
+  });
+
   it("does not mistake independent pending queries for an empty library", async () => {
     vi.mocked(listRegisteredSources).mockImplementation(() => new Promise(() => {}));
     vi.mocked(listIndexedFiles).mockResolvedValue([file()]);

@@ -9,36 +9,8 @@
 export const enFirstUse = {
   entry: "Take a quick tour",
   guide: {
-    eyebrow: "First-use guide",
-    title: "Turn scattered notes into knowledge you can reuse.",
-    lede: "See how memories, files, and existing pages become one cited page your AI tools can use. Then bring your own data.",
     tryExample: "Try an example",
-    bringData: "Bring my data",
     seeKnowledge: "See my knowledge",
-    step1Title: "Bring data in",
-    step1Body:
-      "Paste memories, import files, or connect an AI tool to get started.",
-    step2Title: "Wenlan organizes it",
-    step2Body:
-      "Decisions are pulled out, linked, and compiled into pages. Every claim keeps its source.",
-    step3Title: "Your AI reuses it",
-    step3Body:
-      "Ask from any connected tool and get answers with sources you can open.",
-    back: "Back",
-  },
-  chooser: {
-    title: "Bring your own data",
-    body: "Start with notes you already have, or connect the AI tool you use.",
-    pasteTitle: "Paste memories",
-    pasteBody: "One memory per line, from a chat export or your own notes.",
-    pasteAction: "Open import",
-    filesTitle: "Import files or a folder",
-    filesBody: "Point Wenlan at notes, docs, or a whole directory.",
-    filesAction: "Open sources",
-    connectTitle: "Connect an AI tool",
-    connectBody: "Choose a local AI tool or read-only ChatGPT web access.",
-    connectAction: "Set up a tool",
-    back: "Back",
   },
   sample: {
     animationLabel: "Sample walkthrough · not live processing",
@@ -55,7 +27,7 @@ export const enFirstUse = {
     next: "Next step",
     replay: "Replay",
     skipToResult: "Skip to result",
-    back: "Back to guide",
+    back: "Back to home",
     sourcesTitle: "Sources",
     citationTitle: "Original source",
     fileOrigin: "File {{path}} · line {{line}}",
@@ -68,13 +40,14 @@ export const enFirstUse = {
     pageEyebrow: "Sample knowledge page · 3 sources",
     useTitle: "Let AI use your knowledge",
     useBody:
-      "Import your own notes and connect a tool first. Then copy a command below into a new conversation to find what you saved.",
+      "After you connect a tool, typing a command like these in a new chat gets you an answer with its source. This example is not saved.",
+    finish: "Back to home",
     clientChatgpt: "ChatGPT",
     clientCodex: "Codex",
     clientClaude: "Claude",
     recallLabel: "Recall from a new conversation:",
     chatgptNote:
-      "ChatGPT connects with read-only web access to the selected project. Choose Connect my AI to select a project, enable web access, then review and approve ChatGPT's pairing request in Wenlan. Keep Wenlan running and connected on your computer; authorized query results reach ChatGPT through the relay.",
+      "ChatGPT connects with read-only web access to the selected project. Later, use the Connect a tool step on the Wiki home to select a project, enable web access, then review and approve ChatGPT's pairing request in Wenlan. Keep Wenlan running and connected on your computer; authorized query results reach ChatGPT through the relay.",
     handoffLabel: "Leave progress behind",
     handoffHint: "Run it when work ends, so the next session can continue.",
     handoffReadOnlyNote:
@@ -86,12 +59,9 @@ export const enFirstUse = {
     copyFailed: "Copy failed. Select the text and copy it manually.",
     notInLibrary:
       "Sample only. Not in your library, and your AI cannot retrieve it.",
-    connectCta: "Connect my AI",
-    bringCta: "Bring my data",
     useWithAi: "Use with AI",
     formingNote: "The page will take shape here as the sources are organized.",
     pointsTitle: "Key points so far",
-    connectHint: "First bring your data, then connect your AI. This example is not saved and cannot be found by your AI.",
   },
   checklist: {
     title: "Get started with Wenlan",
@@ -103,7 +73,7 @@ export const enFirstUse = {
     steps: {
       note: {
         title: "Write your first note",
-        body: "Write down anything: a plan, an idea, or something you learned today.",
+        body: "Write down anything: a plan, an idea, or something you learned today. It counts once you save it.",
         draftBody: "Your note is still a draft. Leave the editor and it is saved as a page your AI tools can find.",
         action: "Write a note",
       },
@@ -156,40 +126,15 @@ export const enFirstUse = {
     yourPages: "Your knowledge pages",
     yourPagesNote: "From your library today. Not necessarily from the import above.",
     noActiveImports: "No active imports. New imports will report their progress here.",
-    back: "Back to guide",
+    back: "Back to home",
   },
 };
 
 export const hansFirstUse = {
   entry: "快速导览",
   guide: {
-    eyebrow: "新手导览",
-    title: "把零散的记录，变成用得上的知识。",
-    lede: "看看记忆、文件和已有页面如何变成一页 AI 可用的、带出处的知识，然后带入你自己的数据。",
     tryExample: "试用示例",
-    bringData: "带入我的数据",
     seeKnowledge: "查看我的知识",
-    step1Title: "带入数据",
-    step1Body: "粘贴记忆、导入文件，或连接一个 AI 工具，开始第一步。",
-    step2Title: "文澜负责整理",
-    step2Body: "提取决定、建立关联、汇编成页面，每条结论都保留出处。",
-    step3Title: "AI 随时复用",
-    step3Body: "在任何已连接的工具中提问，得到附带可打开出处来源的回答。",
-    back: "返回",
-  },
-  chooser: {
-    title: "带入你自己的数据",
-    body: "从已有的笔记开始，或连接你常用的 AI 工具。",
-    pasteTitle: "粘贴记忆",
-    pasteBody: "每行一条记忆，来自对话导出或你自己的笔记。",
-    pasteAction: "打开导入",
-    filesTitle: "导入文件或文件夹",
-    filesBody: "把笔记、文档或整个目录交给文澜。",
-    filesAction: "打开来源",
-    connectTitle: "连接 AI 工具",
-    connectBody: "选择本地 AI 工具，或让 ChatGPT 网页只读访问。",
-    connectAction: "设置工具",
-    back: "返回",
   },
   sample: {
     animationLabel: "示例演示 · 非实时处理",
@@ -206,7 +151,7 @@ export const hansFirstUse = {
     next: "下一步",
     replay: "重播",
     skipToResult: "跳到结果",
-    back: "回到导览",
+    back: "回到首页",
     sourcesTitle: "来源",
     citationTitle: "原始出处",
     fileOrigin: "文件 {{path}} · 第 {{line}} 行",
@@ -218,13 +163,15 @@ export const hansFirstUse = {
     backToPage: "回到本页",
     pageEyebrow: "示例知识页 · 3 个来源",
     useTitle: "让 AI 用上你的知识",
-    useBody: "先导入自己的笔记并连接一个工具，再把下面的指令复制到新对话中，查找已保存的内容。",
+    useBody:
+      "连接工具后，在新对话中输入类似下面的指令，就能得到附带出处的回答。这个示例不会被保存。",
+    finish: "回到首页",
     clientChatgpt: "ChatGPT",
     clientCodex: "Codex",
     clientClaude: "Claude",
     recallLabel: "在新对话中回忆：",
     chatgptNote:
-      "ChatGPT 通过网页以只读方式访问所选项目。点击「连接我的 AI」，选择项目并开启网页访问，再回到文澜查看并批准 ChatGPT 的配对请求。请让这台电脑上的文澜保持运行和联网；已授权的查询结果会通过转发服务传给 ChatGPT。",
+      "ChatGPT 通过网页以只读方式访问所选项目。之后可在 Wiki 首页的「连接工具」一步中选择项目并开启网页访问，再回到文澜查看并批准 ChatGPT 的配对请求。请让这台电脑上的文澜保持运行和联网；已授权的查询结果会通过转发服务传给 ChatGPT。",
     handoffLabel: "留下工作进度",
     handoffHint: "工作结束时运行，让下一次会话可以接续。",
     handoffReadOnlyNote:
@@ -235,12 +182,9 @@ export const hansFirstUse = {
     copied: "已复制",
     copyFailed: "复制失败，请手动选择文本复制。",
     notInLibrary: "仅为示例，不在你的知识库中，你的 AI 也检索不到它。",
-    connectCta: "连接我的 AI",
-    bringCta: "带入我的数据",
     useWithAi: "让 AI 使用",
     formingNote: "来源整理完成后，页面会在这里成形。",
     pointsTitle: "目前的重点",
-    connectHint: "先带入自己的数据，再连接 AI。此示例并未保存，AI 无法找到它。",
   },
   checklist: {
     title: "开始使用文澜",
@@ -252,7 +196,7 @@ export const hansFirstUse = {
     steps: {
       note: {
         title: "写下第一篇笔记",
-        body: "随手记点什么：一个计划、一个想法，或今天学到的东西。",
+        body: "写下任何内容：一个计划、一个想法，或今天学到的东西。保存后这一步就完成。",
         draftBody: "你的笔记还是草稿。离开编辑器后它才会保存为页面，AI 工具才能找到。",
         action: "写笔记",
       },
@@ -302,40 +246,15 @@ export const hansFirstUse = {
     yourPages: "你的知识页面",
     yourPagesNote: "来自你今天的知识库，不一定来自上面的导入。",
     noActiveImports: "暂无进行中的导入。新的导入会在这里报告进度。",
-    back: "回到导览",
+    back: "回到首页",
   },
 };
 
 export const hantFirstUse = {
   entry: "快速導覽",
   guide: {
-    eyebrow: "新手導覽",
-    title: "把零散的記錄，變成用得上的知識。",
-    lede: "看看記憶、檔案和已有頁面如何變成一頁 AI 可用的、帶出處的知識，然後帶入你自己的資料。",
     tryExample: "試用範例",
-    bringData: "帶入我的資料",
     seeKnowledge: "查看我的知識",
-    step1Title: "帶入資料",
-    step1Body: "貼上記憶、匯入檔案，或連接一個 AI 工具，開始第一步。",
-    step2Title: "文瀾負責整理",
-    step2Body: "提取決定、建立關聯、彙編成頁面，每條結論都保留出處。",
-    step3Title: "AI 隨時重用",
-    step3Body: "在任何已連接的工具中提問，得到附帶可開啟出處來源的回答。",
-    back: "返回",
-  },
-  chooser: {
-    title: "帶入你自己的資料",
-    body: "從已有的筆記開始，或連接你常用的 AI 工具。",
-    pasteTitle: "貼上記憶",
-    pasteBody: "每行一則記憶，來自對話匯出或你自己的筆記。",
-    pasteAction: "開啟匯入",
-    filesTitle: "匯入檔案或資料夾",
-    filesBody: "把筆記、文件或整個目錄交給文瀾。",
-    filesAction: "開啟來源",
-    connectTitle: "連接 AI 工具",
-    connectBody: "選擇本機 AI 工具，或讓 ChatGPT 網頁唯讀存取。",
-    connectAction: "設定工具",
-    back: "返回",
   },
   sample: {
     animationLabel: "範例演示 · 非即時處理",
@@ -352,7 +271,7 @@ export const hantFirstUse = {
     next: "下一步",
     replay: "重播",
     skipToResult: "跳到結果",
-    back: "回到導覽",
+    back: "回到首頁",
     sourcesTitle: "來源",
     citationTitle: "原始出處",
     fileOrigin: "檔案 {{path}} · 第 {{line}} 行",
@@ -364,13 +283,15 @@ export const hantFirstUse = {
     backToPage: "回到本頁",
     pageEyebrow: "範例知識頁 · 3 個來源",
     useTitle: "讓 AI 用上你的知識",
-    useBody: "先匯入自己的筆記並連接一個工具，再把下面的指令複製到新對話中，查找已儲存的內容。",
+    useBody:
+      "連接工具後，在新對話中輸入類似下面的指令，就能得到附帶出處的回答。這個範例不會被儲存。",
+    finish: "回到首頁",
     clientChatgpt: "ChatGPT",
     clientCodex: "Codex",
     clientClaude: "Claude",
     recallLabel: "在新對話中回憶：",
     chatgptNote:
-      "ChatGPT 透過網頁以唯讀方式存取所選專案。點選「連接我的 AI」，選擇專案並開啟網頁存取，再回到文瀾查看並批准 ChatGPT 的配對請求。請讓這台電腦上的文瀾保持運作與連線；已授權的查詢結果會透過轉送服務傳給 ChatGPT。",
+      "ChatGPT 透過網頁以唯讀方式存取所選專案。之後可在 Wiki 首頁的「連接工具」一步中選擇專案並開啟網頁存取，再回到文瀾查看並批准 ChatGPT 的配對請求。請讓這台電腦上的文瀾保持運作與連線；已授權的查詢結果會透過轉送服務傳給 ChatGPT。",
     handoffLabel: "留下工作進度",
     handoffHint: "工作結束時執行，讓下一次會話可以接續。",
     handoffReadOnlyNote:
@@ -381,12 +302,9 @@ export const hantFirstUse = {
     copied: "已複製",
     copyFailed: "複製失敗，請手動選取文字複製。",
     notInLibrary: "僅為範例，不在你的知識庫中，你的 AI 也擷取不到它。",
-    connectCta: "連接我的 AI",
-    bringCta: "帶入我的資料",
     useWithAi: "讓 AI 使用",
     formingNote: "來源整理完成後，頁面會在這裡成形。",
     pointsTitle: "目前的重點",
-    connectHint: "先帶入自己的資料，再連接 AI。此示例並未儲存，AI 無法找到它。",
   },
   checklist: {
     title: "開始使用文瀾",
@@ -398,7 +316,7 @@ export const hantFirstUse = {
     steps: {
       note: {
         title: "寫下第一篇筆記",
-        body: "隨手記點什麼：一個計畫、一個想法，或今天學到的東西。",
+        body: "寫下任何內容：一個計畫、一個想法，或今天學到的東西。儲存後這一步就完成。",
         draftBody: "你的筆記還是草稿。離開編輯器後它才會儲存為頁面，AI 工具才能找到。",
         action: "寫筆記",
       },
@@ -448,6 +366,6 @@ export const hantFirstUse = {
     yourPages: "你的知識頁面",
     yourPagesNote: "來自你今天的知識庫，不一定來自上面的匯入。",
     noActiveImports: "暫無進行中的匯入。新的匯入會在這裡報告進度。",
-    back: "回到導覽",
+    back: "回到首頁",
   },
 };

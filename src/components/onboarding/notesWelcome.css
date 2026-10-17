@@ -105,13 +105,6 @@
   margin: 0 0 16px;
 }
 
-.notes-welcome__sample-open {
-  min-height: 36px;
-  height: auto;
-  max-width: 100%;
-  white-space: normal;
-}
-
 @media (max-height: 600px) {
   .notes-welcome__main {
     padding-block: 24px;

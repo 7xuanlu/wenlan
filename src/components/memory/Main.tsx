@@ -1505,14 +1505,10 @@ export default function Main({
             />
           ) : view.kind === "first-use" ? (
             <FirstUseGuide
-              onBack={navigateBack}
-              initialView={view.showKnowledge ? "live" : "guide"}
+              onBack={() => navigatePages()}
+              initialView={view.showKnowledge ? "live" : "sample"}
               batchId={view.batchId}
               onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
-              onSources={() => navigateTo({ kind: "settings", section: "sources" })}
-              onConnect={(client) => navigateTo(client === "codex" || client === "claude"
-                ? { kind: "connect-agent" }
-                : { kind: "settings", section: "agents" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
                 updateHistory([...viewHistoryRef.current, {
@@ -1539,6 +1535,7 @@ export default function Main({
               onOpenDocument={(file) => navigateTo({ kind: "source-document", file })}
               onRegisterFlush={registerSourceDescriptionFlush}
               onManageSources={() => navigateTo({ kind: "settings", section: "sources" })}
+              onBackHome={() => navigatePages()}
             />
           ) : view.kind === "graph" ? (
             <div style={{ position: "relative", width: "100%", height: "100%" }}>

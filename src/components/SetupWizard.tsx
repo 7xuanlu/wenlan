@@ -31,7 +31,7 @@ import {
 } from "../lib/setupErrors";
 import { fillUnsetPinsWithRetry, type SourcePin } from "../lib/routingPins";
 import { dragStripHeight } from "../lib/windowChrome";
-import { NotesWelcome, type NotesWelcomeDestination } from "./onboarding/NotesWelcome";
+import { NotesWelcome } from "./onboarding/NotesWelcome";
 import { ImportFlow } from "./ChatImport/ImportFlow";
 import VaultConnectCard, { type VaultPick } from "./memory/sources/VaultConnectCard";
 import { isPluginClient } from "./connect/pluginClients";
@@ -72,7 +72,7 @@ const EmbeddedSetupWizardContext = createContext(false);
 interface SetupWizardProps {
   // May return a promise: the Done step awaits it and, on a rejection, stays
   // put with an inline alert so the user can try again.
-  onComplete: (destination?: NotesWelcomeDestination) => void | Promise<void>;
+  onComplete: () => void | Promise<void>;
   initialStep?: WizardStep;
   // Preview-harness seams. The model and import rows of the setting-up step are
   // conditional on picks made in earlier steps, so entering at `setting-up`

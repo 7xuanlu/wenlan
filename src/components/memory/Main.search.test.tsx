@@ -393,7 +393,6 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
     onImport: () => void;
     onBack: () => void;
     onOpenPage: (id: string) => void;
-    onConnect: (client?: "chatgpt" | "codex" | "claude") => void;
   }) => (
     <section
       data-testid="first-use-guide"
@@ -403,10 +402,6 @@ vi.mock("../onboarding/FirstUseGuide", () => ({
       <button type="button" onClick={props.onImport}>Bring memories</button>
       <button type="button" onClick={props.onBack}>Leave first use</button>
       <button type="button" onClick={() => props.onOpenPage("library-page")}>Open knowledge result</button>
-      <button type="button" onClick={() => props.onConnect("chatgpt")}>Connect ChatGPT sample</button>
-      <button type="button" onClick={() => props.onConnect("codex")}>Connect Codex sample</button>
-      <button type="button" onClick={() => props.onConnect("claude")}>Connect Claude sample</button>
-      <button type="button" onClick={() => props.onConnect()}>Connect unspecified tool</button>
     </section>
   ),
 }));
