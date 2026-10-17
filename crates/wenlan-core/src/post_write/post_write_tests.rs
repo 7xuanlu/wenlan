@@ -2411,7 +2411,9 @@ async fn page_write_update_user_edited_machine_write_creates_revision_card_witho
         .expect("revision card must be visible in pending revisions");
     assert_eq!(card.target_source_id, page_id);
     assert_eq!(card.revision_content, machine_content);
-    assert_eq!(card.source_agent.as_deref(), Some("page_write"));
+    // A pipeline lane's card is proposed by Wenlan itself, never shown
+    // under the internal `page_write` kind.
+    assert_eq!(card.source_agent.as_deref(), Some("wenlan"));
 
     let conn = db.test_primary_session().await;
     let mut rows = conn
@@ -4502,7 +4504,9 @@ async fn pending_revision_queue_lists_a_gated_page_card_and_accept_applies_it() 
         "the queue must name the page as the card's target, so accept/dismiss resolve it"
     );
     assert_eq!(card.revision_content, proposed_content);
-    assert_eq!(card.source_agent.as_deref(), Some("page_write"));
+    // A pipeline lane's card is proposed by Wenlan itself, never shown
+    // under the internal `page_write` kind.
+    assert_eq!(card.source_agent.as_deref(), Some("wenlan"));
     assert_eq!(
         card.target_kind,
         wenlan_types::responses::RevisionTargetKind::Page,
@@ -4907,6 +4911,10 @@ async fn accept_pending_revision_page_write_card_conflicts_when_page_version_cha
     match err {
         WenlanError::Conflict(msg) => {
             assert!(
+                msg.starts_with(crate::post_write::PAGE_REVISION_OUTDATED),
+                "conflict must carry the outdated-card code, got: {msg}"
+            );
+            assert!(
                 msg.contains(&format!("staged version {staged_version}")),
                 "conflict message must name the staged version, got: {msg}"
             );
@@ -4923,13 +4931,16 @@ async fn accept_pending_revision_page_write_card_conflicts_when_page_version_cha
         after.content, newer_human_content,
         "stale page-write card must not overwrite newer human prose"
     );
+    // Both fences only move forward, so the card can never apply. Leaving it
+    // queued stranded it: every later accept failed the same way. It is
+    // discarded instead, and the error says so with a stable code.
     assert!(
-        db.list_pending_revisions(10)
+        !db.list_pending_revisions(10)
             .await
             .unwrap()
             .iter()
             .any(|row| row.revision_source_id == card_id),
-        "conflicted page-write card must remain pending"
+        "an outdated page-write card must be discarded, not left pending"
     );
 }
 
@@ -5028,13 +5039,16 @@ async fn accept_pending_revision_page_write_card_conflicts_when_a_source_attache
             .contains(&attached_mem_id.to_string()),
         "the concurrently attached source must survive the rejected accept"
     );
+    // Both fences only move forward, so the card can never apply. Leaving it
+    // queued stranded it: every later accept failed the same way. It is
+    // discarded instead, and the error says so with a stable code.
     assert!(
-        db.list_pending_revisions(10)
+        !db.list_pending_revisions(10)
             .await
             .unwrap()
             .iter()
             .any(|row| row.revision_source_id == card_id),
-        "conflicted page-write card must remain pending"
+        "an outdated page-write card must be discarded, not left pending"
     );
 }
 
@@ -7520,4 +7534,49 @@ async fn replace_source_on_a_review_locked_source_page_is_refused() {
             .content,
         "Original body"
     );
+}
+
+/// The card names who proposed it: the agent the caller identified, Wenlan
+/// for a pipeline lane, and nobody for an unidentified agent. Never the
+/// internal `page_write` kind, which the review dialog showed verbatim.
+#[tokio::test]
+async fn staged_page_card_names_its_proposer() {
+    let (db, _dir) = test_db().await;
+    let mem_id = "mem_card_proposer";
+    let content = "Rust ownership keeps memory safety rules explicit";
+    seed_memory(&db, mem_id, content).await;
+    let page_id = seed_page(&db, mem_id, content).await;
+    let page = db.get_page(&page_id).await.unwrap().unwrap();
+    let source_revision = db.get_page_source_revision(&page_id).await.unwrap();
+
+    let mut cases = Vec::new();
+    for (edited_by, proposer, expected) in [
+        ("agent_refresh", Some("claude-code"), Some("claude-code")),
+        ("agent_refresh", Some("  "), None),
+        ("agent_refresh", None, None),
+        ("re_distill", None, Some("wenlan")),
+    ] {
+        let staged = crate::post_write::stage_page_revision_card_proposed_by(
+            &db,
+            &page,
+            &format!("{content} ({edited_by} {proposer:?})"),
+            &[mem_id.to_string()],
+            source_revision,
+            edited_by,
+            proposer,
+            None,
+        )
+        .await
+        .unwrap();
+        cases.push((staged.revision_card_id.unwrap(), expected));
+    }
+
+    let listed = db.list_pending_revisions(10).await.unwrap();
+    for (card_id, expected) in cases {
+        let card = listed
+            .iter()
+            .find(|row| row.revision_source_id == card_id)
+            .expect("staged card is queued");
+        assert_eq!(card.source_agent.as_deref(), expected, "card {card_id}");
+    }
 }

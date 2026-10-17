@@ -175,6 +175,34 @@ pub async fn stage_page_revision_card(
     edited_by: &str,
     retry: Option<&RetryIdentity>,
 ) -> Result<WriteResult, WenlanError> {
+    stage_page_revision_card_proposed_by(
+        db,
+        page,
+        content,
+        source_memory_ids,
+        source_revision,
+        edited_by,
+        None,
+        retry,
+    )
+    .await
+}
+
+/// [`stage_page_revision_card`] naming who proposed the change. `proposer`
+/// is the agent the human sees on the card ("proposed by Claude Code"); when
+/// it is `None`, a pipeline writer is shown as Wenlan and any other writer
+/// leaves the card unattributed rather than showing an internal label.
+#[allow(clippy::too_many_arguments)]
+pub async fn stage_page_revision_card_proposed_by(
+    db: &MemoryDB,
+    page: &crate::pages::Page,
+    content: &str,
+    source_memory_ids: &[String],
+    source_revision: i64,
+    edited_by: &str,
+    proposer: Option<&str>,
+    retry: Option<&RetryIdentity>,
+) -> Result<WriteResult, WenlanError> {
     stage_page_revision_card_inner(
         db,
         page,
@@ -183,6 +211,7 @@ pub async fn stage_page_revision_card(
         source_revision,
         None,
         edited_by,
+        proposer,
         retry,
     )
     .await?
@@ -213,6 +242,7 @@ pub(crate) async fn stage_page_revision_card_at_fence(
         fence.source_revision,
         Some(fence),
         edited_by,
+        None,
         retry,
     )
     .await
@@ -227,9 +257,20 @@ async fn stage_page_revision_card_inner(
     source_revision: i64,
     fence: Option<&PageFence>,
     edited_by: &str,
+    proposer: Option<&str>,
     retry: Option<&RetryIdentity>,
 ) -> Result<Option<WriteResult>, WenlanError> {
     crate::export::provenance::validate_canonical_page_content(content)?;
+    // Who the human sees on the card. Never the internal `page_write` kind:
+    // the named agent when the caller knows it, Wenlan for its own pipeline
+    // lanes, otherwise nothing.
+    let proposer: Option<String> = proposer
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            matches!(Writer::classify(edited_by), Writer::Pipeline(_)).then(|| "wenlan".to_string())
+        });
 
     let revision_card_id = format!(
         "mem_{}",
@@ -262,7 +303,7 @@ async fn stage_page_revision_card_inner(
         last_modified: chrono::Utc::now().timestamp(),
         memory_type: Some("fact".to_string()),
         space: page.space.clone().or_else(|| page.workspace.clone()),
-        source_agent: Some("page_write".to_string()),
+        source_agent: proposer.clone(),
         confidence: Some(0.9),
         confirmed: Some(false),
         stability: Some("new".to_string()),
@@ -320,7 +361,7 @@ async fn stage_page_revision_card_inner(
     }
     if let Err(e) = db
         .log_agent_activity(
-            edited_by,
+            proposer.as_deref().unwrap_or(edited_by),
             "page_revision_card",
             &[page.id.clone(), revision_card_id.clone()],
             None,

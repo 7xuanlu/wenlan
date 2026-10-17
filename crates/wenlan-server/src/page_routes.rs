@@ -1421,10 +1421,20 @@ pub async fn handle_update_page(
 pub async fn handle_refresh_page(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    headers: HeaderMap,
     Json(req): Json<wenlan_types::requests::RefreshPageRequest>,
 ) -> Result<Json<wenlan_types::responses::PageWriteResponse>, ServerError> {
     let telemetry = { state.read().await.telemetry.clone() };
-    let result = handle_refresh_page_inner(State(state), Path(id), Json(req)).await;
+    // The agent named on a staged revision card. Only the header counts: an
+    // unattributed write leaves the card unattributed.
+    let proposer = headers
+        .get("x-agent-name")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let result =
+        handle_refresh_page_inner(State(state), Path(id), proposer.as_deref(), Json(req)).await;
     match &result {
         Ok((wenlan_core::post_write::WriteOutcome::Wrote, _)) => {
             telemetry.record(TelemetryEvent::WikiGenerated)
@@ -1448,6 +1458,7 @@ fn page_moved_conflict(id: &str, current_version: i64) -> ServerError {
 async fn handle_refresh_page_inner(
     State(state): State<Arc<RwLock<ServerState>>>,
     Path(id): Path<String>,
+    proposer: Option<&str>,
     Json(req): Json<wenlan_types::requests::RefreshPageRequest>,
 ) -> Result<
     (
@@ -1532,13 +1543,14 @@ async fn handle_refresh_page_inner(
         req.expected_version.is_some(),
         false,
     ) {
-        let result = wenlan_core::post_write::stage_page_revision_card(
+        let result = wenlan_core::post_write::stage_page_revision_card_proposed_by(
             &db,
             &existing,
             &req.content,
             &req.source_memory_ids,
             source_revision,
             "agent_refresh",
+            proposer,
             None,
         )
         .await

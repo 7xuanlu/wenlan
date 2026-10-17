@@ -5,6 +5,11 @@ use crate::{
 };
 use std::path::Path;
 
+/// Error code prefix for a page revision card that can no longer apply because
+/// the page moved past the version (or source revision) it was staged on. The
+/// card is discarded when this is returned.
+pub const PAGE_REVISION_OUTDATED: &str = "page_revision_outdated";
+
 struct PageRevisionCard {
     page_id: String,
     revision_id: String,
@@ -194,9 +199,17 @@ async fn accept_page_revision_card(
                 card.revision_id, card.page_id
             )));
         };
+        // Both fences only ever move forward, so a card that missed them once
+        // can never land. Leaving it queued strands it: every later accept
+        // fails the same way and the page keeps showing a pending revision
+        // the human cannot clear (a locked page edited by hand after an agent
+        // proposed a change is the common case). Discard it, the same way a
+        // dismiss would, and say so with a machine code the app and the MCP
+        // client both recognise. The human's prose is untouched.
         let mut msg = format!(
-            "page revision card {} was staged for page {} at staged version {}, but current version {} no longer matches",
-            card.revision_id, card.page_id, staged_version, current_version
+            "{PAGE_REVISION_OUTDATED}: page {} changed after revision card {} was proposed \
+             (staged version {}, current version {}",
+            card.page_id, card.revision_id, staged_version, current_version
         );
         // A source attached after this card was staged bumps only
         // `source_revision`, leaving `version` unchanged -- so a
@@ -212,6 +225,8 @@ async fn accept_page_revision_card(
                     .unwrap_or_else(|| "unknown".to_string())
             ));
         }
+        msg.push_str("); the card was discarded. Re-read the page and propose the change again.");
+        db.delete_by_source_id("memory", &card.revision_id).await?;
         return Err(WenlanError::Conflict(msg));
     }
 

@@ -30,14 +30,14 @@ pub use self::page_dispatch::{
 };
 pub use self::page_revision::{
     accept_pending_revision, accept_pending_revision_with_knowledge_path, dismiss_contradiction,
-    dismiss_pending_revision,
+    dismiss_pending_revision, PAGE_REVISION_OUTDATED,
 };
 pub(crate) use self::page_update::merge_shrink_threshold;
 #[cfg(test)]
 pub(crate) use self::page_update::PRE_WRITE_GATE;
 pub use self::page_update::{
-    machine_write_requires_review, page_is_human_owned, stage_page_revision_card, PipelineStage,
-    Writer,
+    machine_write_requires_review, page_is_human_owned, stage_page_revision_card,
+    stage_page_revision_card_proposed_by, PipelineStage, Writer,
 };
 
 /// Rename an active knowledge page using the canonical page-write boundary.
