@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=341c4354b0ebb067c2660a4a6c53f39f1d5ea85467e3e1d36c5aa376833db59c -->
+<!-- README_SYNC: source=README.md sha256=609a06abebc23bddb7a2f4ae44addc1a7b609a605e3b6101dcf56f9110eeb08e -->
 
 <p align="center">
   <picture>
@@ -89,7 +89,7 @@ Prueba con la página que acabas de abrir o guardar:
 Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan el conocimiento útil y el progreso para retomarlos en la próxima tarea.
 
 <p align="center">
-  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-es-ES.png" alt="Las fuentes y memorias previas se acumulan en Wenlan; úsalas en la aplicación o con IA y guarda nuevas memorias y el progreso para continuar después." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-es-ES.png" alt="Las fuentes y memorias previas se acumulan en Wenlan; úsalas en la aplicación o con IA y guarda nuevas memorias y el progreso para continuar después." width="100%">
 </p>
 
 Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
@@ -149,7 +149,7 @@ Usa la misma base de conocimiento con distintas herramientas de IA. Los **plugin
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
-  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-es-ES.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-es-ES.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
 </p>
 <p>Ejemplo ficticio, no una prueba del producto; Wenlan aporta contexto junto con la memoria nativa de Claude.</p>
 

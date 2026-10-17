@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=341c4354b0ebb067c2660a4a6c53f39f1d5ea85467e3e1d36c5aa376833db59c -->
+<!-- README_SYNC: source=README.md sha256=609a06abebc23bddb7a2f4ae44addc1a7b609a605e3b6101dcf56f9110eeb08e -->
 
 <p align="center">
   <picture>
@@ -89,7 +89,7 @@
 你可以單獨使用 App，也可以搭配 AI 工作。把值得留下的知識與進度存回 Wenlan，下次接著用。
 
 <p align="center">
-  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-zh-Hant.png" alt="來源與既有記憶累積在 Wenlan；在 App 或 AI 中使用，再存回新記憶與工作進度，供下次接續。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-zh-Hant.png" alt="來源與既有記憶累積在 Wenlan；在 App 或 AI 中使用，再存回新記憶與工作進度，供下次接續。" width="100%">
 </p>
 
 簡化流程示意；插件指令與頁面整理均按需使用，沒有固定順序。
@@ -149,7 +149,7 @@
 - **Spaces 範圍檢索**：選定 Space，將回傳的知識限制在相關專案或個人資料集合內。
 
 <p align="center">
-  <img src="./https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
 </p>
 <p>虛構案例，非產品測試；文瀾補充脈絡，與 Claude 原生記憶搭配使用。</p>
 
