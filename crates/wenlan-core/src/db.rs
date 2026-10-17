@@ -1449,6 +1449,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// reconciles both schema-133 lineages.
 /// Migration 135 stores user-authored source annotations independently of
 /// source-ingest chunks and Page lifetimes.
+/// Migration 136 records one history row per successful Brief update.
 ///
 /// This constant is also the **downgrade barrier**. `run_migrations` refuses
 /// to open a database whose `user_version` exceeds it, so a build that
@@ -1456,7 +1457,7 @@ pub const EMBEDDING_DIM: usize = 768;
 /// `entities` table, skip every `version < N` branch, and quietly operate
 /// against a schema it cannot see. Refusing to open is recoverable; writing is
 /// not.
-pub const SCHEMA_VERSION: u32 = 135;
+pub const SCHEMA_VERSION: u32 = 136;
 
 /// `pages.established_by` for an entity a person or agent confirmed by hand.
 pub const ESTABLISHED_BY_MANUAL: &str = "manual";
@@ -10393,6 +10394,14 @@ impl MemoryDB {
             if version < 135 {
                 self.migrate_135_source_annotations().await?;
             }
+
+            // Migration 136 records one history row per successful Brief update.
+            if ceiling < 136 {
+                return Ok(());
+            }
+            if version < 136 {
+                self.migrate_136_brief_history().await?;
+            }
         }
 
         // Private M4 builds could already have stamped user_version=95 before
@@ -17780,6 +17789,17 @@ impl MemoryDB {
         )
         .await
         .map_err(|e| WenlanError::VectorDb(format!("m135 source annotations: {e}")))?;
+        Ok(())
+    }
+
+    async fn migrate_136_brief_history(&self) -> Result<(), WenlanError> {
+        let conn = self.conn.lock().await;
+        conn.execute_batch(&format!(
+            "{} PRAGMA user_version = 136;",
+            brief::BRIEF_HISTORY_DDL
+        ))
+        .await
+        .map_err(|e| WenlanError::VectorDb(format!("m136 brief history: {e}")))?;
         Ok(())
     }
 
