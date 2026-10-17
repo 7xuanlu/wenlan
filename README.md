@@ -78,6 +78,19 @@ After installing a plugin, start a new AI session and run `/setup`. Connecting y
 
 **First success:** Your AI finds the saved note or imported document you asked for and cites a source you can check.
 
+<a id="daily-workflow"></a>
+
+## In everyday use
+
+Use the App on its own or alongside your AI. The plugin commands below are optional shortcuts, not a daily checklist.
+
+- **Start with your material.** Write a page or import documents and selected conversations as sources. No AI connection is required.
+- **Read, write, and put it to use.** Edit pages and follow citations in the App, or ask your AI to use an existing page for a task or draft a new one. Use `/recall` when you need earlier context.
+- **Keep what you learn.** Save a decision or lesson, with its reasons and sources, through Quick Capture in the App or `/capture` with your AI.
+- **Pause and resume.** `/handoff` saves durable memories and a session log, and updates the current Space’s Brief with progress and next steps. Use `/brief` when you want the next session to pick up that context.
+
+**When several memories deserve a page:** `/distill` asks your AI to synthesize or refresh cited pages now. It is optional: you can write pages directly, and configured background AI can maintain them between sessions. [Plugin commands](plugin/skills/README.md).
+
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
 <a id="what-is-this"></a>
@@ -121,7 +134,6 @@ Use the same knowledge base across AI tools. **Plugins** guide when to retrieve 
 
 - **[Local hybrid retrieval](docs/technical-foundations.md#retrieval-pipeline):** Find exact terms and similar meaning with SQLite FTS5 and BGE embeddings, fused by weighted Reciprocal Rank Fusion (RRF); base search needs no API key.
 - **Graph-assisted ranking:** Rank related memories higher when entity links are available, with optional cross-encoder reranking to refine relevance.
-- **Plugin workflow:** Find context with `/recall`, save decisions with `/capture`, synthesize pages with `/distill`, and leave progress and open questions with `/handoff` ([commands](plugin/skills/README.md)).
 - **Space-scoped retrieval:** Select a Space to limit returned knowledge to the relevant project or personal collection.
 
 <p align="center">

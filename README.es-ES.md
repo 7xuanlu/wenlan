@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=bfc83221b292f82e00cc26696510c926ed11db5ad52ebfc03fe5dd1c3543cafc -->
+<!-- README_SYNC: source=README.md sha256=0b61b556c472f818d83e05b8ef71eb3dc8d353495005b3180fd8913d8411d7d2 -->
 
 <p align="center">
   <picture>
@@ -80,6 +80,19 @@ Tras instalar un plugin, inicia una nueva sesión de IA y ejecuta `/setup`. Cone
 
 **Primera prueba superada:** Tu IA encuentra la nota guardada o el documento importado que le pediste y cita una fuente que puedes comprobar.
 
+<a id="daily-workflow"></a>
+
+## Uso diario
+
+Puedes usar la aplicación por sí sola o junto con tu IA. Los comandos del plugin que aparecen a continuación son atajos opcionales, no una lista de tareas diarias.
+
+- **Empieza por tu material.** Escribe una página o importa documentos y conversaciones seleccionadas como fuentes. No necesitas conectar una IA.
+- **Lee, escribe y ponlo en práctica.** Edita páginas y sigue las citas en la aplicación, o pide a tu IA que use una página existente para una tarea o que redacte una nueva. Usa `/recall` cuando necesites contexto anterior.
+- **Conserva lo que aprendes.** Guarda una decisión o lección, junto con sus motivos y fuentes, mediante Quick Capture en la aplicación o con `/capture` a través de tu IA.
+- **Pausa y retoma.** `/handoff` guarda memorias útiles y un registro de la sesión, y actualiza el Brief del Espacio actual con el progreso y los siguientes pasos. Usa `/brief` cuando quieras retomar ese contexto en la siguiente sesión.
+
+**Cuando varias memorias merezcan una página:** `/distill` pide a tu IA que sintetice o actualice ahora páginas con citas. Es opcional: puedes escribir las páginas directamente y la IA en segundo plano configurada puede mantenerlas entre sesiones. [Comandos del plugin](plugin/skills/README.md).
+
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
 <a id="qué-es-esto"></a>
@@ -125,7 +138,6 @@ Usa la misma base de conocimiento con distintas herramientas de IA. Los **plugin
 
 - **[Búsqueda híbrida local](docs/technical-foundations.md#retrieval-pipeline):** Encuentra términos exactos y significados similares con SQLite FTS5 y embeddings BGE, combinados mediante Reciprocal Rank Fusion (RRF) ponderado; la búsqueda base no requiere clave API.
 - **Clasificación asistida por el grafo:** Prioriza memorias relacionadas cuando hay enlaces entre entidades, con reranking cross-encoder opcional para afinar la relevancia.
-- **Flujo con el plugin:** Busca contexto con `/recall`, guarda decisiones con `/capture`, sintetiza páginas con `/distill` y conserva el progreso y las preguntas pendientes con `/handoff` ([comandos](plugin/skills/README.md)).
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">

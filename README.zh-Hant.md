@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=bfc83221b292f82e00cc26696510c926ed11db5ad52ebfc03fe5dd1c3543cafc -->
+<!-- README_SYNC: source=README.md sha256=0b61b556c472f818d83e05b8ef71eb3dc8d353495005b3180fd8913d8411d7d2 -->
 
 <p align="center">
   <picture>
@@ -80,6 +80,19 @@
 
 **首次使用成功的判準：** AI 找回你指定的筆記或匯入文件，並附上可回查的來源。
 
+<a id="daily-workflow"></a>
+
+## 日常使用
+
+你可以單獨使用 App，也可以搭配 AI 使用。以下插件指令是可選的捷徑，不是每天都要完成的清單。
+
+- **從你的資料開始。** 撰寫頁面，或匯入文件與選定的對話作為來源。不必連接 AI。
+- **閱讀、撰寫並實際運用。** 在 App 編輯頁面、沿引用查回來源，也可請 AI 參考現有頁面完成任務或草擬新頁面。需要先前脈絡時，用 `/recall` 找回。
+- **留下你的新發現。** 透過 App 的 Quick Capture，或請 AI 使用 `/capture`，保存決定或心得，以及其理由與來源。
+- **告一段落，下次接續。** `/handoff` 保存記憶與工作紀錄，並更新目前 Space 的 Brief，記下進度與下一步。下次需要時，用 `/brief` 讀回這些脈絡。
+
+**需要把多則記憶整理成頁面時：** `/distill` 可請 AI 立即整理或更新帶引用的頁面。它不是必做步驟：你可以直接撰寫頁面，也可以設定背景 AI 持續維護。[插件指令](plugin/skills/README.md)。
+
 <a id="what-does-wenlan-build"></a>
 <a id="why-it-compounds"></a>
 <a id="這是什麼"></a>
@@ -125,7 +138,6 @@
 
 - **[本地混合檢索（Hybrid Retrieval）](docs/technical-foundations.md#retrieval-pipeline)**：用 SQLite FTS5 找出相同詞句、BGE 向量找出相近語意，再以加權 RRF 合併排名；基礎搜尋不需 API key。
 - **圖譜輔助排序**：有可用的實體連結時，提高相關記憶的排名，也可選用 cross-encoder reranking 精排結果。
-- **插件工作流程**：用 `/recall` 找脈絡、`/capture` 存決定、`/distill` 合成頁面，並用 `/handoff` 留下進度與待解問題（[指令說明](plugin/skills/README.md)）。
 - **Spaces 範圍檢索**：選定 Space，將回傳的知識限制在相關專案或個人資料集合內。
 
 <p align="center">
