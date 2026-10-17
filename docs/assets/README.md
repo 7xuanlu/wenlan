@@ -42,23 +42,23 @@ The older `wenlan-lifecycle*` and `wenlan-knowledge-network*` illustrations and 
 
 - `wenlan-personal-knowledge-zh-Hant.png`: `328e4bf032d5dcf16cad24658d7d12a51d694fdd2b3d00f5b1e44f94b22246e5`
 - `wenlan-personal-graph-zh-Hant.png`: `65a4588af858c942060477578ef2340a0ff967bf6bebde67ebf6d8de66aafc97`
-- `wenlan-knowledge-to-work-zh-Hant.png`: `59f8a3e6a0254414bd99926902a14ac7eddc0ee372a2a354f2aa477abe58f8fb`
-- `wenlan-knowledge-to-work-zh-Hans.png`: `70b9b18efeb889511e5ecc151fcb0f2a138968ef64d4257f1da26cb065cce3f6`
-- `wenlan-knowledge-to-work.png`: `edd2f27e215915e8aec3467dad218a45e94e79eccfdd7d27c11dca7045922751`
-- `wenlan-knowledge-to-work-es-ES.png`: `09b1449052f53448e41effd9dc330298c763745dbf08f375e330617b29327ad4`
-- `wenlan-updates-history-zh-Hant.png`: `d087921837018ea0efff0d8788ce1e21f5b82db37df2dc4806790cc2a3ba304c`
+- `wenlan-knowledge-to-work-zh-Hant.png`: `3327dca95845e111d577fdc3d823b659ed41b5705d96ccb0d236125e14b23777`
+- `wenlan-knowledge-to-work-zh-Hans.png`: `030eaf6323dbb884265065bb8490c83f3dacad9007e934512fb1708064f5a8e1`
+- `wenlan-knowledge-to-work.png`: `d528201d28ddf71c9503e96d4ecbd8f327630460412c00815239e14d76d11d02`
+- `wenlan-knowledge-to-work-es-ES.png`: `2b36d4e24b9c0e5765d951af1f1bc55d5a76aa1e9b8551615a5843568d0d316d`
+- `wenlan-updates-history-zh-Hant.png`: `dd957457cb3dcd4bbc8303041aa56a45005f7931e1df94aabc1a2028662b09ea`
 - `wenlan-personal-knowledge.png`: `6aa9bd21bb7e5b746ec1c1545570f0f5df9539fb81ffcf4dc1f915295b2de0e9`
 - `wenlan-personal-knowledge-zh-Hans.png`: `96736638a3611964a0b63888e41777f98d07f93e8f9db7b39c964df43dc4eeba`
 - `wenlan-personal-graph.png`: `a06050ed7a3a5bb3d43ef31e5a7982b9a640ac328167487b3490bb5da70cccf2`
 - `wenlan-personal-graph-zh-Hans.png`: `46330eb6094ca49b149bf05acc6d234d93b5ca3b14d9574fe72d5b9c23607696`
-- `wenlan-updates-history.png`: `9b99f9e504d42e61452beddbdf487b7c78f452808bc8ceff0b0d65749b93f58a`
-- `wenlan-updates-history-zh-Hans.png`: `525580619e66dd62f5f806b885f5b986feb43025980c4392030740bbb16034d2`
+- `wenlan-updates-history.png`: `35ca643f069e2cbbfb91c1570b250948ae4aa1fa8bdb4fc7e382cf53d3519259`
+- `wenlan-updates-history-zh-Hans.png`: `ffd16c6bd03c6a3b2810fade591b918f0cc068592b1d9bbd1d4aba90bb9480a6`
 
-## App-light background palette
+## Neutral background palette
 
-The daily workflow, update/history, architecture, and AI-work compositions use the approved App-light background direction: `#FCFCFB` canvas, neutral `#F4F5F5` panels, and white cards. Warm editorial background fills are neutralized; existing text, accents, semantic highlights, and native App screenshot colors are retained. The already-neutral panorama and personal graph remain byte-identical, as does the dark banner.
+The daily workflow, update/history, architecture, and AI-work compositions use the approved neutral background direction: `#FCFCFC` canvas, neutral `#F4F5F5` panels, and white cards. Warm editorial background fills are neutralized; existing text, accents, semantic highlights, and native App screenshot colors are retained. The already-neutral panorama and personal graph remain byte-identical, as does the dark banner.
 
-The palette pass preserves the approved PNG dimensions and original text/geometry pixels. Background masks come from before/after renders of the existing code-native sources; only matching light background pixels are changed, without resampling the approved raster. All 11 native capture regions in the Traditional Chinese history composition are pixel-identical. Four-language variants were inspected at 900px README width; Spanish retains the previously approved fallback images where localized artwork was deferred. Source, masks, original exports, and verification are retained in the `readme-app-light-20261017` production package. The earlier `shared-visual-palette-20261016` package remains the history composition's source; its compact heading and warm-orange paths are unchanged.
+The palette pass preserves the approved PNG dimensions and original text/geometry pixels. Background masks come from before/after renders of the existing code-native sources; only matching light background pixels are changed, without resampling the approved raster. All 11 native capture regions in the Traditional Chinese history composition are pixel-identical. Four-language variants were inspected at 900px README width; Spanish retains the previously approved fallback images where localized artwork was deferred. Source, masks, original exports, and verification are retained in the `readme-neutral-20261017` production package. The earlier `shared-visual-palette-20261016` package remains the history composition's source; its compact heading and warm-orange paths are unchanged.
 
 ## Architecture overview
 
