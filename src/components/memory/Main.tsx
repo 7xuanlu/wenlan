@@ -980,6 +980,29 @@ export default function Main({
       setReadyEditorView(null);
     }
   }, []);
+  // A note deleted from the Wiki directory (published page or draft) may have a
+  // tab here. Drop it, and when it was on screen show its neighbour or the Wiki
+  // home. No navigation guard runs: the note no longer exists to be saved.
+  const handleDirectoryNoteDeleted = (id: string) => {
+    const before = noteTabsRef.current;
+    const goneTabs = before.filter(tab => noteId(tab.view) === id || primaryDraftIdentityByTab.current.get(tab.key) === id);
+    const firstIndex = before.findIndex(tab => goneTabs.includes(tab));
+    const isGone = (candidate: View) => isNoteView(candidate)
+      && (noteId(candidate) === id || goneTabs.some(tab => matchesNote(tab, candidate)));
+    const wasOnScreen = isGone(viewRef.current);
+    handlePageDeleted(id);
+    if (goneTabs.length > 0) {
+      for (const tab of goneTabs) primaryDraftIdentityByTab.current.delete(tab.key);
+      updateNoteTabs(noteTabsRef.current.filter(tab => !goneTabs.some(gone => gone.key === tab.key)));
+    }
+    updateHistory(viewHistoryRef.current.filter(entry => !isGone(entry)), viewForwardRef.current.filter(entry => !isGone(entry)));
+    if (lastNoteViewRef.current && isGone(lastNoteViewRef.current)) lastNoteViewRef.current = null;
+    if (!wasOnScreen) return;
+    const remaining = noteTabsRef.current;
+    const next: View = remaining[Math.min(Math.max(firstIndex, 0), remaining.length - 1)]?.view ?? { kind: "pages" };
+    lastNoteViewRef.current = isNoteView(next) ? next : null;
+    showView(next);
+  };
   const handleDraftTitleChange = useCallback((title: string) => {
     const current = viewRef.current;
     if (current.kind !== "page-draft") return;
@@ -1335,6 +1358,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
               <PagesOverview
                 inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
@@ -1423,6 +1447,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
             <PageDraftEditor
               key={view.sessionKey ?? view.draftId ?? "new"}
@@ -1473,6 +1498,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
             <PageDetail
               pageId={view.pageId}

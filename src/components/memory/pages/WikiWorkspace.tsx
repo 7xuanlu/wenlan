@@ -39,6 +39,8 @@ export interface WikiWorkspaceProps {
   readonly onCreationFolderPathChange?: (path: string | null) => void;
   readonly onOpenDraft: (draftId: string, space: string | null) => void;
   readonly onOpenPage: (page: Page) => void;
+  /** Called after a note was deleted from the directory so its tab closes. */
+  readonly onDeletePage?: (pageId: string) => void;
 }
 
 export function WikiWorkspace({
@@ -65,6 +67,7 @@ export function WikiWorkspace({
   onCreationFolderPathChange,
   onOpenDraft,
   onOpenPage,
+  onDeletePage,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
   const [folderOpen, setFolderOpen] = useState(false);
@@ -186,6 +189,7 @@ export function WikiWorkspace({
               onCreatePage={closeForNavigation(onCreatePage)}
               onOpenDraft={closeForNavigation(onOpenDraft)}
               onOpenPage={closeForNavigation(onOpenPage)}
+              onDeletePage={onDeletePage}
               onNoteCountChange={setNoteCount}
             />
           )}

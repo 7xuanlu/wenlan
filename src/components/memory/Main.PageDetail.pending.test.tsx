@@ -158,11 +158,14 @@ vi.mock("./pages/WikiWorkspace", () => ({
     onOpenPage: (page: { id: string }) => void;
     onCreatePage?: () => void;
     onOpenDraft?: (draftId: string, space: string | null) => void;
+    onDeletePage?: (pageId: string) => void;
   }) => (
     <div data-current-page={props.currentPageId ?? "none"} data-testid="wiki-workspace">
       {props.tabs}{props.children}<div ref={props.onSecondaryHost} />
       {props.currentPageId && <button type="button" onClick={() => props.onOpenPage({ id: props.currentPageId! })}>Reselect current page</button>}
       <button type="button" onClick={() => props.onOpenPage({ id: "page-two" })}>Wiki directory second page</button>
+      {props.onDeletePage && <button type="button" onClick={() => props.onDeletePage!("page-two")}>Delete second page from directory</button>}
+      {props.onDeletePage && <button type="button" onClick={() => props.onDeletePage!("draft-x")}>Delete draft X from directory</button>}
       {props.onCreatePage && <button type="button" onClick={props.onCreatePage}>Create note draft</button>}
       {props.onOpenDraft && <button type="button" onClick={() => props.onOpenDraft!("draft-x", null)}>Open draft X</button>}
     </div>
@@ -406,6 +409,47 @@ describe("Main published PageDetail navigation guards", () => {
     expect(await screen.findByText("Pending page")).toBeInTheDocument();
     expect(within(tabs).getAllByRole("tab")).toHaveLength(1);
     expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("closes a note deleted from the Wiki directory and leaves the previous note on screen", async () => {
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
+    expect(await screen.findByText("Second page")).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Open notes" });
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Delete second page from directory" }));
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(1);
+    expect(screen.queryByText("Second page")).toBeNull();
+    expect(screen.getByRole("button", { name: i18n.t("main.forward") })).toBeDisabled();
+  });
+
+  it("closes a note deleted from the Wiki directory that is open in a background tab", async () => {
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Wiki directory second page" }));
+    expect(await screen.findByText("Second page")).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Open notes" });
+    await user.click(within(tabs).getAllByRole("tab")[0]);
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Delete second page from directory" }));
+    await waitFor(() => expect(within(tabs).getAllByRole("tab")).toHaveLength(1));
+    expect(screen.getByText("Pending page")).toBeInTheDocument();
+  });
+
+  it("closes a draft deleted from the Wiki directory and returns to the previous note", async () => {
+    const { user } = renderMain();
+    await user.click(screen.getByRole("button", { name: "Open draft X" }));
+    expect(await screen.findByTestId("draft-editor")).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Open notes" });
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: "Delete draft X from directory" }));
+    expect(await screen.findByText("Pending page")).toBeInTheDocument();
+    expect(screen.queryByTestId("draft-editor")).toBeNull();
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(1);
   });
 
   it("closes an unhydrated secondary draft and allows quit without an editor handle", async () => {
