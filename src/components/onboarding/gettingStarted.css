@@ -212,12 +212,14 @@
   overflow-wrap: anywhere;
 }
 
-/* An empty library has nothing to open or search, so the panel's copy gives
-   way to the checklist that offers the first note. */
+/* An empty library has nothing to open or search, so the panel keeps only
+   its title (the Wiki's landmark heading) and the checklist offers the first
+   note in its place. */
 .wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-panel {
-  display: none;
+  padding-bottom: 16px;
 }
 
-.wiki-reading-start[data-library-empty="true"]:has(.getting-started) {
-  padding-top: 48px;
+.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-panel p,
+.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-icon {
+  display: none;
 }
