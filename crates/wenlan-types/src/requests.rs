@@ -335,6 +335,13 @@ pub struct UpdateAgentRequest {
     pub display_name: Option<String>,
 }
 
+/// `POST /api/agents` — register a tool the user has just connected so its
+/// first read already sees what a trusted agent sees.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RegisterAgentRequest {
+    pub name: String,
+}
+
 // ===== Spaces =====
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -49,6 +49,14 @@ async function closeWritingView(page: Page): Promise<void> {
   await expect(page.locator(".page-detail")).toBeVisible();
 }
 
+// The fixture library is small enough to show the getting-started card, which
+// hides the Wiki directory these flows browse. Start each test with it dismissed.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    window.localStorage.setItem("onboarding:gettingStartedDismissed", "1");
+  });
+});
+
 async function installRejectedCommandAudit(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Reflect.set(window, "__WENLAN_REVIEW_COMMAND_FAILURES__", []);

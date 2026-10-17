@@ -28,6 +28,11 @@ export interface WikiWorkspaceProps {
   readonly onOpenRecentPage?: (id: string) => void;
   readonly browsing?: boolean;
   readonly fullBleed?: boolean;
+  /** A library with no notes and no drafts, or one whose getting-started
+   *  checklist is still open. The directory has nothing to list or would read
+   *  as a second sidebar, so the workspace collapses to the reading column
+   *  alone and the start panel owns the whole width. */
+  readonly directoryHidden?: boolean;
   readonly filter?: string;
   readonly onFilterChange?: (filter: string) => void;
   readonly onBrowse: (scope: WikiInventoryScope) => void;
@@ -35,6 +40,8 @@ export interface WikiWorkspaceProps {
   readonly onCreationFolderPathChange?: (path: string | null) => void;
   readonly onOpenDraft: (draftId: string, space: string | null) => void;
   readonly onOpenPage: (page: Page) => void;
+  /** Called after a note was deleted from the directory so its tab closes. */
+  readonly onDeletePage?: (pageId: string) => void;
 }
 
 export function WikiWorkspace({
@@ -53,6 +60,7 @@ export function WikiWorkspace({
   onOpenRecentPage,
   browsing = false,
   fullBleed = false,
+  directoryHidden = false,
   filter,
   onFilterChange,
   onBrowse,
@@ -60,6 +68,7 @@ export function WikiWorkspace({
   onCreationFolderPathChange,
   onOpenDraft,
   onOpenPage,
+  onDeletePage,
 }: WikiWorkspaceProps) {
   const { t } = useTranslation();
   const [folderOpen, setFolderOpen] = useState(false);
@@ -112,7 +121,7 @@ export function WikiWorkspace({
 
   return (
     <WikiFolderCreationContext.Provider value={folderCreationContext}>
-    <div className="wiki-workspace">
+    <div className="wiki-workspace" data-directory-hidden={directoryHidden ? "true" : undefined}>
       <button
         type="button"
         className="wiki-workspace-folders-toggle"
@@ -167,6 +176,7 @@ export function WikiWorkspace({
               currentPageId={currentPageId}
               revision={recentRevision}
               onOpenPage={onOpenRecentPage ? closeForNavigation(onOpenRecentPage) : undefined}
+              onBrowseFolders={() => changeInventoryMode("folders")}
             />
           ) : (
             <PageInventoryPanel
@@ -181,6 +191,7 @@ export function WikiWorkspace({
               onCreatePage={closeForNavigation(onCreatePage)}
               onOpenDraft={closeForNavigation(onOpenDraft)}
               onOpenPage={closeForNavigation(onOpenPage)}
+              onDeletePage={onDeletePage}
               onNoteCountChange={setNoteCount}
             />
           )}

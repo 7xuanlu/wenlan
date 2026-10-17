@@ -141,10 +141,10 @@ const en = {
     notesFirst: {
       body: "Start with a note. Connect your AI tools when you need them.",
       hint: "No model setup or import required.",
-      open: "Open notes",
       openFailed: "Could not open your notes. Please try again.",
       checkConnection: "Check connection",
-      backToWelcome: "Back to welcome",
+      intro: "A personal knowledge base you and your AI tools build together. Notes, files and chats become pages they can recall.",
+      start: "Get started",
     },
     tagline: "A living knowledge base your AI tools build as they work.",
     welcomeBody:
@@ -264,8 +264,9 @@ const en = {
       allSetTitle: "You're all set.",
       allSetBody1:
         "Keep using your AI tools normally. Wenlan turns what they learn into pages you can read and cite.",
-      allSetBody2:
-        "Pages refresh between sessions, so the next one starts where the last ended.",
+      addedTitle: "Tools added",
+      restartHint: "Restart these tools and they will read and write your library.",
+      backToWiki: "Back to Wiki",
       routingSummary:
         "Everyday tasks: {{everyday}}. Page synthesis: {{synthesis}}. Change this anytime in Settings → Intelligence.",
       noModelAssurance:
@@ -275,10 +276,6 @@ const en = {
       topics: "Topics",
       connections: "Connections",
       pagesWillDistill: "Pages will distill from these as Wenlan connects the dots.",
-      connected: "Connected:",
-      added: "Added. Restart to finish:",
-      moreAgents_one: "+{{count}} more",
-      moreAgents_other: "+{{count}} more",
     },
   },
   vaultConnect: {
@@ -395,10 +392,10 @@ const en = {
   },
   pages: {
     groups: { central: "Central notes", right: "Right notes", moveToRight: "Move to right group", moveToCentral: "Move to central group", openBeside: "Open beside", moveBack: "Move back", openInRight: "This note is open on the right.", openInCentral: "This note is open in the central group.", showNote: "Show note", dismiss: "Dismiss" },
-    recent: { title: "Recently used", custom: "Manual order", dragNote: "Drag to reorder {{title}}", reorderHint: "Use arrow keys to reorder.", customHint: "Drag notes to set your order. Opening a note keeps its place.", modeLabel: "Browse notes", empty: "Notes you open appear here. Find a note with Search, or browse folders." },
-    tabs: { label: "Open notes", close: "Close {{title}}" },
+    recent: { title: "Recently used", custom: "Manual order", dragNote: "Drag to reorder {{title}}", reorderHint: "Use arrow keys to reorder.", customHint: "Drag notes to set your order. Opening a note keeps its place.", modeLabel: "Browse notes", empty: "Notes you open appear here.", browseFolders: "Browse folders" },
+    tabs: { label: "Open notes", close: "Close {{title}}", home: "Wiki home" },
     folders: {
-      title: "Folders", root: "Folders", rootDestination: "Top level", emptyDirectory: "Create a folder to organize your notes.", locationPending: "Your note is saved, but its file could not be saved in the chosen folder.", retryLocation: "Retry saving the file", retryLocationError: "The file still could not be saved. Check that the folder is available, then retry.", newFolder: "New folder", newFolderIn: "New folder in {{name}}", folderName: "Folder name", createIn: "Create in {{name}}", create: "Create", cancel: "Cancel", createError: "The folder couldn't be created. Try again.", unavailable: "Folder browsing is unavailable. All notes are still accessible.", searchAll: "Search all notes", view: "Note view", cards: "Cards", list: "List", empty: "This folder has no notes yet.", move: "Move to folder", destination: "Destination folder", moveError: "The note couldn't be moved. Try again.", moving: "Moving…", moveConfirm: "Move", close: "Close", currentFolder: "Current folder: {{name}}", noteCount_one: "{{count}} note", noteCount_other: "{{count}} notes",
+      title: "Folders", root: "Folders", rootDestination: "Top level", emptyDirectory: "Create a folder to organize your notes.", locationPending: "Your note is saved, but its file could not be saved in the chosen folder.", retryLocation: "Retry saving the file", retryLocationError: "The file still could not be saved. Check that the folder is available, then retry.", newFolder: "New folder", newFolderIn: "New folder in {{name}}", openNote: "Open", deleteNote: "Delete note", folderName: "Folder name", createIn: "Create in {{name}}", create: "Create", cancel: "Cancel", createError: "The folder couldn't be created. Try again.", unavailable: "Folder browsing is unavailable. All notes are still accessible.", searchAll: "Search all notes", view: "Note view", cards: "Cards", list: "List", empty: "This folder has no notes yet.", move: "Move to folder", destination: "Destination folder", moveError: "The note couldn't be moved. Try again.", moving: "Moving…", moveConfirm: "Move", close: "Close", currentFolder: "Current folder: {{name}}", noteCount_one: "{{count}} note", noteCount_other: "{{count}} notes",
     },
     inventory: {
       all: "All notes",
@@ -2354,8 +2351,8 @@ const en = {
     synthesisBetaHelp: "Background synthesis is in Beta. It drafts and revises knowledge pages, and results may need review. You can also create and update pages through Wenlan's plugin or MCP with Claude or Codex.",
     deviceSwitchNotice: "Enabling another on-device model switches every task using On-device to that model.",
     externalSlotNotice: "External cloud providers and local servers share one connection. Saving a new endpoint replaces the previous one, and tasks using it share its model. The native Anthropic connection is separate.",
-    backgroundAiTitle: "Background AI organization",
-    backgroundAiDescription: "Optional. Your notes work normally while this is off.",
+    backgroundAiTitle: "Background steeping",
+    backgroundAiDescription: "Wenlan steeps what you give it into pages and links ahead of time, so when Claude or Codex looks something up it reads less: faster, cheaper, and more accurate. Optional. Your notes work normally while this is off.",
     backgroundAiSaveError: "Could not save this setting. Try again.",
     cloudRow: "Cloud provider",
     cloudRowHint: "Anthropic, OpenAI, Gemini, Groq, and more: strongest quality, powers synthesis",
@@ -2743,10 +2740,10 @@ const zhHans = {
     notesFirst: {
       body: "先写笔记，需要时再接上你的 AI 工具。",
       hint: "不用先设置模型或导入资料。",
-      open: "打开笔记",
       openFailed: "暂时无法打开笔记，请再试一次。",
       checkConnection: "检查连接",
-      backToWelcome: "返回欢迎页",
+      intro: "你和 AI 工具一起搭建的个人知识库。笔记、文件和对话会变成它们记得住的页面。",
+      start: "开始使用",
     },
     tagline: "一个由你的 AI 工具在工作中不断构建的活知识库。",
     welcomeBody: "你的 AI 工具会把学到的内容写成带来源引用的页面，并在会话之间自动刷新。",
@@ -2855,7 +2852,9 @@ const zhHans = {
       openWenlan: "打开文澜",
       allSetTitle: "全部设置完成。",
       allSetBody1: "继续照常使用你的 AI 工具。文澜会把它们学到的内容变成可阅读、可引用的页面。",
-      allSetBody2: "页面会在会话之间刷新，让下一次对话从上一次结束的地方继续。",
+      addedTitle: "工具已添加",
+      restartHint: "重启这些工具后，它们就能读写你的知识库。",
+      backToWiki: "回到 Wiki",
       routingSummary:
         "日常任务：{{everyday}}。页面综合：{{synthesis}}。可随时在“设置 → 智能”中更改。",
       noModelAssurance:
@@ -2865,10 +2864,6 @@ const zhHans = {
       topics: "主题",
       connections: "连接",
       pagesWillDistill: "随着文澜连接线索，这些内容会蒸馏成页面。",
-      connected: "已连接：",
-      added: "已添加，重启后完成：",
-      moreAgents_one: "还有 {{count}} 个",
-      moreAgents_other: "还有 {{count}} 个",
     },
   },
   vaultConnect: {
@@ -2980,10 +2975,10 @@ const zhHans = {
   },
   pages: {
     groups: { central: "中央笔记", right: "右侧笔记", moveToRight: "移至右侧分组", moveToCentral: "移至中央分组", openBeside: "并排打开", moveBack: "移回中央", openInRight: "这篇笔记已在右侧打开。", openInCentral: "这篇笔记已在中央打开。", showNote: "查看笔记", dismiss: "关闭提示" },
-    recent: { title: "最近使用", custom: "手动排序", dragNote: "拖动调整「{{title}}」的位置", reorderHint: "使用方向键调整顺序。", customHint: "拖动笔记调整顺序，打开笔记时位置保持不变。", modeLabel: "浏览笔记", empty: "打开过的笔记会出现在这里。你可以搜索笔记，或切换到文件夹浏览。" },
-    tabs: { label: "已開啟的筆記", close: "關閉 {{title}}" },
+    recent: { title: "最近使用", custom: "手动排序", dragNote: "拖动调整「{{title}}」的位置", reorderHint: "使用方向键调整顺序。", customHint: "拖动笔记调整顺序，打开笔记时位置保持不变。", modeLabel: "浏览笔记", empty: "打开过的笔记会出现在这里。", browseFolders: "按文件夹浏览" },
+    tabs: { label: "已打开的笔记", close: "关闭 {{title}}", home: "Wiki 首页" },
     folders: {
-      title: "文件夹", root: "文件夹", rootDestination: "最外层", emptyDirectory: "创建文件夹，让笔记更好查找。", locationPending: "笔记已保存，但未能将文件保存到所选文件夹。", retryLocation: "重试保存文件", retryLocationError: "仍无法保存文件。请确认文件夹可用后重试。", newFolder: "新建文件夹", newFolderIn: "在 {{name}} 中新建文件夹", folderName: "文件夹名称", createIn: "创建于 {{name}}", create: "创建", cancel: "取消", createError: "未能创建文件夹，请重试。", unavailable: "暂时无法浏览文件夹。仍可访问所有笔记。", searchAll: "搜索所有笔记", view: "笔记视图", cards: "卡片", list: "列表", empty: "这个文件夹还没有笔记。", move: "移至文件夹", destination: "目标文件夹", moveError: "未能移动笔记，请重试。", moving: "正在移动…", moveConfirm: "移动", close: "关闭", currentFolder: "当前文件夹：{{name}}", noteCount_one: "{{count}} 篇笔记", noteCount_other: "{{count}} 篇笔记",
+      title: "文件夹", root: "文件夹", rootDestination: "最外层", emptyDirectory: "创建文件夹，让笔记更好查找。", locationPending: "笔记已保存，但未能将文件保存到所选文件夹。", retryLocation: "重试保存文件", retryLocationError: "仍无法保存文件。请确认文件夹可用后重试。", newFolder: "新建文件夹", newFolderIn: "在 {{name}} 中新建文件夹", openNote: "打开", deleteNote: "删除笔记", folderName: "文件夹名称", createIn: "创建于 {{name}}", create: "创建", cancel: "取消", createError: "未能创建文件夹，请重试。", unavailable: "暂时无法浏览文件夹。仍可访问所有笔记。", searchAll: "搜索所有笔记", view: "笔记视图", cards: "卡片", list: "列表", empty: "这个文件夹还没有笔记。", move: "移至文件夹", destination: "目标文件夹", moveError: "未能移动笔记，请重试。", moving: "正在移动…", moveConfirm: "移动", close: "关闭", currentFolder: "当前文件夹：{{name}}", noteCount_one: "{{count}} 篇笔记", noteCount_other: "{{count}} 篇笔记",
     },
     inventory: {
       all: "所有笔记",
@@ -4903,8 +4898,8 @@ const zhHans = {
     synthesisBetaHelp: "后台综合处理处于 Beta 阶段。它会起草并修订知识页面，结果可能需要审阅。你也可以通过 Wenlan 的 plugin 或 MCP，让 Claude 或 Codex 创建与更新页面。",
     deviceSwitchNotice: "启用另一个设备内模型，会让所有使用设备内模型的工作切换到它。",
     externalSlotNotice: "外部云端与本地服务共用一个连接。保存新端点会替换原端点，使用此连接的工作共用其模型。原生 Anthropic 连接独立。",
-    backgroundAiTitle: "后台 AI 整理",
-    backgroundAiDescription: "按需开启。关闭时仍可正常使用笔记。",
+    backgroundAiTitle: "后台沉淀",
+    backgroundAiDescription: "文澜会先把交给它的内容沉淀成页面和关联。Claude、Codex 来查的时候读得更少，更快、更省钱，答得也更准。按需开启，关闭时仍可正常使用笔记。",
     backgroundAiSaveError: "无法保存此设置，请重试。",
     cloudRow: "云端供应方",
     cloudRowHint: "Anthropic、OpenAI、Gemini、Groq 等：质量最佳，可驱动综合",
@@ -5283,10 +5278,10 @@ const zhHant = {
     notesFirst: {
       body: "先寫筆記，需要時再接上你的 AI 工具。",
       hint: "不用先設定模型或匯入資料。",
-      open: "開啟筆記",
       openFailed: "暫時無法開啟筆記，請再試一次。",
       checkConnection: "檢查連線",
-      backToWelcome: "返回歡迎頁",
+      intro: "你和 AI 工具一起搭建的個人知識庫。筆記、檔案和對話會變成它們記得住的頁面。",
+      start: "開始使用",
     },
     tagline: "一個由你的 AI 工具在工作中不斷建立的活知識庫。",
     welcomeBody: "你的 AI 工具會把學到的內容寫成附來源引用的頁面，並在工作階段之間自動更新。",
@@ -5395,7 +5390,9 @@ const zhHant = {
       openWenlan: "開啟文瀾",
       allSetTitle: "全部設定完成。",
       allSetBody1: "繼續照常使用你的 AI 工具。文瀾會把它們學到的內容變成可閱讀、可引用的頁面。",
-      allSetBody2: "頁面會在工作階段之間更新，讓下一次對話從上一次結束的地方繼續。",
+      addedTitle: "工具已新增",
+      restartHint: "重新啟動這些工具後，它們就能讀寫你的知識庫。",
+      backToWiki: "回到 Wiki",
       routingSummary:
         "日常任務：{{everyday}}。頁面綜合：{{synthesis}}。可隨時在「設定 → 智慧」中更改。",
       noModelAssurance:
@@ -5405,10 +5402,6 @@ const zhHant = {
       topics: "主題",
       connections: "連結",
       pagesWillDistill: "隨著文瀾連接線索，這些內容會蒸餾成頁面。",
-      connected: "已連接：",
-      added: "已新增，重新啟動後完成：",
-      moreAgents_one: "還有 {{count}} 個",
-      moreAgents_other: "還有 {{count}} 個",
     },
   },
   vaultConnect: {
@@ -5520,10 +5513,10 @@ const zhHant = {
   },
   pages: {
     groups: { central: "中央筆記", right: "右側筆記", moveToRight: "移至右側分組", moveToCentral: "移至中央分組", openBeside: "並排開啟", moveBack: "移回中央", openInRight: "這篇筆記已在右側開啟。", openInCentral: "這篇筆記已在中央開啟。", showNote: "查看筆記", dismiss: "關閉提示" },
-    recent: { title: "最近使用", custom: "手動排序", dragNote: "拖曳調整「{{title}}」的位置", reorderHint: "使用方向鍵調整順序。", customHint: "拖曳筆記調整順序，開啟筆記時位置保持不變。", modeLabel: "瀏覽筆記", empty: "開啟過的筆記會出現在這裡。你可以搜尋筆記，或切換到資料夾瀏覽。" },
-    tabs: { label: "已打开的笔记", close: "关闭 {{title}}" },
+    recent: { title: "最近使用", custom: "手動排序", dragNote: "拖曳調整「{{title}}」的位置", reorderHint: "使用方向鍵調整順序。", customHint: "拖曳筆記調整順序，開啟筆記時位置保持不變。", modeLabel: "瀏覽筆記", empty: "開啟過的筆記會出現在這裡。", browseFolders: "按資料夾瀏覽" },
+    tabs: { label: "已開啟的筆記", close: "關閉 {{title}}", home: "Wiki 首頁" },
     folders: {
-      title: "資料夾", root: "資料夾", rootDestination: "最外層", emptyDirectory: "建立資料夾，讓筆記更好找。", locationPending: "筆記已儲存，但無法將檔案儲存到所選資料夾。", retryLocation: "重試儲存檔案", retryLocationError: "仍無法儲存檔案。請確認資料夾可用後重試。", newFolder: "新增資料夾", newFolderIn: "在 {{name}} 中新增資料夾", folderName: "資料夾名稱", createIn: "建立於 {{name}}", create: "建立", cancel: "取消", createError: "無法建立資料夾，請重試。", unavailable: "暫時無法瀏覽資料夾。仍可存取所有筆記。", searchAll: "搜尋所有筆記", view: "筆記檢視", cards: "卡片", list: "清單", empty: "這個資料夾還沒有筆記。", move: "移至資料夾", destination: "目標資料夾", moveError: "無法移動筆記，請重試。", moving: "移動中…", moveConfirm: "移動", close: "關閉", currentFolder: "目前資料夾：{{name}}", noteCount_one: "{{count}} 篇筆記", noteCount_other: "{{count}} 篇筆記",
+      title: "資料夾", root: "資料夾", rootDestination: "最外層", emptyDirectory: "建立資料夾，讓筆記更好找。", locationPending: "筆記已儲存，但無法將檔案儲存到所選資料夾。", retryLocation: "重試儲存檔案", retryLocationError: "仍無法儲存檔案。請確認資料夾可用後重試。", newFolder: "新增資料夾", newFolderIn: "在 {{name}} 中新增資料夾", openNote: "開啟", deleteNote: "刪除筆記", folderName: "資料夾名稱", createIn: "建立於 {{name}}", create: "建立", cancel: "取消", createError: "無法建立資料夾，請重試。", unavailable: "暫時無法瀏覽資料夾。仍可存取所有筆記。", searchAll: "搜尋所有筆記", view: "筆記檢視", cards: "卡片", list: "清單", empty: "這個資料夾還沒有筆記。", move: "移至資料夾", destination: "目標資料夾", moveError: "無法移動筆記，請重試。", moving: "移動中…", moveConfirm: "移動", close: "關閉", currentFolder: "目前資料夾：{{name}}", noteCount_one: "{{count}} 篇筆記", noteCount_other: "{{count}} 篇筆記",
     },
     inventory: {
       all: "所有筆記",
@@ -7443,8 +7436,8 @@ const zhHant = {
     synthesisBetaHelp: "背景綜合處理仍在 Beta 階段。它會起草並修訂知識頁面，結果可能需要審閱。你也可以透過 Wenlan 的 plugin 或 MCP，讓 Claude 或 Codex 建立與更新頁面。",
     deviceSwitchNotice: "啟用另一個裝置內模型，會讓所有使用裝置內模型的工作切換到它。",
     externalSlotNotice: "外部雲端與本機服務共用一個連線。儲存新端點會替換原端點，使用此連線的工作共用其模型。原生 Anthropic 連線獨立。",
-    backgroundAiTitle: "背景 AI 整理",
-    backgroundAiDescription: "按需啟用。關閉時仍可正常使用筆記。",
+    backgroundAiTitle: "背景沉澱",
+    backgroundAiDescription: "文瀾會先把交給它的內容沉澱成頁面和關聯。Claude、Codex 來查的時候讀得更少，更快、更省錢，答得也更準。按需啟用，關閉時仍可正常使用筆記。",
     backgroundAiSaveError: "無法儲存這項設定，請再試一次。",
     cloudRow: "雲端供應方",
     cloudRowHint: "Anthropic、OpenAI、Gemini、Groq 等：品質最佳，可驅動綜合",

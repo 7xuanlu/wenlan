@@ -19,6 +19,7 @@ import {
   type SearchResult,
   type Space,
 } from "../../lib/tauri";
+import { reloadWindow } from "../../lib/reloadWindow";
 import { setPendingPairingCode } from "../../lib/pairingLink";
 import { MAIN_HEADER_HEIGHT, topBarLeftInset } from "../../lib/windowChrome";
 import ActivityFeed from "./ActivityFeed";
@@ -27,6 +28,7 @@ import EntityDetail from "./EntityDetail";
 import MemoryStream from "./MemoryStream";
 import type { SortMode } from "./MemoryStream";
 import { FirstUseGuide } from "../onboarding/FirstUseGuide";
+import { useGettingStartedState } from "../onboarding/useGettingStartedState";
 import AtlasView from "./AtlasView";
 import { SearchResults } from "./SearchResults";
 import MemoryDetail from "./MemoryDetail";
@@ -41,6 +43,7 @@ import SpaceDetail from "./SpaceDetail";
 import { SpacesOverview } from "./spaces";
 import { PagesOverview } from "./pages/PagesOverview";
 import { WikiWorkspace } from "./pages/WikiWorkspace";
+import { useLibraryInventory } from "./pages/useLibraryInventory";
 import { SecondaryNoteGroup, type SecondaryNoteGroupHandle } from "./pages/SecondaryNoteGroup";
 import { NoteTabs } from "./pages/NoteTabs";
 import { isNoteView, matchesNote, noteId, noteReadingKey, noteReadingPositionsFor, promoteNoteTab, reorderNoteTab, upsertNoteTab, type NoteTab, type NoteView } from "./pages/noteTabState";
@@ -761,6 +764,7 @@ export default function Main({
   const noteTabStrip = <NoteTabs tabs={noteTabs}
     activeKey={isNoteView(view) ? noteTabs.find(tab => matchesNote(tab, view))?.key : undefined}
     onSelect={tab => { focusPrimaryGroup(); navigateTo(tab.view); }} onClose={closeNoteTab}
+    onHome={() => { focusPrimaryGroup(); navigatePages(); }} homeActive={view.kind === "pages" || view.kind === "home"}
     onMoveToOtherGroup={moveToSecondary} moveLabel={t("pages.groups.moveToRight")}
     onCreate={() => navigateTo({
       kind: "page-draft",
@@ -931,6 +935,12 @@ export default function Main({
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
+  // The directory has nothing to say to a brand-new library, and it reads as a
+  // second sidebar next to the open getting-started checklist, so both give the
+  // Wiki a single column; see WikiWorkspace `directoryHidden`.
+  const { empty: libraryEmpty } = useLibraryInventory();
+  const gettingStarted = useGettingStartedState();
+  const directoryHidden = libraryEmpty || (gettingStarted.visible && !gettingStarted.dismissed);
 
   useEffect(() => {
     if (!mobileSearchOpen) return;
@@ -976,6 +986,29 @@ export default function Main({
       setReadyEditorView(null);
     }
   }, []);
+  // A note deleted from the Wiki directory (published page or draft) may have a
+  // tab here. Drop it, and when it was on screen show its neighbour or the Wiki
+  // home. No navigation guard runs: the note no longer exists to be saved.
+  const handleDirectoryNoteDeleted = (id: string) => {
+    const before = noteTabsRef.current;
+    const goneTabs = before.filter(tab => noteId(tab.view) === id || primaryDraftIdentityByTab.current.get(tab.key) === id);
+    const firstIndex = before.findIndex(tab => goneTabs.includes(tab));
+    const isGone = (candidate: View) => isNoteView(candidate)
+      && (noteId(candidate) === id || goneTabs.some(tab => matchesNote(tab, candidate)));
+    const wasOnScreen = isGone(viewRef.current);
+    handlePageDeleted(id);
+    if (goneTabs.length > 0) {
+      for (const tab of goneTabs) primaryDraftIdentityByTab.current.delete(tab.key);
+      updateNoteTabs(noteTabsRef.current.filter(tab => !goneTabs.some(gone => gone.key === tab.key)));
+    }
+    updateHistory(viewHistoryRef.current.filter(entry => !isGone(entry)), viewForwardRef.current.filter(entry => !isGone(entry)));
+    if (lastNoteViewRef.current && isGone(lastNoteViewRef.current)) lastNoteViewRef.current = null;
+    if (!wasOnScreen) return;
+    const remaining = noteTabsRef.current;
+    const next: View = remaining[Math.min(Math.max(firstIndex, 0), remaining.length - 1)]?.view ?? { kind: "pages" };
+    lastNoteViewRef.current = isNoteView(next) ? next : null;
+    showView(next);
+  };
   const handleDraftTitleChange = useCallback((title: string) => {
     const current = viewRef.current;
     if (current.kind !== "page-draft") return;
@@ -1068,6 +1101,13 @@ export default function Main({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return;
+      // Cmd/Ctrl+R reloads the window, like other desktop apps built on a web
+      // view. It works from inside an editor too, and saves the open note first.
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "r") {
+        e.preventDefault();
+        afterPrimaryNavigationGuards(() => reloadWindow());
+        return;
+      }
       if (e.key === "Escape" && movingNoteRef.current) return;
       const target = e.target;
       const closesOpenSearch = e.key === "Escape" && mobileSearchOpen;
@@ -1315,6 +1355,7 @@ export default function Main({
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
             <WikiWorkspace
+              directoryHidden={directoryHidden}
               tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
               secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
               inventoryMode={wikiInventoryMode}
@@ -1330,6 +1371,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
               <PagesOverview
                 inventoryScope={view.kind === "pages" ? view.inventoryScope : undefined}
@@ -1339,6 +1381,9 @@ export default function Main({
                 onSelectDraft={openWikiDraft}
                 onSelectPage={(id) => navigateTo({ kind: "page", pageId: id, inventoryScope: view.kind === "pages" ? view.inventoryScope : undefined })}
                 onSelectSpace={(spaceName) => navigateTo({ kind: "space", spaceId: null, spaceName })}
+                onConnectTool={() => navigateTo({ kind: "connect-agent" })}
+                onSeeExample={() => navigateTo({ kind: "first-use" })}
+                onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               />
             </WikiWorkspace>
           ) : view.kind === "entities" ? (
@@ -1415,6 +1460,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
             <PageDraftEditor
               key={view.sessionKey ?? view.draftId ?? "new"}
@@ -1465,6 +1511,7 @@ export default function Main({
               onCreatePage={(folderPath) => navigateTo({ kind: "page-draft", space: null, folderPath, inventoryScope: view.inventoryScope })}
               onOpenDraft={openWikiDraft}
               onOpenPage={openWikiPage}
+              onDeletePage={handleDirectoryNoteDeleted}
             >
             <PageDetail
               pageId={view.pageId}
@@ -1497,14 +1544,10 @@ export default function Main({
             />
           ) : view.kind === "first-use" ? (
             <FirstUseGuide
-              onBack={navigateBack}
-              initialView={view.showKnowledge ? "live" : "guide"}
+              onBack={() => navigatePages()}
+              initialView={view.showKnowledge ? "live" : "sample"}
               batchId={view.batchId}
               onImport={() => navigateTo({ kind: "import", fromFirstUse: true })}
-              onSources={() => navigateTo({ kind: "settings", section: "sources" })}
-              onConnect={(client) => navigateTo(client === "codex" || client === "claude"
-                ? { kind: "connect-agent" }
-                : { kind: "settings", section: "agents" })}
               onOpenIntelligence={() => navigateTo({ kind: "settings", section: "intelligence" })}
               onOpenPage={(id) => {
                 updateHistory([...viewHistoryRef.current, {

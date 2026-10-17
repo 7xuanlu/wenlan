@@ -115,7 +115,8 @@ test("old daemon keeps every note available and disables unsupported folder oper
   const sidebar = page.locator(".wiki-workspace-directory .notes-list-panel");
   if (!(await sidebar.isVisible())) await page.locator(".wiki-workspace-folders-toggle").click();
   await expect(sidebar.getByText("Folder browsing is unavailable. All notes are still accessible.")).toBeVisible();
-  await sidebar.locator(".notes-list-scroll").click({button:"right",position:{x:2,y:2}});
+  // Right-click the notice, not a corner of the list: a note row now has its own menu.
+  await sidebar.getByText("Folder browsing is unavailable. All notes are still accessible.").click({button:"right"});
   await expect(page.getByRole("menuitem",{name:/^New folder/})).toBeDisabled();
   await page.keyboard.press("Escape");
   await expect(sidebar.getByRole("button",{name:"Work",exact:true})).toHaveCount(0);

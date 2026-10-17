@@ -403,6 +403,16 @@ export async function openSearchResult(url: string): Promise<void> {
   return invoke("open_search_result", { url });
 }
 
+/** AI tool families with a link that opens a new chat with the question typed
+ *  in (never sent). Mirrors `prompt_link` in `app/src/ask_tool.rs`. */
+export const PROMPT_LINK_FAMILIES: readonly string[] = ["claude-desktop", "claude-code", "codex", "cursor"];
+
+/** Open a connected AI tool with `prompt` in its composer. Rejects when the
+ *  tool has no such link or nothing on this machine opens it. */
+export async function openToolWithPrompt(family: string, prompt: string): Promise<void> {
+  return invoke("open_tool_with_prompt", { family, prompt });
+}
+
 export interface SourceDirEntry {
   name: string;
   isDirectory: boolean;
@@ -2970,6 +2980,14 @@ export type PluginInstallClientType = "claude_code" | "codex_cli";
  *  wizard on that rejection. */
 export async function installClientPlugin(clientType: PluginInstallClientType): Promise<void> {
   return invoke("install_client_plugin", { clientType });
+}
+
+/** Tell the daemon the user connected `clientType` when setup found it already
+ *  configured (so neither a config write nor a plugin install ran). Resolves
+ *  to whether the daemon accepted the row; false for an unknown client or a
+ *  daemon that is down or slow. Best-effort: it never rejects on those. */
+export async function registerConnectedAgent(clientType: string): Promise<boolean> {
+  return invoke("register_connected_agent", { clientType });
 }
 
 // ===== Wire State (real, resolved wiring — wizard progress + Diagnostics) =====
