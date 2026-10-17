@@ -57,7 +57,10 @@ export function PagesOverview({
   ) : null;
 
   return (
-    <section className="wiki-overview wiki-reading-start mx-auto w-full max-w-[1130px] pb-16">
+    <section
+      className="wiki-overview wiki-reading-start mx-auto w-full max-w-[1130px] pb-16"
+      data-library-empty={activePagesQuery.isSuccess && draftPagesQuery.isSuccess && pages.length === 0 ? "true" : undefined}
+    >
       <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
       <div className="wiki-reading-start-panel">
         <PageIcon className="wiki-reading-start-icon" size={32} />

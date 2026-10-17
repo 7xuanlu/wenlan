@@ -22,6 +22,14 @@ function openButton() {
   return screen.getByRole("button", { name: i18n.t("setup.notesFirst.open") });
 }
 
+function lookAroundButton() {
+  return screen.getByRole("button", { name: i18n.t("setup.notesFirst.lookAround") });
+}
+
+function pathButton(id: "tool" | "sources" | "note") {
+  return screen.getByRole("button", { name: i18n.t(`setup.notesFirst.paths.${id}.title`) });
+}
+
 function sampleButton() {
   return screen.getByRole("button", { name: i18n.t("firstUse.guide.tryExample") });
 }
@@ -35,15 +43,23 @@ function enterSampleAi() {
 describe("NotesWelcome", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
   });
 
-  it("offers the primary notes action and an optional sample without setup controls or runtime calls", () => {
+  it("asks how the user wants to start, with three paths, a sample and a way to just look around", () => {
     render(<NotesWelcome onComplete={vi.fn()} />);
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(i18n.t("setup.welcomeTitle"));
-    expect(screen.getByText(i18n.t("setup.notesFirst.body"))).toBeInTheDocument();
-    expect(screen.getByText(i18n.t("setup.notesFirst.hint"))).toBeInTheDocument();
-    expect(screen.getAllByRole("button")).toEqual([openButton(), sampleButton()]);
+    expect(screen.getByText(i18n.t("setup.notesFirst.question"))).toBeInTheDocument();
+    expect(screen.getByText(i18n.t("setup.notesFirst.pathsHint"))).toBeInTheDocument();
+    expect(screen.getAllByRole("button")).toEqual([
+      pathButton("tool"),
+      pathButton("sources"),
+      pathButton("note"),
+      sampleButton(),
+      lookAroundButton(),
+    ]);
+    expect(pathButton("tool")).toHaveAccessibleDescription(i18n.t("setup.notesFirst.paths.tool.body"));
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
     expect(screen.queryByRole("radio")).not.toBeInTheDocument();
@@ -51,23 +67,52 @@ describe("NotesWelcome", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["tool", "connect-agent"],
+    ["sources", "sources"],
+    ["note", "page-draft"],
+  ] as const)("routes the %s path to %s and remembers it as the start path", async (id, destination) => {
+    const onComplete = vi.fn();
+    render(<NotesWelcome onComplete={onComplete} />);
+    fireEvent.click(pathButton(id));
+    await waitFor(() => expect(pathButton(id)).toBeEnabled());
+    expect(onComplete).toHaveBeenCalledExactlyOnceWith(destination);
+    expect(localStorage.getItem("onboarding:startPath")).toBe(id);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("disables every path while one completion is pending", async () => {
+    const completion = deferred();
+    const onComplete = vi.fn(() => completion.promise);
+    render(<NotesWelcome onComplete={onComplete} />);
+    fireEvent.click(pathButton("sources"));
+    expect(pathButton("tool")).toBeDisabled();
+    expect(pathButton("note")).toBeDisabled();
+    expect(lookAroundButton()).toBeDisabled();
+    expect(sampleButton()).toBeDisabled();
+    fireEvent.click(pathButton("note"));
+    expect(onComplete).toHaveBeenCalledExactlyOnceWith("sources");
+    await act(async () => completion.resolve());
+    expect(pathButton("tool")).toBeEnabled();
+  });
+
   it("awaits completion and keeps the action disabled while it is pending", async () => {
     const completion = deferred();
     const onComplete = vi.fn(() => completion.promise);
     render(<NotesWelcome onComplete={onComplete} />);
 
-    fireEvent.click(openButton());
+    fireEvent.click(lookAroundButton());
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith();
-    expect(openButton()).toBeDisabled();
+    expect(lookAroundButton()).toBeDisabled();
     expect(sampleButton()).toBeDisabled();
-    expect(openButton()).toHaveAttribute("aria-busy", "true");
+    expect(lookAroundButton()).toHaveAttribute("aria-busy", "true");
     expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
 
     await act(async () => completion.resolve());
 
-    expect(openButton()).toBeEnabled();
-    expect(openButton()).toHaveAttribute("aria-busy", "false");
+    expect(lookAroundButton()).toBeEnabled();
+    expect(lookAroundButton()).toHaveAttribute("aria-busy", "false");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalled();
   });
@@ -76,7 +121,7 @@ describe("NotesWelcome", () => {
     const completion = deferred();
     const onComplete = vi.fn(() => completion.promise);
     render(<NotesWelcome onComplete={onComplete} />);
-    const button = openButton();
+    const button = lookAroundButton();
 
     act(() => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -96,19 +141,19 @@ describe("NotesWelcome", () => {
       .mockImplementationOnce(() => retry.promise);
     render(<NotesWelcome onComplete={onComplete} />);
 
-    fireEvent.click(openButton());
+    fireEvent.click(lookAroundButton());
     await act(async () => first.reject(new Error("could not save completion")));
 
     expect(screen.getByRole("alert")).toHaveTextContent(i18n.t("setup.notesFirst.openFailed"));
-    expect(openButton()).toBeEnabled();
+    expect(lookAroundButton()).toBeEnabled();
     expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
 
-    fireEvent.click(openButton());
+    fireEvent.click(lookAroundButton());
     expect(onComplete).toHaveBeenCalledTimes(2);
-    expect(openButton()).toBeDisabled();
+    expect(lookAroundButton()).toBeDisabled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     await act(async () => retry.resolve());
-    expect(openButton()).toBeEnabled();
+    expect(lookAroundButton()).toBeEnabled();
   });
 
   it("handles synchronous callbacks and synchronous failures", async () => {
@@ -117,12 +162,12 @@ describe("NotesWelcome", () => {
       .mockImplementationOnce(() => undefined);
     render(<NotesWelcome onComplete={onComplete} />);
 
-    fireEvent.click(openButton());
+    fireEvent.click(lookAroundButton());
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    expect(openButton()).toBeEnabled();
+    expect(lookAroundButton()).toBeEnabled();
 
-    fireEvent.click(openButton());
-    await waitFor(() => expect(openButton()).toBeEnabled());
+    fireEvent.click(lookAroundButton());
+    await waitFor(() => expect(lookAroundButton()).toBeEnabled());
     expect(onComplete).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });

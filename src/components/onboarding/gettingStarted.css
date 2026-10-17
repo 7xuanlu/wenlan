@@ -182,3 +182,42 @@
     padding: 28px 8px 20px;
   }
 }
+
+/* The question to paste into the connected tool, under the recall step. */
+.getting-started-prompt {
+  margin-top: 10px;
+}
+
+.getting-started-prompt-lead {
+  margin: 0 0 6px;
+  color: var(--mem-text-secondary);
+  font: 13px/1.5 var(--mem-font-body);
+}
+
+.getting-started-prompt-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-md);
+  background-color: var(--mem-bg);
+}
+
+.getting-started-prompt-text {
+  flex: 1;
+  min-width: 0;
+  color: var(--mem-text);
+  font: 13px/1.5 var(--mem-font-body);
+  overflow-wrap: anywhere;
+}
+
+/* An empty library has nothing to open or search, so the panel's copy gives
+   way to the checklist that offers the first note. */
+.wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-panel {
+  display: none;
+}
+
+.wiki-reading-start[data-library-empty="true"]:has(.getting-started) {
+  padding-top: 48px;
+}

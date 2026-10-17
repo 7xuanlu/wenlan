@@ -104,6 +104,7 @@ export const enFirstUse = {
       note: {
         title: "Write your first note",
         body: "Write down anything: a plan, an idea, or something you learned today.",
+        draftBody: "Your note is still a draft. Leave the editor and it is saved as a page your AI tools can find.",
         action: "Write a note",
       },
       tool: {
@@ -120,6 +121,10 @@ export const enFirstUse = {
         title: "Let your AI use what you saved",
         body: "Ask a connected tool about something in your library and see it answer with the source.",
         action: "See an example",
+        promptLead: "Ask {{tool}}:",
+        prompt: "Did I save anything about \"{{title}}\"? Recap it and tell me where it came from.",
+        copy: "Copy question",
+        copied: "Copied",
       },
     },
   },
@@ -248,6 +253,7 @@ export const hansFirstUse = {
       note: {
         title: "写下第一篇笔记",
         body: "随手记点什么：一个计划、一个想法，或今天学到的东西。",
+        draftBody: "你的笔记还是草稿。离开编辑器后它才会保存为页面，AI 工具才能找到。",
         action: "写笔记",
       },
       tool: {
@@ -264,6 +270,10 @@ export const hansFirstUse = {
         title: "让 AI 用上你存的内容",
         body: "在已连接的工具里问一个知识库里有的问题，看它带着出处回答。",
         action: "看示例",
+        promptLead: "在 {{tool}} 里问它：",
+        prompt: "我之前记过「{{title}}」相关的内容吗？帮我回顾一下，并说明来源。",
+        copy: "复制问题",
+        copied: "已复制",
       },
     },
   },
@@ -389,6 +399,7 @@ export const hantFirstUse = {
       note: {
         title: "寫下第一篇筆記",
         body: "隨手記點什麼：一個計畫、一個想法，或今天學到的東西。",
+        draftBody: "你的筆記還是草稿。離開編輯器後它才會儲存為頁面，AI 工具才能找到。",
         action: "寫筆記",
       },
       tool: {
@@ -405,6 +416,10 @@ export const hantFirstUse = {
         title: "讓 AI 用上你存的內容",
         body: "在已連接的工具裡問一個知識庫裡有的問題，看它帶著出處回答。",
         action: "看範例",
+        promptLead: "在 {{tool}} 裡問它：",
+        prompt: "我之前記過「{{title}}」相關的內容嗎？幫我回顧一下，並說明來源。",
+        copy: "複製問題",
+        copied: "已複製",
       },
     },
   },

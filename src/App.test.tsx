@@ -102,7 +102,7 @@ vi.mock("./components/SetupWizard", () => ({
   // Mirrors the Done step's contract with onComplete: await it and keep the
   // wizard on a rejection (the real step shows an inline alert).
   default: (props: {
-    onComplete: (destination?: "sources" | "connect-agent" | "connections") => void | Promise<void>;
+    onComplete: (destination?: "sources" | "connect-agent" | "connections" | "page-draft") => void | Promise<void>;
     daemonGateErrored?: boolean;
   }) => (
     <div data-testid="setup-wizard" data-gate-errored={String(!!props.daemonGateErrored)}>
@@ -117,7 +117,7 @@ vi.mock("./components/SetupWizard", () => ({
       >
         Finish setup
       </button>
-      {(["sources", "connect-agent", "connections"] as const).map((destination) => (
+      {(["sources", "connect-agent", "connections", "page-draft"] as const).map((destination) => (
         <button key={destination} type="button" onClick={() => {
           void Promise.resolve().then(() => props.onComplete(destination)).catch(() => {});
         }}>
@@ -427,6 +427,7 @@ describe("App - first-run wizard gate", () => {
     ["sources", "sources", undefined],
     ["connect-agent", "connect-agent", undefined],
     ["connections", "settings", "agents"],
+    ["page-draft", "page-draft", undefined],
   ] as const)("opens the chosen %s destination only after completion saves", async (destination, kind, section) => {
     vi.mocked(shouldShowWizard).mockResolvedValueOnce(true).mockResolvedValue(false);
     let resolve!: () => void;

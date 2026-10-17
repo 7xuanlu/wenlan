@@ -16,7 +16,7 @@
 
 .notes-welcome__content {
   width: 100%;
-  max-width: 400px;
+  max-width: 460px;
   margin: auto;
   text-align: center;
   font-family: var(--mem-font-body);
@@ -123,4 +123,88 @@
   .notes-welcome__main {
     padding-block: 24px;
   }
+}
+
+/* The three ways in. Flat bordered rows, not cards inside the page card. */
+.notes-welcome__paths {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 24px;
+  text-align: left;
+}
+
+.notes-welcome__path {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--mem-border);
+  border-radius: var(--mem-radius-lg);
+  background: var(--mem-surface);
+  color: var(--mem-text);
+  font-family: var(--mem-font-body);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.notes-welcome__path:hover {
+  background: var(--mem-hover);
+}
+
+.notes-welcome__path:focus-visible {
+  outline: 2px solid var(--mem-focus-ring);
+  outline-offset: 2px;
+}
+
+.notes-welcome__path:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.notes-welcome__path-icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--mem-radius-sm);
+  background-color: var(--mem-indigo-bg);
+  color: var(--mem-accent-indigo);
+  font-size: 18px;
+}
+
+.notes-welcome__path-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.notes-welcome__path-title {
+  font-size: var(--mem-text-base);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.notes-welcome__path-body {
+  color: var(--mem-text-secondary);
+  font-size: var(--mem-text-sm);
+  line-height: 1.5;
+}
+
+.notes-welcome__secondary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 16px;
+  margin-top: 8px;
+}
+
+.notes-welcome__secondary .notes-welcome__try {
+  display: inline-block;
+  margin: 0;
 }

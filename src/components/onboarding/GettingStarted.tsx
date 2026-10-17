@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import {
@@ -11,6 +11,7 @@ import {
   X,
 } from "@phosphor-icons/react";
 import {
+  clipboardWrite,
   listOnboardingMilestones,
   listRegisteredSources,
   type AgentConnection,
@@ -18,7 +19,9 @@ import {
   type Page,
   type RegisteredSource,
 } from "../../lib/tauri";
+import { resolveAgentDisplayName } from "../../lib/agents";
 import { seenFamiliesOf, useLiveAgents } from "../connect/connectionState";
+import { readStartPath, type StartPath } from "./startPath";
 import "./gettingStarted.css";
 
 /** Per-viewer convenience only: losing it just shows the card again. */
@@ -29,6 +32,7 @@ export const ESTABLISHED_LIBRARY_PAGES = 10;
 /** Wenlan's own identities: the app, its CLI, and the setup probe. Their calls
  *  say nothing about whether the user has connected an AI tool. */
 const OWN_IDENTITY = /^(wenlan|origin)(-|$)|^(manual|unknown)$/;
+const COPIED_MS = 2_000;
 
 export type GettingStartedStepId = "note" | "tool" | "sources" | "recall";
 
@@ -37,6 +41,17 @@ export interface GettingStartedProgress {
   readonly tool: boolean;
   readonly sources: boolean;
   readonly recall: boolean;
+}
+
+/** A draft lives only in the editor until the user leaves it; recall cannot
+ *  see it, so it does not count as a saved note. */
+export function publishedPages(pages: readonly Page[]): Page[] {
+  return pages.filter((page) => page.status !== "draft");
+}
+
+/** The AI tools that have called, Wenlan's own identities excluded. */
+export function connectedToolFamilies(agents: readonly AgentConnection[]): string[] {
+  return [...seenFamiliesOf(agents)].filter((family) => !OWN_IDENTITY.test(family));
 }
 
 /** Each step is read from what the library holds now, not from a stored
@@ -52,15 +67,23 @@ export function gettingStartedProgress({
   sources: readonly RegisteredSource[];
   milestones: readonly MilestoneRecord[];
 }): GettingStartedProgress {
-  const tools = [...seenFamiliesOf(agents)].filter((family) => !OWN_IDENTITY.test(family));
   return {
-    note: pages.length > 0,
-    tool: tools.length > 0,
+    note: publishedPages(pages).length > 0,
+    tool: connectedToolFamilies(agents).length > 0,
     sources: sources.length > 0
       || pages.some((page) => page.creation_kind === "source" || page.creation_kind === "imported"),
     recall: milestones.some((milestone) => milestone.id === "first-recall")
       || pages.some((page) => page.creation_kind === "distilled"),
   };
+}
+
+const DEFAULT_ORDER: readonly GettingStartedStepId[] = ["note", "tool", "sources", "recall"];
+
+/** The step the user chose on the welcome screen leads; recall, which needs
+ *  the others, stays last. */
+export function orderSteps(startPath: StartPath | null): GettingStartedStepId[] {
+  if (startPath === null) return [...DEFAULT_ORDER];
+  return [startPath, ...DEFAULT_ORDER.filter((id) => id !== startPath)];
 }
 
 function readDismissed(): boolean {
@@ -80,8 +103,24 @@ function writeDismissed(value: boolean) {
   }
 }
 
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await clipboardWrite(text);
+    return true;
+  } catch {
+    // Outside Tauri (browser preview) the plugin is missing; try the web API.
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface GettingStartedProps {
-  /** The Wiki inventory (active pages and drafts, entity shadows excluded). */
+  /** The Wiki inventory (active pages and drafts, entity shadows excluded),
+   *  most recently modified first. */
   readonly pages: readonly Page[];
   readonly pagesReady: boolean;
   readonly onWriteNote: () => void;
@@ -100,6 +139,8 @@ export function GettingStarted({
 }: GettingStartedProps) {
   const { t } = useTranslation();
   const [dismissed, setDismissed] = useState(readDismissed);
+  const [startPath] = useState(readStartPath);
+  const [copied, setCopied] = useState(false);
   const agentsQuery = useLiveAgents();
   const sourcesQuery = useQuery({
     queryKey: ["registeredSources"],
@@ -114,6 +155,12 @@ export function GettingStarted({
     staleTime: 30_000,
   });
 
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), COPIED_MS);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
   // A failed read would claim a step is undone when it may not be, so the
   // card stays away rather than guess.
   if (!pagesReady || !agentsQuery.isSuccess || !sourcesQuery.isSuccess || !milestonesQuery.isSuccess) {
@@ -127,18 +174,15 @@ export function GettingStarted({
     sources: sourcesQuery.data,
     milestones: milestonesQuery.data,
   });
-  const steps: {
-    id: GettingStartedStepId;
-    icon: React.ReactNode;
-    onAction: () => void;
-  }[] = [
-    { id: "note", icon: <NotePencil weight="regular" />, onAction: onWriteNote },
-    { id: "tool", icon: <PlugsConnected weight="regular" />, onAction: onConnectTool },
-    { id: "sources", icon: <FolderSimplePlus weight="regular" />, onAction: onAddSources },
-    { id: "recall", icon: <Sparkle weight="regular" />, onAction: onSeeExample },
-  ];
-  const doneCount = steps.filter((step) => progress[step.id]).length;
-  if (doneCount === steps.length) return null;
+  const stepsById: Record<GettingStartedStepId, { icon: React.ReactNode; onAction: () => void }> = {
+    note: { icon: <NotePencil weight="regular" />, onAction: onWriteNote },
+    tool: { icon: <PlugsConnected weight="regular" />, onAction: onConnectTool },
+    sources: { icon: <FolderSimplePlus weight="regular" />, onAction: onAddSources },
+    recall: { icon: <Sparkle weight="regular" />, onAction: onSeeExample },
+  };
+  const order = orderSteps(startPath);
+  const doneCount = order.filter((id) => progress[id]).length;
+  if (doneCount === order.length) return null;
 
   if (dismissed) {
     return (
@@ -155,10 +199,23 @@ export function GettingStarted({
     );
   }
 
+  // The moment the whole thing is for happens outside Wenlan, in the AI tool.
+  // Once a note is saved and a tool has called, hand the user the exact
+  // question to paste there, about the note they just wrote.
+  const published = publishedPages(pages);
+  const promptTool = progress.note && progress.tool && !progress.recall
+    ? resolveAgentDisplayName(connectedToolFamilies(agentsQuery.data)[0], agentsQuery.data)
+    : null;
+  const promptText = promptTool
+    ? t("firstUse.checklist.steps.recall.prompt", { title: published[0].title })
+    : null;
+  const onlyDrafts = !progress.note && pages.length > 0;
+
   return (
     <section
       className="getting-started"
       data-testid="getting-started"
+      data-start-path={startPath ?? undefined}
       aria-labelledby="getting-started-title"
     >
       <header className="getting-started-header">
@@ -180,15 +237,19 @@ export function GettingStarted({
         </button>
       </header>
       <p className="getting-started-progress">
-        {t("firstUse.checklist.progress", { done: doneCount, total: steps.length })}
+        {t("firstUse.checklist.progress", { done: doneCount, total: order.length })}
       </p>
       <ol className="getting-started-steps">
-        {steps.map((step) => {
-          const done = progress[step.id];
+        {order.map((id) => {
+          const step = stepsById[id];
+          const done = progress[id];
+          const body = id === "note" && onlyDrafts
+            ? t("firstUse.checklist.steps.note.draftBody")
+            : t(`firstUse.checklist.steps.${id}.body`);
           return (
             <li
-              key={step.id}
-              data-testid={`getting-started-${step.id}`}
+              key={id}
+              data-testid={`getting-started-${id}`}
               data-done={done ? "true" : "false"}
             >
               <span className="getting-started-icon" aria-hidden="true">
@@ -196,16 +257,36 @@ export function GettingStarted({
               </span>
               <div className="getting-started-copy">
                 <p className="getting-started-step-title">
-                  {t(`firstUse.checklist.steps.${step.id}.title`)}
+                  {t(`firstUse.checklist.steps.${id}.title`)}
                   {done ? (
                     <span className="sr-only">{` ${t("firstUse.checklist.done")}`}</span>
                   ) : null}
                 </p>
-                {done ? null : (
-                  <p className="getting-started-step-body">
-                    {t(`firstUse.checklist.steps.${step.id}.body`)}
-                  </p>
-                )}
+                {done ? null : <p className="getting-started-step-body">{body}</p>}
+                {!done && id === "recall" && promptTool && promptText ? (
+                  <div className="getting-started-prompt" data-testid="getting-started-prompt">
+                    <p className="getting-started-prompt-lead">
+                      {t("firstUse.checklist.steps.recall.promptLead", { tool: promptTool })}
+                    </p>
+                    <div className="getting-started-prompt-row">
+                      <code className="getting-started-prompt-text">{promptText}</code>
+                      <button
+                        type="button"
+                        className="getting-started-action"
+                        aria-live="polite"
+                        onClick={() => {
+                          void copyText(promptText).then((ok) => {
+                            if (ok) setCopied(true);
+                          });
+                        }}
+                      >
+                        {copied
+                          ? t("firstUse.checklist.steps.recall.copied")
+                          : t("firstUse.checklist.steps.recall.copy")}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
               </div>
               {done ? null : (
                 <button
@@ -213,7 +294,7 @@ export function GettingStarted({
                   className="getting-started-action"
                   onClick={step.onAction}
                 >
-                  {t(`firstUse.checklist.steps.${step.id}.action`)}
+                  {t(`firstUse.checklist.steps.${id}.action`)}
                 </button>
               )}
             </li>

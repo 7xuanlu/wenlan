@@ -263,9 +263,12 @@ describe("SetupWizard", () => {
   it("starts with notes and an optional example, without setup questions", () => {
     renderWizard();
     expect(screen.getByText("Welcome to Wenlan")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open notes" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Let my AI tools remember me" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Bring in what I already have" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Write a note first" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Just look around" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Try an example" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button")).toHaveLength(2);
+    expect(screen.getAllByRole("button")).toHaveLength(5);
     expect(screen.queryByTestId("wizard-action-bar")).not.toBeInTheDocument();
     expect(detectMcpClients).not.toHaveBeenCalled();
     expect(getWireState).not.toHaveBeenCalled();
@@ -330,13 +333,14 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(screen.getByText("欢迎使用文澜")).toBeInTheDocument();
-    expect(screen.getByText("不用先设置模型或导入资料。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "打开笔记" })).toBeInTheDocument();
+    expect(screen.getByText("你想先怎么用文澜？")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "先写一篇笔记" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "先随便看看" })).toBeInTheDocument();
   });
 
   it("opens notes directly without entering intelligence setup", async () => {
     const { onComplete } = renderWizard();
-    fireEvent.click(screen.getByRole("button", { name: "Open notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Just look around" }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Choose how Wenlan thinks")).not.toBeInTheDocument();
     expect(setSourcePin).not.toHaveBeenCalled();
@@ -1493,7 +1497,7 @@ describe("SetupWizard", () => {
       },
     });
     const { onComplete } = renderWizard();
-    fireEvent.click(screen.getByRole("button", { name: "Open notes" }));
+    fireEvent.click(screen.getByRole("button", { name: "Just look around" }));
     await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
     expect(getBackgroundAiEnabled).not.toHaveBeenCalled();
     expect(getResolvedRouting).not.toHaveBeenCalled();
@@ -2510,9 +2514,7 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(
-      await screen.findByText(
-        "Start with a note. Connect your AI tools when you need them.",
-      ),
+      await screen.findByText("How do you want to start?"),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Welcome to Wenlan" }),
@@ -3228,7 +3230,7 @@ describe("DoneStep and Setting up: Added versus Connected", () => {
     renderDoneWith(["cursor"], NOW());
 
     const added = await screen.findByTestId("done-added-agents");
-    expect(within(added).getByText("Added. Restart to finish:")).toBeInTheDocument();
+    expect(within(added).getByText("Added. Connects once you restart:")).toBeInTheDocument();
     expect(within(added).getByText("Cursor")).toBeInTheDocument();
     expect(screen.queryByTestId("done-connected-agents")).not.toBeInTheDocument();
     expect(screen.queryByText("Connected:")).not.toBeInTheDocument();
