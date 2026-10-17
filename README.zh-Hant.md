@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=609a06abebc23bddb7a2f4ae44addc1a7b609a605e3b6101dcf56f9110eeb08e -->
+<!-- README_SYNC: source=README.md sha256=da190344184dda7268b225e4b3e06a03b29c70c768b39f56c60a624ba91aa219 -->
 
 <p align="center">
   <picture>
@@ -89,7 +89,7 @@
 你可以單獨使用 App，也可以搭配 AI 工作。把值得留下的知識與進度存回 Wenlan，下次接著用。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-zh-Hant.png" alt="來源與既有記憶累積在 Wenlan；在 App 或 AI 中使用，再存回新記憶與工作進度，供下次接續。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-daily-workflow-zh-Hant.png" alt="來源與既有記憶累積在 Wenlan；在 App 或 AI 中使用，再存回新記憶與工作進度，供下次接續。" width="100%">
 </p>
 
 簡化流程示意；插件指令與頁面整理均按需使用，沒有固定順序。
@@ -149,7 +149,7 @@
 - **Spaces 範圍檢索**：選定 Space，將回傳的知識限制在相關專案或個人資料集合內。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-knowledge-to-work-zh-Hant.png" alt="AI 接著做，不必從頭交代：關鍵詞、語義與圖譜檢索" width="100%">
 </p>
 <p>虛構案例，非產品測試；文瀾補充脈絡，與 Claude 原生記憶搭配使用。</p>
 
@@ -177,7 +177,7 @@
 - **[選配的背景模型](docs/setup-and-data.zh-Hant.md#models)**：用裝置端 Qwen（llama.cpp）、Ollama 或 LM Studio 等 OpenAI 相容本地服務，或已設定的雲端供應商啟用整理、頁面合成與自動更新。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-updates-history-zh-Hant.png" alt="示意流程：文件來源中的發現將記憶由 V1 更新為 V2，再影響自動更新或待審修訂的知識頁。" width="100%">
 </p>
 <p>實機畫面搭配示範資料；連線與標註為示意。</p>
 
@@ -188,7 +188,7 @@
 **共用本地知識庫。** App、CLI 與 AI 工具透過 Wenlan 本地服務讀寫。頁面以 Markdown 保存；記憶、關係與搜尋索引由本地 libSQL 管理。
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-architecture-zh-Hant.png" alt="架構示意：App 與 AI 工具共用本地知識庫，背景整理模型為選配。" width="100%">
 </p>
 
 架構示意。[檢索、引用與模型](docs/technical-foundations.md)。

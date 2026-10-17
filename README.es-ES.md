@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=609a06abebc23bddb7a2f4ae44addc1a7b609a605e3b6101dcf56f9110eeb08e -->
+<!-- README_SYNC: source=README.md sha256=da190344184dda7268b225e4b3e06a03b29c70c768b39f56c60a624ba91aa219 -->
 
 <p align="center">
   <picture>
@@ -89,7 +89,7 @@ Prueba con la página que acabas de abrir o guardar:
 Puedes usar la aplicación por sí sola o trabajar con tu IA. Guarda en Wenlan el conocimiento útil y el progreso para retomarlos en la próxima tarea.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-daily-workflow-es-ES.png" alt="Las fuentes y memorias previas se acumulan en Wenlan; úsalas en la aplicación o con IA y guarda nuevas memorias y el progreso para continuar después." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-daily-workflow-es-ES.png" alt="Las fuentes y memorias previas se acumulan en Wenlan; úsalas en la aplicación o con IA y guarda nuevas memorias y el progreso para continuar después." width="100%">
 </p>
 
 Flujo simplificado. Los comandos del plugin y la organización de páginas son opcionales, sin un orden fijo.
@@ -149,7 +149,7 @@ Usa la misma base de conocimiento con distintas herramientas de IA. Los **plugin
 - **Búsqueda por Espacio:** Selecciona un Espacio para limitar el conocimiento devuelto al proyecto o colección personal pertinente.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-knowledge-to-work-es-ES.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-knowledge-to-work-es-ES.png" alt="La IA continúa con lo que ya sabes: búsqueda por palabras clave, significado y grafo" width="100%">
 </p>
 <p>Ejemplo ficticio, no una prueba del producto; Wenlan aporta contexto junto con la memoria nativa de Claude.</p>
 
@@ -177,7 +177,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 - **[Modelos opcionales en segundo plano](docs/setup-and-data.es-ES.md#models):** Activa el enriquecimiento, la síntesis y la actualización automática con Qwen en el dispositivo (llama.cpp), servidores locales compatibles con OpenAI como Ollama o LM Studio, o proveedores de nube configurados.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-updates-history-zh-Hant.png" alt="Flujo ilustrativo: un hallazgo en un documento actualiza la memoria de V1 a V2 y después influye en una página de conocimiento, que se actualiza automáticamente o queda pendiente de revisión." width="100%">
 </p>
 <p>Vistas de la app con datos de ejemplo; conexiones y etiquetas ilustrativas.</p>
 
@@ -188,7 +188,7 @@ El acceso web experimental permite que clientes compatibles busquen en toda la b
 **Una base local compartida.** La app, la CLI y las herramientas de IA conectadas leen y escriben mediante el servicio local de Wenlan. Las páginas son archivos Markdown; memorias, relaciones e índices de búsqueda residen en libSQL local.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/ffe29d62f083010bea1ee7f78cb44fd6b1f4b61b/docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
+  <img src="https://raw.githubusercontent.com/wenlan-app/wenlan/c45723a1cc79be1dd3c4bd1226b5285ad135be8a/docs/assets/wenlan-architecture-es-ES.png" alt="Vista de la arquitectura: la app y las herramientas de IA comparten una base de conocimiento local, con modelos opcionales para la organización en segundo plano." width="100%">
 </p>
 
 Esquema de la arquitectura. [Búsqueda, evidencias y modelos](docs/technical-foundations.md).
