@@ -303,13 +303,14 @@
   }
 }
 
-/* The quoted line gets a faint neutral wash over the lower half of the
-   text, like a soft pencil mark, rather than a coloured fill or line. */
+/* The quoted line gets a soft warm wash, like a light highlighter on
+   paper, rather than a saturated fill or a coloured line. */
 .fus-doc mark,
 .fus-rack-card mark,
 .fus-dialog mark {
   color: var(--mem-text);
-  background: linear-gradient(transparent 55%, color-mix(in srgb, var(--mem-text) 9%, transparent) 55%);
+  background: color-mix(in srgb, var(--mem-accent-amber) 22%, transparent);
+  border-radius: 2px;
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
