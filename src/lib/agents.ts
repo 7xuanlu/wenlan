@@ -162,6 +162,11 @@ export function toolFamilyOf(agent: { name: string; agent_type: string }): strin
   return name;
 }
 
+/** Wenlan's own identities: the app, its CLI, and the setup probe. Their calls
+ *  say nothing about whether the user has connected an AI tool, so no list of
+ *  the user's tools shows them. Tested against a tool family. */
+export const OWN_IDENTITY = /^(wenlan|origin)(-|$)|^(manual|unknown)$/;
+
 /** Display label for a tool family: the registry name, else the same
  *  prettifier `resolveAgentDisplayName` uses for an unrecognized slug. */
 export function familyDisplayName(family: string): string {

@@ -266,8 +266,9 @@ const en = {
       allSetTitle: "You're all set.",
       allSetBody1:
         "Keep using your AI tools normally. Wenlan turns what they learn into pages you can read and cite.",
-      allSetBody2:
-        "Pages refresh between sessions, so the next one starts where the last ended.",
+      addedTitle: "Tools added",
+      restartHint: "Restart these tools and they will read and write your library.",
+      backToWiki: "Back to Wiki",
       routingSummary:
         "Everyday tasks: {{everyday}}. Page synthesis: {{synthesis}}. Change this anytime in Settings → Intelligence.",
       noModelAssurance:
@@ -277,10 +278,6 @@ const en = {
       topics: "Topics",
       connections: "Connections",
       pagesWillDistill: "Pages will distill from these as Wenlan connects the dots.",
-      connected: "Connected:",
-      added: "Added. Connects once you restart:",
-      moreAgents_one: "+{{count}} more",
-      moreAgents_other: "+{{count}} more",
     },
   },
   vaultConnect: {
@@ -2858,7 +2855,9 @@ const zhHans = {
       openWenlan: "打开文澜",
       allSetTitle: "全部设置完成。",
       allSetBody1: "继续照常使用你的 AI 工具。文澜会把它们学到的内容变成可阅读、可引用的页面。",
-      allSetBody2: "页面会在会话之间刷新，让下一次对话从上一次结束的地方继续。",
+      addedTitle: "工具已添加",
+      restartHint: "重启这些工具后，它们就能读写你的知识库。",
+      backToWiki: "回到 Wiki",
       routingSummary:
         "日常任务：{{everyday}}。页面综合：{{synthesis}}。可随时在“设置 → 智能”中更改。",
       noModelAssurance:
@@ -2868,10 +2867,6 @@ const zhHans = {
       topics: "主题",
       connections: "连接",
       pagesWillDistill: "随着文澜连接线索，这些内容会蒸馏成页面。",
-      connected: "已连接：",
-      added: "已添加，重启这些工具后才会连上：",
-      moreAgents_one: "还有 {{count}} 个",
-      moreAgents_other: "还有 {{count}} 个",
     },
   },
   vaultConnect: {
@@ -5399,7 +5394,9 @@ const zhHant = {
       openWenlan: "開啟文瀾",
       allSetTitle: "全部設定完成。",
       allSetBody1: "繼續照常使用你的 AI 工具。文瀾會把它們學到的內容變成可閱讀、可引用的頁面。",
-      allSetBody2: "頁面會在工作階段之間更新，讓下一次對話從上一次結束的地方繼續。",
+      addedTitle: "工具已新增",
+      restartHint: "重新啟動這些工具後，它們就能讀寫你的知識庫。",
+      backToWiki: "回到 Wiki",
       routingSummary:
         "日常任務：{{everyday}}。頁面綜合：{{synthesis}}。可隨時在「設定 → 智慧」中更改。",
       noModelAssurance:
@@ -5409,10 +5406,6 @@ const zhHant = {
       topics: "主題",
       connections: "連結",
       pagesWillDistill: "隨著文瀾連接線索，這些內容會蒸餾成頁面。",
-      connected: "已連接：",
-      added: "已新增，重新啟動這些工具後才會連上：",
-      moreAgents_one: "還有 {{count}} 個",
-      moreAgents_other: "還有 {{count}} 個",
     },
   },
   vaultConnect: {

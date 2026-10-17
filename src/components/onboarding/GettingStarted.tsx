@@ -19,7 +19,7 @@ import {
   type Page,
   type RegisteredSource,
 } from "../../lib/tauri";
-import { resolveAgentDisplayName, toolFamilyOf } from "../../lib/agents";
+import { OWN_IDENTITY, resolveAgentDisplayName, toolFamilyOf } from "../../lib/agents";
 import { useLiveAgents } from "../connect/connectionState";
 import "./gettingStarted.css";
 
@@ -28,9 +28,6 @@ const DISMISSED_KEY = "onboarding:gettingStartedDismissed";
 /** A library with this many pages is past first use; existing users upgrading
  *  into this card would read it as noise. */
 export const ESTABLISHED_LIBRARY_PAGES = 10;
-/** Wenlan's own identities: the app, its CLI, and the setup probe. Their calls
- *  say nothing about whether the user has connected an AI tool. */
-const OWN_IDENTITY = /^(wenlan|origin)(-|$)|^(manual|unknown)$/;
 const COPIED_MS = 2_000;
 
 export type GettingStartedStepId = "note" | "tool" | "sources" | "recall";
