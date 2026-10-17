@@ -1,15 +1,15 @@
 <svg width="1280" height="320" viewBox="0 0 1280 320" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">Wenlan: A living personal wiki. AI organizes. You stay in control.</desc>
-  <rect width="1280" height="320" fill="#101024"/>
+  <rect width="1280" height="320" fill="#191C24"/>
   <g transform="translate(80 72) scale(0.34375)">
     <rect width="512" height="512" rx="112" fill="#1A1A2E"/>
     <circle cx="256" cy="256" r="160" fill="none" stroke="url(#banner-en-desktop-ring)" stroke-width="76"/>
     <circle cx="322" cy="160" r="42" fill="url(#banner-en-desktop-orb)"/>
   </g>
-  <text x="312" y="108" fill="#93E3F2" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="24" font-weight="700" text-anchor="start" letter-spacing="4">WENLAN</text>
-  <text x="312" y="165" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="44" font-weight="700" text-anchor="start">A living personal wiki.</text>
-  <text x="312" y="211" fill="#F7F8FF" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="32" font-weight="400" text-anchor="start">AI organizes. You stay in control.</text>
+  <text x="312" y="108" fill="#8FB3EA" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="24" font-weight="700" text-anchor="start" letter-spacing="4">WENLAN</text>
+  <text x="312" y="165" fill="#F1EFE8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="44" font-weight="700" text-anchor="start">A living personal wiki.</text>
+  <text x="312" y="211" fill="#F1EFE8" font-family="Arial, &quot;Helvetica Neue&quot;, sans-serif" font-size="32" font-weight="400" text-anchor="start">AI organizes. You stay in control.</text>
   <defs>
     <linearGradient id="banner-en-desktop-ring" x1="96" y1="256" x2="416" y2="256" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6C63FF"/>

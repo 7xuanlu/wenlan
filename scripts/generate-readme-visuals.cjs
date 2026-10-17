@@ -24,9 +24,10 @@ const BANNER_VIEWPORTS = {
 };
 
 const BANNER = {
-  dark: "#101024",
-  white: "#F7F8FF",
-  cyan: "#93E3F2",
+  // Match the App dark theme: background, primary text, and accent.
+  dark: "#191C24",
+  white: "#F1EFE8",
+  accent: "#8FB3EA",
   latin: 'Arial, "Helvetica Neue", sans-serif',
 };
 
@@ -88,11 +89,11 @@ function makeSimpleBanner(viewport, locale) {
     `<text x="${x}" y="${y}" fill="${color}" font-family="${esc(copy.font)}" font-size="${size}" font-weight="${weight}" text-anchor="${anchor}"${letterSpacing === null ? "" : ` letter-spacing="${letterSpacing}"`}>${esc(value)}</text>`;
   const content = mobile
     ? `${logoMarkup({ x: 316, y: 20, size: 88, prefix })}
-  ${text(360, 138, "WENLAN", 20, BANNER.cyan, 700, "middle", 4)}
+  ${text(360, 138, "WENLAN", 20, BANNER.accent, 700, "middle", 4)}
   ${text(360, 185, copy.title[0], 34, BANNER.white, 700, "middle")}
   ${text(360, 225, copy.title[1], 28, BANNER.white, 400, "middle")}`
     : `${logoMarkup({ x: 80, y: 72, size: 176, prefix })}
-  ${text(312, 108, "WENLAN", 24, BANNER.cyan, 700, "start", 4)}
+  ${text(312, 108, "WENLAN", 24, BANNER.accent, 700, "start", 4)}
   ${text(312, 165, copy.title[0], 44, BANNER.white, 700, "start")}
   ${text(312, 211, copy.title[1], 32, BANNER.white, 400, "start")}`;
 
