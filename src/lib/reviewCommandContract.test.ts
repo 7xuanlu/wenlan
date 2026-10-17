@@ -107,6 +107,7 @@ const OUTSIDE_THE_REVIEW_SURFACE: readonly string[] = [
   "on_device_model_download_bytes",
   "open_file",
   "open_search_result",
+  "open_tool_with_prompt",
   "position_quick_capture",
   "quick_capture",
   "quit_wenlan_full",

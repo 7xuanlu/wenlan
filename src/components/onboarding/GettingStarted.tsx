@@ -9,7 +9,7 @@ import {
   Sparkle,
   X,
 } from "@phosphor-icons/react";
-import { clipboardWrite } from "../../lib/tauri";
+import { clipboardWrite, openToolWithPrompt, PROMPT_LINK_FAMILIES } from "../../lib/tauri";
 import { resolveAgentDisplayName } from "../../lib/agents";
 import {
   connectedToolFamilies,
@@ -52,6 +52,9 @@ export function GettingStarted({
 }: GettingStartedProps) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  // "opened": the tool has the question typed in. "copied": it could not be
+  // opened, so the question is on the clipboard to paste there instead.
+  const [handedOver, setHandedOver] = useState<"opened" | "copied" | null>(null);
   const { visible, progress, doneCount, dismissed, setDismissed, pages, agents } = useGettingStartedState();
 
   useEffect(() => {
@@ -83,11 +86,16 @@ export function GettingStarted({
   }
 
   // The moment the whole thing is for happens outside Wenlan, in the AI tool.
-  // Once a note is saved and a tool has called, hand the user the exact
-  // question to paste there, about the note they just wrote.
+  // Once a note is saved and a tool is connected, open that tool with the
+  // question about the note they just wrote already typed in (a tool that
+  // cannot be opened that way gets it copied). The step then checks itself
+  // when the tool reads the note.
   const published = publishedPages(pages);
-  const promptTool = progress.note && progress.tool && !progress.recall
-    ? resolveAgentDisplayName(connectedToolFamilies(agents)[0], agents)
+  const families = connectedToolFamilies(agents);
+  const promptFamily = families.find((family) => PROMPT_LINK_FAMILIES.includes(family)) ?? families[0];
+  const opensTool = promptFamily != null && PROMPT_LINK_FAMILIES.includes(promptFamily);
+  const promptTool = progress.note && progress.tool && !progress.recall && promptFamily != null
+    ? resolveAgentDisplayName(promptFamily, agents)
     : null;
   const promptText = promptTool
     ? t("firstUse.checklist.steps.recall.prompt", { title: published[0].title })
@@ -128,13 +136,19 @@ export function GettingStarted({
         {order.map((id) => {
           const step = stepsById[id];
           const done = progress[id];
-          // Once there is a question to paste, the recall row reads like the
-          // others: the question as its one line, and one button to copy it.
+          // Once there is a question to ask, the recall row reads like the
+          // others: the question as its one line, and one button that opens the
+          // tool with it typed in (or copies it where that is not possible).
           const asking = !done && id === "recall" && promptTool != null && promptText != null;
           const body = id === "note" && onlyDrafts
             ? t("firstUse.checklist.steps.note.draftBody")
-            : asking
-              ? t("firstUse.checklist.steps.recall.askLine", { tool: promptTool, title: published[0].title })
+            : asking && handedOver === "opened"
+              ? t("firstUse.checklist.steps.recall.waiting", { tool: promptTool })
+              : asking && opensTool && handedOver !== "copied"
+                // The button already names the tool, so the line is just the question.
+                ? t("firstUse.checklist.steps.recall.question", { title: published[0].title })
+                : asking
+                  ? t("firstUse.checklist.steps.recall.askLine", { tool: promptTool, title: published[0].title })
               : t(`firstUse.checklist.steps.${id}.body`);
           return (
             <li
@@ -160,14 +174,28 @@ export function GettingStarted({
                   className="getting-started-action"
                   aria-live="polite"
                   onClick={() => {
-                    void copyText(promptText).then((ok) => {
-                      if (ok) setCopied(true);
+                    void copyText(promptText).then(async (ok) => {
+                      if (opensTool && promptFamily != null) {
+                        try {
+                          await openToolWithPrompt(promptFamily, promptText);
+                          setHandedOver("opened");
+                          return;
+                        } catch {
+                          // Not installed here; the copied question still works.
+                        }
+                      }
+                      if (ok) {
+                        setHandedOver("copied");
+                        setCopied(true);
+                      }
                     });
                   }}
                 >
                   {copied
                     ? t("firstUse.checklist.steps.recall.copied")
-                    : t("firstUse.checklist.steps.recall.copy")}
+                    : opensTool && handedOver !== "copied"
+                      ? t("firstUse.checklist.steps.recall.askIn", { tool: promptTool })
+                      : t("firstUse.checklist.steps.recall.copy")}
                 </button>
               ) : (
                 <button

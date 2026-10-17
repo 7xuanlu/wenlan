@@ -10,6 +10,7 @@ import {
   listOnboardingMilestones,
   listPagesExplicitBrowse,
   listRegisteredSources,
+  openToolWithPrompt,
   type AgentConnection,
   type MilestoneRecord,
   type Page,
@@ -28,6 +29,8 @@ vi.mock("../../../lib/tauri", () => ({
   listOnboardingMilestones: vi.fn(),
   listPagesExplicitBrowse: vi.fn(),
   listRegisteredSources: vi.fn(),
+  openToolWithPrompt: vi.fn(),
+  PROMPT_LINK_FAMILIES: ["claude-desktop", "claude-code", "codex", "cursor"],
 }));
 
 function page(overrides: Partial<Page> = {}): Page {
@@ -214,24 +217,56 @@ describe("GettingStarted", () => {
     expect(screen.queryByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copy") })).toBeNull();
   });
 
-  it("hands over the exact question to paste into the connected tool once a note is saved", async () => {
-    vi.mocked(listAgents).mockResolvedValue([agent("claude-code")]);
-    vi.mocked(clipboardWrite).mockResolvedValue(undefined);
+  type AskKey = "prompt" | "question" | "askLine" | "askIn" | "waiting" | "action" | "copy" | "copied";
+  const ask = (key: AskKey, options: { tool?: string; title?: string } = {}) =>
+    i18n.t(`firstUse.checklist.steps.recall.${key}` as const, options);
+
+  function renderAskStep() {
     renderCard([
       page({ id: "newest", title: "Kyoto itinerary", last_modified: "2026-10-02T00:00:00Z" }),
       page({ id: "older", title: "Older note" }),
     ]);
+  }
+
+  it("opens the connected tool with the question about the newest note typed in", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent("claude-code")]);
+    vi.mocked(clipboardWrite).mockResolvedValue(undefined);
+    vi.mocked(openToolWithPrompt).mockResolvedValue(undefined);
+    renderAskStep();
     await screen.findByRole("heading", { name: title() });
 
-    const prompt = i18n.t("firstUse.checklist.steps.recall.prompt", { title: "Kyoto itinerary" });
-    expect(
-      screen.getByText(i18n.t("firstUse.checklist.steps.recall.askLine", { tool: "Claude Code", title: "Kyoto itinerary" })),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copy") }));
-    await vi.waitFor(() => expect(clipboardWrite).toHaveBeenCalledWith(prompt));
-    expect(await screen.findByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.copied") })).toBeInTheDocument();
+    const prompt = ask("prompt", { title: "Kyoto itinerary" });
+    expect(screen.getByText(ask("question", { title: "Kyoto itinerary" }))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: ask("askIn", { tool: "Claude Code" }) }));
+    await vi.waitFor(() => expect(openToolWithPrompt).toHaveBeenCalledWith("claude-code", prompt));
+    expect(clipboardWrite).toHaveBeenCalledWith(prompt);
+    expect(await screen.findByText(ask("waiting", { tool: "Claude Code" }))).toBeInTheDocument();
     // The example stays one click away in the header for whoever wants to see it first.
-    expect(screen.getAllByRole("button", { name: i18n.t("firstUse.checklist.steps.recall.action") })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: ask("action") })).toHaveLength(1);
+  });
+
+  it("falls back to the copied question when the tool cannot be opened", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent("codex")]);
+    vi.mocked(clipboardWrite).mockResolvedValue(undefined);
+    vi.mocked(openToolWithPrompt).mockRejectedValue(new Error("not installed"));
+    renderAskStep();
+    await screen.findByRole("heading", { name: title() });
+
+    fireEvent.click(screen.getByRole("button", { name: ask("askIn", { tool: "Codex" }) }));
+    expect(await screen.findByRole("button", { name: ask("copied") })).toBeInTheDocument();
+    expect(clipboardWrite).toHaveBeenCalledWith(ask("prompt", { title: "Kyoto itinerary" }));
+    expect(screen.getByText(ask("askLine", { tool: "Codex", title: "Kyoto itinerary" }))).toBeInTheDocument();
+  });
+
+  it("only copies the question for a tool no link can open", async () => {
+    vi.mocked(listAgents).mockResolvedValue([agent("gemini-cli")]);
+    vi.mocked(clipboardWrite).mockResolvedValue(undefined);
+    renderAskStep();
+    await screen.findByRole("heading", { name: title() });
+
+    fireEvent.click(screen.getByRole("button", { name: ask("copy") }));
+    expect(await screen.findByRole("button", { name: ask("copied") })).toBeInTheDocument();
+    expect(openToolWithPrompt).not.toHaveBeenCalled();
   });
 
   it("keeps the prompt away until a tool has actually connected", async () => {

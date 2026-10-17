@@ -4,7 +4,7 @@
 
 .getting-started {
   margin: 0 auto;
-  max-width: min(100%, 560px);
+  max-width: min(100%, 480px);
   padding: 14px 20px 4px;
   border: 1px solid var(--mem-border);
   border-radius: var(--mem-radius-lg);
@@ -184,9 +184,13 @@
   outline-offset: 2px;
 }
 
-/* With the directory gone the checklist is the whole screen, so it may be a
-   little wider than the two-column default. The compact reading-start panel
-   above it lives in wikiInventoryOverview.css. */
+/* With the directory gone the checklist is the whole screen. It sits in the
+   upper third, where the eye lands first, at a width that keeps each step's
+   text and its button close together. */
 .wiki-reading-start[data-onboarding="true"] .getting-started {
-  max-width: min(100%, 620px);
+  margin-top: clamp(32px, 14vh, 128px);
+}
+
+.wiki-reading-start[data-onboarding="true"] .getting-started-header h2 {
+  font-size: 18px;
 }
