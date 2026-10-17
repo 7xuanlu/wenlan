@@ -1,12 +1,7 @@
 import { PageIcon } from "../assets/PageIcon";
-import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import {
-  EXPLICIT_BROWSE_QUERY_POLICY,
-  listAllActivePagesExplicitBrowse,
-  listAllDraftPagesExplicitBrowse,
-} from "./listAllPages";
-import { collectPageInventory, type WikiInventoryScope } from "./pageInventory";
+import type { WikiInventoryScope } from "./pageInventory";
+import { useLibraryInventory } from "./useLibraryInventory";
 import "./wikiInventoryOverview.css";
 import { FirstPageMilestone } from "../../onboarding/FirstPageMilestone";
 import { GettingStarted } from "../../onboarding/GettingStarted";
@@ -34,21 +29,11 @@ export function PagesOverview({
   onSeeExample,
 }: PagesOverviewProps) {
   const { t } = useTranslation();
-  const activePagesQuery = useQuery({
-    queryKey: ["pages", "active"],
-    queryFn: listAllActivePagesExplicitBrowse,
-    ...EXPLICIT_BROWSE_QUERY_POLICY,
-  });
-  const draftPagesQuery = useQuery({
-    queryKey: ["pages", "draft"],
-    queryFn: listAllDraftPagesExplicitBrowse,
-    ...EXPLICIT_BROWSE_QUERY_POLICY,
-  });
-  const pages = collectPageInventory(activePagesQuery.data ?? [], draftPagesQuery.data ?? []);
+  const { pages, ready, empty } = useLibraryInventory();
   const gettingStarted = onConnectTool && onAddSources && onSeeExample ? (
     <GettingStarted
       pages={pages}
-      pagesReady={activePagesQuery.isSuccess && draftPagesQuery.isSuccess}
+      pagesReady={ready}
       onWriteNote={() => onCreatePage(null)}
       onConnectTool={onConnectTool}
       onAddSources={onAddSources}
@@ -59,7 +44,7 @@ export function PagesOverview({
   return (
     <section
       className="wiki-overview wiki-reading-start mx-auto w-full max-w-[1130px] pb-16"
-      data-library-empty={activePagesQuery.isSuccess && draftPagesQuery.isSuccess && pages.length === 0 ? "true" : undefined}
+      data-library-empty={empty ? "true" : undefined}
     >
       <FirstPageMilestone pages={pages} onSelectPage={onSelectPage} />
       <div className="wiki-reading-start-panel">

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   distillReview,
@@ -111,4 +111,21 @@ describe("PagesOverview reading workspace", () => {
     expect(listRefinements).not.toHaveBeenCalled();
   });
 
+  it("marks the start section empty only once both lists loaded with no notes", async () => {
+    const { container } = renderOverview();
+    const section = container.querySelector(".wiki-reading-start");
+    expect(section).not.toHaveAttribute("data-library-empty");
+    await waitFor(() => expect(section).toHaveAttribute("data-library-empty", "true"));
+    expect(screen.getByRole("heading", { level: 1, name: "Open a note" })).toBeInTheDocument();
+  });
+
+  it.each(["active", "draft"] as const)("does not mark the library empty when a %s note exists", async status => {
+    vi.mocked(listPagesExplicitBrowse).mockImplementation(async requested => requested === status
+      ? [page({ id: `${status}-1`, status })]
+      : []);
+    const { container } = renderOverview();
+    await waitFor(() => expect(listPagesExplicitBrowse).toHaveBeenCalledTimes(2));
+    await screen.findByRole("heading", { level: 1, name: "Open a note" });
+    expect(container.querySelector(".wiki-reading-start")).not.toHaveAttribute("data-library-empty");
+  });
 });

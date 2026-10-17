@@ -223,3 +223,9 @@
 .wiki-reading-start[data-library-empty="true"]:has(.getting-started) .wiki-reading-start-icon {
   display: none;
 }
+
+/* With the directory gone the checklist is the whole screen, so it may be a
+   little wider than the two-column default. */
+.wiki-reading-start[data-library-empty="true"] .getting-started {
+  max-width: min(100%, 620px);
+}

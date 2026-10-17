@@ -41,6 +41,7 @@ import SpaceDetail from "./SpaceDetail";
 import { SpacesOverview } from "./spaces";
 import { PagesOverview } from "./pages/PagesOverview";
 import { WikiWorkspace } from "./pages/WikiWorkspace";
+import { useLibraryInventory } from "./pages/useLibraryInventory";
 import { SecondaryNoteGroup, type SecondaryNoteGroupHandle } from "./pages/SecondaryNoteGroup";
 import { NoteTabs } from "./pages/NoteTabs";
 import { isNoteView, matchesNote, noteId, noteReadingKey, noteReadingPositionsFor, promoteNoteTab, reorderNoteTab, upsertNoteTab, type NoteTab, type NoteView } from "./pages/noteTabState";
@@ -931,6 +932,8 @@ export default function Main({
   const spacesOverviewLabels = createSpacesOverviewLabels(t);
   const spaceDetailCopy = createSpaceDetailCopy(t);
   const { data: spaces } = useQuery({ queryKey: ["spaces"], queryFn: listSpaces });
+  // A brand-new library gets a single-column Wiki; see WikiWorkspace `libraryEmpty`.
+  const { empty: libraryEmpty } = useLibraryInventory();
 
   useEffect(() => {
     if (!mobileSearchOpen) return;
@@ -1315,6 +1318,7 @@ export default function Main({
             />
           ) : (view.kind === "pages" || view.kind === "home") ? (
             <WikiWorkspace
+              libraryEmpty={libraryEmpty}
               tabs={noteTabStrip} onGroupFocus={focusPrimaryGroup} onGlobalToolsHost={setGroupToolsHost}
               secondaryOpen={secondaryOpen} onSecondaryHost={setSecondaryHost}
               inventoryMode={wikiInventoryMode}
