@@ -182,6 +182,16 @@ export function truncateReviewText(value: string, max: number): string {
   return `${trimmed.slice(0, max - 3).trimEnd()}...`;
 }
 
+/** Why a page revision card needs review; nothing for a reason we do not know. */
+function revisionReasonText(t: TFunction, reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "locked": return t("review.reasonLocked");
+    case "background": return t("review.reasonBackground");
+    case "owned": return t("review.reasonOwned");
+    default: return null;
+  }
+}
+
 function sourceRepairHint(t: TFunction, item: Extract<ReviewItem, { kind: "refinement" }>): string {
   if (item.payload?.action !== "lint_repair_review") return t("sourceRepair.reviewHint");
   switch (item.payload.check_id) {
@@ -1188,9 +1198,14 @@ export default function ReviewDialog({
                 }}
               >
                 {item.kind === "revision"
-                  ? item.agent
-                    ? t("review.proposedBy", { agent: item.agent })
-                    : ""
+                  ? <>
+                      {item.agent ? t("review.proposedBy", { agent: item.agent }) : ""}
+                      {revisionReasonText(t, item.reviewReason) && (
+                        <span data-testid="review-reason" style={{ display: "block" }}>
+                          {revisionReasonText(t, item.reviewReason)}
+                        </span>
+                      )}
+                    </>
                   : item.kind === "capture"
                     ? t("review.captureHint")
                     : item.kind === "page_candidate"

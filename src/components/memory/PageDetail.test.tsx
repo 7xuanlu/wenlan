@@ -28,6 +28,7 @@ vi.mock("../../lib/tauri", () => ({
   // the review action stays disabled unless a test opts in.
   pageReviewSupported: vi.fn().mockResolvedValue("daemon_unsupported"),
   reviewPage: vi.fn(),
+  agentDisplayName: (slug: string | null) => slug,
   getPage: vi.fn().mockResolvedValue({
     id: "concept_abc",
     title: "libSQL Architecture",

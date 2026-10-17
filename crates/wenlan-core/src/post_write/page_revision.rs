@@ -154,7 +154,7 @@ pub(super) async fn accept_page_revision_card(
             .collect(),
     );
     let new_version = current.version + 1;
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "version": new_version,
         "at": chrono::Utc::now().timestamp(),
         "edited_by": "revision_accept",
@@ -167,6 +167,13 @@ pub(super) async fn accept_page_revision_card(
         ),
         "incoming_source_ids": added_sources_json,
     });
+    crate::db::add_page_delta_counts(
+        &mut entry,
+        &current.content,
+        &current.source_memory_ids,
+        &card.content,
+        &source_refs,
+    );
     let existing_cl = db.get_page_changelog(&card.page_id).await?;
     const DEFAULT_CHANGELOG_CAP: usize = 20;
     let new_changelog =

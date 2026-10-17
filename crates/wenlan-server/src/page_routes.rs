@@ -1592,21 +1592,21 @@ async fn handle_refresh_page_inner(
         None => None,
     };
     use wenlan_core::post_write::WriteOutcome;
-    let result = wenlan_core::post_write::update_page_at_source_revision(
+    let result = wenlan_core::post_write::page_write(
         &db,
-        &id,
-        wenlan_types::requests::UpdatePageRequest {
-            content: req.content.clone(),
-            source_memory_ids: req.source_memory_ids.clone(),
-            expected_version: req.expected_version,
-            caller_id: None,
-            operation_id: None,
+        wenlan_core::post_write::PageWrite::AgentUpdate {
+            page_id: &id,
+            req: wenlan_types::requests::UpdatePageRequest {
+                content: req.content.clone(),
+                source_memory_ids: req.source_memory_ids.clone(),
+                expected_version: req.expected_version,
+                caller_id: None,
+                operation_id: None,
+            },
+            agent: proposer,
+            expected_source_revision: source_revision,
+            knowledge_path: page_root.as_deref(),
         },
-        "agent_refresh",
-        false,
-        source_revision,
-        page_root.as_deref(),
-        None,
     )
     .await?;
     // The core gate refused because the page moved past `expected_version`
