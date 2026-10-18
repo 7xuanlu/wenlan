@@ -149,7 +149,7 @@ describe("ReviewDialog page-target revision card", () => {
       await within(dialog).findByRole("heading", { name: PAGE_TITLE }),
     ).toBeVisible();
     expect(within(dialog).queryByRole("heading", { name: /Neo4j/ })).toBeNull();
-    expect(within(dialog).getByText("Page revision")).toBeVisible();
+    expect(within(dialog).getByText("Note revision")).toBeVisible();
     expect(within(dialog).queryByText("Memory revision")).toBeNull();
   });
 
@@ -203,12 +203,12 @@ describe("ReviewDialog page-target revision card", () => {
   });
 
   it.each([
-    ["locked", "en", "Reason: this page is set to review every change"],
+    ["locked", "en", "Reason: this note is set to review every change"],
     ["background", "en", "Reason: Wenlan background upkeep"],
-    ["owned", "en", "Reason: the page has your edits"],
-    ["locked", "zh-Hant", "原因：這頁設為改動要審核"],
+    ["owned", "en", "Reason: the note has your edits"],
+    ["locked", "zh-Hant", "原因：這篇筆記設為改動要審核"],
     ["background", "zh-Hans", "原因：文澜背景整理"],
-    ["owned", "zh-Hant", "原因：頁面有你的修改"],
+    ["owned", "zh-Hant", "原因：筆記有你的修改"],
   ])("says why a %s card needs review (%s)", async (reviewReason, language, text) => {
     await i18n.changeLanguage(language);
     const dialog = await openDialog({ ...pageItem, reviewReason });
@@ -274,7 +274,7 @@ describe("ReviewDialog page-target revision card", () => {
       within(dialog).queryByRole("button", { name: "Open memory" }),
     ).toBeNull();
     const user = userEvent.setup();
-    await user.click(within(dialog).getByRole("button", { name: "Open page" }));
+    await user.click(within(dialog).getByRole("button", { name: "Open note" }));
     expect(onOpenPage).toHaveBeenCalledWith(PAGE_ID);
     expect(onOpenMemory).not.toHaveBeenCalled();
   });

@@ -163,7 +163,7 @@ describe("PageDetail citations", () => {
     expect(screen.queryByRole("button", { name: /Memory 1/ })).toBeNull();
     await openPageInfo(user);
     expect(
-      screen.getByText("Citations cleared by edit — re-distill to restore"),
+      screen.getByText("Citations cleared by edit. Rebuild to restore"),
     ).toBeInTheDocument();
   });
 
@@ -175,7 +175,7 @@ describe("PageDetail citations", () => {
     expect(screen.queryByText(/\[1\]/)).toBeNull();
     await openPageInfo(user);
     expect(
-      screen.getByText("Citation data mismatched — re-distill to repair"),
+      screen.getByText("Citation data mismatched. Rebuild to repair"),
     ).toBeInTheDocument();
   });
 

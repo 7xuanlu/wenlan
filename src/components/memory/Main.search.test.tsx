@@ -1259,10 +1259,10 @@ describe("Main search", () => {
     vi.mocked(createPageDraft).mockRejectedValue(new Error("offline"));
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
     const oldTitle = await screen.findByRole("textbox", { name: "Title" });
     await user.type(oldTitle, "Unsaved original");
-    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
     await screen.findByRole("alert");
     expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
     expect(oldTitle).toHaveValue("Unsaved original");
@@ -1277,11 +1277,11 @@ describe("Main search", () => {
     );
     const user = userEvent.setup();
     renderMain();
-    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
     const oldTitle = await screen.findByRole("textbox", { name: "Title" });
     await user.type(oldTitle, "Pending original");
-    await user.click(screen.getByRole("button", { name: "New page" }));
-    await user.click(screen.getByRole("button", { name: "New page" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
+    await user.click(screen.getByRole("button", { name: "New note" }));
     expect(screen.getByRole("textbox", { name: "Title" })).toBe(oldTitle);
     expect(oldTitle).toHaveValue("Pending original");
     expect(createPageDraft).toHaveBeenCalledTimes(1);
@@ -1643,9 +1643,9 @@ describe("Main search", () => {
 
     const searchAction = screen.getByRole("button", { name: "Search" });
     expect(searchAction).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByPlaceholderText("Search pages, memories, sources...")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Search notes, memories, sources...")).not.toBeInTheDocument();
     await user.click(searchAction);
-    const searchInput = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const searchInput = screen.getByPlaceholderText("Search notes, memories, sources...");
 
     expect(searchAction).toHaveAttribute("aria-expanded", "true");
     expect(searchInput).toHaveFocus();
@@ -1661,7 +1661,7 @@ describe("Main search", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Search" });
     const shell = document.querySelector(".memory-shell");
-    const input = screen.getByPlaceholderText("Search pages, memories, sources...");
+    const input = screen.getByPlaceholderText("Search notes, memories, sources...");
     expect(shell).toHaveAttribute("inert");
     expect(input).toHaveFocus();
 
@@ -1711,7 +1711,7 @@ describe("Main search", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByText("Recently opened")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Open Page: Research notes" }));
+    await user.click(screen.getByRole("button", { name: "Open Note: Research notes" }));
     expect(await screen.findByTestId("page-detail")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Search" })).not.toBeInTheDocument();
   });
