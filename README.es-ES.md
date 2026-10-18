@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
+<!-- README_SYNC: source=README.md sha256=cc2d5cd7095df23eedfae13a7f0256375f3d98e987b4fbb474266ac866e83220 -->
 
 <p align="center">
   <picture>
@@ -7,9 +7,9 @@
   </picture>
 </p>
 
-Wenlan convierte tus documentos, notas y conversaciones con IA en páginas editables con enlaces a sus fuentes, para que tú y tus herramientas de IA podáis seguir trabajando a partir de ellas.
+Wenlan convierte tus documentos, archivos Markdown y conversaciones con IA en notas editables con enlaces a sus fuentes, para que tú y tus herramientas de IA podáis seguir trabajando a partir de ellas.
 
-Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o activar las actualizaciones en segundo plano. Si has editado una página, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
+Cuando las fuentes cambian, puedes pedirle a la IA que actualice las notas o activar las actualizaciones en segundo plano. Si has editado una nota, Wenlan te propone cambios para que los revises, en lugar de sobrescribir tu trabajo automáticamente.
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | Español
@@ -33,7 +33,7 @@ Cuando las fuentes cambian, puedes pedirle a la IA que actualice las páginas o 
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
-  <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con páginas y citas a sus fuentes.</sub>
+  <sub>El primer fotograma es una composición ilustrativa, no una vista nativa de tres paneles. El resto muestra la aplicación en uso, con notas y citas a sus fuentes.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -64,15 +64,15 @@ Al iniciar por primera vez, Wenlan descarga un modelo para la búsqueda local. M
 
 ### 2. Empieza con tus propias notas
 
-Abre Wenlan y empieza con una página propia. La pantalla de bienvenida también ofrece un ejemplo que puedes explorar primero. Puedes empezar a escribir sin importar material, conectar una herramienta de IA ni configurar un modelo de IA.
+Abre Wenlan y empieza con una nota propia. La pantalla de bienvenida también ofrece un ejemplo que puedes explorar primero. Puedes empezar a escribir sin importar material, conectar una herramienta de IA ni configurar un modelo de IA.
 
 ### 3. Importa fuentes cuando quieras
 
-Cuando te venga bien, puedes [importar notas o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in). Es opcional: puedes empezar con una página propia.
+Cuando te venga bien, puedes [importar archivos Markdown o conversaciones exportadas de ChatGPT / Claude](#what-can-i-bring-in). Es opcional: puedes empezar con una nota propia.
 
 ### 4. Conecta herramientas de IA cuando quieras ayuda
 
-Conecta Claude Code, Codex u otras herramientas de IA compatibles cuando quieras que usen el mismo conocimiento. Una IA conectada puede redactar páginas sin instalar otro modelo de lenguaje local.
+Conecta Claude Code, Codex u otras herramientas de IA compatibles cuando quieras que usen el mismo conocimiento. Una IA conectada puede redactar notas sin instalar otro modelo de lenguaje local.
 
 <details>
 <summary>¿Necesitas ayuda? Pídesela a tu IA</summary>
@@ -92,11 +92,11 @@ una memoria de prueba.
 
 Para organizar un tema con una IA conectada, abre una conversación de trabajo que merezca la pena conservar y pídele:
 
-> Organiza las conclusiones, los motivos y las fuentes sobre [tema] de esta conversación en una página de Wenlan con citas a las fuentes.
+> Organiza las conclusiones, los motivos y las fuentes sobre [tema] de esta conversación en una nota de Wenlan con citas a las fuentes.
 
-También puedes pedirle que organice en una página un tema del material que hayas importado.
+También puedes pedirle que organice en una nota un tema del material que hayas importado.
 
-Cuando esté lista, abre la nueva página en Wenlan, pulsa una cita para consultar su fuente y añade tus propias ideas. La próxima vez que trabajes en ese tema, pídele a tu IA que lea esta página antes de continuar.
+Cuando esté lista, abre la nueva nota en Wenlan, pulsa una cita para consultar su fuente y añade tus propias ideas. La próxima vez que trabajes en ese tema, pídele a tu IA que lea esta nota antes de continuar.
 
 La organización y las actualizaciones automáticas en segundo plano son opcionales y necesitan un [modelo configurado](#models-and-privacy). Para instalar desde la terminal, usar otras plataformas o actualizar, consulta la [guía de configuración](docs/setup-and-data.es-ES.md#installation).
 
@@ -109,13 +109,13 @@ La organización y las actualizaciones automáticas en segundo plano son opciona
 
 <a id="qué-es-esto"></a>
 
-## Tu wiki, para ti y tu IA
+## Tu Wiki, para ti y tu IA
 
-- **Reúne material disperso por temas.** Organiza documentos, notas y conversaciones con IA en páginas conectadas, con citas que puedes abrir y comprobar.
-- **Para ti y para tu IA.** Lee y edita tus páginas, o pide a Claude Code o Codex que las use para continuar el trabajo.
-- **Mantén tu conocimiento sin empezar de cero.** Sigue los cambios en las fuentes, actualiza las páginas relacionadas y conserva su historial. La IA propone las revisiones de las páginas que has editado para que decidas si aceptarlas.
+- **Reúne material disperso por temas.** Organiza documentos, archivos Markdown y conversaciones con IA en notas conectadas, con citas que puedes abrir y comprobar.
+- **Para ti y para tu IA.** Lee y edita tus notas, o pide a Claude Code o Codex que las use para continuar el trabajo.
+- **Mantén tu conocimiento sin empezar de cero.** Sigue los cambios en las fuentes, actualiza las notas relacionadas y conserva su historial. La IA propone las revisiones de las notas que has editado para que decidas si aceptarlas.
 
-Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
+Tus notas son archivos Markdown locales que puedes leer, editar y llevarte contigo.
 
 <p align="center">
   <picture>
@@ -126,25 +126,27 @@ Tus páginas son archivos Markdown locales que puedes leer, editar y llevarte co
 
 <a id="what-wenlan-is-not"></a>
 
-La ilustración muestra una regla de trabajo reutilizable, no resultados de clientes ni una prueba de generación automática de páginas. [Cómo se conectan las fuentes, memorias y páginas](docs/knowledge-guide.es-ES.md#sources-and-pages).
+La ilustración muestra una regla de trabajo reutilizable, no resultados de clientes ni una prueba de generación automática de notas. [Cómo se conectan las fuentes, memorias y notas](docs/knowledge-guide.es-ES.md#sources-and-pages).
 
 <a id="knowledge-graph"></a>
 
-### Sigue las conexiones que hay detrás de una página
+<a id="sigue-las-conexiones-que-hay-detrás-de-una-página"></a>
+
+### Sigue las conexiones que hay detrás de una nota
 
 El ejemplo de Agent Loop conecta una pauta de reintentos, una lección de una revisión de interfaz y una lista de aceptación que puedes reutilizar.
 
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Página ilustrativa de Agent Loop que cita una guía de diseño de agentes y una nota de revisión de interfaz; las Memorias mencionadas incluyen pautas de reintento y una lección de comprobación visual, enlazadas a una lista de aceptación reutilizable y a conceptos y herramientas relacionados." width="100%">
+    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Nota ilustrativa de Agent Loop que cita una guía de diseño de agentes y una revisión de interfaz; las Memorias mencionadas incluyen pautas de reintento y una lección de comprobación visual, enlazadas a una lista de aceptación reutilizable y a conceptos y herramientas relacionados." width="100%">
   </picture>
 </p>
 
 <a id="retrieval"></a>
 <a id="recuperación-a-través-de-palabras-significado-y-conexiones"></a>
 
-Sigue una página hasta los conceptos y las fuentes relacionados. [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
+Sigue una nota hasta los conceptos y las fuentes relacionados. [Cómo funcionan el grafo y la búsqueda](docs/knowledge-guide.es-ES.md#graph-and-search).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -159,7 +161,7 @@ La nueva experiencia mejora tus notas sin ocultar decisiones anteriores. Este ej
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Cambio ilustrativo de regla: «las pruebas pasaron, así que la interfaz está lista» pasa a «comprueba las pruebas y las vistas de escritorio y móvil»; las pruebas pasaron, pero una línea tapaba una etiqueta en móvil. Durante la actualización automática, los cambios en una Página que hayas editado se proponen para que los revises." width="100%">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="Cambio ilustrativo de regla: «las pruebas pasaron, así que la interfaz está lista» pasa a «comprueba las pruebas y las vistas de escritorio y móvil»; las pruebas pasaron, pero una línea tapaba una etiqueta en móvil. Durante la actualización automática, los cambios en una nota que hayas editado se proponen para que los revises." width="100%">
   </picture>
 </p>
 
@@ -168,17 +170,17 @@ La nueva experiencia mejora tus notas sin ocultar decisiones anteriores. Este ej
 <a id="página-mantenida"></a>
 <a id="markdown-local-que-funciona-con-obsidian"></a>
 
-La revisión se aplica a las actualizaciones de la IA; la edición directa de archivos y la regeneración forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
+La revisión se aplica a las actualizaciones de la IA; la edición directa de archivos y la reconstrucción forzada siguen otras reglas. [Actualizaciones, revisión y archivos locales](docs/knowledge-guide.es-ES.md#updates-and-history).
 
 ### ¿Ya usas Obsidian con plugins de IA?
 
-Puedes usar [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) para leer y editar notas con IA, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) para encontrar contenido relacionado y [Obsidian Git](https://github.com/Vinzent03/obsidian-git) para conservar el historial de versiones. Tienes mucha flexibilidad, pero debes decidir cómo combinar los plugins, cuándo organizar el material nuevo y cómo actualizar las páginas anteriores.
+Puedes usar [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) para leer y editar notas con IA, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) para encontrar contenido relacionado y [Obsidian Git](https://github.com/Vinzent03/obsidian-git) para conservar el historial de versiones. Tienes mucha flexibilidad, pero debes decidir cómo combinar los plugins, cuándo organizar el material nuevo y cómo actualizar las notas anteriores.
 
-Wenlan reúne la creación de páginas temáticas, el seguimiento de cambios en las fuentes, las actualizaciones y el historial de revisiones en un mismo flujo de trabajo, ahorrándote el trabajo de conectar y mantener esos pasos por tu cuenta. Puedes leer el conocimiento organizado o dejar que Claude Code, Codex y otras herramientas lo usen para continuar el trabajo.
+Wenlan reúne la organización de notas por tema, el seguimiento de cambios en las fuentes, las actualizaciones y el historial de revisiones en un mismo flujo de trabajo, ahorrándote el trabajo de conectar y mantener esos pasos por tu cuenta. Puedes leer el conocimiento organizado o dejar que Claude Code, Codex y otras herramientas lo usen para continuar el trabajo.
 
-Pide a tu IA conectada que actualice una página o [configura un modelo](#models-and-privacy) para activar las actualizaciones en segundo plano. Si has editado una página, Wenlan te propone la revisión para que decidas si aceptarla.
+Pide a tu IA conectada que actualice una nota o [configura un modelo](#models-and-privacy) para activar las actualizaciones en segundo plano. Si has editado una nota, Wenlan te propone la revisión para que decidas si aceptarla.
 
-Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus notas. Wenlan no modifica la bóveda ni sincroniza los cambios de vuelta.
+Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus archivos. Wenlan no modifica la bóveda ni sincroniza los cambios de vuelta.
 
 
 <a id="what-you-get"></a>
@@ -190,40 +192,40 @@ Conecta tu bóveda de Obsidian como fuente de solo lectura sin mover tus notas. 
 ### Incorpora tu material
 
 - **Conserva conversaciones útiles con IA:** Importa archivos ZIP de ChatGPT o Claude sin duplicar conversaciones ya importadas.
-- **Incorpora tus notas actuales:** Incorpora Markdown, texto o PDF con texto extraíble, por archivo o carpeta; indexa un vault de Obsidian. Los PDF escaneados requieren extraer el texto primero.
+- **Incorpora tus archivos actuales:** Incorpora Markdown, texto o PDF con texto extraíble, por archivo o carpeta; conecta una bóveda de Obsidian como fuente. Los PDF escaneados requieren extraer el texto primero.
 - **Captura rápida:** Guarda una idea o decisión directamente en la aplicación de escritorio sin abrir un chat con IA.
 - **[Guarda decisiones con tu IA](https://wenlan.app/learn/ai-work-memory):** Pide a tu herramienta de IA que guarde decisiones, lecciones, correcciones, preferencias y hechos, con sus fuentes y los registros que sustituyen.
 - **Importa otra wiki:** Importa una wiki OKF externa mediante la CLI o la API, conservando referencias y enlaces. No se admite reimportar las propias exportaciones OKF de Wenlan.
 
-### Explora tu wiki personal
+### Explora tu Wiki personal
 
-- **[Páginas editables con fuentes](https://wenlan.app/docs/source-backed-pages):** Convierte documentos y Memorias relacionados en Páginas Markdown con citas y enlaces a otras Páginas.
-- **Tarjetas o listas:** Explora Páginas, Entidades y Espacios con la vista que prefieras.
+- **[Notas editables con fuentes](https://wenlan.app/docs/source-backed-pages):** Convierte documentos y Memorias relacionados en Notas Markdown con citas y enlaces a otras Notas.
+- **Tarjetas o listas:** Explora Notas, Entidades y Espacios con la vista que prefieras.
 - **[Grafo de conocimiento](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explora conexiones entre personas, proyectos, afirmaciones y las Memorias que las respaldan.
 
 ### Úsalo con tus herramientas de IA
 
-- **[Continúa con otra herramienta de IA](https://wenlan.app/docs/architecture):** Una vez conectados, Claude Code, Codex y otros clientes MCP pueden usar las mismas Páginas y Memorias locales que la aplicación de escritorio y la CLI.
+- **[Continúa con otra herramienta de IA](https://wenlan.app/docs/architecture):** Una vez conectados, Claude Code, Codex y otros clientes MCP pueden usar las mismas Notas y Memorias locales que la aplicación de escritorio y la CLI.
 - **[Busca por palabras y significado](docs/technical-foundations.md#retrieval-pipeline):** Combina coincidencias exactas con búsqueda semántica local; las conexiones del grafo pueden aportar contexto.
-- **[Búsqueda avanzada opcional](docs/technical-foundations.md#optional-channels-and-defaults):** Busca en Páginas y Memorias más detalladas, con reordenación opcional para afinar los resultados.
+- **[Búsqueda avanzada opcional](docs/technical-foundations.md#optional-channels-and-defaults):** Busca en Notas y Memorias más detalladas, con reordenación opcional para afinar los resultados.
 - **[Separa tus proyectos](https://wenlan.app/docs/spaces):** Usa Espacios para elegir qué conocimiento laboral, personal, de clientes o de repositorios busca tu IA.
 - **Acceso web (experimental):** Conecta un cliente web de IA compatible a toda tu biblioteca, o a un Espacio que elijas, mientras tu ordenador está conectado. Las consultas y los resultados pasan por un relay; consulta el [funcionamiento del acceso y sus límites de privacidad](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 - **Conecta tus propias herramientas:** Envía texto preparado, contenido web o Memorias mediante la API HTTP local. Acepta contenido, no URL para descargar.
 
 ### Mantén el conocimiento al día
 
-La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
+La organización y las actualizaciones de Notas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
 
-- **Sincronización incremental:** Las Fuentes de archivos y carpetas rastrean cambios en segundo plano. Los vaults de Obsidian siguen siendo de solo lectura y se sincronizan bajo demanda.
+- **Sincronización incremental:** Las Fuentes de archivos y carpetas rastrean cambios en segundo plano. Las bóvedas de Obsidian siguen siendo de solo lectura y se sincronizan bajo demanda.
 - **[Organiza el conocimiento guardado](docs/technical-foundations.md#typed-memory-schema):** Un modelo configurado puede añadir tipos, detalles estructurados, fechas relevantes, etiquetas, pistas de búsqueda y enlaces del grafo a las Memorias.
-- **Actualizaciones respaldadas por citas:** La actualización automática rechaza borradores con citas insuficientes. Las Páginas generadas por IA pueden actualizarse; los cambios en las que has editado se proponen para revisión.
-- **[Revisa cuando hace falta criterio](https://wenlan.app/docs/review-and-trust):** Revisa conflictos protegidos, cambios de Páginas, fusiones de entidades y vocabulario nuevo.
-- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, Steep (el enriquecimiento en segundo plano) y las actualizaciones de Páginas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
+- **Actualizaciones respaldadas por citas:** La actualización automática rechaza borradores con citas insuficientes. Las Notas generadas por IA pueden actualizarse; los cambios en las que has editado se proponen para revisión.
+- **[Revisa cuando hace falta criterio](https://wenlan.app/docs/review-and-trust):** Revisa conflictos protegidos, cambios de Notas, fusiones de entidades y vocabulario nuevo.
+- **Sigue el progreso:** Consulta el progreso y los bloqueos en Activity. La sincronización, Steep (el enriquecimiento en segundo plano) y las actualizaciones de Notas elegibles pueden continuar tras cerrar la ventana, si están configurados y el servicio local sigue activo.
 
 ### Conserva tus datos y el control
 
-- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Páginas Markdown, citas, revisiones y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
-- **Llévate tu wiki:** Exporta las Páginas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
+- **[Conocimiento local e inspeccionable](https://wenlan.app/learn/local-first-ai-memory):** Conserva Notas Markdown, citas, revisiones y exportaciones a Obsidian; las Memorias y el grafo se guardan en libSQL local.
+- **Llévate tu Wiki:** Exporta las Notas elegibles de todos los Espacios como wiki OKF v0.2 desde Ajustes o la CLI. No es una copia de seguridad de toda la base de datos.
 - **[Elige el modelo](docs/technical-foundations.md#model-roles):** La búsqueda base es local. Steep, el enriquecimiento y la síntesis opcionales en segundo plano, puede usar Qwen en el dispositivo, un endpoint local o un modelo en la nube; los proveedores remotos reciben el contenido necesario para sus tareas.
 - **Diagnóstico y reparaciones revisadas:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) y [lint](plugin/skills/lint/SKILL.md) detectan problemas sin reescribir el conocimiento. Para los casos compatibles, puedes previsualizar una reparación en la aplicación, aplicarla explícitamente y verificarla.
 
@@ -251,13 +253,15 @@ Atajo: `/recall [tema]`
 
 Atajo: `/capture [decisión, motivos y fuentes]`
 
-### Cuando un tema merezca una página
+<a id="cuando-un-tema-merezca-una-página"></a>
 
-> Crea o actualiza una página de Wenlan sobre [tema] con el material que hemos guardado. Conserva las citas.
+### Cuando un tema merezca una nota
 
-Para organizar el conocimiento guardado en páginas: `/distill`
+> Crea o actualiza una nota de Wenlan sobre [tema] con el material que hemos guardado. Conserva las citas.
 
-Abre la página en Wenlan para leerla, editarla y consultar sus fuentes. La próxima vez, pide a tu IA que la use para continuar el trabajo.
+Para organizar el conocimiento guardado en notas: `/distill`
+
+Abre la nota en Wenlan para leerla, editarla y consultar sus fuentes. La próxima vez, pide a tu IA que la use para continuar el trabajo.
 
 ### Al terminar la sesión
 
@@ -271,7 +275,7 @@ Atajo: `/handoff`
 - **Lee el resumen del proyecto:** `/brief [tema]` lee el resumen del proyecto del Espacio actual; un tema opcional añade contexto relacionado de ese mismo Espacio.
 - **Comprueba y revisa:** `/lint` comprueba el estado del conocimiento; `/curate` revisa capturas o revisiones pendientes.
 
-Estos comandos están disponibles a través de los plugins de Wenlan. Otros clientes conectados usan las herramientas MCP equivalentes. La organización y las actualizaciones de Páginas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
+Estos comandos están disponibles a través de los plugins de Wenlan. Otros clientes conectados usan las herramientas MCP equivalentes. La organización y las actualizaciones de Notas en segundo plano son opcionales y requieren un [modelo configurado](#models-and-privacy).
 
 [Referencia completa de comandos](plugin/skills/README.md).
 
@@ -285,7 +289,7 @@ Estos comandos están disponibles a través de los plugins de Wenlan. Otros clie
 
 ### Modelos y privacidad
 
-Puedes usar tu IA conectada para escribir páginas sin instalar otro modelo de lenguaje local. La organización y las actualizaciones automáticas en segundo plano son opcionales y requieren configurar un modelo.
+Puedes usar tu IA conectada para escribir notas sin instalar otro modelo de lenguaje local. La organización y las actualizaciones automáticas en segundo plano son opcionales y requieren configurar un modelo.
 
 - **La búsqueda es local.** El modelo de búsqueda se descarga al iniciar por primera vez y se ejecuta en tu equipo, sin clave de API.
 - **La IA conectada puede recibir tus conocimientos.** Un cliente de IA en la nube puede enviar el contenido recuperado a su proveedor. Si eliges un modelo en la nube para organizar material, también recibirá lo necesario para esa tarea. El almacenamiento local no convierte esas interacciones en locales.
@@ -297,7 +301,7 @@ Consulta la [información de red y privacidad](docs/PRIVACY.md#when-wenlan-reach
 
 ### Tus datos y la desinstalación
 
-Tus páginas y notas de sesión son archivos Markdown; las memorias y el grafo se guardan en una base de datos local. Puedes conservar tus conocimientos al desinstalar la app.
+Tus notas y registros de sesión son archivos Markdown; las memorias y el grafo se guardan en una base de datos local. Puedes conservar tus conocimientos al desinstalar la app.
 
 [Ubicación de archivos, copias de seguridad y eliminación](docs/setup-and-data.es-ES.md#backup-and-removal).
 
