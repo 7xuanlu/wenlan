@@ -32,7 +32,7 @@ async function expectWidth(page: Page, width: number) {
 
 test('mirrored drag previews without saving and restores width across tabs close and reload', async ({ page }) => {
   const { errors, controller } = await start(page);
-  const editor = page.getByRole('textbox', { name: 'Page editor', exact: true });
+  const editor = page.getByRole('textbox', { name: 'Note editor', exact: true });
   await expect(editor).toBeVisible(); const body = await editor.innerText();
   await editor.evaluate(el => el.setAttribute('data-resize-original', 'true'));
   const before = (await pane(page).boundingBox())!.width, initial = await stored(page), p = await begin(page);

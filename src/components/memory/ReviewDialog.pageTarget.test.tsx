@@ -149,7 +149,7 @@ describe("ReviewDialog page-target revision card", () => {
       await within(dialog).findByRole("heading", { name: PAGE_TITLE }),
     ).toBeVisible();
     expect(within(dialog).queryByRole("heading", { name: /Neo4j/ })).toBeNull();
-    expect(within(dialog).getByText("Page revision")).toBeVisible();
+    expect(within(dialog).getByText("Note revision")).toBeVisible();
     expect(within(dialog).queryByText("Memory revision")).toBeNull();
   });
 
@@ -202,6 +202,53 @@ describe("ReviewDialog page-target revision card", () => {
     expect(within(dialog).getByText("proposed by Claude Code")).toBeInTheDocument();
   });
 
+  it.each([
+    ["locked", "en", "Reason: this note is set to review every change"],
+    ["background", "en", "Reason: Wenlan background upkeep"],
+    ["owned", "en", "Reason: the note has your edits"],
+    ["locked", "zh-Hant", "原因：這篇筆記設為改動要審核"],
+    ["background", "zh-Hans", "原因：文澜背景整理"],
+    ["owned", "zh-Hant", "原因：筆記有你的修改"],
+  ])("says why a %s card needs review (%s)", async (reviewReason, language, text) => {
+    await i18n.changeLanguage(language);
+    const dialog = await openDialog({ ...pageItem, reviewReason });
+    await within(dialog).findByRole("heading", { name: PAGE_TITLE });
+    expect(within(dialog).getByTestId("review-reason")).toHaveTextContent(text);
+  });
+
+  it.each([undefined, null, "something_new"])(
+    "shows no reason line for reviewReason %s",
+    async (reviewReason) => {
+      const dialog = await openDialog({ ...pageItem, reviewReason });
+      await within(dialog).findByRole("heading", { name: PAGE_TITLE });
+      expect(within(dialog).queryByTestId("review-reason")).toBeNull();
+      expect(within(dialog).getByText("proposed by Claude Code")).toBeInTheDocument();
+    },
+  );
+
+  it("labels history rows by writer and localizes numeric summaries", async () => {
+    vi.mocked(getPageRevisions).mockResolvedValue({
+      page_id: PAGE_ID,
+      current_version: 4,
+      entries: [
+        { version: 3, at: 1_760_000_000, edited_by: "agent_refresh", agent: "claude-code", char_delta: 71, sources_added: 2, sources_removed: 0, delta_summary: "+mem_a; +71 chars" },
+        { version: 2, at: 1_759_500_000, edited_by: "page_write", delta_summary: "Old English summary." },
+        { version: 1, at: 1_759_000_000, edited_by: "manual_edit", char_delta: -4, sources_added: 0, sources_removed: 0 },
+      ],
+    } as never);
+    const dialog = await openDialog(pageItem);
+    expect(await within(dialog).findByText("Updated by Claude Code")).toBeVisible();
+    expect(within(dialog).getByText("+71 characters · 2 sources added")).toBeVisible();
+    expect(within(dialog).getByText("You edited in the app")).toBeVisible();
+    expect(within(dialog).getByText("-4 characters")).toBeVisible();
+    // An unknown writer is "Updated", never its slug; the old English summary
+    // is kept for an English UI.
+    expect(within(dialog).getByText("Updated")).toBeVisible();
+    expect(within(dialog).getByText(/Old English summary\./)).toBeVisible();
+    expect(within(dialog).queryByText(/page_write|agent_refresh|manual_edit/)).toBeNull();
+    expect(within(dialog).queryByText(/mem_a/)).toBeNull();
+  });
+
   it("explains and moves on when the daemon discarded an outdated card", async () => {
     const onResolve = vi.fn().mockRejectedValue(
       new Error('HTTP 409: {"error":"page_revision_outdated: page x changed after revision card y was proposed"}'),
@@ -227,7 +274,7 @@ describe("ReviewDialog page-target revision card", () => {
       within(dialog).queryByRole("button", { name: "Open memory" }),
     ).toBeNull();
     const user = userEvent.setup();
-    await user.click(within(dialog).getByRole("button", { name: "Open page" }));
+    await user.click(within(dialog).getByRole("button", { name: "Open note" }));
     expect(onOpenPage).toHaveBeenCalledWith(PAGE_ID);
     expect(onOpenMemory).not.toHaveBeenCalled();
   });

@@ -4,7 +4,7 @@ import { showWikiFolders } from "./helpers/wikiWorkspace";
 import { createReviewDecisionFixture } from "./fixtures/reviewDecisions";
 import { collectBrowserErrors, installTauriMock } from "./tauriMock";
 const labels = {
- en:{all:"All notes",back:"Back",newFolder:"New folder",folderName:"Folder name",create:"Create",newPage:"New page",empty:"This folder has no notes yet.",folders:"Folders"},
+ en:{all:"All notes",back:"Back",newFolder:"New folder",folderName:"Folder name",create:"Create",newPage:"New note",empty:"This folder has no notes yet.",folders:"Folders"},
 };
 for (const locale of ["en"] as const) for (const width of [1280,375]) {
  test(`real directories and reading workspace/history agree ${locale} ${width}`,async({page})=>{
@@ -84,8 +84,8 @@ test("an existing folder-and-Space draft survives reload, then auto-finalizes an
  await expect(page.getByRole("heading",{level:1,name:"Folder draft after reload",exact:true})).toBeVisible();
  const published=runtime.calls().find(call=>call.command==="publish_page_draft");
  expect(published?.args).toEqual({id:draftId,expectedVersion:2});
- await expect(page.getByRole("button",{name:"Page actions",exact:true})).toBeVisible();
- await page.getByRole("button",{name:"Page actions",exact:true}).click();
+ await expect(page.getByRole("button",{name:"Note actions",exact:true})).toBeVisible();
+ await page.getByRole("button",{name:"Note actions",exact:true}).click();
  await page.getByRole("menuitem",{name:"Move to folder",exact:true}).click();
  const dialog=page.getByRole("dialog",{name:"Move to folder",exact:true});
  await dialog.getByRole("combobox",{name:"Destination folder",exact:true}).selectOption("Reading");
@@ -122,7 +122,7 @@ test("old daemon keeps every note available and disables unsupported folder oper
   await expect(sidebar.getByRole("button",{name:"Work",exact:true})).toHaveCount(0);
   await expect(sidebar.getByRole("button",{name:/Open Independent research/})).toBeVisible();
   await sidebar.getByRole("button",{name:/Open Fixture architecture/}).click();
-  await page.getByRole("button",{name:"Page actions",exact:true}).click();
+  await page.getByRole("button",{name:"Note actions",exact:true}).click();
   await page.getByRole("menuitem",{name:"Move to folder",exact:true}).click();
   const dialog = page.getByRole("dialog",{name:"Move to folder",exact:true});
   await expect(dialog.getByRole("status")).toHaveText("Folder browsing is unavailable. All notes are still accessible.");

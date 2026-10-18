@@ -333,7 +333,7 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(screen.getByText("欢迎使用文澜")).toBeInTheDocument();
-    expect(screen.getByText(/你和 AI 工具一起搭建的个人知识库/)).toBeInTheDocument();
+    expect(screen.getByText(/你和 AI 工具一起搭建的个人 Wiki/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "开始使用" })).toBeInTheDocument();
   });
 
@@ -415,7 +415,7 @@ describe("SetupWizard", () => {
     expect(screen.getByText("Import chat history")).toBeInTheDocument();
     // VaultConnectCard (Task 6), rendered inline as the second path. It carries
     // its own title — no separate wrapper heading duplicates it.
-    expect(screen.getByText("Connect a notes folder")).toBeInTheDocument();
+    expect(screen.getByText("Connect a Markdown folder")).toBeInTheDocument();
     expect(screen.queryByText("Obsidian vault / notes folder")).not.toBeInTheDocument();
   });
 
@@ -1106,11 +1106,11 @@ describe("SetupWizard", () => {
     expect(screen.queryByText(/^Memories will appear/i)).not.toBeInTheDocument();
     expect(
       screen.getByText(
-        "Use your AI tools normally. As they work, Wenlan turns what they learn into source-cited pages and keeps the memories behind them. You can always return to Settings to connect more tools.",
+        "Use your AI tools normally. As they work, Wenlan turns what they learn into source-cited notes and keeps the memories behind them. You can always return to Settings to connect more tools.",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Pages refresh between sessions, so the next one starts where the last ended."),
+      screen.getByText("Notes refresh between sessions, so the next one starts where the last ended."),
     ).toBeInTheDocument();
 
     expect(screen.queryByText("Back")).not.toBeInTheDocument();
@@ -1518,7 +1518,7 @@ describe("SetupWizard", () => {
     expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
     // Re-run entry (wireRouting=false): neither the summary nor the no-model line.
     expect(
-      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      screen.queryByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).not.toBeInTheDocument();
   });
 
@@ -2551,7 +2551,7 @@ describe("SetupWizard", () => {
     renderWizard();
 
     expect(
-      await screen.findByText(/A personal knowledge base you and your AI tools build together/),
+      await screen.findByText(/A personal Wiki you and your AI tools build together/),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("heading", { name: "Welcome to Wenlan" }),
@@ -2997,7 +2997,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(screen.getByText("4 memories imported")).toBeInTheDocument();
     expect(screen.queryByText("Topics")).not.toBeInTheDocument();
     expect(screen.queryByText("Connections")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Pages will distill/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Notes will be organized/)).not.toBeInTheDocument();
   });
 
   it.each([false, true])("pinned daemon: Done respects background AI consent=%s", async (enabled) => {
@@ -3013,7 +3013,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
 
     await waitFor(() => expect(getBackgroundAiEnabled).toHaveBeenCalledTimes(1));
     if (!enabled) {
-      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/);
+      await screen.findByText(/Your Wiki updates whenever your AI tools use Wenlan/);
       expect(getResolvedRouting).not.toHaveBeenCalled();
       expect(setSourcePin).not.toHaveBeenCalled();
       expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
@@ -3022,12 +3022,12 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     await waitFor(() => expect(setSourcePin).toHaveBeenCalledWith("on_device", "anthropic", true));
     expect(
       await screen.findByText(
-        "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
+        "Everyday tasks: On-device. Note synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
       ),
     ).toBeInTheDocument();
     // Exclusivity: a wired routing shows the summary, never the no-model line.
     expect(
-      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      screen.queryByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).not.toBeInTheDocument();
   });
 
@@ -3046,7 +3046,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
     // Concluded without wiring (legacy daemon) → the no-model assurance shows.
     expect(
-      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      await screen.findByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).toBeInTheDocument();
   });
 
@@ -3071,7 +3071,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(screen.queryByText(/Everyday tasks:/)).not.toBeInTheDocument();
     // Concluded without wiring (nothing configured) → the no-model assurance shows.
     expect(
-      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      await screen.findByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).toBeInTheDocument();
   });
 
@@ -3094,7 +3094,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(setSourcePin).toHaveBeenCalledTimes(1);
     expect(
       await screen.findByText(
-        "Everyday tasks: Anthropic. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
+        "Everyday tasks: Anthropic. Note synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
       ),
     ).toBeInTheDocument();
   });
@@ -3114,12 +3114,12 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
 
     expect(
       await screen.findByText(
-        "Everyday tasks: On-device. Page synthesis: On-device. Change this anytime in Settings → Intelligence.",
+        "Everyday tasks: On-device. Note synthesis: On-device. Change this anytime in Settings → Intelligence.",
       ),
     ).toBeInTheDocument();
     expect(setSourcePin).not.toHaveBeenCalled();
     expect(
-      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      screen.queryByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).not.toBeInTheDocument();
   });
 
@@ -3135,7 +3135,7 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     renderDone(true);
 
     expect(
-      await screen.findByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      await screen.findByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).toBeInTheDocument();
     expect(setSourcePin).not.toHaveBeenCalled();
   });
@@ -3166,11 +3166,11 @@ describe("DoneStep onboarding routing wiring (wireRouting=true)", () => {
     expect(getResolvedRouting).toHaveBeenCalledTimes(2);
     expect(
       await screen.findByText(
-        "Everyday tasks: On-device. Page synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
+        "Everyday tasks: On-device. Note synthesis: Anthropic. Change this anytime in Settings → Intelligence.",
       ),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText(/Your wiki updates whenever your AI tools use Wenlan/),
+      screen.queryByText(/Your Wiki updates whenever your AI tools use Wenlan/),
     ).not.toBeInTheDocument();
     expect(error).not.toHaveBeenCalled();
     error.mockRestore();

@@ -199,7 +199,7 @@ describe("FirstUseSample source rack and page flow", () => {
     expect(
       screen.getByText("Let AI use your knowledge"),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Back to the page" }));
+    fireEvent.click(screen.getByRole("button", { name: "Back to the note" }));
     expect(
       screen.queryByText("Let AI use your knowledge"),
     ).not.toBeInTheDocument();
