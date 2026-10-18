@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7e02bf70306e3e56f37828ae67c1cd5d93b94ea466d8aa31cca06cd479721b9c -->
+<!-- README_SYNC: source=README.md sha256=579e30085bf1dc510e892abdf901a568191e551479923028a8f236d8fc0d4b91 -->
 
 <p align="center">
   <picture>
@@ -18,7 +18,7 @@
 
 <p align="center">
   <a href="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml?query=branch%3Amain"><img alt="CI" src="https://github.com/wenlan-app/wenlan/actions/workflows/ci.yml/badge.svg?branch=main&event=push"></a>
-  <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?sort=semver&label=release&cacheSeconds=3600"></a>
+  <a href="https://github.com/wenlan-app/wenlan/releases/latest"><img alt="最新版本" src="https://img.shields.io/github/v/release/wenlan-app/wenlan?label=release"></a>
   <a href="#license"><img alt="许可证：Apache-2.0 与 AGPL-3.0" src="https://img.shields.io/badge/license-Apache--2.0%20%2B%20AGPL--3.0-blue.svg"></a>
 </p>
 
