@@ -5,9 +5,9 @@
   </picture>
 </p>
 
-Wenlan turns your documents, notes, and AI conversations into editable pages with links to their sources, so you and your AI tools can keep building on them.
+Wenlan turns your documents, Markdown files, and AI conversations into editable notes with links to their sources, so you and your AI tools can keep building on them.
 
-As sources change, you can ask AI to update the pages or enable background updates. If you’ve edited a page, Wenlan proposes revisions for you to review instead of automatically overwriting your work.
+As sources change, you can ask AI to update the notes or enable background updates. If you’ve edited a note, Wenlan proposes revisions for you to review instead of automatically overwriting your work.
 
 <p align="center">
   English | <a href="./README.zh-Hans.md">简体中文</a> | <a href="./README.zh-Hant.md">繁體中文</a> | <a href="./README.es-ES.md">Español</a>
@@ -31,7 +31,7 @@ As sources change, you can ask AI to update the pages or enable background updat
 https://github.com/user-attachments/assets/35f06749-00e5-484d-a9f4-5e462de8d11e
 
 <p align="center">
-  <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including pages and source citations.</sub>
+  <sub>The opening frame is a composed preview, not a native three-pane view. The rest shows the app in use, including notes and source citations.</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -62,15 +62,15 @@ First launch downloads a model for local search, so keep an internet connection 
 
 ### 2. Start with your own note
 
-Choose **Open notes** to enter Wenlan, then create a page of your own. The welcome screen also offers a sample to explore first. You can start writing without importing material, connecting an AI tool, or setting up an AI model.
+Choose **Get started** to enter Wenlan, then write a note of your own. The welcome screen also offers a sample to explore first. You can start writing without importing material, connecting an AI tool, or setting up an AI model.
 
 ### 3. Bring in sources when you want
 
-You can [import notes or ChatGPT / Claude conversation exports](#what-can-i-bring-in) whenever you are ready. Import is optional; you can begin with a page of your own.
+You can [import Markdown files or ChatGPT / Claude conversation exports](#what-can-i-bring-in) whenever you are ready. Import is optional; you can begin with a note of your own.
 
 ### 4. Connect AI tools when you want AI help
 
-Connect Claude Code, Codex, or other supported AI tools when you want them to use the same knowledge. A connected AI can write pages without an additional local language model.
+Connect Claude Code, Codex, or other supported AI tools when you want them to use the same knowledge. A connected AI can write notes without an additional local language model.
 
 <details>
 <summary>Need help connecting? Ask your AI</summary>
@@ -89,11 +89,11 @@ Set up only this AI tool, then check that it can save and find a test memory.
 
 To organize a topic with a connected AI, open a work conversation worth keeping and ask:
 
-> Turn the conclusions, reasoning, and sources about [topic] in this conversation into a Wenlan page with source citations.
+> Turn the conclusions, reasoning, and sources about [topic] in this conversation into a Wenlan note with source citations.
 
-You can also ask your AI to organize a topic from material you imported into a page.
+You can also ask your AI to organize a topic from material you imported into a note.
 
-When it's ready, open the new page in Wenlan, click a citation to check its source, and add your own thoughts. Next time you work on that topic, ask your AI to read this page before continuing.
+When it's ready, open the new note in Wenlan, click a citation to check its source, and add your own thoughts. Next time you work on that topic, ask your AI to read this note before continuing.
 
 Background organization and automatic updates are optional and need a [configured model](#models-and-privacy). For terminal installation, other platforms, and updates, see the [setup guide](docs/setup-and-data.md#installation).
 
@@ -105,42 +105,44 @@ Need help? [Setup guide](docs/setup-with-ai.md) · [Report a problem](https://gi
 
 <a id="what-is-this"></a>
 
-## Your wiki, for you and your AI
+## Your Wiki, for you and your AI
 
-- **Turn scattered material into connected topics.** Bring documents, notes, and AI conversations together in linked pages, with citations you can open and check.
-- **Read it yourself. Use it with your AI.** Read and edit your pages, or ask Claude Code or Codex to use them for your next task.
-- **Maintain knowledge without starting over.** Track source changes, update related pages, and keep their history. AI proposes revisions to pages you've edited for you to review.
+- **Turn scattered material into connected topics.** Bring documents, Markdown files, and AI conversations together in linked notes, with citations you can open and check.
+- **Read it yourself. Use it with your AI.** Read and edit your notes, or ask Claude Code or Codex to use them for your next task.
+- **Maintain knowledge without starting over.** Track source changes, update related notes, and keep their history. AI proposes revisions to notes you've edited for you to review.
 
-Your pages are local Markdown files you can read, edit, and take with you.
+Your notes are local Markdown files you can read, edit, and take with you.
 
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-system-mobile.png">
-    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories feed an illustrative Agent Loop page. It combines retry guidance with a concrete lesson: tests passed, but a line still covered a mobile label. Desktop and mobile visual checks become part of the completion criteria for later work with Claude or Codex." width="100%">
+    <img src="./docs/assets/wenlan-system.png" alt="Sources and memories feed an illustrative Agent Loop note. It combines retry guidance with a concrete lesson: tests passed, but a line still covered a mobile label. Desktop and mobile visual checks become part of the completion criteria for later work with Claude or Codex." width="100%">
   </picture>
 </p>
 
 <a id="what-wenlan-is-not"></a>
 
-The illustration shows a reusable working rule, not customer results or an automated page-generation test. [How sources, memories, and pages work together](docs/knowledge-guide.md#sources-and-pages).
+The illustration shows a reusable working rule, not customer results or an automated note-generation test. [How sources, memories, and notes work together](docs/knowledge-guide.md#sources-and-pages).
 
 <a id="knowledge-graph"></a>
 
-### Follow the connections behind a page
+<a id="follow-the-connections-behind-a-page"></a>
+
+### Follow the connections behind a note
 
 The Agent Loop example connects a retry rule, a lesson from a UI review, and an acceptance checklist you can reuse.
 
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Illustrative Agent Loop page citing an agent-design guide and UI-review note; named memories include retry guidance and a visual-check lesson, linked to a reusable acceptance checklist and related concepts and tools." width="100%">
+    <img src="./docs/assets/wenlan-knowledge-network.png" alt="Illustrative Agent Loop note citing an agent-design guide and a UI review; named memories include retry guidance and a visual-check lesson, linked to a reusable acceptance checklist and related concepts and tools." width="100%">
   </picture>
 </p>
 
 <a id="retrieval"></a>
 <a id="retrieval-across-words-meaning-and-connections"></a>
 
-Follow a page to related concepts and evidence. [How graph and search work](docs/knowledge-guide.md#graph-and-search).
+Follow a note to related concepts and evidence. [How graph and search work](docs/knowledge-guide.md#graph-and-search).
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -154,7 +156,7 @@ New experience improves your notes without hiding earlier decisions. This exampl
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle.png" alt="Illustrative before and after: “tests passed, so the UI is done” becomes “check tests and desktop and mobile views”; the evidence is a mobile label obscured despite passing tests. During automatic refresh, changes to a page you edited are proposed for your review." width="100%">
+    <img src="./docs/assets/wenlan-lifecycle.png" alt="Illustrative before and after: “tests passed, so the UI is done” becomes “check tests and desktop and mobile views”; the evidence is a mobile label obscured despite passing tests. During automatic refresh, changes to a note you edited are proposed for your review." width="100%">
   </picture>
 </p>
 
@@ -163,17 +165,17 @@ New experience improves your notes without hiding earlier decisions. This exampl
 <a id="maintained-page"></a>
 <a id="local-markdown-that-works-with-obsidian"></a>
 
-Review applies to AI updates; direct file edits and forced regeneration follow different rules. [Updates, review, and local files](docs/knowledge-guide.md#updates-and-history).
+Review applies to AI updates; direct file edits and forced rebuilds follow different rules. [Updates, review, and local files](docs/knowledge-guide.md#updates-and-history).
 
 ### Already using Obsidian with AI plugins?
 
-You can use [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) for AI-assisted reading and editing, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) to find related notes, and [Obsidian Git](https://github.com/Vinzent03/obsidian-git) to keep version history. That gives you flexibility, but choosing how the plugins work together, when to organize new material, and how to update older pages is still a workflow you arrange.
+You can use [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) for AI-assisted reading and editing, [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) to find related notes, and [Obsidian Git](https://github.com/Vinzent03/obsidian-git) to keep version history. That gives you flexibility, but choosing how the plugins work together, when to organize new material, and how to update older notes is still a workflow you arrange.
 
-Wenlan connects topic-page creation, source-change tracking, page updates, and revision history in one workflow, saving you the work of assembling and maintaining those steps yourself. You can read the resulting knowledge directly or let Claude Code, Codex, and other tools build on it.
+Wenlan connects organizing topic notes, tracking source changes, updating notes, and keeping revision history in one workflow, saving you the work of assembling and maintaining those steps yourself. You can read the resulting knowledge directly or let Claude Code, Codex, and other tools build on it.
 
-Ask your connected AI to update a page, or [configure a model](#models-and-privacy) to enable background updates. When AI updates a page you've edited, Wenlan proposes a revision for you to review.
+Ask your connected AI to update a note, or [configure a model](#models-and-privacy) to enable background updates. When AI updates a note you've edited, Wenlan proposes a revision for you to review.
 
-Connect your existing Obsidian vault as a read-only source without moving your notes. Wenlan does not modify the vault or sync changes back to it.
+Connect your existing Obsidian vault as a read-only source without moving your files. Wenlan does not modify the vault or sync changes back to it.
 
 
 <a id="what-you-get"></a>
@@ -185,40 +187,40 @@ Connect your existing Obsidian vault as a read-only source without moving your n
 ### Bring your material in
 
 - **Keep useful AI conversations:** Import ChatGPT or Claude export ZIPs without duplicating conversations already imported.
-- **Bring your existing notes:** Import Markdown, text files, or text-extractable PDFs, by file or folder; connect an Obsidian vault as a source. Scanned PDFs need text extraction first.
+- **Bring your existing files:** Import Markdown, text files, or text-extractable PDFs, by file or folder; connect an Obsidian vault as a source. Scanned PDFs need text extraction first.
 - **Quick Capture:** Save a thought or decision directly in the desktop app without opening an AI chat.
 - **[Capture decisions with your AI](https://wenlan.app/learn/ai-work-memory):** Ask your AI tool to save decisions, lessons, corrections, preferences, and facts, with their sources and what they replace.
 - **Bring in another wiki:** Import an external OKF wiki through the CLI or API, preserving source references and links. Reimporting Wenlan's own OKF exports is not supported.
 
-### Explore your personal wiki
+### Explore your personal Wiki
 
-- **[Editable, source-linked Pages](https://wenlan.app/docs/source-backed-pages):** Turn related documents and Memories into Markdown Pages with citations and links to other Pages.
-- **Cards or lists:** Browse Pages, Entities, and Spaces in the view that suits you.
+- **[Editable, source-linked Notes](https://wenlan.app/docs/source-backed-pages):** Turn related documents and Memories into Markdown Notes with citations and links to other Notes.
+- **Cards or lists:** Browse Notes, Entities, and Spaces in the view that suits you.
 - **[Knowledge graph](docs/technical-foundations.md#graph-data-and-entity-resolution):** Explore connections between people, projects, claims, and the Memories supporting them.
 
 ### Use it with your AI tools
 
-- **[Pick up in another AI tool](https://wenlan.app/docs/architecture):** Connected Claude Code, Codex, and other MCP clients can use the same local Pages and Memories as the desktop app and CLI.
+- **[Pick up in another AI tool](https://wenlan.app/docs/architecture):** Connected Claude Code, Codex, and other MCP clients can use the same local Notes and Memories as the desktop app and CLI.
 - **[Search by words and meaning](docs/technical-foundations.md#retrieval-pipeline):** Combine exact matches with local semantic search; graph connections can add relevant context.
-- **[Optional deeper search](docs/technical-foundations.md#optional-channels-and-defaults):** Search Pages and finer-grained Memories, with optional reranking to refine results.
+- **[Optional deeper search](docs/technical-foundations.md#optional-channels-and-defaults):** Search Notes and finer-grained Memories, with optional reranking to refine results.
 - **[Keep projects separate](https://wenlan.app/docs/spaces):** Use Spaces to choose which work, personal, client, or repository knowledge your AI searches.
 - **Web access (experimental):** Connect a supported web AI client to your whole library, or to one Space you choose, while your computer is online. Queries and results pass through a relay; see [how access works and its privacy limits](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector).
 - **Connect your own tools:** Send prepared text, webpage content, or Memories through the local HTTP API. It accepts content, not URLs to fetch.
 
 ### Keep knowledge current
 
-Optional background organization and Page updates need a [configured model](#models-and-privacy).
+Optional background organization and Note updates need a [configured model](#models-and-privacy).
 
 - **Incremental sync:** File and folder Sources track changes in the background. Obsidian vaults stay read-only and resync on demand.
 - **[Organize saved knowledge](docs/technical-foundations.md#typed-memory-schema):** A configured model can add types, structured details, relevant dates, tags, search cues, and graph links to Memories.
-- **Updates backed by sources:** Automatic refresh rejects drafts with insufficient citations. AI-generated Pages can update; changes to Pages you have edited become review proposals.
-- **[Review where judgment matters](https://wenlan.app/docs/review-and-trust):** Review protected conflicts, Page revisions, entity merges, and new vocabulary.
-- **See what is happening:** Check progress and blockers in Activity. Configured sync, Steep (background enrichment), and eligible Page updates can continue after the app window closes while the local service runs.
+- **Updates backed by sources:** Automatic refresh rejects drafts with insufficient citations. AI-generated Notes can update; changes to Notes you have edited become review proposals.
+- **[Review where judgment matters](https://wenlan.app/docs/review-and-trust):** Review protected conflicts, Note revisions, entity merges, and new vocabulary.
+- **See what is happening:** Check progress and blockers in Activity. Configured sync, Steep (background enrichment), and eligible Note updates can continue after the app window closes while the local service runs.
 
 ### Keep ownership and control
 
-- **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Pages, citations, revisions, and Obsidian exports; Memories and graph data live in local libSQL.
-- **Take your wiki with you:** Export eligible Pages across Spaces as an OKF v0.2 wiki from Settings or the CLI. This is a wiki export, not a full database backup.
+- **[Local, inspectable knowledge](https://wenlan.app/learn/local-first-ai-memory):** Keep Markdown Notes, citations, revisions, and Obsidian exports; Memories and graph data live in local libSQL.
+- **Take your Wiki with you:** Export eligible Notes across Spaces as an OKF v0.2 wiki from Settings or the CLI. This is a wiki export, not a full database backup.
 - **[Model choice](docs/technical-foundations.md#model-roles):** Base retrieval stays local. Steep, the optional background enrichment and synthesis, can use on-device Qwen, a local endpoint, or a cloud model; remote providers receive the content needed for their tasks.
 - **Health checks and reviewed repairs:** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) and [lint](plugin/skills/lint/SKILL.md) report problems without rewriting knowledge. For supported findings, the app lets you preview and explicitly apply a repair, then verify it.
 
@@ -246,13 +248,15 @@ Shortcut: `/recall [topic]`
 
 Shortcut: `/capture [decision, reasons, and sources]`
 
-### When a topic deserves a page
+<a id="when-a-topic-deserves-a-page"></a>
 
-> Create or update a Wenlan page on [topic] from the material we've saved. Keep the citations.
+### When a topic deserves a note
 
-To organize saved knowledge into pages: `/distill`
+> Create or update a Wenlan note on [topic] from the material we've saved. Keep the citations.
 
-Open the page in Wenlan to read, edit, and check its sources. Next time, ask your AI to use it for your next task.
+To organize saved knowledge into notes: `/distill`
+
+Open the note in Wenlan to read, edit, and check its sources. Next time, ask your AI to use it for your next task.
 
 ### When you wrap up
 
@@ -266,7 +270,7 @@ Shortcut: `/handoff`
 - **Read the project summary:** `/brief [topic]` reads the current Space's project summary; an optional topic adds related context from that Space.
 - **Check and review:** `/lint` checks knowledge health; `/curate` reviews pending captures or revisions.
 
-These shortcuts are available through the Wenlan plugins. Other connected clients use the equivalent MCP tools. Optional background organization and Page updates need a [configured model](#models-and-privacy).
+These shortcuts are available through the Wenlan plugins. Other connected clients use the equivalent MCP tools. Optional background organization and Note updates need a [configured model](#models-and-privacy).
 
 [Full command reference](plugin/skills/README.md).
 
@@ -280,7 +284,7 @@ These shortcuts are available through the Wenlan plugins. Other connected client
 
 ### Models and privacy
 
-Use your connected AI to write pages without installing an additional local language model. Background organization and automatic updates are optional and need a configured model.
+Use your connected AI to write notes without installing an additional local language model. Background organization and automatic updates are optional and need a configured model.
 
 - **Search stays local.** The search model downloads at first launch and runs on your machine, without an API key.
 - **Connected AI can receive your knowledge.** A cloud AI client can send retrieved content to its provider. Choosing a cloud model for background organization also sends the material needed for that task. Local storage does not make those interactions local.
@@ -292,7 +296,7 @@ See [network and privacy details](docs/PRIVACY.md#when-wenlan-reaches-the-networ
 
 ### Your data and uninstall
 
-Your pages and session notes are Markdown files; memories and the graph live in a local database. You can keep your knowledge when you uninstall the app.
+Your notes and session logs are Markdown files; memories and the graph live in a local database. You can keep your knowledge when you uninstall the app.
 
 [File locations, backup, and removal](docs/setup-and-data.md#backup-and-removal).
 
