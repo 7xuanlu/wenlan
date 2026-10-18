@@ -9,13 +9,13 @@ import {
 } from "../../lib/tauri";
 import { setPendingPairingCode } from "../../lib/pairingLink";
 import { classifyPairingCode } from "../../lib/pairingCode";
-import { Button, Card, Field, Input, SectionHeader, StatusChip, Tag } from "./settings/primitives";
+import { Button, Card, Field, Input, SectionHeader, SettingRow, StatusChip, Tag } from "./settings/primitives";
 import {
   Disclosure, InlineConfirm, RemoteErrorMessage, errorText, secondaryText,
 } from "./remoteAccessParts";
 import { ConnectedApps } from "./RemoteAccessApps";
 import { RemoteScopeChooser } from "./RemoteScopeChooser";
-import { scopeLabel, type RemoteScope } from "./remoteScope";
+import { scopeLabel, wholeLibrary, type RemoteScope } from "./remoteScope";
 import { useRemoteAccess } from "./useRemoteAccess";
 
 /** The key is offered a renewal this long before it ends. */
@@ -57,6 +57,9 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const { status, profile, spaces, connected, relayUrl, isOn, pendingDisconnect, ready, nativeReadFailed, nativeLoading, queryError, scope } = remote;
   const now = useNow(60_000);
   const [confirming, setConfirming] = useState<Confirming | null>(null);
+  // The switch was flipped on while Spaces exist: the one question is showing,
+  // and nothing is turned on until it is answered.
+  const [choosing, setChoosing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [chatgptOpened, setChatgptOpened] = useState(false);
   const [probe, setProbe] = useState<RemoteConnectionTest | null>(null);
@@ -79,6 +82,8 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     mutationFn: (operation: () => Promise<void>) => operation(),
     onSettled: () => remote.refresh(),
   });
+  // Once it is on (or the question is no longer needed), there is nothing left to ask.
+  useEffect(() => { if (isOn) setChoosing(false); }, [isOn]);
   const busy = action.isPending;
   const run = (operation: () => Promise<void>) => { action.reset(); action.mutate(operation); };
 
@@ -92,6 +97,7 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   const turnOnAgain = () => run(async () => {
     await remote.stop();
     if (scope && spaceExists(scope)) await remote.switchOn(scope);
+    else setChoosing(true);
   });
   const changeScope = (target: RemoteScope) => run(async () => {
     await remote.stop();
@@ -118,9 +124,10 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     </Button>
   );
 
-  let body: React.ReactNode;
+  // The switch itself says loading, saving or unavailable; the body adds the rest.
+  let body: React.ReactNode = null;
   if (nativeLoading) {
-    body = <p role="status" className={secondaryText}>{t("settings.controlState.loading")}</p>;
+    body = null;
   } else if (nativeReadFailed) {
     // The saved settings could not be read, so nothing here may look like permission to turn on.
     body = <div className="space-y-2"><RemoteErrorMessage error={queryError} />{stopButton}</div>;
@@ -136,14 +143,11 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
   } else if (stuck && status?.status === "error") {
     body = <div className="space-y-2"><RemoteErrorMessage error={status.error} />{stopButton}</div>;
   } else if (!isOn) {
-    body = (
-      <div className="min-w-0 space-y-3">
-        <StatusChip state={{ kind: "idle" }} label={t("remoteAccess.statusOff")} />
-        {spacesFailed
-          ? <RemoteErrorMessage error={queryError} />
-          : <RemoteScopeChooser spaces={spaces} defaultSpace={remote.defaultSpace} busy={busy} disabled={!ready} onChoose={turnOn} />}
-      </div>
-    );
+    body = choosing
+      ? spacesFailed
+        ? <RemoteErrorMessage error={queryError} />
+        : <RemoteScopeChooser spaces={spaces} defaultSpace={remote.defaultSpace} busy={busy} disabled={!ready} onChoose={turnOn} />
+      : null;
   } else if (ended) {
     body = (
       <div className="min-w-0 space-y-3">
@@ -192,12 +196,9 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
           )}
           {failed
             ? stopButton
-            : <>
-                <Button variant="secondary" size="sm" aria-expanded={confirming?.kind === "choose" || confirming?.kind === "change"}
-                  disabled={busy || spacesFailed || !ready || (scope?.kind === "wholeLibrary" && spaces.length === 0)}
-                  onClick={() => setConfirming({ kind: "choose" })}>{t("remoteAccess.changeSpace")}</Button>
-                <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming({ kind: "off" })}>{t("remoteAccess.turnOff")}</Button>
-              </>}
+            : <Button variant="secondary" size="sm" aria-expanded={confirming?.kind === "choose" || confirming?.kind === "change"}
+                disabled={busy || spacesFailed || !ready || (scope?.kind === "wholeLibrary" && spaces.length === 0)}
+                onClick={() => setConfirming({ kind: "choose" })}>{t("remoteAccess.changeSpace")}</Button>}
         </div>
 
         {probe?.ok && <p role="status" className={secondaryText}>{t("remoteAccess.testOk", { ms: probe.latency_ms ?? "?" })}</p>}
@@ -208,10 +209,6 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
           </div>
         )}
 
-        {confirming?.kind === "off" && (
-          <InlineConfirm message={t("remoteAccess.offConfirm")} confirmLabel={t("remoteAccess.turnOff")} busy={busy}
-            onConfirm={turnOff} onCancel={() => setConfirming(null)} />
-        )}
         {confirming?.kind === "choose" && (
           <div className="min-w-0 space-y-2">
             <RemoteScopeChooser spaces={spaces} defaultSpace={remote.defaultSpace} current={scope} busy={busy}
@@ -266,32 +263,67 @@ export function RemoteAccessPanel({ currentSpace }: { currentSpace?: string }) {
     );
   }
 
+  // The switch cannot be flipped on while the saved state is unreadable, a
+  // disconnect is unfinished or an error is stuck: those only offer Stop.
+  // Turning on needs the Spaces, so the switch waits for them instead of ignoring a click.
+  const loading = nativeLoading || (!isOn && !ready && !nativeReadFailed && !spacesFailed);
+  const cannotTurnOn = nativeReadFailed || (!isOn && (pendingDisconnect || stuck));
+  const onToggle = () => {
+    if (isOn) {
+      setConfirming({ kind: "off" });
+    } else if (choosing) {
+      setChoosing(false);
+    } else if (spacesFailed) {
+      setChoosing(true);
+    } else if (ready && !pendingDisconnect) {
+      // With no Space to pick, the whole library is the only choice.
+      if (spaces.length === 0) turnOn(wholeLibrary);
+      else setChoosing(true);
+    }
+  };
+  const showCodeEntry = !nativeLoading && !nativeReadFailed && !pendingDisconnect && !stuck && !ended;
+  const offConfirm = confirming?.kind === "off" && isOn && !nativeReadFailed
+    ? <InlineConfirm message={t("remoteAccess.offConfirm")} confirmLabel={t("remoteAccess.turnOff")} busy={busy}
+        onConfirm={turnOff} onCancel={() => setConfirming(null)} />
+    : null;
+  const actionError = action.error ? <RemoteErrorMessage error={action.error} /> : null;
+  const hasContent = Boolean(body || offConfirm || actionError || showCodeEntry);
+
   return (
     <div className="min-w-0 space-y-4" style={{ fontFamily: "var(--mem-font-body)", color: "var(--mem-text)" }}>
       <SectionHeader label={t("remoteAccess.title")} action={<Tag tone="neutral">{t("remoteAccess.experimentalBadge")}</Tag>} />
-      <Card padding="card">
-        <div className="min-w-0 space-y-4">
-          <p className={secondaryText}>{t("remoteAccess.intro")}</p>
-          {/* Said once, always: requests and results go through the relay. */}
-          <p className={secondaryText}>{t("remoteAccess.relayDisclosure")}</p>
-          {body}
-          {action.error && <RemoteErrorMessage error={action.error} />}
-          {!nativeLoading && !nativeReadFailed && !pendingDisconnect && !stuck && !ended && <CodeEntry />}
-        </div>
+      <Card padding="rows">
+        {/* The intro also says, once, that requests and results go through the relay. */}
+        <SettingRow
+          title={t("remoteAccess.toggleTitle")}
+          description={t("remoteAccess.intro")}
+          enabled={isOn || choosing}
+          onToggle={onToggle}
+          valueUnknown={loading || cannotTurnOn || busy}
+          unknownState={loading ? "loading" : cannotTurnOn ? "unavailable" : "saving"}
+        />
+        {hasContent && (
+          <div className="min-w-0 px-5 py-4 space-y-4">
+            {offConfirm}
+            {body}
+            {actionError}
+            {showCodeEntry && <CodeEntry bordered={Boolean(body || offConfirm || actionError)} />}
+          </div>
+        )}
       </Card>
     </div>
   );
 }
 
 /** For when the browser's link did not open Wenlan: type what the page shows. */
-function CodeEntry() {
+function CodeEntry({ bordered }: { bordered: boolean }) {
   const { t } = useTranslation();
   const id = useId();
   const [value, setValue] = useState("");
   const classified = classifyPairingCode(value);
   const invalid = value.trim() !== "" && classified.kind === "invalid";
   return (
-    <div className="border-t border-[var(--mem-border)] pt-4">
+    <div className={bordered ? "border-t border-[var(--mem-border)] pt-4" : undefined}>
       <Disclosure label={t("remoteAccess.haveCode")}>
         <form className="space-y-3 max-w-sm" onSubmit={(event) => {
           event.preventDefault();

@@ -77,6 +77,7 @@ mod tests {
     #[test]
     fn has_no_link_for_tools_without_one() {
         assert_eq!(prompt_link("gemini-cli", "hi"), None);
+        assert_eq!(prompt_link("muse-code", "hi"), None);
         assert_eq!(prompt_link("https://example.com", "hi"), None);
     }
 

@@ -1995,6 +1995,7 @@ pub const KNOWN_CLIENTS: &[(&str, &str)] = &[
     ("continue", "Continue"),
     ("cursor", "Cursor"),
     ("gemini-cli", "Gemini CLI"),
+    ("muse-code", "Muse Code"),
     ("obsidian", "Obsidian"),
     ("openai-mcp", "ChatGPT"),
     ("raycast", "Raycast"),
@@ -2098,6 +2099,7 @@ mod agent_id_tests {
             known_client_display_name("claude-code"),
             Some("Claude Code")
         );
+        assert_eq!(known_client_display_name("muse-code"), Some("Muse Code"));
         assert_eq!(known_client_display_name("unknown-tool"), None);
     }
 }

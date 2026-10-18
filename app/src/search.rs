@@ -396,7 +396,8 @@ pub async fn remove_raw_mcp_entry(client_type: String) -> Result<(), String> {
         return crate::mcp_config::remove_wenlan_entry_toml(&config_path)
             .map_err(|e| e.to_string());
     }
-    crate::mcp_config::remove_wenlan_entry(&config_path).map_err(|e| e.to_string())
+    crate::mcp_config::remove_wenlan_entry_for(&config_path, &client_type)
+        .map_err(|e| e.to_string())
 }
 
 /// Removes ONLY the legacy `origin` MCP entry from `client_type`'s config,
@@ -412,7 +413,8 @@ pub async fn remove_legacy_mcp_entry(client_type: String) -> Result<(), String> 
         return crate::mcp_config::remove_legacy_origin_entry_toml(&config_path)
             .map_err(|e| e.to_string());
     }
-    crate::mcp_config::remove_legacy_origin_entry(&config_path).map_err(|e| e.to_string())
+    crate::mcp_config::remove_legacy_origin_entry_for(&config_path, &client_type)
+        .map_err(|e| e.to_string())
 }
 
 /// Returns the current `wenlan` MCP server entry (command + args) that Wenlan
@@ -6326,6 +6328,7 @@ mod register_connected_agent_tests {
             ("claude_desktop", "claude-desktop"),
             ("cursor", "cursor"),
             ("gemini_cli", "gemini-cli"),
+            ("muse_code", "muse-code"),
         ] {
             // The name sent is the one the written entry reports with
             // `--agent-name`, or the daemon would trust a row the tool never uses.

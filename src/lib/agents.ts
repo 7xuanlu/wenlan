@@ -25,6 +25,7 @@ export const KNOWN_CLIENT_DISPLAY_NAMES: Record<string, string> = {
   "continue": "Continue",
   "cursor": "Cursor",
   "gemini-cli": "Gemini CLI",
+  "muse-code": "Muse Code",
   "obsidian": "Obsidian",
   "openai-mcp": "ChatGPT",
   "raycast": "Raycast",
@@ -116,6 +117,8 @@ export function clientTypeFamily(clientType: string): string {
       return "cursor";
     case "gemini_cli":
       return "gemini-cli";
+    case "muse_code":
+      return "muse-code";
     default:
       return "";
   }
