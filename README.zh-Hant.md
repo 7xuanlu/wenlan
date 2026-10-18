@@ -1,4 +1,4 @@
-<!-- README_SYNC: source=README.md sha256=7f4b57613996d7e71a4e0943b9a6a524cba009f914241668ce5c3355f2049126 -->
+<!-- README_SYNC: source=README.md sha256=cc2d5cd7095df23eedfae13a7f0256375f3d98e987b4fbb474266ac866e83220 -->
 
 <p align="center">
   <picture>
@@ -7,9 +7,9 @@
   </picture>
 </p>
 
-Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連結的頁面，讓你和 AI 工具在已有成果上繼續工作。
+Wenlan 把你的文件、Markdown 檔案和 AI 對話整理成可編輯、附有來源連結的筆記，讓你和 AI 工具在已有成果上繼續工作。
 
-來源有變，可以請 AI 更新頁面，也能啟用背景更新。如果你編輯過頁面，Wenlan 會提出修訂，讓你確認是否採用，而不是自動覆寫你的內容。
+來源有變，可以請 AI 更新筆記，也能啟用背景更新。如果你編輯過筆記，Wenlan 會提出修訂，讓你確認是否採用，而不是自動覆寫你的內容。
 
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README.zh-Hans.md">简体中文</a> | 繁體中文 | <a href="./README.es-ES.md">Español</a>
@@ -33,7 +33,7 @@ Wenlan 把你的文件、筆記和 AI 對話整理成可編輯、附有來源連
 https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 
 <p align="center">
-  <sub>開場為組合示意，並非 app 的原生三欄介面；後續為 app 實際操作錄影，展示頁面與來源引用。</sub>
+  <sub>開場為組合示意，並非 app 的原生三欄介面；後續為 app 實際操作錄影，展示筆記與來源引用。</sub>
 </p>
 
 <a id="quickstart"></a>
@@ -64,15 +64,15 @@ https://github.com/user-attachments/assets/e4c934f9-c284-480f-a20f-708d9c91748d
 
 ### 2. 先寫下自己的筆記
 
-選擇「開啟筆記」進入 Wenlan，接著建立自己的頁面。歡迎畫面也提供範例，可以先看看。開始寫筆記不必先匯入資料、連接 AI 工具或設定 AI 模型。
+選擇「開始使用」進入 Wenlan，接著寫一篇自己的筆記。歡迎畫面也提供範例，可以先看看。開始寫筆記不必先匯入資料、連接 AI 工具或設定 AI 模型。
 
 ### 3. 想帶入來源時再匯入
 
-準備好時，可以[匯入筆記或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)。匯入是選用功能；你可以先寫自己的頁面。
+準備好時，可以[匯入 Markdown 檔案或 ChatGPT／Claude 匯出的對話](#what-can-i-bring-in)。匯入是選用功能；你可以先寫自己的筆記。
 
 ### 4. 想使用 AI 時再連接工具
 
-需要 AI 使用同一份知識時，再連接 Claude Code、Codex 等支援的工具。連接後的 AI 可以撰寫頁面，不必另外安裝本地語言模型。
+需要 AI 使用同一份知識時，再連接 Claude Code、Codex 等支援的工具。連接後的 AI 可以撰寫筆記，不必另外安裝本地語言模型。
 
 <details>
 <summary>連接時需要幫忙？讓 AI 協助設定</summary>
@@ -91,11 +91,11 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 想用已連接的 AI 整理主題時，打開一段值得保留的工作對話，然後提出：
 
-> 把這段對話中［主題］的結論與理由，整理成附來源引用的 Wenlan 頁面。
+> 把這段對話中［主題］的結論與理由，整理成附來源引用的 Wenlan 筆記。
 
-也可以請 AI 把已匯入資料中的主題整理成頁面。
+也可以請 AI 把已匯入資料中的主題整理成筆記。
 
-完成後，在 Wenlan 打開新頁面，點開引用查來源，也能補上自己的想法。下次做相關工作時，請 AI 先讀這一頁再繼續。
+完成後，在 Wenlan 打開新筆記，點開引用查來源，也能補上自己的想法。下次做相關工作時，請 AI 先讀這篇筆記再繼續。
 
 背景整理與自動更新是可選功能，需要[設定模型](#models-and-privacy)。終端機安裝、其他平台與更新方式，請見[設定指南](docs/setup-and-data.zh-Hant.md#installation)。
 
@@ -108,13 +108,15 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 <a id="這是什麼"></a>
 
-## 你與 AI 共用的個人維基
+<a id="你與-ai-共用的個人維基"></a>
 
-- **散落的資料，整理成主題。** 文件、筆記與 AI 對話，彙整成彼此連結的頁面，引用可以點開查證。
+## 你與 AI 共用的個人 Wiki
+
+- **散落的資料，整理成主題。** 文件、Markdown 檔案與 AI 對話，彙整成彼此連結的筆記，引用可以點開查證。
 - **自己看，也給 AI 用。** 直接閱讀、編輯，也能讓 Claude Code、Codex 接著用。
-- **後續維護有流程，不必每次從頭整理。** 追蹤來源變動、更新相關頁面並保留歷史；你編輯過的內容，先確認修訂再更新。
+- **後續維護有流程，不必每次從頭整理。** 追蹤來源變動、更新相關筆記並保留歷史；你編輯過的內容，先確認修訂再更新。
 
-頁面是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
+筆記是本地 Markdown 檔案，你可以閱讀、編輯，也能帶走。
 
 <p align="center">
   <picture>
@@ -125,25 +127,27 @@ https://raw.githubusercontent.com/wenlan-app/wenlan/main/docs/setup-with-ai.md
 
 <a id="what-wenlan-is-not"></a>
 
-圖中是可重用工作準則的整理示例，不代表使用者成效或自動產頁實測。[來源、記憶與頁面如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
+圖中是可重用工作準則的整理示例，不代表使用者成效或自動產生筆記的實測。[來源、記憶與筆記如何協作](docs/knowledge-guide.zh-Hant.md#sources-and-pages)。
 
 <a id="knowledge-graph"></a>
 
-### 從一頁，找到相關的知識
+<a id="從一頁找到相關的知識"></a>
+
+### 從一篇筆記，找到相關的知識
 
 Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗，以及可接著使用的驗收清單。
 
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-knowledge-network-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Agent Loop 頁面的示意圖，引用 Agent 設計指南與介面檢查筆記；具名記憶包括重試準則和視覺檢查經驗，並連結到可重用的驗收清單及相關概念與工具。" width="100%">
+    <img src="./docs/assets/wenlan-knowledge-network-zh-Hant.png" alt="Agent Loop 筆記的示意圖，引用 Agent 設計指南與介面檢查紀錄；具名記憶包括重試準則和視覺檢查經驗，並連結到可重用的驗收清單及相關概念與工具。" width="100%">
   </picture>
 </p>
 
 <a id="retrieval"></a>
 <a id="從關鍵字語意與關聯找回正確內容"></a>
 
-從頁面連到相關概念與依據。[圖譜與搜尋如何運作](docs/knowledge-guide.zh-Hant.md#graph-and-search)。
+從筆記連到相關概念與依據。[圖譜與搜尋如何運作](docs/knowledge-guide.zh-Hant.md#graph-and-search)。
 
 <a id="what-makes-wenlan-distinct"></a>
 <a id="why-is-wenlan-different"></a>
@@ -158,7 +162,7 @@ Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗
 <p align="center">
   <picture>
     <source media="(max-width: 900px)" srcset="./docs/assets/wenlan-lifecycle-zh-Hant-mobile.png">
-    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="示意的前後規則：「測試通過就算完成」改為「檢查測試以及桌面與手機畫面」；依據是測試雖通過，手機標籤仍被遮住。自動更新你編輯過的頁面時，修改會以提案交由你審核。" width="100%">
+    <img src="./docs/assets/wenlan-lifecycle-zh-Hant.png" alt="示意的前後規則：「測試通過就算完成」改為「檢查測試以及桌面與手機畫面」；依據是測試雖通過，手機標籤仍被遮住。自動更新你編輯過的筆記時，修改會以提案交由你審核。" width="100%">
   </picture>
 </p>
 
@@ -167,17 +171,17 @@ Agent Loop 不只是一篇筆記：它連著重試準則、介面檢查的經驗
 <a id="持續維護的頁面"></a>
 <a id="與-obsidian-共存的本地-markdown"></a>
 
-審核針對 AI 更新；直接改檔與強制重建另有規則。[更新、審核與本地檔案](docs/knowledge-guide.zh-Hant.md#updates-and-history)。
+審核針對 AI 更新；直接改檔與強制重新整理另有規則。[更新、審核與本地檔案](docs/knowledge-guide.zh-Hant.md#updates-and-history)。
 
 ### 已經在用 Obsidian 和 AI 套件？
 
-你可以用 [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) 讓 AI 讀寫筆記、用 [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) 找相關內容，再用 [Obsidian Git](https://github.com/Vinzent03/obsidian-git) 保留版本。自由度很高，但套件怎麼搭配、資料何時整理、舊頁面如何更新，仍需要自己安排。
+你可以用 [Copilot](https://docs.obsidiancopilot.com/agent-mode-and-tools/) 讓 AI 讀寫筆記、用 [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) 找相關內容，再用 [Obsidian Git](https://github.com/Vinzent03/obsidian-git) 保留版本。自由度很高，但套件怎麼搭配、資料何時整理、舊筆記如何更新，仍需要自己安排。
 
-Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂歷史接成一套流程，省下自行搭建與維護的工夫。整理好的知識，自己能閱讀，也能讓 Claude Code、Codex 接著用。
+Wenlan 把整理成筆記、追蹤來源變動、更新相關內容和保留修訂歷史接成一套流程，省下自行搭建與維護的工夫。整理好的知識，自己能閱讀，也能讓 Claude Code、Codex 接著用。
 
-可以直接請已連接的 AI 更新頁面，也能[設定模型](#models-and-privacy)啟用背景更新。你編輯過的頁面，更新前先提出修訂，由你確認是否採用。
+可以直接請已連接的 AI 更新筆記，也能[設定模型](#models-and-privacy)啟用背景更新。你編輯過的筆記，更新前先提出修訂，由你確認是否採用。
 
-現有 Obsidian 儲存庫可以接為唯讀來源，不必搬動筆記。Wenlan 不會修改原本的儲存庫，也不會把變更同步回去。
+現有 Obsidian 庫可以接為唯讀來源，不必搬動檔案。Wenlan 不會修改原本的庫，也不會把變更同步回去。
 
 
 <a id="what-you-get"></a>
@@ -189,44 +193,44 @@ Wenlan 把整理成頁、追蹤來源變動、更新相關內容和保留修訂�
 ### 匯入你的資料
 
 - **留下有用的 AI 對話：** 匯入 ChatGPT 或 Claude 匯出的 ZIP，已匯入的對話不會重複加入。
-- **帶入現有筆記：** 匯入 Markdown、文字檔或可擷取文字的 PDF，也能整批讀取資料夾，或把 Obsidian 儲存庫接為來源。掃描版 PDF 須先擷取文字。
-- **快速記錄：** 直接在桌面 app 記下想法或決策，不必先開啟 AI 對話。
+- **帶入現有檔案：** 匯入 Markdown、文字檔或可擷取文字的 PDF，也能整批讀取資料夾，或把 Obsidian 庫接為來源。掃描版 PDF 須先擷取文字。
+- **快速捕捉：** 直接在桌面 app 記下想法或決策，不必先開啟 AI 對話。
 - **[請 AI 記住工作重點](https://wenlan.app/learn/ai-work-memory)：** 請 AI 工具記下決策、經驗、更正、偏好與事實，保留來源及取代的舊記錄。
 - **帶入其他 wiki：** 透過 CLI 或 API 匯入外部 OKF wiki，保留來源引用與連結。目前不支援重新匯入 Wenlan 自己匯出的 OKF。
 
-### 瀏覽你的個人 wiki
+### 瀏覽你的個人 Wiki
 
-- **[可編輯、有來源的頁面](https://wenlan.app/docs/source-backed-pages)：** 把相關文件與記憶整理成 Markdown 頁面，附引用與頁面連結。
-- **卡片或列表：** 用適合自己的方式瀏覽頁面、實體與空間。
+- **[可編輯、有來源的筆記](https://wenlan.app/docs/source-backed-pages)：** 把相關文件與記憶整理成 Markdown 筆記，附引用與筆記之間的連結。
+- **卡片或列表：** 用適合自己的方式瀏覽筆記、實體與空間。
 - **[知識圖譜](docs/technical-foundations.md#graph-data-and-entity-resolution)：** 探索人物、專案、主張與支撐記憶之間的關係。
 
 ### 搭配 AI 繼續工作
 
-- **[換個 AI，也能接著用](https://wenlan.app/docs/architecture)：** 連接後，Claude Code、Codex 與其他 MCP 用戶端，可使用和桌面 app、CLI 相同的本地頁面與記憶。
+- **[換個 AI，也能接著用](https://wenlan.app/docs/architecture)：** 連接後，Claude Code、Codex 與其他 MCP 用戶端，可使用和桌面 app、CLI 相同的本地筆記與記憶。
 - **[原詞與語意搜尋](docs/technical-foundations.md#retrieval-pipeline)：** 結合精確比對與本地語意搜尋，圖譜關係可補上相關脈絡。
-- **[需要時，搜尋得更細](docs/technical-foundations.md#optional-channels-and-defaults)：** 可選擇搜尋頁面與更細緻的記憶，並重新排序結果。
+- **[需要時，搜尋得更細](docs/technical-foundations.md#optional-channels-and-defaults)：** 可選擇搜尋筆記與更細緻的記憶，並重新排序結果。
 - **[不同專案，分開管理](https://wenlan.app/docs/spaces)：** 用空間選擇 AI 這次要搜尋的工作、個人、客戶或程式庫知識。
 - **網頁 AI 存取（實驗性）：** 電腦保持連線時，讓支援的網頁 AI 用戶端連到你的整個資料庫，或你選擇的一個空間。查詢與結果會經過中繼服務，詳見[連接方式與隱私界限](docs/PRIVACY.md#pre-release-standalone-wenlan-relay-connector)。
 - **接入自己的工具：** 透過本地 HTTP API 傳入準備好的文字、網頁內容或記憶；它接收內容，不會代為抓取網址。
 
 ### 持續更新與維護
 
-背景整理與頁面更新是可選功能，需要先[設定模型](#models-and-privacy)。
+背景整理與筆記更新是可選功能，需要先[設定模型](#models-and-privacy)。
 
-- **增量同步：** 檔案與資料夾會在背景追蹤變更；Obsidian 儲存庫維持唯讀，需要時再同步。
+- **增量同步：** 檔案與資料夾會在背景追蹤變更；Obsidian 庫維持唯讀，需要時再同步。
 - **[整理已存的知識](docs/technical-foundations.md#typed-memory-schema)：** 設定模型後，可協助補上類型、欄位、相關日期、標籤、搜尋提示與圖譜連結。
-- **有引用才更新：** 自動更新會拒絕引用不足的草稿。AI 產生的頁面可以更新；你編輯過的頁面則先提出修訂。
-- **[需要判斷才審核](https://wenlan.app/docs/review-and-trust)：** 審核受保護的衝突、頁面修訂、實體合併與新詞彙。
-- **進度看得見：** 在 Activity 查看進度與卡住的原因。本地服務運作時，關閉 app 視窗後仍可繼續執行已設定的同步、Steep（背景補全）與符合條件的頁面更新。
+- **有引用才更新：** 自動更新會拒絕引用不足的草稿。AI 產生的筆記可以更新；你編輯過的筆記則先提出修訂。
+- **[需要判斷才審核](https://wenlan.app/docs/review-and-trust)：** 審核受保護的衝突、筆記修訂、實體合併與新詞彙。
+- **進度看得見：** 在「活動」查看進度與卡住的原因。本地服務運作時，關閉 app 視窗後仍可繼續執行已設定的同步、Steep（背景補全）與符合條件的筆記更新。
 
 ### 保有資料與控制權
 
-- **[資料在本地，也能檢查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 頁面、引用、修訂與 Obsidian 匯出；記憶與圖譜存於本地 libSQL。
-- **把 wiki 帶走：** 從設定或 CLI，把各空間符合條件的頁面匯出成 OKF v0.2 wiki。這是 wiki 匯出，不是完整資料庫備份。
-- **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的 Steep（背景補全與頁面合成）能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
+- **[資料在本地，也能檢查](https://wenlan.app/learn/local-first-ai-memory)：** 保留 Markdown 筆記、引用、修訂與 Obsidian 匯出；記憶與圖譜存於本地 libSQL。
+- **把 Wiki 帶走：** 從設定或 CLI，把各空間符合條件的筆記匯出成 OKF v0.2 wiki。這是 wiki 匯出，不是完整資料庫備份。
+- **[模型自己選](docs/technical-foundations.md#model-roles)：** 基礎檢索留在本機。可選的 Steep（背景補全與筆記整理）能用裝置端 Qwen、本地端點或雲端模型；遠端服務會收到該任務所需的內容。
 - **檢查問題，確認後修復：** [Doctor](https://wenlan.app/docs/diagnostics-and-issue-reports) 與 [lint](plugin/skills/lint/SKILL.md) 只回報問題，不改寫知識。支援的修復可在 app 預覽，確認後套用並驗證。
 
-**先從一則想留下的筆記開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。
+**先從一篇想留下的筆記開始。** [開始使用](#start-in-30-seconds)。想之後再試，也可以先給這個 repo 一顆 Star，方便回來找到它。
 
 
 <a id="how-wenlan-works"></a>
@@ -250,13 +254,15 @@ AI 工具連接好後，可以直接這樣說：
 
 快捷指令：`/capture [決定、理由與來源]`
 
-### 值得整理成頁面時
+<a id="值得整理成頁面時"></a>
 
-> 把［主題］的已存資料整理成 Wenlan 頁面，已有的就更新，並保留引用。
+### 值得整理成筆記時
 
-將已存知識整理成頁面：`/distill`
+> 把［主題］的已存資料整理成 Wenlan 筆記，已有的就更新，並保留引用。
 
-在 Wenlan 裡閱讀、編輯頁面、查看來源。下次做相關工作時，請 AI 先讀這一頁，再接著做。
+將已存知識整理成筆記：`/distill`
+
+在 Wenlan 裡閱讀、編輯筆記、查看來源。下次做相關工作時，請 AI 先讀這篇筆記，再接著做。
 
 ### 工作收尾時
 
@@ -270,7 +276,7 @@ AI 工具連接好後，可以直接這樣說：
 - **讀取專案摘要：** `/brief [topic]` 讀取目前空間的專案摘要；加上主題時，會補充同一空間的相關內容。
 - **檢查與審核：** `/lint` 檢查知識庫狀態；`/curate` 審核待處理的記錄或修訂。
 
-這些快捷指令由 Wenlan 插件提供。其他已連接的用戶端使用對應的 MCP 工具。可選的背景整理與頁面更新需要先[設定模型](#models-and-privacy)。
+這些快捷指令由 Wenlan 插件提供。其他已連接的用戶端使用對應的 MCP 工具。可選的背景整理與筆記更新需要先[設定模型](#models-and-privacy)。
 
 [完整指令參考](plugin/skills/README.md)。
 
@@ -284,7 +290,7 @@ AI 工具連接好後，可以直接這樣說：
 
 ### 模型與隱私
 
-先用已連接的 AI 寫頁面，不必另裝本地語言模型。背景整理與自動更新是可選功能，需要另外設定模型。
+先用已連接的 AI 寫筆記，不必另裝本地語言模型。背景整理與自動更新是可選功能，需要另外設定模型。
 
 - **搜尋在本機執行。** 首次啟動會下載搜尋模型，之後在你的電腦上運作，不需要 API key。
 - **連接 AI，就可能傳出內容。** 雲端 AI 可將讀取的知識傳給其供應商；選用雲端模型整理資料，也會傳送該任務所需的內容。本機儲存不代表這些互動都留在本機。
@@ -296,7 +302,7 @@ AI 工具連接好後，可以直接這樣說：
 
 ### 你的資料與移除
 
-頁面與工作階段筆記是 Markdown 檔案；記憶與圖譜保存在本地資料庫。移除 app 時，可以保留你的知識資料。
+筆記與工作階段紀錄是 Markdown 檔案；記憶與圖譜保存在本地資料庫。移除 app 時，可以保留你的知識資料。
 
 [檔案位置、備份與移除方式](docs/setup-and-data.zh-Hant.md#backup-and-removal)。
 
