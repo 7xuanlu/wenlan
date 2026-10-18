@@ -386,7 +386,7 @@ describe("PairingApprovalDialog", () => {
       mocks.listSpaces.mockResolvedValue([]);
       setPendingPairingCode(SHORT);
       mount();
-      expect(await screen.findByText("To share just one Space, create a Space first.")).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Share whole library" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Share one Space…" })).toBeDisabled();
       await waitFor(() => expect(screen.getByRole("button", { name: "Share whole library" })).toBeEnabled());
     });
