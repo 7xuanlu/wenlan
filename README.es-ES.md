@@ -3,7 +3,7 @@
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-es-ES-mobile.png">
-    <img src="./docs/assets/readme-banner-es-ES.png" alt="Wenlan: Una wiki personal viva. La IA organiza. Tú tienes el control." width="100%">
+    <img src="./docs/assets/readme-banner-es-ES.png" alt="Wenlan: Una wiki personal viva" width="100%">
   </picture>
 </p>
 

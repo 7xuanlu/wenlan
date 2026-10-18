@@ -3,7 +3,7 @@
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-zh-Hans-mobile.png">
-    <img src="./docs/assets/readme-banner-zh-Hans.png" alt="Wenlan：持续更新的个人知识库。AI 帮你整理，你保有主导权" width="100%">
+    <img src="./docs/assets/readme-banner-zh-Hans.png" alt="Wenlan: 持续更新的个人知识库" width="100%">
   </picture>
 </p>
 

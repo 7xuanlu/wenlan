@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(max-width: 600px)" srcset="./docs/assets/readme-banner-mobile.png">
-    <img src="./docs/assets/readme-banner.png" alt="Wenlan: A living personal wiki. AI organizes. You stay in control." width="100%">
+    <img src="./docs/assets/readme-banner.png" alt="Wenlan: A living personal wiki" width="100%">
   </picture>
 </p>
 

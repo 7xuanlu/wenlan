@@ -34,19 +34,19 @@ const BANNER = {
 
 const BANNER_COPY = {
   en: {
-    title: ["A living personal wiki", "AI organizes. You stay in control."],
+    title: ["A living personal wiki"],
     font: BANNER.latin,
   },
   "zh-Hant": {
-    title: ["持續更新的個人知識庫", "AI 幫你整理，你保有主導權"],
+    title: ["持續更新的個人知識庫"],
     font: '"PingFang TC", "Noto Sans TC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "zh-Hans": {
-    title: ["持续更新的个人知识库", "AI 帮你整理，你保有主导权"],
+    title: ["持续更新的个人知识库"],
     font: '"PingFang SC", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   "es-ES": {
-    title: ["Una wiki personal viva", "La IA organiza. Tú tienes el control."],
+    title: ["Una wiki personal viva"],
     font: BANNER.latin,
   },
 };
@@ -92,20 +92,18 @@ function makeSimpleBanner(viewport, locale) {
   const brand = (x, y, size, anchor) =>
     `<text x="${x}" y="${y}" fill="${BANNER.accent}" font-size="${size}" font-weight="500" text-anchor="${anchor}"><tspan font-family="${esc(BANNER.latin)}">Wenlan</tspan>${chineseName ? `<tspan dx="12" font-family="${esc(copy.font)}">${chineseName}</tspan>` : ""}</text>`;
   const content = mobile
-    ? `${logoMarkup({ x: 320, y: 20, size: 80, prefix })}
-  ${brand(360, 138, 28, "middle")}
-  ${text(360, 183, copy.title[0], 32, BANNER.white, 500, "middle")}
-  ${text(360, 223, copy.title[1], 23, BANNER.secondary, 400, "middle")}`
-    : `${logoMarkup({ x: 81.28, y: 63.28, size: 181.44, prefix })}
-  ${brand(300, 113, 32, "start")}
-  ${text(300, 169, copy.title[0], 36, BANNER.white, 500, "start")}
-  ${text(300, 218, copy.title[1], 26, BANNER.secondary, 400, "start")}`;
+    ? `${logoMarkup({ x: 320, y: 32, size: 80, prefix })}
+  ${brand(360, 150, chineseName ? 29.12 : 30.24, "middle")}
+  ${text(360, 195, copy.title[0], 32, BANNER.white, 500, "middle")}`
+    : `${logoMarkup({ x: 81.28, y: 84.28, size: 181.44, prefix })}
+  ${brand(300, 153, chineseName ? 41.6 : 43.2, "start")}
+  ${text(300, 219, copy.title[0], 40, BANNER.white, 500, "start", chineseName ? 0.65 : null)}`;
 
   const svg = `<svg width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
   <title id="title">Wenlan README banner</title>
   <desc id="desc">${esc(`Wenlan: ${copy.title.join(" ")}`)}</desc>
   <rect width="${width}" height="${height}" fill="${BANNER.dark}"/>
-  ${mobile ? content : `<g transform="translate(150 22)">${content}</g>`}
+  ${mobile ? content : `<g transform="translate(172 0)">${content}</g>`}
   <defs>
     ${logoDefs(prefix)}
   </defs>
@@ -184,7 +182,7 @@ async function renderSvgToPng(asset, pngPath) {
   }
   const browser = await chromium.launch({ headless: true });
   try {
-    const rasterScale = asset.group === "banner" ? 2 : 1;
+    const rasterScale = asset.group === "banner" ? 3 : 1;
     const context = await browser.newContext({
       viewport: { width: asset.width, height: asset.height },
       deviceScaleFactor: rasterScale,
